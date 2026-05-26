@@ -55,8 +55,9 @@ class UpworkAnalyzerHandler:
 
         rec_bid = None
         if should_bid:
+            projected_rate = "$75/hr" if primary_domain == "coding" else "$25/hr"
             rec_bid = RecommendedBid(
-                projected_rate="/hr",
+                projected_rate=projected_rate,
                 required_tokens_estimate=1200
             )
 
