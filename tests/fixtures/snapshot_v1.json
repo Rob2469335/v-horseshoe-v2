@@ -1,0 +1,13 @@
+{
+  "snapshot_version": 1,
+  "generation": 3,
+  "organisms": [
+    {
+      "id": "o1",
+      "fitness": 0.42,
+      "genome": {
+        "generation": 3
+      }
+    }
+  ]
+}

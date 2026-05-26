@@ -1,0 +1,1259 @@
+{"time": "2026-05-23 22:14:09,160", "level": "INFO", "logger": "__main__", "message": "Starting swarm OS"}
+{"time": "2026-05-23 22:14:09,161", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "seed=42 scenario=stress"}
+{"time": "2026-05-23 22:14:09,161", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "generation=0 step=0"}
+{"time": "2026-05-23 22:14:09,162", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=0 population=7"}
+{"time": "2026-05-23 22:14:09,162", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "generation=1 step=1"}
+{"time": "2026-05-23 22:14:09,162", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=1 population=10"}
+{"time": "2026-05-23 22:14:09,162", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "generation=2 step=2"}
+{"time": "2026-05-23 22:14:09,162", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=2 population=12"}
+{"time": "2026-05-23 22:14:09,163", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "generation=3 step=3"}
+{"time": "2026-05-23 22:14:09,163", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=3 population=12"}
+{"time": "2026-05-23 22:14:09,163", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "generation=4 step=4"}
+{"time": "2026-05-23 22:14:09,163", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=4 population=12"}
+{"time": "2026-05-23 22:14:09,163", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "generation=5 step=5"}
+{"time": "2026-05-23 22:14:09,163", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=5 population=12"}
+{"time": "2026-05-23 22:14:09,163", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "generation=6 step=6"}
+{"time": "2026-05-23 22:14:09,163", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=6 population=12"}
+{"time": "2026-05-23 22:14:09,163", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "generation=7 step=7"}
+{"time": "2026-05-23 22:14:09,164", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=7 population=12"}
+{"time": "2026-05-23 22:14:09,164", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "generation=8 step=8"}
+{"time": "2026-05-23 22:14:09,164", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=8 population=12"}
+{"time": "2026-05-23 22:14:09,164", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "generation=9 step=9"}
+{"time": "2026-05-23 22:14:09,164", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=9 population=12"}
+{"time": "2026-05-23 22:14:09,164", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "generation=10 step=10"}
+{"time": "2026-05-23 22:14:09,164", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=10 population=12"}
+{"time": "2026-05-23 22:14:09,164", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "generation=11 step=11"}
+{"time": "2026-05-23 22:14:09,164", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=11 population=12"}
+{"time": "2026-05-23 22:14:09,164", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "generation=12 step=12"}
+{"time": "2026-05-23 22:14:09,165", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=12 population=12"}
+{"time": "2026-05-23 22:14:09,165", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "generation=13 step=13"}
+{"time": "2026-05-23 22:14:09,165", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=13 population=12"}
+{"time": "2026-05-23 22:14:09,165", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "generation=14 step=14"}
+{"time": "2026-05-23 22:14:09,165", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=14 population=12"}
+{"time": "2026-05-23 22:14:09,165", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "final population:"}
+{"time": "2026-05-23 22:14:09,165", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "gen0_child_2615 fitness=0.617 generation=0"}
+{"time": "2026-05-23 22:14:09,165", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "V fitness=0.450 generation=0"}
+{"time": "2026-05-23 22:14:09,165", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "gen4_child_1612 fitness=0.436 generation=0"}
+{"time": "2026-05-23 22:14:09,166", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "gen2_child_2266 fitness=0.434 generation=0"}
+{"time": "2026-05-23 22:14:09,166", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "gen3_child_3295 fitness=0.417 generation=0"}
+{"time": "2026-05-23 22:14:09,166", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "W fitness=0.415 generation=0"}
+{"time": "2026-05-23 22:14:09,166", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "gen4_child_1528 fitness=0.279 generation=0"}
+{"time": "2026-05-23 22:14:09,166", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "gen2_child_7668 fitness=0.266 generation=0"}
+{"time": "2026-05-23 22:14:09,166", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "Y fitness=0.264 generation=0"}
+{"time": "2026-05-23 22:14:09,166", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "gen1_child_5820 fitness=0.259 generation=0"}
+{"time": "2026-05-23 22:14:09,166", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "gen5_child_1638 fitness=0.168 generation=0"}
+{"time": "2026-05-23 22:14:09,166", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "gen4_child_4073 fitness=0.017 generation=0"}
+{"time": "2026-05-23 22:15:59,554", "level": "INFO", "logger": "__main__", "message": "Starting swarm OS"}
+{"time": "2026-05-23 22:15:59,555", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "seed=42 scenario=stress"}
+{"time": "2026-05-23 22:15:59,555", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "generation=0 step=0"}
+{"time": "2026-05-23 22:15:59,555", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=0 population=7"}
+{"time": "2026-05-23 22:15:59,556", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "generation=1 step=1"}
+{"time": "2026-05-23 22:15:59,556", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=1 population=10"}
+{"time": "2026-05-23 22:15:59,556", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "generation=2 step=2"}
+{"time": "2026-05-23 22:15:59,556", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=2 population=12"}
+{"time": "2026-05-23 22:15:59,556", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "generation=3 step=3"}
+{"time": "2026-05-23 22:15:59,556", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=3 population=12"}
+{"time": "2026-05-23 22:15:59,556", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "generation=4 step=4"}
+{"time": "2026-05-23 22:15:59,556", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=4 population=12"}
+{"time": "2026-05-23 22:15:59,556", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "generation=5 step=5"}
+{"time": "2026-05-23 22:15:59,557", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=5 population=12"}
+{"time": "2026-05-23 22:15:59,557", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "generation=6 step=6"}
+{"time": "2026-05-23 22:15:59,557", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=6 population=12"}
+{"time": "2026-05-23 22:15:59,557", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "generation=7 step=7"}
+{"time": "2026-05-23 22:15:59,557", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=7 population=12"}
+{"time": "2026-05-23 22:15:59,557", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "generation=8 step=8"}
+{"time": "2026-05-23 22:15:59,557", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=8 population=12"}
+{"time": "2026-05-23 22:15:59,557", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "generation=9 step=9"}
+{"time": "2026-05-23 22:15:59,557", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=9 population=12"}
+{"time": "2026-05-23 22:15:59,557", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "generation=10 step=10"}
+{"time": "2026-05-23 22:15:59,558", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=10 population=12"}
+{"time": "2026-05-23 22:15:59,558", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "generation=11 step=11"}
+{"time": "2026-05-23 22:15:59,558", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=11 population=12"}
+{"time": "2026-05-23 22:15:59,558", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "generation=12 step=12"}
+{"time": "2026-05-23 22:15:59,558", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=12 population=12"}
+{"time": "2026-05-23 22:15:59,558", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "generation=13 step=13"}
+{"time": "2026-05-23 22:15:59,558", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=13 population=12"}
+{"time": "2026-05-23 22:15:59,558", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "generation=14 step=14"}
+{"time": "2026-05-23 22:15:59,558", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=14 population=12"}
+{"time": "2026-05-23 22:15:59,558", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "final_population count=12"}
+{"time": "2026-05-23 22:15:59,558", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "organism id=gen0_child_2615 fitness=0.617 generation=0"}
+{"time": "2026-05-23 22:15:59,559", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "organism id=V fitness=0.450 generation=0"}
+{"time": "2026-05-23 22:15:59,559", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "organism id=gen4_child_1612 fitness=0.436 generation=0"}
+{"time": "2026-05-23 22:15:59,559", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "organism id=gen2_child_2266 fitness=0.434 generation=0"}
+{"time": "2026-05-23 22:15:59,559", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "organism id=gen3_child_3295 fitness=0.417 generation=0"}
+{"time": "2026-05-23 22:15:59,559", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "organism id=W fitness=0.415 generation=0"}
+{"time": "2026-05-23 22:15:59,559", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "organism id=gen4_child_1528 fitness=0.279 generation=0"}
+{"time": "2026-05-23 22:15:59,559", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "organism id=gen2_child_7668 fitness=0.266 generation=0"}
+{"time": "2026-05-23 22:15:59,559", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "organism id=Y fitness=0.264 generation=0"}
+{"time": "2026-05-23 22:15:59,559", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "organism id=gen1_child_5820 fitness=0.259 generation=0"}
+{"time": "2026-05-23 22:15:59,559", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "organism id=gen5_child_1638 fitness=0.168 generation=0"}
+{"time": "2026-05-23 22:15:59,559", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "organism id=gen4_child_4073 fitness=0.017 generation=0"}
+{"time": "2026-05-23 22:17:47,964", "level": "INFO", "logger": "__main__", "message": "Starting swarm OS"}
+{"time": "2026-05-23 22:17:47,965", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "seed=42 scenario=stress"}
+{"time": "2026-05-23 22:17:47,965", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "generation=0 step=0"}
+{"time": "2026-05-23 22:17:47,965", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=0 population=7"}
+{"time": "2026-05-23 22:17:47,966", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "generation=1 step=1"}
+{"time": "2026-05-23 22:17:47,966", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=1 population=10"}
+{"time": "2026-05-23 22:17:47,966", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "generation=2 step=2"}
+{"time": "2026-05-23 22:17:47,966", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=2 population=12"}
+{"time": "2026-05-23 22:17:47,966", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "generation=3 step=3"}
+{"time": "2026-05-23 22:17:47,966", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=3 population=12"}
+{"time": "2026-05-23 22:17:47,967", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "generation=4 step=4"}
+{"time": "2026-05-23 22:17:47,967", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=4 population=12"}
+{"time": "2026-05-23 22:17:47,967", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "generation=5 step=5"}
+{"time": "2026-05-23 22:17:47,967", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=5 population=12"}
+{"time": "2026-05-23 22:17:47,967", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "generation=6 step=6"}
+{"time": "2026-05-23 22:17:47,967", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=6 population=12"}
+{"time": "2026-05-23 22:17:47,967", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "generation=7 step=7"}
+{"time": "2026-05-23 22:17:47,967", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=7 population=12"}
+{"time": "2026-05-23 22:17:47,967", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "generation=8 step=8"}
+{"time": "2026-05-23 22:17:47,967", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=8 population=12"}
+{"time": "2026-05-23 22:17:47,968", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "generation=9 step=9"}
+{"time": "2026-05-23 22:17:47,968", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=9 population=12"}
+{"time": "2026-05-23 22:17:47,968", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "generation=10 step=10"}
+{"time": "2026-05-23 22:17:47,968", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=10 population=12"}
+{"time": "2026-05-23 22:17:47,968", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "generation=11 step=11"}
+{"time": "2026-05-23 22:17:47,969", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=11 population=12"}
+{"time": "2026-05-23 22:17:47,969", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "generation=12 step=12"}
+{"time": "2026-05-23 22:17:47,969", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=12 population=12"}
+{"time": "2026-05-23 22:17:47,969", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "generation=13 step=13"}
+{"time": "2026-05-23 22:17:47,969", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=13 population=12"}
+{"time": "2026-05-23 22:17:47,969", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "generation=14 step=14"}
+{"time": "2026-05-23 22:17:47,969", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=14 population=12"}
+{"time": "2026-05-23 22:17:47,969", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "metrics count=12 avg_fitness=0.335 best_fitness=0.617 worst_fitness=0.017 generation=15"}
+{"time": "2026-05-23 22:17:47,969", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "final population count=12"}
+{"time": "2026-05-23 22:17:47,969", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "organism id=gen0_child_2615 fitness=0.617 generation=0"}
+{"time": "2026-05-23 22:17:47,970", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "organism id=V fitness=0.450 generation=0"}
+{"time": "2026-05-23 22:17:47,970", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "organism id=gen4_child_1612 fitness=0.436 generation=0"}
+{"time": "2026-05-23 22:17:47,970", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "organism id=gen2_child_2266 fitness=0.434 generation=0"}
+{"time": "2026-05-23 22:17:47,970", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "organism id=gen3_child_3295 fitness=0.417 generation=0"}
+{"time": "2026-05-23 22:17:47,970", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "organism id=W fitness=0.415 generation=0"}
+{"time": "2026-05-23 22:17:47,970", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "organism id=gen4_child_1528 fitness=0.279 generation=0"}
+{"time": "2026-05-23 22:17:47,970", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "organism id=gen2_child_7668 fitness=0.266 generation=0"}
+{"time": "2026-05-23 22:17:47,970", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "organism id=Y fitness=0.264 generation=0"}
+{"time": "2026-05-23 22:17:47,970", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "organism id=gen1_child_5820 fitness=0.259 generation=0"}
+{"time": "2026-05-23 22:17:47,970", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "organism id=gen5_child_1638 fitness=0.168 generation=0"}
+{"time": "2026-05-23 22:17:47,970", "level": "INFO", "logger": "swarm_os.apps.simulation_runner", "message": "organism id=gen4_child_4073 fitness=0.017 generation=0"}
+{"time": "2026-05-24 13:36:40,204", "level": "INFO", "logger": "__main__", "message": "Starting swarm OS"}
+{"time": "2026-05-24 13:36:40,221", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=0 population=4"}
+{"time": "2026-05-24 13:36:40,224", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=1 population=6"}
+{"time": "2026-05-24 13:36:40,226", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=2 population=8"}
+{"time": "2026-05-24 13:36:40,227", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=3 population=8"}
+{"time": "2026-05-24 13:36:40,228", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=4 population=8"}
+{"time": "2026-05-24 13:36:40,228", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=5 population=8"}
+{"time": "2026-05-24 13:36:40,229", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=6 population=8"}
+{"time": "2026-05-24 13:36:40,230", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=7 population=8"}
+{"time": "2026-05-24 13:36:40,231", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=8 population=8"}
+{"time": "2026-05-24 13:36:40,231", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=9 population=8"}
+{"time": "2026-05-24 13:36:40,232", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=10 population=8"}
+{"time": "2026-05-24 13:36:40,233", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=11 population=8"}
+{"time": "2026-05-24 13:36:40,234", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=12 population=8"}
+{"time": "2026-05-24 13:36:40,234", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=13 population=8"}
+{"time": "2026-05-24 13:36:40,235", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=14 population=8"}
+{"time": "2026-05-24 13:39:20,564", "level": "INFO", "logger": "__main__", "message": "Starting swarm OS"}
+{"time": "2026-05-24 13:40:39,673", "level": "INFO", "logger": "__main__", "message": "Starting swarm OS"}
+{"time": "2026-05-24 13:42:02,862", "level": "INFO", "logger": "__main__", "message": "Starting swarm OS"}
+{"time": "2026-05-24 13:44:33,523", "level": "INFO", "logger": "__main__", "message": "Starting swarm OS"}
+{"time": "2026-05-24 13:51:09,037", "level": "INFO", "logger": "__main__", "message": "Starting swarm OS"}
+{"time": "2026-05-24 13:51:09,056", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 13:51:09,063", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 13:51:09,063", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 13:51:09,064", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 13:51:09,064", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 13:51:09,065", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 13:51:09,065", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 13:51:09,066", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 13:51:09,066", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=15 population=8"}
+{"time": "2026-05-24 13:51:09,068", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 13:51:09,068", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 13:51:09,068", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 13:51:09,068", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 13:51:09,069", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 13:51:09,069", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 13:51:09,069", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 13:51:09,069", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 13:51:09,070", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=16 population=8"}
+{"time": "2026-05-24 13:51:09,070", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 13:51:09,071", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 13:51:09,071", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 13:51:09,071", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 13:51:09,072", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 13:51:09,072", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 13:51:09,072", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 13:51:09,072", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 13:51:09,073", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=17 population=8"}
+{"time": "2026-05-24 13:51:09,073", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 13:51:09,074", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 13:51:09,074", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 13:51:09,074", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 13:51:09,074", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 13:51:09,075", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 13:51:09,075", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 13:51:09,075", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 13:51:09,075", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=18 population=8"}
+{"time": "2026-05-24 13:51:09,077", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 13:51:09,078", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 13:51:09,078", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 13:51:09,078", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 13:51:09,079", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 13:51:09,079", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 13:51:09,079", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 13:51:09,079", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 13:51:09,080", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=19 population=8"}
+{"time": "2026-05-24 13:51:09,080", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 13:51:09,081", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 13:51:09,081", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 13:51:09,081", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 13:51:09,082", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 13:51:09,082", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 13:51:09,082", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 13:51:09,082", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 13:51:09,083", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=20 population=8"}
+{"time": "2026-05-24 13:51:09,084", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 13:51:09,084", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 13:51:09,084", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 13:51:09,084", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 13:51:09,085", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 13:51:09,085", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 13:51:09,085", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 13:51:09,085", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 13:51:09,086", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=21 population=8"}
+{"time": "2026-05-24 13:51:09,086", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 13:51:09,087", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 13:51:09,087", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 13:51:09,087", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 13:51:09,087", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 13:51:09,088", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 13:51:09,088", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 13:51:09,088", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 13:51:09,089", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=22 population=8"}
+{"time": "2026-05-24 13:51:09,090", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 13:51:09,090", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 13:51:09,091", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 13:51:09,091", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 13:51:09,091", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 13:51:09,091", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 13:51:09,091", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 13:51:09,092", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 13:51:09,092", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=23 population=8"}
+{"time": "2026-05-24 13:51:09,093", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 13:51:09,094", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 13:51:09,094", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 13:51:09,095", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 13:51:09,095", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 13:51:09,096", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 13:51:09,096", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 13:51:09,096", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 13:51:09,096", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=24 population=8"}
+{"time": "2026-05-24 13:51:09,097", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 13:51:09,098", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 13:51:09,099", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 13:51:09,099", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 13:51:09,100", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 13:51:09,100", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 13:51:09,101", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 13:51:09,101", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 13:51:09,102", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=25 population=8"}
+{"time": "2026-05-24 13:51:09,103", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 13:51:09,103", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 13:51:09,103", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 13:51:09,104", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 13:51:09,104", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 13:51:09,104", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 13:51:09,104", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 13:51:09,105", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 13:51:09,105", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=26 population=8"}
+{"time": "2026-05-24 13:51:09,106", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 13:51:09,106", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 13:51:09,106", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 13:51:09,106", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 13:51:09,107", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 13:51:09,107", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 13:51:09,107", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 13:51:09,107", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 13:51:09,108", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=27 population=8"}
+{"time": "2026-05-24 13:51:09,108", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 13:51:09,109", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 13:51:09,109", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 13:51:09,110", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 13:51:09,110", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 13:51:09,110", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 13:51:09,111", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 13:51:09,112", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 13:51:09,112", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=28 population=8"}
+{"time": "2026-05-24 13:51:09,113", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 13:51:09,113", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 13:51:09,114", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 13:51:09,114", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 13:51:09,114", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 13:51:09,115", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 13:51:09,115", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 13:51:09,116", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 13:51:09,116", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=29 population=8"}
+{"time": "2026-05-24 13:53:04,121", "level": "INFO", "logger": "__main__", "message": "Starting swarm OS"}
+{"time": "2026-05-24 13:53:04,134", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=30 population=8"}
+{"time": "2026-05-24 13:53:04,143", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=31 population=8"}
+{"time": "2026-05-24 13:53:04,144", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=32 population=8"}
+{"time": "2026-05-24 13:53:04,145", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=33 population=8"}
+{"time": "2026-05-24 13:53:04,145", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=34 population=8"}
+{"time": "2026-05-24 13:53:04,146", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=35 population=8"}
+{"time": "2026-05-24 13:53:04,147", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=36 population=8"}
+{"time": "2026-05-24 13:53:04,147", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=37 population=8"}
+{"time": "2026-05-24 13:53:04,148", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=38 population=8"}
+{"time": "2026-05-24 13:53:04,149", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=39 population=8"}
+{"time": "2026-05-24 13:53:04,149", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=40 population=8"}
+{"time": "2026-05-24 13:53:04,150", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=41 population=8"}
+{"time": "2026-05-24 13:53:04,151", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=42 population=8"}
+{"time": "2026-05-24 13:53:04,151", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=43 population=8"}
+{"time": "2026-05-24 13:53:04,152", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=44 population=8"}
+{"time": "2026-05-24 13:57:39,454", "level": "INFO", "logger": "__main__", "message": "Starting swarm OS"}
+{"time": "2026-05-24 14:05:10,196", "level": "INFO", "logger": "__main__", "message": "Starting swarm OS"}
+{"time": "2026-05-24 14:05:10,209", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=45 population=8"}
+{"time": "2026-05-24 14:05:10,211", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=46 population=8"}
+{"time": "2026-05-24 14:05:10,212", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=47 population=8"}
+{"time": "2026-05-24 14:05:10,213", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=48 population=8"}
+{"time": "2026-05-24 14:05:10,213", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=49 population=8"}
+{"time": "2026-05-24 14:05:10,214", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=50 population=8"}
+{"time": "2026-05-24 14:05:10,215", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=51 population=8"}
+{"time": "2026-05-24 14:05:10,216", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=52 population=8"}
+{"time": "2026-05-24 14:05:10,218", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=53 population=8"}
+{"time": "2026-05-24 14:05:10,219", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=54 population=8"}
+{"time": "2026-05-24 14:05:10,220", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=55 population=8"}
+{"time": "2026-05-24 14:05:10,220", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=56 population=8"}
+{"time": "2026-05-24 14:05:10,221", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=57 population=8"}
+{"time": "2026-05-24 14:05:10,222", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=58 population=8"}
+{"time": "2026-05-24 14:05:10,223", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=59 population=8"}
+{"time": "2026-05-24 14:12:43,860", "level": "INFO", "logger": "__main__", "message": "Starting swarm OS"}
+{"time": "2026-05-24 14:15:51,209", "level": "INFO", "logger": "__main__", "message": "Starting swarm OS"}
+{"time": "2026-05-24 14:15:51,227", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 14:15:51,242", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 14:15:51,243", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 14:15:51,243", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 14:15:51,244", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 14:15:51,244", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 14:15:51,244", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 14:15:51,244", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 14:15:51,245", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=60 population=8"}
+{"time": "2026-05-24 14:15:51,246", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 14:15:51,246", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 14:15:51,246", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 14:15:51,246", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 14:15:51,247", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 14:15:51,247", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 14:15:51,247", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 14:15:51,247", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 14:15:51,248", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=61 population=8"}
+{"time": "2026-05-24 14:15:51,248", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 14:15:51,249", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 14:15:51,249", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 14:15:51,249", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 14:15:51,249", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 14:15:51,250", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 14:15:51,250", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 14:15:51,250", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 14:15:51,250", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=62 population=8"}
+{"time": "2026-05-24 14:15:51,251", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 14:15:51,251", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 14:15:51,252", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 14:15:51,252", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 14:15:51,252", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 14:15:51,252", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 14:15:51,253", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 14:15:51,253", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 14:15:51,253", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=63 population=8"}
+{"time": "2026-05-24 14:15:51,254", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 14:15:51,254", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 14:15:51,255", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 14:15:51,255", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 14:15:51,255", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 14:15:51,255", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 14:15:51,256", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 14:15:51,256", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 14:15:51,256", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=64 population=8"}
+{"time": "2026-05-24 14:15:51,257", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 14:15:51,257", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 14:15:51,257", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 14:15:51,258", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 14:15:51,258", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 14:15:51,259", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 14:15:51,259", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 14:15:51,260", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 14:15:51,261", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=65 population=8"}
+{"time": "2026-05-24 14:15:51,262", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 14:15:51,262", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 14:15:51,262", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 14:15:51,263", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 14:15:51,263", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 14:15:51,263", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 14:15:51,263", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 14:15:51,264", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 14:15:51,264", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=66 population=8"}
+{"time": "2026-05-24 14:15:51,265", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 14:15:51,265", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 14:15:51,265", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 14:15:51,265", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 14:15:51,266", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 14:15:51,266", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 14:15:51,266", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 14:15:51,266", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 14:15:51,267", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=67 population=8"}
+{"time": "2026-05-24 14:15:51,267", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 14:15:51,268", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 14:15:51,268", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 14:15:51,268", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 14:15:51,269", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 14:15:51,269", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 14:15:51,269", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 14:15:51,269", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 14:15:51,270", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=68 population=8"}
+{"time": "2026-05-24 14:15:51,271", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 14:15:51,271", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 14:15:51,272", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 14:15:51,272", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 14:15:51,272", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 14:15:51,272", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 14:15:51,273", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 14:15:51,273", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 14:15:51,273", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=69 population=8"}
+{"time": "2026-05-24 14:15:51,274", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 14:15:51,274", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 14:15:51,274", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 14:15:51,275", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 14:15:51,275", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 14:15:51,275", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 14:15:51,276", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 14:15:51,277", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 14:15:51,278", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=70 population=8"}
+{"time": "2026-05-24 14:15:51,279", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 14:15:51,279", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 14:15:51,280", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 14:15:51,280", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 14:15:51,280", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 14:15:51,280", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 14:15:51,281", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 14:15:51,281", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 14:15:51,281", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=71 population=8"}
+{"time": "2026-05-24 14:15:51,282", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 14:15:51,282", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 14:15:51,282", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 14:15:51,283", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 14:15:51,283", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 14:15:51,283", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 14:15:51,283", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 14:15:51,284", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 14:15:51,284", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=72 population=8"}
+{"time": "2026-05-24 14:15:51,285", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 14:15:51,285", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 14:15:51,285", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 14:15:51,285", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 14:15:51,286", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 14:15:51,286", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 14:15:51,287", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 14:15:51,287", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 14:15:51,287", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=73 population=8"}
+{"time": "2026-05-24 14:15:51,288", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 14:15:51,289", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 14:15:51,289", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 14:15:51,289", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 14:15:51,289", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 14:15:51,290", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 14:15:51,290", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 14:15:51,290", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 14:15:51,290", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=74 population=8"}
+{"time": "2026-05-24 14:17:04,726", "level": "INFO", "logger": "__main__", "message": "Starting swarm OS"}
+{"time": "2026-05-24 14:17:04,738", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 14:17:04,739", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 14:17:04,740", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 14:17:04,740", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 14:17:04,740", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 14:17:04,741", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 14:17:04,741", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 14:17:04,742", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 14:17:04,742", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=75 population=8"}
+{"time": "2026-05-24 14:17:04,743", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 14:17:04,744", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 14:17:04,744", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 14:17:04,744", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 14:17:04,745", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 14:17:04,745", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 14:17:04,745", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 14:17:04,746", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 14:17:04,746", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=76 population=8"}
+{"time": "2026-05-24 14:17:04,746", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 14:17:04,747", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 14:17:04,747", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 14:17:04,747", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 14:17:04,748", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 14:17:04,748", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 14:17:04,748", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 14:17:04,748", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 14:17:04,749", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=77 population=8"}
+{"time": "2026-05-24 14:17:04,749", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 14:17:04,749", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 14:17:04,750", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 14:17:04,750", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 14:17:04,750", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 14:17:04,751", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 14:17:04,751", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 14:17:04,751", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 14:17:04,751", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=78 population=8"}
+{"time": "2026-05-24 14:17:04,752", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 14:17:04,752", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 14:17:04,753", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 14:17:04,753", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 14:17:04,753", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 14:17:04,753", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 14:17:04,754", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 14:17:04,754", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 14:17:04,754", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=79 population=8"}
+{"time": "2026-05-24 14:17:04,755", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 14:17:04,755", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 14:17:04,755", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 14:17:04,756", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 14:17:04,756", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 14:17:04,756", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 14:17:04,757", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 14:17:04,757", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 14:17:04,758", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=80 population=8"}
+{"time": "2026-05-24 14:17:04,760", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 14:17:04,760", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 14:17:04,761", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 14:17:04,761", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 14:17:04,761", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 14:17:04,762", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 14:17:04,762", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 14:17:04,762", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 14:17:04,763", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=81 population=8"}
+{"time": "2026-05-24 14:17:04,764", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 14:17:04,764", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 14:17:04,764", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 14:17:04,764", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 14:17:04,765", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 14:17:04,765", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 14:17:04,765", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 14:17:04,765", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 14:17:04,766", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=82 population=8"}
+{"time": "2026-05-24 14:17:04,766", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 14:17:04,767", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 14:17:04,767", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 14:17:04,767", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 14:17:04,767", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 14:17:04,768", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 14:17:04,768", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 14:17:04,768", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 14:17:04,769", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=83 population=8"}
+{"time": "2026-05-24 14:17:04,769", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 14:17:04,769", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 14:17:04,770", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 14:17:04,770", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 14:17:04,770", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 14:17:04,771", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 14:17:04,771", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 14:17:04,771", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 14:17:04,771", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=84 population=8"}
+{"time": "2026-05-24 14:17:04,772", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 14:17:04,772", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 14:17:04,772", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 14:17:04,773", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 14:17:04,773", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 14:17:04,774", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 14:17:04,775", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 14:17:04,775", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 14:17:04,776", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=85 population=8"}
+{"time": "2026-05-24 14:17:04,777", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 14:17:04,777", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 14:17:04,777", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 14:17:04,778", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 14:17:04,778", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 14:17:04,778", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 14:17:04,778", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 14:17:04,779", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 14:17:04,779", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=86 population=8"}
+{"time": "2026-05-24 14:17:04,780", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 14:17:04,780", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 14:17:04,780", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 14:17:04,781", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 14:17:04,781", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 14:17:04,781", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 14:17:04,781", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 14:17:04,782", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 14:17:04,782", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=87 population=8"}
+{"time": "2026-05-24 14:17:04,782", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 14:17:04,783", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 14:17:04,783", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 14:17:04,783", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 14:17:04,784", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 14:17:04,784", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 14:17:04,784", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 14:17:04,784", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 14:17:04,785", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=88 population=8"}
+{"time": "2026-05-24 14:17:04,785", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 14:17:04,786", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 14:17:04,786", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 14:17:04,786", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 14:17:04,787", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 14:17:04,787", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 14:17:04,787", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 14:17:04,787", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 14:17:04,788", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=89 population=8"}
+{"time": "2026-05-24 14:23:23,199", "level": "INFO", "logger": "__main__", "message": "Starting swarm OS"}
+{"time": "2026-05-24 14:37:13,746", "level": "INFO", "logger": "__main__", "message": "Starting swarm OS"}
+{"time": "2026-05-24 14:38:22,060", "level": "INFO", "logger": "__main__", "message": "Starting swarm OS"}
+{"time": "2026-05-24 14:44:24,272", "level": "INFO", "logger": "__main__", "message": "Starting swarm OS"}
+{"time": "2026-05-24 14:45:28,065", "level": "INFO", "logger": "__main__", "message": "Starting swarm OS"}
+{"time": "2026-05-24 14:54:00,914", "level": "INFO", "logger": "__main__", "message": "Starting swarm OS"}
+{"time": "2026-05-24 15:04:11,954", "level": "INFO", "logger": "__main__", "message": "Starting swarm OS"}
+{"time": "2026-05-24 15:04:11,969", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:04:11,971", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:04:11,971", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:04:11,972", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:04:11,972", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:04:11,973", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:04:11,974", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:04:11,974", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:04:11,975", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=90 population=8"}
+{"time": "2026-05-24 15:04:11,976", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:04:11,976", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:04:11,977", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:04:11,977", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:04:11,978", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:04:11,978", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:04:11,978", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:04:11,979", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:04:11,979", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=91 population=8"}
+{"time": "2026-05-24 15:04:11,980", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:04:11,980", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:04:11,981", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:04:11,981", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:04:11,981", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:04:11,982", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:04:11,983", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:04:11,983", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:04:11,983", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=92 population=8"}
+{"time": "2026-05-24 15:04:11,984", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:04:11,985", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:04:11,985", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:04:11,985", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:04:11,986", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:04:11,986", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:04:11,987", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:04:11,987", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:04:11,987", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=93 population=8"}
+{"time": "2026-05-24 15:04:11,988", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:04:11,988", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:04:11,989", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:04:11,989", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:04:11,990", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:04:11,990", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:04:11,991", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:04:11,992", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:04:11,992", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=94 population=8"}
+{"time": "2026-05-24 15:04:11,993", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:04:11,993", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:04:11,994", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:04:11,994", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:04:11,995", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:04:11,995", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:04:11,995", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:04:11,996", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:04:11,996", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=95 population=8"}
+{"time": "2026-05-24 15:04:11,997", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:04:11,997", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:04:11,998", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:04:11,998", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:04:11,998", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:04:11,999", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:04:11,999", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:04:12,000", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:04:12,000", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=96 population=8"}
+{"time": "2026-05-24 15:04:12,001", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:04:12,001", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:04:12,002", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:04:12,002", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:04:12,002", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:04:12,003", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:04:12,003", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:04:12,003", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:04:12,004", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=97 population=8"}
+{"time": "2026-05-24 15:04:12,004", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:04:12,005", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:04:12,005", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:04:12,006", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:04:12,006", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:04:12,007", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:04:12,008", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:04:12,009", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:04:12,009", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=98 population=8"}
+{"time": "2026-05-24 15:04:12,010", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:04:12,010", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:04:12,011", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:04:12,011", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:04:12,011", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:04:12,012", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:04:12,012", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:04:12,012", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:04:12,013", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=99 population=8"}
+{"time": "2026-05-24 15:04:12,014", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:04:12,014", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:04:12,014", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:04:12,015", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:04:12,015", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:04:12,016", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:04:12,016", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:04:12,016", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:04:12,017", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=100 population=8"}
+{"time": "2026-05-24 15:04:12,017", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:04:12,018", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:04:12,018", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:04:12,019", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:04:12,019", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:04:12,019", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:04:12,020", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:04:12,020", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:04:12,020", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=101 population=8"}
+{"time": "2026-05-24 15:04:12,021", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:04:12,022", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:04:12,022", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:04:12,023", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:04:12,024", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:04:12,024", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:04:12,025", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:04:12,025", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:04:12,025", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=102 population=8"}
+{"time": "2026-05-24 15:04:12,026", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:04:12,027", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:04:12,027", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:04:12,028", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:04:12,028", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:04:12,028", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:04:12,029", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:04:12,029", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:04:12,030", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=103 population=8"}
+{"time": "2026-05-24 15:04:12,030", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:04:12,031", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:04:12,031", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:04:12,032", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:04:12,032", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:04:12,032", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:04:12,033", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:04:12,033", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:04:12,034", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=104 population=8"}
+{"time": "2026-05-24 15:09:07,957", "level": "INFO", "logger": "__main__", "message": "Starting swarm OS"}
+{"time": "2026-05-24 15:09:07,973", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:09:07,988", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:09:07,989", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:09:07,989", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:09:07,990", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:09:07,990", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:09:07,990", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:09:07,991", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:09:07,991", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=105 population=8"}
+{"time": "2026-05-24 15:09:07,992", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:09:07,993", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:09:07,993", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:09:07,993", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:09:07,994", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:09:07,994", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:09:07,995", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:09:07,995", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:09:07,995", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=106 population=8"}
+{"time": "2026-05-24 15:09:07,997", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:09:07,998", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:09:07,998", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:09:07,999", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:09:07,999", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:09:08,000", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:09:08,000", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:09:08,001", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:09:08,001", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=107 population=8"}
+{"time": "2026-05-24 15:09:08,002", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:09:08,002", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:09:08,003", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:09:08,003", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:09:08,003", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:09:08,004", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:09:08,004", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:09:08,005", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:09:08,005", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=108 population=8"}
+{"time": "2026-05-24 15:09:08,006", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:09:08,007", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:09:08,007", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:09:08,008", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:09:08,009", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:09:08,009", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:09:08,009", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:09:08,010", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:09:08,010", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=109 population=8"}
+{"time": "2026-05-24 15:09:08,011", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:09:08,011", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:09:08,012", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:09:08,012", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:09:08,013", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:09:08,014", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:09:08,015", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:09:08,015", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:09:08,016", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=110 population=8"}
+{"time": "2026-05-24 15:09:08,017", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:09:08,017", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:09:08,018", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:09:08,018", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:09:08,018", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:09:08,019", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:09:08,019", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:09:08,019", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:09:08,020", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=111 population=8"}
+{"time": "2026-05-24 15:09:08,020", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:09:08,021", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:09:08,021", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:09:08,022", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:09:08,022", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:09:08,023", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:09:08,023", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:09:08,023", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:09:08,024", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=112 population=8"}
+{"time": "2026-05-24 15:09:08,024", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:09:08,025", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:09:08,025", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:09:08,026", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:09:08,026", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:09:08,026", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:09:08,027", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:09:08,027", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:09:08,028", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=113 population=8"}
+{"time": "2026-05-24 15:09:08,028", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:09:08,029", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:09:08,029", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:09:08,030", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:09:08,031", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:09:08,032", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:09:08,032", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:09:08,032", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:09:08,033", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=114 population=8"}
+{"time": "2026-05-24 15:09:08,034", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:09:08,034", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:09:08,035", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:09:08,035", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:09:08,035", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:09:08,036", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:09:08,036", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:09:08,037", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:09:08,037", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=115 population=8"}
+{"time": "2026-05-24 15:09:08,038", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:09:08,038", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:09:08,038", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:09:08,039", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:09:08,039", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:09:08,039", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:09:08,040", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:09:08,040", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:09:08,041", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=116 population=8"}
+{"time": "2026-05-24 15:09:08,041", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:09:08,042", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:09:08,042", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:09:08,043", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:09:08,043", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:09:08,043", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:09:08,044", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:09:08,044", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:09:08,044", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=117 population=8"}
+{"time": "2026-05-24 15:09:08,045", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:09:08,045", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:09:08,046", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:09:08,047", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:09:08,048", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:09:08,048", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:09:08,049", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:09:08,049", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:09:08,050", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=118 population=8"}
+{"time": "2026-05-24 15:09:08,050", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:09:08,051", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:09:08,051", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:09:08,052", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:09:08,052", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:09:08,053", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:09:08,053", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:09:08,053", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:09:08,054", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=119 population=8"}
+{"time": "2026-05-24 15:10:47,541", "level": "INFO", "logger": "__main__", "message": "Starting swarm OS"}
+{"time": "2026-05-24 15:10:47,557", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=120 population=8"}
+{"time": "2026-05-24 15:10:47,558", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=121 population=8"}
+{"time": "2026-05-24 15:10:47,559", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=122 population=8"}
+{"time": "2026-05-24 15:10:47,561", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=123 population=8"}
+{"time": "2026-05-24 15:10:47,562", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=124 population=8"}
+{"time": "2026-05-24 15:10:47,563", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=125 population=8"}
+{"time": "2026-05-24 15:10:47,563", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=126 population=8"}
+{"time": "2026-05-24 15:10:47,564", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=127 population=8"}
+{"time": "2026-05-24 15:10:47,565", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=128 population=8"}
+{"time": "2026-05-24 15:10:47,573", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=129 population=8"}
+{"time": "2026-05-24 15:10:47,574", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=130 population=8"}
+{"time": "2026-05-24 15:10:47,575", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=131 population=8"}
+{"time": "2026-05-24 15:10:47,576", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=132 population=8"}
+{"time": "2026-05-24 15:10:47,577", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=133 population=8"}
+{"time": "2026-05-24 15:10:47,578", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=134 population=8"}
+{"time": "2026-05-24 15:21:27,642", "level": "INFO", "logger": "__main__", "message": "Starting swarm OS"}
+{"time": "2026-05-24 15:24:00,760", "level": "INFO", "logger": "__main__", "message": "Starting swarm OS"}
+{"time": "2026-05-24 15:31:11,223", "level": "INFO", "logger": "__main__", "message": "Starting swarm OS"}
+{"time": "2026-05-24 15:32:37,250", "level": "INFO", "logger": "__main__", "message": "Starting swarm OS"}
+{"time": "2026-05-24 15:33:51,538", "level": "INFO", "logger": "__main__", "message": "Starting swarm OS"}
+{"time": "2026-05-24 15:33:51,557", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:33:51,573", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:33:51,573", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:33:51,574", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:33:51,574", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:33:51,575", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:33:51,575", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:33:51,576", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:33:51,577", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=135 population=8"}
+{"time": "2026-05-24 15:33:51,578", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:33:51,578", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:33:51,579", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:33:51,579", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:33:51,580", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:33:51,580", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:33:51,581", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:33:51,582", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:33:51,582", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=136 population=8"}
+{"time": "2026-05-24 15:33:51,583", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:33:51,584", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:33:51,585", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:33:51,585", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:33:51,586", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:33:51,587", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:33:51,588", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:33:51,588", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:33:51,589", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=137 population=8"}
+{"time": "2026-05-24 15:33:51,590", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:33:51,591", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:33:51,591", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:33:51,592", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:33:51,592", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:33:51,593", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:33:51,593", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:33:51,593", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:33:51,594", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=138 population=8"}
+{"time": "2026-05-24 15:33:51,595", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:33:51,595", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:33:51,596", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:33:51,596", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:33:51,596", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:33:51,597", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:33:51,597", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:33:51,598", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:33:51,599", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=139 population=8"}
+{"time": "2026-05-24 15:33:51,600", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:33:51,600", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:33:51,601", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:33:51,601", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:33:51,601", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:33:51,602", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:33:51,602", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:33:51,603", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:33:51,603", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=140 population=8"}
+{"time": "2026-05-24 15:33:51,605", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:33:51,606", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:33:51,607", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:33:51,608", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:33:51,609", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:33:51,609", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:33:51,610", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:33:51,610", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:33:51,611", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=141 population=8"}
+{"time": "2026-05-24 15:33:51,612", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:33:51,613", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:33:51,614", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:33:51,615", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:33:51,616", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:33:51,616", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:33:51,616", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:33:51,617", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:33:51,617", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=142 population=8"}
+{"time": "2026-05-24 15:33:51,618", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:33:51,619", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:33:51,619", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:33:51,619", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:33:51,620", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:33:51,620", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:33:51,621", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:33:51,621", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:33:51,621", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=143 population=8"}
+{"time": "2026-05-24 15:33:51,622", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:33:51,623", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:33:51,623", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:33:51,623", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:33:51,623", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:33:51,624", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:33:51,624", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:33:51,624", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:33:51,625", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=144 population=8"}
+{"time": "2026-05-24 15:33:51,625", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:33:51,626", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:33:51,626", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:33:51,627", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:33:51,627", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:33:51,627", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:33:51,628", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:33:51,628", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:33:51,628", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=145 population=8"}
+{"time": "2026-05-24 15:33:51,629", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:33:51,629", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:33:51,630", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:33:51,630", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:33:51,630", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:33:51,631", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:33:51,631", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:33:51,632", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:33:51,632", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=146 population=8"}
+{"time": "2026-05-24 15:33:51,633", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:33:51,634", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:33:51,634", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:33:51,635", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:33:51,635", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:33:51,636", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:33:51,636", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:33:51,636", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:33:51,637", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=147 population=8"}
+{"time": "2026-05-24 15:33:51,638", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:33:51,638", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:33:51,639", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:33:51,639", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:33:51,639", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:33:51,640", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:33:51,640", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:33:51,640", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:33:51,641", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=148 population=8"}
+{"time": "2026-05-24 15:33:51,642", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:33:51,642", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:33:51,643", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:33:51,643", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:33:51,644", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:33:51,644", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:33:51,645", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:33:51,646", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:33:51,646", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=149 population=8"}
+{"time": "2026-05-24 15:35:50,308", "level": "INFO", "logger": "__main__", "message": "Starting swarm OS"}
+{"time": "2026-05-24 15:38:43,522", "level": "INFO", "logger": "__main__", "message": "Starting swarm OS"}
+{"time": "2026-05-24 15:38:43,540", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:38:43,542", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:38:43,544", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:38:43,546", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:38:43,547", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:38:43,548", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:38:43,548", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:38:43,549", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:38:43,550", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=150 population=8"}
+{"time": "2026-05-24 15:38:43,551", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:38:43,551", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:38:43,552", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:38:43,553", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:38:43,554", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:38:43,557", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:38:43,558", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:38:43,559", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:38:43,559", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=151 population=8"}
+{"time": "2026-05-24 15:38:43,560", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:38:43,561", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:38:43,562", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:38:43,563", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:38:43,564", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:38:43,564", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:38:43,565", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:38:43,566", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:38:43,567", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=152 population=8"}
+{"time": "2026-05-24 15:38:43,567", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:38:43,568", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:38:43,569", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:38:43,570", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:38:43,570", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:38:43,573", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:38:43,574", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:38:43,574", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:38:43,575", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=153 population=8"}
+{"time": "2026-05-24 15:38:43,576", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:38:43,577", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:38:43,577", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:38:43,578", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:38:43,579", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:38:43,579", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:38:43,580", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:38:43,581", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:38:43,582", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=154 population=8"}
+{"time": "2026-05-24 15:38:43,582", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:38:43,583", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:38:43,584", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:38:43,584", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:38:43,585", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:38:43,586", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:38:43,586", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:38:43,588", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:38:43,589", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=155 population=8"}
+{"time": "2026-05-24 15:38:43,590", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:38:43,591", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:38:43,592", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:38:43,593", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:38:43,593", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:38:43,594", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:38:43,595", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:38:43,596", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:38:43,596", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=156 population=8"}
+{"time": "2026-05-24 15:38:43,597", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:38:43,598", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:38:43,598", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:38:43,599", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:38:43,600", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:38:43,601", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:38:43,601", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:38:43,602", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:38:43,603", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=157 population=8"}
+{"time": "2026-05-24 15:38:43,604", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:38:43,605", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:38:43,606", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:38:43,607", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:38:43,608", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:38:43,609", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:38:43,609", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:38:43,610", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:38:43,611", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=158 population=8"}
+{"time": "2026-05-24 15:38:43,612", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:38:43,612", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:38:43,613", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:38:43,614", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:38:43,615", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:38:43,615", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:38:43,616", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:38:43,617", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:38:43,617", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=159 population=8"}
+{"time": "2026-05-24 15:38:43,619", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:38:43,620", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:38:43,620", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:38:43,621", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:38:43,622", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:38:43,623", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:38:43,624", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:38:43,625", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:38:43,626", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=160 population=8"}
+{"time": "2026-05-24 15:38:43,626", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:38:43,627", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:38:43,628", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:38:43,629", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:38:43,629", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:38:43,630", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:38:43,631", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:38:43,632", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:38:43,632", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=161 population=8"}
+{"time": "2026-05-24 15:38:43,633", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:38:43,634", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:38:43,634", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:38:43,635", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:38:43,636", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:38:43,637", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:38:43,638", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:38:43,640", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:38:43,641", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=162 population=8"}
+{"time": "2026-05-24 15:38:43,641", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:38:43,642", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:38:43,643", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:38:43,644", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:38:43,644", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:38:43,645", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:38:43,646", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:38:43,646", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:38:43,647", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=163 population=8"}
+{"time": "2026-05-24 15:38:43,648", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen2_child_5820"}
+{"time": "2026-05-24 15:38:43,648", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen0_child_8279"}
+{"time": "2026-05-24 15:38:43,649", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_4333"}
+{"time": "2026-05-24 15:38:43,650", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen1_child_5514"}
+{"time": "2026-05-24 15:38:43,651", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=gen5_child_1049"}
+{"time": "2026-05-24 15:38:43,651", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=B"}
+{"time": "2026-05-24 15:38:43,652", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=C"}
+{"time": "2026-05-24 15:38:43,653", "level": "ERROR", "logger": "swarm_os.kernel.organism", "message": "organism act failed id=A"}
+{"time": "2026-05-24 15:38:43,654", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=164 population=8"}
+{"time": "2026-05-24 15:40:28,539", "level": "INFO", "logger": "__main__", "message": "Starting swarm OS"}
+{"time": "2026-05-24 15:40:28,572", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=165 population=8"}
+{"time": "2026-05-24 15:40:28,576", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=166 population=8"}
+{"time": "2026-05-24 15:40:28,580", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=167 population=8"}
+{"time": "2026-05-24 15:40:28,583", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=168 population=8"}
+{"time": "2026-05-24 15:40:28,586", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=169 population=8"}
+{"time": "2026-05-24 15:40:28,590", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=170 population=8"}
+{"time": "2026-05-24 15:40:28,593", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=171 population=8"}
+{"time": "2026-05-24 15:40:28,597", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=172 population=8"}
+{"time": "2026-05-24 15:40:28,599", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=173 population=8"}
+{"time": "2026-05-24 15:40:28,604", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=174 population=8"}
+{"time": "2026-05-24 15:40:28,608", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=175 population=8"}
+{"time": "2026-05-24 15:40:28,611", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=176 population=8"}
+{"time": "2026-05-24 15:40:28,614", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=177 population=8"}
+{"time": "2026-05-24 15:40:28,617", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=178 population=8"}
+{"time": "2026-05-24 15:40:28,622", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=179 population=8"}
+{"time": "2026-05-24 15:42:12,850", "level": "INFO", "logger": "__main__", "message": "Starting swarm OS"}
+{"time": "2026-05-24 15:42:12,873", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=180 population=8"}
+{"time": "2026-05-24 15:42:12,877", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=181 population=8"}
+{"time": "2026-05-24 15:42:12,880", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=182 population=8"}
+{"time": "2026-05-24 15:42:12,886", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=183 population=8"}
+{"time": "2026-05-24 15:42:12,889", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=184 population=8"}
+{"time": "2026-05-24 15:42:12,892", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=185 population=8"}
+{"time": "2026-05-24 15:42:12,895", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=186 population=8"}
+{"time": "2026-05-24 15:42:12,900", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=187 population=8"}
+{"time": "2026-05-24 15:42:12,904", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=188 population=8"}
+{"time": "2026-05-24 15:42:12,907", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=189 population=8"}
+{"time": "2026-05-24 15:42:12,910", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=190 population=8"}
+{"time": "2026-05-24 15:42:12,915", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=191 population=8"}
+{"time": "2026-05-24 15:42:12,918", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=192 population=8"}
+{"time": "2026-05-24 15:42:12,922", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=193 population=8"}
+{"time": "2026-05-24 15:42:12,926", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=194 population=8"}
+{"time": "2026-05-24 15:46:05,886", "level": "INFO", "logger": "__main__", "message": "Starting swarm OS"}
+{"time": "2026-05-24 15:46:05,905", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=195 population=8"}
+{"time": "2026-05-24 15:46:05,909", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=196 population=8"}
+{"time": "2026-05-24 15:46:05,912", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=197 population=8"}
+{"time": "2026-05-24 15:46:05,916", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=198 population=8"}
+{"time": "2026-05-24 15:46:05,920", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=199 population=8"}
+{"time": "2026-05-24 15:46:05,925", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=200 population=8"}
+{"time": "2026-05-24 15:46:05,928", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=201 population=8"}
+{"time": "2026-05-24 15:46:05,933", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=202 population=8"}
+{"time": "2026-05-24 15:46:05,936", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=203 population=8"}
+{"time": "2026-05-24 15:46:05,942", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=204 population=8"}
+{"time": "2026-05-24 15:46:05,947", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=205 population=8"}
+{"time": "2026-05-24 15:46:05,952", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=206 population=8"}
+{"time": "2026-05-24 15:46:05,958", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=207 population=8"}
+{"time": "2026-05-24 15:46:05,964", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=208 population=8"}
+{"time": "2026-05-24 15:46:05,970", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=209 population=8"}
+{"time": "2026-05-24 15:51:02,081", "level": "INFO", "logger": "__main__", "message": "Starting swarm OS"}
+{"time": "2026-05-24 15:52:25,785", "level": "INFO", "logger": "__main__", "message": "Starting swarm OS"}
+{"time": "2026-05-24 15:54:11,692", "level": "INFO", "logger": "__main__", "message": "Starting swarm OS"}
+{"time": "2026-05-24 15:54:11,714", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=210 population=8"}
+{"time": "2026-05-24 15:54:11,719", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=211 population=8"}
+{"time": "2026-05-24 15:54:11,722", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=212 population=8"}
+{"time": "2026-05-24 15:54:11,728", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=213 population=8"}
+{"time": "2026-05-24 15:54:11,731", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=214 population=8"}
+{"time": "2026-05-24 15:54:11,735", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=215 population=8"}
+{"time": "2026-05-24 15:54:11,739", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=216 population=8"}
+{"time": "2026-05-24 15:54:11,743", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=217 population=8"}
+{"time": "2026-05-24 15:54:11,747", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=218 population=8"}
+{"time": "2026-05-24 15:54:11,751", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=219 population=8"}
+{"time": "2026-05-24 15:54:11,754", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=220 population=8"}
+{"time": "2026-05-24 15:54:11,759", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=221 population=8"}
+{"time": "2026-05-24 15:54:11,763", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=222 population=8"}
+{"time": "2026-05-24 15:54:11,767", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=223 population=8"}
+{"time": "2026-05-24 15:54:11,770", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=224 population=8"}
+{"time": "2026-05-24 15:56:04,828", "level": "INFO", "logger": "__main__", "message": "Starting swarm OS"}
+{"time": "2026-05-24 15:56:04,845", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=225 population=8"}
+{"time": "2026-05-24 15:56:04,850", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=226 population=8"}
+{"time": "2026-05-24 15:56:04,854", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=227 population=8"}
+{"time": "2026-05-24 15:56:04,857", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=228 population=8"}
+{"time": "2026-05-24 15:56:04,864", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=229 population=8"}
+{"time": "2026-05-24 15:56:04,867", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=230 population=8"}
+{"time": "2026-05-24 15:56:04,872", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=231 population=8"}
+{"time": "2026-05-24 15:56:04,877", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=232 population=8"}
+{"time": "2026-05-24 15:56:04,883", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=233 population=8"}
+{"time": "2026-05-24 15:56:04,886", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=234 population=8"}
+{"time": "2026-05-24 15:56:04,890", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=235 population=8"}
+{"time": "2026-05-24 15:56:04,893", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=236 population=8"}
+{"time": "2026-05-24 15:56:04,897", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=237 population=8"}
+{"time": "2026-05-24 15:56:04,901", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=238 population=8"}
+{"time": "2026-05-24 15:56:04,906", "level": "INFO", "logger": "swarm_os.kernel.swarm_kernel", "message": "generation=239 population=8"}
+{"time": "2026-05-24 16:05:14,382", "level": "INFO", "logger": "__main__", "message": "Starting swarm OS"}
+{"time": "2026-05-24 16:10:32,803", "level": "INFO", "logger": "__main__", "message": "Starting swarm OS"}
+{"time": "2026-05-24 16:27:10,900", "level": "INFO", "logger": "__main__", "message": "Starting swarm OS"}
+{"time": "2026-05-24 16:29:29,725", "level": "INFO", "logger": "__main__", "message": "Starting swarm OS"}
+{"time": "2026-05-24 16:30:58,811", "level": "INFO", "logger": "__main__", "message": "Starting swarm OS"}
+{"time": "2026-05-24 16:32:27,111", "level": "INFO", "logger": "__main__", "message": "Starting swarm OS"}
+{"time": "2026-05-24 16:43:50,437", "level": "INFO", "logger": "__main__", "message": "Starting swarm OS"}
+{"time": "2026-05-24 16:45:30,995", "level": "INFO", "logger": "__main__", "message": "Starting swarm OS"}

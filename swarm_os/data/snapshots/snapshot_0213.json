@@ -1,0 +1,94 @@
+{
+  "snapshot_version": 2,
+  "generation": 213,
+  "organisms": [
+    {
+      "id": "B",
+      "fitness": 4.6553818838298255,
+      "genome": {
+        "genes": {},
+        "architecture": [],
+        "mutation_rate": 0.1,
+        "parent_id": null,
+        "generation": 0
+      }
+    },
+    {
+      "id": "gen2_child_5820",
+      "fitness": 4.629499830868488,
+      "genome": {
+        "genes": {},
+        "architecture": [],
+        "mutation_rate": 0.07649486833205844,
+        "parent_id": null,
+        "generation": 0
+      }
+    },
+    {
+      "id": "gen5_child_1049",
+      "fitness": 4.588343757929729,
+      "genome": {
+        "genes": {},
+        "architecture": [],
+        "mutation_rate": 0.07253641820874161,
+        "parent_id": null,
+        "generation": 0
+      }
+    },
+    {
+      "id": "gen1_child_4333",
+      "fitness": 4.571856607400339,
+      "genome": {
+        "genes": {},
+        "architecture": [],
+        "mutation_rate": 0.09375822889915884,
+        "parent_id": null,
+        "generation": 0
+      }
+    },
+    {
+      "id": "gen1_child_5514",
+      "fitness": 4.5648065095436765,
+      "genome": {
+        "genes": {},
+        "architecture": [],
+        "mutation_rate": 0.08621917999247126,
+        "parent_id": null,
+        "generation": 0
+      }
+    },
+    {
+      "id": "gen0_child_8279",
+      "fitness": 4.526557953103785,
+      "genome": {
+        "genes": {},
+        "architecture": [],
+        "mutation_rate": 0.08874551899214414,
+        "parent_id": null,
+        "generation": 0
+      }
+    },
+    {
+      "id": "A",
+      "fitness": 2.112929903177545,
+      "genome": {
+        "genes": {},
+        "architecture": [],
+        "mutation_rate": 0.1,
+        "parent_id": null,
+        "generation": 0
+      }
+    },
+    {
+      "id": "C",
+      "fitness": 1.8742839387489534,
+      "genome": {
+        "genes": {},
+        "architecture": [],
+        "mutation_rate": 0.1,
+        "parent_id": null,
+        "generation": 0
+      }
+    }
+  ]
+}

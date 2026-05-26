@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "swarm-os"
+version = "0.1.0"
+description = "Horseshoe Swarm OS runtime and orchestration layer"
+requires-python = ">=3.11"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["swarm_os*"]

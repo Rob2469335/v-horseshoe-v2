@@ -1,0 +1,67 @@
+{
+  "snapshot_version": 2,
+  "generation": 1,
+  "organisms": [
+    {
+      "id": "gen0_child_8279",
+      "fitness": 0.0,
+      "genome": {
+        "genes": {
+          "a": 0.918098502489808
+        },
+        "architecture": [
+          "core",
+          "module_95"
+        ],
+        "mutation_rate": 0.08874551899214414,
+        "parent_id": null,
+        "generation": 0
+      }
+    },
+    {
+      "id": "B",
+      "fitness": -0.009201372964015265,
+      "genome": {
+        "genes": {
+          "a": 0.2
+        },
+        "architecture": [
+          "core"
+        ],
+        "mutation_rate": 0.1,
+        "parent_id": null,
+        "generation": 0
+      }
+    },
+    {
+      "id": "C",
+      "fitness": -0.01697415999705974,
+      "genome": {
+        "genes": {
+          "a": 0.9
+        },
+        "architecture": [
+          "core"
+        ],
+        "mutation_rate": 0.1,
+        "parent_id": null,
+        "generation": 0
+      }
+    },
+    {
+      "id": "A",
+      "fitness": -0.046704157435983114,
+      "genome": {
+        "genes": {
+          "a": 0.5
+        },
+        "architecture": [
+          "core"
+        ],
+        "mutation_rate": 0.1,
+        "parent_id": null,
+        "generation": 0
+      }
+    }
+  ]
+}

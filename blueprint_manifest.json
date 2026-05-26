@@ -1,0 +1,11 @@
+{
+  "id": "file_folder_automation",
+  "name": "File & Folder Automation",
+  "version": "1.0.0",
+  "description": "Organize, rename, move, and manage files using natural language commands",
+  "category": "desktop",
+  "icon": "folder",
+  "requires_mcp": ["filesystem"],
+  "model_tier": "fast",
+  "tags": ["files", "automation", "desktop"]
+}

@@ -1,0 +1,131 @@
+{
+  "snapshot_version": 2,
+  "generation": 188,
+  "organisms": [
+    {
+      "id": "gen5_child_1049",
+      "fitness": 4.084176759621893,
+      "genome": {
+        "genes": {
+          "a": 0.9980213194183971
+        },
+        "architecture": [
+          "core",
+          "module_867",
+          "module_95"
+        ],
+        "mutation_rate": 0.07253641820874161,
+        "parent_id": null,
+        "generation": 0
+      }
+    },
+    {
+      "id": "B",
+      "fitness": 4.056459854283734,
+      "genome": {
+        "genes": {
+          "a": 0.2
+        },
+        "architecture": [
+          "core"
+        ],
+        "mutation_rate": 0.1,
+        "parent_id": null,
+        "generation": 0
+      }
+    },
+    {
+      "id": "gen0_child_8279",
+      "fitness": 4.054290936336582,
+      "genome": {
+        "genes": {
+          "a": 0.918098502489808
+        },
+        "architecture": [
+          "core",
+          "module_95"
+        ],
+        "mutation_rate": 0.08874551899214414,
+        "parent_id": null,
+        "generation": 0
+      }
+    },
+    {
+      "id": "gen1_child_4333",
+      "fitness": 4.016363910084769,
+      "genome": {
+        "genes": {
+          "a": 0.4185491686760296
+        },
+        "architecture": [
+          "core",
+          "module_867"
+        ],
+        "mutation_rate": 0.09375822889915884,
+        "parent_id": null,
+        "generation": 0
+      }
+    },
+    {
+      "id": "gen2_child_5820",
+      "fitness": 3.9865943477770367,
+      "genome": {
+        "genes": {
+          "a": 0.23030993947133246
+        },
+        "architecture": [
+          "core",
+          "module_867"
+        ],
+        "mutation_rate": 0.07649486833205844,
+        "parent_id": null,
+        "generation": 0
+      }
+    },
+    {
+      "id": "gen1_child_5514",
+      "fitness": 3.9115103496303187,
+      "genome": {
+        "genes": {
+          "a": 0.23962787899764537
+        },
+        "architecture": [
+          "core"
+        ],
+        "mutation_rate": 0.08621917999247126,
+        "parent_id": null,
+        "generation": 0
+      }
+    },
+    {
+      "id": "C",
+      "fitness": 1.706007306801676,
+      "genome": {
+        "genes": {
+          "a": 0.9
+        },
+        "architecture": [
+          "core"
+        ],
+        "mutation_rate": 0.1,
+        "parent_id": null,
+        "generation": 0
+      }
+    },
+    {
+      "id": "A",
+      "fitness": 1.6898492278915727,
+      "genome": {
+        "genes": {
+          "a": 0.5
+        },
+        "architecture": [
+          "core"
+        ],
+        "mutation_rate": 0.1,
+        "parent_id": null,
+        "generation": 0
+      }
+    }
+  ]
+}

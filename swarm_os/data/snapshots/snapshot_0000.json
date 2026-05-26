@@ -1,0 +1,190 @@
+{
+  "snapshot_version": 2,
+  "generation": 0,
+  "organisms": [
+    {
+      "id": "A",
+      "fitness": 0.4750305028523223,
+      "genome": {
+        "model_tier": 0.5,
+        "temperature": 0.5,
+        "reasoning_depth": 0.5,
+        "verbosity": 0.5,
+        "coding_affinity": 0.33,
+        "research_affinity": 0.33,
+        "upwork_affinity": 0.33,
+        "context_budget": 0.5,
+        "retrieval_top_k": 0.5,
+        "memory_window": 0.5,
+        "mutation_rate": 0.1,
+        "crossover_stability": 0.5,
+        "parent_id": null,
+        "generation": 0,
+        "cognition": {
+          "decomposition_bias": 0.5,
+          "max_subtasks": 0.5,
+          "reflection_depth": 0.5,
+          "self_critique_bias": 0.5,
+          "verification_bias": 0.5,
+          "hallucination_sensitivity": 0.5,
+          "parallel_tool_calls": 0.5,
+          "retry_aggression": 0.5,
+          "fallback_model_bias": 0.5,
+          "escalation_bias": 0.5,
+          "summarization_bias": 0.5,
+          "compression_ratio": 0.5,
+          "memory_read_bias": 0.5,
+          "memory_write_bias": 0.5
+        },
+        "tool_genes": {
+          "web_search": 0.5697133992289418,
+          "playwright": 0.26250537761133347,
+          "filesystem": 0.38751465918455963,
+          "context7": 0.3616053690744114,
+          "qdrant_recall": 0.6182356070820062,
+          "code_exec": 0.5883497437114557
+        },
+        "lifetime_fitness": 0.5588594151203792,
+        "evaluations": 1
+      }
+    },
+    {
+      "id": "B",
+      "fitness": 0.4750305028523223,
+      "genome": {
+        "model_tier": 0.5,
+        "temperature": 0.5,
+        "reasoning_depth": 0.5,
+        "verbosity": 0.5,
+        "coding_affinity": 0.33,
+        "research_affinity": 0.33,
+        "upwork_affinity": 0.33,
+        "context_budget": 0.5,
+        "retrieval_top_k": 0.5,
+        "memory_window": 0.5,
+        "mutation_rate": 0.1,
+        "crossover_stability": 0.5,
+        "parent_id": null,
+        "generation": 0,
+        "cognition": {
+          "decomposition_bias": 0.5,
+          "max_subtasks": 0.5,
+          "reflection_depth": 0.5,
+          "self_critique_bias": 0.5,
+          "verification_bias": 0.5,
+          "hallucination_sensitivity": 0.5,
+          "parallel_tool_calls": 0.5,
+          "retry_aggression": 0.5,
+          "fallback_model_bias": 0.5,
+          "escalation_bias": 0.5,
+          "summarization_bias": 0.5,
+          "compression_ratio": 0.5,
+          "memory_read_bias": 0.5,
+          "memory_write_bias": 0.5
+        },
+        "tool_genes": {
+          "web_search": 0.6960897838524227,
+          "playwright": 0.2934694163147081,
+          "filesystem": 0.4609609098426352,
+          "context7": 0.26489860971903517,
+          "qdrant_recall": 0.3593189874018017,
+          "code_exec": 0.5026776440516811
+        },
+        "lifetime_fitness": 0.5588594151203792,
+        "evaluations": 1
+      }
+    },
+    {
+      "id": "C",
+      "fitness": 0.4750305028523223,
+      "genome": {
+        "model_tier": 0.5,
+        "temperature": 0.5,
+        "reasoning_depth": 0.5,
+        "verbosity": 0.5,
+        "coding_affinity": 0.33,
+        "research_affinity": 0.33,
+        "upwork_affinity": 0.33,
+        "context_budget": 0.5,
+        "retrieval_top_k": 0.5,
+        "memory_window": 0.5,
+        "mutation_rate": 0.1,
+        "crossover_stability": 0.5,
+        "parent_id": null,
+        "generation": 0,
+        "cognition": {
+          "decomposition_bias": 0.5,
+          "max_subtasks": 0.5,
+          "reflection_depth": 0.5,
+          "self_critique_bias": 0.5,
+          "verification_bias": 0.5,
+          "hallucination_sensitivity": 0.5,
+          "parallel_tool_calls": 0.5,
+          "retry_aggression": 0.5,
+          "fallback_model_bias": 0.5,
+          "escalation_bias": 0.5,
+          "summarization_bias": 0.5,
+          "compression_ratio": 0.5,
+          "memory_read_bias": 0.5,
+          "memory_write_bias": 0.5
+        },
+        "tool_genes": {
+          "web_search": 0.2632679848419318,
+          "playwright": 0.34941882534332425,
+          "filesystem": 0.5749422188897616,
+          "context7": 0.5224707403016083,
+          "qdrant_recall": 0.36022031102034835,
+          "code_exec": 0.5446328419379544
+        },
+        "lifetime_fitness": 0.5588594151203792,
+        "evaluations": 1
+      }
+    },
+    {
+      "id": "g0_c2697",
+      "fitness": 0.0,
+      "genome": {
+        "model_tier": 0.4918918828833781,
+        "temperature": 0.47211798844578096,
+        "reasoning_depth": 0.37829773894756463,
+        "verbosity": 0.5476948248543989,
+        "coding_affinity": 0.27881276011604594,
+        "research_affinity": 0.29521812107665535,
+        "upwork_affinity": 0.4259691188072989,
+        "context_budget": 0.3662513561696511,
+        "retrieval_top_k": 0.5460366464797375,
+        "memory_window": 0.5438539253884953,
+        "mutation_rate": 0.10804885731021098,
+        "crossover_stability": 0.3681838022231041,
+        "parent_id": "C",
+        "generation": 1,
+        "cognition": {
+          "decomposition_bias": 0.5684640765323548,
+          "max_subtasks": 0.5901777532585096,
+          "reflection_depth": 0.3827807096734412,
+          "self_critique_bias": 0.4074770216424962,
+          "verification_bias": 0.5108857261731033,
+          "hallucination_sensitivity": 0.39205468912843233,
+          "parallel_tool_calls": 0.40504641073617,
+          "retry_aggression": 0.4887884205202902,
+          "fallback_model_bias": 0.612345786221174,
+          "escalation_bias": 0.3726154665122868,
+          "summarization_bias": 0.5924066734195108,
+          "compression_ratio": 0.6067900677405118,
+          "memory_read_bias": 0.3793726184604801,
+          "memory_write_bias": 0.5456434681995566
+        },
+        "tool_genes": {
+          "web_search": 0.6960897838524227,
+          "playwright": 0.17144824916985885,
+          "filesystem": 0.5749422188897616,
+          "context7": 0.26489860971903517,
+          "qdrant_recall": 0.3593189874018017,
+          "code_exec": 0.5236552429948178
+        },
+        "lifetime_fitness": 0.0,
+        "evaluations": 0
+      }
+    }
+  ]
+}
