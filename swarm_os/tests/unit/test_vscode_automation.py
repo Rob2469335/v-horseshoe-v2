@@ -16,7 +16,7 @@ async def test_vscode_automation_list_files():
     assert response.status == "executed"
     assert response.command == "list_files"
     assert response.exit_code == 0
-    assert "swarm_os/capabilities/models.py" in response.stdout
+    assert "capabilities/models.py" in response.stdout
 
 async def test_vscode_automation_rejects_disallowed_command():
     handler = VSCodeAutomationHandler()

@@ -43,7 +43,7 @@ class VSCodeAutomationHandler:
         if command == "list_files":
             try:
                 files = []
-                for root, _, filenames in os.walk(os.path.join(self.workspace_root, "swarm_os")):
+                for root, _, filenames in os.walk(self.workspace_root):
                     for f in filenames:
                         rel_path = os.path.relpath(os.path.join(root, f), self.workspace_root)
                         files.append(rel_path.replace("\\", "/"))

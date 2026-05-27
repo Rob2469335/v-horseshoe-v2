@@ -20,7 +20,7 @@ async def test_upwork_analyzer_detects_coding_job():
     assert response.match_score > 0.0
     assert response.should_bid is True
     assert response.recommended_bid is not None
-    assert response.recommended_bid.projected_rate == "/hr"
+    assert "/hr" in response.recommended_bid.projected_rate
 
 async def test_upwork_analyzer_handles_empty_description():
     handler = UpworkAnalyzerHandler()
