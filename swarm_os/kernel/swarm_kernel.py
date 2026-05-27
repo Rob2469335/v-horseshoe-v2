@@ -15,7 +15,7 @@ from .selection import SelectionEngine
 from .snapshot import save_snapshot
 
 log = logging.getLogger(__name__)
-_CONCURRENCY = 3
+_CONCURRENCY = 1
 
 def _make_organism(org_id: str, genome: Genome, task_domain: str = "general") -> Organism:
     brain = brain_registry.make("swarm", genome, task_domain)
@@ -128,5 +128,6 @@ class SwarmKernel:
             "resources": self.env.resources,
             "top_organisms": [{"id": o.id, "fitness": round(o.fitness, 4)} for o in top],
         }
+
 
 

@@ -7,6 +7,7 @@ Fixed:
   - Uses Genome.to_dict() not genome.__dict__
   - snapshot_repo injected with default (FileSnapshotRepository)
   - Uses correct kernel import paths
+  - Safe getattr lookup for random_seed config protection
 """
 from __future__ import annotations
 
@@ -55,8 +56,11 @@ class SimulationService:
         scenario: str | None = None,
     ) -> tuple:
         s = self.settings
-        if s.random_seed is not None:
-            random.seed(s.random_seed)
+        
+        # Safe fallback lookup if random_seed isn't present in settings blueprint
+        seed = getattr(s, "random_seed", None)
+        if seed is not None:
+            random.seed(seed)
 
         env = Environment()
 
@@ -71,7 +75,7 @@ class SimulationService:
         else:
             sc_name   = scenario or getattr(s, "scenario_name", "default")
             pop_max   = getattr(s, "population_max", 8)
-            organisms = build_scenario(sc_name, pop_max)
+            organisms = build_scenario(sc_name)
             kernel    = SwarmKernel(organisms, env)
             log.info("started fresh scenario=%s pop=%d", sc_name, len(organisms))
 
