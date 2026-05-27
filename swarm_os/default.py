@@ -7,7 +7,7 @@ from __future__ import annotations
 from typing import List
 
 from swarm_os.kernel.brain import registry as brain_registry
-from swarm_os.kernel.genetics import CognitivePolicy, Genome, MCP_TOOL_REGISTRY, normalize_affinities
+from swarm_os.genetics import CognitivePolicy, Genome, MCP_TOOL_REGISTRY, normalize_affinities
 from swarm_os.kernel.organism import Organism
 
 
@@ -117,3 +117,4 @@ def build(population_max: int = 6) -> List[Organism]:
     ]
 
     return seeds[:population_max]
+

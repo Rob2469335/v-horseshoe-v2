@@ -22,7 +22,7 @@ log = logging.getLogger(__name__)
 
 def _restore_from_snapshot(path) -> tuple:
     """Restore population using Genome.from_dict — safe for all snapshot versions."""
-    from swarm_os.kernel.genetics import Genome
+    from swarm_os.genetics import Genome
     from swarm_os.kernel.brain import registry as brain_registry
     from swarm_os.kernel.organism import Organism
 
@@ -174,3 +174,4 @@ def _print_final_report(kernel: SwarmKernel) -> None:
 
     print("\n" + "═" * 68)
     print("\n  To resume:  python -m swarm_os --resume\n")
+

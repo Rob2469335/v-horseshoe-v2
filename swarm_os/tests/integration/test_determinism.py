@@ -2,7 +2,7 @@ import unittest
 import random
 from swarm_os.config.settings import settings
 from swarm_os.kernel.environment import Environment
-from swarm_os.kernel.genetics import Genome
+from swarm_os.genetics import Genome
 from swarm_os.kernel.organism import Organism
 from swarm_os.kernel.swarm_kernel import SwarmKernel
 
@@ -31,4 +31,5 @@ class TestDeterminism(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
 

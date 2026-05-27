@@ -3,6 +3,7 @@ import asyncio
 import os
 from typing import Dict, Any, List
 from swarm_os.capabilities.models import VSCodeAutomationRequest, VSCodeAutomationResponse
+from swarm_os.lib.safety import validate_path
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,18 @@ class VSCodeAutomationHandler:
         for arg in payload.args:
             clean_arg = "".join(c for c in str(arg) if c.isalnum() or c in "._-/\\")
             if clean_arg:
-                sanitized_args.append(clean_arg)
+                try:
+                    validate_path(clean_arg, self.workspace_root)
+                    sanitized_args.append(clean_arg)
+                except ValueError as ve:
+                    return VSCodeAutomationResponse(
+                        status="rejected",
+                        command=command,
+                        stdout="",
+                        stderr=f'Security Containment Error: {str(ve)}',
+                        exit_code=1,
+                        message="Directory containment breach prevented."
+                    )
 
         if command not in self.allowed_commands:
             return VSCodeAutomationResponse(
@@ -89,12 +101,13 @@ class VSCodeAutomationHandler:
                 message="Command executed successfully."
             )
         except Exception as e:
-            # Fallback for systems lacking git or optional modules during environment testing
             return VSCodeAutomationResponse(
-                status="executed",
+                status="failed",
                 command=command,
-                stdout=f"Executed {command} in deterministic fallback mode.",
-                stderr="",
-                exit_code=0,
-                message=f"Subprocess wrapper default notice: {str(e)}"
+                stdout="",
+                stderr=str(e),
+                exit_code=1,
+                message="Subprocess execution failed."
             )
+
+
