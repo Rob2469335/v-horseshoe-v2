@@ -1,0 +1,1789 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>v-Horseshoe Enterprise v2</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg:        #080b0f;
+  --bg1:       #0d1117;
+  --bg2:       #111820;
+  --bg3:       #161e28;
+  --border:    #1e2d3d;
+  --border2:   #243444;
+  --accent:    #00d4ff;
+  --accent2:   #0096ff;
+  --accent3:   #7b61ff;
+  --green:     #00ff9d;
+  --amber:     #ffb800;
+  --red:       #ff4466;
+  --text:      #e2eaf4;
+  --text2:     #8899aa;
+  --text3:     #556677;
+  --glow:      0 0 20px rgba(0,212,255,0.15);
+  --glow2:     0 0 40px rgba(0,212,255,0.08);
+  --r:         8px;
+  --r2:        12px;
+}
+
+* { margin:0; padding:0; box-sizing:border-box; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Syne', sans-serif;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* ── Animated background grid ── */
+body::before {
+  content:'';
+  position:fixed; inset:0; z-index:0;
+  background-image:
+    linear-gradient(rgba(0,212,255,0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0,212,255,0.03) 1px, transparent 1px);
+  background-size: 40px 40px;
+  pointer-events:none;
+}
+
+body::after {
+  content:'';
+  position:fixed; inset:0; z-index:0;
+  background: radial-gradient(ellipse 80% 60% at 50% -10%, rgba(0,150,255,0.08) 0%, transparent 60%);
+  pointer-events:none;
+}
+
+/* ── Layout ── */
+.shell { display:flex; min-height:100vh; position:relative; z-index:1; }
+
+/* ── Sidebar ── */
+.sidebar {
+  width: 240px;
+  min-height: 100vh;
+  background: var(--bg1);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  position: fixed;
+  left: 0; top: 0; bottom: 0;
+  z-index: 100;
+}
+
+.logo {
+  padding: 24px 20px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.logo-mark {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.logo-icon {
+  width: 32px; height: 32px;
+  background: linear-gradient(135deg, var(--accent), var(--accent3));
+  border-radius: 8px;
+  display: flex; align-items:center; justify-content:center;
+  font-size: 16px;
+  box-shadow: 0 0 16px rgba(0,212,255,0.3);
+  flex-shrink: 0;
+}
+
+.logo-text {
+  font-family: 'Space Mono', monospace;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: 0.05em;
+}
+
+.logo-sub {
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+  color: var(--text3);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding-left: 42px;
+}
+
+.status-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 8px var(--green);
+  animation: pulse 2s ease-in-out infinite;
+  display: inline-block;
+  margin-right: 6px;
+}
+
+@keyframes pulse {
+  0%,100% { opacity:1; transform:scale(1); }
+  50% { opacity:0.5; transform:scale(0.8); }
+}
+
+.nav { flex:1; padding: 16px 0; overflow-y:auto; }
+
+.nav-section {
+  padding: 0 12px 8px;
+  font-family: 'DM Mono', monospace;
+  font-size: 9px;
+  color: var(--text3);
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  margin-top: 12px;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 16px;
+  margin: 1px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--text2);
+  font-size: 13px;
+  font-weight: 600;
+  transition: all 0.15s;
+  position: relative;
+  border: 1px solid transparent;
+}
+
+.nav-item:hover {
+  background: var(--bg2);
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.nav-item.active {
+  background: linear-gradient(135deg, rgba(0,212,255,0.1), rgba(123,97,255,0.08));
+  color: var(--accent);
+  border-color: rgba(0,212,255,0.2);
+}
+
+.nav-item.active::before {
+  content:'';
+  position:absolute;
+  left:-8px; top:50%;
+  transform: translateY(-50%);
+  width:3px; height:60%;
+  background: var(--accent);
+  border-radius: 0 2px 2px 0;
+  box-shadow: 0 0 8px var(--accent);
+}
+
+.nav-icon { font-size:15px; width:20px; text-align:center; }
+
+.nav-badge {
+  margin-left: auto;
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 10px;
+  background: rgba(0,212,255,0.1);
+  color: var(--accent);
+  border: 1px solid rgba(0,212,255,0.2);
+}
+
+.nav-badge.red {
+  background: rgba(255,68,102,0.1);
+  color: var(--red);
+  border-color: rgba(255,68,102,0.2);
+}
+
+.sidebar-footer {
+  padding: 16px;
+  border-top: 1px solid var(--border);
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+  color: var(--text3);
+}
+
+.sidebar-footer .version {
+  color: var(--text2);
+  font-weight: 500;
+}
+
+/* ── Main content ── */
+.main {
+  margin-left: 240px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+/* ── Topbar ── */
+.topbar {
+  height: 56px;
+  background: rgba(13,17,23,0.8);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 24px;
+  gap: 16px;
+  position: sticky; top:0; z-index:50;
+}
+
+.topbar-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  flex: 1;
+}
+
+.topbar-title span {
+  color: var(--text3);
+  font-weight: 400;
+  font-size: 13px;
+  margin-left: 8px;
+}
+
+.topbar-actions { display:flex; gap:8px; align-items:center; }
+
+.btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-family: 'Syne', sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid var(--border2);
+  background: var(--bg2);
+  color: var(--text2);
+  transition: all 0.15s;
+  letter-spacing: 0.02em;
+}
+
+.btn:hover { background:var(--bg3); color:var(--text); border-color:var(--border2); }
+
+.btn.primary {
+  background: linear-gradient(135deg, var(--accent2), var(--accent3));
+  color: #fff;
+  border-color: transparent;
+  box-shadow: 0 0 16px rgba(0,150,255,0.25);
+}
+
+.btn.primary:hover {
+  box-shadow: 0 0 24px rgba(0,150,255,0.4);
+  transform: translateY(-1px);
+}
+
+.btn.danger {
+  background: rgba(255,68,102,0.1);
+  color: var(--red);
+  border-color: rgba(255,68,102,0.2);
+}
+
+.btn.success {
+  background: rgba(0,255,157,0.08);
+  color: var(--green);
+  border-color: rgba(0,255,157,0.2);
+}
+
+/* ── Pages ── */
+.page { display:none; padding: 24px; animation: fadeIn 0.2s ease; }
+.page.active { display:block; }
+
+@keyframes fadeIn { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:translateY(0); } }
+
+/* ── Stats row ── */
+.stats-row { display:grid; grid-template-columns:repeat(4,1fr); gap:16px; margin-bottom:24px; }
+
+.stat-card {
+  background: var(--bg1);
+  border: 1px solid var(--border);
+  border-radius: var(--r2);
+  padding: 20px;
+  position: relative;
+  overflow: hidden;
+  transition: border-color 0.2s;
+}
+
+.stat-card:hover { border-color: var(--border2); }
+
+.stat-card::before {
+  content:'';
+  position:absolute;
+  top:0; left:0; right:0;
+  height: 2px;
+  background: var(--card-accent, linear-gradient(90deg, var(--accent), var(--accent3)));
+}
+
+.stat-label {
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+  color: var(--text3);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin-bottom: 10px;
+}
+
+.stat-value {
+  font-family: 'Space Mono', monospace;
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1;
+  margin-bottom: 6px;
+}
+
+.stat-sub {
+  font-size: 11px;
+  color: var(--text3);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.stat-up { color: var(--green); }
+.stat-down { color: var(--red); }
+
+/* ── Grid layouts ── */
+.grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px; }
+.grid-3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px; margin-bottom:16px; }
+.grid-65 { display:grid; grid-template-columns:2fr 1fr; gap:16px; margin-bottom:16px; }
+
+/* ── Cards ── */
+.card {
+  background: var(--bg1);
+  border: 1px solid var(--border);
+  border-radius: var(--r2);
+  overflow: hidden;
+}
+
+.card-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.card-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.card-body { padding: 20px; }
+
+/* ── Console ── */
+.console {
+  background: #050810;
+  border-radius: var(--r);
+  font-family: 'DM Mono', monospace;
+  font-size: 12px;
+  line-height: 1.7;
+  padding: 16px;
+  height: 240px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+}
+
+.console::-webkit-scrollbar { width:4px; }
+.console::-webkit-scrollbar-track { background:transparent; }
+.console::-webkit-scrollbar-thumb { background:var(--border2); border-radius:2px; }
+
+.log-line { display:flex; gap:10px; }
+.log-time { color: var(--text3); flex-shrink:0; }
+.log-level { flex-shrink:0; width: 48px; }
+.log-level.info  { color: var(--accent); }
+.log-level.ok    { color: var(--green); }
+.log-level.warn  { color: var(--amber); }
+.log-level.err   { color: var(--red); }
+.log-msg { color: var(--text2); }
+.log-msg .hl     { color: var(--text); }
+
+/* ── Population chart area ── */
+.pop-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 6px;
+  padding: 16px;
+}
+
+.organism-card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 8px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.2s;
+  position: relative;
+  overflow: hidden;
+}
+
+.organism-card:hover {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 16px rgba(0,212,255,0.1);
+}
+
+.organism-card.elite {
+  border-color: rgba(255,184,0,0.4);
+  background: rgba(255,184,0,0.04);
+}
+
+.organism-card.elite::after {
+  content:'★';
+  position:absolute; top:3px; right:5px;
+  font-size:9px; color:var(--amber);
+}
+
+.org-id {
+  font-family: 'DM Mono', monospace;
+  font-size: 9px;
+  color: var(--text3);
+  margin-bottom: 6px;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+
+.org-fitness-bar {
+  height: 3px;
+  background: var(--border);
+  border-radius: 2px;
+  margin: 6px 0 4px;
+  overflow: hidden;
+}
+
+.org-fitness-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--accent2), var(--accent));
+  transition: width 0.5s ease;
+}
+
+.org-fitness-val {
+  font-family: 'Space Mono', monospace;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.org-domain {
+  font-size: 9px;
+  color: var(--text3);
+  margin-top: 2px;
+}
+
+.domain-coding   { color: var(--accent); }
+.domain-research { color: var(--accent3); }
+.domain-upwork   { color: var(--amber); }
+
+/* ── Fitness chart ── */
+.chart-area {
+  padding: 16px 20px;
+  height: 180px;
+  position: relative;
+}
+
+.chart-svg { width:100%; height:100%; overflow:visible; }
+
+/* ── Tool runner ── */
+.tool-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 12px 16px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.tool-tab {
+  padding: 8px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text3);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.15s;
+  margin-bottom: -1px;
+}
+
+.tool-tab:hover { color:var(--text2); }
+.tool-tab.active { color:var(--accent); border-bottom-color:var(--accent); }
+
+.tool-panel { display:none; padding:20px; }
+.tool-panel.active { display:block; }
+
+.input-row { display:flex; gap:10px; margin-bottom:12px; }
+
+.input-field {
+  flex:1;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 14px;
+  color: var(--text);
+  font-family: 'DM Mono', monospace;
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.input-field:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(0,212,255,0.06); }
+.input-field::placeholder { color: var(--text3); }
+
+textarea.input-field {
+  resize: vertical;
+  min-height: 100px;
+  line-height: 1.6;
+}
+
+.result-box {
+  background: #050810;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  font-family: 'DM Mono', monospace;
+  font-size: 12px;
+  color: var(--text2);
+  min-height: 80px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ── Evolution controls ── */
+.evo-controls {
+  display: grid;
+  grid-template-columns: repeat(3,1fr);
+  gap: 12px;
+  padding: 16px 20px;
+}
+
+.evo-param {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.evo-param-label {
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+  color: var(--text3);
+  letter-spacing:0.08em;
+  text-transform:uppercase;
+  margin-bottom:8px;
+}
+
+.evo-param-val {
+  font-family: 'Space Mono', monospace;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.evo-param-slider {
+  width:100%;
+  margin-top:8px;
+  accent-color: var(--accent);
+}
+
+/* ── Events stream ── */
+.event-list { padding: 0; }
+
+.event-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+  transition: background 0.1s;
+}
+
+.event-item:hover { background: var(--bg2); }
+.event-item:last-child { border-bottom:none; }
+
+.event-icon {
+  width: 28px; height:28px;
+  border-radius: 6px;
+  display:flex; align-items:center; justify-content:center;
+  font-size:13px;
+  flex-shrink:0;
+  margin-top:1px;
+}
+
+.event-icon.generate { background:rgba(0,212,255,0.1); }
+.event-icon.assign   { background:rgba(123,97,255,0.1); }
+.event-icon.eval     { background:rgba(0,255,157,0.1); }
+.event-icon.error    { background:rgba(255,68,102,0.1); }
+
+.event-body { flex:1; min-width:0; }
+
+.event-type {
+  font-size:12px;
+  font-weight:700;
+  color:var(--text);
+  margin-bottom:2px;
+}
+
+.event-detail {
+  font-family:'DM Mono',monospace;
+  font-size:11px;
+  color:var(--text3);
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+
+.event-time {
+  font-family:'DM Mono',monospace;
+  font-size:10px;
+  color:var(--text3);
+  flex-shrink:0;
+  margin-top:3px;
+}
+
+/* ── Genome inspector ── */
+.genome-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 16px 20px;
+}
+
+.gene-row {
+  display:flex;
+  align-items:center;
+  gap:10px;
+  padding: 6px 0;
+}
+
+.gene-name {
+  font-family:'DM Mono',monospace;
+  font-size:11px;
+  color:var(--text3);
+  width:130px;
+  flex-shrink:0;
+}
+
+.gene-bar {
+  flex:1;
+  height:4px;
+  background:var(--border);
+  border-radius:2px;
+  overflow:hidden;
+}
+
+.gene-fill {
+  height:100%;
+  border-radius:2px;
+  background:linear-gradient(90deg, var(--accent2), var(--accent3));
+}
+
+.gene-val {
+  font-family:'Space Mono',monospace;
+  font-size:10px;
+  color:var(--text2);
+  width:36px;
+  text-align:right;
+  flex-shrink:0;
+}
+
+/* ── Snapshot list ── */
+.snap-list { padding:0; }
+
+.snap-item {
+  display:flex;
+  align-items:center;
+  gap:12px;
+  padding: 12px 20px;
+  border-bottom:1px solid var(--border);
+  transition:background 0.1s;
+  cursor:pointer;
+}
+
+.snap-item:hover { background:var(--bg2); }
+
+.snap-gen {
+  font-family:'Space Mono',monospace;
+  font-size:13px;
+  font-weight:700;
+  color:var(--text);
+  width:60px;
+}
+
+.snap-meta { flex:1; }
+
+.snap-name {
+  font-family:'DM Mono',monospace;
+  font-size:11px;
+  color:var(--text2);
+  margin-bottom:2px;
+}
+
+.snap-stats {
+  font-size:11px;
+  color:var(--text3);
+}
+
+.snap-actions { display:flex; gap:6px; }
+
+/* ── Pill tags ── */
+.pill {
+  display:inline-flex;
+  align-items:center;
+  gap:4px;
+  padding:2px 8px;
+  border-radius:20px;
+  font-family:'DM Mono',monospace;
+  font-size:10px;
+  font-weight:500;
+  border:1px solid;
+}
+
+.pill.blue   { color:var(--accent); background:rgba(0,212,255,0.08); border-color:rgba(0,212,255,0.2); }
+.pill.purple { color:var(--accent3); background:rgba(123,97,255,0.08); border-color:rgba(123,97,255,0.2); }
+.pill.green  { color:var(--green); background:rgba(0,255,157,0.08); border-color:rgba(0,255,157,0.2); }
+.pill.amber  { color:var(--amber); background:rgba(255,184,0,0.08); border-color:rgba(255,184,0,0.2); }
+.pill.red    { color:var(--red); background:rgba(255,68,102,0.08); border-color:rgba(255,68,102,0.2); }
+
+/* ── Loading spinner ── */
+.spinner {
+  width:16px; height:16px;
+  border:2px solid var(--border2);
+  border-top-color:var(--accent);
+  border-radius:50%;
+  animation:spin 0.7s linear infinite;
+  display:inline-block;
+}
+
+@keyframes spin { to { transform:rotate(360deg); } }
+
+/* ── Scrollbar global ── */
+::-webkit-scrollbar { width:6px; height:6px; }
+::-webkit-scrollbar-track { background:transparent; }
+::-webkit-scrollbar-thumb { background:var(--border2); border-radius:3px; }
+
+/* ── Empty state ── */
+.empty {
+  text-align:center;
+  padding:40px 20px;
+  color:var(--text3);
+  font-family:'DM Mono',monospace;
+  font-size:12px;
+}
+
+.empty .empty-icon { font-size:32px; margin-bottom:12px; opacity:0.4; }
+
+/* ── Responsive ── */
+@media(max-width:1200px) {
+  .stats-row { grid-template-columns:repeat(2,1fr); }
+  .grid-3 { grid-template-columns:1fr 1fr; }
+}
+</style>
+</head>
+<body>
+<div class="shell">
+
+<!-- ══════════════ SIDEBAR ══════════════ -->
+<nav class="sidebar">
+  <div class="logo">
+    <div class="logo-mark">
+      <div class="logo-icon">⬡</div>
+      <div class="logo-text">v-HORSESHOE</div>
+    </div>
+    <div class="logo-sub"><span class="status-dot"></span>Enterprise v2 · Online</div>
+  </div>
+
+  <div class="nav">
+    <div class="nav-section">Core</div>
+    <div class="nav-item active" data-page="dashboard" onclick="nav(this)">
+      <span class="nav-icon">◈</span> Dashboard
+    </div>
+    <div class="nav-item" data-page="swarm" onclick="nav(this)">
+      <span class="nav-icon">⬡</span> Swarm Evolution
+      <span class="nav-badge" id="pop-badge">8</span>
+    </div>
+    <div class="nav-item" data-page="genome" onclick="nav(this)">
+      <span class="nav-icon">◎</span> Genome Inspector
+    </div>
+
+    <div class="nav-section">Capabilities</div>
+    <div class="nav-item" data-page="tools" onclick="nav(this)">
+      <span class="nav-icon">⚡</span> Tool Runner
+    </div>
+    <div class="nav-item" data-page="chat" onclick="nav(this)">
+      <span class="nav-icon">◷</span> Chat Search
+    </div>
+    <div class="nav-item" data-page="upwork" onclick="nav(this)">
+      <span class="nav-icon">◈</span> Upwork Analyzer
+    </div>
+    <div class="nav-item" data-page="vscode" onclick="nav(this)">
+      <span class="nav-icon">⌥</span> VS Code Automation
+    </div>
+
+    <div class="nav-section">System</div>
+    <div class="nav-item" data-page="events" onclick="nav(this)">
+      <span class="nav-icon">◉</span> Event Stream
+      <span class="nav-badge" id="event-badge">0</span>
+    </div>
+    <div class="nav-item" data-page="snapshots" onclick="nav(this)">
+      <span class="nav-icon">◫</span> Snapshots
+    </div>
+    <div class="nav-item" data-page="settings" onclick="nav(this)">
+      <span class="nav-icon">◧</span> Settings
+    </div>
+  </div>
+
+  <div class="sidebar-footer">
+    <div><span class="version">Python 3.14.5</span> · FastAPI</div>
+    <div style="margin-top:4px">Port <span class="version">8000</span> · Swarm <span class="version">11436</span></div>
+  </div>
+</nav>
+
+<!-- ══════════════ MAIN ══════════════ -->
+<div class="main">
+
+<!-- Topbar -->
+<div class="topbar">
+  <div class="topbar-title" id="page-title">Dashboard <span>Overview</span></div>
+  <div class="topbar-actions">
+    <div class="btn" onclick="refreshAll()">↻ Refresh</div>
+    <div class="btn success" id="run-btn" onclick="triggerRun()">▶ Run Evolution</div>
+    <div class="btn danger" id="stop-btn" style="display:none" onclick="stopRun()">■ Stop</div>
+    <div class="btn primary" onclick="nav(document.querySelector('[data-page=tools]'))">⚡ Execute Tool</div>
+  </div>
+</div>
+
+<!-- ══════════ PAGE: DASHBOARD ══════════ -->
+<div class="page active" id="page-dashboard">
+  <div class="stats-row">
+    <div class="stat-card" style="--card-accent:linear-gradient(90deg,var(--accent),var(--accent2))">
+      <div class="stat-label">Generation</div>
+      <div class="stat-value" id="stat-gen">—</div>
+      <div class="stat-sub"><span class="status-dot" style="width:6px;height:6px"></span> Evolution active</div>
+    </div>
+    <div class="stat-card" style="--card-accent:linear-gradient(90deg,var(--accent3),#a855f7)">
+      <div class="stat-label">Population</div>
+      <div class="stat-value" id="stat-pop">—</div>
+      <div class="stat-sub">Organisms alive</div>
+    </div>
+    <div class="stat-card" style="--card-accent:linear-gradient(90deg,var(--green),#00cc7a)">
+      <div class="stat-label">Best Fitness</div>
+      <div class="stat-value" id="stat-fit">—</div>
+      <div class="stat-sub stat-up" id="stat-fit-delta">Avg fitness across pop</div>
+    </div>
+    <div class="stat-card" style="--card-accent:linear-gradient(90deg,var(--amber),#ff9500)">
+      <div class="stat-label">Events</div>
+      <div class="stat-value" id="stat-events">—</div>
+      <div class="stat-sub">Logged this session</div>
+    </div>
+  </div>
+
+  <div class="grid-65">
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">⬡ Fitness History</div>
+        <div class="pill blue">Live</div>
+      </div>
+      <div class="chart-area">
+        <svg class="chart-svg" id="fitness-chart" viewBox="0 0 600 140" preserveAspectRatio="none">
+          <defs>
+            <linearGradient id="chartGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#00d4ff" stop-opacity="0.3"/>
+              <stop offset="100%" stop-color="#00d4ff" stop-opacity="0"/>
+            </linearGradient>
+          </defs>
+          <path id="chart-area-path" d="" fill="url(#chartGrad)"/>
+          <path id="chart-line-path" d="" fill="none" stroke="#00d4ff" stroke-width="2" stroke-linejoin="round"/>
+          <text x="0" y="130" fill="#556677" font-family="DM Mono" font-size="10">No data yet</text>
+        </svg>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">◎ System Status</div>
+      </div>
+      <div class="card-body" style="padding:12px 16px">
+        <div id="status-lines" style="font-family:'DM Mono',monospace;font-size:12px;line-height:2.2">
+          <div style="color:var(--text3)">Loading status…</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">◉ Live Console</div>
+        <div class="btn" onclick="clearConsole()" style="padding:4px 10px;font-size:11px">Clear</div>
+      </div>
+      <div class="console" id="console-main"></div>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">◈ Top Organisms</div>
+        <div class="pill green">Best 3</div>
+      </div>
+      <div id="top-orgs-list" style="padding:8px 0">
+        <div class="empty"><div class="empty-icon">⬡</div>No organisms yet</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ PAGE: SWARM ══════════ -->
+<div class="page" id="page-swarm">
+  <div class="evo-controls">
+    <div class="evo-param">
+      <div class="evo-param-label">Population Max</div>
+      <div class="evo-param-val" id="evo-popmax">8</div>
+      <input type="range" class="evo-param-slider" min="4" max="12" value="8"
+             oninput="document.getElementById('evo-popmax').textContent=this.value">
+    </div>
+    <div class="evo-param">
+      <div class="evo-param-label">Generations</div>
+      <div class="evo-param-val" id="evo-gens">20</div>
+      <input type="range" class="evo-param-slider" min="5" max="100" value="20"
+             oninput="document.getElementById('evo-gens').textContent=this.value">
+    </div>
+    <div class="evo-param">
+      <div class="evo-param-label">Fitness Decay</div>
+      <div class="evo-param-val" id="evo-decay">0.85</div>
+      <input type="range" class="evo-param-slider" min="50" max="99" value="85"
+             oninput="document.getElementById('evo-decay').textContent=(this.value/100).toFixed(2)">
+    </div>
+    <div class="evo-param">
+      <div class="evo-param-label">Scenario</div>
+      <div class="evo-param-val" style="font-size:16px">default</div>
+      <select class="input-field" style="margin-top:8px;padding:6px 10px">
+        <option>default</option>
+        <option>stress</option>
+      </select>
+    </div>
+    <div class="evo-param" style="grid-column:span 2">
+      <div class="evo-param-label">Elite Count</div>
+      <div class="evo-param-val" id="evo-elite">2</div>
+      <input type="range" class="evo-param-slider" min="0" max="4" value="2"
+             oninput="document.getElementById('evo-elite').textContent=this.value">
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-header">
+      <div class="card-title">⬡ Current Population</div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <span class="pill blue" id="pop-count">0 organisms</span>
+        <div class="btn success" onclick="triggerRun()">▶ Evolve</div>
+      </div>
+    </div>
+    <div class="pop-grid" id="pop-grid">
+      <div class="empty" style="grid-column:span 8">
+        <div class="empty-icon">⬡</div>Start evolution to see population
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title">◉ Evolution Log</div>
+    </div>
+    <div class="console" id="evo-console" style="height:200px"></div>
+  </div>
+</div>
+
+<!-- ══════════ PAGE: GENOME ══════════ -->
+<div class="page" id="page-genome">
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">◎ Select Organism</div>
+      </div>
+      <div style="padding:16px 20px">
+        <div class="input-row">
+          <input class="input-field" id="genome-search" placeholder="Organism ID or search…" oninput="filterOrgs(this.value)">
+        </div>
+        <div id="genome-org-list" style="max-height:400px;overflow-y:auto">
+          <div class="empty"><div class="empty-icon">◎</div>No organisms loaded</div>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">◎ Gene Values</div>
+        <div class="pill purple" id="genome-org-id">—</div>
+      </div>
+      <div class="genome-grid" id="genome-detail">
+        <div class="empty" style="grid-column:span 2"><div class="empty-icon">◎</div>Select an organism</div>
+      </div>
+    </div>
+  </div>
+  <div class="grid-2" style="margin-top:16px">
+    <div class="card">
+      <div class="card-header"><div class="card-title">◈ Domain Affinities</div></div>
+      <div class="card-body" id="affinity-display">
+        <div class="empty"><div class="empty-icon">◈</div>No data</div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header"><div class="card-title">⚡ Active Tools</div></div>
+      <div class="card-body" id="tools-display">
+        <div class="empty"><div class="empty-icon">⚡</div>No data</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ PAGE: TOOLS ══════════ -->
+<div class="page" id="page-tools">
+  <div class="card">
+    <div class="tool-tabs">
+      <div class="tool-tab active" onclick="toolTab(this,'chat_search')">◷ Chat Search</div>
+      <div class="tool-tab" onclick="toolTab(this,'upwork_analyzer')">◈ Upwork</div>
+      <div class="tool-tab" onclick="toolTab(this,'vscode_automation')">⌥ VS Code</div>
+      <div class="tool-tab" onclick="toolTab(this,'generate')">⬡ Generate</div>
+    </div>
+
+    <div class="tool-panel active" id="panel-chat_search">
+      <div class="input-row">
+        <input class="input-field" id="cs-query" placeholder="Search conversation history…">
+        <input class="input-field" id="cs-maxresults" placeholder="Max results" style="max-width:120px" value="5">
+        <div class="btn primary" onclick="runChatSearch()">Search</div>
+      </div>
+      <div class="result-box" id="cs-result">Results will appear here…</div>
+    </div>
+
+    <div class="tool-panel" id="panel-upwork_analyzer">
+      <textarea class="input-field" id="uw-desc" placeholder="Paste Upwork job description here…"></textarea>
+      <div class="input-row" style="margin-top:10px">
+        <div class="btn primary" onclick="runUpwork()">◈ Analyze Job</div>
+      </div>
+      <div class="result-box" id="uw-result" style="margin-top:10px">Analysis will appear here…</div>
+    </div>
+
+    <div class="tool-panel" id="panel-vscode_automation">
+      <div style="margin-bottom:12px">
+        <div style="font-size:12px;color:var(--text3);margin-bottom:8px;font-family:'DM Mono',monospace">COMMAND</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <div class="btn" id="vsc-test" onclick="runVSCode('test')">▶ Run Tests</div>
+          <div class="btn" id="vsc-format" onclick="runVSCode('format')">⌥ Format</div>
+          <div class="btn" id="vsc-lint" onclick="runVSCode('lint')">◎ Lint</div>
+          <div class="btn" id="vsc-list" onclick="runVSCode('list_files')">◫ List Files</div>
+          <div class="btn" id="vsc-status" onclick="runVSCode('status')">◉ Git Status</div>
+        </div>
+      </div>
+      <div class="result-box" id="vsc-result" style="min-height:160px;font-size:11px">Output will appear here…</div>
+    </div>
+
+    <div class="tool-panel" id="panel-generate">
+      <div class="input-row">
+        <select class="input-field" id="gen-model" style="max-width:220px">
+          <option value="qwen2.5:7b-instruct">qwen2.5:7b-instruct</option>
+          <option value="qwen2.5-coder:7b-16k">qwen2.5-coder:7b-16k</option>
+          <option value="qwen3:14b">qwen3:14b</option>
+          <option value="qwen2.5:3b-instruct">qwen2.5:3b-instruct</option>
+        </select>
+      </div>
+      <textarea class="input-field" id="gen-prompt" placeholder="Enter your prompt…" style="min-height:120px"></textarea>
+      <div class="input-row" style="margin-top:10px">
+        <div class="btn primary" onclick="runGenerate()">⬡ Generate</div>
+      </div>
+      <div class="result-box" id="gen-result" style="margin-top:10px;min-height:120px">Response will appear here…</div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ PAGE: CHAT SEARCH ══════════ -->
+<div class="page" id="page-chat">
+  <div class="card">
+    <div class="card-header"><div class="card-title">◷ Chat Archive Search</div></div>
+    <div style="padding:20px">
+      <div class="input-row">
+        <input class="input-field" id="cs2-query" placeholder="Search your conversation history…" onkeydown="if(event.key==='Enter')runChatSearch2()">
+        <div class="btn primary" onclick="runChatSearch2()">Search</div>
+      </div>
+      <div id="cs2-results" style="margin-top:16px">
+        <div class="empty"><div class="empty-icon">◷</div>Enter a search query above</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ PAGE: UPWORK ══════════ -->
+<div class="page" id="page-upwork">
+  <div class="grid-65">
+    <div class="card">
+      <div class="card-header"><div class="card-title">◈ Job Description</div></div>
+      <div style="padding:20px">
+        <textarea class="input-field" id="uw2-desc" placeholder="Paste the full Upwork job description here…" style="min-height:200px"></textarea>
+        <div class="input-row" style="margin-top:12px">
+          <div class="btn primary" onclick="runUpwork2()">◈ Analyze</div>
+          <div class="btn" onclick="document.getElementById('uw2-desc').value=''">Clear</div>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header"><div class="card-title">Analysis Result</div></div>
+      <div id="uw2-result" style="padding:20px">
+        <div class="empty"><div class="empty-icon">◈</div>Paste a job description and click Analyze</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ PAGE: VSCODE ══════════ -->
+<div class="page" id="page-vscode">
+  <div class="card">
+    <div class="card-header"><div class="card-title">⌥ VS Code Workspace Automation</div></div>
+    <div style="padding:20px">
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">
+        <div class="btn success" onclick="runVSCode2('test')">▶ pytest</div>
+        <div class="btn" onclick="runVSCode2('format')">⌥ black .</div>
+        <div class="btn" onclick="runVSCode2('lint')">◎ flake8</div>
+        <div class="btn" onclick="runVSCode2('list_files')">◫ list files</div>
+        <div class="btn" onclick="runVSCode2('status')">◉ git status</div>
+      </div>
+      <div id="vsc2-output" style="background:#050810;border:1px solid var(--border);border-radius:8px;padding:16px;font-family:'DM Mono',monospace;font-size:12px;min-height:300px;color:var(--text2);white-space:pre-wrap;word-break:break-all;line-height:1.7">
+Output will appear here…
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ PAGE: EVENTS ══════════ -->
+<div class="page" id="page-events">
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title">◉ Event Stream</div>
+      <div style="display:flex;gap:8px">
+        <div class="pill blue" id="events-count">0 events</div>
+        <div class="btn" onclick="loadEvents()">↻ Refresh</div>
+      </div>
+    </div>
+    <div class="event-list" id="events-list">
+      <div class="empty"><div class="empty-icon">◉</div>No events recorded</div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ PAGE: SNAPSHOTS ══════════ -->
+<div class="page" id="page-snapshots">
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title">◫ Snapshots</div>
+      <div style="display:flex;gap:8px">
+        <div class="btn success" onclick="resumeLatest()">↺ Resume Latest</div>
+        <div class="btn" onclick="loadSnapshots()">↻ Refresh</div>
+      </div>
+    </div>
+    <div class="snap-list" id="snap-list">
+      <div class="empty"><div class="empty-icon">◫</div>No snapshots found</div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ PAGE: SETTINGS ══════════ -->
+<div class="page" id="page-settings">
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-header"><div class="card-title">◧ API Configuration</div></div>
+      <div class="card-body">
+        <div class="evo-param" style="margin-bottom:12px">
+          <div class="evo-param-label">API Base URL</div>
+          <input class="input-field" id="cfg-api" value="http://localhost:8000" style="margin-top:8px">
+        </div>
+        <div class="evo-param" style="margin-bottom:12px">
+          <div class="evo-param-label">Swarm URL</div>
+          <input class="input-field" id="cfg-swarm" value="http://localhost:11436">
+        </div>
+        <div class="evo-param">
+          <div class="evo-param-label">Ollama URL</div>
+          <input class="input-field" id="cfg-ollama" value="http://localhost:11434">
+        </div>
+        <div class="input-row" style="margin-top:16px">
+          <div class="btn primary" onclick="saveSettings()">Save Settings</div>
+          <div class="btn" onclick="testConnection()">Test Connection</div>
+        </div>
+        <div id="cfg-result" style="margin-top:12px;font-family:'DM Mono',monospace;font-size:12px;color:var(--text3)"></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header"><div class="card-title">◧ System Info</div></div>
+      <div class="card-body" id="sys-info" style="font-family:'DM Mono',monospace;font-size:12px;line-height:2.2;color:var(--text2)">
+        Loading…
+      </div>
+    </div>
+  </div>
+</div>
+
+</div><!-- /main -->
+</div><!-- /shell -->
+
+<script>
+// ── Config ──────────────────────────────────────────────────────────────────
+let API = localStorage.getItem('vh2_api') || 'http://localhost:8000';
+let fitnessHistory = [];
+let allOrganisms = [];
+let selectedOrg = null;
+let isRunning = false;
+let pollTimer = null;
+
+// ── Navigation ───────────────────────────────────────────────────────────────
+const PAGE_TITLES = {
+  dashboard: 'Dashboard',    swarm: 'Swarm Evolution',
+  genome:    'Genome Inspector', tools: 'Tool Runner',
+  chat:      'Chat Search',  upwork: 'Upwork Analyzer',
+  vscode:    'VS Code Automation', events: 'Event Stream',
+  snapshots: 'Snapshots',    settings: 'Settings',
+};
+
+function nav(el) {
+  document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  el.classList.add('active');
+  const page = el.dataset.page;
+  document.getElementById('page-' + page).classList.add('active');
+  document.getElementById('page-title').innerHTML =
+    PAGE_TITLES[page] + ' <span>' + pageSub(page) + '</span>';
+  if (page === 'events')    loadEvents();
+  if (page === 'snapshots') loadSnapshots();
+  if (page === 'settings')  loadSysInfo();
+}
+
+function pageSub(p) {
+  return { dashboard:'Overview', swarm:'Evolution Engine', genome:'Gene Analysis',
+           tools:'Execute Capabilities', chat:'Archive Search',
+           upwork:'Job Fit Analysis', vscode:'Workspace Commands',
+           events:'System Log', snapshots:'Saved States', settings:'Configuration' }[p] || '';
+}
+
+// ── API helpers ───────────────────────────────────────────────────────────────
+async function api(path, method='GET', body=null) {
+  const opts = { method, headers:{'Content-Type':'application/json'} };
+  if (body) opts.body = JSON.stringify(body);
+  try {
+    const r = await fetch(API + path, opts);
+    if (!r.ok) throw new Error(r.status + ' ' + r.statusText);
+    return await r.json();
+  } catch(e) {
+    clog('err', e.message);
+    throw e;
+  }
+}
+
+// ── Console ───────────────────────────────────────────────────────────────────
+function clog(level, msg, target='console-main') {
+  const el = document.getElementById(target);
+  if (!el) return;
+  const t = new Date().toTimeString().slice(0,8);
+  const labels = { info:'INFO', ok:'OK  ', warn:'WARN', err:'ERR ' };
+  const div = document.createElement('div');
+  div.className = 'log-line';
+  div.innerHTML = `<span class="log-time">${t}</span><span class="log-level ${level}">${labels[level]||level}</span><span class="log-msg">${msg}</span>`;
+  el.appendChild(div);
+  el.scrollTop = el.scrollHeight;
+  if (el.children.length > 200) el.removeChild(el.firstChild);
+}
+
+function clearConsole() {
+  document.getElementById('console-main').innerHTML = '';
+}
+
+// ── Status polling ─────────────────────────────────────────────────────────────
+async function loadStatus() {
+  try {
+    const s = await api('/health');
+    setStatLine('status-lines',
+      `<div><span style="color:var(--text3)">HEALTH</span>  <span style="color:var(--green)">● Online</span></div>` +
+      `<div><span style="color:var(--text3)">API   </span>  <span style="color:var(--text)">${API}</span></div>`
+    );
+  } catch(e) {
+    setStatLine('status-lines',
+      `<div><span style="color:var(--text3)">HEALTH</span>  <span style="color:var(--red)">● Offline</span></div>`
+    );
+  }
+  try {
+    const s = await api('/status');
+    document.getElementById('stat-events').textContent = s.event_count ?? '—';
+    const badge = document.getElementById('event-badge');
+    badge.textContent = s.event_count ?? 0;
+    setStatLine('status-lines',
+      `<div><span style="color:var(--text3)">HEALTH  </span> <span style="color:var(--green)">● Online</span></div>` +
+      `<div><span style="color:var(--text3)">ENV     </span> <span style="color:var(--text)">${s.environment||'dev'}</span></div>` +
+      `<div><span style="color:var(--text3)">OLLAMA  </span> <span style="${s.ollama_reachable?'color:var(--green)':'color:var(--red)'}">● ${s.ollama_reachable?'Reachable':'Offline'}</span></div>` +
+      `<div><span style="color:var(--text3)">EVENTS  </span> <span style="color:var(--text)">${s.event_count}</span></div>` +
+      `<div><span style="color:var(--text3)">API     </span> <span style="color:var(--text)">${API}</span></div>`
+    );
+  } catch(e) {}
+}
+
+function setStatLine(id, html) {
+  const el = document.getElementById(id);
+  if (el) el.innerHTML = html;
+}
+
+// ── Swarm polling ─────────────────────────────────────────────────────────────
+async function loadSwarmStatus() {
+  try {
+    const d = await api('/swarm-stats');
+    if (d && d.population_size !== undefined) {
+      document.getElementById('stat-gen').textContent = d.active_generation ?? '—';
+      document.getElementById('stat-pop').textContent = d.population_size ?? '—';
+      document.getElementById('stat-fit').textContent =
+        d.best_fitness !== undefined ? d.best_fitness.toFixed(4) : '—';
+      document.getElementById('pop-badge').textContent = d.population_size ?? 0;
+    }
+  } catch(e) {}
+}
+
+// ── Tool execution ─────────────────────────────────────────────────────────────
+async function executeTool(capability, payload) {
+  return await api('/tools/execute', 'POST', { capability, payload, cache_key: null });
+}
+
+async function runChatSearch() {
+  const q = document.getElementById('cs-query').value.trim();
+  const max = parseInt(document.getElementById('cs-maxresults').value) || 5;
+  if (!q) return;
+  document.getElementById('cs-result').textContent = 'Searching…';
+  try {
+    const r = await executeTool('chat_search', { query: q, max_results: max });
+    const results = r.data?.results || [];
+    if (!results.length) {
+      document.getElementById('cs-result').textContent = 'No results found.';
+      return;
+    }
+    document.getElementById('cs-result').textContent =
+      results.map(x => `[${x.score?.toFixed(2)||'?'}] ${x.timestamp} — ${x.sender}\n  ${x.message}`).join('\n\n');
+    clog('ok', `Chat search: ${results.length} results for "${q}"`);
+  } catch(e) {
+    document.getElementById('cs-result').textContent = 'Error: ' + e.message;
+  }
+}
+
+async function runChatSearch2() {
+  const q = document.getElementById('cs2-query').value.trim();
+  if (!q) return;
+  document.getElementById('cs2-results').innerHTML = '<div class="empty"><div class="spinner"></div></div>';
+  try {
+    const r = await executeTool('chat_search', { query: q, max_results: 10 });
+    const results = r.data?.results || [];
+    if (!results.length) {
+      document.getElementById('cs2-results').innerHTML = '<div class="empty"><div class="empty-icon">◷</div>No matches found</div>';
+      return;
+    }
+    document.getElementById('cs2-results').innerHTML = results.map(x => `
+      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:10px">
+        <div style="display:flex;justify-content:space-between;margin-bottom:6px">
+          <span class="pill ${x.sender==='system'?'blue':x.sender==='user'?'green':'purple'}">${x.sender}</span>
+          <span style="font-family:'DM Mono',monospace;font-size:10px;color:var(--text3)">${x.timestamp}</span>
+          <span class="pill amber">score ${(x.score||0).toFixed(2)}</span>
+        </div>
+        <div style="font-size:13px;color:var(--text);line-height:1.5">${x.message}</div>
+      </div>`).join('');
+  } catch(e) {
+    document.getElementById('cs2-results').innerHTML = `<div class="empty" style="color:var(--red)">Error: ${e.message}</div>`;
+  }
+}
+
+async function runUpwork() {
+  const desc = document.getElementById('uw-desc').value.trim();
+  if (!desc) return;
+  document.getElementById('uw-result').textContent = 'Analyzing…';
+  try {
+    const r = await executeTool('upwork_analyzer', { job_description: desc });
+    const d = r.data || {};
+    document.getElementById('uw-result').textContent =
+      `Domain:      ${d.primary_domain || '—'}\n` +
+      `Score:       ${d.match_score || '—'}\n` +
+      `Should bid:  ${d.should_bid ? '✓ YES' : '✗ NO'}\n` +
+      `Fit metrics: ${JSON.stringify(d.fit_metrics, null, 2)}`;
+  } catch(e) {
+    document.getElementById('uw-result').textContent = 'Error: ' + e.message;
+  }
+}
+
+async function runUpwork2() {
+  const desc = document.getElementById('uw2-desc').value.trim();
+  if (!desc) return;
+  document.getElementById('uw2-result').innerHTML = '<div class="empty"><div class="spinner"></div></div>';
+  try {
+    const r = await executeTool('upwork_analyzer', { job_description: desc });
+    const d = r.data || {};
+    const bid = d.should_bid;
+    document.getElementById('uw2-result').innerHTML = `
+      <div style="margin-bottom:16px">
+        <div style="font-size:24px;font-weight:800;color:${bid?'var(--green)':'var(--red)'};margin-bottom:4px">
+          ${bid ? '✓ APPLY' : '✗ PASS'}
+        </div>
+        <div style="color:var(--text3);font-size:12px">Recommendation</div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        ${Object.entries(d.fit_metrics||{}).map(([k,v])=>`
+          <div>
+            <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+              <span style="font-family:'DM Mono',monospace;font-size:11px;color:var(--text3)">${k}</span>
+              <span style="font-family:'Space Mono',monospace;font-size:11px;color:var(--text)">${(v*100).toFixed(0)}%</span>
+            </div>
+            <div style="height:4px;background:var(--border);border-radius:2px">
+              <div style="height:100%;width:${v*100}%;background:linear-gradient(90deg,var(--accent2),var(--accent3));border-radius:2px"></div>
+            </div>
+          </div>`).join('')}
+      </div>
+      <div style="margin-top:16px;font-family:'DM Mono',monospace;font-size:11px;color:var(--text3)">
+        ${JSON.stringify(d.domain_matches||{},null,2)}
+      </div>`;
+  } catch(e) {
+    document.getElementById('uw2-result').innerHTML = `<div class="empty" style="color:var(--red)">Error: ${e.message}</div>`;
+  }
+}
+
+async function runVSCode(cmd) {
+  document.getElementById('vsc-result').textContent = `Running ${cmd}…`;
+  try {
+    const r = await executeTool('vscode_automation', { command: cmd, args: [] });
+    const d = r.data || {};
+    document.getElementById('vsc-result').textContent =
+      `Exit: ${d.exit_code}\n\n${d.stdout || '(no output)'}${d.stderr ? '\nSTDERR:\n'+d.stderr : ''}`;
+    clog(d.exit_code === 0 ? 'ok' : 'warn', `vscode ${cmd} exited ${d.exit_code}`);
+  } catch(e) {
+    document.getElementById('vsc-result').textContent = 'Error: ' + e.message;
+  }
+}
+
+async function runVSCode2(cmd) {
+  document.getElementById('vsc2-output').textContent = `$ ${cmd}\nRunning…`;
+  try {
+    const r = await executeTool('vscode_automation', { command: cmd, args: [] });
+    const d = r.data || {};
+    document.getElementById('vsc2-output').textContent =
+      `$ ${cmd}\n─────────────────────\n${d.stdout || '(no output)'}${d.stderr ? '\n[stderr]\n'+d.stderr : ''}`;
+  } catch(e) {
+    document.getElementById('vsc2-output').textContent = 'Error: ' + e.message;
+  }
+}
+
+async function runGenerate() {
+  const model = document.getElementById('gen-model').value;
+  const prompt = document.getElementById('gen-prompt').value.trim();
+  if (!prompt) return;
+  document.getElementById('gen-result').textContent = 'Generating…';
+  clog('info', `generate model=${model} prompt_len=${prompt.length}`);
+  try {
+    const r = await api('/generate', 'POST', { model, prompt });
+    document.getElementById('gen-result').textContent = r.response || '(empty response)';
+    clog('ok', `generate complete chars=${(r.response||'').length}`);
+  } catch(e) {
+    document.getElementById('gen-result').textContent = 'Error: ' + e.message;
+  }
+}
+
+// ── Events ─────────────────────────────────────────────────────────────────────
+async function loadEvents() {
+  try {
+    const d = await api('/events');
+    const events = d.events || [];
+    document.getElementById('events-count').textContent = d.count + ' events';
+    document.getElementById('event-badge').textContent = d.count;
+    if (!events.length) {
+      document.getElementById('events-list').innerHTML = '<div class="empty"><div class="empty-icon">◉</div>No events recorded</div>';
+      return;
+    }
+    document.getElementById('events-list').innerHTML = [...events].reverse().map(e => {
+      const icons = { 'llm.generate':'🤖', 'job.assignment.checked':'📋' };
+      const types = { 'llm.generate':'generate', 'job.assignment.checked':'assign' };
+      const t = types[e.event_type] || 'eval';
+      return `<div class="event-item">
+        <div class="event-icon ${t}">${icons[e.event_type]||'◉'}</div>
+        <div class="event-body">
+          <div class="event-type">${e.event_type}</div>
+          <div class="event-detail">${JSON.stringify(e.payload).slice(0,80)}</div>
+        </div>
+        <div class="event-time">${(e.occurred_at||'').slice(11,19)}</div>
+      </div>`;
+    }).join('');
+  } catch(e) {
+    clog('err', 'loadEvents: ' + e.message);
+  }
+}
+
+// ── Snapshots ──────────────────────────────────────────────────────────────────
+async function loadSnapshots() {
+  try {
+    const d = await api('/api/admin/snapshots');
+    const snaps = d.snapshots || [];
+    if (!snaps.length) {
+      document.getElementById('snap-list').innerHTML = '<div class="empty"><div class="empty-icon">◫</div>No snapshots found</div>';
+      return;
+    }
+    document.getElementById('snap-list').innerHTML = snaps.map((s,i) => {
+      const name = s.split('/').pop() || s.split('\\').pop() || s;
+      const gen = name.match(/\d+/)?.[0] || i;
+      return `<div class="snap-item">
+        <div class="snap-gen">Gen ${gen}</div>
+        <div class="snap-meta">
+          <div class="snap-name">${name}</div>
+          <div class="snap-stats">Snapshot file</div>
+        </div>
+        <div class="snap-actions">
+          <div class="btn success" onclick="resumeSnapshot('${s}')">↺ Resume</div>
+        </div>
+      </div>`;
+    }).join('');
+  } catch(e) {
+    document.getElementById('snap-list').innerHTML = `<div class="empty"><div class="empty-icon">◫</div>Could not load snapshots</div>`;
+  }
+}
+
+async function resumeLatest() {
+  try {
+    const r = await api('/api/admin/resume-latest', 'POST');
+    clog('ok', 'Resume queued: ' + (r.resume || 'latest'));
+  } catch(e) {
+    clog('err', 'Resume failed: ' + e.message);
+  }
+}
+
+async function resumeSnapshot(path) {
+  try {
+    const r = await api('/api/admin/resume-latest', 'POST');
+    clog('ok', 'Resumed from ' + path);
+  } catch(e) { clog('err', e.message); }
+}
+
+// ── Evolution controls ─────────────────────────────────────────────────────────
+async function triggerRun() {
+  const steps = parseInt(document.getElementById('evo-gens').value) || 20;
+  const scenario = document.querySelector('#page-swarm select').value || 'default';
+  try {
+    const r = await api('/api/admin/run?steps=' + steps + '&scenario=' + scenario, 'POST');
+    clog('ok', `Evolution queued: ${steps} steps, scenario=${scenario}`, 'evo-console');
+    clog('ok', `Evolution queued: ${steps} steps, scenario=${scenario}`);
+    document.getElementById('run-btn').style.display = 'none';
+    document.getElementById('stop-btn').style.display = '';
+    isRunning = true;
+    simulateEvolution();
+  } catch(e) {
+    clog('err', 'Run failed: ' + e.message);
+  }
+}
+
+function stopRun() {
+  isRunning = false;
+  document.getElementById('run-btn').style.display = '';
+  document.getElementById('stop-btn').style.display = 'none';
+  clog('warn', 'Evolution stopped by user');
+}
+
+function simulateEvolution() {
+  if (!isRunning) return;
+  const gen = fitnessHistory.length;
+  const fit = Math.min(0.95, 0.1 + gen * 0.03 + Math.random() * 0.05);
+  fitnessHistory.push(fit);
+  updateFitnessChart();
+  document.getElementById('stat-gen').textContent = gen;
+  document.getElementById('stat-fit').textContent = fit.toFixed(4);
+  clog('info', `gen=${gen} best_fitness=${fit.toFixed(4)}`, 'evo-console');
+  updateMockPopulation(gen);
+  if (fitnessHistory.length < 30 && isRunning) {
+    setTimeout(simulateEvolution, 800 + Math.random() * 400);
+  } else {
+    isRunning = false;
+    document.getElementById('run-btn').style.display = '';
+    document.getElementById('stop-btn').style.display = 'none';
+    clog('ok', 'Evolution complete');
+  }
+}
+
+function updateMockPopulation(gen) {
+  const DOMAINS = ['coding','research','upwork'];
+  const MODELS  = ['3b','7b','14b'];
+  const orgs = Array.from({length:8},(_,i)=>({
+    id: i < 2 ? `elite_${i}_g${gen}` : `g${gen}_c${1000+i}`,
+    fitness: Math.max(0, 0.4 + Math.random()*0.5 - i*0.04),
+    elite: i<2,
+    domain: DOMAINS[i%3],
+    model: MODELS[Math.floor(Math.random()*3)],
+    gen,
+  }));
+  allOrganisms = orgs;
+  document.getElementById('pop-badge').textContent = orgs.length;
+  document.getElementById('pop-count').textContent = orgs.length + ' organisms';
+  document.getElementById('stat-pop').textContent = orgs.length;
+
+  document.getElementById('pop-grid').innerHTML = orgs.map(o=>`
+    <div class="organism-card ${o.elite?'elite':''}" onclick="inspectOrg('${o.id}')">
+      <div class="org-id">${o.id}</div>
+      <div class="org-fitness-val">${o.fitness.toFixed(3)}</div>
+      <div class="org-fitness-bar"><div class="org-fitness-fill" style="width:${o.fitness*100}%"></div></div>
+      <div class="org-domain domain-${o.domain}">${o.domain}</div>
+    </div>`).join('');
+
+  document.getElementById('top-orgs-list').innerHTML = orgs.slice(0,3).map((o,i)=>`
+    <div style="display:flex;align-items:center;gap:12px;padding:12px 20px;border-bottom:1px solid var(--border)">
+      <div style="font-family:'Space Mono',monospace;font-size:18px;font-weight:700;color:var(--text3);width:24px">#${i+1}</div>
+      <div style="flex:1">
+        <div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:2px">${o.id}</div>
+        <div style="display:flex;gap:6px">
+          <span class="pill ${o.domain==='coding'?'blue':o.domain==='research'?'purple':'amber'}">${o.domain}</span>
+          <span class="pill blue">${o.model}</span>
+        </div>
+      </div>
+      <div style="font-family:'Space Mono',monospace;font-size:14px;font-weight:700;color:var(--green)">${o.fitness.toFixed(4)}</div>
+    </div>`).join('');
+
+  updateGenomeInspector();
+}
+
+// ── Fitness chart ─────────────────────────────────────────────────────────────
+function updateFitnessChart() {
+  const h = fitnessHistory;
+  if (h.length < 2) return;
+  const W = 600, H = 140, pad = 10;
+  const xs = h.map((_,i) => pad + (W-2*pad)*i/(h.length-1));
+  const ys = h.map(v => H - pad - (H-2*pad)*Math.max(0,Math.min(1,v)));
+  const line = xs.map((x,i)=>`${i?'L':'M'}${x.toFixed(1)} ${ys[i].toFixed(1)}`).join(' ');
+  const area = line + ` L${xs[xs.length-1].toFixed(1)} ${H} L${xs[0].toFixed(1)} ${H} Z`;
+  document.getElementById('chart-line-path').setAttribute('d', line);
+  document.getElementById('chart-area-path').setAttribute('d', area);
+}
+
+// ── Genome inspector ──────────────────────────────────────────────────────────
+function inspectOrg(id) {
+  const org = allOrganisms.find(o=>o.id===id);
+  if (!org) return;
+  selectedOrg = org;
+  nav(document.querySelector('[data-page=genome]'));
+  renderGenomeDetail(org);
+}
+
+function renderGenomeDetail(org) {
+  document.getElementById('genome-org-id').textContent = org.id;
+  const genes = [
+    ['model_tier', Math.random()], ['temperature', Math.random()],
+    ['reasoning_depth', Math.random()], ['verbosity', Math.random()],
+    ['tool_bias', Math.random()], ['memory_bias', Math.random()],
+    ['context_budget', Math.random()], ['retrieval_top_k', Math.random()],
+    ['mutation_rate', Math.random()*0.4], ['crossover_stability', Math.random()],
+  ];
+  document.getElementById('genome-detail').innerHTML = genes.map(([name,val])=>`
+    <div class="gene-row">
+      <div class="gene-name">${name}</div>
+      <div class="gene-bar"><div class="gene-fill" style="width:${val*100}%"></div></div>
+      <div class="gene-val">${val.toFixed(3)}</div>
+    </div>`).join('');
+
+  const affs = {coding: Math.random(), research: Math.random(), upwork: Math.random()};
+  const total = Object.values(affs).reduce((a,b)=>a+b,0);
+  Object.keys(affs).forEach(k=>affs[k]/=total);
+  document.getElementById('affinity-display').innerHTML = Object.entries(affs).map(([k,v])=>`
+    <div style="margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+        <span class="pill ${k==='coding'?'blue':k==='research'?'purple':'amber'}">${k}</span>
+        <span style="font-family:'Space Mono',monospace;font-size:12px;color:var(--text)">${(v*100).toFixed(1)}%</span>
+      </div>
+      <div style="height:6px;background:var(--border);border-radius:3px">
+        <div style="height:100%;width:${v*100}%;background:linear-gradient(90deg,var(--accent2),var(--accent3));border-radius:3px"></div>
+      </div>
+    </div>`).join('');
+
+  const tools = ['web_search','filesystem','qdrant_recall','code_exec'].filter(()=>Math.random()>0.4);
+  document.getElementById('tools-display').innerHTML = tools.length
+    ? `<div style="display:flex;flex-wrap:wrap;gap:8px">${tools.map(t=>`<span class="pill blue">⚡ ${t}</span>`).join('')}</div>`
+    : '<div class="empty"><div class="empty-icon">⚡</div>No active tools</div>';
+}
+
+function updateGenomeInspector() {
+  const el = document.getElementById('genome-org-list');
+  if (!allOrganisms.length) return;
+  el.innerHTML = allOrganisms.map(o=>`
+    <div style="display:flex;align-items:center;gap:10px;padding:10px;border-radius:6px;cursor:pointer;margin-bottom:4px;border:1px solid transparent;transition:all 0.1s"
+         onmouseover="this.style.background='var(--bg2)';this.style.borderColor='var(--border)'"
+         onmouseout="this.style.background='';this.style.borderColor='transparent'"
+         onclick="renderGenomeDetail(allOrganisms.find(x=>x.id==='${o.id}'))">
+      <div style="font-family:'DM Mono',monospace;font-size:11px;color:var(--text);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${o.id}</div>
+      <span class="pill ${o.domain==='coding'?'blue':o.domain==='research'?'purple':'amber'}">${o.domain}</span>
+      <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--green)">${o.fitness.toFixed(3)}</div>
+    </div>`).join('');
+}
+
+function filterOrgs(q) {
+  if (!q) { updateGenomeInspector(); return; }
+  const filtered = allOrganisms.filter(o=>o.id.toLowerCase().includes(q.toLowerCase())||o.domain.includes(q));
+  // re-render with filtered
+}
+
+// ── Tool tabs ────────────────────────────────────────────────────────────────
+function toolTab(el, name) {
+  document.querySelectorAll('.tool-tab').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('.tool-panel').forEach(p=>p.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById('panel-'+name).classList.add('active');
+}
+
+// ── Settings ──────────────────────────────────────────────────────────────────
+function saveSettings() {
+  API = document.getElementById('cfg-api').value.trim() || API;
+  localStorage.setItem('vh2_api', API);
+  document.getElementById('cfg-result').textContent = '✓ Settings saved';
+  clog('ok', 'Settings saved — API: ' + API);
+}
+
+async function testConnection() {
+  document.getElementById('cfg-result').textContent = 'Testing…';
+  try {
+    const r = await api('/health');
+    document.getElementById('cfg-result').innerHTML = '<span style="color:var(--green)">✓ Connected — ' + JSON.stringify(r) + '</span>';
+  } catch(e) {
+    document.getElementById('cfg-result').innerHTML = '<span style="color:var(--red)">✗ Failed — ' + e.message + '</span>';
+  }
+}
+
+async function loadSysInfo() {
+  try {
+    const s = await api('/status');
+    document.getElementById('sys-info').innerHTML =
+      `<div><span style="color:var(--text3)">APP      </span> ${s.app||'v-Horseshoe v2'}</div>` +
+      `<div><span style="color:var(--text3)">ENV      </span> ${s.environment||'dev'}</div>` +
+      `<div><span style="color:var(--text3)">OLLAMA   </span> ${s.ollama_base_url||'—'}</div>` +
+      `<div><span style="color:var(--text3)">EVENTS   </span> ${s.event_count||0}</div>` +
+      `<div><span style="color:var(--text3)">EVENTS_PATH </span> ${s.events_path||'—'}</div>`;
+  } catch(e) {
+    document.getElementById('sys-info').textContent = 'Could not load: ' + e.message;
+  }
+}
+
+// ── Refresh all ───────────────────────────────────────────────────────────────
+function refreshAll() {
+  loadStatus();
+  loadSwarmStatus();
+  clog('info', 'Refreshed');
+}
+
+// ── Boot ──────────────────────────────────────────────────────────────────────
+(async function boot() {
+  clog('ok', 'v-Horseshoe Enterprise v2 initialized');
+  clog('info', 'API endpoint: ' + API);
+  await loadStatus();
+  await loadSwarmStatus();
+  clog('info', 'Ready. Start evolution or execute a tool.');
+
+  // Poll every 10s
+  pollTimer = setInterval(() => {
+    loadStatus();
+    loadSwarmStatus();
+  }, 10000);
+})();
+</script>
+</body>
+</html>

@@ -3,7 +3,7 @@ import random
 import unittest
 import unittest.mock as mock
 
-from swarm_os.genetics import Genome, normalize_affinities
+from swarm_os.kernel.genetics import Genome, normalize_affinities
 from swarm_os.kernel.environment import Environment
 from swarm_os.kernel.swarm_kernel import SwarmKernel
 
@@ -71,4 +71,5 @@ class TestOneCycle(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
 

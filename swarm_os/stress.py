@@ -8,7 +8,7 @@ import random
 from typing import List
 
 from swarm_os.kernel.brain import registry as brain_registry
-from swarm_os.genetics import CognitivePolicy, Genome, MCP_TOOL_REGISTRY, normalize_affinities
+from swarm_os.kernel.genetics import CognitivePolicy, Genome, MCP_TOOL_REGISTRY, normalize_affinities
 from swarm_os.kernel.organism import Organism
 
 
@@ -44,4 +44,5 @@ def build(population_max: int = 10) -> List[Organism]:
         brain  = brain_registry.make("swarm", genome, task_domain="general")
         organisms.append(Organism(id=f"stress_{i}_gen0", brain=brain, genome=genome))
     return organisms
+
 

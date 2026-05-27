@@ -7,7 +7,7 @@ Fixed: uses brain_registry.make() not .get()
 from __future__ import annotations
 
 from swarm_os.kernel.organism import Organism
-from swarm_os.genetics import Genome
+from swarm_os.kernel.genetics import Genome
 from swarm_os.kernel.brain import registry as brain_registry
 from swarm_os.kernel.migrations import migrate_snapshot
 
@@ -28,4 +28,5 @@ def organisms_from_snapshot(snapshot: dict) -> list[Organism]:
         items.append(org)
 
     return items
+
 

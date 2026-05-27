@@ -1,5 +1,5 @@
 from __future__ import annotations
-from swarm_os.genetics import Genome
+from swarm_os.kernel.genetics import Genome
 from swarm_os.organism import Organism
 from swarm_os.brain import BrainRegistry, simple_brain
 
@@ -15,4 +15,5 @@ def build_stress_population():
         Organism("W", brain, Genome({"a": 0.4}, ["core", "stress"])),
         Organism("V", brain, Genome({"a": 0.2}, ["core", "stress"])),
     ]
+
 

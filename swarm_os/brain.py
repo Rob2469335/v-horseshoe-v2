@@ -270,3 +270,18 @@ class BrainRegistry:
 registry = BrainRegistry()
 
 
+
+# -------------------------------------------------------------------
+# Legacy compatibility surface
+# -------------------------------------------------------------------
+
+def simple_brain(genome, task_domain: str = "general"):
+    return make_swarm_brain(genome, task_domain)
+
+__all__ = [
+    "BrainRegistry",
+    "make_swarm_brain",
+    "simple_brain",
+    "registry",
+]
+

@@ -10,7 +10,8 @@ import logging
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 
-from swarm_os.kernel.snapshot import latest_snapshot, save_snapshot
+from swarm_os.kernel.snapshot_index import latest_snapshot
+from swarm_os.kernel.snapshot import save_snapshot
 from swarm_os.repositories.file_snapshot_repository import FileSnapshotRepository
 from swarm_os.services.simulation_service import SimulationService
 
@@ -52,3 +53,4 @@ def run_simulation(
 ) -> dict:
     background_tasks.add_task(_service.run, steps=steps, scenario=scenario)
     return {"queued": True, "steps": steps, "scenario": scenario}
+

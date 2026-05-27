@@ -18,7 +18,7 @@ from swarm_os.core.settings import get_settings
 from swarm_os.kernel.environment import Environment
 from swarm_os.kernel.metrics import summarize
 from swarm_os.kernel.swarm_kernel import SwarmKernel
-from swarm_os.genetics import Genome
+from swarm_os.kernel.genetics import Genome
 from swarm_os.kernel.brain import registry as brain_registry
 from swarm_os.kernel.organism import Organism
 from swarm_os.scenarios.registry import build as build_scenario

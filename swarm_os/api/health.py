@@ -1,15 +1,17 @@
-# api/routes/health.py
+# swarm_os/api/health.py
+from __future__ import annotations
 from fastapi import APIRouter
-from config.settings import APP_TITLE, APP_VERSION, SWARM_BASE_URL, OLLAMA_BASE_URL
+from ..core.settings import get_settings
 
-router = APIRouter()
+router = APIRouter(tags=["health"])
 
 @router.get("/health")
 async def health():
+    s = get_settings()
     return {
         "status": "ok",
-        "app": APP_TITLE,
-        "version": APP_VERSION,
-        "swarm": SWARM_BASE_URL,
-        "ollama": OLLAMA_BASE_URL,
+        "app": s.app_name,
+        "version": "2.0.0",
+        "ollama": s.ollama_base_url,
+        "environment": s.environment,
     }

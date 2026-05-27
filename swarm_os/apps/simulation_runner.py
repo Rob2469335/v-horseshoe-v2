@@ -4,8 +4,8 @@ import argparse
 import json
 
 from swarm_os.config.settings import settings
-from swarm_os.snapshot_index import latest_snapshot, list_snapshots
-from swarm_os.status import build_status
+from swarm_os.kernel.snapshot_index import latest_snapshot, list_snapshots
+from swarm_os.kernel.status import build_status
 from swarm_os.services.simulation_service import SimulationService
 
 from swarm_os.repositories.file_snapshot_repository import FileSnapshotRepository
@@ -38,6 +38,9 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
 
 
 

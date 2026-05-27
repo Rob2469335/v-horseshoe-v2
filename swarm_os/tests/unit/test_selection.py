@@ -2,7 +2,7 @@
 """Updated to use new Genome dataclass and kernel import paths."""
 import unittest
 import random
-from swarm_os.genetics import Genome, normalize_affinities
+from swarm_os.kernel.genetics import Genome, normalize_affinities
 from swarm_os.kernel.organism import Organism
 from swarm_os.kernel.selection import SelectionEngine, score_response
 
@@ -96,4 +96,5 @@ class TestSelectionEngine(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
 

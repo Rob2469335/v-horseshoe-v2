@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from swarm_os.kernel.snapshot import latest_snapshot
+from swarm_os.kernel.snapshot_index import latest_snapshot
 from swarm_os.kernel.status import build_status
 from swarm_os.repositories.file_snapshot_repository import FileSnapshotRepository
 
@@ -24,3 +24,4 @@ def get_dashboard() -> dict:
         "snapshot_count":   len(_repo.list()),
         "latest_snapshot":  str(latest) if latest else None,
     }
+

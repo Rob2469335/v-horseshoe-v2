@@ -17,3 +17,17 @@ def register_scenario(name: str, builder: PopulationBuilder) -> None:
 
 def build_population(name: str):
     return SCENARIOS.get(name, build_default_population)()
+
+# -------------------------------------------------------------------
+# Legacy compatibility surface
+# -------------------------------------------------------------------
+
+build = build_population
+
+__all__ = [
+    "SCENARIOS",
+    "register_scenario",
+    "build_population",
+    "build",
+]
+
