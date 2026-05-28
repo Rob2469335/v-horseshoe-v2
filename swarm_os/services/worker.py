@@ -12,16 +12,12 @@ class SwarmWorker:
     async def run_loop(self):
         self.is_running = True
         log.info("SwarmWorker: The Swarm heart is beating and the brain is active...")
-        
+
         while self.is_running:
             try:
-                # 1. Evolve the population
-                self.orch.evolve()
-                
-                # 2. Run the agentic step (the 'Brain' in action)
+                await self.orch.evolve()
                 log.info("SwarmWorker: Agentic brain is processing...")
                 await self.orch.run_agent_step()
-                
                 await asyncio.sleep(10)
             except Exception as e:
                 log.error(f"SwarmWorker: Error in execution loop: {e}")
