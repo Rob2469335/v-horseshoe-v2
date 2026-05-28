@@ -1,20 +1,8 @@
 # swarm_os/services/simulation_service.py
-"""
-SimulationService — orchestrates the evolution loop.
-Fixed:
-  - Uses get_settings() not settings object
-  - Uses scenarios.registry.build() not build_population()
-  - Uses Genome.to_dict() not genome.__dict__
-  - snapshot_repo injected with default (FileSnapshotRepository)
-  - Uses correct kernel import paths
-  - Safe getattr lookup for random_seed config protection
-"""
 from __future__ import annotations
 
 import logging
 import random
-from dataclasses import asdict
-
 from swarm_os.core.settings import get_settings
 from swarm_os.kernel.environment import Environment
 from swarm_os.kernel.metrics import summarize
@@ -31,7 +19,6 @@ log = logging.getLogger(__name__)
 
 
 def _organisms_from_snapshot(snapshot: dict) -> list[Organism]:
-    """Rebuild organism list from a migrated snapshot dict."""
     items = []
     for item in snapshot.get("organisms", []):
         genome = Genome.from_dict(item["genome"])
@@ -49,15 +36,14 @@ class SimulationService:
             self.settings.snapshots_dir
         )
 
-    def run(
+    async def run(
         self,
         resume_path: str = "",
         steps: int = 15,
         scenario: str | None = None,
     ) -> tuple:
         s = self.settings
-        
-        # Safe fallback lookup if random_seed isn't present in settings blueprint
+
         seed = getattr(s, "random_seed", None)
         if seed is not None:
             random.seed(seed)
@@ -65,8 +51,8 @@ class SimulationService:
         env = Environment()
 
         if resume_path:
-            raw      = self.snapshot_repo.load(resume_path)
-            snapshot = migrate_snapshot(raw)
+            raw       = self.snapshot_repo.load(resume_path)
+            snapshot  = migrate_snapshot(raw)
             organisms = _organisms_from_snapshot(snapshot)
             kernel    = SwarmKernel(organisms, env)
             kernel.generation = snapshot.get("generation", 0)
@@ -80,7 +66,7 @@ class SimulationService:
             log.info("started fresh scenario=%s pop=%d", sc_name, len(organisms))
 
         for _ in range(steps):
-            kernel.step()
+            await kernel.step()
             payload = {
                 "snapshot_version": 4,
                 "generation":       kernel.generation,

@@ -199,7 +199,7 @@ class SwarmKernel:
                     "id":           o.id,
                     "fitness":      round(o.fitness, 4),
                     "avg_fitness":  round(o.genome.average_fitness, 4),
-                    "model_weights":o.genome.model_weights,
+                    "model_weights":getattr(o.genome, "model_weights", {}),
                     "tools":        o.genome.active_tools(seed=step_seed),
                     "generation":   o.genome.generation,
                     "evaluations":  o.genome.evaluations,
@@ -268,7 +268,7 @@ class SwarmKernel:
                     "id":           o.id,
                     "fitness":      round(o.fitness, 4),
                     "avg_fitness":  round(o.genome.average_fitness, 4),
-                    "model_weights":o.genome.model_weights,
+                    "model_weights":getattr(o.genome, "model_weights", {}),
                     "tools":        o.genome.active_tools(seed=self.generation),
                     "generation":   o.genome.generation,
                 }

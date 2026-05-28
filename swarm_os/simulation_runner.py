@@ -6,6 +6,7 @@ specialists emerge in real time.
 """
 from __future__ import annotations
 
+import asyncio
 import argparse
 import logging
 import random
@@ -86,7 +87,7 @@ def main() -> None:
 
     for gen in range(args.generations):
         try:
-            summary  = kernel.step()
+            summary = asyncio.run(kernel.step())
             top      = summary["top_organisms"]
             diversity = summary.get("diversity", {})
 
@@ -174,5 +175,6 @@ def _print_final_report(kernel: SwarmKernel) -> None:
 
     print("\n" + "═" * 68)
     print("\n  To resume:  python -m swarm_os --resume\n")
+
 
 

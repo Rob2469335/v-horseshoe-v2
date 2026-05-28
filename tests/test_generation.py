@@ -5,7 +5,7 @@ from swarm_os.main import app
 client = TestClient(app)
 
 def test_generation():
-    response = client.get("/admin/generation")
+    response = client.get("/api/admin/generation")
     assert response.status_code == 200
     data = response.json()
     assert "scenario" in data
@@ -13,3 +13,4 @@ def test_generation():
     assert "current_run" in data
     assert "population" in data
     assert isinstance(data["population"], list)
+

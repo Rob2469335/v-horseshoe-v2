@@ -17,5 +17,7 @@ class Settings:
     random_seed: int = _env_int("SWARM_RANDOM_SEED", 42)
     scenario_name: str = _env_str("SWARM_SCENARIO_NAME", "default")
     swarm_url: str = _env_str("SWARM_URL", "http://127.0.0.1:11436")
+    swarm_timeout: float = float(_env_int("SWARM_TIMEOUT", 30))
 
 settings = Settings()
+

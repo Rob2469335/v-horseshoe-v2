@@ -30,7 +30,6 @@ async def lifespan(app: FastAPI):
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
 
-    # Ensure data dirs exist
     for d in ["data", "data/events", "data/snapshots", "logs"]:
         Path(d).mkdir(parents=True, exist_ok=True)
 
@@ -56,7 +55,6 @@ async def lifespan(app: FastAPI):
     log.info("v-Horseshoe v2 shutdown complete")
 
 
-# ── App factory ───────────────────────────────────────────────────────────────
 def create_app() -> FastAPI:
     app = FastAPI(
         title="v-Horseshoe Enterprise v2",
@@ -72,34 +70,12 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # ── API routes ────────────────────────────────────────────────────────────
     app.include_router(router)
 
-    # Try to include optional admin/dashboard routers
-    try:
-        from swarm_os.api.admin import router as admin_router
-        app.include_router(admin_router, prefix="/api")
-    except Exception as e:
-        log.warning("admin router skipped: %s", e)
-
-    try:
-        from swarm_os.api.dashboard import router as dash_router
-        app.include_router(dash_router, prefix="/api")
-    except Exception as e:
-        log.warning("dashboard router skipped: %s", e)
-
-    try:
-        from swarm_os.api.explorer import router as exp_router
-        app.include_router(exp_router, prefix="/api")
-    except Exception as e:
-        log.warning("explorer router skipped: %s", e)
-
-    # ── Static files ──────────────────────────────────────────────────────────
     static_dir = Path(__file__).parent / "static"
     static_dir.mkdir(exist_ok=True)
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
-    # ── Frontend ──────────────────────────────────────────────────────────────
     gui_file = Path(__file__).parent / "templates" / "index.html"
 
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)

@@ -27,7 +27,16 @@ def sigmoid(x: float) -> float:
 def clamp(v: float, lo: float = 0.0, hi: float = 1.0) -> float:
     return max(lo, min(hi, v))
 
-def model_distribution(tier: float) -> Dict[str, float]:
+def model_distribution(tier: float, smoke: bool = False) -> Dict[str, float]:
+    if smoke:
+        triage_weight = clamp(1.0 - (tier * 2.0))
+        fast_weight = clamp(1.0 - abs((tier - 0.5) * 2.0))
+        total = triage_weight + fast_weight + 1e-9
+        return {
+            MODEL_TIERS["triage"]: triage_weight / total,
+            MODEL_TIERS["fast"]: fast_weight / total,
+        }
+
     triage_weight = clamp(1.0 - (tier * 2.0))
     heavy_weight = clamp((tier * 2.0) - 1.0)
     fast_weight = clamp(1.0 - abs((tier - 0.5) * 2.0))
@@ -38,8 +47,8 @@ def model_distribution(tier: float) -> Dict[str, float]:
         MODEL_TIERS["heavy"]: heavy_weight / total,
     }
 
-def sample_model(tier: float) -> str:
-    distribution = model_distribution(tier)
+def sample_model(tier: float, smoke: bool = False) -> str:
+    distribution = model_distribution(tier, smoke=smoke)
     roll = random.random()
     cumulative = 0.0
     for model, weight in distribution.items():
@@ -97,9 +106,15 @@ class Genome:
     lifetime_fitness: float = 0.0
     evaluations: int = 0
 
+
+    @property
+    def timeout_budget(self) -> float:
+        # Higher tiers get more time
+        return 10.0 + (self.model_tier * 50.0)
+
     @property
     def model(self) -> str:
-        return sample_model(self.model_tier)
+        return sample_model(self.model_tier, smoke=getattr(self, "smoke", False))
 
     @property
     def actual_temperature(self) -> float:

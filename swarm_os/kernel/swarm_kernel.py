@@ -12,7 +12,6 @@ from .environment import Environment
 from .genetics import Genome, crossover, mutate
 from .organism import Organism
 from .selection import SelectionEngine
-from .snapshot import save_snapshot
 
 log = logging.getLogger(__name__)
 _CONCURRENCY = 1
@@ -23,7 +22,7 @@ def _make_organism(org_id: str, genome: Genome, task_domain: str = "general") ->
 
 async def _act_async(organism: Organism, env_state: dict, sem: asyncio.Semaphore) -> dict:
     async with sem:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, organism.act, env_state)
 
 class SwarmKernel:
@@ -42,7 +41,6 @@ class SwarmKernel:
         self.snapshot_every = snapshot_every
         self.elite_count = elite_count
         self.fitness_decay = fitness_decay
-        self._generation_log: List[Dict] = []
 
     async def step_async(self, human_scores: Optional[Dict[str, float]] = None) -> Dict:
         t0 = time.perf_counter()
@@ -99,24 +97,20 @@ class SwarmKernel:
             "top_organisms": [{"id": o.id, "fitness": round(o.fitness, 4)} for o in top],
         }
 
-        self._generation_log.append(summary)
-
         if self.generation % self.snapshot_every == 0:
+            from .snapshot import save_snapshot
             save_snapshot(self.organisms, self.generation)
 
         self.generation += 1
         return summary
 
-    def step(self, human_scores: Optional[Dict[str, float]] = None) -> Dict:
-        return asyncio.run(self.step_async(human_scores=human_scores))
-
-    def run(self, generations: int = 10) -> List[Dict]:
-        return [self.step() for _ in range(generations)]
+    async def step(self, human_scores: Optional[Dict[str, float]] = None) -> Dict:
+        return await self.step_async(human_scores=human_scores)
 
     async def run_async(self, generations: int = 10) -> List[Dict]:
         summaries = []
         for _ in range(generations):
-            summaries.append(await self.step_async())
+            summaries.append(await self.step())
         return summaries
 
     def status(self) -> Dict:
@@ -128,6 +122,4 @@ class SwarmKernel:
             "resources": self.env.resources,
             "top_organisms": [{"id": o.id, "fitness": round(o.fitness, 4)} for o in top],
         }
-
-
 
