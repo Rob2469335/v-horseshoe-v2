@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import argparse
 import json
 
@@ -34,10 +35,11 @@ def main():
         print(json.dumps(build_status(None, settings.scenario_name), indent=2))
         return
 
-    service.run(resume_path=args.resume)
+    asyncio.run(service.run(resume_path=args.resume))
 
 if __name__ == "__main__":
     main()
+
 
 
 

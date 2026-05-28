@@ -23,13 +23,11 @@ _repo    = FileSnapshotRepository()
 _service = SimulationService(snapshot_repo=_repo)
 
 
-def _resume_task(path: str) -> None:
+async def _resume_task(path: str) -> None:
     try:
-        _service.run(resume_path=path)
+        await _service.run(resume_path=path)
     except Exception as e:
         log.exception("resume task failed: %s", e)
-
-
 
 @router.get("/status")
 def admin_status() -> dict:
@@ -81,3 +79,5 @@ def admin_explorer() -> dict:
         **build_status(None, None),
         "current_run": None,  # Adding this key to keep the original explorer test requirements happy!
     }
+
+
