@@ -1,3 +1,4 @@
+from pathlib import Path
 import logging
 from typing import Dict, Any, Type
 from swarm_os.capabilities.chat_search import ChatSearchHandler
@@ -44,7 +45,8 @@ class CapabilityRouter:
                 self._handlers[capability_name] = handler_class(rules=handler_config or None)
             elif capability_name == "vscode_automation":
                 # Fallback to current directory string if no custom root is supplied
-                root_path = handler_config.get("workspace_root", ".") if isinstance(handler_config, dict) else "."
+                default_root = str(Path(__file__).resolve().parents[1])
+                root_path = handler_config.get("workspace_root", default_root) if isinstance(handler_config, dict) else default_root
                 self._handlers[capability_name] = handler_class(workspace_root=root_path)
             else:
                 self._handlers[capability_name] = handler_class(config=handler_config or None)

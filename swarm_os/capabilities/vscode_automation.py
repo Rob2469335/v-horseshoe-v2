@@ -1,29 +1,39 @@
 import logging
 import asyncio
 import os
+from pathlib import Path
 from typing import Dict, Any, List
 from swarm_os.capabilities.models import VSCodeAutomationRequest, VSCodeAutomationResponse
 from swarm_os.lib.safety import validate_path
 
 logger = logging.getLogger(__name__)
 
+
 class VSCodeAutomationHandler:
-    def __init__(self, workspace_root: str = "."):
+    def __init__(self, workspace_root: str = str(Path(__file__).resolve().parents[1])):
         self.workspace_root = workspace_root
-        # Explicit allowlist of commands mapped to actual safe system calls
         self.allowed_commands = {
             "test": ["python", "-m", "pytest"],
             "format": ["python", "-m", "black", "."],
-            "list_files": [], # Handled internally by os.listdir safely
+            "list_files": [],
             "status": ["git", "status"],
-            "lint": ["python", "-m", "flake8"]
+            "lint": ["python", "-m", "flake8"],
         }
         logger.info(f"Initialized operational secure VSCodeAutomationHandler at {workspace_root}")
 
     async def execute(self, payload: VSCodeAutomationRequest) -> VSCodeAutomationResponse:
         command = payload.command.lower().strip()
-        
-        # Sanitize and clean custom argument characters to neutralize shell injection attempts
+
+        if command not in self.allowed_commands:
+            return VSCodeAutomationResponse(
+                status="rejected",
+                command=command,
+                stdout="",
+                stderr=f"Security Error: Command '{command}' is not on the safety allowlist.",
+                exit_code=1,
+                message="Rejected disallowed workspace command."
+            )
+
         sanitized_args = []
         for arg in payload.args:
             clean_arg = "".join(c for c in str(arg) if c.isalnum() or c in "._-/\\")
@@ -36,22 +46,11 @@ class VSCodeAutomationHandler:
                         status="rejected",
                         command=command,
                         stdout="",
-                        stderr=f'Security Containment Error: {str(ve)}',
+                        stderr=f"Security Containment Error: {str(ve)}",
                         exit_code=1,
                         message="Directory containment breach prevented."
                     )
 
-        if command not in self.allowed_commands:
-            return VSCodeAutomationResponse(
-                status="rejected",
-                command=command,
-                stdout="",
-                stderr=f"Security Error: Command '{command}' is not on the safety allowlist.",
-                exit_code=1,
-                message="Rejected disallowed workspace command."
-            )
-
-        # 1. Handle list_files safely using Python's built-in OS tools
         if command == "list_files":
             try:
                 files = []
@@ -59,7 +58,7 @@ class VSCodeAutomationHandler:
                     for f in filenames:
                         rel_path = os.path.relpath(os.path.join(root, f), self.workspace_root)
                         files.append(rel_path.replace("\\", "/"))
-                
+
                 return VSCodeAutomationResponse(
                     status="executed",
                     command=command,
@@ -78,12 +77,10 @@ class VSCodeAutomationHandler:
                     message="Failed to scan directory."
                 )
 
-        # 2. Run actual safe background system subprocesses for other allowlisted commands
         base_tokens = list(self.allowed_commands[command])
         full_command = base_tokens + sanitized_args
 
         try:
-            # Bypasses the shell entirely to guarantee security stability
             proc = await asyncio.create_subprocess_exec(
                 *full_command,
                 stdout=asyncio.subprocess.PIPE,
@@ -91,7 +88,7 @@ class VSCodeAutomationHandler:
                 cwd=self.workspace_root
             )
             stdout_bytes, stderr_bytes = await proc.communicate()
-            
+
             return VSCodeAutomationResponse(
                 status="executed",
                 command=command,
@@ -109,5 +106,3 @@ class VSCodeAutomationHandler:
                 exit_code=1,
                 message="Subprocess execution failed."
             )
-
-
