@@ -12,6 +12,7 @@ from ..events.envelope import EventEnvelope
 from ..events.store import EventStore
 from ..infra.ollama import OllamaClient
 from ..services.simulation_service import SimulationService
+from ..config.settings import settings as swarm_settings
 
 log = logging.getLogger(__name__)
 
@@ -23,7 +24,8 @@ class Orchestrator:
         self.events = EventStore(s.events_dir)
         self.ollama = OllamaClient()
         self.simulation = SimulationService()
-        self.swarm_base_url = "http://127.0.0.1:11436"
+        self.swarm_base_url = swarm_settings.swarm_url
+        self.swarm_timeout = swarm_settings.swarm_timeout
 
     def assign_job(self, node: SwarmNode, job: SwarmJob) -> bool:
         accepted = can_accept_job(node, job)
@@ -61,7 +63,7 @@ class Orchestrator:
 
         return "qwen2.5:7b-instruct"
 
-    def _generate_via_swarm(self, model: str, prompt: str, timeout: int = 120) -> str:
+    def _generate_via_swarm(self, model: str, prompt: str, timeout: float | None = None) -> str:
         url = f"{self.swarm_base_url}/v1/chat/completions"
         payload = {
             "model": model,
@@ -71,7 +73,7 @@ class Orchestrator:
             "stream": False,
         }
 
-        with httpx.Client(timeout=timeout) as client:
+        with httpx.Client(timeout=timeout if timeout is not None else self.swarm_timeout) as client:
             r = client.post(url, json=payload)
             r.raise_for_status()
             raw = r.text
@@ -178,3 +180,4 @@ class Orchestrator:
             "status": "success",
             "message": "Agent step completed (placeholder)",
         }
+
