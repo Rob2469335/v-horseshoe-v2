@@ -13,3 +13,8 @@ logs/
 .vscode/
 .idea/
 data/
+
+organism-console/node_modules/
+startup-log.txt
+swarm_os/logs/
+swarm_os/data/snapshots/

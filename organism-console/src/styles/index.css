@@ -1,0 +1,197 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  min-width: 0;
+}
+
+.ops-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 20px;
+  align-items: start;
+  min-width: 0;
+}
+
+.ops-panel {
+  min-width: 0;
+  background: rgba(10, 18, 30, 0.72);
+  border: 1px solid rgba(120, 170, 255, 0.14);
+  border-radius: 18px;
+  padding: 18px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
+}
+
+.ops-panel h2 {
+  margin: 0 0 14px;
+  font-size: 14px;
+  line-height: 1.3;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.ops-panel pre {
+  margin: 0;
+  min-width: 0;
+  max-width: 100%;
+  height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  padding: 14px;
+  border-radius: 14px;
+  background: rgba(2, 8, 20, 0.88);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.agent-layout {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 20px;
+  min-width: 0;
+}
+
+.agent-panel {
+  min-width: 0;
+  background: rgba(10, 18, 30, 0.72);
+  border: 1px solid rgba(120, 170, 255, 0.14);
+  border-radius: 18px;
+  padding: 18px;
+}
+
+.agent-textarea {
+  width: 100%;
+  min-height: 220px;
+  margin-top: 12px;
+  margin-bottom: 14px;
+  padding: 14px;
+  border: 1px solid rgba(120, 170, 255, 0.18);
+  border-radius: 14px;
+  background: rgba(2, 8, 20, 0.88);
+  color: inherit;
+  resize: vertical;
+}
+
+.agent-send-button {
+  padding: 10px 16px;
+  border: 1px solid rgba(120, 170, 255, 0.2);
+  border-radius: 12px;
+  background: rgba(40, 120, 255, 0.16);
+  color: inherit;
+}
+
+.agent-response {
+  margin: 12px 0 0;
+  height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  padding: 14px;
+  border-radius: 14px;
+  background: rgba(2, 8, 20, 0.88);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+@media (max-width: 900px) {
+  .ops-grid,
+  .agent-layout {
+    grid-template-columns: 1fr;
+  }
+}
+/* === OPS LAYOUT OVERRIDE === */
+.page {
+  min-width: 0;
+  overflow-x: hidden;
+}
+
+.ops-grid {
+  display: grid !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  gap: 20px !important;
+  align-items: start !important;
+  width: 100% !important;
+  min-width: 0 !important;
+}
+
+.ops-panel {
+  min-width: 0 !important;
+  width: 100% !important;
+  overflow: hidden !important;
+}
+
+.ops-panel h2 {
+  font-size: 13px !important;
+  line-height: 1.25 !important;
+  white-space: normal !important;
+  word-break: break-word !important;
+  overflow-wrap: anywhere !important;
+}
+
+.ops-panel pre {
+  height: 300px !important;
+  max-width: 100% !important;
+  overflow: auto !important;
+  white-space: pre-wrap !important;
+  word-break: break-word !important;
+  overflow-wrap: anywhere !important;
+}
+
+@media (max-width: 1200px) {
+  .ops-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
+
+@media (max-width: 760px) {
+  .ops-grid {
+    grid-template-columns: 1fr !important;
+  }
+}
+html, body, #root {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+main,
+.app-shell,
+.app-layout,
+.layout,
+.content,
+.page-shell,
+.page-content,
+.route-container {
+  min-width: 0 !important;
+  max-width: 100% !important;
+  overflow-x: hidden !important;
+}
+
+.page {
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  overflow-x: hidden !important;
+}
+
+.ops-grid {
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+}
+
+.ops-panel,
+.ops-panel pre {
+  min-width: 0 !important;
+  max-width: 100% !important;
+}
+
+@media (max-width: 1200px) {
+  .ops-grid {
+    grid-template-columns: 1fr !important;
+  }
+}
