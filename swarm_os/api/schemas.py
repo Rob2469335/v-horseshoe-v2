@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 
 # --- Existing Core Orchestration Schemas ---
 class GenerateRequest(BaseModel):
-    model: str
+    model: Optional[str] = None
     prompt: str
 
 class GenerateResponse(BaseModel):
@@ -34,20 +34,20 @@ class StatusResponse(BaseModel):
 # --- New Capability Tool Schemas ---
 class ToolExecuteRequest(BaseModel):
     """Request to execute a capability tool."""
-    capability: str  # "chat_search", "upwork_analyzer", "vscode_automation"
-    payload: Dict[str, Any]  # Request model data (e.g., {"query": "..."} for chat_search)
-    cache_key: Optional[str] = None  # Optional cache key for result caching
+    capability: str
+    payload: Dict[str, Any]
+    cache_key: Optional[str] = None
 
 class ToolExecuteResponse(BaseModel):
     """Response from capability tool execution."""
-    status: str  # "success", "executed", "rejected", "failed", "error"
+    status: str
     capability: str
-    data: Dict[str, Any]  # Full response data from handler
+    data: Dict[str, Any]
     message: Optional[str] = None
-    command: Optional[str] = None  # For vscode_automation
-    exit_code: Optional[int] = None  # For vscode_automation
-    stdout: Optional[str] = None  # For vscode_automation
-    stderr: Optional[str] = None  # For vscode_automation
+    command: Optional[str] = None
+    exit_code: Optional[int] = None
+    stdout: Optional[str] = None
+    stderr: Optional[str] = None
 
 class ToolListResponse(BaseModel):
     """Response listing available capabilities."""
