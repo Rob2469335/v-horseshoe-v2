@@ -41,6 +41,21 @@ def get_runtime():
     return _rt
 
 
+def _build_tool_request(capability: str, payload: dict):
+    from swarm_os.capabilities.models import (
+        ChatSearchRequest, UpworkAnalysisRequest, VSCodeAutomationRequest,
+    )
+
+    cap = capability.lower().strip()
+    if cap == "chat_search":
+        return cap, ChatSearchRequest(**payload)
+    if cap == "upwork_analyzer":
+        return cap, UpworkAnalysisRequest(**payload)
+    if cap == "vscode_automation":
+        return cap, VSCodeAutomationRequest(**payload)
+
+    raise HTTPException(status_code=400, detail=f"Unknown capability: {cap}")
+
 @router.get("/readyz")
 def readyz():
     return {"ready": True}
@@ -83,20 +98,7 @@ def cache_status(runtime=Depends(get_runtime)):
 @router.post("/tools/execute", response_model=ToolExecuteResponse)
 async def execute_tool(payload: ToolExecuteRequest, runtime=Depends(get_runtime)):
     try:
-        from swarm_os.capabilities.models import (
-            ChatSearchRequest, UpworkAnalysisRequest, VSCodeAutomationRequest,
-        )
-
-        cap = payload.capability.lower().strip()
-        if cap == "chat_search":
-            req = ChatSearchRequest(**payload.payload)
-        elif cap == "upwork_analyzer":
-            req = UpworkAnalysisRequest(**payload.payload)
-        elif cap == "vscode_automation":
-            req = VSCodeAutomationRequest(**payload.payload)
-        else:
-            raise HTTPException(status_code=400, detail=f"Unknown capability: {cap}")
-
+        cap, req = _build_tool_request(payload.capability, payload.payload)
         result = await runtime.call_tool(cap, req, cache_key=payload.cache_key)
         return ToolExecuteResponse(
             status=result.status,
@@ -113,7 +115,6 @@ async def execute_tool(payload: ToolExecuteRequest, runtime=Depends(get_runtime)
     except Exception as e:
         log.exception("Tool execution failed")
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @router.post("/generate", response_model=GenerateResponse)
 def generate(payload: GenerateRequest, orch: Orchestrator = Depends(get_orchestrator)):
@@ -169,3 +170,4 @@ def swarm_stats(orch: Orchestrator = Depends(get_orchestrator)):
             "best_agent_id": "none",
             "active_generation": 0,
         }
+
