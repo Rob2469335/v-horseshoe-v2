@@ -27,6 +27,13 @@ class Orchestrator:
         self.swarm_base_url = swarm_settings.swarm_url
         self.swarm_timeout = swarm_settings.swarm_timeout
 
+        self.last_swarm_stats = {
+            "status": "idling",
+            "population_size": 0,
+            "best_fitness": 0.0,
+            "best_agent_id": "none",
+            "active_generation": 0,
+        }
     def assign_job(self, node: SwarmNode, job: SwarmJob) -> bool:
         accepted = can_accept_job(node, job)
         event = EventEnvelope.create(
@@ -159,6 +166,18 @@ class Orchestrator:
     async def evolve(self) -> None:
         log.info("Orchestrator.evolve(): Starting evolution cycle")
         kernel, metrics = await self.simulation.run(steps=1)
+
+        organisms = getattr(kernel, "organisms", []) or []
+        top = max(organisms, key=lambda x: getattr(x, "fitness", 0.0), default=None)
+
+        self.last_swarm_stats = {
+            "status": "active" if organisms else "idling",
+            "population_size": len(organisms),
+            "best_fitness": round(float(getattr(metrics, "best_fitness", 0.0) or 0.0), 4),
+            "best_agent_id": getattr(top, "id", "none") if top else "none",
+            "active_generation": int(getattr(kernel, "generation", 0) or 0),
+        }
+
         event = EventEnvelope.create(
             event_type="swarm.evolve",
             source="orchestrator",
@@ -225,3 +244,4 @@ class Orchestrator:
                 "status": "error",
                 "message": str(e),
             }
+

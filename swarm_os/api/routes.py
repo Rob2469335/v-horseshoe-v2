@@ -144,30 +144,12 @@ def assign(payload: AssignRequest, orch: Orchestrator = Depends(get_orchestrator
 
 @router.get("/swarm-stats")
 def swarm_stats(orch: Orchestrator = Depends(get_orchestrator)):
-    try:
-        pop = orch.memory.get_population() if hasattr(orch, "memory") else []
-        if not pop:
-            return {
-                "status": "idling",
-                "population_size": 0,
-                "best_fitness": 0.0,
-                "best_agent_id": "none",
-                "active_generation": 0,
-            }
+    return dict(getattr(orch, "last_swarm_stats", {
+        "status": "idling",
+        "population_size": 0,
+        "best_fitness": 0.0,
+        "best_agent_id": "none",
+        "active_generation": 0,
+    }))
 
-        top = sorted(pop, key=lambda x: getattr(x, "fitness", 0.0), reverse=True)[0]
-        return {
-            "population_size": len(pop),
-            "best_fitness": round(getattr(top, "fitness", 0.0), 4),
-            "best_agent_id": getattr(top, "id", "unknown"),
-            "active_generation": getattr(top, "generation", 0),
-        }
-    except Exception:
-        return {
-            "status": "idling",
-            "population_size": 0,
-            "best_fitness": 0.0,
-            "best_agent_id": "none",
-            "active_generation": 0,
-        }
 

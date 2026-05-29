@@ -66,7 +66,7 @@ class SimulationService:
             log.info("started fresh scenario=%s pop=%d", sc_name, len(organisms))
 
         for _ in range(steps):
-            await kernel.step()
+            await kernel.step_async()
             payload = {
                 "snapshot_version": 4,
                 "generation":       kernel.generation,
@@ -85,4 +85,5 @@ class SimulationService:
         log.info("run complete generation=%d best_fitness=%.4f",
                  kernel.generation, metrics.best_fitness)
         return kernel, metrics
+
 
