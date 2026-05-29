@@ -28,12 +28,12 @@ _CONCURRENCY     = 1
 _MAX_LOG_ENTRIES = 200
 
 
-def _make_organism(org_id: str, genome: Genome, task_domain: str = "general") -> Organism:
-    brain = brain_registry.make("swarm", genome, task_domain)
+def _make_organism(org_id: str, genome: Genome, task_domain: str = "general", generate_fn=None) -> Organism:
+    brain = brain_registry.make("swarm", genome, task_domain, generate_fn=generate_fn)
     return Organism(id=org_id, brain=brain, genome=genome)
 
 
-def _clone_organism(org: Organism, new_id: str, task_domain: str = "general") -> Organism:
+def _clone_organism(org: Organism, new_id: str, task_domain: str = "general", generate_fn=None) -> Organism:
     """
     Clone an organism for elitism — COPY the genome, don't reuse the object.
     The clone starts with the same genome but fresh fitness history so it
@@ -44,7 +44,7 @@ def _clone_organism(org: Organism, new_id: str, task_domain: str = "general") ->
     # Preserve fitness history so elites don't lose their average_fitness advantage
     genome_copy.lifetime_fitness = org.genome.lifetime_fitness
     genome_copy.evaluations      = org.genome.evaluations
-    return _make_organism(new_id, genome_copy, task_domain)
+    return _make_organism(new_id, genome_copy, task_domain, generate_fn=generate_fn)
 
 
 async def _act_async(organism: Organism, env_state: dict, sem: asyncio.Semaphore) -> dict:
@@ -86,6 +86,7 @@ class SwarmKernel:
         snapshot_every: int   = 5,
         elite_count:    int   = 2,
         fitness_decay:  float = 0.85,
+        generate_fn = None,
     ):
         self.organisms      = organisms
         self.env            = env
@@ -95,6 +96,7 @@ class SwarmKernel:
         self.elite_count    = elite_count
         self.fitness_decay  = fitness_decay
         self._generation_log: List[Dict] = []
+        self.generate_fn     = generate_fn
 
     async def step_async(
         self,
@@ -161,13 +163,15 @@ class SwarmKernel:
                 org_id      = f"g{self.generation}_c{random.randint(0, 9999)}",
                 genome      = child_genome,
                 task_domain = task.domain if task else "general",
+                generate_fn = self.generate_fn,
             )
             children.append(child)
 
         # 9. Add elite CLONES to next generation pool
         elite_clones = [
             _clone_organism(e, f"elite_{e.id}_g{self.generation}",
-                            task.domain if task else "general")
+                            task.domain if task else "general",
+                            generate_fn=self.generate_fn)
             for e in elites
         ]
 
@@ -239,8 +243,12 @@ class SwarmKernel:
         self.generation += 1
         return summary
 
-    def step(self, human_scores: Optional[Dict[str, float]] = None) -> Dict:
-        return asyncio.run(self.step_async(human_scores=human_scores))
+    def step(self, human_scores: Optional[Dict[str, float]] = None):
+        try:
+            asyncio.get_running_loop()
+            return self.step_async(human_scores=human_scores)
+        except RuntimeError:
+            return asyncio.run(self.step_async(human_scores=human_scores))
 
     def run(self, generations: int = 10) -> List[Dict]:
         summaries = []
@@ -275,4 +283,8 @@ class SwarmKernel:
                 for o in top
             ],
         }
+
+
+
+
 

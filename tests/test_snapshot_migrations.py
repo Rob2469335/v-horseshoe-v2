@@ -9,8 +9,11 @@ def test_snapshot_migration_v1_to_current():
     doc = json.loads(FIXTURE.read_text(encoding="utf-8"))
     migrated = migrate_snapshot(doc)
 
-    assert migrated["snapshot_version"] == 2
+    assert migrated["snapshot_version"] == 4
     assert migrated["generation"] == 3
     assert migrated["organisms"][0]["genome"]["generation"] == 3
-    assert migrated["organisms"][0]["genome"]["age"] == 0
+    assert "age" not in migrated["organisms"][0]["genome"]
+
+
+
 

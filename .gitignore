@@ -18,3 +18,9 @@ organism-console/node_modules/
 startup-log.txt
 swarm_os/logs/
 swarm_os/data/snapshots/
+.env
+*.bak
+*.bak-*
+*.bak_step*
+*.bak-step*
+_tmp_*.py
