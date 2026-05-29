@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import time
 import json
+import random
 from typing import Any, Callable, Dict, List
 
 import httpx
@@ -197,13 +198,31 @@ def make_swarm_brain(genome, task_domain: str = "general") -> Callable:
         t0 = time.perf_counter()
         try:
             timeout = httpx.Timeout(genome.timeout_budget, connect=10.0)
-            with httpx.Client(timeout=timeout) as client:
-                resp = client.post(SWARM_URL, json=payload)
+            attempts = 3
+            resp = None
+            elapsed = 0.0
+            status = 0
+            content_type = ""
+            body_text = ""
 
-            elapsed = time.perf_counter() - t0
-            status = resp.status_code
-            content_type = resp.headers.get("content-type", "")
-            body_text = resp.text or ""
+            with httpx.Client(timeout=timeout) as client:
+                for attempt in range(1, attempts + 1):
+                    resp = client.post(SWARM_URL, json=payload)
+                    elapsed = time.perf_counter() - t0
+                    status = resp.status_code
+                    content_type = resp.headers.get("content-type", "")
+                    body_text = resp.text or ""
+
+                    if status != 429:
+                        break
+
+                    if attempt < attempts:
+                        delay = min(2.0, 0.35 * (2 ** (attempt - 1))) + random.uniform(0.0, 0.15)
+                        log.warning(
+                            "brain rate limited org=%s model=%s attempt=%d/%d retry_in=%.2fs",
+                            org_id, model, attempt, attempts, delay
+                        )
+                        time.sleep(delay)
 
             if status >= 400:
                 log.error("brain http error org=%s status=%s content_type=%s body=%s",
@@ -376,6 +395,8 @@ __all__ = [
     "simple_brain",
     "registry",
 ]
+
+
 
 
 
