@@ -176,8 +176,52 @@ class Orchestrator:
 
     async def run_agent_step(self) -> dict:
         log.info("Orchestrator.run_agent_step(): Starting agent step")
-        return {
-            "status": "success",
-            "message": "Agent step completed (placeholder)",
-        }
 
+        prompt = (
+            "Return a one-line system heartbeat for Horseshoe Swarm. "
+            "State that the orchestrator loop is active."
+        )
+
+        try:
+            result, chosen_model = self.generate(model=None, prompt=prompt)
+            response_text = result.strip()
+
+            payload = {
+                "status": "success",
+                "message": "Agent step completed",
+                "model": chosen_model,
+                "response": response_text,
+            }
+
+            event = EventEnvelope.create(
+                event_type="agent.step.completed",
+                source="orchestrator",
+                payload={
+                    "model": chosen_model,
+                    "response_len": len(response_text),
+                    "status": "success",
+                },
+            )
+            self.events.append(event)
+
+            log.info(
+                "Orchestrator.run_agent_step(): completed model=%s response_len=%d",
+                chosen_model,
+                len(response_text),
+            )
+            return payload
+
+        except Exception as e:
+            log.exception("Orchestrator.run_agent_step(): agent step failed")
+
+            event = EventEnvelope.create(
+                event_type="agent.step.failed",
+                source="orchestrator",
+                payload={"error": str(e)},
+            )
+            self.events.append(event)
+
+            return {
+                "status": "error",
+                "message": str(e),
+            }
