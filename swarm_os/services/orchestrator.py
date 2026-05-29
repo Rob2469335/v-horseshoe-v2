@@ -71,70 +71,7 @@ class Orchestrator:
         return "qwen2.5:7b-instruct"
 
     def _generate_via_swarm(self, model: str, prompt: str, timeout: float | None = None) -> str:
-        url = f"{self.swarm_base_url}/v1/chat/completions"
-        payload = {
-            "model": model,
-            "messages": [
-                {"role": "user", "content": prompt}
-            ],
-            "stream": False,
-        }
-
-        with httpx.Client(timeout=timeout if timeout is not None else self.swarm_timeout) as client:
-            r = client.post(url, json=payload)
-            r.raise_for_status()
-            raw = r.text
-            if not raw or not raw.strip():
-                raise RuntimeError("Empty JSON response from swarm endpoint")
-
-            if raw.lstrip().startswith("data:"):
-                chunks = []
-                for line in raw.splitlines():
-                    line = line.strip()
-                    if not line or not line.startswith("data:"):
-                        continue
-                    payload_line = line[5:].strip()
-                    if payload_line == "[DONE]":
-                        break
-                    try:
-                        event = json.loads(payload_line)
-                    except json.JSONDecodeError:
-                        continue
-                    choices = event.get("choices", [])
-                    if not choices:
-                        continue
-                    choice = choices[0]
-                    if isinstance(choice, dict):
-                        delta = choice.get("delta", {})
-                        if isinstance(delta, dict):
-                            content = delta.get("content", "")
-                            if content:
-                                chunks.append(content)
-                        message = choice.get("message", {})
-                        if isinstance(message, dict):
-                            content = message.get("content", "")
-                            if content:
-                                chunks.append(content)
-
-                if chunks:
-                    return "".join(chunks)
-
-                raise RuntimeError("SSE stream from swarm contained no content")
-
-            try:
-                data = json.loads(raw)
-            except json.JSONDecodeError as e:
-                preview = raw[:300].replace("\n", "\\n")
-                raise RuntimeError(f"Invalid JSON from swarm endpoint: {preview}") from e
-
-        choices = data.get("choices", [])
-        if not choices:
-            return ""
-
-        message = choices[0].get("message", {})
-        if isinstance(message, dict):
-            return message.get("content", "") or ""
-        return ""
+        raise RuntimeError("Swarm loopback generation disabled for diagnostics")
 
     def generate(self, model: str | None, prompt: str) -> tuple[str, str]:
         chosen_model = self._choose_model(prompt=prompt, requested_model=model)
@@ -244,4 +181,5 @@ class Orchestrator:
                 "status": "error",
                 "message": str(e),
             }
+
 

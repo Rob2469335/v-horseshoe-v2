@@ -39,18 +39,19 @@ async def lifespan(app: FastAPI):
 
     worker = SwarmWorker(orch)
     app_state["worker"] = worker
-    worker_task = asyncio.create_task(worker.run_loop())
-    app_state["worker_task"] = worker_task
-    log.info("v-Horseshoe v2 online — SwarmWorker started")
+    # worker_task = asyncio.create_task(worker.run_loop())
+    # app_state["worker_task"] = worker_task
+    log.info("v-Horseshoe v2 online — SwarmWorker disabled for diagnostics")
 
     yield
 
     worker.is_running = False
-    worker_task.cancel()
-    try:
-        await worker_task
-    except asyncio.CancelledError:
-        pass
+    if "worker_task" in app_state:
+        app_state["worker_task"].cancel()
+        try:
+            await app_state["worker_task"]
+        except asyncio.CancelledError:
+            pass
     app_state.clear()
     log.info("v-Horseshoe v2 shutdown complete")
 

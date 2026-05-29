@@ -30,7 +30,21 @@ class OllamaClient:
             return content_obj.get("content", "") or ""
         return ""
 
+
+    def _resolve_model(self, model: str) -> str:
+        aliases = {
+            "qwen2.5": "qwen2.5:7b-instruct",
+            "qwen2.5-coder": "qwen2.5-coder:14b",
+            "qwen3": "qwen3:14b",
+            "mistral": "mistral-nemo:12b",
+        }
+        requested = (model or "").strip()
+        if not requested:
+            return "qwen2.5:7b-instruct"
+        return aliases.get(requested, requested)
+
     def generate(self, model: str, prompt: str, timeout: int = 120) -> str:
+        model = self._resolve_model(model)
         url = f"{self.base_url}/api/chat"
         payload = {
             "model": model,
