@@ -24,3 +24,5 @@ swarm_os/data/snapshots/
 *.bak_step*
 *.bak-step*
 _tmp_*.py
+
+organism-console/tsconfig.tsbuildinfo
