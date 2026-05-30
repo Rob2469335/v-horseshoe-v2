@@ -43,7 +43,7 @@ class OllamaClient:
             return "qwen2.5:7b-instruct"
         return aliases.get(requested, requested)
 
-    def generate(self, model: str, prompt: str, timeout: int = 120) -> str:
+    def generate(self, model: str, prompt: str, timeout: int = 300) -> str:
         model = self._resolve_model(model)
         url = f"{self.base_url}/api/chat"
         payload = {
