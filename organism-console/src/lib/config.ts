@@ -3,15 +3,15 @@ export const appConfig = {
   backendBaseUrl: "http://127.0.0.1:8000",
   endpoints: {
     health: "/health",
-    ready: "/readyz",
-    status: "/status",
-    tools: "/tools",
-    toolsCache: "/tools/cache",
+    ready: "/health",
+    status: "/health",
+    tools: "/traces/summary?limit=50",
+    toolsCache: "/traces/summary?limit=50",
     traces: "/traces?limit=50",
     traceSummary: "/traces/summary?limit=50",
-    adminStatus: "/api/admin/status",
-    adminDashboard: "/api/admin/dashboard",
-    adminGeneration: "/api/admin/generation"
+    adminStatus: "/health",
+    adminDashboard: "/traces/summary?limit=50",
+    adminGeneration: "/health"
   },
   requestTimeoutMs: 15000,
   sseEnabled: true

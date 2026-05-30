@@ -22,6 +22,7 @@ import type {
   TracesResponse
 } from "../lib/types"
 import { useUiStore } from "../state/ui-store"
+import { appConfig } from "../lib/config"
 
 function formatJson(value: unknown) {
   return JSON.stringify(value, null, 2)
@@ -129,30 +130,23 @@ export default function OpsPage() {
   })
 
   useEffect(() => {
-    if (healthQuery.isSuccess && readyQuery.isSuccess) {
+    if (healthQuery.isSuccess) {
       setConnectionStatus("online")
       return
     }
 
-    if (healthQuery.isError || readyQuery.isError || statusQuery.isError || toolsQuery.isError) {
+    if (healthQuery.isError) {
       setConnectionStatus("offline")
       return
     }
 
-    if (healthQuery.isLoading || readyQuery.isLoading || statusQuery.isLoading || toolsQuery.isLoading) {
+    if (healthQuery.isLoading) {
       setConnectionStatus("connecting")
     }
   }, [
     healthQuery.isSuccess,
-    readyQuery.isSuccess,
     healthQuery.isError,
-    readyQuery.isError,
-    statusQuery.isError,
-    toolsQuery.isError,
     healthQuery.isLoading,
-    readyQuery.isLoading,
-    statusQuery.isLoading,
-    toolsQuery.isLoading,
     setConnectionStatus
   ])
 
@@ -410,24 +404,24 @@ export default function OpsPage() {
       </div>
 
       <div className="ops-grid">
-        <DisclosurePanel title="/health">
+        <DisclosurePanel title={appConfig.endpoints.health}>
           <pre>{healthQuery.data ? formatJson(healthQuery.data) : String(healthQuery.error?.message ?? "Loading")}</pre>
         </DisclosurePanel>
 
-        <DisclosurePanel title="/readyz">
+        <DisclosurePanel title={appConfig.endpoints.ready}>
           <pre>{readyQuery.data ? formatJson(readyQuery.data) : String(readyQuery.error?.message ?? "Loading")}</pre>
         </DisclosurePanel>
 
-        <DisclosurePanel title="/status">
+        <DisclosurePanel title={appConfig.endpoints.status}>
           <pre>{statusQuery.data ? formatJson(statusQuery.data) : String(statusQuery.error?.message ?? "Loading")}</pre>
         </DisclosurePanel>
 
-        <DisclosurePanel title="/tools">
+        <DisclosurePanel title={appConfig.endpoints.tools}>
           <pre>{toolsQuery.data ? formatJson(toolsQuery.data) : String(toolsQuery.error?.message ?? "Loading")}</pre>
         </DisclosurePanel>
 
         <article className="ops-panel ops-panel--span-2">
-          <h2>/traces/summary</h2>
+          <h2>{appConfig.endpoints.traceSummary}</h2>
           {traceSummaryQuery.data ? (
             <div className="trace-summary-list">
               {traceSummary.length ? (
@@ -460,7 +454,7 @@ export default function OpsPage() {
         </article>
 
         <article className="ops-panel ops-panel--span-2">
-          <h2>/traces</h2>
+          <h2>{appConfig.endpoints.traces}</h2>
           {tracesQuery.data ? (
             <div className="trace-events">
               {selectedSummary ? (
@@ -500,19 +494,20 @@ export default function OpsPage() {
           )}
         </article>
 
-        <DisclosurePanel title="/api/admin/status">
+        <DisclosurePanel title={appConfig.endpoints.adminStatus}>
           <pre>{adminStatusQuery.data ? formatJson(adminStatusQuery.data) : String(adminStatusQuery.error?.message ?? "Loading")}</pre>
         </DisclosurePanel>
 
-        <DisclosurePanel title="/api/admin/dashboard">
+        <DisclosurePanel title={appConfig.endpoints.adminDashboard}>
           <pre>{adminDashboardQuery.data ? formatJson(adminDashboardQuery.data) : String(adminDashboardQuery.error?.message ?? "Loading")}</pre>
         </DisclosurePanel>
 
-        <DisclosurePanel title="/api/admin/generation">
+        <DisclosurePanel title={appConfig.endpoints.adminGeneration}>
           <pre>{adminGenerationQuery.data ? formatJson(adminGenerationQuery.data) : String(adminGenerationQuery.error?.message ?? "Loading")}</pre>
         </DisclosurePanel>
       </div>
     </section>
   )
 }
+
 
