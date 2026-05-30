@@ -189,7 +189,7 @@ class Orchestrator:
             "refactor", "python", "powershell", "bug", "traceback", "exception",
             "write code", "edit file", "patch", "function", "class", "fastapi"
         ]):
-            return "qwen2.5:7b-instruct"
+            return "qwen2.5-coder:14b-32k"
 
         if len(prompt) > 2500 or any(x in p for x in [
             "analyze", "compare", "design", "architecture", "plan", "reason",
@@ -197,9 +197,207 @@ class Orchestrator:
         ]):
             return "qwen2.5:14b-instruct-32k"
 
+        if any(x in p for x in [
+            "hi", "hello", "hey", "ping", "heartbeat", "status", "smoke", "test", "thanks", "help"
+        ]) or (len((prompt or "").split()) <= 4):
+            return "qwen2.5:3b-instruct"
+
         return "qwen2.5:7b-instruct"
 
-    def generate(self, model: str | None, prompt: str) -> tuple[str, str]:
+
+    def _fetch_installed_models(self) -> list[str]:
+        try:
+            import requests
+            response = requests.get("http://127.0.0.1:11434/api/tags", timeout=5)
+            response.raise_for_status()
+            data = response.json()
+            models = []
+            for item in data.get("models", []):
+                name = item.get("model") or item.get("name")
+                if isinstance(name, str) and name.strip():
+                    models.append(name.strip())
+            return models
+        except Exception:
+            return []
+
+    def _classify_model_name(self, model_name: str) -> set[str]:
+        name = (model_name or "").lower()
+        tags = set()
+
+        if "coder" in name or "code" in name:
+            tags.add("coding")
+        if "embed" in name:
+            tags.add("embedding")
+        if "rerank" in name or "reranker" in name:
+            tags.add("reranker")
+        if "vision" in name or "vl" in name or "moondream" in name:
+            tags.add("vision")
+        if any(x in name for x in ["14b", "12b", "32k", "qwen3"]):
+            tags.add("reasoning")
+        if any(x in name for x in ["3b", "7b"]):
+            tags.add("fast")
+        if "instruct" in name or "mistral" in name or "qwen" in name:
+            tags.add("chat")
+
+        return tags
+
+    def _choose_first_available(self, installed_models: list[str], candidates: list[str]) -> str | None:
+        installed_lookup = {m.lower(): m for m in installed_models}
+        for candidate in candidates:
+            hit = installed_lookup.get(candidate.lower())
+            if hit:
+                return hit
+        return None
+
+    def _infer_task_type(self, prompt: str = "") -> str:
+        text = (prompt or "").lower()
+
+        coding_markers = [
+            "python", "powershell", "javascript", "typescript", "fastapi", "traceback",
+            "exception", "stack trace", "refactor", "function", "class ", "compile",
+            "syntaxerror", "pytest", "module", "import ", "sql", "api", "json"
+        ]
+        if any(marker in text for marker in coding_markers):
+            return "coding"
+
+        if any(marker in text for marker in ["image", "screenshot", "diagram", "vision", "ocr", "photo"]):
+            return "vision"
+
+        if any(marker in text for marker in ["embed", "embedding", "vector"]):
+            return "embedding"
+
+        if any(marker in text for marker in ["rerank", "reranker"]):
+            return "reranker"
+
+        if any(marker in text for marker in [
+            "analyze", "analysis", "compare", "design", "architecture", "plan", "reason",
+            "investigate", "root cause", "debug this", "step by step"
+        ]):
+            return "reasoning"
+
+        return "general"
+
+    def _select_model_from_inventory(
+        self,
+        prompt: str,
+        requested_model: str | None = None,
+        phenotype: dict | None = None,
+    ) -> dict:
+        phenotype = phenotype or {}
+        installed_models = self._fetch_installed_models()
+        route_profile = str(phenotype.get("route_profile") or "default").strip().lower()
+        task_type = self._infer_task_type(prompt)
+
+        if requested_model:
+            chosen = self._choose_first_available(installed_models, [requested_model])
+            if chosen:
+                return {
+                    "chosen_model": chosen,
+                    "route_profile": route_profile,
+                    "source": "request",
+                    "reason": "requested_model_available",
+                }
+
+
+        role_candidates = {
+            "triage": ["qwen2.5:3b-instruct", "qwen2.5:7b-instruct", "mistral-nemo:12b"],
+            "default": ["qwen2.5:3b-instruct", "qwen2.5:7b-instruct", "mistral-nemo:12b", "qwen2.5:14b-instruct"],
+            "reasoning": ["qwen3:14b", "qwen2.5:14b-instruct-32k", "qwen2.5:14b-instruct"],
+            "recovery": ["qwen2.5:3b-instruct", "qwen2.5:7b-instruct", "mistral-nemo:12b"],
+            "coding": ["qwen2.5-coder:14b-32k", "qwen2.5-coder:14b", "qwen2.5-coder:7b-16k", "qwen2.5-coder:7b", "qwen2.5-coder:3b"],
+            "embedding": ["qwen3-embedding:8b", "nomic-embed-text:latest"],
+            "reranker": ["qllama/bge-reranker-v2-m3:latest"],
+            "vision": ["moondream:latest"],
+        }
+
+        if task_type == "coding":
+            chosen = self._choose_first_available(installed_models, role_candidates["coding"])
+            if chosen:
+                return {
+                    "chosen_model": chosen,
+                    "route_profile": route_profile,
+                    "source": "inventory",
+                    "reason": "coding_task",
+                }
+
+        if task_type == "reasoning":
+            chosen = self._choose_first_available(installed_models, role_candidates["reasoning"])
+            if chosen:
+                return {
+                    "chosen_model": chosen,
+                    "route_profile": route_profile,
+                    "source": "inventory",
+                    "reason": "reasoning_task",
+                }
+
+        if task_type == "embedding":
+            chosen = self._choose_first_available(installed_models, role_candidates["embedding"])
+            if chosen:
+                return {
+                    "chosen_model": chosen,
+                    "route_profile": route_profile,
+                    "source": "inventory",
+                    "reason": "embedding_task",
+                }
+
+        if task_type == "reranker":
+            chosen = self._choose_first_available(installed_models, role_candidates["reranker"])
+            if chosen:
+                return {
+                    "chosen_model": chosen,
+                    "route_profile": route_profile,
+                    "source": "inventory",
+                    "reason": "reranker_task",
+                }
+
+        if task_type == "vision":
+            chosen = self._choose_first_available(installed_models, role_candidates["vision"])
+            if chosen:
+                return {
+                    "chosen_model": chosen,
+                    "route_profile": route_profile,
+                    "source": "inventory",
+                    "reason": "vision_task",
+                }
+
+        chosen = self._choose_first_available(installed_models, role_candidates.get(route_profile, role_candidates["default"]))
+        if chosen:
+            return {
+                "chosen_model": chosen,
+                "route_profile": route_profile,
+                "source": "inventory",
+                "reason": f"{route_profile}_profile",
+            }
+
+        chosen = self._choose_first_available(installed_models, role_candidates["default"])
+        if chosen:
+            return {
+                "chosen_model": chosen,
+                "route_profile": route_profile,
+                "source": "inventory",
+                "reason": "default_fallback",
+            }
+
+        return {
+            "chosen_model": requested_model or "qwen2.5:7b-instruct",
+            "route_profile": route_profile,
+            "source": "fallback",
+            "reason": "hard_fallback",
+        }
+
+    def build_route(
+        self,
+        prompt: str,
+        requested_model: str | None = None,
+        phenotype: dict | None = None,
+    ) -> dict:
+        return self._select_model_from_inventory(
+            prompt=prompt,
+            requested_model=requested_model,
+            phenotype=phenotype,
+        )
+
+    def generate(self, model: str | None, prompt: str, phenotype: dict | None = None) -> tuple[str, str]:
         trace_id = self.trace.new_trace_id()
         start_ms = self.trace.now_ms()
         step_budget = self.policy.check_step_budget(1)
@@ -215,7 +413,12 @@ class Orchestrator:
             )
             raise RuntimeError(step_budget.reason)
 
-        chosen_model = self._choose_model(prompt=prompt, requested_model=model)
+        route = self.build_route(
+            prompt=prompt,
+            requested_model=model,
+            phenotype=phenotype,
+        )
+        chosen_model = route["chosen_model"]
         self.trace.add(
             trace_id=trace_id,
             step_id="generate",
@@ -225,6 +428,7 @@ class Orchestrator:
             status="started",
             model=chosen_model,
             summary="generation_started",
+            metadata={"route": route},
         )
 
         used_path = "ollama"
@@ -357,8 +561,3 @@ class Orchestrator:
                 "status": "error",
                 "message": str(e),
             }
-
-
-
-
-
