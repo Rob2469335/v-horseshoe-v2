@@ -70,17 +70,20 @@ class ModelProfile:
 @dataclass(slots=True)
 class ModelState:
     name: str
-    inflight: int = 0
-    last_used_at: float = 0.0
+    role: str = "fast"
+    failures: int = 0
+    total_latency_ms: float = 0.0
+    total_requests: int = 0
     cooldown_until: float = 0.0
-    error_count: int = 0
+    last_success_at: float = 0.0
+    last_attempt_at: float = 0.0
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
 class RouteDecision:
     model: str
-    profile: str
+    role: str
     reason: str
     fallback: bool = False
     metadata: Dict[str, Any] = field(default_factory=dict)
