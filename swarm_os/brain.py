@@ -1,7 +1,6 @@
 # swarm_os/kernel/brain.py
 """
-Brain — calls Horseshoe Swarm using genome parameters.
-SWARM_URL reads from settings.
+Brain — uses injected in-process generation via orchestrator.
 record_fitness() removed — selection.py calls it with the real score.
 Calling it here with 0.0 doubled evaluations and halved average_fitness.
 """
@@ -12,13 +11,11 @@ import time
 import json
 import random
 from typing import Any, Callable, Dict, List
-
 import httpx
 
-from swarm_os.config.settings import settings
+
 
 log       = logging.getLogger(__name__)
-SWARM_URL = f"{settings.swarm_url}/v1/chat/completions"
 
 def _safe_attr(obj, name: str, default):
     return getattr(obj, name, default)
@@ -428,6 +425,8 @@ __all__ = [
     "simple_brain",
     "registry",
 ]
+
+
 
 
 
