@@ -253,9 +253,7 @@ def make_swarm_brain(genome, task_domain: str = "general", generate_fn=None) -> 
 
                     if attempt < attempts:
                         delay = min(2.0, 0.35 * (2 ** (attempt - 1))) + random.uniform(0.0, 0.15)
-                        log.warning(
-                            "brain rate limited org=%s model=%s attempt=%d/%d retry_in=%.2fs",
-                            org_id, model, attempt, attempts, delay
+                        log.warning("brain rate limited org=%s model=%s attempt=%d/%d retry_in=%.2fs", org_id, requested_model, attempt, attempts, delay
                         )
                         time.sleep(delay)
 
@@ -377,7 +375,7 @@ def make_swarm_brain(genome, task_domain: str = "general", generate_fn=None) -> 
             return {
                 "error": "timeout",
                 "cost": 5.0,
-                "elapsed": float(genome.timeout_budget),
+                "elapsed": _safe_attr(genome, "timeout_budget", 60.0),
                 "content": "",
                 "model": requested_model or _safe_model(genome),
                 "tools_used": active_tools,
@@ -430,3 +428,6 @@ __all__ = [
     "simple_brain",
     "registry",
 ]
+
+
+

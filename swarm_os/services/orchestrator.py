@@ -24,7 +24,7 @@ class Orchestrator:
         self.settings = s
         self.events = EventStore(s.events_dir)
         self.ollama = OllamaClient()
-        self.simulation = SimulationService()
+        self.simulation = SimulationService(generate_fn=self.generate)
         self.trace = TraceCollector()
         self.policy = PolicyEngine(max_steps=12)
         self.critic = Critic()
@@ -561,3 +561,4 @@ class Orchestrator:
                 "status": "error",
                 "message": str(e),
             }
+

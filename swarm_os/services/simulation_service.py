@@ -30,11 +30,15 @@ def _organisms_from_snapshot(snapshot: dict, generate_fn=None) -> list[Organism]
 
 
 class SimulationService:
-    def __init__(self, snapshot_repo: SnapshotRepository | None = None) -> None:
+    def __init__(self, snapshot_repo: SnapshotRepository | None = None, generate_fn=None) -> None:
         self.settings      = get_settings()
         self.snapshot_repo = snapshot_repo or FileSnapshotRepository(
             self.settings.snapshots_dir
         )
+        self.generate_fn = generate_fn
+
+    def set_generate_fn(self, generate_fn) -> None:
+        self.generate_fn = generate_fn
 
     async def run(
         self,
@@ -44,6 +48,8 @@ class SimulationService:
         generate_fn=None,
     ) -> tuple:
         s = self.settings
+        if generate_fn is None:
+            generate_fn = self.generate_fn
 
         seed = getattr(s, "random_seed", None)
         if seed is not None:
@@ -86,5 +92,7 @@ class SimulationService:
         log.info("run complete generation=%d best_fitness=%.4f",
                  kernel.generation, metrics.best_fitness)
         return kernel, metrics
+
+
 
 
