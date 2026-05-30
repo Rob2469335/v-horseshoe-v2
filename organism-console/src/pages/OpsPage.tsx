@@ -1,4 +1,4 @@
-import { useEffect } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { api } from "../lib/api"
 import type {
@@ -9,6 +9,8 @@ import type {
   ReadyResponse,
   StatusResponse,
   ToolsResponse,
+  TraceItem,
+  TraceSummaryItem,
   TraceSummaryResponse,
   TracesResponse
 } from "../lib/types"
@@ -18,9 +20,21 @@ function formatJson(value: unknown) {
   return JSON.stringify(value, null, 2)
 }
 
+function formatTimestamp(timestampMs?: number) {
+  if (!timestampMs) return "—"
+  return new Date(timestampMs).toLocaleString()
+}
+
+function formatDuration(durationMs?: number) {
+  if (!durationMs) return "0 ms"
+  if (durationMs < 1000) return `${durationMs.toFixed(1)} ms`
+  return `${(durationMs / 1000).toFixed(2)} s`
+}
+
 export default function OpsPage() {
   const backendUrl = useUiStore((state) => state.backendUrl)
   const setConnectionStatus = useUiStore((state) => state.setConnectionStatus)
+  const [selectedTraceId, setSelectedTraceId] = useState<string>("")
 
   const healthQuery = useQuery({
     queryKey: ["health", backendUrl],
@@ -120,6 +134,32 @@ export default function OpsPage() {
     setConnectionStatus
   ])
 
+  const traceSummary = (traceSummaryQuery.data ?? []) as TraceSummaryResponse
+  const traceItems = ((tracesQuery.data as TracesResponse | undefined)?.items ?? []) as TraceItem[]
+
+  useEffect(() => {
+    if (!traceSummary.length) {
+      setSelectedTraceId("")
+      return
+    }
+
+    setSelectedTraceId((current) => {
+      if (current && traceSummary.some((item) => item.trace_id === current)) {
+        return current
+      }
+
+      return traceSummary[0]?.trace_id ?? ""
+    })
+  }, [traceSummary])
+
+  const selectedSummary = useMemo<TraceSummaryItem | undefined>(() => {
+    return traceSummary.find((item) => item.trace_id === selectedTraceId)
+  }, [traceSummary, selectedTraceId])
+
+  const selectedTraceEvents = useMemo<TraceItem[]>(() => {
+    return traceItems.filter((item) => item.trace_id === selectedTraceId)
+  }, [traceItems, selectedTraceId])
+
   return (
     <section className="page page--ops">
       <h1>Ops</h1>
@@ -151,14 +191,80 @@ export default function OpsPage() {
           <pre>{toolsCacheQuery.data ? formatJson(toolsCacheQuery.data) : String(toolsCacheQuery.error?.message ?? "Loading")}</pre>
         </article>
 
-        <article className="ops-panel">
-          <h2>/traces</h2>
-          <pre>{tracesQuery.data ? formatJson(tracesQuery.data as TracesResponse) : String(tracesQuery.error?.message ?? "Loading")}</pre>
+        <article className="ops-panel ops-panel--span-2">
+          <h2>/traces/summary</h2>
+          {traceSummaryQuery.data ? (
+            <div className="trace-summary-list">
+              {traceSummary.length ? (
+                traceSummary.map((item) => (
+                  <button
+                    key={item.trace_id}
+                    type="button"
+                    className={`trace-summary-item${item.trace_id === selectedTraceId ? " trace-summary-item--active" : ""}`}
+                    onClick={() => setSelectedTraceId(item.trace_id)}
+                  >
+                    <div className="trace-summary-item__top">
+                      <span className="trace-summary-item__trace">{item.trace_id}</span>
+                      <span className="trace-summary-item__time">{formatTimestamp(item.latest_timestamp_ms)}</span>
+                    </div>
+                    <div className="trace-summary-item__meta">
+                      <span>{item.first_phase} → {item.last_status}</span>
+                      <span>{item.action_count} steps</span>
+                      <span>{formatDuration(item.total_duration_ms)}</span>
+                    </div>
+                    <div className="trace-summary-item__summary">{item.summary || "No summary"}</div>
+                  </button>
+                ))
+              ) : (
+                <div className="trace-empty">No trace summaries available.</div>
+              )}
+            </div>
+          ) : (
+            <pre>{String(traceSummaryQuery.error?.message ?? "Loading")}</pre>
+          )}
         </article>
 
-        <article className="ops-panel">
-          <h2>/traces/summary</h2>
-          <pre>{traceSummaryQuery.data ? formatJson(traceSummaryQuery.data as TraceSummaryResponse) : String(traceSummaryQuery.error?.message ?? "Loading")}</pre>
+        <article className="ops-panel ops-panel--span-2">
+          <h2>/traces</h2>
+          {tracesQuery.data ? (
+            <div className="trace-events">
+              {selectedSummary ? (
+                <div className="trace-events__header">
+                  <div><strong>Selected trace:</strong> {selectedSummary.trace_id}</div>
+                  <div><strong>Latest:</strong> {formatTimestamp(selectedSummary.latest_timestamp_ms)}</div>
+                </div>
+              ) : null}
+
+              {selectedTraceEvents.length ? (
+                <div className="trace-event-list">
+                  {selectedTraceEvents.map((event, index) => (
+                    <article key={`${event.trace_id}-${event.step_id}-${event.phase}-${index}`} className="trace-event-card">
+                      <div className="trace-event-card__top">
+                        <span className="trace-event-card__phase">{event.phase}</span>
+                        <span className="trace-event-card__status">{event.status}</span>
+                      </div>
+                      <div className="trace-event-card__meta">
+                        <span><strong>Actor:</strong> {event.actor}</span>
+                        <span><strong>Action:</strong> {event.action}</span>
+                        <span><strong>Step:</strong> {event.step_id}</span>
+                        <span><strong>Time:</strong> {formatTimestamp(event.timestamp_ms)}</span>
+                        <span><strong>Duration:</strong> {formatDuration(event.duration_ms)}</span>
+                        <span><strong>Model:</strong> {event.model || "—"}</span>
+                      </div>
+                      <div className="trace-event-card__summary">{event.summary || "No summary"}</div>
+                      {event.metadata ? (
+                        <pre>{formatJson(event.metadata)}</pre>
+                      ) : null}
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <div className="trace-empty">No raw events available for the selected trace.</div>
+              )}
+            </div>
+          ) : (
+            <pre>{String(tracesQuery.error?.message ?? "Loading")}</pre>
+          )}
         </article>
 
         <article className="ops-panel">
@@ -179,3 +285,4 @@ export default function OpsPage() {
     </section>
   )
 }
+
