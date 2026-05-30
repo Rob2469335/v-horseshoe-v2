@@ -31,6 +31,20 @@ def health() -> dict[str, Any]:
     }
 
 
+@app.get("/traces")
+def traces(limit: int = 50) -> dict[str, Any]:
+    return {
+        "count": max(0, limit),
+        "items": orchestrator.get_recent_traces(limit=limit),
+    }
+
+
+@app.post("/traces/clear")
+def clear_traces() -> dict[str, Any]:
+    orchestrator.clear_traces()
+    return {"status": "cleared"}
+
+
 @app.post("/plan")
 def plan(req: TaskRequest) -> dict[str, Any]:
     return {
