@@ -70,6 +70,7 @@ class Orchestrator:
                 "action": e.action,
                 "status": e.status,
                 "duration_ms": e.duration_ms,
+                "timestamp_ms": e.timestamp_ms,
                 "model": e.model,
                 "tokens": e.tokens,
                 "cost": e.cost,

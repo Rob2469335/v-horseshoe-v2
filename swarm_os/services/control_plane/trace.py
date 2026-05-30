@@ -30,6 +30,7 @@ class TraceCollector:
         summary: str = "",
         metadata: Dict[str, Any] | None = None,
     ) -> None:
+        timestamp_ms = time.time() * 1000.0
         self._events.append(
             StepTrace(
                 trace_id=trace_id,
@@ -39,6 +40,7 @@ class TraceCollector:
                 action=action,
                 status=status,
                 duration_ms=duration_ms,
+                timestamp_ms=timestamp_ms,
                 model=model,
                 tokens=tokens,
                 cost=cost,

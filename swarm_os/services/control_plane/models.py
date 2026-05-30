@@ -47,12 +47,12 @@ class StepTrace:
     action: str
     status: str
     duration_ms: float = 0.0
+    timestamp_ms: float = 0.0
     model: str = ""
     tokens: int = 0
     cost: float = 0.0
     summary: str = ""
     metadata: Dict[str, Any] = field(default_factory=dict)
-
 
 
 @dataclass(slots=True)
@@ -86,5 +86,3 @@ class RouteDecision:
     reason: str
     fallback: bool = False
     metadata: Dict[str, Any] = field(default_factory=dict)
-
-

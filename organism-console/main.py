@@ -65,9 +65,12 @@ def generate(req: GenerateRequest) -> dict[str, Any]:
         "model": chosen_model,
         "response": response,
     }
+
+
 @app.get("/traces/summary")
 def traces_summary(limit: int = 50) -> list[dict]:
     from collections import defaultdict
+
     events = orchestrator.trace.events()
     sliced = events[-limit:]
     grouped: dict[str, list] = defaultdict(list)
@@ -76,21 +79,20 @@ def traces_summary(limit: int = 50) -> list[dict]:
 
     out: list[dict] = []
     for tid, evts in grouped.items():
-        evts.sort(key=lambda e: getattr(e, "timestamp_ms", 0))
+        evts.sort(key=lambda e: e.timestamp_ms)
         first = evts[0]
         last = evts[-1]
-        total_ms = (getattr(last, "duration_ms", 0) or 0) + (getattr(first, "duration_ms", 0) or 0)
-        for e in evts[1:]:
-            total_ms += getattr(e, "duration_ms", 0) or 0
+        total_ms = sum((e.duration_ms or 0.0) for e in evts)
+        latest_timestamp_ms = max((e.timestamp_ms or 0.0) for e in evts)
         out.append({
             "trace_id": tid,
             "first_phase": first.phase,
             "last_status": last.status,
             "total_duration_ms": total_ms,
+            "latest_timestamp_ms": latest_timestamp_ms,
             "summary": last.summary or first.summary or "",
             "action_count": len(evts),
         })
-    out.sort(key=lambda x: -x["total_duration_ms"])
+
+    out.sort(key=lambda x: -x["latest_timestamp_ms"])
     return out
-
-
