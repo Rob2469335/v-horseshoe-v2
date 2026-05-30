@@ -40,6 +40,39 @@ export interface ToolsResponse {
   tools?: string[]
 }
 
+export interface TraceItem {
+  trace_id: string
+  step_id: string
+  phase: string
+  actor: string
+  action: string
+  status: string
+  duration_ms: number
+  timestamp_ms?: number
+  model?: string
+  tokens?: number
+  cost?: number
+  summary?: string
+  metadata?: Record<string, unknown>
+}
+
+export interface TracesResponse {
+  count: number
+  items: TraceItem[]
+}
+
+export interface TraceSummaryItem {
+  trace_id: string
+  first_phase: string
+  last_status: string
+  total_duration_ms: number
+  latest_timestamp_ms?: number
+  summary?: string
+  action_count: number
+}
+
+export type TraceSummaryResponse = TraceSummaryItem[]
+
 export interface AdminStatusResponse {
   [key: string]: unknown
 }
@@ -51,17 +84,7 @@ export interface AdminDashboardResponse {
 export interface AdminGenerationResponse {
   [key: string]: unknown
 }
-export type ChatRequest = {
-  message: string
-}
 
-export type ChatResponse = {
-  response?: string
-  answer?: string
-  output?: string
-  result?: string
-  [key: string]: unknown
-}
 export type ChatRequest = {
   message: string
 }

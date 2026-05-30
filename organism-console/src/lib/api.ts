@@ -1,5 +1,5 @@
 import { appConfig } from "./config"
-import type { ChatResponse } from "./types"
+import type { ChatResponse, TraceSummaryResponse, TracesResponse } from "./types"
 
 export type GenerateRequest = {
   prompt: string
@@ -58,6 +58,8 @@ export const api = {
   getStatus: <T>(baseUrl: string) => fetchJson<T>(baseUrl, appConfig.endpoints.status),
   getTools: <T>(baseUrl: string) => fetchJson<T>(baseUrl, appConfig.endpoints.tools),
   getToolsCache: <T>(baseUrl: string) => fetchJson<T>(baseUrl, appConfig.endpoints.toolsCache),
+  getTraces: (baseUrl: string) => fetchJson<TracesResponse>(baseUrl, appConfig.endpoints.traces),
+  getTraceSummary: (baseUrl: string) => fetchJson<TraceSummaryResponse>(baseUrl, appConfig.endpoints.traceSummary),
   getAdminStatus: <T>(baseUrl: string) => fetchJson<T>(baseUrl, appConfig.endpoints.adminStatus),
   getAdminDashboard: <T>(baseUrl: string) => fetchJson<T>(baseUrl, appConfig.endpoints.adminDashboard),
   getAdminGeneration: <T>(baseUrl: string) => fetchJson<T>(baseUrl, appConfig.endpoints.adminGeneration),

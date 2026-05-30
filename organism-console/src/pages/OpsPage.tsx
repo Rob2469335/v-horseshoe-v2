@@ -8,7 +8,9 @@ import type {
   HealthResponse,
   ReadyResponse,
   StatusResponse,
-  ToolsResponse
+  ToolsResponse,
+  TraceSummaryResponse,
+  TracesResponse
 } from "../lib/types"
 import { useUiStore } from "../state/ui-store"
 
@@ -53,6 +55,20 @@ export default function OpsPage() {
     queryFn: () => api.getToolsCache<Record<string, unknown>>(backendUrl),
     retry: 1,
     refetchInterval: 60000
+  })
+
+  const tracesQuery = useQuery({
+    queryKey: ["traces", backendUrl],
+    queryFn: () => api.getTraces(backendUrl),
+    retry: 1,
+    refetchInterval: 15000
+  })
+
+  const traceSummaryQuery = useQuery({
+    queryKey: ["trace-summary", backendUrl],
+    queryFn: () => api.getTraceSummary(backendUrl),
+    retry: 1,
+    refetchInterval: 15000
   })
 
   const adminStatusQuery = useQuery({
@@ -107,7 +123,7 @@ export default function OpsPage() {
   return (
     <section className="page page--ops">
       <h1>Ops</h1>
-      <p>Backend proof for health, readiness, status, tools, cache, and admin surfaces.</p>
+      <p>Backend proof for health, readiness, status, tools, cache, traces, and admin surfaces.</p>
 
       <div className="ops-grid">
         <article className="ops-panel">
@@ -133,6 +149,16 @@ export default function OpsPage() {
         <article className="ops-panel">
           <h2>/tools/cache</h2>
           <pre>{toolsCacheQuery.data ? formatJson(toolsCacheQuery.data) : String(toolsCacheQuery.error?.message ?? "Loading")}</pre>
+        </article>
+
+        <article className="ops-panel">
+          <h2>/traces</h2>
+          <pre>{tracesQuery.data ? formatJson(tracesQuery.data as TracesResponse) : String(tracesQuery.error?.message ?? "Loading")}</pre>
+        </article>
+
+        <article className="ops-panel">
+          <h2>/traces/summary</h2>
+          <pre>{traceSummaryQuery.data ? formatJson(traceSummaryQuery.data as TraceSummaryResponse) : String(traceSummaryQuery.error?.message ?? "Loading")}</pre>
         </article>
 
         <article className="ops-panel">

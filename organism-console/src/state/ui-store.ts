@@ -1,7 +1,7 @@
 import { create } from "zustand"
 import type { PanelKey } from "../lib/types"
 
-type ConnectionStatus = "idle" | "connecting" | "online" | "degraded" | "offline"
+type ConnectionStatus = "idle" | "unknown" | "connecting" | "online" | "degraded" | "offline"
 
 interface UiState {
   activePanel: PanelKey
@@ -11,6 +11,7 @@ interface UiState {
   connectionStatus: ConnectionStatus
   setActivePanel: (panel: PanelKey) => void
   setSidebarCollapsed: (collapsed: boolean) => void
+  toggleSidebar: () => void
   setSelectedWorkspace: (workspace: string) => void
   setBackendUrl: (url: string) => void
   setConnectionStatus: (status: ConnectionStatus) => void
@@ -24,6 +25,7 @@ export const useUiStore = create<UiState>()((set) => ({
   connectionStatus: "idle",
   setActivePanel: (panel) => set({ activePanel: panel }),
   setSidebarCollapsed: (collapsed) => set({ sidebarCollapsed: collapsed }),
+  toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
   setSelectedWorkspace: (workspace) => set({ selectedWorkspace: workspace }),
   setBackendUrl: (url) => set({ backendUrl: url }),
   setConnectionStatus: (status) => set({ connectionStatus: status })

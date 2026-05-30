@@ -7,6 +7,8 @@ export const appConfig = {
     status: "/status",
     tools: "/tools",
     toolsCache: "/tools/cache",
+    traces: "/traces?limit=50",
+    traceSummary: "/traces/summary?limit=50",
     adminStatus: "/api/admin/status",
     adminDashboard: "/api/admin/dashboard",
     adminGeneration: "/api/admin/generation"
