@@ -18,11 +18,11 @@ from swarm_os.kernel.migrations import migrate_snapshot
 log = logging.getLogger(__name__)
 
 
-def _organisms_from_snapshot(snapshot: dict) -> list[Organism]:
+def _organisms_from_snapshot(snapshot: dict, generate_fn=None) -> list[Organism]:
     items = []
     for item in snapshot.get("organisms", []):
         genome = Genome.from_dict(item["genome"])
-        brain  = brain_registry.make("swarm", genome, "general")
+        brain  = brain_registry.make("swarm", genome, "general", generate_fn=generate_fn)
         org    = Organism(id=item["id"], brain=brain, genome=genome)
         org.fitness = float(item.get("fitness", 0.0))
         items.append(org)
@@ -41,6 +41,7 @@ class SimulationService:
         resume_path: str = "",
         steps: int = 15,
         scenario: str | None = None,
+        generate_fn=None,
     ) -> tuple:
         s = self.settings
 
@@ -53,8 +54,8 @@ class SimulationService:
         if resume_path:
             raw       = self.snapshot_repo.load(resume_path)
             snapshot  = migrate_snapshot(raw)
-            organisms = _organisms_from_snapshot(snapshot)
-            kernel    = SwarmKernel(organisms, env)
+            organisms = _organisms_from_snapshot(snapshot, generate_fn=generate_fn)
+            kernel    = SwarmKernel(organisms, env, generate_fn  = generate_fn)
             kernel.generation = snapshot.get("generation", 0)
             log.info("resumed from %s at generation %d",
                      resume_path, kernel.generation)
@@ -62,7 +63,7 @@ class SimulationService:
             sc_name   = scenario or getattr(s, "scenario_name", "default")
             pop_max   = getattr(s, "population_max", 8)
             organisms = build_scenario(sc_name)
-            kernel    = SwarmKernel(organisms, env)
+            kernel    = SwarmKernel(organisms, env, generate_fn  = generate_fn)
             log.info("started fresh scenario=%s pop=%d", sc_name, len(organisms))
 
         for _ in range(steps):

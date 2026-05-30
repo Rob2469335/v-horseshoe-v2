@@ -1,7 +1,7 @@
 # swarm_os/tests/unit/test_genetics.py
 import unittest
 import random
-from swarm_os.kernel.genetics import (
+from swarm_os.kernel.genetics_compat import (
     Genome, CognitivePolicy, MCP_TOOL_REGISTRY,
     mutate, crossover, normalize_affinities,
 )
@@ -114,5 +114,6 @@ class TestFromDict(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
 
 

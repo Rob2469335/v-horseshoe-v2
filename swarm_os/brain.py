@@ -169,7 +169,7 @@ def _build_user_message(genome, task: str, memory_context: str = "") -> str:
     return "\n".join(parts)
 
 
-def make_swarm_brain(genome, task_domain: str = "general") -> Callable:
+def make_swarm_brain(genome, task_domain: str = "general", generate_fn=None) -> Callable:
     def brain(context: Dict[str, Any]) -> Dict[str, Any]:
         org_id  = context.get("id", "unknown")
         task    = context.get("task", context.get("env", {}).get("task", ""))
@@ -196,8 +196,25 @@ def make_swarm_brain(genome, task_domain: str = "general") -> Callable:
                   org_id, model, active_tools, genome.actual_temperature)
 
         t0 = time.perf_counter()
+        prompt = f"{system_prompt}\n\n{user_message}"
         try:
-            timeout = httpx.Timeout(genome.timeout_budget, connect=10.0)
+            if generate_fn is not None:
+                content, resolved_model = generate_fn(model, prompt)
+                elapsed = time.perf_counter() - t0
+                return {
+                    "content": content,
+                    "model": resolved_model or model,
+                    "tools_used": active_tools,
+                    "elapsed": elapsed,
+                    "total_tokens": 0,
+                    "prompt_tokens": 0,
+                    "finish_reason": "stop",
+                    "tool_calls": [],
+                    "cost": 0.0,
+                    "retrieval_top_k": top_k,
+                    "system_prompt_len": len(system_prompt),
+                }
+            timeout = httpx.Timeout(max(30.0, float(genome.timeout_budget)), connect=10.0)
             attempts = 3
             resp = None
             elapsed = 0.0
@@ -379,15 +396,15 @@ class BrainRegistry:
             raise KeyError(f"Unknown brain: {name!r}. Available: {list(self._factories)}")
         return self._factories[name]
 
-    def make(self, name: str, genome, task_domain: str = "general") -> Callable:
-        return self.get(name)(genome, task_domain)
+    def make(self, name: str, genome, task_domain: str = "general", generate_fn=None) -> Callable:
+        return self.get(name)(genome, task_domain, generate_fn=generate_fn)
 
 
 registry = BrainRegistry()
 
 
-def simple_brain(genome, task_domain: str = "general"):
-    return make_swarm_brain(genome, task_domain)
+def simple_brain(genome, task_domain: str = "general", generate_fn=None):
+    return make_swarm_brain(genome, task_domain, generate_fn=generate_fn)
 
 __all__ = [
     "BrainRegistry",
@@ -395,6 +412,7 @@ __all__ = [
     "simple_brain",
     "registry",
 ]
+
 
 
 

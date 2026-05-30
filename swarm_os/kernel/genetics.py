@@ -17,7 +17,7 @@ MCP_TOOL_REGISTRY: List[str] = [
 
 MODEL_TIERS: Dict[str, str] = {
     "triage": "qwen2.5:3b-instruct",
-    "fast": "qwen2.5-coder:7b-16k",
+    "fast": "qwen2.5:7b-instruct",
     "heavy": "qwen3:14b",
 }
 
@@ -110,7 +110,7 @@ class Genome:
     @property
     def timeout_budget(self) -> float:
         # Higher tiers get more time
-        return 10.0 + (self.model_tier * 50.0)
+        return max(30.0, 10.0 + (self.model_tier * 50.0))
 
     @property
     def model(self) -> str:
@@ -232,4 +232,5 @@ def normalize_affinities(genome: Genome) -> Genome:
     genome.research_affinity /= total
     genome.upwork_affinity /= total
     return genome
+
 

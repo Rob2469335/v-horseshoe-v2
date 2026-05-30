@@ -12,6 +12,7 @@ from ..events.envelope import EventEnvelope
 from ..events.store import EventStore
 from ..infra.ollama import OllamaClient
 from ..services.simulation_service import SimulationService
+from ..services.control_plane import TraceCollector, PolicyEngine, Critic, Planner, Router, StateManager
 from ..config.settings import settings as swarm_settings
 
 log = logging.getLogger(__name__)
@@ -24,6 +25,12 @@ class Orchestrator:
         self.events = EventStore(s.events_dir)
         self.ollama = OllamaClient()
         self.simulation = SimulationService()
+        self.trace = TraceCollector()
+        self.policy = PolicyEngine(max_steps=12)
+        self.critic = Critic()
+        self.planner = Planner()
+        self.router = Router()
+        self.state_manager = StateManager()
         self.swarm_base_url = swarm_settings.swarm_url
         self.swarm_timeout = swarm_settings.swarm_timeout
 
@@ -34,6 +41,128 @@ class Orchestrator:
             "best_agent_id": "none",
             "active_generation": 0,
         }
+
+    def get_recent_traces(self, limit: int = 50) -> list[dict]:
+        events = self.trace.events()
+        if limit <= 0:
+            return []
+        sliced = events[-limit:]
+        return [
+            {
+                "trace_id": e.trace_id,
+                "step_id": e.step_id,
+                "phase": e.phase,
+                "actor": e.actor,
+                "action": e.action,
+                "status": e.status,
+                "duration_ms": e.duration_ms,
+                "model": e.model,
+                "tokens": e.tokens,
+                "cost": e.cost,
+                "summary": e.summary,
+                "metadata": dict(e.metadata),
+            }
+            for e in sliced
+        ]
+
+    def clear_traces(self) -> None:
+        self.trace.clear()
+
+    def plan_task(self, task: str, context: dict | None = None) -> list[dict]:
+        trace_id = self.trace.new_trace_id()
+        context = context or {}
+        self.trace.add(
+            trace_id=trace_id,
+            step_id="plan",
+            phase="planner",
+            actor="planner",
+            action="plan_task",
+            status="started",
+            summary=task[:120],
+            metadata={"context_keys": sorted(context.keys())},
+        )
+        plan = self.planner.make_plan(task, context)
+        self.trace.add(
+            trace_id=trace_id,
+            step_id="plan",
+            phase="planner",
+            actor="planner",
+            action="plan_task",
+            status="completed",
+            summary=f"planned:{len(plan)}",
+            metadata={"step_ids": [step.step_id for step in plan]},
+        )
+        return [
+            {
+                "step_id": step.step_id,
+                "kind": step.kind,
+                "goal": step.goal,
+                "assigned_to": step.assigned_to,
+                "metadata": dict(step.metadata),
+            }
+            for step in plan
+        ]
+
+    def route_task(self, task: str, context: dict | None = None) -> dict:
+        trace_id = self.trace.new_trace_id()
+        context = context or {}
+        self.trace.add(
+            trace_id=trace_id,
+            step_id="route",
+            phase="router",
+            actor="router",
+            action="route_task",
+            status="started",
+            summary=task[:120],
+            metadata={"context_keys": sorted(context.keys())},
+        )
+        plan = self.planner.make_plan(task, context)
+        if not plan:
+            self.trace.add(
+                trace_id=trace_id,
+                step_id="route",
+                phase="router",
+                actor="router",
+                action="route_task",
+                status="completed",
+                summary="no_plan",
+            )
+            return {
+                "action": "complete",
+                "reason": "no_plan",
+                "target": "orchestrator",
+                "plan": [],
+            }
+
+        first = plan[0]
+        decision = self.router.route(first)
+        self.trace.add(
+            trace_id=trace_id,
+            step_id="route",
+            phase="router",
+            actor="router",
+            action="route_task",
+            status="completed",
+            summary=decision.reason,
+            metadata={"target": decision.target, "action": decision.action},
+        )
+        return {
+            "action": decision.action,
+            "reason": decision.reason,
+            "target": decision.target,
+            "plan": [
+                {
+                    "step_id": step.step_id,
+                    "kind": step.kind,
+                    "goal": step.goal,
+                    "assigned_to": step.assigned_to,
+                    "metadata": dict(step.metadata),
+                }
+                for step in plan
+            ],
+            "metadata": dict(decision.metadata),
+        }
+
     def assign_job(self, node: SwarmNode, job: SwarmJob) -> bool:
         accepted = can_accept_job(node, job)
         event = EventEnvelope.create(
@@ -60,7 +189,7 @@ class Orchestrator:
             "refactor", "python", "powershell", "bug", "traceback", "exception",
             "write code", "edit file", "patch", "function", "class", "fastapi"
         ]):
-            return "qwen2.5-coder:14b"
+            return "qwen2.5:7b-instruct"
 
         if len(prompt) > 2500 or any(x in p for x in [
             "analyze", "compare", "design", "architecture", "plan", "reason",
@@ -70,21 +199,58 @@ class Orchestrator:
 
         return "qwen2.5:7b-instruct"
 
-    def _generate_via_swarm(self, model: str, prompt: str, timeout: float | None = None) -> str:
-        raise RuntimeError("Swarm loopback generation disabled for diagnostics")
-
     def generate(self, model: str | None, prompt: str) -> tuple[str, str]:
-        chosen_model = self._choose_model(prompt=prompt, requested_model=model)
-        used_path = "swarm"
+        trace_id = self.trace.new_trace_id()
+        start_ms = self.trace.now_ms()
+        step_budget = self.policy.check_step_budget(1)
+        if not step_budget.allowed:
+            self.trace.add(
+                trace_id=trace_id,
+                step_id="generate",
+                phase="policy",
+                actor="orchestrator",
+                action="generate",
+                status="blocked",
+                summary=step_budget.reason,
+            )
+            raise RuntimeError(step_budget.reason)
 
-        try:
-            result = self._generate_via_swarm(model=chosen_model, prompt=prompt)
-            if not result:
-                raise RuntimeError("Empty response from swarm")
-        except Exception as e:
-            log.warning("swarm path failed, falling back to ollama: %s", e)
-            used_path = "ollama"
-            result = self.ollama.generate(model=chosen_model, prompt=prompt)
+        chosen_model = self._choose_model(prompt=prompt, requested_model=model)
+        self.trace.add(
+            trace_id=trace_id,
+            step_id="generate",
+            phase="start",
+            actor="orchestrator",
+            action="generate",
+            status="started",
+            model=chosen_model,
+            summary="generation_started",
+        )
+
+        used_path = "ollama"
+        result = self.ollama.generate(model=chosen_model, prompt=prompt)
+        duration_ms = self.trace.now_ms() - start_ms
+
+        critic_result = self.critic.evaluate_step(
+            result={
+                "content": result,
+                "finish_reason": "stop",
+            },
+            expected_kind="generate",
+        )
+
+        self.trace.add(
+            trace_id=trace_id,
+            step_id="generate",
+            phase="critic",
+            actor="critic",
+            action="evaluate",
+            status="accepted" if critic_result.accepted else "rejected",
+            duration_ms=duration_ms,
+            model=chosen_model,
+            summary=critic_result.reason,
+            metadata={"score": critic_result.score, "retryable": critic_result.retryable},
+        )
 
         event = EventEnvelope.create(
             event_type="llm.generate",
@@ -95,6 +261,10 @@ class Orchestrator:
                 "prompt_len": len(prompt),
                 "result_len": len(result),
                 "path": used_path,
+                "trace_id": trace_id,
+                "critic_accepted": critic_result.accepted,
+                "critic_score": critic_result.score,
+                "critic_reason": critic_result.reason,
             },
         )
         self.events.append(event)
@@ -133,6 +303,8 @@ class Orchestrator:
     async def run_agent_step(self) -> dict:
         log.info("Orchestrator.run_agent_step(): Starting agent step")
 
+        task = "Return a one-line system heartbeat for Horseshoe Swarm. State that the orchestrator loop is active."
+        route = self.route_task(task, {"phase": "agent_step"})
         prompt = (
             "Return a one-line system heartbeat for Horseshoe Swarm. "
             "State that the orchestrator loop is active."
@@ -147,6 +319,7 @@ class Orchestrator:
                 "message": "Agent step completed",
                 "model": chosen_model,
                 "response": response_text,
+                "route": route,
             }
 
             event = EventEnvelope.create(
@@ -155,6 +328,9 @@ class Orchestrator:
                 payload={
                     "model": chosen_model,
                     "response_len": len(response_text),
+                    "route_action": route.get("action"),
+                    "route_reason": route.get("reason"),
+                    "route_target": route.get("target"),
                     "status": "success",
                 },
             )
@@ -181,5 +357,8 @@ class Orchestrator:
                 "status": "error",
                 "message": str(e),
             }
+
+
+
 
 

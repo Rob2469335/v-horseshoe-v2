@@ -17,7 +17,15 @@ class SwarmWorker:
             try:
                 await self.orch.evolve()
                 log.info("SwarmWorker: Agentic brain is processing...")
-                await self.orch.run_agent_step()
+                step_result = await self.orch.run_agent_step()
+                route = step_result.get("route", {})
+                log.info(
+                    "SwarmWorker: step status=%s model=%s route_action=%s route_target=%s",
+                    step_result.get("status"),
+                    step_result.get("model"),
+                    route.get("action"),
+                    route.get("target"),
+                )
                 await asyncio.sleep(10)
             except Exception as e:
                 log.error(f"SwarmWorker: Error in execution loop: {e}")
