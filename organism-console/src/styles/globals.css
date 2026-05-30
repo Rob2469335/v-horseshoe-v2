@@ -581,3 +581,39 @@ pre {
     grid-template-columns: 1fr;
   }
 }
+
+.disclosure-panel {
+  padding: 0;
+  overflow: hidden;
+}
+
+.disclosure-panel__summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  list-style: none;
+  padding: 14px 16px;
+  font-weight: 700;
+}
+
+.disclosure-panel__summary::-webkit-details-marker {
+  display: none;
+}
+
+.disclosure-panel__hint {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.disclosure-panel__content {
+  padding: 0 16px 16px 16px;
+}
+
+.disclosure-panel[open] .disclosure-panel__summary {
+  border-bottom: 1px solid var(--border);
+}

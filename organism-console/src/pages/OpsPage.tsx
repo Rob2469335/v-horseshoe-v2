@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import React, { useEffect, useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { api } from "../lib/api"
 import {
@@ -36,6 +36,26 @@ function formatDuration(durationMs?: number) {
   if (!durationMs) return "0 ms"
   if (durationMs < 1000) return `${durationMs.toFixed(1)} ms`
   return `${(durationMs / 1000).toFixed(2)} s`
+}
+
+function DisclosurePanel({
+  title,
+  children,
+  defaultOpen = false
+}: {
+  title: string
+  children: React.ReactNode
+  defaultOpen?: boolean
+}) {
+  return (
+    <details className="ops-panel disclosure-panel" open={defaultOpen}>
+      <summary className="disclosure-panel__summary">
+        <span>{title}</span>
+        <span className="disclosure-panel__hint">{defaultOpen ? "Open by default" : "Click to expand"}</span>
+      </summary>
+      <div className="disclosure-panel__content">{children}</div>
+    </details>
+  )
 }
 
 export default function OpsPage() {
@@ -390,25 +410,21 @@ export default function OpsPage() {
       </div>
 
       <div className="ops-grid">
-        <article className="ops-panel">
-          <h2>/health</h2>
+        <DisclosurePanel title="/health">
           <pre>{healthQuery.data ? formatJson(healthQuery.data) : String(healthQuery.error?.message ?? "Loading")}</pre>
-        </article>
+        </DisclosurePanel>
 
-        <article className="ops-panel">
-          <h2>/readyz</h2>
+        <DisclosurePanel title="/readyz">
           <pre>{readyQuery.data ? formatJson(readyQuery.data) : String(readyQuery.error?.message ?? "Loading")}</pre>
-        </article>
+        </DisclosurePanel>
 
-        <article className="ops-panel">
-          <h2>/status</h2>
+        <DisclosurePanel title="/status">
           <pre>{statusQuery.data ? formatJson(statusQuery.data) : String(statusQuery.error?.message ?? "Loading")}</pre>
-        </article>
+        </DisclosurePanel>
 
-        <article className="ops-panel">
-          <h2>/tools</h2>
+        <DisclosurePanel title="/tools">
           <pre>{toolsQuery.data ? formatJson(toolsQuery.data) : String(toolsQuery.error?.message ?? "Loading")}</pre>
-        </article>
+        </DisclosurePanel>
 
         <article className="ops-panel ops-panel--span-2">
           <h2>/traces/summary</h2>
@@ -484,21 +500,19 @@ export default function OpsPage() {
           )}
         </article>
 
-        <article className="ops-panel">
-          <h2>/api/admin/status</h2>
+        <DisclosurePanel title="/api/admin/status">
           <pre>{adminStatusQuery.data ? formatJson(adminStatusQuery.data) : String(adminStatusQuery.error?.message ?? "Loading")}</pre>
-        </article>
+        </DisclosurePanel>
 
-        <article className="ops-panel">
-          <h2>/api/admin/dashboard</h2>
+        <DisclosurePanel title="/api/admin/dashboard">
           <pre>{adminDashboardQuery.data ? formatJson(adminDashboardQuery.data) : String(adminDashboardQuery.error?.message ?? "Loading")}</pre>
-        </article>
+        </DisclosurePanel>
 
-        <article className="ops-panel">
-          <h2>/api/admin/generation</h2>
+        <DisclosurePanel title="/api/admin/generation">
           <pre>{adminGenerationQuery.data ? formatJson(adminGenerationQuery.data) : String(adminGenerationQuery.error?.message ?? "Loading")}</pre>
-        </article>
+        </DisclosurePanel>
       </div>
     </section>
   )
 }
+
