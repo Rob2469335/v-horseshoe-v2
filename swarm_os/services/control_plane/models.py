@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
-from typing import Any, Dict, List, Optional
 
 
 @dataclass(slots=True)
@@ -87,3 +86,5 @@ class RouteDecision:
     reason: str
     fallback: bool = False
     metadata: Dict[str, Any] = field(default_factory=dict)
+
+
