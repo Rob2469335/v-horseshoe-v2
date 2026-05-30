@@ -90,6 +90,7 @@ def traces_summary(limit: int = 50) -> list[dict]:
             "summary": last.summary or first.summary or "",
             "action_count": len(evts),
         })
-    out.sort(key=lambda x: x["trace_id"])
+    out.sort(key=lambda x: -x["total_duration_ms"])
     return out
+
 
