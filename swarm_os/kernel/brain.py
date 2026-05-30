@@ -7,6 +7,7 @@ Calling it here with 0.0 doubled evaluations and halved average_fitness.
 from __future__ import annotations
 
 import logging
+import os
 import time
 import json
 import random
@@ -16,6 +17,7 @@ import httpx
 
 
 log       = logging.getLogger(__name__)
+SWARM_URL = os.getenv("SWARM_URL", "http://127.0.0.1:8000/generate")
 
 def _safe_attr(obj, name: str, default):
     return getattr(obj, name, default)
@@ -187,27 +189,22 @@ def make_swarm_brain(genome, task_domain: str = "general", generate_fn=None) -> 
         mem_ctx = context.get("memory_context", "")
 
         requested_model = getattr(genome, "model", None)
+        resolved_model = requested_model or _safe_model(genome)
         active_tools = genome.active_tools() if hasattr(genome, "active_tools") else []
-        top_k        = max(3, int(_safe_attr(genome, "retrieval_top_k", 0.25) * 20))
+        top_k = max(3, int(_safe_attr(genome, "retrieval_top_k", 0.25) * 20))
 
         system_prompt = _build_system_prompt(genome, task_domain)
         user_message  = _build_user_message(genome, task, mem_ctx)
-
+        prompt = f"{system_prompt}\n\n{user_message}"
         payload: Dict[str, Any] = {
-            "model": requested_model or _safe_model(genome),
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message},
-            ],
-            "temperature": _safe_temperature(genome),
-            "stream": False,
+            "model": resolved_model,
+            "prompt": prompt,
         }
 
         log.debug("brain call org=%s model=%s tools=%s temp=%.2f",
                   org_id, requested_model or "<dynamic>", active_tools, _safe_temperature(genome))
 
         t0 = time.perf_counter()
-        prompt = f"{system_prompt}\n\n{user_message}"
         try:
             if generate_fn is not None:
                 phenotype = None
@@ -262,7 +259,7 @@ def make_swarm_brain(genome, task_domain: str = "general", generate_fn=None) -> 
                     "cost": 5.0,
                     "elapsed": elapsed,
                     "content": "",
-                    "model": requested_model or _safe_model(genome),
+                    "model": resolved_model,
                     "tools_used": active_tools,
                     "finish_reason": f"http_{status}",
                     "response_preview": body_text[:1000],
@@ -276,7 +273,7 @@ def make_swarm_brain(genome, task_domain: str = "general", generate_fn=None) -> 
                     "cost": 5.0,
                     "elapsed": elapsed,
                     "content": "",
-                    "model": requested_model or _safe_model(genome),
+                    "model": resolved_model,
                     "tools_used": active_tools,
                     "finish_reason": "empty_response",
                 }
@@ -320,14 +317,14 @@ def make_swarm_brain(genome, task_domain: str = "general", generate_fn=None) -> 
 
                 return {
                     "content": content,
-                    "model": requested_model or _safe_model(genome),
+                    "model": resolved_model,
                     "tools_used": active_tools,
                     "elapsed": elapsed,
-                    "total_tokens": total_tokens,
+                    "total_tokens": 0,
                     "prompt_tokens": prompt_tokens,
                     "finish_reason": finish_reason,
                     "tool_calls": [],
-                    "cost": total_tokens / 1000.0 if total_tokens else 0.0,
+                    "cost": 0.0 if total_tokens else 0.0,
                     "retrieval_top_k": top_k,
                     "system_prompt_len": len(system_prompt),
                 }
@@ -342,39 +339,36 @@ def make_swarm_brain(genome, task_domain: str = "general", generate_fn=None) -> 
                     "cost": 5.0,
                     "elapsed": elapsed,
                     "content": "",
-                    "model": requested_model or _safe_model(genome),
+                    "model": resolved_model,
                     "tools_used": active_tools,
                     "finish_reason": "invalid_json",
                     "response_preview": body_text[:1000],
                 }
-
-            choice = data["choices"][0]
-            content = choice["message"].get("content", "")
-            usage = data.get("usage", {})
-            total_tokens = usage.get("total_tokens", 0)
+            content = data.get("response", "")
+            resolved_model = data.get("model", requested_model or _safe_model(genome))
 
             return {
                 "content": content,
-                "model": requested_model or _safe_model(genome),
+                "model": resolved_model,
                 "tools_used": active_tools,
                 "elapsed": elapsed,
-                "total_tokens": total_tokens,
-                "prompt_tokens": usage.get("prompt_tokens", 0),
-                "finish_reason": choice.get("finish_reason", ""),
-                "tool_calls": choice["message"].get("tool_calls", []),
-                "cost": total_tokens / 1000.0,
+                "total_tokens": 0,
+                "prompt_tokens": 0,
+                "finish_reason": "stop",
+                "tool_calls": [],
+                "cost": 0.0,
                 "retrieval_top_k": top_k,
                 "system_prompt_len": len(system_prompt),
             }
 
         except httpx.TimeoutException:
-            log.warning("brain timeout org=%s model=%s", org_id, model)
+            log.warning("brain timeout org=%s model=%s", org_id, requested_model or _safe_model(genome))
             return {
                 "error": "timeout",
                 "cost": 5.0,
                 "elapsed": _safe_attr(genome, "timeout_budget", 60.0),
                 "content": "",
-                "model": requested_model or _safe_model(genome),
+                "model": resolved_model,
                 "tools_used": active_tools,
                 "finish_reason": "timeout",
             }
@@ -386,7 +380,7 @@ def make_swarm_brain(genome, task_domain: str = "general", generate_fn=None) -> 
                 "cost": 5.0,
                 "elapsed": 0.0,
                 "content": "",
-                "model": requested_model or _safe_model(genome),
+                "model": resolved_model,
                 "tools_used": active_tools,
                 "finish_reason": "error",
             }
@@ -425,6 +419,14 @@ __all__ = [
     "simple_brain",
     "registry",
 ]
+
+
+
+
+
+
+
+
 
 
 
