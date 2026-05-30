@@ -492,8 +492,7 @@ class Orchestrator:
     async def evolve(self) -> None:
         log.info("Orchestrator.evolve(): Starting evolution cycle")
         import asyncio
-        loop = asyncio.get_running_loop()
-        kernel, metrics = await loop.run_in_executor(None, lambda: self.simulation.run(steps=1))
+        kernel, metrics = await self.simulation.run(steps=1)
 
         organisms = getattr(kernel, "organisms", []) or []
         top = max(organisms, key=lambda x: getattr(x, "fitness", 0.0), default=None)
