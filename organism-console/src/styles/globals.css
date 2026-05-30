@@ -429,3 +429,155 @@ pre {
     grid-column: span 1;
   }
 }
+
+.tutor-hero,
+.tutor-layout,
+.tutor-hero__stats,
+.tutor-card-list,
+.tutor-group,
+.lesson-grid,
+.lesson-glossary {
+  display: grid;
+  gap: 16px;
+}
+
+.tutor-hero {
+  grid-template-columns: 2fr 1fr;
+  align-items: start;
+  margin-bottom: 20px;
+}
+
+.tutor-hero__stats {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.tutor-stat,
+.tutor-card,
+.lesson-glossary__item,
+.lesson-badge {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #0c1117;
+}
+
+.tutor-stat {
+  padding: 14px;
+}
+
+.tutor-stat__label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.tutor-layout {
+  grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
+  gap: 20px;
+  margin-bottom: 20px;
+  align-items: start;
+}
+
+.tutor-panel {
+  display: grid;
+  gap: 18px;
+}
+
+.tutor-panel__intro,
+.lesson-header__text {
+  color: var(--muted);
+}
+
+.tutor-group h3,
+.lesson-section h3 {
+  margin-bottom: 8px;
+}
+
+.tutor-card {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+  padding: 14px;
+  text-align: left;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.tutor-card:hover,
+.tutor-card--active {
+  border-color: #2f81f7;
+  background: rgba(47, 129, 247, 0.10);
+}
+
+.tutor-card__title {
+  font-weight: 700;
+}
+
+.tutor-card__meta,
+.tutor-card__text,
+.lesson-badge,
+.lesson-section p,
+.lesson-section li,
+.lesson-glossary__item p {
+  color: var(--muted);
+}
+
+.lesson-header {
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.lesson-badges {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.lesson-badge {
+  padding: 6px 10px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.lesson-section {
+  display: grid;
+  gap: 10px;
+}
+
+.lesson-section ul,
+.lesson-section ol {
+  margin: 0;
+  padding-left: 20px;
+  display: grid;
+  gap: 8px;
+}
+
+.lesson-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.lesson-glossary {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.lesson-glossary__item {
+  padding: 12px;
+}
+
+@media (max-width: 1100px) {
+  .tutor-hero,
+  .tutor-layout,
+  .lesson-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .tutor-hero__stats {
+    grid-template-columns: 1fr;
+  }
+}
