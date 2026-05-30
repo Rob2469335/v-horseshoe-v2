@@ -436,7 +436,7 @@ class Orchestrator:
         self.trace.add(
             trace_id=trace_id,
             step_id="generate",
-            phase="start",
+            phase="generator",
             actor="orchestrator",
             action="generate",
             status="started",
@@ -490,7 +490,9 @@ class Orchestrator:
 
     async def evolve(self) -> None:
         log.info("Orchestrator.evolve(): Starting evolution cycle")
-        kernel, metrics = await self.simulation.run(steps=1)
+        import asyncio
+        loop = asyncio.get_running_loop()
+        kernel, metrics = await loop.run_in_executor(None, lambda: self.simulation.run(steps=1))
 
         organisms = getattr(kernel, "organisms", []) or []
         top = max(organisms, key=lambda x: getattr(x, "fitness", 0.0), default=None)
@@ -575,6 +577,8 @@ class Orchestrator:
                 "status": "error",
                 "message": str(e),
             }
+
+
 
 
 
