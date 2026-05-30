@@ -12,7 +12,7 @@ from ..events.envelope import EventEnvelope
 from ..events.store import EventStore
 from ..infra.ollama import OllamaClient
 from ..services.simulation_service import SimulationService
-from ..services.control_plane import TraceCollector, PolicyEngine, Critic, Planner, Router, StateManager
+from ..services.control_plane import TraceCollector, PolicyEngine, Critic, Planner, Router, StateManager, ModelProfile
 from ..config.settings import settings as swarm_settings
 
 log = logging.getLogger(__name__)
@@ -29,7 +29,21 @@ class Orchestrator:
         self.policy = PolicyEngine(max_steps=12)
         self.critic = Critic()
         self.planner = Planner()
-        self.router = Router()
+        self.router = Router(
+            profiles=[
+                ModelProfile(name="qwen2.5:3b-instruct", role="fast", cost_per_1m=0.0, max_tokens=32000, preferred_temp=0.7, cooldown_seconds=0.0),
+                ModelProfile(name="qwen2.5:7b-instruct", role="fast", cost_per_1m=0.0, max_tokens=32000, preferred_temp=0.7, cooldown_seconds=0.0),
+                ModelProfile(name="qwen2.5:14b-instruct", role="reasoning", cost_per_1m=0.0, max_tokens=32000, preferred_temp=0.7, cooldown_seconds=0.0),
+                ModelProfile(name="qwen2.5:14b-instruct-32k", role="reasoning", cost_per_1m=0.0, max_tokens=32768, preferred_temp=0.7, cooldown_seconds=0.0),
+                ModelProfile(name="qwen2.5-coder:3b", role="coding", cost_per_1m=0.0, max_tokens=32000, preferred_temp=0.7, cooldown_seconds=0.0),
+                ModelProfile(name="qwen2.5-coder:7b", role="coding", cost_per_1m=0.0, max_tokens=32000, preferred_temp=0.7, cooldown_seconds=0.0),
+                ModelProfile(name="qwen2.5-coder:14b", role="coding", cost_per_1m=0.0, max_tokens=32000, preferred_temp=0.7, cooldown_seconds=0.0),
+                ModelProfile(name="qwen2.5-coder:14b-32k", role="coding", cost_per_1m=0.0, max_tokens=32768, preferred_temp=0.7, cooldown_seconds=0.0),
+                ModelProfile(name="qwen3:14b", role="reasoning", cost_per_1m=0.0, max_tokens=32000, preferred_temp=0.7, cooldown_seconds=0.0),
+            ],
+            default_role="fast",
+            cooldown_multiplier=2.0,
+        )
         self.state_manager = StateManager()
         self.swarm_base_url = swarm_settings.swarm_url
         self.swarm_timeout = swarm_settings.swarm_timeout
@@ -561,4 +575,8 @@ class Orchestrator:
                 "status": "error",
                 "message": str(e),
             }
+
+
+
+
 

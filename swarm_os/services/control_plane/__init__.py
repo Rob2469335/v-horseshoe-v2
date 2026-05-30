@@ -1,4 +1,4 @@
-from .models import StepDecision, StepTrace, PolicyDecision, CriticResult, PlanStep
+from .models import StepDecision, StepTrace, PolicyDecision, CriticResult, PlanStep, ModelProfile, ModelState, RouteDecision
 from .trace import TraceCollector
 from .policy import PolicyEngine
 from .critic import Critic
@@ -12,6 +12,9 @@ __all__ = [
     "PolicyDecision",
     "CriticResult",
     "PlanStep",
+    "ModelProfile",
+    "ModelState",
+    "RouteDecision",
     "TraceCollector",
     "PolicyEngine",
     "Critic",
