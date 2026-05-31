@@ -12,15 +12,7 @@ from ..events.envelope import EventEnvelope
 from ..events.store import EventStore
 from ..infra.ollama import OllamaClient
 from ..services.simulation_service import SimulationService
-from ..services.control_plane import (
-    TraceCollector,
-    PolicyEngine,
-    Critic,
-    Planner,
-    Router,
-    StateManager,
-    ModelProfile,
-)
+from ..services.control_plane import TraceCollector, PolicyEngine, Critic, Planner, Router, StateManager, ModelProfile
 from ..config.settings import settings as swarm_settings
 
 log = logging.getLogger(__name__)
@@ -48,10 +40,6 @@ class Orchestrator:
                 ModelProfile(name="qwen2.5-coder:14b", role="coding", cost_per_1m=0.0, max_tokens=32000, preferred_temp=0.7, cooldown_seconds=0.0),
                 ModelProfile(name="qwen2.5-coder:14b-32k", role="coding", cost_per_1m=0.0, max_tokens=32768, preferred_temp=0.7, cooldown_seconds=0.0),
                 ModelProfile(name="qwen3:14b", role="reasoning", cost_per_1m=0.0, max_tokens=32000, preferred_temp=0.7, cooldown_seconds=0.0),
-                ModelProfile(name="mistral-nemo:12b", role="fast", cost_per_1m=0.0, max_tokens=32000, preferred_temp=0.7, cooldown_seconds=0.0),
-                ModelProfile(name="qwen3-embedding:8b", role="embedding", cost_per_1m=0.0, max_tokens=32000, preferred_temp=0.0, cooldown_seconds=0.0),
-                ModelProfile(name="nomic-embed-text:latest", role="embedding", cost_per_1m=0.0, max_tokens=8192, preferred_temp=0.0, cooldown_seconds=0.0),
-                ModelProfile(name="qllama/bge-reranker-v2-m3:latest", role="reranker", cost_per_1m=0.0, max_tokens=8192, preferred_temp=0.0, cooldown_seconds=0.0),
                 ModelProfile(name="qwen3-vl:8b", role="vision", cost_per_1m=0.0, max_tokens=32768, preferred_temp=0.2, cooldown_seconds=0.0),
                 ModelProfile(name="moondream:latest", role="vision", cost_per_1m=0.0, max_tokens=8192, preferred_temp=0.2, cooldown_seconds=0.0),
             ],
@@ -208,6 +196,32 @@ class Orchestrator:
         log.info("assign_job node=%s job=%s accepted=%s", node.node_id, job.job_id, accepted)
         return accepted
 
+    def _choose_model(self, prompt: str, requested_model: str | None = None) -> str:
+        if requested_model and requested_model.strip():
+            return requested_model.strip()
+
+        p = (prompt or "").lower()
+
+        if any(x in p for x in [
+            "refactor", "python", "powershell", "bug", "traceback", "exception",
+            "write code", "edit file", "patch", "function", "class", "fastapi"
+        ]):
+            return "qwen2.5-coder:14b-32k"
+
+        if len(prompt) > 2500 or any(x in p for x in [
+            "analyze", "compare", "design", "architecture", "plan", "reason",
+            "investigate", "root cause", "debug this", "step by step"
+        ]):
+            return "qwen2.5:14b-instruct-32k"
+
+        if any(x in p for x in [
+            "hi", "hello", "hey", "ping", "heartbeat", "status", "smoke", "test", "thanks", "help"
+        ]) or (len((prompt or "").split()) <= 4):
+            return "qwen2.5:3b-instruct"
+
+        return "qwen2.5:7b-instruct"
+
+
     def _fetch_installed_models(self) -> list[str]:
         try:
             import requests
@@ -223,7 +237,64 @@ class Orchestrator:
         except Exception:
             return []
 
-    def build_route(
+    def _classify_model_name(self, model_name: str) -> set[str]:
+        name = (model_name or "").lower()
+        tags = set()
+
+        if "coder" in name or "code" in name:
+            tags.add("coding")
+        if "embed" in name:
+            tags.add("embedding")
+        if "rerank" in name or "reranker" in name:
+            tags.add("reranker")
+        if "vision" in name or "vl" in name or "moondream" in name:
+            tags.add("vision")
+        if any(x in name for x in ["14b", "12b", "32k", "qwen3"]):
+            tags.add("reasoning")
+        if any(x in name for x in ["3b", "7b"]):
+            tags.add("fast")
+        if "instruct" in name or "mistral" in name or "qwen" in name:
+            tags.add("chat")
+
+        return tags
+
+    def _choose_first_available(self, installed_models: list[str], candidates: list[str]) -> str | None:
+        installed_lookup = {m.lower(): m for m in installed_models}
+        for candidate in candidates:
+            hit = installed_lookup.get(candidate.lower())
+            if hit:
+                return hit
+        return None
+
+    def _infer_task_type(self, prompt: str = "") -> str:
+        text = (prompt or "").lower()
+
+        coding_markers = [
+            "python", "powershell", "javascript", "typescript", "fastapi", "traceback",
+            "exception", "stack trace", "refactor", "function", "class ", "compile",
+            "syntaxerror", "pytest", "module", "import ", "sql", "api", "json"
+        ]
+        if any(marker in text for marker in coding_markers):
+            return "coding"
+
+        if any(marker in text for marker in ["image", "screenshot", "diagram", "vision", "ocr", "photo"]):
+            return "vision"
+
+        if any(marker in text for marker in ["embed", "embedding", "vector"]):
+            return "embedding"
+
+        if any(marker in text for marker in ["rerank", "reranker"]):
+            return "reranker"
+
+        if any(marker in text for marker in [
+            "analyze", "analysis", "compare", "design", "architecture", "plan", "reason",
+            "investigate", "root cause", "debug this", "step by step"
+        ]):
+            return "reasoning"
+
+        return "general"
+
+    def _select_model_from_inventory(
         self,
         prompt: str,
         requested_model: str | None = None,
@@ -232,70 +303,119 @@ class Orchestrator:
         phenotype = phenotype or {}
         installed_models = self._fetch_installed_models()
         route_profile = str(phenotype.get("route_profile") or "default").strip().lower()
-        routing_mode = str(phenotype.get("routing_mode") or "balanced").strip().lower()
-        if routing_mode not in {"speed", "balanced", "deep"}:
-            routing_mode = "balanced"
-        competition_band = float(phenotype.get("competition_band") or 0.0)
-        routing_mode = str(phenotype.get("routing_mode") or "balanced").strip().lower()
-        if routing_mode not in {"speed", "balanced", "deep"}:
-            routing_mode = "balanced"
+        task_type = self._infer_task_type(prompt)
 
-        if requested_model and requested_model in installed_models:
-            return {
-                "chosen_model": requested_model,
-                "route_profile": route_profile,
-                "source": "request",
-                "reason": "requested_model_available",
-                "task_type": "requested",
-                "router_role": "requested",
-                "fallback": False,
-                "candidates": [requested_model],
-            }
+        if requested_model:
+            chosen = self._choose_first_available(installed_models, [requested_model])
+            if chosen:
+                return {
+                    "chosen_model": chosen,
+                    "route_profile": route_profile,
+                    "source": "request",
+                    "reason": "requested_model_available",
+                }
 
-        candidate_groups = {
-            "default": ["qwen2.5:7b-instruct", "qwen2.5:14b-instruct", "qwen2.5:14b-instruct-32k", "qwen3:14b", "mistral-nemo:12b", "qwen2.5:3b-instruct"],
-            "reasoning": ["qwen3:14b", "qwen2.5:14b-instruct-32k", "qwen2.5:14b-instruct", "mistral-nemo:12b", "qwen2.5:7b-instruct"],
-            "coding": ["qwen2.5-coder:14b-32k", "qwen2.5-coder:14b", "qwen2.5-coder:7b", "qwen2.5-coder:3b"],
+
+        role_candidates = {
+            "triage": ["qwen2.5:3b-instruct", "qwen2.5:7b-instruct", "mistral-nemo:12b"],
+            "default": ["qwen2.5:3b-instruct", "qwen2.5:7b-instruct", "mistral-nemo:12b", "qwen2.5:14b-instruct"],
+            "reasoning": ["qwen3:14b", "qwen2.5:14b-instruct-32k", "qwen2.5:14b-instruct"],
+            "recovery": ["qwen2.5:3b-instruct", "qwen2.5:7b-instruct", "mistral-nemo:12b"],
+            "coding": ["qwen2.5-coder:14b-32k", "qwen2.5-coder:14b", "qwen2.5-coder:7b-16k", "qwen2.5-coder:7b", "qwen2.5-coder:3b"],
             "embedding": ["qwen3-embedding:8b", "nomic-embed-text:latest"],
             "reranker": ["qllama/bge-reranker-v2-m3:latest"],
-            "vision": ["qwen3-vl:8b",
-                "moondream:latest"],
+            "vision": ["qwen3-vl:8b", "moondream:latest"],
         }
 
-        router_role = route_profile if route_profile in {"coding", "reasoning", "embedding", "reranker", "vision"} else "fast"
-        candidates = [
-            model_name
-            for model_name in candidate_groups.get(route_profile, candidate_groups["default"])
-            if any(model_name.lower() == installed.lower() for installed in installed_models)
-        ]
+        if task_type == "coding":
+            chosen = self._choose_first_available(installed_models, role_candidates["coding"])
+            if chosen:
+                return {
+                    "chosen_model": chosen,
+                    "route_profile": route_profile,
+                    "source": "inventory",
+                    "reason": "coding_task",
+                }
 
-        route_outcome = self.router.route_model_detailed(
-            candidates=candidates,
-            role=router_role,
-            allow_fallback=True,
-            routing_mode=routing_mode,
-            prompt=prompt,
-            competition_band=competition_band,
-            gap_threshold=max(0.5, competition_band),
-            stochastic_top_k=3,
-            stochastic_temperature=1.8,
-            stochastic_sigma=8.0,
-        )
+        if task_type == "reasoning":
+            chosen = self._choose_first_available(installed_models, role_candidates["reasoning"])
+            if chosen:
+                return {
+                    "chosen_model": chosen,
+                    "route_profile": route_profile,
+                    "source": "inventory",
+                    "reason": "reasoning_task",
+                }
+
+        if task_type == "embedding":
+            chosen = self._choose_first_available(installed_models, role_candidates["embedding"])
+            if chosen:
+                return {
+                    "chosen_model": chosen,
+                    "route_profile": route_profile,
+                    "source": "inventory",
+                    "reason": "embedding_task",
+                }
+
+        if task_type == "reranker":
+            chosen = self._choose_first_available(installed_models, role_candidates["reranker"])
+            if chosen:
+                return {
+                    "chosen_model": chosen,
+                    "route_profile": route_profile,
+                    "source": "inventory",
+                    "reason": "reranker_task",
+                }
+
+        if task_type == "vision":
+            chosen = self._choose_first_available(installed_models, role_candidates["vision"])
+            if chosen:
+                return {
+                    "chosen_model": chosen,
+                    "route_profile": route_profile,
+                    "source": "inventory",
+                    "reason": "vision_task",
+                }
+
+        chosen = self._choose_first_available(installed_models, role_candidates.get(route_profile, role_candidates["default"]))
+        if chosen:
+            return {
+                "chosen_model": chosen,
+                "route_profile": route_profile,
+                "source": "inventory",
+                "reason": f"{route_profile}_profile",
+            }
+
+        chosen = self._choose_first_available(installed_models, role_candidates["default"])
+        if chosen:
+            return {
+                "chosen_model": chosen,
+                "route_profile": route_profile,
+                "source": "inventory",
+                "reason": "default_fallback",
+            }
 
         return {
-            "chosen_model": route_outcome.model,
+            "chosen_model": requested_model or "qwen2.5:7b-instruct",
             "route_profile": route_profile,
-            "source": "router",
-            "reason": route_outcome.reason,
-            "task_type": route_profile,
-            "router_role": router_role,
-            "routing_mode": routing_mode,
-            "competition_band": competition_band,
-            "fallback": route_outcome.fallback,
-            "candidates": list(route_outcome.candidates),
-            "score": route_outcome.score,
-            "metadata": dict(route_outcome.metadata),
+            "source": "fallback",
+            "reason": "hard_fallback",
         }
+
+
+    def select_model_from_inventory(self, prompt: str, requested_model: str | None = None, phenotype: dict | None = None) -> dict:
+        return self._select_model_from_inventory(prompt=prompt, requested_model=requested_model, phenotype=phenotype)
+    def build_route(
+        self,
+        prompt: str,
+        requested_model: str | None = None,
+        phenotype: dict | None = None,
+    ) -> dict:
+        return self._select_model_from_inventory(
+            prompt=prompt,
+            requested_model=requested_model,
+            phenotype=phenotype,
+        )
 
     def generate(self, model: str | None, prompt: str, phenotype: dict | None = None) -> tuple[str, str]:
         trace_id = self.trace.new_trace_id()
@@ -343,17 +463,6 @@ class Orchestrator:
             expected_kind="generate",
         )
 
-        self.router.apply_feedback(
-            RouteFeedback(
-                model=chosen_model,
-                accepted=critic_result.accepted,
-                latency_ms=duration_ms,
-                critic_score=critic_result.score,
-                reason=critic_result.reason,
-                metadata={"trace_id": trace_id, "route": route},
-            )
-        )
-
         self.trace.add(
             trace_id=trace_id,
             step_id="generate",
@@ -380,7 +489,6 @@ class Orchestrator:
                 "critic_accepted": critic_result.accepted,
                 "critic_score": critic_result.score,
                 "critic_reason": critic_result.reason,
-                "route": route,
             },
         )
         self.events.append(event)
@@ -474,6 +582,7 @@ class Orchestrator:
                 "status": "error",
                 "message": str(e),
             }
+
 
 
 
