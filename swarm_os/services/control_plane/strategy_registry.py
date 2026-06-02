@@ -23,9 +23,15 @@ class StrategyRegistry:
         self._default_name = name
 
     def get_active(self, context: dict | None = None) -> RoutingStrategy:
-        _ = context
+        context = context or {}
+        role = context.get("role")
+
+        if role == "deep" and "deep" in self._strategies:
+            return self._strategies["deep"]
+
         if self._default_name not in self._strategies:
             raise KeyError(f"Unknown strategy: {self._default_name}")
+
         return self._strategies[self._default_name]
 
 
