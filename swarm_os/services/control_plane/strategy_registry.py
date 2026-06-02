@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .strategy import DefaultStrategy, RoutingStrategy
+from .strategy import DefaultStrategy, DeepStrategy, RoutingStrategy
 
 
 class StrategyRegistry:
@@ -37,4 +37,5 @@ class StrategyRegistry:
 
 strategy_registry = StrategyRegistry()
 strategy_registry.register(DefaultStrategy())
+strategy_registry.register(DeepStrategy())
 strategy_registry.set_default("default")

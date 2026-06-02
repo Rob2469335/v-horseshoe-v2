@@ -128,3 +128,9 @@ class DefaultStrategy(RoutingStrategy):
             strategy=strategy_name,
             metadata={"strategy": strategy_name},
         )
+
+
+class DeepStrategy(DefaultStrategy):
+    @property
+    def name(self) -> str:
+        return "deep"
