@@ -85,6 +85,11 @@ def events(orch: Orchestrator = Depends(get_orchestrator)):
     all_ev = orch.events.read_all()
     return {"count": len(all_ev), "events": all_ev[-50:]}
 
+@router.get("/traces")
+def traces(limit: int = 50, orch: Orchestrator = Depends(get_orchestrator)):
+    items = orch.get_recent_traces(limit=limit)
+    return {"count": len(items), "traces": items}
+
 @router.get("/tools", response_model=ToolListResponse)
 def list_tools(runtime=Depends(get_runtime)):
     tools = runtime.list_tools()
@@ -162,3 +167,4 @@ def swarm_stats(orch: Orchestrator = Depends(get_orchestrator)):
             },
         )
     )
+
