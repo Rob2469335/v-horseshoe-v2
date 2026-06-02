@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import asdict
-from typing import Any, Callable, Dict
 import json
 import logging
-import os
 import time
+from pathlib import Path
+from typing import Any, Callable, Dict
 
 from .genetics import Genome
 from swarm_os.config.settings import settings
@@ -13,7 +12,16 @@ from swarm_os.config.settings import settings
 log = logging.getLogger(__name__)
 LOG_PATH = settings.log_path
 
+
+def _read_field(obj: Any, name: str, default: Any = None) -> Any:
+    if isinstance(obj, dict):
+        return obj.get(name, default)
+    return getattr(obj, name, default)
+
+
 class MemoryBank:
+    """Per-organism persistent JSONL diary."""
+
     def __init__(self, org_id: str):
         self.org_id = org_id
         self.events: list = []
@@ -21,7 +29,7 @@ class MemoryBank:
     def write(self, event: Dict[str, Any]) -> None:
         record = {"ts": time.time(), "org": self.org_id, **event}
         self.events.append(record)
-        os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
+        Path(LOG_PATH).parent.mkdir(parents=True, exist_ok=True)
         with open(LOG_PATH, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
         log.debug("memory write org=%s event=%s", self.org_id, event.get("event", "?"))
@@ -35,8 +43,14 @@ class MemoryBank:
                 return e["content"]
         return ""
 
+
 class Organism:
-    def __init__(self, id: str, brain: Callable[[Dict[str, Any]], Dict[str, Any]], genome: Genome):
+    def __init__(
+        self,
+        id: str,
+        brain: Callable[[Dict[str, Any]], Dict[str, Any]],
+        genome: Genome,
+    ):
         self.id = id
         self.brain = brain
         self.genome = genome
@@ -45,31 +59,57 @@ class Organism:
         self._action_count = 0
 
     def act(self, env_state: Dict[str, Any]) -> Dict[str, Any]:
-        genome_data = asdict(self.genome)
+        genome_data = self.genome.to_dict()
         context = {
             "id": self.id,
             "genome": genome_data,
-            "active_tools": genome_data.get("tool_genes", {}),
+            "active_tools": self.genome.active_tools(),
             "env": env_state,
             "task": env_state.get("task", ""),
             "action_count": self._action_count,
         }
+
         try:
-            action = self.brain(context) or {}
-        except Exception as e:
+            raw_action = self.brain(context)
+        except Exception as exc:
             log.exception("organism act failed id=%s", self.id)
-            action = {"error": str(e), "cost": 5.0, "content": ""}
+            raw_action = {"error": str(exc), "cost": 5.0, "content": ""}
+
+        action = raw_action or {}
         self._action_count += 1
-        self.memory.write({
-            "event": "action",
-            "action_count": self._action_count,
-            "task": env_state.get("task", "")[:120],
-            "model": action.get("model", genome_data.get("model", "")),
-            "tools_used": action.get("tools_used", []),
-            "elapsed": action.get("elapsed", 0),
-            "total_tokens": action.get("total_tokens", 0),
-            "content_preview": action.get("content", "")[:200],
-            "error": action.get("error"),
-            "avg_fitness": round(genome_data.get("lifetime_fitness", 0.0) / max(genome_data.get("evaluations", 1), 1), 4),
-        })
-        return action
+
+        self.memory.write(
+            {
+                "event": "action",
+                "action_count": self._action_count,
+                "task": env_state.get("task", "")[:120],
+                "model": _read_field(action, "model", genome_data.get("model", "")),
+                "tools_used": _read_field(action, "tools_used", []),
+                "elapsed": _read_field(action, "elapsed", 0),
+                "total_tokens": _read_field(action, "total_tokens", 0),
+                "content_preview": (_read_field(action, "content", "") or "")[:200],
+                "error": _read_field(action, "error"),
+                "avg_fitness": round(self.genome.average_fitness, 4),
+            }
+        )
+
+        if isinstance(action, dict):
+            return action
+
+        return {
+            "model": _read_field(action, "model", genome_data.get("model", "")),
+            "tools_used": _read_field(action, "tools_used", []),
+            "elapsed": _read_field(action, "elapsed", 0),
+            "total_tokens": _read_field(action, "total_tokens", 0),
+            "content": _read_field(action, "content", ""),
+            "error": _read_field(action, "error"),
+            "cost": _read_field(action, "cost", 0.0),
+            "finish_reason": _read_field(action, "finish_reason", ""),
+        }
+
+    def __repr__(self) -> str:
+        return (
+            f"Organism(id={self.id!r}, fitness={self.fitness:.3f}, "
+            f"avg={self.genome.average_fitness:.3f}, "
+            f"model={self.genome.model!r}, gen={self.genome.generation})"
+        )

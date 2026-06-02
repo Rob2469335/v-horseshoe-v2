@@ -1,15 +1,26 @@
+from __future__ import annotations
+
 import asyncio
 import logging
+from typing import Any
+
 from swarm_os.services.orchestrator import Orchestrator
 
 log = logging.getLogger(__name__)
 
 class SwarmWorker:
-    def __init__(self, orchestrator: Orchestrator):
+    def __init__(self, orchestrator: Orchestrator) -> None:
         self.orch = orchestrator
         self.is_running = False
 
-    async def run_loop(self):
+    def _read_field(self, obj: Any, name: str, default: Any = None) -> Any:
+        if hasattr(obj, name):
+            return getattr(obj, name)
+        if isinstance(obj, dict):
+            return obj.get(name, default)
+        return default
+
+    async def run_loop(self) -> None:
         self.is_running = True
         log.info("SwarmWorker: The Swarm heart is beating and the brain is active...")
 
@@ -17,16 +28,22 @@ class SwarmWorker:
             try:
                 await self.orch.evolve()
                 log.info("SwarmWorker: Agentic brain is processing...")
+
                 step_result = await self.orch.run_agent_step()
-                route = step_result.get("route", {})
+
+                route = self._read_field(step_result, "route", {}) or {}
+                route_action = self._read_field(route, "action")
+                route_target = self._read_field(route, "target")
+
                 log.info(
                     "SwarmWorker: step status=%s model=%s route_action=%s route_target=%s",
-                    step_result.get("status"),
-                    step_result.get("model"),
-                    route.get("action"),
-                    route.get("target"),
+                    self._read_field(step_result, "status"),
+                    self._read_field(step_result, "model"),
+                    route_action,
+                    route_target,
                 )
+
                 await asyncio.sleep(10)
-            except Exception as e:
-                log.error(f"SwarmWorker: Error in execution loop: {e}")
+            except Exception:
+                log.exception("SwarmWorker: Error in execution loop")
                 await asyncio.sleep(5)
