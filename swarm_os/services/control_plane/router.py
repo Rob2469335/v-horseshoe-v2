@@ -4,6 +4,7 @@ import time
 from typing import Iterable
 
 from .models import ModelProfile, ModelState, PlanStep, RouteDecision, StepDecision
+from .strategy_registry import strategy_registry
 
 class Router:
     def __init__(
@@ -49,96 +50,18 @@ class Router:
         role: str | None = None,
         allow_fallback: bool = True,
     ) -> RouteDecision:
-        strategy_name = "default"
-
-        if not candidates:
-            return RouteDecision(
-                model="",
-                role=self.default_role,
-                reason="no_candidates",
-                fallback=True,
-                strategy=strategy_name,
-                metadata={"strategy": strategy_name},
-            )
-
-        now = time.time()
-        desired_role = role or self.default_role
-        ranked: list[tuple[str, float, str]] = []
-
-        for name in candidates:
-            profile = self.profiles.get(name)
-            state = self.get_state(name)
-
-            if state.cooldown_until > now:
-                state.last_penalty = 1e9
-                state.last_score = -1e9
-                ranked.append((name, -1e9, "cooldown"))
-                continue
-
-            score = 0.0
-            reason_parts: list[str] = []
-
-            if profile and profile.role == desired_role:
-                score += 100.0
-                reason_parts.append("role_match")
-            elif profile and desired_role == self.default_role:
-                score += 25.0
-                reason_parts.append("default_role_bias")
-            else:
-                reason_parts.append("role_mismatch")
-
-            failure_penalty = min(50.0, float(state.failures * 5))
-            score -= failure_penalty
-
-            if state.total_requests > 0 and state.total_latency_ms > 0:
-                avg_latency = state.total_latency_ms / state.total_requests
-                latency_penalty = min(25.0, avg_latency / 200.0)
-                score -= latency_penalty
-                reason_parts.append("latency_penalty")
-            else:
-                latency_penalty = 0.0
-
-            state.last_penalty = failure_penalty + latency_penalty
-            state.last_score = score
-            ranked.append((name, score, ",".join(reason_parts)))
-
-        ranked.sort(key=lambda item: item[1], reverse=True)
-        best_name, best_score, best_reason = ranked[0]
-        best_state = self.get_state(best_name)
-
-        if best_score > 0:
-            return RouteDecision(
-                model=best_name,
-                role=best_state.role,
-                reason=best_reason,
-                fallback=False,
-                strategy=strategy_name,
-                metadata={
-                    "score": best_score,
-                    "strategy": strategy_name,
-                },
-            )
-
-        if allow_fallback:
-            return RouteDecision(
-                model=best_name,
-                role=best_state.role,
-                reason=f"fallback:{best_reason}",
-                fallback=True,
-                strategy=strategy_name,
-                metadata={
-                    "score": best_score,
-                    "strategy": strategy_name,
-                },
-            )
-
-        return RouteDecision(
-            model="",
-            role=desired_role,
-            reason="no_viable_route",
-            fallback=True,
-            strategy=strategy_name,
-            metadata={"strategy": strategy_name},
+        strategy = strategy_registry.get_active(
+            context={
+                "role": role or self.default_role,
+                "candidates": list(candidates),
+                "allow_fallback": allow_fallback,
+            }
+        )
+        return strategy.select_model(
+            router=self,
+            candidates=candidates,
+            role=role,
+            allow_fallback=allow_fallback,
         )
 
     def record_success(self, model: str, latency_ms: float) -> None:
