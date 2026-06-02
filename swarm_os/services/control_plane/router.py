@@ -49,12 +49,16 @@ class Router:
         role: str | None = None,
         allow_fallback: bool = True,
     ) -> RouteDecision:
+        strategy_name = "default"
+
         if not candidates:
             return RouteDecision(
                 model="",
                 role=self.default_role,
                 reason="no_candidates",
                 fallback=True,
+                strategy=strategy_name,
+                metadata={"strategy": strategy_name},
             )
 
         now = time.time()
@@ -108,7 +112,11 @@ class Router:
                 role=best_state.role,
                 reason=best_reason,
                 fallback=False,
-                metadata={"score": best_score},
+                strategy=strategy_name,
+                metadata={
+                    "score": best_score,
+                    "strategy": strategy_name,
+                },
             )
 
         if allow_fallback:
@@ -117,7 +125,11 @@ class Router:
                 role=best_state.role,
                 reason=f"fallback:{best_reason}",
                 fallback=True,
-                metadata={"score": best_score},
+                strategy=strategy_name,
+                metadata={
+                    "score": best_score,
+                    "strategy": strategy_name,
+                },
             )
 
         return RouteDecision(
@@ -125,6 +137,8 @@ class Router:
             role=desired_role,
             reason="no_viable_route",
             fallback=True,
+            strategy=strategy_name,
+            metadata={"strategy": strategy_name},
         )
 
     def record_success(self, model: str, latency_ms: float) -> None:

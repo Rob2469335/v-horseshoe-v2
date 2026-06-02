@@ -35,6 +35,7 @@ class RouteDecision:
     reason: str
     fallback: bool = False
     metadata: dict[str, Any] = field(default_factory=dict)
+    strategy: str = "default"
 
 @dataclass(slots=True)
 class PlanStep:

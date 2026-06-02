@@ -156,6 +156,7 @@ class Orchestrator:
             metadata={
                 "target_role": target_role,
                 "fallback_mode": route_decision.fallback,
+                "strategy": route_decision.strategy,
                 "router_metadata": dict(route_decision.metadata),
                 "phenotype_keys": sorted((phenotype or {}).keys()),
             },
@@ -275,3 +276,4 @@ class Orchestrator:
                 "status": "error",
                 "message": str(exc),
             }
+
