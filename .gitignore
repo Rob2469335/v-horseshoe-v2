@@ -26,3 +26,17 @@ swarm_os/data/snapshots/
 _tmp_*.py
 
 organism-console/tsconfig.tsbuildinfo
+
+swarm_state.json
+
+chaos_test.py
+integration_test.py
+metacognition_test.py
+stress_test.py
+
+organism-console/file-list.txt
+organism-console/source-files.txt
+organism-console/tree.txt
+organism-console/swarm_server_full.py
+organism-console/output/
+organism-console/swarm_os/
