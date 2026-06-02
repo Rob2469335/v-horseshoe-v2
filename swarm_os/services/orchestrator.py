@@ -166,6 +166,22 @@ class Orchestrator:
             result = self.ollama.generate(model=chosen_model, prompt=prompt)
             duration_ms = (time.time() * 1000.0) - start_ms
 
+            self.trace.add(
+                trace_id=trace_id,
+                step_id="generate",
+                phase="generator",
+                actor="orchestrator",
+                action="generate",
+                status="completed",
+                duration_ms=duration_ms,
+                model=chosen_model,
+                summary="Generation completed",
+                metadata={
+                    "result_chars": len(result or ""),
+                    "target_role": target_role,
+                },
+            )
+
             critic_result = self.critic.evaluate_step(
                 result={"content": result, "finish_reason": "stop"},
                 expected_kind="generate",
