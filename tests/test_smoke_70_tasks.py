@@ -48,3 +48,4 @@ class TestSmoke70Tasks:
         assert sum(rewards)/len(rewards) > 0.7
         print(f"\n✅ 70/70 PASS | Avg:{sum(rewards)/len(rewards):.3f} | Min:{min(rewards):.3f} | Max:{max(rewards):.3f} | AvgTools:{sum(tool_counts)/len(tool_counts):.2f}")
         print(f"   Tools used: {set(tools for tools in tool_counts)}")
+
