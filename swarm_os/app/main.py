@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
 from typing import Any, Dict
-from swarm_os.core.state import backend_health
+from swarm_os.services.health import backend_health, refresh_backend_health
 from swarm_os.api.routes import router as core_router
 
 try:
@@ -206,9 +206,7 @@ def _install_legacy_aliases(app: FastAPI) -> FastAPI:
 
 
 def create_app() -> FastAPI:
-    from swarm_os.api.agent_routes import router as _ar
     app = FastAPI(title="Swarm OS")
-    app.include_router(_ar)
     app.include_router(core_router)
 
     if swarm_router is not None:
@@ -230,6 +228,7 @@ def create_app() -> FastAPI:
 
     @app.get("/api/backend-health", include_in_schema=False)
     def backend_health_legacy():
+        refresh_backend_health()
         avg_latency = sum(backend_health.latency_history_ms) / max(1, len(backend_health.latency_history_ms))
         return {
             "ollama_reachable": backend_health.ollama_ok,
@@ -244,5 +243,8 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
+
+
+
 
 
