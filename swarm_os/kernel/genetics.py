@@ -4,14 +4,14 @@ import copy
 import math
 import random
 from dataclasses import asdict, dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Protocol
 
 MCP_TOOL_REGISTRY: List[str] = [
     "web_search",
     "playwright",
     "filesystem",
     "context7",
-    "qdrant_recall",
+    "context7",
     "code_exec",
 ]
 
@@ -21,11 +21,26 @@ MODEL_TIERS: Dict[str, str] = {
     "heavy": "qwen3:14b",
 }
 
+
+class RandomLike(Protocol):
+    def random(self) -> float: ...
+
+
 def sigmoid(x: float) -> float:
     return 1 / (1 + math.exp(-x))
 
+
 def clamp(v: float, lo: float = 0.0, hi: float = 1.0) -> float:
     return max(lo, min(hi, v))
+
+
+def tool_activation_probability(weight: float) -> float:
+    return sigmoid((weight - 0.5) * 6)
+
+
+def tool_activation_rng(seed: Optional[int] = None) -> RandomLike:
+    return random.Random(seed) if seed is not None else random
+
 
 def model_distribution(tier: float, smoke: bool = False) -> Dict[str, float]:
     if smoke:
@@ -47,6 +62,7 @@ def model_distribution(tier: float, smoke: bool = False) -> Dict[str, float]:
         MODEL_TIERS["heavy"]: heavy_weight / total,
     }
 
+
 def sample_model(tier: float, smoke: bool = False) -> str:
     distribution = model_distribution(tier, smoke=smoke)
     roll = random.random()
@@ -56,6 +72,7 @@ def sample_model(tier: float, smoke: bool = False) -> str:
         if roll <= cumulative:
             return model
     return MODEL_TIERS["fast"]
+
 
 @dataclass
 class CognitivePolicy:
@@ -85,6 +102,7 @@ class CognitivePolicy:
     def from_dict(cls, data: dict) -> "CognitivePolicy":
         return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
 
+
 @dataclass
 class Genome:
     model_tier: float = 0.5
@@ -106,10 +124,8 @@ class Genome:
     lifetime_fitness: float = 0.0
     evaluations: int = 0
 
-
     @property
     def timeout_budget(self) -> float:
-        # Higher tiers get more time
         return max(30.0, 10.0 + (self.model_tier * 50.0))
 
     @property
@@ -125,9 +141,10 @@ class Genome:
         return 0.0 if self.evaluations == 0 else self.lifetime_fitness / self.evaluations
 
     def active_tools(self, seed: Optional[int] = None) -> List[str]:
-        active = []
+        rng = tool_activation_rng(seed)
+        active: List[str] = []
         for tool, weight in self.tool_genes.items():
-            if random.random() < sigmoid((weight - 0.5) * 6):
+            if rng.random() < tool_activation_probability(weight):
                 active.append(tool)
         return active
 
@@ -178,6 +195,7 @@ class Genome:
         genome.cognition = CognitivePolicy.from_dict(cog_data)
         return genome
 
+
 def mutate(genome: Genome) -> None:
     fitness_modifier = 1.0 - clamp(genome.average_fitness)
     adaptive_delta = clamp(genome.mutation_rate * (0.5 + fitness_modifier), 0.01, 0.5)
@@ -196,12 +214,15 @@ def mutate(genome: Genome) -> None:
         tool = random.choice(MCP_TOOL_REGISTRY)
         genome.tool_genes[tool] = random.uniform(0.3, 0.7)
     genome.mutation_rate = clamp(genome.mutation_rate + random.uniform(-0.01, 0.01), 0.01, 0.4)
-
     normalize_affinities(genome)
+
+
 def crossover(a: Genome, b: Genome) -> Genome:
     stability = (a.crossover_stability + b.crossover_stability) / 2
+
     def inherit(va: float, vb: float) -> float:
         return (va + vb) / 2 if random.random() < stability else random.choice([va, vb])
+
     child = Genome(
         model_tier=inherit(a.model_tier, b.model_tier),
         temperature=inherit(a.temperature, b.temperature),
@@ -223,6 +244,7 @@ def crossover(a: Genome, b: Genome) -> Genome:
     normalize_affinities(child)
     return child
 
+
 def normalize_affinities(genome: Genome) -> Genome:
     total = genome.coding_affinity + genome.research_affinity + genome.upwork_affinity
     if total <= 0:
@@ -232,5 +254,3 @@ def normalize_affinities(genome: Genome) -> Genome:
     genome.research_affinity /= total
     genome.upwork_affinity /= total
     return genome
-
-

@@ -14,6 +14,7 @@ from .control_plane.planner import Planner
 from .control_plane.policy import PolicyEngine
 from .control_plane.router import Router
 from .control_plane.trace import TraceCollector
+from swarm_os.tools.memory_bridge import MemoryBridge
 
 log = logging.getLogger(__name__)
 
@@ -27,6 +28,8 @@ class Orchestrator:
         self.policy = PolicyEngine(max_steps=12)
         self.critic = Critic()
         self.planner = Planner()
+        
+        self.bridge = MemoryBridge()
         self.simulation = SimulationService(generate_fn=self.generate)
 
         self.router = Router(
@@ -45,6 +48,7 @@ class Orchestrator:
             ],
             default_role="fast",
             cooldown_multiplier=2.0,
+            bridge=self.bridge,
         )
 
         self.swarm_base_url = swarm_settings.swarm_url
@@ -111,7 +115,7 @@ class Orchestrator:
         except Exception:
             return ["qwen2.5:7b-instruct", "qwen2.5:3b-instruct"]
 
-    def generate(self, model: str | None, prompt: str, phenotype: dict | None = None) -> tuple[str, str]:
+    async def generate(self, model: str | None, prompt: str, phenotype: dict | None = None) -> tuple[str, str]:
         trace_id = self.trace.new_trace_id()
         start_ms = time.time() * 1000.0
 
@@ -136,10 +140,11 @@ class Orchestrator:
         else:
             candidates = installed_candidates
 
-        route_decision: RouteDecision = self.router.route_model(
+        route_decision: RouteDecision = await self.router.route_model(
             candidates=candidates,
             role=target_role,
             allow_fallback=True,
+            event_type="GENERATE",
         )
 
         chosen_model = route_decision.model or "qwen2.5:7b-instruct"
@@ -280,7 +285,7 @@ class Orchestrator:
     async def run_agent_step(self) -> dict:
         prompt = "Return a one-line system heartbeat for Horseshoe Swarm. State that the orchestrator loop is active."
         try:
-            result, chosen_model = self.generate(model=None, prompt=prompt)
+            result, chosen_model = await self.generate(model=None, prompt=prompt)
             return {
                 "status": "success",
                 "message": "Agent step completed",
@@ -293,3 +298,11 @@ class Orchestrator:
                 "message": str(exc),
             }
 
+# Compatibility export for API/tests expecting a module-level director
+try:
+    swarm_director
+except NameError:
+    try:
+        swarm_director = Orchestrator()
+    except Exception:
+        swarm_director = None

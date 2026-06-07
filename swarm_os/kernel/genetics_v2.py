@@ -16,7 +16,7 @@ MCP_TOOL_REGISTRY: List[str] = [
     "playwright",
     "filesystem",
     "context7",
-    "qdrant_recall",
+    "context7",
     "code_exec",
 ]
 

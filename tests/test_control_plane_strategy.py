@@ -1,3 +1,4 @@
+import pytest
 from swarm_os.services.control_plane.models import ModelProfile, RouteDecision
 from swarm_os.services.control_plane.router import Router
 from swarm_os.services.control_plane.strategy import DefaultStrategy
@@ -14,14 +15,15 @@ def test_strategy_registry_returns_default():
     assert strategy.name == "default"
 
 
-def test_route_model_stamps_strategy():
+@pytest.mark.asyncio
+async def test_route_model_stamps_strategy():
     router = Router(
         profiles=[
             ModelProfile(name="qwen2.5:3b-instruct", role="fast", max_tokens=32000),
         ],
         default_role="fast",
     )
-    decision = router.route_model(
+    decision = await router.route_model(
         candidates=["qwen2.5:3b-instruct"],
         role="fast",
         allow_fallback=True,
@@ -32,9 +34,10 @@ def test_route_model_stamps_strategy():
     assert decision.fallback is False
 
 
-def test_route_model_fallback_no_candidates():
+@pytest.mark.asyncio
+async def test_route_model_fallback_no_candidates():
     router = Router(default_role="fast")
-    decision = router.route_model(
+    decision = await router.route_model(
         candidates=[],
         role="fast",
         allow_fallback=True,
@@ -44,9 +47,10 @@ def test_route_model_fallback_no_candidates():
     assert decision.reason == "no_candidates"
 
 
-def test_orchestrator_trace_preserves_strategy():
+@pytest.mark.asyncio
+async def test_orchestrator_trace_preserves_strategy():
     orchestrator = Orchestrator()
-    orchestrator.generate(model="qwen2.5:3b-instruct", prompt="hello")
+    await orchestrator.generate(model="qwen2.5:3b-instruct", prompt="hello")
     traces = orchestrator.get_recent_traces(limit=10)
     router_events = [event for event in traces if event.get("phase") == "router"]
     assert router_events
