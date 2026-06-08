@@ -1,7 +1,9 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Any, Dict
 from swarm_os.services.health import backend_health, refresh_backend_health
+from swarm_os.services.orchestrator import Orchestrator
 from swarm_os.api.routes import router as core_router
 
 try:
@@ -207,6 +209,20 @@ def _install_legacy_aliases(app: FastAPI) -> FastAPI:
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Swarm OS")
+    app.state.orchestrator = Orchestrator()
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[
+            "http://127.0.0.1:3000",
+            "http://localhost:3000",
+            "http://127.0.0.1:5173",
+            "http://localhost:5173",
+        ],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
     app.include_router(core_router)
 
     if swarm_router is not None:
@@ -243,6 +259,10 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
+
+
+
+
 
 
 

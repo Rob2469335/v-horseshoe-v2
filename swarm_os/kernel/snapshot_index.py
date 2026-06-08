@@ -12,3 +12,4 @@ def list_snapshots() -> list[Path]:
 def latest_snapshot() -> Path | None:
     snaps = list_snapshots()
     return max(snaps, key=lambda p: p.stat().st_mtime) if snaps else None
+

@@ -14,3 +14,4 @@ def run_cycle(population: list) -> list:
         next_gen.append(child)
         
     return next_gen
+

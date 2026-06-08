@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from swarm_os.kernel.genetics import Genome
 from swarm_os.kernel.organism import Organism
-from swarm_os.kernel.brain import simple_brain
+import swarm_os.brain as brain_module
 
 def build_stress_population():
     genome_x = Genome(0.8)
@@ -21,10 +21,12 @@ def build_stress_population():
     genome_v.smoke = True
 
     return [
-        Organism("X", simple_brain(genome_x, "general"), genome_x),
-        Organism("Y", simple_brain(genome_y, "general"), genome_y),
-        Organism("Z", simple_brain(genome_z, "general"), genome_z),
-        Organism("W", simple_brain(genome_w, "general"), genome_w),
-        Organism("V", simple_brain(genome_v, "general"), genome_v),
+        Organism("X", brain_module.simple_brain(genome_x, "general"), genome_x),
+        Organism("Y", brain_module.simple_brain(genome_y, "general"), genome_y),
+        Organism("Z", brain_module.simple_brain(genome_z, "general"), genome_z),
+        Organism("W", brain_module.simple_brain(genome_w, "general"), genome_w),
+        Organism("V", brain_module.simple_brain(genome_v, "general"), genome_v),
     ]
+
+
 

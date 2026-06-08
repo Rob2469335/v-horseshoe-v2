@@ -70,3 +70,4 @@ class UpworkAnalyzerHandler:
             should_bid=should_bid,
             recommended_bid=rec_bid
         )
+

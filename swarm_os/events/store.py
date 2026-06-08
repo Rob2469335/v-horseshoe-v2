@@ -25,3 +25,5 @@ class EventStore:
                 if line:
                     items.append(json.loads(line))
         return items
+
+

@@ -80,3 +80,4 @@ async def test_population_stays_bounded():
     await _run_steps(kernel, 3)
 
     assert len(kernel.organisms) <= pop_max
+

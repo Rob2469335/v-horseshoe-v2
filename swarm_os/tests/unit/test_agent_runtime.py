@@ -29,3 +29,4 @@ async def test_agent_runtime_clears_tool_cache():
     assert runtime.get_tool_cache_size() == 2
     runtime.clear_tool_cache()
     assert runtime.get_tool_cache_size() == 0
+

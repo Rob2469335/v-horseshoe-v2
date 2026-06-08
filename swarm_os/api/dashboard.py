@@ -25,3 +25,4 @@ def get_dashboard() -> dict:
         "latest_snapshot":  str(latest) if latest else None,
     }
 
+

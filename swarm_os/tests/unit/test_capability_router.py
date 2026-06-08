@@ -35,3 +35,4 @@ def test_router_list_capabilities():
     assert "chat_search" in caps
     assert "upwork_analyzer" in caps
     assert "vscode_automation" in caps
+

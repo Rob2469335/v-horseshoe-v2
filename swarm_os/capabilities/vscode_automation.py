@@ -106,3 +106,4 @@ class VSCodeAutomationHandler:
                 exit_code=1,
                 message="Subprocess execution failed."
             )
+

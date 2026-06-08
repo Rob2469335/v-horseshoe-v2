@@ -11,3 +11,4 @@ def run_stress_test(agent_strategy: dict) -> bool:
     
     # 3. If passed, the strategy is 'robust'
     return result.returncode == 0
+

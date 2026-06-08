@@ -125,3 +125,4 @@ def evolve_plugin_weights(registry: object) -> dict[str, float]:
         for item in ranked
         if getattr(item, "name", "")
     }
+

@@ -49,3 +49,4 @@ if __name__ == "__main__":
     setup_logging()
     logging.getLogger(__name__).info("Starting swarm OS")
     main()
+

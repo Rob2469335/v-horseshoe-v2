@@ -34,3 +34,4 @@ def score_node(node: SwarmNode, job: SwarmJob) -> int:
     # Penalise busy nodes
     score -= node.state.get("active_jobs", 0) * 3
     return max(0, score)
+

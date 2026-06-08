@@ -8,7 +8,7 @@ from swarm_os.kernel.environment import Environment
 from swarm_os.kernel.metrics import summarize
 from swarm_os.kernel.swarm_kernel import SwarmKernel
 from swarm_os.kernel.genetics import Genome
-from swarm_os.kernel.brain import registry as brain_registry
+import swarm_os.brain as brain_module
 from swarm_os.kernel.organism import Organism
 from swarm_os.scenarios.registry import build as build_scenario
 from swarm_os.repositories.file_snapshot_repository import FileSnapshotRepository
@@ -22,7 +22,7 @@ def _organisms_from_snapshot(snapshot: dict, generate_fn=None) -> list[Organism]
     items = []
     for item in snapshot.get("organisms", []):
         genome = Genome.from_dict(item["genome"])
-        brain  = brain_registry.make("swarm", genome, "general", generate_fn=generate_fn)
+        brain  = brain_module.registry.make("swarm", genome, "general", generate_fn=generate_fn)
         org    = Organism(id=item["id"], brain=brain, genome=genome)
         org.fitness = float(item.get("fitness", 0.0))
         items.append(org)
@@ -92,6 +92,8 @@ class SimulationService:
         log.info("run complete generation=%d best_fitness=%.4f",
                  kernel.generation, metrics.best_fitness)
         return kernel, metrics
+
+
 
 
 

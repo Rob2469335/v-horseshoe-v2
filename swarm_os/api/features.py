@@ -22,3 +22,4 @@ async def semantic_search(req: QueryRequest):
     else:
         results = candidates[:req.top_k]
     return {"results": results}
+

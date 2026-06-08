@@ -14,3 +14,4 @@ def should_archive(client: QdrantClient, new_embedding: list, threshold: float =
     if search_result and search_result[0].score > threshold:
         return False
     return True
+

@@ -80,3 +80,4 @@ class CapabilityRouter:
         if len(content) < 1000:
             return content
         return f"{content[:500]}...[TRUNCATED]...{content[-500:]}"
+

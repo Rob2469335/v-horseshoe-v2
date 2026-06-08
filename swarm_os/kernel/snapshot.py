@@ -31,3 +31,4 @@ def load_snapshot(path: str | Path) -> dict:
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     return migrate_snapshot(data)
 
+

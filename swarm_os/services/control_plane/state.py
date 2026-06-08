@@ -34,3 +34,4 @@ class StateManager:
                 return json.load(f)
         except json.JSONDecodeError:
             return {'history': []}
+

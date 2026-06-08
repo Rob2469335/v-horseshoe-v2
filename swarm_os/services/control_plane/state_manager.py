@@ -16,3 +16,4 @@ class StateManager:
 
     def clear(self) -> None:
         self._working_state.clear()
+

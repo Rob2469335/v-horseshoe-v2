@@ -41,3 +41,4 @@ async def search(collection: str, query: str, top_k: int = 5) -> list[Any]:
         return results
     except Exception:
         return []
+

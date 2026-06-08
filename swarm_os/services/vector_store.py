@@ -121,3 +121,4 @@ class VectorStore:
             return info.points_count or 0
         except Exception:
             return 0
+

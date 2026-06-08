@@ -36,3 +36,4 @@ class EmbeddingService:
     def embed_batch(self, texts: List[str]) -> List[List[float]]:
         """Generate embeddings for multiple texts."""
         return [self.embed(text) for text in texts]
+

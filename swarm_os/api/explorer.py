@@ -23,3 +23,4 @@ def get_generation() -> dict:
         "current_run":     None,
         "population":      [],
     }
+

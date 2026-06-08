@@ -27,3 +27,4 @@ class Guardian:
     def trigger_metacognition(self):
         print("🧠 Action: Executing metacognition to adjust global strategy...")
         # os.system('python metacognition_test.py')
+

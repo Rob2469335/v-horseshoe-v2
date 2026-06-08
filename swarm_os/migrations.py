@@ -178,3 +178,4 @@ def migrate_snapshot(data: dict) -> dict:
         data = _MIGRATIONS[version](data)
         version = data["snapshot_version"]
     return data
+

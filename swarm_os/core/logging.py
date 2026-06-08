@@ -27,3 +27,4 @@ def setup_logging() -> None:
     file_handler = logging.FileHandler(log_file, encoding='utf-8')
     file_handler.setFormatter(formatter)
     root.addHandler(file_handler)
+

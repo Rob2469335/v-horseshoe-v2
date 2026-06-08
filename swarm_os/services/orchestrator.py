@@ -48,7 +48,6 @@ class Orchestrator:
             ],
             default_role="fast",
             cooldown_multiplier=2.0,
-            bridge=self.bridge,
         )
 
         self.swarm_base_url = swarm_settings.swarm_url
@@ -140,11 +139,10 @@ class Orchestrator:
         else:
             candidates = installed_candidates
 
-        route_decision: RouteDecision = await self.router.route_model(
+        route_decision: RouteDecision = self.router.route_model(
             candidates=candidates,
             role=target_role,
             allow_fallback=True,
-            event_type="GENERATE",
         )
 
         chosen_model = route_decision.model or "qwen2.5:7b-instruct"
@@ -306,3 +304,7 @@ except NameError:
         swarm_director = Orchestrator()
     except Exception:
         swarm_director = None
+
+
+
+

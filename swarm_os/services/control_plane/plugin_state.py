@@ -25,3 +25,4 @@ class PluginState:
         self.failure_count += 1
         self.last_used = time.time()
         self.fitness *= 0.9
+

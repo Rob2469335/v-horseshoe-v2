@@ -71,3 +71,4 @@ class TraceCollector:
 
     def clear(self) -> None:
         self._events.clear()
+

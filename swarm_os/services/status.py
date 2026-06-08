@@ -29,3 +29,4 @@ def get_status(events_dir: Path) -> SwarmStatus:
         events_path = events_path,
         event_count = event_count,
     )
+

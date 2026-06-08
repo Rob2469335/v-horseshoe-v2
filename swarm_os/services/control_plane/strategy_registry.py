@@ -39,3 +39,4 @@ strategy_registry = StrategyRegistry()
 strategy_registry.register(DefaultStrategy())
 strategy_registry.register(DeepStrategy())
 strategy_registry.set_default("default")
+

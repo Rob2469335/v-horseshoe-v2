@@ -347,3 +347,4 @@ def crossover(a: Genome, b: Genome, seed: Optional[int] = None) -> Genome:
 
     child.genome_id = child.compute_id()
     return child
+

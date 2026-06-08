@@ -114,3 +114,4 @@ class OllamaClient:
         except Exception as e:
             log.warning("ollama list_models failed: %s", e)
             return []
+

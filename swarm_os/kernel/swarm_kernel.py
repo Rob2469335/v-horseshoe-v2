@@ -9,3 +9,4 @@ from __future__ import annotations
 from swarm_os.swarm_kernel import SwarmKernel, _clone_organism, _population_diversity
 
 __all__ = ["SwarmKernel", "_clone_organism", "_population_diversity"]
+

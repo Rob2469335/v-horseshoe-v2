@@ -34,3 +34,4 @@ from swarm_os.scenarios.stress import build as _stress
 
 register("default", _default)
 register("stress", _stress)
+

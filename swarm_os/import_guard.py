@@ -10,3 +10,4 @@ def validate():
     for module in CRITICAL_IMPORTS:
         importlib.import_module(module)
     print("IMPORT GRAPH OK")
+

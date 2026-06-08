@@ -112,3 +112,4 @@ class Organism:
             f"avg={self.genome.average_fitness:.3f}, "
             f"model={self.genome.model!r}, gen={self.genome.generation})"
         )
+

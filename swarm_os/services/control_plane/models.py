@@ -76,3 +76,4 @@ class ImprovementProposal:
     requires_approval: bool = True
     created_at_ms: float = 0.0
     status: str = "pending"
+

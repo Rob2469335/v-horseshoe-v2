@@ -47,3 +47,4 @@ class SwarmWorker:
             except Exception:
                 log.exception("SwarmWorker: Error in execution loop")
                 await asyncio.sleep(5)
+

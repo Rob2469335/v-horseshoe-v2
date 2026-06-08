@@ -52,3 +52,4 @@ async def rerank(query: str, candidates: list[dict], top_k: int = 5) -> list[dic
     except Exception as e:
         log.warning(f"Reranker unavailable ({e}), using Qdrant order")
         return candidates[:top_k]
+

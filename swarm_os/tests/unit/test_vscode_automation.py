@@ -26,3 +26,4 @@ async def test_vscode_automation_rejects_disallowed_command():
     assert response.status == "rejected"
     assert response.exit_code == 1
     assert "Security Error" in response.stderr
+

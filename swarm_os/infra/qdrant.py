@@ -12,3 +12,4 @@ class QdrantClient:
         url = f'{self.base_url}/healthz'
         r = requests.get(url, timeout=30)
         return r.ok
+

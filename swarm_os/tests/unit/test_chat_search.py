@@ -23,3 +23,4 @@ async def test_chat_search_empty_query_returns_nothing():
     response = await handler.execute(req)
     assert response.status == "success"
     assert len(response.results) == 0
+

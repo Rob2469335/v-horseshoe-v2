@@ -17,3 +17,4 @@ async def health():
         "ollama":      s.ollama_base_url,
         "environment": s.environment,
     }
+

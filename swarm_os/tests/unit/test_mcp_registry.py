@@ -26,3 +26,4 @@ async def test_qdrant_recall_returns_valid_shape():
     result = await rt.call_tool("qdrant_recall", {"query": "test", "collection": "chat_archive"})
     assert result["ok"] is True
     assert isinstance(result["results"], list)
+

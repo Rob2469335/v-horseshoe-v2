@@ -67,3 +67,4 @@ def latest_snapshot() -> Optional[Path]:
         return None
     snapshots = sorted(snap_dir.glob("snapshot_*.json"))
     return snapshots[-1] if snapshots else None
+

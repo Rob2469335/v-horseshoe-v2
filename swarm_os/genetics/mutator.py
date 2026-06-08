@@ -20,3 +20,4 @@ def mutate(genome: dict, mutation_rate: float) -> dict:
     # 2. Renormalize to maintain a valid probability distribution
     genome["affinities"] = normalize(genome["affinities"])
     return genome
+

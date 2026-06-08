@@ -9,3 +9,4 @@ def refactor_strategy(strategy: str) -> str:
     # In a real Swarm OS, this would call an LLM to 'rewrite' the plan
     # For now, we simulate the compression of steps.
     return f"Refactored: {strategy[:100]}..." 
+

@@ -71,3 +71,4 @@ class ChatSearchHandler:
             results=truncated_results,
             message=f"Found {len(truncated_results)} matches out of {len(events)} stored events."
         )
+

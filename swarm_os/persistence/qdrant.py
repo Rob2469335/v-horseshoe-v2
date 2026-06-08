@@ -87,3 +87,4 @@ async def search(collection_key: str, query: str, top_k: int = 20) -> list[dict]
         with_payload=True,
     )
     return [{"score": r.score, "payload": r.payload} for r in results]
+

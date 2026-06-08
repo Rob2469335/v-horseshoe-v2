@@ -22,3 +22,4 @@ def summarize(organisms: Iterable, generation: int) -> RunMetrics:
         worst_fitness=min(fitness),
         generation=generation,
     )
+

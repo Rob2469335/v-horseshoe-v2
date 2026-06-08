@@ -57,3 +57,4 @@ async def upwork_status():
 @router.get("/vscode")
 async def vscode_status():
     return {"status": "stub", "message": "vscode_automation handler not yet implemented"}
+

@@ -27,3 +27,4 @@ def test_cache_status(client):
     response = client.get("/tools/cache")
     assert response.status_code == 200
     assert "cache_size" in response.json()
+

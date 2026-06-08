@@ -15,3 +15,4 @@ class SnapshotRepository(ABC):
 
     @abstractmethod
     def latest(self) -> Path | None: ...
+

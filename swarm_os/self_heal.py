@@ -21,3 +21,4 @@ class SelfHeal:
             else:
                 recovered[m] = "quarantined"
         return recovered
+

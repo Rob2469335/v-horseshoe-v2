@@ -26,3 +26,4 @@ class PluginRegistry:
 
     def all_states(self):
         return self._state
+

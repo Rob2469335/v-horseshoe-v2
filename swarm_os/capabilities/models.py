@@ -44,3 +44,4 @@ class VSCodeAutomationResponse(BaseModel):
     stderr: str
     exit_code: int
     message: Optional[str] = None
+

@@ -29,3 +29,4 @@ class FileSnapshotRepository(SnapshotRepository):
         snaps = self.list()
         return max(snaps, key=lambda p: p.stat().st_mtime) if snaps else None
 
+

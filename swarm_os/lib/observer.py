@@ -8,3 +8,4 @@ def log_combination(tool_a: str, tool_b: str):
     with open("swarm_behavior.log", "a") as f:
         f.write(json.dumps(entry) + "\n")
     print(f"Emergent behavior detected: {tool_a} linked with {tool_b}")
+

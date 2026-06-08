@@ -6,3 +6,4 @@ def review_proposal(proposed_logic: str) -> bool:
     # 2. Compare 'Capability Expansion' metrics
     # 3. If it improves performance without violating safety, return True
     return True 
+

@@ -32,3 +32,4 @@ async def test_tool_executor_clears_cache():
     assert executor.cache_size() == 1
     executor.clear_cache()
     assert executor.cache_size() == 0
+
