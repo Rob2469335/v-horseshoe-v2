@@ -49,3 +49,4 @@ class TestPipeline:
             r = brain(task)
             assert r.composite_reward > 0.5
             assert len(r.tools_used) > 0
+

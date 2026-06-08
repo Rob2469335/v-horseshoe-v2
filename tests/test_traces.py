@@ -63,3 +63,4 @@ def test_traces_endpoint_returns_recent_trace_items():
     assert len(payload["traces"]) == 2
     assert payload["traces"][1]["phase"] == "generator"
     assert payload["traces"][1]["status"] == "completed"
+

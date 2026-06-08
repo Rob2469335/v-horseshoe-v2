@@ -11,3 +11,4 @@ def test_run_state():
     assert "scenario" in data
     assert "latest_snapshot" in data
     assert "snapshot_count" in data
+

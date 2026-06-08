@@ -96,3 +96,4 @@ def traces_summary(limit: int = 50) -> list[dict]:
 
     out.sort(key=lambda x: -x["latest_timestamp_ms"])
     return out
+

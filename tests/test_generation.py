@@ -14,3 +14,4 @@ def test_generation():
     assert "population" in data
     assert isinstance(data["population"], list)
 
+

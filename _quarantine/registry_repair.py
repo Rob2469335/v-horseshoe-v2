@@ -9,3 +9,4 @@ def repair_registry(registry):
             registry.register(r, {"status": "auto-recovered"})
 
     return registry.all()
+

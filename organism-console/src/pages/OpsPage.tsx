@@ -164,12 +164,12 @@ export default function OpsPage() {
         return current
       }
 
-      return traceSummary[0]?.trace_id ?? ""
+      return (Array.isArray(traceSummary) ? traceSummary[0]?.trace_id : "") ?? ""
     })
   }, [traceSummary])
 
   const selectedSummary = useMemo<TraceSummaryItem | undefined>(() => {
-    return traceSummary.find((item) => item.trace_id === selectedTraceId)
+    return (Array.isArray(traceSummary) ? traceSummary : []).find((item) => item.trace_id === selectedTraceId)
   }, [traceSummary, selectedTraceId])
 
   const selectedTraceEvents = useMemo<TraceItem[]>(() => {
@@ -509,5 +509,8 @@ export default function OpsPage() {
     </section>
   )
 }
+
+
+
 
 

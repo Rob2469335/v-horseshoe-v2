@@ -17,7 +17,7 @@ function getDisplayText(data: ChatResponse | undefined) {
 
 export default function AgentPage() {
   const backendUrl = useUiStore((state) => state.backendUrl)
-  const [message, setMessage] = useState("summarize current system status")
+  const [message, setMessage] = useState("Report the live status of this local system in 4 bullets: backend API health, frontend UI health, latest generate request result, and any active errors. Use only observed current state. No generic placeholders.")
   const [lastResponse, setLastResponse] = useState<ChatResponse | undefined>(undefined)
 
   const chatMutation = useMutation({
@@ -63,3 +63,4 @@ export default function AgentPage() {
     </section>
   )
 }
+

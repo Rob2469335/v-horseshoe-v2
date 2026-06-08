@@ -12,3 +12,4 @@ def test_explorer():
     assert "latest_snapshot" in data
     assert "current_run" in data
 
+

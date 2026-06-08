@@ -21,3 +21,4 @@ async def test_resume_flow_advances_generation():
 
     assert kernel.generation == before + 1
     assert len(kernel.organisms) == len(organisms)
+

@@ -11,3 +11,4 @@ def test_admin_snapshots():
     assert "snapshots" in data
     assert isinstance(data["snapshots"], list)
 
+

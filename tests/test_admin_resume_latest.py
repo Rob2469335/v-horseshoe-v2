@@ -15,3 +15,4 @@ def test_admin_resume_latest_queued(monkeypatch):
     data = response.json()
     assert data["queued"] is True
     assert data["resume"] == str(fake)
+

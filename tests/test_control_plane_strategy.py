@@ -55,3 +55,4 @@ async def test_orchestrator_trace_preserves_strategy():
     router_events = [event for event in traces if event.get("phase") == "router"]
     assert router_events
     assert router_events[-1]["metadata"]["strategy"] == "default"
+

@@ -1,69 +1,9 @@
 import { useMemo, useState } from "react"
-import { useQuery } from "@tanstack/react-query"
-import { api } from "../lib/api"
-import { useUiStore } from "../state/ui-store"
-
-type OrganismStatusResponse = {
-  ready?: boolean
-  environment?: string
-  event_count?: number
-  events_path?: string
-  ollama_reachable?: boolean
-  primary_vision_model?: string
-}
-
-type OrganismToolsResponse = {
-  count?: number
-  capabilities?: string[]
-}
-
-type ToolsCacheResponse = {
-  cache_size?: number
-  cached_keys?: string[]
-}
-
-type TimelinePoint = {
-  bucket: string
-  event_count: number
-  success_count: number
-  partial_count: number
-  fail_count: number
-}
-
-type TimelineResponse = {
-  window_minutes: number
-  points: TimelinePoint[]
-}
-
-type FeatureCardProps = {
-  id: string
-  activeId: string
-  onActivate: (id: string) => void
-  label: string
-  title: string
-  value: string
-  summary: string
-  detail: string
-  nextStep: string
-  accent: string
-  glow: string
-  gradient: string
-}
-
-type StatTileProps = {
-  label: string
-  value: string
-  tone: string
-  detail: string
-}
-
-type KnowledgePanelProps = {
-  badge: string
-  title: string
-  intro: string
-  bullets: string[]
-  accent: string
-}
+import { StatTile } from "../features/organism/StatTile"
+import { KnowledgePanel } from "../features/organism/KnowledgePanel"
+import { SubsystemCard } from "../features/organism/SubsystemCard"
+import { useOrganismData } from "../features/organism/organism-hooks"
+import { getSubsystemTheme, organismTheme } from "../features/organism/organism-theme"
 
 function formatList(items: string[] | undefined) {
   if (!items || items.length === 0) return "None"
@@ -74,413 +14,52 @@ function formatBoolean(value: boolean | undefined) {
   return value ? "Yes" : "No"
 }
 
-function getErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error)
-}
-
-function hasCapability(capabilities: string[] | undefined, name: string) {
-  return (capabilities ?? []).some((item) => item.toLowerCase() === name.toLowerCase())
-}
-
-function getTimelineUrl(backendUrl: string) {
-  return `${backendUrl.replace(/\/$/, "")}/timeline?window_minutes=20000`
-}
-
 function formatCompact(value: number) {
   return new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(value)
 }
-
-function getLinePoints(values: number[], width: number, height: number, padding: number) {
-  if (!values.length) return ""
-  const maxY = Math.max(...values, 1)
-  const innerWidth = width - padding * 2
-  const innerHeight = height - padding * 2
-  const stepX = values.length > 1 ? innerWidth / (values.length - 1) : innerWidth / 2
-
-  return values
-    .map((value, index) => {
-      const x = padding + index * stepX
-      const y = padding + innerHeight - (value / maxY) * innerHeight
-      return `${x},${y}`
-    })
-    .join(" ")
-}
-
-function getAreaPoints(values: number[], width: number, height: number, padding: number) {
-  const line = getLinePoints(values, width, height, padding)
-  if (!line || !values.length) return ""
-  return `${padding},${height - padding} ${line} ${width - padding},${height - padding}`
-}
-
-function getStatusColor(value: boolean | undefined) {
-  return value ? "#4ade80" : "#f59e0b"
-}
-
-function getStatusText(value: boolean | undefined, positive: string, negative: string) {
-  return value ? positive : negative
-}
-
-function FeatureCard({
-  id,
-  activeId,
-  onActivate,
-  label,
-  title,
-  value,
-  summary,
-  detail,
-  nextStep,
-  accent,
-  glow,
-  gradient
-}: FeatureCardProps) {
-  const isActive = activeId === id
-
-  return (
-    <button
-      type="button"
-      onClick={() => onActivate(id)}
-      aria-pressed={isActive}
-      style={{
-        position: "relative",
-        overflow: "hidden",
-        width: "100%",
-        textAlign: "left",
-        padding: 22,
-        borderRadius: 24,
-        border: isActive ? `1px solid ${accent}` : "1px solid rgba(255,255,255,0.08)",
-        background: gradient,
-        color: "white",
-        cursor: "pointer",
-        transform: isActive ? "translateY(-6px) scale(1.01)" : "translateY(0) scale(1)",
-        boxShadow: isActive
-          ? `0 26px 70px ${glow}, 0 0 0 1px ${accent}33 inset`
-          : "0 20px 50px rgba(0,0,0,0.26)",
-        transition: "transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease",
-        animation: isActive ? "activeCardGlow 2.8s ease-in-out infinite" : "floatCard 7s ease-in-out infinite"
-      }}
-    >
-      <div
-        style={{
-          position: "absolute",
-          inset: 0,
-          background: "linear-gradient(115deg, transparent 20%, rgba(255,255,255,0.14) 50%, transparent 80%)",
-          transform: "translateX(-120%)",
-          animation: isActive ? "scanSweep 2.8s linear infinite" : "none",
-          pointerEvents: "none"
-        }}
-      />
-
-      <div
-        style={{
-          position: "absolute",
-          top: -30,
-          right: -10,
-          width: 150,
-          height: 150,
-          borderRadius: "50%",
-          background: "rgba(255,255,255,0.10)",
-          filter: "blur(10px)"
-        }}
-      />
-
-      <div style={{ position: "relative", zIndex: 1 }}>
-        <div
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 10,
-            padding: "7px 12px",
-            borderRadius: 999,
-            background: "rgba(255,255,255,0.10)",
-            marginBottom: 14,
-            fontSize: 12,
-            fontWeight: 800,
-            letterSpacing: "0.08em",
-            textTransform: "uppercase"
-          }}
-        >
-          <span
-            style={{
-              width: 10,
-              height: 10,
-              borderRadius: "50%",
-              background: accent,
-              boxShadow: `0 0 18px ${accent}`,
-              animation: "statusBlink 1.8s ease-in-out infinite"
-            }}
-          />
-          {label}
-        </div>
-
-        <div style={{ fontSize: 14, opacity: 0.78, marginBottom: 8 }}>{title}</div>
-        <div style={{ fontSize: 32, fontWeight: 900, lineHeight: 1.02, marginBottom: 10 }}>{value}</div>
-        <div style={{ lineHeight: 1.65, color: "rgba(255,255,255,0.92)", marginBottom: 14 }}>{summary}</div>
-
-        <div
-          style={{
-            borderRadius: 16,
-            padding: 14,
-            background: isActive ? "rgba(255,255,255,0.16)" : "rgba(255,255,255,0.08)",
-            border: "1px solid rgba(255,255,255,0.10)",
-            marginBottom: 12
-          }}
-        >
-          <div style={{ fontSize: 12, letterSpacing: "0.06em", textTransform: "uppercase", opacity: 0.76, marginBottom: 6 }}>
-            Operator meaning
-          </div>
-          <div style={{ lineHeight: 1.6 }}>{detail}</div>
-        </div>
-
-        <div
-          style={{
-            fontSize: 13,
-            color: "rgba(255,255,255,0.84)",
-            paddingTop: 4
-          }}
-        >
-          Next move: {nextStep}
-        </div>
-      </div>
-    </button>
-  )
-}
-
-function StatTile({ label, value, tone, detail }: StatTileProps) {
-  return (
-    <article
-      style={{
-        position: "relative",
-        overflow: "hidden",
-        borderRadius: 20,
-        padding: 18,
-        background: "linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.03))",
-        border: "1px solid rgba(255,255,255,0.08)",
-        minHeight: 142,
-        boxShadow: "0 16px 40px rgba(0,0,0,0.18)",
-        animation: "floatCard 8s ease-in-out infinite"
-      }}
-    >
-      <div
-        style={{
-          position: "absolute",
-          inset: "auto -10px -30px auto",
-          width: 120,
-          height: 120,
-          borderRadius: "50%",
-          background: `${tone}18`,
-          filter: "blur(12px)"
-        }}
-      />
-      <div
-        style={{
-          position: "absolute",
-          inset: 0,
-          background: "linear-gradient(120deg, transparent 0%, rgba(255,255,255,0.06) 48%, transparent 100%)",
-          transform: "translateX(-120%)",
-          animation: "scanSweep 5s linear infinite",
-          pointerEvents: "none"
-        }}
-      />
-      <div style={{ position: "relative", zIndex: 1 }}>
-        <div
-          style={{
-            color: tone,
-            fontSize: 12,
-            textTransform: "uppercase",
-            letterSpacing: "0.08em",
-            fontWeight: 800,
-            marginBottom: 10
-          }}
-        >
-          {label}
-        </div>
-        <div style={{ color: "white", fontSize: 30, fontWeight: 900, lineHeight: 1.05, marginBottom: 8 }}>
-          {value}
-        </div>
-        <div style={{ color: "rgba(255,255,255,0.70)", lineHeight: 1.55 }}>{detail}</div>
-      </div>
-    </article>
-  )
-}
-
-function KnowledgePanel({ badge, title, intro, bullets, accent }: KnowledgePanelProps) {
-  return (
-    <article
-      style={{
-        position: "relative",
-        overflow: "hidden",
-        borderRadius: 22,
-        padding: 22,
-        background: "linear-gradient(180deg, rgba(14,20,35,0.96), rgba(8,11,20,0.98))",
-        border: `1px solid ${accent}33`,
-        boxShadow: "0 20px 50px rgba(0,0,0,0.24)",
-        animation: "floatPanel 8.5s ease-in-out infinite"
-      }}
-    >
-      <div
-        style={{
-          position: "absolute",
-          inset: 0,
-          background: "linear-gradient(120deg, transparent 0%, rgba(255,255,255,0.05) 48%, transparent 100%)",
-          transform: "translateX(-120%)",
-          animation: "scanSweep 6.2s linear infinite"
-        }}
-      />
-
-      <div style={{ position: "relative", zIndex: 1 }}>
-        <div
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 10,
-            padding: "6px 12px",
-            borderRadius: 999,
-            background: `${accent}1A`,
-            color: accent,
-            fontSize: 12,
-            fontWeight: 800,
-            textTransform: "uppercase",
-            letterSpacing: "0.06em",
-            marginBottom: 14
-          }}
-        >
-          <span
-            style={{
-              width: 10,
-              height: 10,
-              borderRadius: "50%",
-              background: accent,
-              boxShadow: `0 0 16px ${accent}`,
-              animation: "statusBlink 2s ease-in-out infinite"
-            }}
-          />
-          {badge}
-        </div>
-
-        <h2 style={{ margin: "0 0 10px", color: "white", fontSize: 24 }}>{title}</h2>
-        <p style={{ margin: "0 0 16px", color: "rgba(255,255,255,0.74)", lineHeight: 1.7 }}>{intro}</p>
-
-        <div style={{ display: "grid", gap: 10 }}>
-          {bullets.map((bullet) => (
-            <div
-              key={bullet}
-              style={{
-                borderRadius: 14,
-                padding: "12px 14px",
-                background: "rgba(255,255,255,0.04)",
-                border: "1px solid rgba(255,255,255,0.08)",
-                color: "rgba(255,255,255,0.90)",
-                lineHeight: 1.6
-              }}
-            >
-              {bullet}
-            </div>
-          ))}
-        </div>
-      </div>
-    </article>
-  )
-}
-
 export default function OrganismPage() {
-  const backendUrl = useUiStore((state) => state.backendUrl)
-  const [activeCard, setActiveCard] = useState("learning")
+  const [activeCard, setActiveCard] = useState<import("../features/organism/organism-types").OrganismSubsystem>("learning")
+  const [showDeepTutorial, setShowDeepTutorial] = useState(false)
+  const {
+    backendUrl,
+    statusQuery,
+    isLoading,
+    isError,
+    errorMessage,
+    timelineQuery,
+    capabilities,
+    cacheSize,
+    cachedKeys,
+    eventCount,
+    toolCount,
+    systemReady,
+    ollamaReady,
+    totalTimelineEvents,
+    totalTimelineSuccess,
+    totalTimelinePartial,
+    totalTimelineFail,
+    successRate,
+    failureRate,
+    visionConfigured,
+    visionExposedToTools,
+    visionRuntimeReady,
+    timelinePoints,
+    latestBucket,
+    tickerItems,
+    pulseCards,
+    chart
+  } = useOrganismData()
 
-  const statusQuery = useQuery({
-    queryKey: ["organism-status", backendUrl],
-    queryFn: () => api.getStatus<OrganismStatusResponse>(backendUrl),
-    retry: 1,
-    refetchInterval: 30000
-  })
-
-  const toolsQuery = useQuery({
-    queryKey: ["organism-tools", backendUrl],
-    queryFn: () => api.getTools<OrganismToolsResponse>(backendUrl),
-    retry: 1,
-    refetchInterval: 60000
-  })
-
-  const toolsCacheQuery = useQuery({
-    queryKey: ["organism-tools-cache", backendUrl],
-    queryFn: () => api.getToolsCache<ToolsCacheResponse>(backendUrl),
-    retry: 1,
-    refetchInterval: 60000
-  })
-
-  const timelineQuery = useQuery<TimelineResponse, Error>({
-    queryKey: ["organism-timeline", backendUrl],
-    queryFn: async () => {
-      const response = await fetch(getTimelineUrl(backendUrl))
-      if (!response.ok) {
-        throw new Error(`Timeline request failed with ${response.status}`)
-      }
-      return (await response.json()) as TimelineResponse
-    },
-    retry: 1,
-    refetchInterval: 15000
-  })
-
-  const isLoading =
-    statusQuery.isLoading || toolsQuery.isLoading || toolsCacheQuery.isLoading || timelineQuery.isLoading
-
-  const isError =
-    statusQuery.isError || toolsQuery.isError || toolsCacheQuery.isError || timelineQuery.isError
-
-  const errorMessage =
-    statusQuery.isError
-      ? getErrorMessage(statusQuery.error)
-      : toolsQuery.isError
-        ? getErrorMessage(toolsQuery.error)
-        : toolsCacheQuery.isError
-          ? getErrorMessage(toolsCacheQuery.error)
-          : timelineQuery.isError
-            ? getErrorMessage(timelineQuery.error)
-            : null
-
-  const capabilities = toolsQuery.data?.capabilities ?? []
-  const cacheSize = toolsCacheQuery.data?.cache_size ?? 0
-  const cachedKeys = toolsCacheQuery.data?.cached_keys ?? []
-  const eventCount = statusQuery.data?.event_count ?? 0
-  const timelinePoints = timelineQuery.data?.points ?? []
-  const toolCount = toolsQuery.data?.count ?? 0
-  const systemReady = !!statusQuery.data?.ready
-  const ollamaReady = !!statusQuery.data?.ollama_reachable
-
-  const totalTimelineEvents = timelinePoints.reduce((sum, point) => sum + point.event_count, 0)
-  const totalTimelineSuccess = timelinePoints.reduce((sum, point) => sum + point.success_count, 0)
-  const totalTimelinePartial = timelinePoints.reduce((sum, point) => sum + point.partial_count, 0)
-  const totalTimelineFail = timelinePoints.reduce((sum, point) => sum + point.fail_count, 0)
-
-  const successRate = totalTimelineEvents > 0 ? Math.round((totalTimelineSuccess / totalTimelineEvents) * 100) : 0
-  const failureRate = totalTimelineEvents > 0 ? Math.round((totalTimelineFail / totalTimelineEvents) * 100) : 0
-
-  const visionExposedToTools =
-    hasCapability(capabilities, "vision") ||
-    hasCapability(capabilities, "moondream") ||
-    hasCapability(capabilities, "qwen3-vl") ||
-    hasCapability(capabilities, "qwen2.5-vl") ||
-    hasCapability(capabilities, "llava")
-
-  const visionConfigured = true
-  const visionRuntimeReady = visionConfigured && visionExposedToTools && ollamaReady
-
-  const width = 1100
-  const height = 340
-  const padding = 28
-
-  const allEventsValues = timelinePoints.map((point) => point.event_count)
-  const successValues = timelinePoints.map((point) => point.success_count)
-  const partialValues = timelinePoints.map((point) => point.partial_count)
-  const failValues = timelinePoints.map((point) => point.fail_count)
-
-  const allEventsLine = getLinePoints(allEventsValues, width, height, padding)
-  const successLine = getLinePoints(successValues, width, height, padding)
-  const partialLine = getLinePoints(partialValues, width, height, padding)
-  const failLine = getLinePoints(failValues, width, height, padding)
-  const allEventsArea = getAreaPoints(allEventsValues, width, height, padding)
-
-  const latestBucket = timelinePoints[timelinePoints.length - 1]?.bucket ?? "No timeline yet"
+  const {
+    width,
+    height,
+    padding,
+    allEventsLine,
+    successLine,
+    partialLine,
+    failLine,
+    allEventsArea
+  } = chart
 
   const activeMessage = useMemo(() => {
     switch (activeCard) {
@@ -497,50 +76,127 @@ export default function OrganismPage() {
     }
   }, [activeCard])
 
-  const tickerItems = [
-    `events ${eventCount}`,
-    `timeline ${totalTimelineEvents}`,
-    `success ${successRate}%`,
-    `fail ${failureRate}%`,
-    `tools ${toolCount}`,
-    `cache ${cacheSize}`,
-    `vision ${visionRuntimeReady ? "live" : "pending"}`,
-    `ollama ${ollamaReady ? "reachable" : "offline"}`
-  ]
+  
 
-  const pulseCards = [
-    {
-      label: "State",
-      value: getStatusText(systemReady, "Ready", "Review"),
-      color: getStatusColor(systemReady),
-      detail: systemReady ? "Organism status endpoint reports ready." : "Readiness is not fully healthy yet."
-    },
-    {
-      label: "Ollama",
-      value: getStatusText(ollamaReady, "Reachable", "Offline"),
-      color: getStatusColor(ollamaReady),
-      detail: ollamaReady ? "Model runtime is reachable from the console." : "Vision and inference paths may degrade."
-    },
-    {
-      label: "Vision",
-      value: visionRuntimeReady ? "Live" : "Pending",
-      color: visionRuntimeReady ? "#f472b6" : "#f59e0b",
-      detail: visionRuntimeReady ? "Visual model path is exposed to tools." : "Visual workflows are not fully available yet."
-    },
-    {
-      label: "Tools cache",
-      value: String(cacheSize),
-      color: "#7dd3fc",
-      detail: cachedKeys.length > 0 ? `${cachedKeys.length} cached keys exposed.` : "No cached tool keys reported yet."
+  const tutorialContent = useMemo(() => {
+    switch (activeCard) {
+      case "learning":
+        return {
+          steps: [
+            "Watch the timeline and event counters first to understand incoming system activity.",
+            "Inspect the learning card to see whether activity is turning into reusable signal and memory.",
+            "Use the tutor rail to connect raw events to adaptive behavior instead of treating them as isolated logs."
+          ],
+          operatorAction: "Compare event volume with successful outcomes and look for learning signal that grows with throughput.",
+          deepDive: [
+            "Healthy learning means new activity increases system usefulness instead of only increasing noise.",
+            "If event volume rises but interpretation stays flat, the organism may be observing without internalizing.",
+            "Use this section to teach operators what a good learning loop looks like before tuning behavior."
+          ]
+        }
+      case "healing":
+        return {
+          steps: [
+            "Check readiness and runtime reachability before trusting downstream behavior.",
+            "Look for degraded or amber states that suggest the organism is compensating rather than operating cleanly.",
+            "Use the tutor rail to decide whether to stabilize first or continue observing."
+          ],
+          operatorAction: "Treat healing as operational resilience: if the runtime is weak, fix that before judging autonomy or vision.",
+          deepDive: [
+            "A system can appear functional while quietly degrading under the surface.",
+            "Healing content should help the operator distinguish stable recovery from fragile temporary health.",
+            "Use this section to explain why resilience is part of intelligence, not separate from it."
+          ]
+        }
+      case "autonomy":
+        return {
+          steps: [
+            "Inspect the exposed tools and cache posture to understand what the organism can actually do.",
+            "Compare intent surfaces with available capabilities before assuming the organism can act.",
+            "Use the tutor rail to translate capability into real execution confidence."
+          ],
+          operatorAction: "Autonomy is real only when intent, tools, and runtime availability line up at the same time.",
+          deepDive: [
+            "An organism is not autonomous because it has goals; it is autonomous because it can execute safely and repeatedly.",
+            "Capability gaps should be visible here before they become confusing failures elsewhere.",
+            "Use this section to teach the difference between apparent agency and operational agency."
+          ]
+        }
+      case "vision":
+        return {
+          steps: [
+            "Verify that vision is configured, exposed to tools, and live in the current runtime.",
+            "Use the vision card and related metrics to tell whether image-aware workflows are truly available.",
+            "Read the tutor guidance to connect model posture with user-facing workflow readiness."
+          ],
+          operatorAction: "Treat vision as a runtime pathway, not a checkbox; it matters only when the model is reachable and usable.",
+          deepDive: [
+            "Configured vision is not the same as usable vision.",
+            "This section should teach the operator how to spot the gap between configuration, exposure, and live execution.",
+            "Use it to keep image-aware workflows explainable instead of magical."
+          ]
+        }
+      default:
+        return {
+          steps: [
+            "Use the active system summary to decide where attention belongs first.",
+            "Follow the tutor rail to connect subsystem posture with a concrete operator decision.",
+            "Use deeper notes only when you need more explanation, not by default."
+          ],
+          operatorAction: "Operator control is the mechanism that keeps the organism understandable and steerable under changing conditions.",
+          deepDive: [
+            "Good operator surfaces reduce guessing and shorten the path from signal to action.",
+            "This section should teach control, not just describe status.",
+            "Use it to make complex system behavior understandable fast."
+          ]
+        }
     }
-  ]
+  }, [activeCard])
+  const activeTheme = getSubsystemTheme(activeCard)
+
+  const tutorMeta = useMemo(() => {
+    switch (activeCard) {
+      case "learning":
+        return {
+          eyebrow: "Focused subsystem: Learning",
+          title: "Learning is shaping memory and pattern reuse.",
+          intro: "This view emphasizes how event flow becomes retained context, reusable signal, and adaptive behavior."
+        }
+      case "healing":
+        return {
+          eyebrow: "Focused subsystem: Healing",
+          title: "Healing is measuring resilience and recovery.",
+          intro: "This view emphasizes organism stability, degradation signals, and whether the system can keep serving under pressure."
+        }
+      case "autonomy":
+        return {
+          eyebrow: "Focused subsystem: Autonomy",
+          title: "Autonomy is about action through real capability.",
+          intro: "This view emphasizes tool reach, execution posture, and whether the organism can convert intent into action."
+        }
+      case "vision":
+        return {
+          eyebrow: "Focused subsystem: Vision",
+          title: "Vision is making image-aware workflows legible.",
+          intro: "This view emphasizes whether visual reasoning is configured, exposed, and usable in live runtime paths."
+        }
+      default:
+        return {
+          eyebrow: "Focused subsystem: Operator",
+          title: "Operator control keeps the organism steerable.",
+          intro: "This view emphasizes explainability, guided control, and fast intervention when posture changes."
+        }
+    }
+  }, [activeCard])
+
+  
 
   return (
     <section
       className="page"
       style={{
         minHeight: "100vh",
-        color: "#ecf3ff",
+        color: organismTheme.surface.text,
         background: `
           radial-gradient(circle at 0% 0%, rgba(14,165,233,0.18), transparent 26%),
           radial-gradient(circle at 100% 0%, rgba(139,92,246,0.20), transparent 24%),
@@ -609,6 +265,23 @@ export default function OrganismPage() {
             100% { transform: scale(0.96); opacity: 0.78; }
           }
 
+          
+          @keyframes focusBreath {
+            0% { transform: scale(1); filter: saturate(1); }
+            50% { transform: scale(1.015); filter: saturate(1.08); }
+            100% { transform: scale(1); filter: saturate(1); }
+          }
+
+          @keyframes tutorReveal {
+            0% { opacity: 0; transform: translateY(10px); }
+            100% { opacity: 1; transform: translateY(0); }
+          }
+
+          @keyframes railGlow {
+            0% { box-shadow: 0 0 0 rgba(0,0,0,0); }
+            50% { box-shadow: 0 0 30px var(--active-glow); }
+            100% { box-shadow: 0 0 0 rgba(0,0,0,0); }
+          }
           @keyframes dashFlow {
             to { stroke-dashoffset: -24; }
           }
@@ -616,6 +289,9 @@ export default function OrganismPage() {
       </style>
 
       <div style={{ maxWidth: 1440, margin: "0 auto", display: "grid", gap: 22 }}>
+<div style={{ position: "fixed", top: 8, right: 8, zIndex: 9999, background: "red", color: "white", padding: 8 }}>
+  NEW BUILD 2:27 PM
+</div>
         <header
           style={{
             position: "relative",
@@ -681,8 +357,8 @@ export default function OrganismPage() {
                     width: "fit-content",
                     padding: "8px 14px",
                     borderRadius: 999,
-                    background: "rgba(56,189,248,0.12)",
-                    color: "#7dd3fc",
+                    background: activeTheme.tint,
+                    color: activeTheme.accent,
                     fontSize: 12,
                     fontWeight: 900,
                     letterSpacing: "0.08em",
@@ -694,8 +370,8 @@ export default function OrganismPage() {
                       width: 10,
                       height: 10,
                       borderRadius: "50%",
-                      background: "#7dd3fc",
-                      boxShadow: "0 0 18px #7dd3fc",
+                      background: activeTheme.accent,
+                      boxShadow: `0 0 18px ${activeTheme.accent}`,
                       animation: "statusBlink 1.8s ease-in-out infinite"
                     }}
                   />
@@ -713,7 +389,7 @@ export default function OrganismPage() {
                       maxWidth: 860,
                       fontSize: 17,
                       lineHeight: 1.78,
-                      color: "rgba(236,243,255,0.82)"
+                      color: organismTheme.surface.textSoft
                     }}
                   >
                     This page should feel like a living system surface, not a static status page. It shows readiness,
@@ -1018,7 +694,7 @@ export default function OrganismPage() {
                     border: "1px solid rgba(125,211,252,0.18)"
                   }}
                 >
-                  <div style={{ color: "#7dd3fc", fontSize: 12, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 }}>
+                  <div style={{ color: activeTheme.accent, fontSize: 12, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 }}>
                     Active backend
                   </div>
                   <div style={{ color: "white", fontSize: 15, lineHeight: 1.6, wordBreak: "break-word" }}>{backendUrl}</div>
@@ -1094,7 +770,7 @@ export default function OrganismPage() {
                 gap: 18
               }}
             >
-              <FeatureCard
+              <SubsystemCard
                 id="learning"
                 activeId={activeCard}
                 onActivate={setActiveCard}
@@ -1104,27 +780,21 @@ export default function OrganismPage() {
                 summary="The organism watches event flow and turns it into traces, memory, and adaptive signal."
                 detail={`Observed events: ${eventCount}. Timeline events: ${totalTimelineEvents}. Cache size: ${cacheSize}.`}
                 nextStep="Watch whether throughput rises while failures stay controlled."
-                gradient="linear-gradient(135deg, #0ea5e9 0%, #2563eb 100%)"
-                glow="rgba(37,99,235,0.35)"
-                accent="#7dd3fc"
               />
 
-              <FeatureCard
+              <SubsystemCard
                 id="healing"
                 activeId={activeCard}
                 onActivate={setActiveCard}
                 label="Healing"
                 title="Resilience + runtime health"
-                value={getStatusText(systemReady, "Healthy", "Review")}
+                value={systemReady ? "Healthy" : "Review"}
                 summary="This shows whether the system is stable enough to trust the organism under active load."
                 detail={`Ready: ${formatBoolean(statusQuery.data?.ready)}. Ollama reachable: ${formatBoolean(statusQuery.data?.ollama_reachable)}. Environment: ${statusQuery.data?.environment ?? "Unknown"}.`}
                 nextStep="Fix health before trusting weak or partial organism behavior."
-                gradient="linear-gradient(135deg, #22c55e 0%, #15803d 100%)"
-                glow="rgba(34,197,94,0.30)"
-                accent="#86efac"
               />
 
-              <FeatureCard
+              <SubsystemCard
                 id="autonomy"
                 activeId={activeCard}
                 onActivate={setActiveCard}
@@ -1134,12 +804,9 @@ export default function OrganismPage() {
                 summary="Autonomy measures whether the organism can act through tool execution rather than only observe."
                 detail={`Tool count: ${toolCount}. Capabilities: ${formatList(capabilities)}.`}
                 nextStep="Low tool reach means the organism may understand but still fail to help."
-                gradient="linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%)"
-                glow="rgba(139,92,246,0.32)"
-                accent="#c4b5fd"
               />
 
-              <FeatureCard
+              <SubsystemCard
                 id="vision"
                 activeId={activeCard}
                 onActivate={setActiveCard}
@@ -1149,12 +816,9 @@ export default function OrganismPage() {
                 summary="Vision determines whether screenshots, images, and visual state inspection are genuinely available."
                 detail={`Vision configured: ${formatBoolean(visionConfigured)}. Vision exposed: ${formatBoolean(visionExposedToTools)}. Primary model: ${statusQuery.data?.primary_vision_model ?? "Unknown"}.`}
                 nextStep="If pending, visual tasks will be weaker even if the core organism is up."
-                gradient="linear-gradient(135deg, #ec4899 0%, #ef4444 100%)"
-                glow="rgba(236,72,153,0.30)"
-                accent="#f9a8d4"
               />
 
-              <FeatureCard
+              <SubsystemCard
                 id="operator"
                 activeId={activeCard}
                 onActivate={setActiveCard}
@@ -1164,9 +828,6 @@ export default function OrganismPage() {
                 summary="The organism remains useful only if you can inspect it, understand it, and steer it early."
                 detail={`Backend URL: ${backendUrl}. Capability visibility: ${formatBoolean(toolCount > 0)}. Events path: ${statusQuery.data?.events_path ?? "Unknown"}.`}
                 nextStep="Use this page as an early-warning control layer, not a passive dashboard."
-                gradient="linear-gradient(135deg, #f97316 0%, #ef4444 100%)"
-                glow="rgba(249,115,22,0.28)"
-                accent="#fdba74"
               />
             </div>
           </article>
@@ -1226,7 +887,7 @@ export default function OrganismPage() {
                 }}
               />
               <div style={{ position: "relative", zIndex: 1 }}>
-                <div style={{ color: "#7dd3fc", fontSize: 12, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>
+                <div style={{ color: activeTheme.accent, fontSize: 12, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>
                   Active interpretation
                 </div>
                 <div style={{ color: "white", fontSize: 20, fontWeight: 800, marginBottom: 8 }}>{activeCard}</div>
@@ -1306,7 +967,7 @@ export default function OrganismPage() {
                   padding: "6px 12px",
                   borderRadius: 999,
                   background: "rgba(125,211,252,0.12)",
-                  color: "#7dd3fc",
+                  color: activeTheme.accent,
                   fontSize: 12,
                   fontWeight: 800,
                   textTransform: "uppercase",
@@ -1331,7 +992,7 @@ export default function OrganismPage() {
               }}
             >
               {[
-                { label: "Latest bucket", value: latestBucket, color: "#7dd3fc" },
+                { label: "Latest bucket", value: latestBucket, color: activeTheme.accent },
                 { label: "Success", value: String(totalTimelineSuccess), color: "#4ade80" },
                 { label: "Partial", value: String(totalTimelinePartial), color: "#fbbf24" },
                 { label: "Fail", value: String(totalTimelineFail), color: "#fb7185" }
@@ -1375,7 +1036,7 @@ export default function OrganismPage() {
                 border: "1px solid rgba(251,113,133,0.25)"
               }}
             >
-              {getErrorMessage(timelineQuery.error)}
+              {errorMessage}
             </div>
           ) : timelinePoints.length === 0 ? (
             <div
@@ -1501,63 +1162,281 @@ export default function OrganismPage() {
         <section
           style={{
             display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
-            gap: 18
+            gridTemplateColumns: "minmax(0, 1.35fr) minmax(320px, 0.95fr)",
+            gap: 18,
+            alignItems: "start",
+            padding: 18,
+            borderRadius: 28,
+            background: `linear-gradient(180deg, ${activeTheme.tint}, rgba(255,255,255,0.02))`,
+            border: `1px solid ${activeTheme.tint}`,
+            boxShadow: `0 24px 60px ${activeTheme.glow}`
           }}
         >
-          <KnowledgePanel
-            badge="Mental model"
-            title="What an organism is"
-            accent="#7dd3fc"
-            intro="In this system, an organism converts raw activity into a more adaptive and explainable behavior loop."
-            bullets={[
-              "It watches events instead of letting them disappear into logs.",
-              "It remembers patterns instead of starting fresh every time.",
-              "It can act through tools when action is available.",
-              "It stays visible to a human operator rather than becoming opaque."
-            ]}
-          />
+          <div
+            style={{
+              display: "grid",
+              gap: 18
+            }}
+          >
+            <div
+              style={{
+                display: "grid",
+                gap: 12,
+                padding: 18,
+                borderRadius: 24,
+                background: "linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.03))",
+                border: `1px solid ${activeTheme.tint}`,
+                boxShadow: `0 24px 60px ${activeTheme.glow}`,
+                animation: "tutorReveal 260ms cubic-bezier(0.16, 1, 0.3, 1)"
+              }}
+            >
+              <div
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 10,
+                  width: "fit-content",
+                  padding: "7px 12px",
+                  borderRadius: 999,
+                  background: activeTheme.tint,
+                  color: activeTheme.accent,
+                  fontSize: 12,
+                  fontWeight: 900,
+                  letterSpacing: "0.08em",
+                  textTransform: "uppercase"
+                }}
+              >
+                <span
+                  style={{
+                    width: 10,
+                    height: 10,
+                    borderRadius: "50%",
+                    background: activeTheme.accent,
+                    boxShadow: `0 0 16px ${activeTheme.accent}`,
+                    animation: "statusBlink 1.8s ease-in-out infinite"
+                  }}
+                />
+                {tutorMeta.eyebrow}
+              </div>
 
-          <KnowledgePanel
-            badge="Usefulness"
-            title="What it is doing for you"
-            accent="#86efac"
-            intro="The organism improves observability, actionability, and adaptability at the same time."
-            bullets={[
-              "Learning from event flow and timeline behavior.",
-              "Checking whether the runtime is healthy enough to keep serving.",
-              "Using tools and capabilities when those paths are exposed.",
-              "Preparing image-aware intelligence when vision support is live."
-            ]}
-          />
+              <h2 style={{ margin: 0, color: "white", fontSize: 28, lineHeight: 1.05 }}>
+                {tutorMeta.title}
+              </h2>
 
-          <KnowledgePanel
-            badge="Reading guide"
-            title="How to read this page"
-            accent="#fbbf24"
-            intro="This page is designed to make organism posture obvious without decoding raw backend jargon."
-            bullets={[
-              "Start with the animated metric band to read immediate posture.",
-              "Use the anatomy cards to inspect each organism role.",
-              "Use the timeline chart to spot growth, stability, and failure pressure.",
-              "Treat amber and pink as attention surfaces, not decoration."
-            ]}
-          />
+              <p style={{ margin: 0, color: "rgba(236,243,255,0.78)", lineHeight: 1.7 }}>
+                {tutorMeta.intro}
+              </p>
 
-          <KnowledgePanel
-            badge="Why it matters"
-            title="Why this matters"
-            accent="#f9a8d4"
-            intro="A strong organism surface is part of the control system. It helps you steer, debug, and evolve faster."
-            bullets={[
-              "It pushes the platform toward adaptive behavior instead of static status checking.",
-              "It gives you earlier warning for regressions and runtime weakness.",
-              "It makes tool reach and vision posture obvious instead of hidden.",
-              "It creates a stronger foundation for self-learning and guided autonomy."
-            ]}
-          />
+              <div style={{ color: activeTheme.accent, fontSize: 12, fontWeight: 900, letterSpacing: "0.08em", textTransform: "uppercase" }}>
+                Guided instructions
+              </div>
+
+              <div style={{ display: "grid", gap: 10 }}>
+                {tutorialContent.steps.map((step, index) => (
+                  <div
+                    key={step}
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "32px minmax(0, 1fr)",
+                      gap: 12,
+                      alignItems: "start",
+                      padding: 12,
+                      borderRadius: 16,
+                      background: "rgba(255,255,255,0.03)",
+                      border: "1px solid rgba(255,255,255,0.06)"
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: 32,
+                        height: 32,
+                        borderRadius: "50%",
+                        display: "grid",
+                        placeItems: "center",
+                        background: activeTheme.tint,
+                        color: activeTheme.accent,
+                        fontWeight: 900
+                      }}
+                    >
+                      {index + 1}
+                    </div>
+
+                    <div style={{ color: "rgba(236,243,255,0.92)", lineHeight: 1.65 }}>
+                      {step}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div
+                style={{
+                  padding: 14,
+                  borderRadius: 16,
+                  background: activeTheme.tint,
+                  border: `1px solid ${activeTheme.tint}`,
+                  color: "white",
+                  lineHeight: 1.65
+                }}
+              >
+                <span style={{ color: activeTheme.accent, fontWeight: 900 }}>Operator action:</span> {tutorialContent.operatorAction}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowDeepTutorial((value) => !value)}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: "fit-content",
+                  padding: "10px 14px",
+                  borderRadius: 999,
+                  border: `1px solid ${activeTheme.tint}`,
+                  background: "rgba(255,255,255,0.04)",
+                  color: "white",
+                  fontWeight: 800,
+                  cursor: "pointer"
+                }}
+              >
+                {showDeepTutorial ? "Hide deeper guidance" : "Show deeper guidance"}
+              </button>
+
+              {showDeepTutorial ? (
+                <div
+                  style={{
+                    display: "grid",
+                    gap: 10,
+                    padding: 14,
+                    borderRadius: 18,
+                    background: "rgba(255,255,255,0.03)",
+                    border: "1px solid rgba(255,255,255,0.08)",
+                    animation: "tutorReveal 220ms cubic-bezier(0.16, 1, 0.3, 1)"
+                  }}
+                >
+                  {tutorialContent.deepDive.map((item) => (
+                    <div key={item} style={{ color: "rgba(236,243,255,0.82)", lineHeight: 1.65 }}>
+                      {item}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+
+            <div
+              style={{
+                animation: "tutorReveal 320ms cubic-bezier(0.16, 1, 0.3, 1)",
+                borderRadius: 24,
+                boxShadow: `0 0 0 1px ${activeTheme.tint} inset, 0 24px 60px ${activeTheme.glow}`
+              }}
+            >
+              <KnowledgePanel
+                badge="Mental model"
+                accent={activeCard === "learning" ? activeTheme.accent : "#7dd3fc"}
+                title="What an organism is"
+                intro="In this system, an organism converts raw activity into a more adaptive and explainable behavior loop."
+                bullets={[
+                  "It watches events instead of letting them disappear into logs.",
+                  "It remembers patterns instead of starting fresh every time.",
+                  "It can act through tools when action is available.",
+                  "It stays visible to a human operator rather than becoming opaque."
+                ]}
+              />
+            </div>
+
+            <div
+              style={{
+                animation: "tutorReveal 420ms cubic-bezier(0.16, 1, 0.3, 1)"
+              }}
+            >
+              <KnowledgePanel
+                badge="Why it matters"
+                accent={activeCard === "vision" ? activeTheme.accent : "#f472b6"}
+                title="Why this matters"
+                intro="A strong organism surface is part of the control system. It helps you steer, debug, and evolve faster."
+                bullets={[
+                  "It pushes the platform toward adaptive behavior instead of static status checking.",
+                  "It gives you earlier warning for regressions and runtime weakness.",
+                  "It makes tool reach and vision posture obvious instead of hidden.",
+                  "It creates a stronger foundation for self-learning and guided autonomy."
+                ]}
+              />
+            </div>
+          </div>
+
+          <div
+            style={{
+              display: "grid",
+              gap: 18,
+              opacity: 0.94
+            }}
+          >
+            <div
+              style={{
+                animation: "tutorReveal 360ms cubic-bezier(0.16, 1, 0.3, 1)"
+              }}
+            >
+              <KnowledgePanel
+                badge="Usefulness"
+                accent={activeCard === "healing" ? activeTheme.accent : "#4ade80"}
+                title="What it is doing for you"
+                intro="The organism improves observability, actionability, and adaptability at the same time."
+                bullets={[
+                  "Learning from event flow and timeline behavior.",
+                  "Checking whether the runtime is healthy enough to keep serving.",
+                  "Using tools and capabilities when those paths are exposed.",
+                  "Preparing image-aware intelligence when vision support is live."
+                ]}
+              />
+            </div>
+
+            <div
+              style={{
+                animation: "tutorReveal 480ms cubic-bezier(0.16, 1, 0.3, 1)"
+              }}
+            >
+              <KnowledgePanel
+                badge="Reading guide"
+                accent={activeCard === "autonomy" ? activeTheme.accent : "#a78bfa"}
+                title="How to read this page"
+                intro="This page is designed to make organism posture obvious without decoding raw backend jargon."
+                bullets={[
+                  "Start with the animated metric band to read immediate posture.",
+                  "Use the anatomy cards to inspect each organism role.",
+                  "Use the timeline chart to spot growth, stability, and failure pressure.",
+                  "Treat amber and pink as attention surfaces, not decoration."
+                ]}
+              />
+            </div>
+          </div>
         </section>
       </div>
     </section>
   )
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
