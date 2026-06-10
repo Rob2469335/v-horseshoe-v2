@@ -1,0 +1,287 @@
+import type { Dispatch, SetStateAction } from "react"
+import type { OrganismSubsystem } from "../../features/organism/organism-types"
+import { KnowledgePanel } from "../../features/organism/KnowledgePanel"
+
+type ActiveTheme = {
+  accent: string
+  tint: string
+  glow: string
+}
+
+type TutorMeta = {
+  eyebrow: string
+  title: string
+  intro: string
+}
+
+type TutorialContent = {
+  steps: string[]
+  operatorAction: string
+  deepDive: string[]
+}
+
+type OrganismTutorSectionProps = {
+  activeCard: OrganismSubsystem
+  activeTheme: ActiveTheme
+  tutorMeta: TutorMeta
+  tutorialContent: TutorialContent
+  showDeepTutorial: boolean
+  setShowDeepTutorial: Dispatch<SetStateAction<boolean>>
+}
+
+export function OrganismTutorSection({
+  activeCard,
+  activeTheme,
+  tutorMeta,
+  tutorialContent,
+  showDeepTutorial,
+  setShowDeepTutorial
+}: OrganismTutorSectionProps) {
+  return (
+    <section
+      style={{
+        display: "grid",
+        gridTemplateColumns: "minmax(0, 1.35fr) minmax(320px, 0.95fr)",
+        gap: 18,
+        alignItems: "start",
+        padding: 18,
+        borderRadius: 28,
+        background: `linear-gradient(180deg, ${activeTheme.tint}, rgba(255,255,255,0.02))`,
+        border: `1px solid ${activeTheme.tint}`,
+        boxShadow: `0 24px 60px ${activeTheme.glow}`
+      }}
+    >
+      <div style={{ display: "grid", gap: 18 }}>
+        <div
+          key={activeCard}
+          style={{
+            display: "grid",
+            gap: 12,
+            padding: 18,
+            borderRadius: 24,
+            background: "linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.03))",
+            border: `1px solid ${activeTheme.tint}`,
+            boxShadow: `0 24px 60px ${activeTheme.glow}`,
+            animation: "tutorReveal 260ms cubic-bezier(0.16, 1, 0.3, 1)"
+          }}
+        >
+          <div
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 10,
+              width: "fit-content",
+              padding: "7px 12px",
+              borderRadius: 999,
+              background: activeTheme.tint,
+              color: activeTheme.accent,
+              fontSize: 12,
+              fontWeight: 900,
+              letterSpacing: "0.08em",
+              textTransform: "uppercase"
+            }}
+          >
+            <span
+              style={{
+                width: 10,
+                height: 10,
+                borderRadius: "50%",
+                background: activeTheme.accent,
+                boxShadow: `0 0 16px ${activeTheme.accent}`,
+                animation: "statusBlink 1.8s ease-in-out infinite"
+              }}
+            />
+            {tutorMeta.eyebrow}
+          </div>
+
+          <h2 style={{ margin: 0, color: "white", fontSize: 28, lineHeight: 1.05 }}>
+            {tutorMeta.title}
+          </h2>
+
+          <p style={{ margin: 0, color: "rgba(236,243,255,0.78)", lineHeight: 1.7 }}>
+            {tutorMeta.intro}
+          </p>
+
+          <div
+            style={{
+              color: activeTheme.accent,
+              fontSize: 12,
+              fontWeight: 900,
+              letterSpacing: "0.08em",
+              textTransform: "uppercase"
+            }}
+          >
+            Guided instructions
+          </div>
+
+          <div style={{ display: "grid", gap: 10 }}>
+            {tutorialContent.steps.map((step, index) => (
+              <div
+                key={index}
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "32px minmax(0, 1fr)",
+                  gap: 12,
+                  alignItems: "start",
+                  padding: 12,
+                  borderRadius: 16,
+                  background: "rgba(255,255,255,0.03)",
+                  border: "1px solid rgba(255,255,255,0.06)"
+                }}
+              >
+                <div
+                  style={{
+                    width: 32,
+                    height: 32,
+                    borderRadius: "50%",
+                    display: "grid",
+                    placeItems: "center",
+                    background: activeTheme.tint,
+                    color: activeTheme.accent,
+                    fontWeight: 900
+                  }}
+                >
+                  {index + 1}
+                </div>
+                <div style={{ color: "rgba(236,243,255,0.92)", lineHeight: 1.65 }}>{step}</div>
+              </div>
+            ))}
+          </div>
+
+          <div
+            style={{
+              padding: 14,
+              borderRadius: 16,
+              background: activeTheme.tint,
+              border: `1px solid ${activeTheme.tint}`,
+              color: "white",
+              lineHeight: 1.65
+            }}
+          >
+            <span style={{ color: activeTheme.accent, fontWeight: 900 }}>Operator action: </span>
+            {tutorialContent.operatorAction}
+          </div>
+
+          <button
+            type="button"
+            aria-expanded={showDeepTutorial}
+            onClick={() => setShowDeepTutorial((v) => !v)}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: "fit-content",
+              padding: "10px 14px",
+              borderRadius: 999,
+              border: `1px solid ${activeTheme.tint}`,
+              background: "rgba(255,255,255,0.04)",
+              color: "white",
+              fontWeight: 800,
+              cursor: "pointer"
+            }}
+          >
+            {showDeepTutorial ? "Hide deeper guidance" : "Show deeper guidance"}
+          </button>
+
+          {showDeepTutorial && (
+            <div
+              style={{
+                display: "grid",
+                gap: 10,
+                padding: 14,
+                borderRadius: 18,
+                background: "rgba(255,255,255,0.03)",
+                border: "1px solid rgba(255,255,255,0.08)",
+                animation: "tutorReveal 220ms cubic-bezier(0.16, 1, 0.3, 1)"
+              }}
+            >
+              {tutorialContent.deepDive.map((item, i) => (
+                <div key={i} style={{ color: "rgba(236,243,255,0.82)", lineHeight: 1.65 }}>
+                  {item}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div
+          key={`mental-${activeCard}`}
+          style={{
+            animation: "tutorReveal 320ms cubic-bezier(0.16, 1, 0.3, 1)",
+            borderRadius: 24,
+            boxShadow: `0 0 0 1px ${activeTheme.tint} inset, 0 24px 60px ${activeTheme.glow}`
+          }}
+        >
+          <KnowledgePanel
+            badge="Mental model"
+            accent={activeCard === "learning" ? activeTheme.accent : "#7dd3fc"}
+            title="What an organism is"
+            intro="In this system, an organism converts raw activity into a more adaptive and explainable behavior loop."
+            bullets={[
+              "It watches events instead of letting them disappear into logs.",
+              "It remembers patterns instead of starting fresh every time.",
+              "It can act through tools when action is available.",
+              "It stays visible to a human operator rather than becoming opaque."
+            ]}
+          />
+        </div>
+
+        <div
+          key={`why-${activeCard}`}
+          style={{ animation: "tutorReveal 420ms cubic-bezier(0.16, 1, 0.3, 1)" }}
+        >
+          <KnowledgePanel
+            badge="Why it matters"
+            accent={activeCard === "vision" ? activeTheme.accent : "#f472b6"}
+            title="Why this matters"
+            intro="A strong organism surface is part of the control system. It helps you steer, debug, and evolve faster."
+            bullets={[
+              "It pushes the platform toward adaptive behavior instead of static status checking.",
+              "It gives you earlier warning for regressions and runtime weakness.",
+              "It makes tool reach and vision posture obvious instead of hidden.",
+              "It creates a stronger foundation for self-learning and guided autonomy."
+            ]}
+          />
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gap: 18, opacity: 0.94 }}>
+        <div
+          key={`useful-${activeCard}`}
+          style={{ animation: "tutorReveal 360ms cubic-bezier(0.16, 1, 0.3, 1)" }}
+        >
+          <KnowledgePanel
+            badge="Usefulness"
+            accent={activeCard === "healing" ? activeTheme.accent : "#4ade80"}
+            title="What it is doing for you"
+            intro="The organism improves observability, actionability, and adaptability at the same time."
+            bullets={[
+              "Learning from event flow and timeline behavior.",
+              "Checking whether the runtime is healthy enough to keep serving.",
+              "Using tools and capabilities when those paths are exposed.",
+              "Preparing image-aware intelligence when vision support is live."
+            ]}
+          />
+        </div>
+
+        <div
+          key={`guide-${activeCard}`}
+          style={{ animation: "tutorReveal 480ms cubic-bezier(0.16, 1, 0.3, 1)" }}
+        >
+          <KnowledgePanel
+            badge="Reading guide"
+            accent={activeCard === "autonomy" ? activeTheme.accent : "#a78bfa"}
+            title="How to read this page"
+            intro="This page is designed to make organism posture obvious without decoding raw backend jargon."
+            bullets={[
+              "Start with the animated metric band to read immediate posture.",
+              "Use the anatomy cards to inspect each organism role.",
+              "Use the timeline chart to spot growth, stability, and failure pressure.",
+              "Treat amber and pink as attention surfaces, not decoration."
+            ]}
+          />
+        </div>
+      </div>
+    </section>
+  )
+}

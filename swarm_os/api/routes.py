@@ -45,16 +45,12 @@ def get_orchestrator(request: Request) -> Orchestrator:
     return request.app.state.orchestrator
 
 
-_rt = None
+def get_runtime(request: Request):
+    return request.app.state.runtime
 
 
-def get_runtime():
-    global _rt
-    if _rt is None:
-        from swarm_os.agent_runtime import AgentRuntime
-        _rt = AgentRuntime()
-    return _rt
-
+def runtime_dep(request: Request):
+    return get_runtime(request)
 
 def _build_tool_request(capability: str, payload: dict):
     from swarm_os.capabilities.models import (
@@ -173,7 +169,7 @@ def traces(limit: int = 50, orch: Orchestrator = Depends(get_orchestrator)):
 
 
 @router.get("/tools", response_model=ToolListResponse)
-def list_tools(runtime=Depends(get_runtime)):
+def list_tools(runtime=Depends(runtime_dep)):
     s = get_settings()
     tools = runtime.list_tools()
     vision = _get_vision_meta(s.ollama_base_url)
@@ -199,7 +195,16 @@ def list_tools(runtime=Depends(get_runtime)):
 
 
 @router.get("/tools/cache", response_model=CacheStatusResponse)
-def cache_status(runtime=Depends(get_runtime)):
+def cache_status(request: Request, runtime=Depends(runtime_dep)):
+    cache = getattr(request.app.state, "cache", None)
+
+    if cache is not None and hasattr(cache, "_items"):
+        cached_keys = list(cache._items.keys())
+        return CacheStatusResponse(
+            cache_size=len(cached_keys),
+            cached_keys=cached_keys,
+        )
+
     return CacheStatusResponse(
         cache_size=runtime.get_tool_cache_size(),
         cached_keys=[],
@@ -207,7 +212,7 @@ def cache_status(runtime=Depends(get_runtime)):
 
 
 @router.post("/tools/execute", response_model=ToolExecuteResponse)
-async def execute_tool(payload: ToolExecuteRequest, runtime=Depends(get_runtime)):
+async def execute_tool(payload: ToolExecuteRequest, runtime=Depends(runtime_dep)):
     try:
         cap, req = _build_tool_request(payload.capability, payload.payload)
         result = await runtime.call_tool(cap, req, cache_key=payload.cache_key)
@@ -327,5 +332,9 @@ def timeline(window_minutes: int = 60):
         for bucket, values in sorted(buckets.items(), key=lambda item: item[0])
     ]
     return TimelineResponse(window_minutes=window_minutes, points=points)
+
+
+
+
 
 

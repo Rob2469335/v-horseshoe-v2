@@ -1,197 +1,113 @@
-.page {
-  display: flex;
-  flex-direction: column;
-  gap: 24px;
-  min-width: 0;
+/* Phase 7 refinement bridge */
+html, body {
+  overscroll-behavior-y: none;
 }
 
-.ops-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 20px;
-  align-items: start;
-  min-width: 0;
+button, input, select, textarea, a {
+  transition:
+    border-color 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    background 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    color 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-.ops-panel {
-  min-width: 0;
-  background: rgba(10, 18, 30, 0.72);
-  border: 1px solid rgba(120, 170, 255, 0.14);
-  border-radius: 18px;
-  padding: 18px;
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
+pre, code {
+  font-variant-numeric: tabular-nums;
 }
 
-.ops-panel h2 {
-  margin: 0 0 14px;
-  font-size: 14px;
-  line-height: 1.3;
-  word-break: break-word;
-  overflow-wrap: anywhere;
+textarea::placeholder,
+input::placeholder {
+  color: var(--text-muted);
 }
 
-.ops-panel pre {
-  margin: 0;
-  min-width: 0;
+/* ------------------------------
+   Phase 7 app polish
+------------------------------ */
+
+::selection {
+  background: rgba(125, 211, 252, 0.22);
+  color: white;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.18) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.16);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(255,255,255,0.24);
+  background-clip: padding-box;
+}
+
+button:active,
+[role="button"]:active,
+a:active {
+  transform: translateY(1px);
+}
+
+img,
+svg,
+canvas {
   max-width: 100%;
-  height: 320px;
-  overflow: auto;
-  white-space: pre-wrap;
-  word-break: break-word;
-  overflow-wrap: anywhere;
-  padding: 14px;
-  border-radius: 14px;
-  background: rgba(2, 8, 20, 0.88);
-  font-size: 12px;
-  line-height: 1.45;
 }
 
-.agent-layout {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-  gap: 20px;
-  min-width: 0;
-}
+@media (max-width: 640px) {
+  body {
+    overscroll-behavior-y: contain;
+  }
 
-.agent-panel {
-  min-width: 0;
-  background: rgba(10, 18, 30, 0.72);
-  border: 1px solid rgba(120, 170, 255, 0.14);
-  border-radius: 18px;
-  padding: 18px;
-}
-
-.agent-textarea {
-  width: 100%;
-  min-height: 220px;
-  margin-top: 12px;
-  margin-bottom: 14px;
-  padding: 14px;
-  border: 1px solid rgba(120, 170, 255, 0.18);
-  border-radius: 14px;
-  background: rgba(2, 8, 20, 0.88);
-  color: inherit;
-  resize: vertical;
-}
-
-.agent-send-button {
-  padding: 10px 16px;
-  border: 1px solid rgba(120, 170, 255, 0.2);
-  border-radius: 12px;
-  background: rgba(40, 120, 255, 0.16);
-  color: inherit;
-}
-
-.agent-response {
-  margin: 12px 0 0;
-  height: 320px;
-  overflow: auto;
-  white-space: pre-wrap;
-  word-break: break-word;
-  overflow-wrap: anywhere;
-  padding: 14px;
-  border-radius: 14px;
-  background: rgba(2, 8, 20, 0.88);
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-@media (max-width: 900px) {
-  .ops-grid,
-  .agent-layout {
-    grid-template-columns: 1fr;
+  .page {
+    padding-left: max(12px, env(safe-area-inset-left));
+    padding-right: max(12px, env(safe-area-inset-right));
   }
 }
-/* === OPS LAYOUT OVERRIDE === */
-.page {
-  min-width: 0;
-  overflow-x: hidden;
+/* ------------------------------
+   Phase 7 polish pass A bridge
+------------------------------ */
+
+html {
+  background: #04080f;
 }
 
-.ops-grid {
-  display: grid !important;
-  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
-  gap: 20px !important;
-  align-items: start !important;
-  width: 100% !important;
-  min-width: 0 !important;
+body {
+  background:
+    radial-gradient(circle at top left, rgba(0,209,255,0.07), transparent 24%),
+    radial-gradient(circle at bottom right, rgba(217,70,239,0.06), transparent 24%),
+    #04080f;
 }
 
-.ops-panel {
-  min-width: 0 !important;
-  width: 100% !important;
-  overflow: hidden !important;
+::selection {
+  background: color-mix(in srgb, var(--page-accent, #7dd3fc) 34%, transparent);
+  color: #ffffff;
 }
 
-.ops-panel h2 {
-  font-size: 13px !important;
-  line-height: 1.25 !important;
-  white-space: normal !important;
-  word-break: break-word !important;
-  overflow-wrap: anywhere !important;
+pre,
+code {
+  text-shadow: none;
 }
 
-.ops-panel pre {
-  height: 300px !important;
-  max-width: 100% !important;
-  overflow: auto !important;
-  white-space: pre-wrap !important;
-  word-break: break-word !important;
-  overflow-wrap: anywhere !important;
-}
-
-@media (max-width: 1200px) {
-  .ops-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-  }
-}
-
-@media (max-width: 760px) {
-  .ops-grid {
-    grid-template-columns: 1fr !important;
-  }
-}
-html, body, #root {
-  width: 100%;
-  max-width: 100%;
-  overflow-x: hidden;
-}
-
-main,
-.app-shell,
-.app-layout,
-.layout,
-.content,
-.page-shell,
-.page-content,
-.route-container {
-  min-width: 0 !important;
-  max-width: 100% !important;
-  overflow-x: hidden !important;
-}
-
-.page {
-  width: 100% !important;
-  max-width: 100% !important;
-  min-width: 0 !important;
-  overflow-x: hidden !important;
-}
-
-.ops-grid {
-  width: 100% !important;
-  max-width: 100% !important;
-  min-width: 0 !important;
-  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-}
-
-.ops-panel,
-.ops-panel pre {
-  min-width: 0 !important;
-  max-width: 100% !important;
-}
-
-@media (max-width: 1200px) {
-  .ops-grid {
-    grid-template-columns: 1fr !important;
+@media (max-width: 640px) {
+  body {
+    background:
+      radial-gradient(circle at top left, rgba(0,209,255,0.05), transparent 22%),
+      radial-gradient(circle at bottom right, rgba(217,70,239,0.04), transparent 22%),
+      #04080f;
   }
 }

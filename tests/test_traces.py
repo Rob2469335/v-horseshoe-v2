@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 from fastapi.testclient import TestClient
 
-from swarm_os.app.main import app
+from swarm_os.app.main import create_app
 
 
 class StubOrchestrator:
@@ -45,17 +43,19 @@ class StubOrchestrator:
 
 
 def test_traces_endpoint_returns_recent_trace_items():
-    original = getattr(app.state, "orchestrator", None)
-    app.state.orchestrator = StubOrchestrator()
+    app = create_app()
 
-    try:
-        client = TestClient(app)
-        response = client.get("/traces?limit=10")
-    finally:
-        if original is None:
-            delattr(app.state, "orchestrator")
-        else:
-            app.state.orchestrator = original
+    with TestClient(app) as client:
+        original = getattr(app.state, "orchestrator", None)
+        app.state.orchestrator = StubOrchestrator()
+
+        try:
+            response = client.get("/traces?limit=10")
+        finally:
+            if original is None:
+                delattr(app.state, "orchestrator")
+            else:
+                app.state.orchestrator = original
 
     assert response.status_code == 200
     payload = response.json()
@@ -63,4 +63,3 @@ def test_traces_endpoint_returns_recent_trace_items():
     assert len(payload["traces"]) == 2
     assert payload["traces"][1]["phase"] == "generator"
     assert payload["traces"][1]["status"] == "completed"
-

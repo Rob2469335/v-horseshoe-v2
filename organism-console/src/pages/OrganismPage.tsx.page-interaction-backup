@@ -1,0 +1,335 @@
+import { useEffect, useMemo, useState } from "react"
+import { OrganismHero } from "../components/organism/OrganismHero"
+import { OrganismAnatomySection } from "../components/organism/OrganismAnatomySection"
+import { OrganismTimelineSection } from "../components/organism/OrganismTimelineSection"
+import { OrganismTutorSection } from "../components/organism/OrganismTutorSection"
+import { useOrganismData } from "../features/organism/organism-hooks"
+import { getSubsystemTheme, organismTheme } from "../features/organism/organism-theme"
+import type { OrganismSubsystem } from "../features/organism/organism-types"
+
+function formatCompact(value: number) {
+  return new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(value)
+}
+
+export default function OrganismPage() {
+  const [activeCard, setActiveCard] = useState<OrganismSubsystem>("learning")
+  const [showDeepTutorial, setShowDeepTutorial] = useState(false)
+
+  useEffect(() => {
+    setShowDeepTutorial(false)
+  }, [activeCard])
+
+  const {
+    backendUrl,
+    statusQuery,
+    isLoading,
+    isError,
+    errorMessage,
+    capabilities,
+    cacheSize,
+    cachedKeys,
+    eventCount,
+    toolCount,
+    systemReady,
+    totalTimelineEvents,
+    totalTimelineSuccess,
+    totalTimelinePartial,
+    totalTimelineFail,
+    successRate,
+    failureRate,
+    visionConfigured,
+    visionExposedToTools,
+    visionRuntimeReady,
+    timelinePoints,
+    latestBucket,
+    tickerItems,
+    pulseCards,
+    chart
+  } = useOrganismData()
+
+  const { width, height, padding, allEventsLine, successLine, partialLine, failLine, allEventsArea } = chart
+
+  const activeMessage = useMemo(() => {
+    switch (activeCard) {
+      case "learning":
+        return "Learning turns event flow into memory, context, and adaptive behavior."
+      case "healing":
+        return "Healing tells you whether the organism is resilient enough to keep serving."
+      case "autonomy":
+        return "Autonomy shows whether the organism can act through real capabilities."
+      case "vision":
+        return "Vision tells you whether image-aware workflows are live and usable."
+      default:
+        return "Operator control keeps the system explainable, reviewable, and directed by you."
+    }
+  }, [activeCard])
+
+  const tutorialContent = useMemo(() => {
+    switch (activeCard) {
+      case "learning":
+        return {
+          steps: [
+            "Watch the timeline and event counters first to understand incoming system activity.",
+            "Inspect the learning card to see whether activity is turning into reusable signal and memory.",
+            "Use the tutor rail to connect raw events to adaptive behavior instead of treating them as isolated logs."
+          ],
+          operatorAction: "Compare event volume with successful outcomes and look for learning signal that grows with throughput.",
+          deepDive: [
+            "Healthy learning means new activity increases system usefulness instead of only increasing noise.",
+            "If event volume rises but interpretation stays flat, the organism may be observing without internalizing.",
+            "Use this section to teach operators what a good learning loop looks like before tuning behavior."
+          ]
+        }
+      case "healing":
+        return {
+          steps: [
+            "Check readiness and runtime reachability before trusting downstream behavior.",
+            "Look for degraded or amber states that suggest the organism is compensating rather than operating cleanly.",
+            "Use the tutor rail to decide whether to stabilize first or continue observing."
+          ],
+          operatorAction: "Treat healing as operational resilience: if the runtime is weak, fix that before judging autonomy or vision.",
+          deepDive: [
+            "A system can appear functional while quietly degrading under the surface.",
+            "Healing content should help the operator distinguish stable recovery from fragile temporary health.",
+            "Use this section to explain why resilience is part of intelligence, not separate from it."
+          ]
+        }
+      case "autonomy":
+        return {
+          steps: [
+            "Inspect the exposed tools and cache posture to understand what the organism can actually do.",
+            "Compare intent surfaces with available capabilities before assuming the organism can act.",
+            "Use the tutor rail to translate capability into real execution confidence."
+          ],
+          operatorAction: "Autonomy is real only when intent, tools, and runtime availability line up at the same time.",
+          deepDive: [
+            "An organism is not autonomous because it has goals; it is autonomous because it can execute safely and repeatedly.",
+            "Capability gaps should be visible here before they become confusing failures elsewhere.",
+            "Use this section to teach the difference between apparent agency and operational agency."
+          ]
+        }
+      case "vision":
+        return {
+          steps: [
+            "Verify that vision is configured, exposed to tools, and live in the current runtime.",
+            "Use the vision card and related metrics to tell whether image-aware workflows are truly available.",
+            "Read the tutor guidance to connect model posture with user-facing workflow readiness."
+          ],
+          operatorAction: "Treat vision as a runtime pathway, not a checkbox; it matters only when the model is reachable and usable.",
+          deepDive: [
+            "Configured vision is not the same as usable vision.",
+            "This section should teach the operator how to spot the gap between configuration, exposure, and live execution.",
+            "Use it to keep image-aware workflows explainable instead of magical."
+          ]
+        }
+      default:
+        return {
+          steps: [
+            "Use the active system summary to decide where attention belongs first.",
+            "Follow the tutor rail to connect subsystem posture with a concrete operator decision.",
+            "Use deeper notes only when you need more explanation, not by default."
+          ],
+          operatorAction: "Operator control is the mechanism that keeps the organism understandable and steerable under changing conditions.",
+          deepDive: [
+            "Good operator surfaces reduce guessing and shorten the path from signal to action.",
+            "This section should teach control, not just describe status.",
+            "Use it to make complex system behavior understandable fast."
+          ]
+        }
+    }
+  }, [activeCard])
+
+  const activeTheme = getSubsystemTheme(activeCard)
+
+  const tutorMeta = useMemo(() => {
+    switch (activeCard) {
+      case "learning":
+        return {
+          eyebrow: "Focused subsystem: Learning",
+          title: "Learning is shaping memory and pattern reuse.",
+          intro: "This view emphasizes how event flow becomes retained context, reusable signal, and adaptive behavior."
+        }
+      case "healing":
+        return {
+          eyebrow: "Focused subsystem: Healing",
+          title: "Healing is measuring resilience and recovery.",
+          intro: "This view emphasizes organism stability, degradation signals, and whether the system can keep serving under pressure."
+        }
+      case "autonomy":
+        return {
+          eyebrow: "Focused subsystem: Autonomy",
+          title: "Autonomy is about action through real capability.",
+          intro: "This view emphasizes tool reach, execution posture, and whether the organism can convert intent into action."
+        }
+      case "vision":
+        return {
+          eyebrow: "Focused subsystem: Vision",
+          title: "Vision is making image-aware workflows legible.",
+          intro: "This view emphasizes whether visual reasoning is configured, exposed, and usable in live runtime paths."
+        }
+      default:
+        return {
+          eyebrow: "Focused subsystem: Operator",
+          title: "Operator control keeps the organism steerable.",
+          intro: "This view emphasizes explainability, guided control, and fast intervention when posture changes."
+        }
+    }
+  }, [activeCard])
+
+  return (
+    <section
+      className="page"
+      style={{
+        minHeight: "100vh",
+        color: organismTheme.surface.text,
+        background: `
+          radial-gradient(circle at 0% 0%, rgba(14,165,233,0.18), transparent 26%),
+          radial-gradient(circle at 100% 0%, rgba(139,92,246,0.20), transparent 24%),
+          radial-gradient(circle at 100% 100%, rgba(236,72,153,0.18), transparent 24%),
+          radial-gradient(circle at 0% 100%, rgba(34,197,94,0.12), transparent 22%),
+          linear-gradient(180deg, #040816 0%, #07101f 48%, #050815 100%)
+        `,
+        padding: "28px 18px 56px"
+      }}
+    >
+      <style>{`
+        @keyframes pulseHalo {
+          0% { transform: scale(0.96); opacity: 0.35; }
+          50% { transform: scale(1.08); opacity: 0.9; }
+          100% { transform: scale(0.96); opacity: 0.35; }
+        }
+        @keyframes statusBlink {
+          0% { opacity: 0.45; transform: scale(0.95); }
+          50% { opacity: 1; transform: scale(1.18); }
+          100% { opacity: 0.45; transform: scale(0.95); }
+        }
+        @keyframes scanSweep {
+          0% { transform: translateX(-120%); }
+          100% { transform: translateX(140%); }
+        }
+        @keyframes tickerMove {
+          0% { transform: translateX(0); }
+          100% { transform: translateX(-50%); }
+        }
+        @keyframes orbitSpin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+        @keyframes orbitReverse {
+          from { transform: rotate(360deg); }
+          to { transform: rotate(0deg); }
+        }
+        @keyframes corePulse {
+          0% { transform: scale(0.96); opacity: 0.78; }
+          50% { transform: scale(1.08); opacity: 1; }
+          100% { transform: scale(0.96); opacity: 0.78; }
+        }
+        @keyframes tutorReveal {
+          0% { opacity: 0; transform: translateY(10px); }
+          100% { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes dashFlow {
+          to { stroke-dashoffset: -24; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          *, *::before, *::after {
+            animation: none !important;
+            transition: none !important;
+          }
+        }
+      `}</style>
+
+      <div style={{ maxWidth: 1440, margin: "0 auto", display: "grid", gap: 22 }}>
+        <OrganismHero
+          activeTheme={activeTheme}
+          activeMessage={activeMessage}
+          isLoading={isLoading}
+          eventCount={eventCount}
+          totalTimelineEvents={totalTimelineEvents}
+          successRate={successRate}
+          toolCount={toolCount}
+          tickerItems={tickerItems}
+          systemReady={systemReady}
+          visionRuntimeReady={visionRuntimeReady}
+          pulseCards={pulseCards}
+          backendUrl={backendUrl}
+          formatCompact={formatCompact}
+        />
+
+        {isError && (
+          <article
+            style={{
+              borderRadius: 22,
+              padding: 20,
+              background: "linear-gradient(180deg, rgba(69,10,10,0.94), rgba(31,10,18,0.95))",
+              border: "1px solid rgba(251,113,133,0.45)",
+              color: "#ffe4e6"
+            }}
+          >
+            <h2 style={{ marginTop: 0, marginBottom: 10 }}>Connection issue</h2>
+            <p style={{ margin: 0, lineHeight: 1.7 }}>
+              One or more live organism data sources could not be loaded. Current error: {errorMessage}
+            </p>
+          </article>
+        )}
+
+        <OrganismAnatomySection
+          activeCard={activeCard}
+          setActiveCard={setActiveCard}
+          isLoading={isLoading}
+          systemReady={systemReady}
+          visionRuntimeReady={visionRuntimeReady}
+          visionConfigured={visionConfigured}
+          visionExposedToTools={visionExposedToTools}
+          toolCount={toolCount}
+          totalTimelineEvents={totalTimelineEvents}
+          eventCount={eventCount}
+          cacheSize={cacheSize}
+          capabilities={capabilities}
+          backendUrl={backendUrl}
+          eventsPath={statusQuery.data?.events_path}
+          ollamaReachable={statusQuery.data?.ollama_reachable}
+          environment={statusQuery.data?.environment}
+          primaryVisionModel={statusQuery.data?.primary_vision_model}
+          statusReady={statusQuery.data?.ready}
+          activeTheme={activeTheme}
+          activeMessage={activeMessage}
+          failureRate={failureRate}
+          cachedKeys={cachedKeys}
+        />
+
+        <OrganismTimelineSection
+          isLoading={isLoading}
+          isError={isError}
+          errorMessage={errorMessage}
+          timelinePoints={timelinePoints}
+          totalTimelineSuccess={totalTimelineSuccess}
+          totalTimelinePartial={totalTimelinePartial}
+          totalTimelineFail={totalTimelineFail}
+          latestBucket={latestBucket}
+          activeAccent={activeTheme.accent}
+          width={width}
+          height={height}
+          padding={padding}
+          allEventsArea={allEventsArea}
+          allEventsLine={allEventsLine}
+          successLine={successLine}
+          partialLine={partialLine}
+          failLine={failLine}
+        />
+
+        <OrganismTutorSection
+          activeCard={activeCard}
+          activeTheme={activeTheme}
+          tutorMeta={tutorMeta}
+          tutorialContent={tutorialContent}
+          showDeepTutorial={showDeepTutorial}
+          setShowDeepTutorial={setShowDeepTutorial}
+        />
+      </div>
+    </section>
+  )
+}
+
+
+

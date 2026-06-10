@@ -1,3 +1,3 @@
-"""Package: organism."""
+from swarm_os.kernel.organism import Organism
 
-__all__ = []
+__all__ = ["Organism"]

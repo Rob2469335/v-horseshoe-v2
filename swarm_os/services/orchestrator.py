@@ -139,7 +139,7 @@ class Orchestrator:
         else:
             candidates = installed_candidates
 
-        route_decision: RouteDecision = self.router.route_model(
+        route_decision: RouteDecision = await self.router.route_model(
             candidates=candidates,
             role=target_role,
             allow_fallback=True,
@@ -297,13 +297,9 @@ class Orchestrator:
             }
 
 # Compatibility export for API/tests expecting a module-level director
-try:
-    swarm_director
-except NameError:
-    try:
-        swarm_director = Orchestrator()
-    except Exception:
-        swarm_director = None
+swarm_director = None
+
+
 
 
 

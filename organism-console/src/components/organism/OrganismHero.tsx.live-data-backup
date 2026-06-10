@@ -1,0 +1,439 @@
+type ActiveTheme = {
+  accent: string
+  tint: string
+  glow: string
+}
+
+type PulseCard = {
+  label: string
+  value: string
+  accent: string
+  detail: string
+}
+
+type OrganismHeroProps = {
+  activeTheme: ActiveTheme
+  activeMessage: string
+  isLoading: boolean
+  eventCount: number
+  totalTimelineEvents: number
+  successRate: number
+  toolCount: number
+  tickerItems: string[]
+  systemReady: boolean
+  visionRuntimeReady: boolean
+  pulseCards: PulseCard[]
+  backendUrl: string
+  formatCompact: (value: number) => string
+}
+
+export function OrganismHero({
+  activeTheme,
+  activeMessage,
+  isLoading,
+  eventCount,
+  totalTimelineEvents,
+  successRate,
+  toolCount,
+  tickerItems,
+  systemReady,
+  visionRuntimeReady,
+  pulseCards,
+  backendUrl,
+  formatCompact
+}: OrganismHeroProps) {
+  const ticker = tickerItems.length > 0
+    ? [...tickerItems, ...tickerItems]
+    : [
+        "Learning signal online",
+        "Healing telemetry active",
+        "Autonomy surface mapped",
+        "Vision posture monitored"
+      ]
+
+  return (
+    <section
+      style={{
+        position: "relative",
+        overflow: "hidden",
+        borderRadius: 34,
+        padding: 26,
+        background: "linear-gradient(135deg, rgba(8,14,30,0.98), rgba(13,18,35,0.98) 42%, rgba(7,11,24,0.99))",
+        border: "1px solid rgba(255,255,255,0.10)",
+        boxShadow: "0 34px 100px rgba(0,0,0,0.36)"
+      }}
+    >
+      <div
+        style={{
+          position: "absolute",
+          inset: -120,
+          background: `
+            radial-gradient(circle at 20% 20%, rgba(56,189,248,0.22), transparent 24%),
+            radial-gradient(circle at 78% 18%, rgba(167,139,250,0.22), transparent 22%),
+            radial-gradient(circle at 68% 76%, rgba(244,114,182,0.18), transparent 20%),
+            radial-gradient(circle at 22% 82%, rgba(74,222,128,0.14), transparent 18%)
+          `,
+          pointerEvents: "none"
+        }}
+      />
+
+      <div style={{ position: "relative", zIndex: 1, display: "grid", gap: 22 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.2fr) minmax(320px, 0.88fr)", gap: 20 }}>
+          <div style={{ display: "grid", gap: 16 }}>
+            <div
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 10,
+                width: "fit-content",
+                padding: "8px 14px",
+                borderRadius: 999,
+                background: "rgba(255,255,255,0.06)",
+                border: "1px solid rgba(255,255,255,0.10)",
+                color: "rgba(255,255,255,0.92)",
+                fontSize: 12,
+                fontWeight: 900,
+                textTransform: "uppercase",
+                letterSpacing: "0.08em"
+              }}
+            >
+              <span
+                style={{
+                  width: 10,
+                  height: 10,
+                  borderRadius: "50%",
+                  background: activeTheme.accent,
+                  boxShadow: `0 0 18px ${activeTheme.accent}`,
+                  animation: "statusBlink 1.8s ease-in-out infinite"
+                }}
+              />
+              Organism command layer
+            </div>
+
+            <div style={{ display: "grid", gap: 10 }}>
+              <h1
+                style={{
+                  margin: 0,
+                  color: "white",
+                  fontSize: "clamp(2.5rem, 6vw, 5.2rem)",
+                  lineHeight: 0.95,
+                  letterSpacing: "-0.04em"
+                }}
+              >
+                Living organism console
+              </h1>
+
+              <p
+                style={{
+                  margin: 0,
+                  maxWidth: 820,
+                  color: "rgba(230,238,255,0.78)",
+                  fontSize: 17,
+                  lineHeight: 1.75
+                }}
+              >
+                A dense operator surface for self-learning, self-healing, autonomy, vision readiness, and human-in-the-loop control.
+                The active subsystem is highlighted in real time so the page reads like a tutor instead of a dead status board.
+              </p>
+            </div>
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))",
+                gap: 12
+              }}
+            >
+              {[
+                {
+                  label: "Observed events",
+                  value: isLoading ? "Loading..." : formatCompact(eventCount),
+                  accent: "#38bdf8"
+                },
+                {
+                  label: "Timeline volume",
+                  value: isLoading ? "Loading..." : formatCompact(totalTimelineEvents),
+                  accent: "#a78bfa"
+                },
+                {
+                  label: "Success rate",
+                  value: isLoading ? "Loading..." : `${successRate}%`,
+                  accent: "#4ade80"
+                },
+                {
+                  label: "Tool reach",
+                  value: isLoading ? "Loading..." : `${toolCount}`,
+                  accent: "#fbbf24"
+                }
+              ].map((item) => (
+                <div
+                  key={item.label}
+                  style={{
+                    borderRadius: 18,
+                    padding: 14,
+                    background: "rgba(255,255,255,0.04)",
+                    border: "1px solid rgba(255,255,255,0.09)"
+                  }}
+                >
+                  <div
+                    style={{
+                      color: item.accent,
+                      fontSize: 12,
+                      fontWeight: 900,
+                      textTransform: "uppercase",
+                      letterSpacing: "0.08em",
+                      marginBottom: 6
+                    }}
+                  >
+                    {item.label}
+                  </div>
+                  <div style={{ color: "white", fontSize: 22, fontWeight: 800 }}>{item.value}</div>
+                </div>
+              ))}
+            </div>
+
+            <div
+              style={{
+                borderRadius: 18,
+                padding: 16,
+                background: activeTheme.tint,
+                border: `1px solid ${activeTheme.tint}`
+              }}
+            >
+              <div
+                style={{
+                  color: activeTheme.accent,
+                  fontSize: 12,
+                  fontWeight: 900,
+                  textTransform: "uppercase",
+                  letterSpacing: "0.08em",
+                  marginBottom: 8
+                }}
+              >
+                Active reading
+              </div>
+              <div style={{ color: "white", lineHeight: 1.7, fontSize: 15 }}>{activeMessage}</div>
+            </div>
+          </div>
+
+          <div style={{ display: "grid", gap: 16 }}>
+            <div
+              style={{
+                position: "relative",
+                minHeight: 320,
+                borderRadius: 28,
+                background: "linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.03))",
+                border: "1px solid rgba(255,255,255,0.10)",
+                overflow: "hidden"
+              }}
+            >
+              <div
+                style={{
+                  position: "absolute",
+                  inset: "50% auto auto 50%",
+                  width: 128,
+                  height: 128,
+                  marginLeft: -64,
+                  marginTop: -64,
+                  borderRadius: "50%",
+                  background: `radial-gradient(circle, ${activeTheme.accent}, rgba(255,255,255,0.05))`,
+                  filter: "blur(2px)",
+                  boxShadow: `0 0 90px ${activeTheme.glow}`,
+                  animation: "corePulse 4.5s ease-in-out infinite"
+                }}
+              />
+
+              <div
+                style={{
+                  position: "absolute",
+                  inset: "50% auto auto 50%",
+                  width: 260,
+                  height: 260,
+                  marginLeft: -130,
+                  marginTop: -130,
+                  borderRadius: "50%",
+                  border: "1px dashed rgba(125,211,252,0.28)",
+                  animation: "orbitSpin 18s linear infinite"
+                }}
+              >
+                <div style={{ position: "absolute", top: -6, left: "50%", width: 12, height: 12, marginLeft: -6, borderRadius: "50%", background: "#38bdf8", boxShadow: "0 0 16px #38bdf8" }} />
+                <div style={{ position: "absolute", bottom: -6, left: "18%", width: 12, height: 12, marginLeft: -6, borderRadius: "50%", background: "#4ade80", boxShadow: "0 0 16px #4ade80" }} />
+              </div>
+
+              <div
+                style={{
+                  position: "absolute",
+                  inset: "50% auto auto 50%",
+                  width: 196,
+                  height: 196,
+                  marginLeft: -98,
+                  marginTop: -98,
+                  borderRadius: "50%",
+                  border: "1px solid rgba(244,114,182,0.24)",
+                  animation: "orbitReverse 12s linear infinite"
+                }}
+              >
+                <div style={{ position: "absolute", top: "50%", right: -6, width: 12, height: 12, marginTop: -6, borderRadius: "50%", background: "#f472b6", boxShadow: "0 0 16px #f472b6" }} />
+                <div style={{ position: "absolute", top: "16%", left: 22, width: 12, height: 12, borderRadius: "50%", background: "#fbbf24", boxShadow: "0 0 16px #fbbf24" }} />
+              </div>
+
+              <div
+                style={{
+                  position: "absolute",
+                  left: 18,
+                  right: 18,
+                  bottom: 18,
+                  display: "grid",
+                  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                  gap: 10
+                }}
+              >
+                <div
+                  style={{
+                    borderRadius: 16,
+                    padding: 12,
+                    background: "rgba(8,14,30,0.72)",
+                    border: "1px solid rgba(255,255,255,0.08)"
+                  }}
+                >
+                  <div style={{ color: "#4ade80", fontSize: 12, fontWeight: 900, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>
+                    Healing state
+                  </div>
+                  <div style={{ color: "white", lineHeight: 1.5 }}>{systemReady ? "Healthy and stable" : "Needs operator attention"}</div>
+                </div>
+
+                <div
+                  style={{
+                    borderRadius: 16,
+                    padding: 12,
+                    background: "rgba(8,14,30,0.72)",
+                    border: "1px solid rgba(255,255,255,0.08)"
+                  }}
+                >
+                  <div style={{ color: "#f472b6", fontSize: 12, fontWeight: 900, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>
+                    Vision state
+                  </div>
+                  <div style={{ color: "white", lineHeight: 1.5 }}>{visionRuntimeReady ? "Vision pathway active" : "Vision pathway pending"}</div>
+                </div>
+              </div>
+            </div>
+
+            <div
+              style={{
+                borderRadius: 20,
+                padding: 16,
+                background: "rgba(255,255,255,0.04)",
+                border: "1px solid rgba(255,255,255,0.08)"
+              }}
+            >
+              <div style={{ color: "rgba(255,255,255,0.62)", fontSize: 12, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>
+                Backend route
+              </div>
+              <div style={{ color: "white", wordBreak: "break-word", lineHeight: 1.6 }}>{backendUrl}</div>
+            </div>
+          </div>
+        </div>
+
+        <div
+          style={{
+            overflow: "hidden",
+            borderRadius: 18,
+            border: "1px solid rgba(255,255,255,0.08)",
+            background: "rgba(255,255,255,0.03)"
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              gap: 26,
+              width: "max-content",
+              padding: "12px 18px",
+              color: "rgba(255,255,255,0.8)",
+              whiteSpace: "nowrap",
+              animation: "tickerMove 24s linear infinite"
+            }}
+          >
+            {ticker.map((item, index) => (
+              <div
+                key={`${item}-${index}`}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 10,
+                  fontSize: 13,
+                  fontWeight: 700,
+                  letterSpacing: "0.03em"
+                }}
+              >
+                <span
+                  style={{
+                    width: 8,
+                    height: 8,
+                    borderRadius: "50%",
+                    background: activeTheme.accent,
+                    boxShadow: `0 0 12px ${activeTheme.accent}`
+                  }}
+                />
+                {item}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+            gap: 14
+          }}
+        >
+          {(pulseCards.length > 0 ? pulseCards : [
+            { label: "Learning pulse", value: "Adaptive", accent: "#38bdf8", detail: "Event traces are available for interpretation." },
+            { label: "Healing pulse", value: "Stable", accent: "#4ade80", detail: "Recovery posture is visible to the operator." },
+            { label: "Autonomy pulse", value: "Tool-aware", accent: "#fbbf24", detail: "Action surface can be read before execution." },
+            { label: "Vision pulse", value: "Monitored", accent: "#f472b6", detail: "Visual workflow readiness is exposed." }
+          ]).map((card) => (
+            <article
+              key={card.label}
+              style={{
+                borderRadius: 20,
+                padding: 16,
+                background: "linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.03))",
+                border: "1px solid rgba(255,255,255,0.08)",
+                boxShadow: "0 18px 40px rgba(0,0,0,0.18)"
+              }}
+            >
+              <div
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 8,
+                  marginBottom: 8,
+                  color: card.accent,
+                  fontSize: 12,
+                  fontWeight: 900,
+                  textTransform: "uppercase",
+                  letterSpacing: "0.08em"
+                }}
+              >
+                <span
+                  style={{
+                    width: 10,
+                    height: 10,
+                    borderRadius: "50%",
+                    background: card.accent,
+                    boxShadow: `0 0 14px ${card.accent}`,
+                    animation: "statusBlink 1.8s ease-in-out infinite"
+                  }}
+                />
+                {card.label}
+              </div>
+              <div style={{ color: "white", fontSize: 22, fontWeight: 800, marginBottom: 8 }}>{card.value}</div>
+              <div style={{ color: "rgba(255,255,255,0.72)", lineHeight: 1.6 }}>{card.detail}</div>
+            </article>
+          ))}
+        </div>
+      </div>
+    </section>
+  )
+}

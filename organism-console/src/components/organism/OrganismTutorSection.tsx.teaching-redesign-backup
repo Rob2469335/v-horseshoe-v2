@@ -1,0 +1,455 @@
+import type { Dispatch, SetStateAction } from "react"
+import type { OrganismSubsystem } from "../../features/organism/organism-types"
+
+type ActiveTheme = {
+  accent: string
+  tint: string
+  glow: string
+}
+
+type TutorMeta = {
+  eyebrow: string
+  title: string
+  intro: string
+}
+
+type TutorialContent = {
+  steps: string[]
+  operatorAction: string
+  deepDive: string[]
+}
+
+type OrganismTutorSectionProps = {
+  activeCard: OrganismSubsystem
+  activeTheme: ActiveTheme
+  tutorMeta: TutorMeta
+  tutorialContent: TutorialContent
+  showDeepTutorial: boolean
+  setShowDeepTutorial: Dispatch<SetStateAction<boolean>>
+}
+
+export function OrganismTutorSection({
+  activeCard,
+  activeTheme,
+  tutorMeta,
+  tutorialContent,
+  showDeepTutorial,
+  setShowDeepTutorial
+}: OrganismTutorSectionProps) {
+  const watchItems =
+    activeCard === "learning"
+      ? [
+          "Rising event volume with weak interpretation means the organism is observing more than learning.",
+          "Healthy learning should make future action easier, not just create more data.",
+          "Use success and throughput together so you do not confuse noise with growth."
+        ]
+      : activeCard === "healing"
+        ? [
+            "A ready system is not enough if it is degrading underneath the surface.",
+            "Watch for runtime weakness before trusting any downstream capability.",
+            "Healing should reduce fragility, not just hide instability."
+          ]
+        : activeCard === "autonomy"
+          ? [
+              "Capability only matters when the tools are live and reachable now.",
+              "A system that wants to act but cannot execute is not yet autonomous.",
+              "Operator trust should rise only when intent and capability match."
+            ]
+          : activeCard === "vision"
+            ? [
+                "Configured vision does not automatically mean usable vision.",
+                "A visible runtime path matters more than a model name on paper.",
+                "Check exposure to tools before assuming image workflows are live."
+              ]
+            : [
+                "Operator control is what keeps this organism explainable.",
+                "Human oversight should shorten the path from signal to action.",
+                "Good control surfaces reduce guessing during pressure."
+              ]
+
+  const plainMeaning =
+    activeCard === "learning"
+      ? "Learning means the organism is turning activity into reusable memory and better future behavior."
+      : activeCard === "healing"
+        ? "Healing means the organism can recover, stabilize, and keep serving instead of collapsing under stress."
+        : activeCard === "autonomy"
+          ? "Autonomy means the organism can actually do useful work through real capabilities."
+          : activeCard === "vision"
+            ? "Vision means the organism can support image-aware reasoning when the runtime path is live."
+            : "Operator control means a human can still direct, review, and correct the organism."
+
+  const nextQuestion =
+    activeCard === "learning"
+      ? "Ask: is this system becoming smarter from experience, or only noisier?"
+      : activeCard === "healing"
+        ? "Ask: would I trust this organism to keep operating if pressure increases?"
+        : activeCard === "autonomy"
+          ? "Ask: can this organism truly act right now, or does it only look capable?"
+          : activeCard === "vision"
+            ? "Ask: can image workflows run now, or is vision only configured on paper?"
+            : "Ask: can the operator quickly understand what changed and what to do next?"
+
+  return (
+    <section
+      style={{
+        display: "grid",
+        gridTemplateColumns: "minmax(0, 1.25fr) minmax(320px, 0.92fr)",
+        gap: 18,
+        alignItems: "start",
+        padding: 18,
+        borderRadius: 28,
+        background: `linear-gradient(180deg, ${activeTheme.tint}, rgba(255,255,255,0.02))`,
+        border: `1px solid ${activeTheme.tint}`,
+        boxShadow: `0 24px 60px ${activeTheme.glow}`
+      }}
+    >
+      <div
+        key={activeCard}
+        style={{
+          display: "grid",
+          gap: 16,
+          padding: 18,
+          borderRadius: 24,
+          background: "linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.03))",
+          border: `1px solid ${activeTheme.tint}`,
+          boxShadow: `0 24px 60px ${activeTheme.glow}`,
+          animation: "tutorReveal 260ms cubic-bezier(0.16, 1, 0.3, 1)"
+        }}
+      >
+        <div
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 10,
+            width: "fit-content",
+            padding: "7px 12px",
+            borderRadius: 999,
+            background: activeTheme.tint,
+            color: activeTheme.accent,
+            fontSize: 12,
+            fontWeight: 900,
+            letterSpacing: "0.08em",
+            textTransform: "uppercase"
+          }}
+        >
+          <span
+            style={{
+              width: 10,
+              height: 10,
+              borderRadius: "50%",
+              background: activeTheme.accent,
+              boxShadow: `0 0 16px ${activeTheme.accent}`,
+              animation: "statusBlink 1.8s ease-in-out infinite"
+            }}
+          />
+          {tutorMeta.eyebrow}
+        </div>
+
+        <div style={{ display: "grid", gap: 8 }}>
+          <h2 style={{ margin: 0, color: "white", fontSize: 30, lineHeight: 1.05 }}>
+            {tutorMeta.title}
+          </h2>
+          <p style={{ margin: 0, color: "rgba(236,243,255,0.78)", lineHeight: 1.72 }}>
+            {tutorMeta.intro}
+          </p>
+        </div>
+
+        <article
+          style={{
+            borderRadius: 18,
+            padding: 16,
+            background: activeTheme.tint,
+            border: `1px solid ${activeTheme.tint}`
+          }}
+        >
+          <div
+            style={{
+              color: activeTheme.accent,
+              fontSize: 11,
+              fontWeight: 900,
+              textTransform: "uppercase",
+              letterSpacing: "0.1em",
+              marginBottom: 8
+            }}
+          >
+            What this means
+          </div>
+          <div style={{ color: "white", lineHeight: 1.68, fontSize: 15 }}>
+            {plainMeaning}
+          </div>
+        </article>
+
+        <div>
+          <div
+            style={{
+              color: activeTheme.accent,
+              fontSize: 12,
+              fontWeight: 900,
+              letterSpacing: "0.08em",
+              textTransform: "uppercase",
+              marginBottom: 10
+            }}
+          >
+            Step-by-step tutoring
+          </div>
+
+          <div style={{ display: "grid", gap: 10 }}>
+            {tutorialContent.steps.map((step, index) => (
+              <div
+                key={index}
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "36px minmax(0, 1fr)",
+                  gap: 12,
+                  alignItems: "start",
+                  padding: 14,
+                  borderRadius: 16,
+                  background: "rgba(255,255,255,0.03)",
+                  border: "1px solid rgba(255,255,255,0.08)"
+                }}
+              >
+                <div
+                  style={{
+                    width: 36,
+                    height: 36,
+                    borderRadius: "50%",
+                    display: "grid",
+                    placeItems: "center",
+                    background: activeTheme.tint,
+                    color: activeTheme.accent,
+                    fontWeight: 900,
+                    boxShadow: `0 0 18px ${activeTheme.glow}`
+                  }}
+                >
+                  {index + 1}
+                </div>
+
+                <div style={{ display: "grid", gap: 4 }}>
+                  <div style={{ color: "white", fontWeight: 800 }}>Step {index + 1}</div>
+                  <div style={{ color: "rgba(236,243,255,0.86)", lineHeight: 1.65 }}>{step}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <article
+          style={{
+            borderRadius: 18,
+            padding: 16,
+            background: "rgba(255,255,255,0.03)",
+            border: "1px solid rgba(255,255,255,0.08)"
+          }}
+        >
+          <div
+            style={{
+              color: activeTheme.accent,
+              fontSize: 11,
+              fontWeight: 900,
+              textTransform: "uppercase",
+              letterSpacing: "0.1em",
+              marginBottom: 8
+            }}
+          >
+            What to watch
+          </div>
+
+          <div style={{ display: "grid", gap: 10 }}>
+            {watchItems.map((item, index) => (
+              <div
+                key={index}
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "12px minmax(0, 1fr)",
+                  gap: 10,
+                  alignItems: "start"
+                }}
+              >
+                <div
+                  style={{
+                    width: 10,
+                    height: 10,
+                    marginTop: 6,
+                    borderRadius: "50%",
+                    background: activeTheme.accent,
+                    boxShadow: `0 0 14px ${activeTheme.accent}`
+                  }}
+                />
+                <div style={{ color: "rgba(236,243,255,0.82)", lineHeight: 1.62 }}>{item}</div>
+              </div>
+            ))}
+          </div>
+        </article>
+
+        <article
+          style={{
+            borderRadius: 18,
+            padding: 16,
+            background: "rgba(255,255,255,0.03)",
+            border: "1px solid rgba(255,255,255,0.08)"
+          }}
+        >
+          <div
+            style={{
+              color: activeTheme.accent,
+              fontSize: 11,
+              fontWeight: 900,
+              textTransform: "uppercase",
+              letterSpacing: "0.1em",
+              marginBottom: 8
+            }}
+          >
+            What to do next
+          </div>
+          <div style={{ color: "white", lineHeight: 1.68, marginBottom: 10 }}>
+            {tutorialContent.operatorAction}
+          </div>
+          <div style={{ color: "rgba(236,243,255,0.74)", lineHeight: 1.62 }}>
+            {nextQuestion}
+          </div>
+        </article>
+      </div>
+
+      <div style={{ display: "grid", gap: 16 }}>
+        <article
+          style={{
+            borderRadius: 22,
+            padding: 16,
+            background: "linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.03))",
+            border: "1px solid rgba(255,255,255,0.08)",
+            boxShadow: `0 14px 38px ${activeTheme.glow}`
+          }}
+        >
+          <div
+            style={{
+              color: activeTheme.accent,
+              fontSize: 11,
+              fontWeight: 900,
+              textTransform: "uppercase",
+              letterSpacing: "0.1em",
+              marginBottom: 8
+            }}
+          >
+            Tutor question
+          </div>
+          <div style={{ color: "white", fontSize: 22, fontWeight: 800, lineHeight: 1.25, marginBottom: 8 }}>
+            {nextQuestion}
+          </div>
+          <div style={{ color: "rgba(236,243,255,0.74)", lineHeight: 1.62 }}>
+            This is the question the page should help the user answer before moving on.
+          </div>
+        </article>
+
+        <article
+          style={{
+            borderRadius: 22,
+            padding: 16,
+            background: "linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.03))",
+            border: "1px solid rgba(255,255,255,0.08)"
+          }}
+        >
+          <div
+            style={{
+              color: activeTheme.accent,
+              fontSize: 11,
+              fontWeight: 900,
+              textTransform: "uppercase",
+              letterSpacing: "0.1em",
+              marginBottom: 8
+            }}
+          >
+            Teaching posture
+          </div>
+
+          <div style={{ display: "grid", gap: 10 }}>
+            {[
+              "Explain the subsystem in plain language first.",
+              "Show the user what signal matters most.",
+              "Give one concrete operator action.",
+              "Only then reveal deeper guidance."
+            ].map((line, index) => (
+              <div
+                key={index}
+                style={{
+                  borderRadius: 14,
+                  padding: 12,
+                  background: "rgba(255,255,255,0.03)",
+                  border: "1px solid rgba(255,255,255,0.06)",
+                  color: "rgba(236,243,255,0.82)",
+                  lineHeight: 1.6
+                }}
+              >
+                {line}
+              </div>
+            ))}
+          </div>
+        </article>
+
+        <button
+          type="button"
+          aria-expanded={showDeepTutorial}
+          onClick={() => setShowDeepTutorial((v) => !v)}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "12px 16px",
+            borderRadius: 999,
+            border: `1px solid ${activeTheme.tint}`,
+            background: showDeepTutorial ? activeTheme.tint : "rgba(255,255,255,0.04)",
+            color: "white",
+            fontWeight: 800,
+            cursor: "pointer",
+            boxShadow: showDeepTutorial ? `0 0 24px ${activeTheme.glow}` : "none",
+            transition: "all 180ms cubic-bezier(0.16,1,0.3,1)"
+          }}
+        >
+          {showDeepTutorial ? "Hide deeper lesson" : "Open deeper lesson"}
+        </button>
+
+        {showDeepTutorial && (
+          <article
+            style={{
+              display: "grid",
+              gap: 10,
+              padding: 16,
+              borderRadius: 22,
+              background: "linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.03))",
+              border: "1px solid rgba(255,255,255,0.08)",
+              animation: "tutorReveal 220ms cubic-bezier(0.16, 1, 0.3, 1)"
+            }}
+          >
+            <div
+              style={{
+                color: activeTheme.accent,
+                fontSize: 11,
+                fontWeight: 900,
+                textTransform: "uppercase",
+                letterSpacing: "0.1em",
+                marginBottom: 4
+              }}
+            >
+              Deeper lesson
+            </div>
+
+            {tutorialContent.deepDive.map((item, index) => (
+              <div
+                key={index}
+                style={{
+                  borderRadius: 14,
+                  padding: 12,
+                  background: "rgba(255,255,255,0.03)",
+                  border: "1px solid rgba(255,255,255,0.06)",
+                  color: "rgba(236,243,255,0.82)",
+                  lineHeight: 1.64
+                }}
+              >
+                {item}
+              </div>
+            ))}
+          </article>
+        )}
+      </div>
+    </section>
+  )
+}

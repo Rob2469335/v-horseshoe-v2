@@ -4,13 +4,8 @@ import type { ReadyResponse, StatusResponse, ToolsResponse } from "../lib/types"
 import { useUiStore } from "../state/ui-store"
 
 type ToolsCacheResponse = {
-  cache_size?: number
-  cached_keys?: string[]
-}
-
-function formatList(items: string[] | undefined) {
-  if (!items || items.length === 0) return "None"
-  return items.join(", ")
+  cacheSize?: number
+  cachedKeys?: string[]
 }
 
 function formatBoolean(value: boolean | undefined) {
@@ -28,28 +23,28 @@ export default function WorkspacePage() {
     queryKey: ["workspace-status", backendUrl],
     queryFn: () => api.getStatus<StatusResponse>(backendUrl),
     retry: 1,
-    refetchInterval: 30000
+    refetchInterval: 30000,
   })
 
   const readyQuery = useQuery({
     queryKey: ["workspace-ready", backendUrl],
     queryFn: () => api.getReady<ReadyResponse>(backendUrl),
     retry: 1,
-    refetchInterval: 30000
+    refetchInterval: 30000,
   })
 
   const toolsQuery = useQuery({
     queryKey: ["workspace-tools", backendUrl],
     queryFn: () => api.getTools<ToolsResponse>(backendUrl),
     retry: 1,
-    refetchInterval: 60000
+    refetchInterval: 60000,
   })
 
   const toolsCacheQuery = useQuery({
     queryKey: ["workspace-tools-cache", backendUrl],
     queryFn: () => api.getToolsCache<ToolsCacheResponse>(backendUrl),
     retry: 1,
-    refetchInterval: 60000
+    refetchInterval: 60000,
   })
 
   const statusLoading = statusQuery.isLoading || readyQuery.isLoading
@@ -57,81 +52,111 @@ export default function WorkspacePage() {
 
   return (
     <section className="page">
-      <h1>Workspace</h1>
-      <p>Live workspace context from the local backend, including readiness, events, tools, and cache state.</p>
+      <div className="pageheader">
+        <div>
+          <h1>Workspace</h1>
+          <p className="page-subtitle">
+            Live workspace context from the local backend, including readiness, events, tools, and cache state.
+          </p>
+        </div>
+      </div>
 
       <div className="agent-layout">
-        <article className="agent-panel">
-          <h2>System status</h2>
-          <pre className="agent-response">
-{statusLoading
-  ? "Loading workspace status..."
-  : statusQuery.isError
-    ? getErrorMessage(statusQuery.error)
-    : readyQuery.isError
-      ? getErrorMessage(readyQuery.error)
-      : JSON.stringify({
-          backend_url: backendUrl,
-          ready: readyQuery.data?.ready ?? statusQuery.data?.ready ?? false,
-          environment: statusQuery.data?.environment ?? null,
-          events_path: statusQuery.data?.events_path ?? null,
-          event_count: statusQuery.data?.event_count ?? 0,
-          ollama_base_url: statusQuery.data?.ollama_base_url ?? null,
-          ollama_reachable: statusQuery.data?.ollama_reachable ?? false
-        }, null, 2)}
+        <article className="agent-panel panel-accent-top">
+          <h2>System posture</h2>
+          <pre className="agent-response" style={{ padding: 18, background: "rgba(0,0,0,0.2)" }}>
+            {statusLoading
+              ? "Sensing environment..."
+              : statusQuery.isError
+                ? getErrorMessage(statusQuery.error)
+                : readyQuery.isError
+                  ? getErrorMessage(readyQuery.error)
+                  : JSON.stringify(
+                      {
+                        backendUrl,
+                        ready: readyQuery.data?.ready ?? statusQuery.data?.ready ?? false,
+                        environment: statusQuery.data?.environment ?? null,
+                        eventsPath: statusQuery.data?.events_path ?? null,
+                        eventCount: statusQuery.data?.event_count ?? 0,
+                        ollamaBaseUrl: statusQuery.data?.ollama_base_url ?? null,
+                        ollamaReachable: statusQuery.data?.ollama_reachable ?? false,
+                      },
+                      null,
+                      2,
+                    )}
           </pre>
         </article>
 
-        <article className="agent-panel">
+        <article className="agent-panel panel-accent-top">
           <h2>Workspace summary</h2>
-          <pre className="agent-response">
-{statusLoading
-  ? "Building workspace summary..."
-  : statusQuery.isError
-    ? getErrorMessage(statusQuery.error)
-    : readyQuery.isError
-      ? getErrorMessage(readyQuery.error)
-      : [
-          `Backend URL: ${backendUrl}`,
-          `Ready: ${formatBoolean(readyQuery.data?.ready ?? statusQuery.data?.ready)}`,
-          `Environment: ${statusQuery.data?.environment ?? "Unknown"}`,
-          `Events path: ${statusQuery.data?.events_path ?? "Unknown"}`,
-          `Event count: ${statusQuery.data?.event_count ?? 0}`,
-          `Ollama reachable: ${formatBoolean(statusQuery.data?.ollama_reachable)}`
-        ].join("\n")}
+          <div className="metric-list">
+            {[
+              { label: "Backend URL", value: backendUrl },
+              {
+                label: "Ready",
+                value: formatBoolean(readyQuery.data?.ready ?? statusQuery.data?.ready),
+                accent: true,
+              },
+              { label: "Environment", value: statusQuery.data?.environment ?? "Unknown" },
+              { label: "Events path", value: statusQuery.data?.events_path ?? "Unknown" },
+              { label: "Event count", value: String(statusQuery.data?.event_count ?? 0) },
+              {
+                label: "Ollama reachable",
+                value: formatBoolean(statusQuery.data?.ollama_reachable),
+                accent: true,
+              },
+            ].map((item) => (
+              <div key={item.label} className="metric-row">
+                <span className="metric-label">{item.label}</span>
+                <span className={item.accent ? "metric-value metric-value--accent" : "metric-value"}>
+                  {item.value}
+                </span>
+              </div>
+            ))}
+          </div>
+        </article>
+
+        <article className="agent-panel panel-accent-top">
+          <h2>Capabilities</h2>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12 }}>
+            {toolsQuery.data?.capabilities?.length ? (
+              toolsQuery.data.capabilities.map((cap: string) => (
+                <span
+                  key={cap}
+                  className="lesson-badge"
+                  style={{ borderColor: "var(--page-accent)", color: "var(--page-accent)" }}
+                >
+                  {cap}
+                </span>
+              ))
+            ) : (
+              <span style={{ color: "var(--text-muted)" }}>No capabilities detected.</span>
+            )}
+          </div>
+          <pre
+            className="agent-response"
+            style={{ marginTop: 20, fontSize: 11, height: 160, padding: 16, background: "rgba(0,0,0,0.3)" }}
+          >
+            {toolsLoading ? "Sensing tools..." : JSON.stringify(toolsQuery.data, null, 2)}
           </pre>
         </article>
 
-        <article className="agent-panel">
-          <h2>Tools</h2>
-          <pre className="agent-response">
-{toolsLoading
-  ? "Loading tools..."
-  : toolsQuery.isError
-    ? getErrorMessage(toolsQuery.error)
-    : JSON.stringify({
-        tool_count: toolsQuery.data?.count ?? 0,
-        capabilities: toolsQuery.data?.capabilities ?? [],
-        capabilities_summary: formatList(toolsQuery.data?.capabilities)
-      }, null, 2)}
-          </pre>
-        </article>
-
-        <article className="agent-panel">
-          <h2>Tool cache</h2>
-          <pre className="agent-response">
-{toolsLoading
-  ? "Loading tool cache..."
-  : toolsCacheQuery.isError
-    ? getErrorMessage(toolsCacheQuery.error)
-    : JSON.stringify({
-        cache_size: toolsCacheQuery.data?.cache_size ?? 0,
-        cached_keys: toolsCacheQuery.data?.cached_keys ?? [],
-        cached_keys_summary: formatList(toolsCacheQuery.data?.cached_keys)
-      }, null, 2)}
+        <article className="agent-panel panel-accent-top panel-accent-glow">
+          <h2>Tool Cache</h2>
+          <div style={{ fontSize: 14, color: "var(--text-soft)", marginBottom: 16 }}>
+            Currently holding strong{" "}
+            <strong style={{ color: "var(--page-accent)" }}>{toolsCacheQuery.data?.cacheSize ?? 0}</strong> active traces in local memory.
+          </div>
+          <pre className="agent-response" style={{ height: 200, padding: 16, background: "rgba(0,0,0,0.3)" }}>
+            {toolsLoading
+              ? "Reading cache..."
+              : toolsCacheQuery.isError
+                ? getErrorMessage(toolsCacheQuery.error)
+                : JSON.stringify(toolsCacheQuery.data?.cachedKeys ?? [], null, 2)}
           </pre>
         </article>
       </div>
     </section>
   )
 }
+

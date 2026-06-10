@@ -43,7 +43,7 @@ class Router:
     def is_in_cooldown(self, model: str) -> bool:
         return time.time() < self.get_state(model).cooldown_until
 
-    def route_model(
+    async def route_model(
         self,
         *,
         candidates: list[str],
@@ -125,4 +125,5 @@ def evolve_plugin_weights(registry: object) -> dict[str, float]:
         for item in ranked
         if getattr(item, "name", "")
     }
+
 

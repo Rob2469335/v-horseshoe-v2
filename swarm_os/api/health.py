@@ -2,6 +2,7 @@
 from __future__ import annotations
 from fastapi import APIRouter
 from ..core.settings import get_settings
+from ops.health.system_health import run_system_health_checks
 
 router = APIRouter(tags=["health"])
 
@@ -16,3 +17,9 @@ async def health():
         "environment": s.environment,
     }
 
+@router.get("/health/system")
+async def health_system():
+    return {
+        "status": "ok",
+        "checks": run_system_health_checks(),
+    }

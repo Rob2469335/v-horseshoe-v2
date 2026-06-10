@@ -8,6 +8,7 @@ import logging
 from typing import List, Dict, Any, Optional
 
 from qdrant_client import QdrantClient
+from infrastructure.config.settings import get_settings
 from qdrant_client import models
 
 logger = logging.getLogger(__name__)
@@ -28,7 +29,8 @@ class VectorStore:
             logger.info("Initialized in-memory QdrantClient")
         else:
             # Production: connect to local Qdrant instance
-            self.client = QdrantClient(host="localhost", port=6333)
+            settings = get_settings()
+            self.client = QdrantClient(url=settings.qdrant_url)
             logger.info("Connected to local Qdrant instance")
 
         self.collection_name = collection_name
@@ -121,4 +123,6 @@ class VectorStore:
             return info.points_count or 0
         except Exception:
             return 0
+
+
 
