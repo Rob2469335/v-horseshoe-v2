@@ -1,104 +1,104 @@
-# swarm_os/app/main.py
-
 from __future__ import annotations
 
-from dataclasses import dataclass
 from contextlib import asynccontextmanager
-from typing import Any
+from dataclasses import dataclass
+from typing import AsyncIterator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from infrastructure.cache.cache_provider import get_cache_provider
-from infrastructure.runtime.background_jobs import BackgroundJobRunner, register_default_jobs
-from infrastructure.vector.qdrant_collections import ensure_collections
+from swarm_os.core.settings import Settings, get_settings
+from swarm_os.events.store import EventStore
+from swarm_os.healing.audit_logger import AuditLogger
+from swarm_os.healing.controller import HealingController
+from swarm_os.healing.executor import HealingExecutor
+from swarm_os.healing.failure_detector import FailureDetector
+from swarm_os.healing.graph import CausalGraphBuilder
+from swarm_os.healing.recovery_policy import RecoveryPolicy
+from swarm_os.healing.watchdog import RuntimeWatchdog
+from swarm_os.services.orchestrator import Orchestrator, build_orchestrator
 
-from swarm_os.services.orchestrator import Orchestrator
-from swarm_os.services.health import backend_health, refresh_backend_health
+_ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
 
-from swarm_os.repositories.file_snapshot_repository import FileSnapshotRepository
-from swarm_os.services.simulation_service import SimulationService
 
-
-@dataclass
+@dataclass(slots=True)
 class RuntimeGraph:
+    settings: Settings
+    event_store: EventStore
     orchestrator: Orchestrator
-    cache: Any
-    runner: BackgroundJobRunner
-    snapshot_repo: FileSnapshotRepository
-    simulation_service: SimulationService
+    healing: HealingController
+    causal_graph_builder: CausalGraphBuilder
 
     def start(self) -> None:
-        try:
-            ensure_collections()
-        except Exception as exc:
-            print("[startup] Qdrant init skipped:", exc)
-
-        try:
-            register_default_jobs(self.runner)
-            self.runner.start()
-        except Exception as exc:
-            print("[startup] background jobs skipped:", exc)
+        self.settings.data_dir.mkdir(parents=True, exist_ok=True)
+        self.settings.logs_dir.mkdir(parents=True, exist_ok=True)
+        self.settings.events_dir.mkdir(parents=True, exist_ok=True)
 
     def stop(self) -> None:
-        try:
-            self.runner.stop()
-        except Exception:
-            pass
+        return None
+
+
+def build_runtime(settings: Settings | None = None) -> RuntimeGraph:
+    resolved = settings or get_settings()
+    event_store = EventStore(resolved.events_dir)
+    policy = RecoveryPolicy()
+    healing = HealingController(
+        detector=FailureDetector(),
+        policy=policy,
+        executor=HealingExecutor(policy=policy, simulate=True),
+        audit_logger=AuditLogger(resolved.data_dir / "audit" / "healing_log.jsonl"),
+        event_store=event_store,
+        watchdog=RuntimeWatchdog(
+            cooldown_seconds=policy.cooldown_seconds,
+            max_attempts=policy.max_attempts_per_window,
+            instability_threshold=policy.instability_threshold,
+        ),
+    )
+    return RuntimeGraph(
+        settings=resolved,
+        event_store=event_store,
+        orchestrator=build_orchestrator(resolved, event_store),
+        healing=healing,
+        causal_graph_builder=CausalGraphBuilder(),
+    )
 
 
 def get_runtime(app: FastAPI) -> RuntimeGraph:
     return app.state.runtime
 
 
-def get_snapshot_repo(app: FastAPI) -> FileSnapshotRepository:
-    return app.state.runtime.snapshot_repo
-
-
-def get_simulation_service(app: FastAPI) -> SimulationService:
-    return app.state.runtime.simulation_service
-
-
 @asynccontextmanager
-async def lifespan(app: FastAPI):
-    snapshot_repo = FileSnapshotRepository()
-    simulation_service = SimulationService(snapshot_repo=snapshot_repo)
-
-    runtime = RuntimeGraph(
-        orchestrator=Orchestrator(),
-        cache=get_cache_provider(),
-        runner=BackgroundJobRunner(),
-        snapshot_repo=snapshot_repo,
-        simulation_service=simulation_service,
-    )
-
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    runtime = build_runtime()
     app.state.runtime = runtime
     app.state.orchestrator = runtime.orchestrator
     runtime.start()
-    yield
-    runtime.stop()
+    try:
+        yield
+    finally:
+        runtime.stop()
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="Swarm OS", lifespan=lifespan)
-
+    from swarm_os.api.routes import router
+    
+    app = FastAPI(title="Swarm OS", version="0.2.0", lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[
-            "http://127.0.0.1:3000",
-            "http://localhost:3000",
-            "http://127.0.0.1:5173",
-            "http://localhost:5173",
-        ],
+        allow_origins=_ALLOWED_ORIGINS,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
-
-    from swarm_os.api.routes import router as core_router
-    app.include_router(core_router)
-
+    app.include_router(router)
     return app
 
 
 app = create_app()
+
+__all__ = ["RuntimeGraph", "app", "build_runtime", "create_app", "get_runtime"]
+
+

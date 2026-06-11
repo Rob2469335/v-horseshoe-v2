@@ -62,3 +62,13 @@ everything_*.txt
 everything_*.csv
 everything_*.html
 temp_screenshot.png
+
+# Generated runtime artifacts
+reports/
+runtime/
+swarm_os/logs/
+swarm_os/data/snapshots/
+swarm_os.egg-info/
+*.bak
+*.tmp
+*.temp

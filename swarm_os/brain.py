@@ -12,10 +12,13 @@ import json
 import random
 from typing import Any, Callable, Dict, List
 import httpx
+import os
 
 
 
 log       = logging.getLogger(__name__)
+
+SWARM_URL = os.getenv("SWARM_URL", "http://127.0.0.1:8000/generate")
 
 def _safe_attr(obj, name: str, default):
     return getattr(obj, name, default)
@@ -425,6 +428,8 @@ __all__ = [
     "simple_brain",
     "registry",
 ]
+
+
 
 
 
