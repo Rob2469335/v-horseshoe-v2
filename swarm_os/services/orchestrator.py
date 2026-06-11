@@ -118,7 +118,8 @@ class Orchestrator:
         trace_id = self.trace.new_trace_id()
         start_ms = time.time() * 1000.0
 
-        step_budget = self.policy.check_step_budget(1)
+        request_policy = PolicyEngine(max_steps=self.policy.max_steps)
+        step_budget = request_policy.check_step_budget(1)
         if not step_budget.allowed:
             self.trace.add(
                 trace_id=trace_id,
@@ -298,9 +299,3 @@ class Orchestrator:
 
 # Compatibility export for API/tests expecting a module-level director
 swarm_director = None
-
-
-
-
-
-
