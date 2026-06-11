@@ -16,7 +16,7 @@ from swarm_os.healing.failure_detector import FailureDetector
 from swarm_os.healing.graph import CausalGraphBuilder
 from swarm_os.healing.recovery_policy import RecoveryPolicy
 from swarm_os.healing.watchdog import RuntimeWatchdog
-from swarm_os.services.orchestrator import Orchestrator, build_orchestrator
+from swarm_os.services.orchestrator import Orchestrator
 
 _ALLOWED_ORIGINS = [
     "http://localhost:5173",

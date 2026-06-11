@@ -8,7 +8,7 @@ import logging
 from typing import List, Dict, Any, Optional
 
 from qdrant_client import QdrantClient
-from infrastructure.config.settings import get_settings
+from swarm_os.core.settings import get_settings
 from qdrant_client import models
 
 logger = logging.getLogger(__name__)

@@ -299,3 +299,6 @@ class Orchestrator:
 
 # Compatibility export for API/tests expecting a module-level director
 swarm_director = None
+
+def build_orchestrator(settings=None, event_store=None):
+    return Orchestrator()
