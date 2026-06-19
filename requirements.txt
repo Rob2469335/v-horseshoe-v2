@@ -19,6 +19,7 @@ python-dotenv>=1.0.0
 
 # Data handling
 pydantic>=2.7.0
+pydantic-settings>=2.0.0
 
 # Utilities
 tenacity>=8.3.0       # retry logic
