@@ -1,81 +1,44 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any, Dict
 
+from .filesystem import filesystem_handler
+from .playwright import playwright_handler
+from .context7 import context7_handler
+from .web_search import web_search_handler
+
+logger = logging.getLogger(__name__)
 
 def _noop_trace(event: str, payload: Dict[str, Any]) -> None:
     return None
-
 
 class MCPRegistry:
     def __init__(self, root: Path | None = None, trace_hook=None):
         self.root = (root or Path.cwd()).resolve()
         self.trace_hook = trace_hook or _noop_trace
+        logger.info(f"Initialized MCPRegistry with root: {self.root}")
 
     async def call(self, tool: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        logger.debug(f"MCP call: {tool} with params: {params}")
+        
         if tool == "filesystem":
-            return await self._filesystem(params)
+            return await filesystem_handler(params, self.root, self.trace_hook)
+        
+        if tool == "playwright":
+            return await playwright_handler(params, self.trace_hook)
+            
+        if tool == "context7":
+            return await context7_handler(params, self.trace_hook)
+            
+        if tool == "web_search":
+            return await web_search_handler(params, self.trace_hook)
+            
         if tool == "qdrant_recall":
             return await self._qdrant_recall(params)
+            
         return {"ok": False, "error": f"Unknown tool: {tool}"}
-
-    def _resolve_in_sandbox(self, requested: str) -> Path:
-        requested_path = Path(requested or "")
-        target_path = (self.root / requested_path).resolve()
-        try:
-            target_path.relative_to(self.root)
-        except ValueError as e:
-            raise ValueError(f"Path is outside sandbox: {requested_path}") from e
-        return target_path
-
-    async def _filesystem(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        requested = str(params.get("path", ""))
-
-        try:
-            target_path = self._resolve_in_sandbox(requested)
-
-            if not target_path.exists():
-                result = {
-                    "ok": False,
-                    "error": f"File not found: {requested}",
-                    "path": str(target_path),
-                }
-                self.trace_hook("filesystem_read", result)
-                return result
-
-            if not target_path.is_file():
-                result = {
-                    "ok": False,
-                    "error": f"Not a file: {requested}",
-                    "path": str(target_path),
-                }
-                self.trace_hook("filesystem_read", result)
-                return result
-
-            content = target_path.read_text(encoding="utf-8", errors="replace")
-            result = {
-                "ok": True,
-                "path": str(target_path),
-                "content": content,
-            }
-            self.trace_hook("filesystem_read", {"ok": True, "path": str(target_path)})
-            return result
-
-        except Exception as e:
-            error_path = requested
-            try:
-                error_path = str((self.root / Path(requested)).resolve())
-            except Exception:
-                pass
-
-            result = {
-                "ok": False,
-                "error": str(e),
-                "path": error_path,
-            }
-            self.trace_hook("filesystem_read", result)
-            return result
 
     async def _qdrant_recall(self, params: Dict[str, Any]) -> Dict[str, Any]:
         query = str(params.get("query", ""))
@@ -90,9 +53,7 @@ class MCPRegistry:
         self.trace_hook("qdrant_recall", result)
         return result
 
-
 registry = MCPRegistry()
-
 
 async def call(tool: str, params: Dict[str, Any]) -> Dict[str, Any]:
     return await registry.call(tool, params)

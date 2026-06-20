@@ -1,0 +1,139 @@
+{
+  "status": {
+    "status": "ok",
+    "ready": true,
+    "app_name": "v-horseshoe-v2",
+    "environment": "dev",
+    "events_path": "data\\events\\events.jsonl",
+    "event_count": 6802,
+    "ollama_base_url": "http://127.0.0.1:11434",
+    "ollama_reachable": true,
+    "installed_model_count": 16,
+    "installed_models": [
+      "mistral-nemo:12b",
+      "moondream:latest",
+      "nomic-embed-text:latest",
+      "qllama/bge-reranker-v2-m3:latest",
+      "qwen2.5-coder:14b",
+      "qwen2.5-coder:14b-32k",
+      "qwen2.5-coder:3b",
+      "qwen2.5-coder:7b",
+      "qwen2.5-coder:7b-16k",
+      "qwen2.5:14b-instruct",
+      "qwen2.5:14b-instruct-32k",
+      "qwen2.5:3b-instruct",
+      "qwen2.5:7b-instruct",
+      "qwen3-embedding:8b",
+      "qwen3-vl:8b",
+      "qwen3:14b"
+    ],
+    "capabilities": {
+      "tools": {
+        "available": true,
+        "count": 15,
+        "names": [
+          "health",
+          "readyz",
+          "status",
+          "events",
+          "admin/events",
+          "admin/causal-graph",
+          "healing/evaluate",
+          "admin/healing/run",
+          "admin/replay",
+          "traces",
+          "traces/summary",
+          "traces/clear",
+          "admin/status",
+          "admin/dashboard",
+          "admin/generation"
+        ],
+        "source": "runtime-routes"
+      },
+      "vision": {
+        "available": true,
+        "models": [
+          "moondream:latest",
+          "qwen3-vl:8b"
+        ],
+        "primary_model": "moondream:latest",
+        "provider": "ollama"
+      },
+      "generation": {
+        "available": true,
+        "provider": "ollama",
+        "models": [
+          "mistral-nemo:12b",
+          "moondream:latest",
+          "nomic-embed-text:latest",
+          "qllama/bge-reranker-v2-m3:latest",
+          "qwen2.5-coder:14b",
+          "qwen2.5-coder:14b-32k",
+          "qwen2.5-coder:3b",
+          "qwen2.5-coder:7b",
+          "qwen2.5-coder:7b-16k",
+          "qwen2.5:14b-instruct",
+          "qwen2.5:14b-instruct-32k",
+          "qwen2.5:3b-instruct",
+          "qwen2.5:7b-instruct",
+          "qwen3-embedding:8b",
+          "qwen3-vl:8b",
+          "qwen3:14b"
+        ],
+        "default_model": "mistral-nemo:12b",
+        "coding_models": [
+          "qwen2.5-coder:14b",
+          "qwen2.5-coder:14b-32k",
+          "qwen2.5-coder:3b",
+          "qwen2.5-coder:7b",
+          "qwen2.5-coder:7b-16k"
+        ],
+        "reasoning_models": [
+          "mistral-nemo:12b",
+          "qwen2.5-coder:14b",
+          "qwen2.5-coder:14b-32k",
+          "qwen2.5:14b-instruct",
+          "qwen2.5:14b-instruct-32k",
+          "qwen3-embedding:8b",
+          "qwen3-vl:8b",
+          "qwen3:14b"
+        ]
+      }
+    }
+  },
+  "health": {
+    "status": "ok",
+    "health_score": 100,
+    "overall": "healing detector unavailable"
+  },
+  "readyz": {
+    "status": "ready",
+    "ready": true,
+    "checks": {
+      "runtime_started": true,
+      "events_store_available": true,
+      "ollama_reachable": true,
+      "models_loaded": true,
+      "health_score_ok": true
+    },
+    "health_score": 100,
+    "overall": "healing detector unavailable"
+  },
+  "tools": {
+    "tools": [
+      "health",
+      "readyz",
+      "status",
+      "events",
+      "traces",
+      "admin/status",
+      "admin/dashboard",
+      "admin/generation",
+      "admin/run-state",
+      "admin/snapshots",
+      "admin/explorer",
+      "admin/resume-latest"
+    ]
+  },
+  "traceSummary": null
+}

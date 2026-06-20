@@ -1,0 +1,2036 @@
+[
+  {
+    "timestamp": "2026-06-12T20:14:19",
+    "backendReachable": true,
+    "healthReachable": true,
+    "readyzReachable": true,
+    "toolCount": 12,
+    "traceCount": 0,
+    "visionAvailable": true,
+    "manualOnly": null,
+    "recoverySignals": 0,
+    "status": {
+      "status": "ok",
+      "ready": true,
+      "app_name": "v-horseshoe-v2",
+      "environment": "dev",
+      "events_path": "data\\events\\events.jsonl",
+      "event_count": 6802,
+      "ollama_base_url": "http://127.0.0.1:11434",
+      "ollama_reachable": true,
+      "installed_model_count": 16,
+      "installed_models": [
+        "mistral-nemo:12b",
+        "moondream:latest",
+        "nomic-embed-text:latest",
+        "qllama/bge-reranker-v2-m3:latest",
+        "qwen2.5-coder:14b",
+        "qwen2.5-coder:14b-32k",
+        "qwen2.5-coder:3b",
+        "qwen2.5-coder:7b",
+        "qwen2.5-coder:7b-16k",
+        "qwen2.5:14b-instruct",
+        "qwen2.5:14b-instruct-32k",
+        "qwen2.5:3b-instruct",
+        "qwen2.5:7b-instruct",
+        "qwen3-embedding:8b",
+        "qwen3-vl:8b",
+        "qwen3:14b"
+      ],
+      "capabilities": {
+        "tools": {
+          "available": true,
+          "count": 15,
+          "names": [
+            "health",
+            "readyz",
+            "status",
+            "events",
+            "admin/events",
+            "admin/causal-graph",
+            "healing/evaluate",
+            "admin/healing/run",
+            "admin/replay",
+            "traces",
+            "traces/summary",
+            "traces/clear",
+            "admin/status",
+            "admin/dashboard",
+            "admin/generation"
+          ],
+          "source": "runtime-routes"
+        },
+        "vision": {
+          "available": true,
+          "models": [
+            "moondream:latest",
+            "qwen3-vl:8b"
+          ],
+          "primary_model": "moondream:latest",
+          "provider": "ollama"
+        },
+        "generation": {
+          "available": true,
+          "provider": "ollama",
+          "models": [
+            "mistral-nemo:12b",
+            "moondream:latest",
+            "nomic-embed-text:latest",
+            "qllama/bge-reranker-v2-m3:latest",
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5-coder:3b",
+            "qwen2.5-coder:7b",
+            "qwen2.5-coder:7b-16k",
+            "qwen2.5:14b-instruct",
+            "qwen2.5:14b-instruct-32k",
+            "qwen2.5:3b-instruct",
+            "qwen2.5:7b-instruct",
+            "qwen3-embedding:8b",
+            "qwen3-vl:8b",
+            "qwen3:14b"
+          ],
+          "default_model": "mistral-nemo:12b",
+          "coding_models": [
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5-coder:3b",
+            "qwen2.5-coder:7b",
+            "qwen2.5-coder:7b-16k"
+          ],
+          "reasoning_models": [
+            "mistral-nemo:12b",
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5:14b-instruct",
+            "qwen2.5:14b-instruct-32k",
+            "qwen3-embedding:8b",
+            "qwen3-vl:8b",
+            "qwen3:14b"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "timestamp": "2026-06-12T20:14:24",
+    "backendReachable": true,
+    "healthReachable": true,
+    "readyzReachable": true,
+    "toolCount": 12,
+    "traceCount": 0,
+    "visionAvailable": true,
+    "manualOnly": null,
+    "recoverySignals": 0,
+    "status": {
+      "status": "ok",
+      "ready": true,
+      "app_name": "v-horseshoe-v2",
+      "environment": "dev",
+      "events_path": "data\\events\\events.jsonl",
+      "event_count": 6802,
+      "ollama_base_url": "http://127.0.0.1:11434",
+      "ollama_reachable": true,
+      "installed_model_count": 16,
+      "installed_models": [
+        "mistral-nemo:12b",
+        "moondream:latest",
+        "nomic-embed-text:latest",
+        "qllama/bge-reranker-v2-m3:latest",
+        "qwen2.5-coder:14b",
+        "qwen2.5-coder:14b-32k",
+        "qwen2.5-coder:3b",
+        "qwen2.5-coder:7b",
+        "qwen2.5-coder:7b-16k",
+        "qwen2.5:14b-instruct",
+        "qwen2.5:14b-instruct-32k",
+        "qwen2.5:3b-instruct",
+        "qwen2.5:7b-instruct",
+        "qwen3-embedding:8b",
+        "qwen3-vl:8b",
+        "qwen3:14b"
+      ],
+      "capabilities": {
+        "tools": {
+          "available": true,
+          "count": 15,
+          "names": [
+            "health",
+            "readyz",
+            "status",
+            "events",
+            "admin/events",
+            "admin/causal-graph",
+            "healing/evaluate",
+            "admin/healing/run",
+            "admin/replay",
+            "traces",
+            "traces/summary",
+            "traces/clear",
+            "admin/status",
+            "admin/dashboard",
+            "admin/generation"
+          ],
+          "source": "runtime-routes"
+        },
+        "vision": {
+          "available": true,
+          "models": [
+            "moondream:latest",
+            "qwen3-vl:8b"
+          ],
+          "primary_model": "moondream:latest",
+          "provider": "ollama"
+        },
+        "generation": {
+          "available": true,
+          "provider": "ollama",
+          "models": [
+            "mistral-nemo:12b",
+            "moondream:latest",
+            "nomic-embed-text:latest",
+            "qllama/bge-reranker-v2-m3:latest",
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5-coder:3b",
+            "qwen2.5-coder:7b",
+            "qwen2.5-coder:7b-16k",
+            "qwen2.5:14b-instruct",
+            "qwen2.5:14b-instruct-32k",
+            "qwen2.5:3b-instruct",
+            "qwen2.5:7b-instruct",
+            "qwen3-embedding:8b",
+            "qwen3-vl:8b",
+            "qwen3:14b"
+          ],
+          "default_model": "mistral-nemo:12b",
+          "coding_models": [
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5-coder:3b",
+            "qwen2.5-coder:7b",
+            "qwen2.5-coder:7b-16k"
+          ],
+          "reasoning_models": [
+            "mistral-nemo:12b",
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5:14b-instruct",
+            "qwen2.5:14b-instruct-32k",
+            "qwen3-embedding:8b",
+            "qwen3-vl:8b",
+            "qwen3:14b"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "timestamp": "2026-06-12T20:14:30",
+    "backendReachable": true,
+    "healthReachable": true,
+    "readyzReachable": true,
+    "toolCount": 12,
+    "traceCount": 0,
+    "visionAvailable": true,
+    "manualOnly": null,
+    "recoverySignals": 0,
+    "status": {
+      "status": "ok",
+      "ready": true,
+      "app_name": "v-horseshoe-v2",
+      "environment": "dev",
+      "events_path": "data\\events\\events.jsonl",
+      "event_count": 6802,
+      "ollama_base_url": "http://127.0.0.1:11434",
+      "ollama_reachable": true,
+      "installed_model_count": 16,
+      "installed_models": [
+        "mistral-nemo:12b",
+        "moondream:latest",
+        "nomic-embed-text:latest",
+        "qllama/bge-reranker-v2-m3:latest",
+        "qwen2.5-coder:14b",
+        "qwen2.5-coder:14b-32k",
+        "qwen2.5-coder:3b",
+        "qwen2.5-coder:7b",
+        "qwen2.5-coder:7b-16k",
+        "qwen2.5:14b-instruct",
+        "qwen2.5:14b-instruct-32k",
+        "qwen2.5:3b-instruct",
+        "qwen2.5:7b-instruct",
+        "qwen3-embedding:8b",
+        "qwen3-vl:8b",
+        "qwen3:14b"
+      ],
+      "capabilities": {
+        "tools": {
+          "available": true,
+          "count": 15,
+          "names": [
+            "health",
+            "readyz",
+            "status",
+            "events",
+            "admin/events",
+            "admin/causal-graph",
+            "healing/evaluate",
+            "admin/healing/run",
+            "admin/replay",
+            "traces",
+            "traces/summary",
+            "traces/clear",
+            "admin/status",
+            "admin/dashboard",
+            "admin/generation"
+          ],
+          "source": "runtime-routes"
+        },
+        "vision": {
+          "available": true,
+          "models": [
+            "moondream:latest",
+            "qwen3-vl:8b"
+          ],
+          "primary_model": "moondream:latest",
+          "provider": "ollama"
+        },
+        "generation": {
+          "available": true,
+          "provider": "ollama",
+          "models": [
+            "mistral-nemo:12b",
+            "moondream:latest",
+            "nomic-embed-text:latest",
+            "qllama/bge-reranker-v2-m3:latest",
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5-coder:3b",
+            "qwen2.5-coder:7b",
+            "qwen2.5-coder:7b-16k",
+            "qwen2.5:14b-instruct",
+            "qwen2.5:14b-instruct-32k",
+            "qwen2.5:3b-instruct",
+            "qwen2.5:7b-instruct",
+            "qwen3-embedding:8b",
+            "qwen3-vl:8b",
+            "qwen3:14b"
+          ],
+          "default_model": "mistral-nemo:12b",
+          "coding_models": [
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5-coder:3b",
+            "qwen2.5-coder:7b",
+            "qwen2.5-coder:7b-16k"
+          ],
+          "reasoning_models": [
+            "mistral-nemo:12b",
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5:14b-instruct",
+            "qwen2.5:14b-instruct-32k",
+            "qwen3-embedding:8b",
+            "qwen3-vl:8b",
+            "qwen3:14b"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "timestamp": "2026-06-12T20:14:35",
+    "backendReachable": true,
+    "healthReachable": true,
+    "readyzReachable": true,
+    "toolCount": 12,
+    "traceCount": 0,
+    "visionAvailable": true,
+    "manualOnly": null,
+    "recoverySignals": 0,
+    "status": {
+      "status": "ok",
+      "ready": true,
+      "app_name": "v-horseshoe-v2",
+      "environment": "dev",
+      "events_path": "data\\events\\events.jsonl",
+      "event_count": 6802,
+      "ollama_base_url": "http://127.0.0.1:11434",
+      "ollama_reachable": true,
+      "installed_model_count": 16,
+      "installed_models": [
+        "mistral-nemo:12b",
+        "moondream:latest",
+        "nomic-embed-text:latest",
+        "qllama/bge-reranker-v2-m3:latest",
+        "qwen2.5-coder:14b",
+        "qwen2.5-coder:14b-32k",
+        "qwen2.5-coder:3b",
+        "qwen2.5-coder:7b",
+        "qwen2.5-coder:7b-16k",
+        "qwen2.5:14b-instruct",
+        "qwen2.5:14b-instruct-32k",
+        "qwen2.5:3b-instruct",
+        "qwen2.5:7b-instruct",
+        "qwen3-embedding:8b",
+        "qwen3-vl:8b",
+        "qwen3:14b"
+      ],
+      "capabilities": {
+        "tools": {
+          "available": true,
+          "count": 15,
+          "names": [
+            "health",
+            "readyz",
+            "status",
+            "events",
+            "admin/events",
+            "admin/causal-graph",
+            "healing/evaluate",
+            "admin/healing/run",
+            "admin/replay",
+            "traces",
+            "traces/summary",
+            "traces/clear",
+            "admin/status",
+            "admin/dashboard",
+            "admin/generation"
+          ],
+          "source": "runtime-routes"
+        },
+        "vision": {
+          "available": true,
+          "models": [
+            "moondream:latest",
+            "qwen3-vl:8b"
+          ],
+          "primary_model": "moondream:latest",
+          "provider": "ollama"
+        },
+        "generation": {
+          "available": true,
+          "provider": "ollama",
+          "models": [
+            "mistral-nemo:12b",
+            "moondream:latest",
+            "nomic-embed-text:latest",
+            "qllama/bge-reranker-v2-m3:latest",
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5-coder:3b",
+            "qwen2.5-coder:7b",
+            "qwen2.5-coder:7b-16k",
+            "qwen2.5:14b-instruct",
+            "qwen2.5:14b-instruct-32k",
+            "qwen2.5:3b-instruct",
+            "qwen2.5:7b-instruct",
+            "qwen3-embedding:8b",
+            "qwen3-vl:8b",
+            "qwen3:14b"
+          ],
+          "default_model": "mistral-nemo:12b",
+          "coding_models": [
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5-coder:3b",
+            "qwen2.5-coder:7b",
+            "qwen2.5-coder:7b-16k"
+          ],
+          "reasoning_models": [
+            "mistral-nemo:12b",
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5:14b-instruct",
+            "qwen2.5:14b-instruct-32k",
+            "qwen3-embedding:8b",
+            "qwen3-vl:8b",
+            "qwen3:14b"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "timestamp": "2026-06-12T20:14:40",
+    "backendReachable": true,
+    "healthReachable": true,
+    "readyzReachable": true,
+    "toolCount": 12,
+    "traceCount": 0,
+    "visionAvailable": true,
+    "manualOnly": null,
+    "recoverySignals": 0,
+    "status": {
+      "status": "ok",
+      "ready": true,
+      "app_name": "v-horseshoe-v2",
+      "environment": "dev",
+      "events_path": "data\\events\\events.jsonl",
+      "event_count": 6802,
+      "ollama_base_url": "http://127.0.0.1:11434",
+      "ollama_reachable": true,
+      "installed_model_count": 16,
+      "installed_models": [
+        "mistral-nemo:12b",
+        "moondream:latest",
+        "nomic-embed-text:latest",
+        "qllama/bge-reranker-v2-m3:latest",
+        "qwen2.5-coder:14b",
+        "qwen2.5-coder:14b-32k",
+        "qwen2.5-coder:3b",
+        "qwen2.5-coder:7b",
+        "qwen2.5-coder:7b-16k",
+        "qwen2.5:14b-instruct",
+        "qwen2.5:14b-instruct-32k",
+        "qwen2.5:3b-instruct",
+        "qwen2.5:7b-instruct",
+        "qwen3-embedding:8b",
+        "qwen3-vl:8b",
+        "qwen3:14b"
+      ],
+      "capabilities": {
+        "tools": {
+          "available": true,
+          "count": 15,
+          "names": [
+            "health",
+            "readyz",
+            "status",
+            "events",
+            "admin/events",
+            "admin/causal-graph",
+            "healing/evaluate",
+            "admin/healing/run",
+            "admin/replay",
+            "traces",
+            "traces/summary",
+            "traces/clear",
+            "admin/status",
+            "admin/dashboard",
+            "admin/generation"
+          ],
+          "source": "runtime-routes"
+        },
+        "vision": {
+          "available": true,
+          "models": [
+            "moondream:latest",
+            "qwen3-vl:8b"
+          ],
+          "primary_model": "moondream:latest",
+          "provider": "ollama"
+        },
+        "generation": {
+          "available": true,
+          "provider": "ollama",
+          "models": [
+            "mistral-nemo:12b",
+            "moondream:latest",
+            "nomic-embed-text:latest",
+            "qllama/bge-reranker-v2-m3:latest",
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5-coder:3b",
+            "qwen2.5-coder:7b",
+            "qwen2.5-coder:7b-16k",
+            "qwen2.5:14b-instruct",
+            "qwen2.5:14b-instruct-32k",
+            "qwen2.5:3b-instruct",
+            "qwen2.5:7b-instruct",
+            "qwen3-embedding:8b",
+            "qwen3-vl:8b",
+            "qwen3:14b"
+          ],
+          "default_model": "mistral-nemo:12b",
+          "coding_models": [
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5-coder:3b",
+            "qwen2.5-coder:7b",
+            "qwen2.5-coder:7b-16k"
+          ],
+          "reasoning_models": [
+            "mistral-nemo:12b",
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5:14b-instruct",
+            "qwen2.5:14b-instruct-32k",
+            "qwen3-embedding:8b",
+            "qwen3-vl:8b",
+            "qwen3:14b"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "timestamp": "2026-06-12T20:14:45",
+    "backendReachable": true,
+    "healthReachable": true,
+    "readyzReachable": true,
+    "toolCount": 12,
+    "traceCount": 0,
+    "visionAvailable": true,
+    "manualOnly": null,
+    "recoverySignals": 0,
+    "status": {
+      "status": "ok",
+      "ready": true,
+      "app_name": "v-horseshoe-v2",
+      "environment": "dev",
+      "events_path": "data\\events\\events.jsonl",
+      "event_count": 6802,
+      "ollama_base_url": "http://127.0.0.1:11434",
+      "ollama_reachable": true,
+      "installed_model_count": 16,
+      "installed_models": [
+        "mistral-nemo:12b",
+        "moondream:latest",
+        "nomic-embed-text:latest",
+        "qllama/bge-reranker-v2-m3:latest",
+        "qwen2.5-coder:14b",
+        "qwen2.5-coder:14b-32k",
+        "qwen2.5-coder:3b",
+        "qwen2.5-coder:7b",
+        "qwen2.5-coder:7b-16k",
+        "qwen2.5:14b-instruct",
+        "qwen2.5:14b-instruct-32k",
+        "qwen2.5:3b-instruct",
+        "qwen2.5:7b-instruct",
+        "qwen3-embedding:8b",
+        "qwen3-vl:8b",
+        "qwen3:14b"
+      ],
+      "capabilities": {
+        "tools": {
+          "available": true,
+          "count": 15,
+          "names": [
+            "health",
+            "readyz",
+            "status",
+            "events",
+            "admin/events",
+            "admin/causal-graph",
+            "healing/evaluate",
+            "admin/healing/run",
+            "admin/replay",
+            "traces",
+            "traces/summary",
+            "traces/clear",
+            "admin/status",
+            "admin/dashboard",
+            "admin/generation"
+          ],
+          "source": "runtime-routes"
+        },
+        "vision": {
+          "available": true,
+          "models": [
+            "moondream:latest",
+            "qwen3-vl:8b"
+          ],
+          "primary_model": "moondream:latest",
+          "provider": "ollama"
+        },
+        "generation": {
+          "available": true,
+          "provider": "ollama",
+          "models": [
+            "mistral-nemo:12b",
+            "moondream:latest",
+            "nomic-embed-text:latest",
+            "qllama/bge-reranker-v2-m3:latest",
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5-coder:3b",
+            "qwen2.5-coder:7b",
+            "qwen2.5-coder:7b-16k",
+            "qwen2.5:14b-instruct",
+            "qwen2.5:14b-instruct-32k",
+            "qwen2.5:3b-instruct",
+            "qwen2.5:7b-instruct",
+            "qwen3-embedding:8b",
+            "qwen3-vl:8b",
+            "qwen3:14b"
+          ],
+          "default_model": "mistral-nemo:12b",
+          "coding_models": [
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5-coder:3b",
+            "qwen2.5-coder:7b",
+            "qwen2.5-coder:7b-16k"
+          ],
+          "reasoning_models": [
+            "mistral-nemo:12b",
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5:14b-instruct",
+            "qwen2.5:14b-instruct-32k",
+            "qwen3-embedding:8b",
+            "qwen3-vl:8b",
+            "qwen3:14b"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "timestamp": "2026-06-12T20:14:50",
+    "backendReachable": true,
+    "healthReachable": true,
+    "readyzReachable": true,
+    "toolCount": 12,
+    "traceCount": 0,
+    "visionAvailable": true,
+    "manualOnly": null,
+    "recoverySignals": 0,
+    "status": {
+      "status": "ok",
+      "ready": true,
+      "app_name": "v-horseshoe-v2",
+      "environment": "dev",
+      "events_path": "data\\events\\events.jsonl",
+      "event_count": 6802,
+      "ollama_base_url": "http://127.0.0.1:11434",
+      "ollama_reachable": true,
+      "installed_model_count": 16,
+      "installed_models": [
+        "mistral-nemo:12b",
+        "moondream:latest",
+        "nomic-embed-text:latest",
+        "qllama/bge-reranker-v2-m3:latest",
+        "qwen2.5-coder:14b",
+        "qwen2.5-coder:14b-32k",
+        "qwen2.5-coder:3b",
+        "qwen2.5-coder:7b",
+        "qwen2.5-coder:7b-16k",
+        "qwen2.5:14b-instruct",
+        "qwen2.5:14b-instruct-32k",
+        "qwen2.5:3b-instruct",
+        "qwen2.5:7b-instruct",
+        "qwen3-embedding:8b",
+        "qwen3-vl:8b",
+        "qwen3:14b"
+      ],
+      "capabilities": {
+        "tools": {
+          "available": true,
+          "count": 15,
+          "names": [
+            "health",
+            "readyz",
+            "status",
+            "events",
+            "admin/events",
+            "admin/causal-graph",
+            "healing/evaluate",
+            "admin/healing/run",
+            "admin/replay",
+            "traces",
+            "traces/summary",
+            "traces/clear",
+            "admin/status",
+            "admin/dashboard",
+            "admin/generation"
+          ],
+          "source": "runtime-routes"
+        },
+        "vision": {
+          "available": true,
+          "models": [
+            "moondream:latest",
+            "qwen3-vl:8b"
+          ],
+          "primary_model": "moondream:latest",
+          "provider": "ollama"
+        },
+        "generation": {
+          "available": true,
+          "provider": "ollama",
+          "models": [
+            "mistral-nemo:12b",
+            "moondream:latest",
+            "nomic-embed-text:latest",
+            "qllama/bge-reranker-v2-m3:latest",
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5-coder:3b",
+            "qwen2.5-coder:7b",
+            "qwen2.5-coder:7b-16k",
+            "qwen2.5:14b-instruct",
+            "qwen2.5:14b-instruct-32k",
+            "qwen2.5:3b-instruct",
+            "qwen2.5:7b-instruct",
+            "qwen3-embedding:8b",
+            "qwen3-vl:8b",
+            "qwen3:14b"
+          ],
+          "default_model": "mistral-nemo:12b",
+          "coding_models": [
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5-coder:3b",
+            "qwen2.5-coder:7b",
+            "qwen2.5-coder:7b-16k"
+          ],
+          "reasoning_models": [
+            "mistral-nemo:12b",
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5:14b-instruct",
+            "qwen2.5:14b-instruct-32k",
+            "qwen3-embedding:8b",
+            "qwen3-vl:8b",
+            "qwen3:14b"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "timestamp": "2026-06-12T20:14:55",
+    "backendReachable": true,
+    "healthReachable": true,
+    "readyzReachable": true,
+    "toolCount": 12,
+    "traceCount": 0,
+    "visionAvailable": true,
+    "manualOnly": null,
+    "recoverySignals": 0,
+    "status": {
+      "status": "ok",
+      "ready": true,
+      "app_name": "v-horseshoe-v2",
+      "environment": "dev",
+      "events_path": "data\\events\\events.jsonl",
+      "event_count": 6802,
+      "ollama_base_url": "http://127.0.0.1:11434",
+      "ollama_reachable": true,
+      "installed_model_count": 16,
+      "installed_models": [
+        "mistral-nemo:12b",
+        "moondream:latest",
+        "nomic-embed-text:latest",
+        "qllama/bge-reranker-v2-m3:latest",
+        "qwen2.5-coder:14b",
+        "qwen2.5-coder:14b-32k",
+        "qwen2.5-coder:3b",
+        "qwen2.5-coder:7b",
+        "qwen2.5-coder:7b-16k",
+        "qwen2.5:14b-instruct",
+        "qwen2.5:14b-instruct-32k",
+        "qwen2.5:3b-instruct",
+        "qwen2.5:7b-instruct",
+        "qwen3-embedding:8b",
+        "qwen3-vl:8b",
+        "qwen3:14b"
+      ],
+      "capabilities": {
+        "tools": {
+          "available": true,
+          "count": 15,
+          "names": [
+            "health",
+            "readyz",
+            "status",
+            "events",
+            "admin/events",
+            "admin/causal-graph",
+            "healing/evaluate",
+            "admin/healing/run",
+            "admin/replay",
+            "traces",
+            "traces/summary",
+            "traces/clear",
+            "admin/status",
+            "admin/dashboard",
+            "admin/generation"
+          ],
+          "source": "runtime-routes"
+        },
+        "vision": {
+          "available": true,
+          "models": [
+            "moondream:latest",
+            "qwen3-vl:8b"
+          ],
+          "primary_model": "moondream:latest",
+          "provider": "ollama"
+        },
+        "generation": {
+          "available": true,
+          "provider": "ollama",
+          "models": [
+            "mistral-nemo:12b",
+            "moondream:latest",
+            "nomic-embed-text:latest",
+            "qllama/bge-reranker-v2-m3:latest",
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5-coder:3b",
+            "qwen2.5-coder:7b",
+            "qwen2.5-coder:7b-16k",
+            "qwen2.5:14b-instruct",
+            "qwen2.5:14b-instruct-32k",
+            "qwen2.5:3b-instruct",
+            "qwen2.5:7b-instruct",
+            "qwen3-embedding:8b",
+            "qwen3-vl:8b",
+            "qwen3:14b"
+          ],
+          "default_model": "mistral-nemo:12b",
+          "coding_models": [
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5-coder:3b",
+            "qwen2.5-coder:7b",
+            "qwen2.5-coder:7b-16k"
+          ],
+          "reasoning_models": [
+            "mistral-nemo:12b",
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5:14b-instruct",
+            "qwen2.5:14b-instruct-32k",
+            "qwen3-embedding:8b",
+            "qwen3-vl:8b",
+            "qwen3:14b"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "timestamp": "2026-06-12T20:15:01",
+    "backendReachable": true,
+    "healthReachable": true,
+    "readyzReachable": true,
+    "toolCount": 12,
+    "traceCount": 0,
+    "visionAvailable": true,
+    "manualOnly": null,
+    "recoverySignals": 0,
+    "status": {
+      "status": "ok",
+      "ready": true,
+      "app_name": "v-horseshoe-v2",
+      "environment": "dev",
+      "events_path": "data\\events\\events.jsonl",
+      "event_count": 6802,
+      "ollama_base_url": "http://127.0.0.1:11434",
+      "ollama_reachable": true,
+      "installed_model_count": 16,
+      "installed_models": [
+        "mistral-nemo:12b",
+        "moondream:latest",
+        "nomic-embed-text:latest",
+        "qllama/bge-reranker-v2-m3:latest",
+        "qwen2.5-coder:14b",
+        "qwen2.5-coder:14b-32k",
+        "qwen2.5-coder:3b",
+        "qwen2.5-coder:7b",
+        "qwen2.5-coder:7b-16k",
+        "qwen2.5:14b-instruct",
+        "qwen2.5:14b-instruct-32k",
+        "qwen2.5:3b-instruct",
+        "qwen2.5:7b-instruct",
+        "qwen3-embedding:8b",
+        "qwen3-vl:8b",
+        "qwen3:14b"
+      ],
+      "capabilities": {
+        "tools": {
+          "available": true,
+          "count": 15,
+          "names": [
+            "health",
+            "readyz",
+            "status",
+            "events",
+            "admin/events",
+            "admin/causal-graph",
+            "healing/evaluate",
+            "admin/healing/run",
+            "admin/replay",
+            "traces",
+            "traces/summary",
+            "traces/clear",
+            "admin/status",
+            "admin/dashboard",
+            "admin/generation"
+          ],
+          "source": "runtime-routes"
+        },
+        "vision": {
+          "available": true,
+          "models": [
+            "moondream:latest",
+            "qwen3-vl:8b"
+          ],
+          "primary_model": "moondream:latest",
+          "provider": "ollama"
+        },
+        "generation": {
+          "available": true,
+          "provider": "ollama",
+          "models": [
+            "mistral-nemo:12b",
+            "moondream:latest",
+            "nomic-embed-text:latest",
+            "qllama/bge-reranker-v2-m3:latest",
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5-coder:3b",
+            "qwen2.5-coder:7b",
+            "qwen2.5-coder:7b-16k",
+            "qwen2.5:14b-instruct",
+            "qwen2.5:14b-instruct-32k",
+            "qwen2.5:3b-instruct",
+            "qwen2.5:7b-instruct",
+            "qwen3-embedding:8b",
+            "qwen3-vl:8b",
+            "qwen3:14b"
+          ],
+          "default_model": "mistral-nemo:12b",
+          "coding_models": [
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5-coder:3b",
+            "qwen2.5-coder:7b",
+            "qwen2.5-coder:7b-16k"
+          ],
+          "reasoning_models": [
+            "mistral-nemo:12b",
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5:14b-instruct",
+            "qwen2.5:14b-instruct-32k",
+            "qwen3-embedding:8b",
+            "qwen3-vl:8b",
+            "qwen3:14b"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "timestamp": "2026-06-12T20:15:06",
+    "backendReachable": true,
+    "healthReachable": true,
+    "readyzReachable": true,
+    "toolCount": 12,
+    "traceCount": 0,
+    "visionAvailable": true,
+    "manualOnly": null,
+    "recoverySignals": 0,
+    "status": {
+      "status": "ok",
+      "ready": true,
+      "app_name": "v-horseshoe-v2",
+      "environment": "dev",
+      "events_path": "data\\events\\events.jsonl",
+      "event_count": 6802,
+      "ollama_base_url": "http://127.0.0.1:11434",
+      "ollama_reachable": true,
+      "installed_model_count": 16,
+      "installed_models": [
+        "mistral-nemo:12b",
+        "moondream:latest",
+        "nomic-embed-text:latest",
+        "qllama/bge-reranker-v2-m3:latest",
+        "qwen2.5-coder:14b",
+        "qwen2.5-coder:14b-32k",
+        "qwen2.5-coder:3b",
+        "qwen2.5-coder:7b",
+        "qwen2.5-coder:7b-16k",
+        "qwen2.5:14b-instruct",
+        "qwen2.5:14b-instruct-32k",
+        "qwen2.5:3b-instruct",
+        "qwen2.5:7b-instruct",
+        "qwen3-embedding:8b",
+        "qwen3-vl:8b",
+        "qwen3:14b"
+      ],
+      "capabilities": {
+        "tools": {
+          "available": true,
+          "count": 15,
+          "names": [
+            "health",
+            "readyz",
+            "status",
+            "events",
+            "admin/events",
+            "admin/causal-graph",
+            "healing/evaluate",
+            "admin/healing/run",
+            "admin/replay",
+            "traces",
+            "traces/summary",
+            "traces/clear",
+            "admin/status",
+            "admin/dashboard",
+            "admin/generation"
+          ],
+          "source": "runtime-routes"
+        },
+        "vision": {
+          "available": true,
+          "models": [
+            "moondream:latest",
+            "qwen3-vl:8b"
+          ],
+          "primary_model": "moondream:latest",
+          "provider": "ollama"
+        },
+        "generation": {
+          "available": true,
+          "provider": "ollama",
+          "models": [
+            "mistral-nemo:12b",
+            "moondream:latest",
+            "nomic-embed-text:latest",
+            "qllama/bge-reranker-v2-m3:latest",
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5-coder:3b",
+            "qwen2.5-coder:7b",
+            "qwen2.5-coder:7b-16k",
+            "qwen2.5:14b-instruct",
+            "qwen2.5:14b-instruct-32k",
+            "qwen2.5:3b-instruct",
+            "qwen2.5:7b-instruct",
+            "qwen3-embedding:8b",
+            "qwen3-vl:8b",
+            "qwen3:14b"
+          ],
+          "default_model": "mistral-nemo:12b",
+          "coding_models": [
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5-coder:3b",
+            "qwen2.5-coder:7b",
+            "qwen2.5-coder:7b-16k"
+          ],
+          "reasoning_models": [
+            "mistral-nemo:12b",
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5:14b-instruct",
+            "qwen2.5:14b-instruct-32k",
+            "qwen3-embedding:8b",
+            "qwen3-vl:8b",
+            "qwen3:14b"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "timestamp": "2026-06-12T20:15:11",
+    "backendReachable": true,
+    "healthReachable": true,
+    "readyzReachable": true,
+    "toolCount": 12,
+    "traceCount": 0,
+    "visionAvailable": true,
+    "manualOnly": null,
+    "recoverySignals": 0,
+    "status": {
+      "status": "ok",
+      "ready": true,
+      "app_name": "v-horseshoe-v2",
+      "environment": "dev",
+      "events_path": "data\\events\\events.jsonl",
+      "event_count": 6802,
+      "ollama_base_url": "http://127.0.0.1:11434",
+      "ollama_reachable": true,
+      "installed_model_count": 16,
+      "installed_models": [
+        "mistral-nemo:12b",
+        "moondream:latest",
+        "nomic-embed-text:latest",
+        "qllama/bge-reranker-v2-m3:latest",
+        "qwen2.5-coder:14b",
+        "qwen2.5-coder:14b-32k",
+        "qwen2.5-coder:3b",
+        "qwen2.5-coder:7b",
+        "qwen2.5-coder:7b-16k",
+        "qwen2.5:14b-instruct",
+        "qwen2.5:14b-instruct-32k",
+        "qwen2.5:3b-instruct",
+        "qwen2.5:7b-instruct",
+        "qwen3-embedding:8b",
+        "qwen3-vl:8b",
+        "qwen3:14b"
+      ],
+      "capabilities": {
+        "tools": {
+          "available": true,
+          "count": 15,
+          "names": [
+            "health",
+            "readyz",
+            "status",
+            "events",
+            "admin/events",
+            "admin/causal-graph",
+            "healing/evaluate",
+            "admin/healing/run",
+            "admin/replay",
+            "traces",
+            "traces/summary",
+            "traces/clear",
+            "admin/status",
+            "admin/dashboard",
+            "admin/generation"
+          ],
+          "source": "runtime-routes"
+        },
+        "vision": {
+          "available": true,
+          "models": [
+            "moondream:latest",
+            "qwen3-vl:8b"
+          ],
+          "primary_model": "moondream:latest",
+          "provider": "ollama"
+        },
+        "generation": {
+          "available": true,
+          "provider": "ollama",
+          "models": [
+            "mistral-nemo:12b",
+            "moondream:latest",
+            "nomic-embed-text:latest",
+            "qllama/bge-reranker-v2-m3:latest",
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5-coder:3b",
+            "qwen2.5-coder:7b",
+            "qwen2.5-coder:7b-16k",
+            "qwen2.5:14b-instruct",
+            "qwen2.5:14b-instruct-32k",
+            "qwen2.5:3b-instruct",
+            "qwen2.5:7b-instruct",
+            "qwen3-embedding:8b",
+            "qwen3-vl:8b",
+            "qwen3:14b"
+          ],
+          "default_model": "mistral-nemo:12b",
+          "coding_models": [
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5-coder:3b",
+            "qwen2.5-coder:7b",
+            "qwen2.5-coder:7b-16k"
+          ],
+          "reasoning_models": [
+            "mistral-nemo:12b",
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5:14b-instruct",
+            "qwen2.5:14b-instruct-32k",
+            "qwen3-embedding:8b",
+            "qwen3-vl:8b",
+            "qwen3:14b"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "timestamp": "2026-06-12T20:15:16",
+    "backendReachable": true,
+    "healthReachable": true,
+    "readyzReachable": true,
+    "toolCount": 12,
+    "traceCount": 0,
+    "visionAvailable": true,
+    "manualOnly": null,
+    "recoverySignals": 0,
+    "status": {
+      "status": "ok",
+      "ready": true,
+      "app_name": "v-horseshoe-v2",
+      "environment": "dev",
+      "events_path": "data\\events\\events.jsonl",
+      "event_count": 6802,
+      "ollama_base_url": "http://127.0.0.1:11434",
+      "ollama_reachable": true,
+      "installed_model_count": 16,
+      "installed_models": [
+        "mistral-nemo:12b",
+        "moondream:latest",
+        "nomic-embed-text:latest",
+        "qllama/bge-reranker-v2-m3:latest",
+        "qwen2.5-coder:14b",
+        "qwen2.5-coder:14b-32k",
+        "qwen2.5-coder:3b",
+        "qwen2.5-coder:7b",
+        "qwen2.5-coder:7b-16k",
+        "qwen2.5:14b-instruct",
+        "qwen2.5:14b-instruct-32k",
+        "qwen2.5:3b-instruct",
+        "qwen2.5:7b-instruct",
+        "qwen3-embedding:8b",
+        "qwen3-vl:8b",
+        "qwen3:14b"
+      ],
+      "capabilities": {
+        "tools": {
+          "available": true,
+          "count": 15,
+          "names": [
+            "health",
+            "readyz",
+            "status",
+            "events",
+            "admin/events",
+            "admin/causal-graph",
+            "healing/evaluate",
+            "admin/healing/run",
+            "admin/replay",
+            "traces",
+            "traces/summary",
+            "traces/clear",
+            "admin/status",
+            "admin/dashboard",
+            "admin/generation"
+          ],
+          "source": "runtime-routes"
+        },
+        "vision": {
+          "available": true,
+          "models": [
+            "moondream:latest",
+            "qwen3-vl:8b"
+          ],
+          "primary_model": "moondream:latest",
+          "provider": "ollama"
+        },
+        "generation": {
+          "available": true,
+          "provider": "ollama",
+          "models": [
+            "mistral-nemo:12b",
+            "moondream:latest",
+            "nomic-embed-text:latest",
+            "qllama/bge-reranker-v2-m3:latest",
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5-coder:3b",
+            "qwen2.5-coder:7b",
+            "qwen2.5-coder:7b-16k",
+            "qwen2.5:14b-instruct",
+            "qwen2.5:14b-instruct-32k",
+            "qwen2.5:3b-instruct",
+            "qwen2.5:7b-instruct",
+            "qwen3-embedding:8b",
+            "qwen3-vl:8b",
+            "qwen3:14b"
+          ],
+          "default_model": "mistral-nemo:12b",
+          "coding_models": [
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5-coder:3b",
+            "qwen2.5-coder:7b",
+            "qwen2.5-coder:7b-16k"
+          ],
+          "reasoning_models": [
+            "mistral-nemo:12b",
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5:14b-instruct",
+            "qwen2.5:14b-instruct-32k",
+            "qwen3-embedding:8b",
+            "qwen3-vl:8b",
+            "qwen3:14b"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "timestamp": "2026-06-12T20:15:22",
+    "backendReachable": true,
+    "healthReachable": true,
+    "readyzReachable": true,
+    "toolCount": 12,
+    "traceCount": 0,
+    "visionAvailable": true,
+    "manualOnly": null,
+    "recoverySignals": 0,
+    "status": {
+      "status": "ok",
+      "ready": true,
+      "app_name": "v-horseshoe-v2",
+      "environment": "dev",
+      "events_path": "data\\events\\events.jsonl",
+      "event_count": 6802,
+      "ollama_base_url": "http://127.0.0.1:11434",
+      "ollama_reachable": true,
+      "installed_model_count": 16,
+      "installed_models": [
+        "mistral-nemo:12b",
+        "moondream:latest",
+        "nomic-embed-text:latest",
+        "qllama/bge-reranker-v2-m3:latest",
+        "qwen2.5-coder:14b",
+        "qwen2.5-coder:14b-32k",
+        "qwen2.5-coder:3b",
+        "qwen2.5-coder:7b",
+        "qwen2.5-coder:7b-16k",
+        "qwen2.5:14b-instruct",
+        "qwen2.5:14b-instruct-32k",
+        "qwen2.5:3b-instruct",
+        "qwen2.5:7b-instruct",
+        "qwen3-embedding:8b",
+        "qwen3-vl:8b",
+        "qwen3:14b"
+      ],
+      "capabilities": {
+        "tools": {
+          "available": true,
+          "count": 15,
+          "names": [
+            "health",
+            "readyz",
+            "status",
+            "events",
+            "admin/events",
+            "admin/causal-graph",
+            "healing/evaluate",
+            "admin/healing/run",
+            "admin/replay",
+            "traces",
+            "traces/summary",
+            "traces/clear",
+            "admin/status",
+            "admin/dashboard",
+            "admin/generation"
+          ],
+          "source": "runtime-routes"
+        },
+        "vision": {
+          "available": true,
+          "models": [
+            "moondream:latest",
+            "qwen3-vl:8b"
+          ],
+          "primary_model": "moondream:latest",
+          "provider": "ollama"
+        },
+        "generation": {
+          "available": true,
+          "provider": "ollama",
+          "models": [
+            "mistral-nemo:12b",
+            "moondream:latest",
+            "nomic-embed-text:latest",
+            "qllama/bge-reranker-v2-m3:latest",
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5-coder:3b",
+            "qwen2.5-coder:7b",
+            "qwen2.5-coder:7b-16k",
+            "qwen2.5:14b-instruct",
+            "qwen2.5:14b-instruct-32k",
+            "qwen2.5:3b-instruct",
+            "qwen2.5:7b-instruct",
+            "qwen3-embedding:8b",
+            "qwen3-vl:8b",
+            "qwen3:14b"
+          ],
+          "default_model": "mistral-nemo:12b",
+          "coding_models": [
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5-coder:3b",
+            "qwen2.5-coder:7b",
+            "qwen2.5-coder:7b-16k"
+          ],
+          "reasoning_models": [
+            "mistral-nemo:12b",
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5:14b-instruct",
+            "qwen2.5:14b-instruct-32k",
+            "qwen3-embedding:8b",
+            "qwen3-vl:8b",
+            "qwen3:14b"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "timestamp": "2026-06-12T20:15:27",
+    "backendReachable": true,
+    "healthReachable": true,
+    "readyzReachable": true,
+    "toolCount": 12,
+    "traceCount": 0,
+    "visionAvailable": true,
+    "manualOnly": null,
+    "recoverySignals": 0,
+    "status": {
+      "status": "ok",
+      "ready": true,
+      "app_name": "v-horseshoe-v2",
+      "environment": "dev",
+      "events_path": "data\\events\\events.jsonl",
+      "event_count": 6802,
+      "ollama_base_url": "http://127.0.0.1:11434",
+      "ollama_reachable": true,
+      "installed_model_count": 16,
+      "installed_models": [
+        "mistral-nemo:12b",
+        "moondream:latest",
+        "nomic-embed-text:latest",
+        "qllama/bge-reranker-v2-m3:latest",
+        "qwen2.5-coder:14b",
+        "qwen2.5-coder:14b-32k",
+        "qwen2.5-coder:3b",
+        "qwen2.5-coder:7b",
+        "qwen2.5-coder:7b-16k",
+        "qwen2.5:14b-instruct",
+        "qwen2.5:14b-instruct-32k",
+        "qwen2.5:3b-instruct",
+        "qwen2.5:7b-instruct",
+        "qwen3-embedding:8b",
+        "qwen3-vl:8b",
+        "qwen3:14b"
+      ],
+      "capabilities": {
+        "tools": {
+          "available": true,
+          "count": 15,
+          "names": [
+            "health",
+            "readyz",
+            "status",
+            "events",
+            "admin/events",
+            "admin/causal-graph",
+            "healing/evaluate",
+            "admin/healing/run",
+            "admin/replay",
+            "traces",
+            "traces/summary",
+            "traces/clear",
+            "admin/status",
+            "admin/dashboard",
+            "admin/generation"
+          ],
+          "source": "runtime-routes"
+        },
+        "vision": {
+          "available": true,
+          "models": [
+            "moondream:latest",
+            "qwen3-vl:8b"
+          ],
+          "primary_model": "moondream:latest",
+          "provider": "ollama"
+        },
+        "generation": {
+          "available": true,
+          "provider": "ollama",
+          "models": [
+            "mistral-nemo:12b",
+            "moondream:latest",
+            "nomic-embed-text:latest",
+            "qllama/bge-reranker-v2-m3:latest",
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5-coder:3b",
+            "qwen2.5-coder:7b",
+            "qwen2.5-coder:7b-16k",
+            "qwen2.5:14b-instruct",
+            "qwen2.5:14b-instruct-32k",
+            "qwen2.5:3b-instruct",
+            "qwen2.5:7b-instruct",
+            "qwen3-embedding:8b",
+            "qwen3-vl:8b",
+            "qwen3:14b"
+          ],
+          "default_model": "mistral-nemo:12b",
+          "coding_models": [
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5-coder:3b",
+            "qwen2.5-coder:7b",
+            "qwen2.5-coder:7b-16k"
+          ],
+          "reasoning_models": [
+            "mistral-nemo:12b",
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5:14b-instruct",
+            "qwen2.5:14b-instruct-32k",
+            "qwen3-embedding:8b",
+            "qwen3-vl:8b",
+            "qwen3:14b"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "timestamp": "2026-06-12T20:15:32",
+    "backendReachable": true,
+    "healthReachable": true,
+    "readyzReachable": true,
+    "toolCount": 12,
+    "traceCount": 0,
+    "visionAvailable": true,
+    "manualOnly": null,
+    "recoverySignals": 0,
+    "status": {
+      "status": "ok",
+      "ready": true,
+      "app_name": "v-horseshoe-v2",
+      "environment": "dev",
+      "events_path": "data\\events\\events.jsonl",
+      "event_count": 6802,
+      "ollama_base_url": "http://127.0.0.1:11434",
+      "ollama_reachable": true,
+      "installed_model_count": 16,
+      "installed_models": [
+        "mistral-nemo:12b",
+        "moondream:latest",
+        "nomic-embed-text:latest",
+        "qllama/bge-reranker-v2-m3:latest",
+        "qwen2.5-coder:14b",
+        "qwen2.5-coder:14b-32k",
+        "qwen2.5-coder:3b",
+        "qwen2.5-coder:7b",
+        "qwen2.5-coder:7b-16k",
+        "qwen2.5:14b-instruct",
+        "qwen2.5:14b-instruct-32k",
+        "qwen2.5:3b-instruct",
+        "qwen2.5:7b-instruct",
+        "qwen3-embedding:8b",
+        "qwen3-vl:8b",
+        "qwen3:14b"
+      ],
+      "capabilities": {
+        "tools": {
+          "available": true,
+          "count": 15,
+          "names": [
+            "health",
+            "readyz",
+            "status",
+            "events",
+            "admin/events",
+            "admin/causal-graph",
+            "healing/evaluate",
+            "admin/healing/run",
+            "admin/replay",
+            "traces",
+            "traces/summary",
+            "traces/clear",
+            "admin/status",
+            "admin/dashboard",
+            "admin/generation"
+          ],
+          "source": "runtime-routes"
+        },
+        "vision": {
+          "available": true,
+          "models": [
+            "moondream:latest",
+            "qwen3-vl:8b"
+          ],
+          "primary_model": "moondream:latest",
+          "provider": "ollama"
+        },
+        "generation": {
+          "available": true,
+          "provider": "ollama",
+          "models": [
+            "mistral-nemo:12b",
+            "moondream:latest",
+            "nomic-embed-text:latest",
+            "qllama/bge-reranker-v2-m3:latest",
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5-coder:3b",
+            "qwen2.5-coder:7b",
+            "qwen2.5-coder:7b-16k",
+            "qwen2.5:14b-instruct",
+            "qwen2.5:14b-instruct-32k",
+            "qwen2.5:3b-instruct",
+            "qwen2.5:7b-instruct",
+            "qwen3-embedding:8b",
+            "qwen3-vl:8b",
+            "qwen3:14b"
+          ],
+          "default_model": "mistral-nemo:12b",
+          "coding_models": [
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5-coder:3b",
+            "qwen2.5-coder:7b",
+            "qwen2.5-coder:7b-16k"
+          ],
+          "reasoning_models": [
+            "mistral-nemo:12b",
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5:14b-instruct",
+            "qwen2.5:14b-instruct-32k",
+            "qwen3-embedding:8b",
+            "qwen3-vl:8b",
+            "qwen3:14b"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "timestamp": "2026-06-12T20:15:37",
+    "backendReachable": true,
+    "healthReachable": true,
+    "readyzReachable": true,
+    "toolCount": 12,
+    "traceCount": 0,
+    "visionAvailable": true,
+    "manualOnly": null,
+    "recoverySignals": 0,
+    "status": {
+      "status": "ok",
+      "ready": true,
+      "app_name": "v-horseshoe-v2",
+      "environment": "dev",
+      "events_path": "data\\events\\events.jsonl",
+      "event_count": 6802,
+      "ollama_base_url": "http://127.0.0.1:11434",
+      "ollama_reachable": true,
+      "installed_model_count": 16,
+      "installed_models": [
+        "mistral-nemo:12b",
+        "moondream:latest",
+        "nomic-embed-text:latest",
+        "qllama/bge-reranker-v2-m3:latest",
+        "qwen2.5-coder:14b",
+        "qwen2.5-coder:14b-32k",
+        "qwen2.5-coder:3b",
+        "qwen2.5-coder:7b",
+        "qwen2.5-coder:7b-16k",
+        "qwen2.5:14b-instruct",
+        "qwen2.5:14b-instruct-32k",
+        "qwen2.5:3b-instruct",
+        "qwen2.5:7b-instruct",
+        "qwen3-embedding:8b",
+        "qwen3-vl:8b",
+        "qwen3:14b"
+      ],
+      "capabilities": {
+        "tools": {
+          "available": true,
+          "count": 15,
+          "names": [
+            "health",
+            "readyz",
+            "status",
+            "events",
+            "admin/events",
+            "admin/causal-graph",
+            "healing/evaluate",
+            "admin/healing/run",
+            "admin/replay",
+            "traces",
+            "traces/summary",
+            "traces/clear",
+            "admin/status",
+            "admin/dashboard",
+            "admin/generation"
+          ],
+          "source": "runtime-routes"
+        },
+        "vision": {
+          "available": true,
+          "models": [
+            "moondream:latest",
+            "qwen3-vl:8b"
+          ],
+          "primary_model": "moondream:latest",
+          "provider": "ollama"
+        },
+        "generation": {
+          "available": true,
+          "provider": "ollama",
+          "models": [
+            "mistral-nemo:12b",
+            "moondream:latest",
+            "nomic-embed-text:latest",
+            "qllama/bge-reranker-v2-m3:latest",
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5-coder:3b",
+            "qwen2.5-coder:7b",
+            "qwen2.5-coder:7b-16k",
+            "qwen2.5:14b-instruct",
+            "qwen2.5:14b-instruct-32k",
+            "qwen2.5:3b-instruct",
+            "qwen2.5:7b-instruct",
+            "qwen3-embedding:8b",
+            "qwen3-vl:8b",
+            "qwen3:14b"
+          ],
+          "default_model": "mistral-nemo:12b",
+          "coding_models": [
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5-coder:3b",
+            "qwen2.5-coder:7b",
+            "qwen2.5-coder:7b-16k"
+          ],
+          "reasoning_models": [
+            "mistral-nemo:12b",
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5:14b-instruct",
+            "qwen2.5:14b-instruct-32k",
+            "qwen3-embedding:8b",
+            "qwen3-vl:8b",
+            "qwen3:14b"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "timestamp": "2026-06-12T20:15:42",
+    "backendReachable": true,
+    "healthReachable": true,
+    "readyzReachable": true,
+    "toolCount": 12,
+    "traceCount": 0,
+    "visionAvailable": true,
+    "manualOnly": null,
+    "recoverySignals": 0,
+    "status": {
+      "status": "ok",
+      "ready": true,
+      "app_name": "v-horseshoe-v2",
+      "environment": "dev",
+      "events_path": "data\\events\\events.jsonl",
+      "event_count": 6802,
+      "ollama_base_url": "http://127.0.0.1:11434",
+      "ollama_reachable": true,
+      "installed_model_count": 16,
+      "installed_models": [
+        "mistral-nemo:12b",
+        "moondream:latest",
+        "nomic-embed-text:latest",
+        "qllama/bge-reranker-v2-m3:latest",
+        "qwen2.5-coder:14b",
+        "qwen2.5-coder:14b-32k",
+        "qwen2.5-coder:3b",
+        "qwen2.5-coder:7b",
+        "qwen2.5-coder:7b-16k",
+        "qwen2.5:14b-instruct",
+        "qwen2.5:14b-instruct-32k",
+        "qwen2.5:3b-instruct",
+        "qwen2.5:7b-instruct",
+        "qwen3-embedding:8b",
+        "qwen3-vl:8b",
+        "qwen3:14b"
+      ],
+      "capabilities": {
+        "tools": {
+          "available": true,
+          "count": 15,
+          "names": [
+            "health",
+            "readyz",
+            "status",
+            "events",
+            "admin/events",
+            "admin/causal-graph",
+            "healing/evaluate",
+            "admin/healing/run",
+            "admin/replay",
+            "traces",
+            "traces/summary",
+            "traces/clear",
+            "admin/status",
+            "admin/dashboard",
+            "admin/generation"
+          ],
+          "source": "runtime-routes"
+        },
+        "vision": {
+          "available": true,
+          "models": [
+            "moondream:latest",
+            "qwen3-vl:8b"
+          ],
+          "primary_model": "moondream:latest",
+          "provider": "ollama"
+        },
+        "generation": {
+          "available": true,
+          "provider": "ollama",
+          "models": [
+            "mistral-nemo:12b",
+            "moondream:latest",
+            "nomic-embed-text:latest",
+            "qllama/bge-reranker-v2-m3:latest",
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5-coder:3b",
+            "qwen2.5-coder:7b",
+            "qwen2.5-coder:7b-16k",
+            "qwen2.5:14b-instruct",
+            "qwen2.5:14b-instruct-32k",
+            "qwen2.5:3b-instruct",
+            "qwen2.5:7b-instruct",
+            "qwen3-embedding:8b",
+            "qwen3-vl:8b",
+            "qwen3:14b"
+          ],
+          "default_model": "mistral-nemo:12b",
+          "coding_models": [
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5-coder:3b",
+            "qwen2.5-coder:7b",
+            "qwen2.5-coder:7b-16k"
+          ],
+          "reasoning_models": [
+            "mistral-nemo:12b",
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5:14b-instruct",
+            "qwen2.5:14b-instruct-32k",
+            "qwen3-embedding:8b",
+            "qwen3-vl:8b",
+            "qwen3:14b"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "timestamp": "2026-06-12T20:15:47",
+    "backendReachable": true,
+    "healthReachable": true,
+    "readyzReachable": true,
+    "toolCount": 12,
+    "traceCount": 0,
+    "visionAvailable": true,
+    "manualOnly": null,
+    "recoverySignals": 0,
+    "status": {
+      "status": "ok",
+      "ready": true,
+      "app_name": "v-horseshoe-v2",
+      "environment": "dev",
+      "events_path": "data\\events\\events.jsonl",
+      "event_count": 6802,
+      "ollama_base_url": "http://127.0.0.1:11434",
+      "ollama_reachable": true,
+      "installed_model_count": 16,
+      "installed_models": [
+        "mistral-nemo:12b",
+        "moondream:latest",
+        "nomic-embed-text:latest",
+        "qllama/bge-reranker-v2-m3:latest",
+        "qwen2.5-coder:14b",
+        "qwen2.5-coder:14b-32k",
+        "qwen2.5-coder:3b",
+        "qwen2.5-coder:7b",
+        "qwen2.5-coder:7b-16k",
+        "qwen2.5:14b-instruct",
+        "qwen2.5:14b-instruct-32k",
+        "qwen2.5:3b-instruct",
+        "qwen2.5:7b-instruct",
+        "qwen3-embedding:8b",
+        "qwen3-vl:8b",
+        "qwen3:14b"
+      ],
+      "capabilities": {
+        "tools": {
+          "available": true,
+          "count": 15,
+          "names": [
+            "health",
+            "readyz",
+            "status",
+            "events",
+            "admin/events",
+            "admin/causal-graph",
+            "healing/evaluate",
+            "admin/healing/run",
+            "admin/replay",
+            "traces",
+            "traces/summary",
+            "traces/clear",
+            "admin/status",
+            "admin/dashboard",
+            "admin/generation"
+          ],
+          "source": "runtime-routes"
+        },
+        "vision": {
+          "available": true,
+          "models": [
+            "moondream:latest",
+            "qwen3-vl:8b"
+          ],
+          "primary_model": "moondream:latest",
+          "provider": "ollama"
+        },
+        "generation": {
+          "available": true,
+          "provider": "ollama",
+          "models": [
+            "mistral-nemo:12b",
+            "moondream:latest",
+            "nomic-embed-text:latest",
+            "qllama/bge-reranker-v2-m3:latest",
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5-coder:3b",
+            "qwen2.5-coder:7b",
+            "qwen2.5-coder:7b-16k",
+            "qwen2.5:14b-instruct",
+            "qwen2.5:14b-instruct-32k",
+            "qwen2.5:3b-instruct",
+            "qwen2.5:7b-instruct",
+            "qwen3-embedding:8b",
+            "qwen3-vl:8b",
+            "qwen3:14b"
+          ],
+          "default_model": "mistral-nemo:12b",
+          "coding_models": [
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5-coder:3b",
+            "qwen2.5-coder:7b",
+            "qwen2.5-coder:7b-16k"
+          ],
+          "reasoning_models": [
+            "mistral-nemo:12b",
+            "qwen2.5-coder:14b",
+            "qwen2.5-coder:14b-32k",
+            "qwen2.5:14b-instruct",
+            "qwen2.5:14b-instruct-32k",
+            "qwen3-embedding:8b",
+            "qwen3-vl:8b",
+            "qwen3:14b"
+          ]
+        }
+      }
+    }
+  }
+]

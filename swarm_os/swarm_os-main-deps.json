@@ -1,0 +1,297 @@
+{
+    "dotenv": {
+        "bacon": 2,
+        "imported_by": [
+            "swarm_os.app.main",
+            "swarm_os.services.agent_service"
+        ],
+        "name": "dotenv",
+        "path": "C:\\Users\\rober\\Projects\\v-horseshoe-v2\\.venv\\Lib\\site-packages\\dotenv\\__init__.py"
+    },
+    "fastapi": {
+        "bacon": 2,
+        "imported_by": [
+            "swarm_os.api.agents",
+            "swarm_os.api.routes",
+            "swarm_os.app.main"
+        ],
+        "name": "fastapi",
+        "path": "C:\\Users\\rober\\Projects\\v-horseshoe-v2\\.venv\\Lib\\site-packages\\fastapi\\__init__.py"
+    },
+    "fastapi.middleware": {
+        "bacon": 2,
+        "imported_by": [
+            "swarm_os.app.main"
+        ],
+        "name": "fastapi.middleware",
+        "path": "C:\\Users\\rober\\Projects\\v-horseshoe-v2\\.venv\\Lib\\site-packages\\fastapi\\middleware\\__init__.py"
+    },
+    "fastapi.middleware.cors": {
+        "bacon": 2,
+        "imported_by": [
+            "swarm_os.app.main"
+        ],
+        "name": "fastapi.middleware.cors",
+        "path": "C:\\Users\\rober\\Projects\\v-horseshoe-v2\\.venv\\Lib\\site-packages\\fastapi\\middleware\\cors.py"
+    },
+    "main.py": {
+        "bacon": 0,
+        "imports": [
+            "swarm_os",
+            "swarm_os.app",
+            "swarm_os.app.main"
+        ],
+        "name": "main.py",
+        "path": null
+    },
+    "swarm_os": {
+        "bacon": 1,
+        "imported_by": [
+            "main.py",
+            "swarm_os",
+            "swarm_os.api.routes",
+            "swarm_os.app.main",
+            "swarm_os.capabilities",
+            "swarm_os.foundation.events.event_store",
+            "swarm_os.services.agent_service",
+            "swarm_os.services.control_plane.bootstrap",
+            "swarm_os.services.orchestrator"
+        ],
+        "imports": [
+            "swarm_os",
+            "swarm_os.capabilities"
+        ],
+        "name": "swarm_os",
+        "path": "C:\\Users\\rober\\Projects\\v-horseshoe-v2\\swarm_os\\__init__.py"
+    },
+    "swarm_os.api": {
+        "bacon": 2,
+        "imported_by": [
+            "swarm_os.api.routes",
+            "swarm_os.app.main"
+        ],
+        "name": "swarm_os.api",
+        "path": "C:\\Users\\rober\\Projects\\v-horseshoe-v2\\swarm_os\\api\\__init__.py"
+    },
+    "swarm_os.api.agents": {
+        "bacon": 2,
+        "imported_by": [
+            "swarm_os.app.main"
+        ],
+        "imports": [
+            "fastapi"
+        ],
+        "name": "swarm_os.api.agents",
+        "path": "C:\\Users\\rober\\Projects\\v-horseshoe-v2\\swarm_os\\api\\agents.py"
+    },
+    "swarm_os.api.routes": {
+        "bacon": 2,
+        "imported_by": [
+            "swarm_os.app.main"
+        ],
+        "imports": [
+            "fastapi",
+            "swarm_os",
+            "swarm_os.api"
+        ],
+        "name": "swarm_os.api.routes",
+        "path": "C:\\Users\\rober\\Projects\\v-horseshoe-v2\\swarm_os\\api\\routes.py"
+    },
+    "swarm_os.app": {
+        "bacon": 1,
+        "imported_by": [
+            "main.py"
+        ],
+        "name": "swarm_os.app",
+        "path": "C:\\Users\\rober\\Projects\\v-horseshoe-v2\\swarm_os\\app\\__init__.py"
+    },
+    "swarm_os.app.main": {
+        "bacon": 1,
+        "imported_by": [
+            "main.py"
+        ],
+        "imports": [
+            "dotenv",
+            "fastapi",
+            "fastapi.middleware",
+            "fastapi.middleware.cors",
+            "swarm_os",
+            "swarm_os.api",
+            "swarm_os.api.agents",
+            "swarm_os.api.routes",
+            "swarm_os.core",
+            "swarm_os.core.settings",
+            "swarm_os.foundation",
+            "swarm_os.foundation.events",
+            "swarm_os.foundation.events.event_store",
+            "swarm_os.lib",
+            "swarm_os.lib.vector",
+            "swarm_os.lib.vector.code_indexer",
+            "swarm_os.services",
+            "swarm_os.services.agent_service",
+            "swarm_os.services.control_plane",
+            "swarm_os.services.control_plane.bootstrap",
+            "swarm_os.services.orchestrator"
+        ],
+        "name": "swarm_os.app.main",
+        "path": "C:\\Users\\rober\\Projects\\v-horseshoe-v2\\swarm_os\\app\\main.py"
+    },
+    "swarm_os.capabilities": {
+        "bacon": 2,
+        "imported_by": [
+            "swarm_os",
+            "swarm_os.capabilities"
+        ],
+        "imports": [
+            "swarm_os",
+            "swarm_os.capabilities"
+        ],
+        "name": "swarm_os.capabilities",
+        "path": "C:\\Users\\rober\\Projects\\v-horseshoe-v2\\swarm_os\\capabilities\\__init__.py"
+    },
+    "swarm_os.core": {
+        "bacon": 2,
+        "imported_by": [
+            "swarm_os.app.main",
+            "swarm_os.services.agent_service",
+            "swarm_os.services.orchestrator"
+        ],
+        "name": "swarm_os.core",
+        "path": "C:\\Users\\rober\\Projects\\v-horseshoe-v2\\swarm_os\\core\\__init__.py"
+    },
+    "swarm_os.core.settings": {
+        "bacon": 2,
+        "imported_by": [
+            "swarm_os.app.main"
+        ],
+        "name": "swarm_os.core.settings",
+        "path": "C:\\Users\\rober\\Projects\\v-horseshoe-v2\\swarm_os\\core\\settings.py"
+    },
+    "swarm_os.foundation": {
+        "bacon": 2,
+        "imported_by": [
+            "swarm_os.app.main",
+            "swarm_os.foundation.events.event_store"
+        ],
+        "name": "swarm_os.foundation",
+        "path": "C:\\Users\\rober\\Projects\\v-horseshoe-v2\\swarm_os\\foundation\\__init__.py"
+    },
+    "swarm_os.foundation.events": {
+        "bacon": 2,
+        "imported_by": [
+            "swarm_os.app.main",
+            "swarm_os.foundation.events.event_store"
+        ],
+        "name": "swarm_os.foundation.events",
+        "path": "C:\\Users\\rober\\Projects\\v-horseshoe-v2\\swarm_os\\foundation\\events\\__init__.py"
+    },
+    "swarm_os.foundation.events.event_store": {
+        "bacon": 2,
+        "imported_by": [
+            "swarm_os.app.main"
+        ],
+        "imports": [
+            "swarm_os",
+            "swarm_os.foundation",
+            "swarm_os.foundation.events"
+        ],
+        "name": "swarm_os.foundation.events.event_store",
+        "path": "C:\\Users\\rober\\Projects\\v-horseshoe-v2\\swarm_os\\foundation\\events\\event_store.py"
+    },
+    "swarm_os.lib": {
+        "bacon": 2,
+        "imported_by": [
+            "swarm_os.app.main",
+            "swarm_os.services.agent_service"
+        ],
+        "name": "swarm_os.lib",
+        "path": "C:\\Users\\rober\\Projects\\v-horseshoe-v2\\swarm_os\\lib\\__init__.py"
+    },
+    "swarm_os.lib.vector": {
+        "bacon": 2,
+        "imported_by": [
+            "swarm_os.app.main",
+            "swarm_os.services.agent_service"
+        ],
+        "name": "swarm_os.lib.vector",
+        "path": "C:\\Users\\rober\\Projects\\v-horseshoe-v2\\swarm_os\\lib\\vector\\__init__.py"
+    },
+    "swarm_os.lib.vector.code_indexer": {
+        "bacon": 2,
+        "imported_by": [
+            "swarm_os.app.main"
+        ],
+        "name": "swarm_os.lib.vector.code_indexer",
+        "path": "C:\\Users\\rober\\Projects\\v-horseshoe-v2\\swarm_os\\lib\\vector\\code_indexer.py"
+    },
+    "swarm_os.services": {
+        "bacon": 2,
+        "imported_by": [
+            "swarm_os.app.main",
+            "swarm_os.services.agent_service",
+            "swarm_os.services.control_plane.bootstrap"
+        ],
+        "imports": [
+            "swarm_os.services.orchestrator"
+        ],
+        "name": "swarm_os.services",
+        "path": "C:\\Users\\rober\\Projects\\v-horseshoe-v2\\swarm_os\\services\\__init__.py"
+    },
+    "swarm_os.services.agent_service": {
+        "bacon": 2,
+        "imported_by": [
+            "swarm_os.app.main"
+        ],
+        "imports": [
+            "dotenv",
+            "swarm_os",
+            "swarm_os.core",
+            "swarm_os.lib",
+            "swarm_os.lib.vector",
+            "swarm_os.services",
+            "swarm_os.services.control_plane"
+        ],
+        "name": "swarm_os.services.agent_service",
+        "path": "C:\\Users\\rober\\Projects\\v-horseshoe-v2\\swarm_os\\services\\agent_service.py"
+    },
+    "swarm_os.services.control_plane": {
+        "bacon": 2,
+        "imported_by": [
+            "swarm_os.app.main",
+            "swarm_os.services.agent_service",
+            "swarm_os.services.control_plane.bootstrap"
+        ],
+        "imports": [
+            "swarm_os.services.control_plane.bootstrap"
+        ],
+        "name": "swarm_os.services.control_plane",
+        "path": "C:\\Users\\rober\\Projects\\v-horseshoe-v2\\swarm_os\\services\\control_plane\\__init__.py"
+    },
+    "swarm_os.services.control_plane.bootstrap": {
+        "bacon": 2,
+        "imported_by": [
+            "swarm_os.app.main",
+            "swarm_os.services.control_plane"
+        ],
+        "imports": [
+            "swarm_os",
+            "swarm_os.services",
+            "swarm_os.services.control_plane"
+        ],
+        "name": "swarm_os.services.control_plane.bootstrap",
+        "path": "C:\\Users\\rober\\Projects\\v-horseshoe-v2\\swarm_os\\services\\control_plane\\bootstrap.py"
+    },
+    "swarm_os.services.orchestrator": {
+        "bacon": 2,
+        "imported_by": [
+            "swarm_os.app.main",
+            "swarm_os.services"
+        ],
+        "imports": [
+            "swarm_os",
+            "swarm_os.core"
+        ],
+        "name": "swarm_os.services.orchestrator",
+        "path": "C:\\Users\\rober\\Projects\\v-horseshoe-v2\\swarm_os\\services\\orchestrator.py"
+    }
+}

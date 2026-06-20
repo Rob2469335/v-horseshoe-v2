@@ -1,0 +1,6 @@
+help
+status
+roles
+select planner
+route reasoning
+exit

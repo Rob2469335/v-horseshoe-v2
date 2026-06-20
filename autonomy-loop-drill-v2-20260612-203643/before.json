@@ -1,0 +1,87 @@
+{
+  "status": {
+    "status": "degraded",
+    "ready": false,
+    "app_name": "v-horseshoe-v2",
+    "environment": "dev",
+    "events_path": "data\\events\\events.jsonl",
+    "event_count": 6802,
+    "ollama_base_url": "http://127.0.0.1:11434",
+    "ollama_reachable": false,
+    "installed_model_count": 0,
+    "installed_models": [],
+    "capabilities": {
+      "tools": {
+        "available": true,
+        "count": 15,
+        "names": [
+          "health",
+          "readyz",
+          "status",
+          "events",
+          "admin/events",
+          "admin/causal-graph",
+          "healing/evaluate",
+          "admin/healing/run",
+          "admin/replay",
+          "traces",
+          "traces/summary",
+          "traces/clear",
+          "admin/status",
+          "admin/dashboard",
+          "admin/generation"
+        ],
+        "source": "runtime-routes"
+      },
+      "vision": {
+        "available": false,
+        "models": [],
+        "primary_model": null,
+        "provider": null
+      },
+      "generation": {
+        "available": false,
+        "provider": null,
+        "models": [],
+        "default_model": null,
+        "coding_models": [],
+        "reasoning_models": []
+      }
+    }
+  },
+  "health": {
+    "status": "ok",
+    "health_score": 100,
+    "overall": "healing detector unavailable"
+  },
+  "readyz": {
+    "status": "not-ready",
+    "ready": false,
+    "checks": {
+      "runtime_started": true,
+      "events_store_available": true,
+      "ollama_reachable": false,
+      "models_loaded": false,
+      "health_score_ok": true
+    },
+    "health_score": 100,
+    "overall": "healing detector unavailable"
+  },
+  "tools": {
+    "tools": [
+      "health",
+      "readyz",
+      "status",
+      "events",
+      "traces",
+      "admin/status",
+      "admin/dashboard",
+      "admin/generation",
+      "admin/run-state",
+      "admin/snapshots",
+      "admin/explorer",
+      "admin/resume-latest"
+    ]
+  },
+  "traceSummary": null
+}

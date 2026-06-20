@@ -1,6 +1,8 @@
 export type OrganismSubsystem = "learning" | "healing" | "autonomy" | "vision" | "operator"
 
 export type OrganismStatusResponse = {
+  installed_model_count?: number;
+  installed_models?: string[];
   ready: boolean
   environment: string
   event_count: number
@@ -73,3 +75,4 @@ export type KnowledgePanelDisplay = {
   bullets: string[]
   accent: string
 }
+

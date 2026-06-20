@@ -6,4 +6,4 @@ service:
   grpc_port: 6334
 
 storage:
-  storage_path: "C:/Users/rober/Projects/v-horseshoe-v2/.qdrant/storage"
+  storage_path: 'C:/Users/rober/Projects/v-horseshoe-v2/.qdrant/storage'

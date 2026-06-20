@@ -232,7 +232,7 @@ def make_swarm_brain(genome, task_domain: str = "general", generate_fn=None) -> 
                     "retrieval_top_k": top_k,
                     "system_prompt_len": len(system_prompt),
                 }
-            timeout = httpx.Timeout(max(30.0, float(_safe_attr(genome, "timeout_budget", 60.0))), connect=10.0)
+            timeout = httpx.Timeout(max(30.0, float(_safe_attr(genome, "timeout_budget", 300.0))), connect=10.0)
             attempts = 3
             resp = None
             elapsed = 0.0
@@ -375,7 +375,7 @@ def make_swarm_brain(genome, task_domain: str = "general", generate_fn=None) -> 
             return {
                 "error": "timeout",
                 "cost": 5.0,
-                "elapsed": _safe_attr(genome, "timeout_budget", 60.0),
+                "elapsed": _safe_attr(genome, "timeout_budget", 300.0),
                 "content": "",
                 "model": requested_model or _safe_model(genome),
                 "tools_used": active_tools,

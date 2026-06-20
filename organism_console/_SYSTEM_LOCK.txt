@@ -1,0 +1,7 @@
+SYSTEM LOCK (UPDATED)
+
+1. ALL file writes must use Safe-WriteFile
+2. Direct Set-Content on .py files is forbidden
+3. Every write auto-generates backup in .backup\latest
+4. Restore always from .backup\latest only
+5. No manual patching of Python files

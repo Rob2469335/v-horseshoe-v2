@@ -18,11 +18,17 @@ class VSCodeAutomationHandler:
             "list_files": [],
             "status": ["git", "status"],
             "lint": ["python", "-m", "flake8"],
+            "grep": ["grep", "-r"],
+            "ls": ["ls", "-R"],
+            "cat": ["cat"],
+            "diff": ["git", "diff"],
+            "log": ["git", "log", "-n", "5"],
+            "scout": ["powershell.exe", "-Command", "Write-Host 'Active Branch:'; git branch --show-current; Write-Host '`nRecent Changes:'; git status -s; Write-Host '`nProject Tree:'; Get-ChildItem -Depth 1"],
         }
         logger.info(f"Initialized operational secure VSCodeAutomationHandler at {workspace_root}")
 
     async def execute(self, payload: VSCodeAutomationRequest) -> VSCodeAutomationResponse:
-        command = payload.command.lower().strip()
+        command = (payload.get("command") if isinstance(payload, dict) else payload.command).lower().strip()
 
         if command not in self.allowed_commands:
             return VSCodeAutomationResponse(
@@ -35,7 +41,7 @@ class VSCodeAutomationHandler:
             )
 
         sanitized_args = []
-        for arg in payload.args:
+        for arg in (payload.get("args", []) if isinstance(payload, dict) else payload.args):
             clean_arg = "".join(c for c in str(arg) if c.isalnum() or c in "._-/\\")
             if clean_arg:
                 try:

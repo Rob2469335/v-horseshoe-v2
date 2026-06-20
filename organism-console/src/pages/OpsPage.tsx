@@ -22,6 +22,7 @@ import type {
   TracesResponse
 } from "../lib/types"
 import { useUiStore } from "../state/ui-store"
+import { AutomationRunner } from "../components/organism/AutomationRunner"
 import { appConfig } from "../lib/config"
 
 function formatJson(value: unknown) {
@@ -65,6 +66,151 @@ export default function OpsPage() {
 
   const [selectedTraceId, setSelectedTraceId] = useState<string>("")
   const [selectedAutomationId, setSelectedAutomationId] = useState<string>(starterAutomations[0]?.id ?? "")
+
+  const [upworkInput, setUpworkInput] = useState<string>("")
+  const [upworkResult, setUpworkResult] = useState<any>(null)
+  const [upworkLoading, setUpworkLoading] = useState<boolean>(false)
+  const [activeAction, setActiveAction] = useState<string>("")
+
+  const runUpworkAction = async (action: string) => {
+    if (!upworkInput.trim()) {
+      alert("Please enter some job or project text first.")
+      return
+    }
+    setUpworkLoading(true)
+    setActiveAction(action)
+    setUpworkResult(null)
+    try {
+      const endpoint = `${backendUrl}/upwork/${action}`
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ input: upworkInput })
+      })
+      if (!res.ok) {
+        throw new Error(`Server returned status ${res.status}`)
+      }
+      const data = await res.json()
+      setUpworkResult(data)
+    } catch (err: any) {
+      setUpworkResult({ error: err.message || "Failed to fetch response" })
+    } finally {
+      setUpworkLoading(false)
+    }
+  }
+
+  const renderUpworkResult = () => {
+    if (upworkLoading) {
+      return (
+        <div style={{ padding: "20px", textAlign: "center", color: "var(--text-muted)" }}>
+          <span>⏳ Synthesizing {activeAction.toUpperCase()} analysis...</span>
+        </div>
+      )
+    }
+    if (!upworkResult) return null
+
+    if (upworkResult.error) {
+      return (
+        <div style={{ padding: "12px", background: "rgba(239, 68, 68, 0.08)", border: "1px solid rgba(239, 68, 68, 0.3)", borderRadius: "10px", color: "#f87171", marginTop: "12px" }}>
+          <strong>Error:</strong> {upworkResult.error}
+        </div>
+      )
+    }
+
+    switch (upworkResult.type) {
+      case "proposal":
+        return (
+          <div style={{ marginTop: "16px", padding: "16px", background: "rgba(20, 27, 41, 0.4)", border: "1px solid rgba(255, 255, 255, 0.08)", borderRadius: "14px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
+              <strong style={{ color: "var(--page-accent)" }}>Generated Cover Letter Proposal</strong>
+              <button 
+                className="topbar__button" 
+                style={{ padding: "6px 12px", fontSize: "12px", border: "1px solid var(--page-accent)", background: "var(--page-accent-tint)", color: "#fff", minHeight: "auto", height: "auto" }}
+                onClick={() => {
+                  navigator.clipboard.writeText(upworkResult.content)
+                  alert("Copied to clipboard!")
+                }}
+              >
+                Copy Cover Letter
+              </button>
+            </div>
+            <pre style={{ whiteSpace: "pre-wrap", fontFamily: "inherit", color: "var(--text-soft)", fontSize: "14px", margin: 0, background: "rgba(0,0,0,0.25)", padding: "12px", borderRadius: "8px", border: "1px solid rgba(255,255,255,0.04)" }}>{upworkResult.content}</pre>
+            <div style={{ marginTop: "12px", fontSize: "11px", color: "var(--text-muted)" }}>
+              Memory nodes queried: {upworkResult.memory_used} | Generated at: {new Date(upworkResult.timestamp).toLocaleString()}
+            </div>
+          </div>
+        )
+      case "estimate":
+        return (
+          <div style={{ marginTop: "16px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+            <div style={{ padding: "12px", background: "rgba(16, 185, 129, 0.06)", border: "1px solid rgba(16, 185, 129, 0.2)", borderRadius: "12px" }}>
+              <div style={{ fontSize: "11px", color: "var(--success)", fontWeight: "bold", textTransform: "uppercase", letterSpacing: "0.05em" }}>Hours Estimate</div>
+              <div style={{ fontSize: "20px", fontWeight: "bold", color: "#34d399", marginTop: "4px" }}>{upworkResult.hours} hours</div>
+            </div>
+            <div style={{ padding: "12px", background: "rgba(59, 130, 246, 0.06)", border: "1px solid rgba(59, 130, 246, 0.2)", borderRadius: "12px" }}>
+              <div style={{ fontSize: "11px", color: "var(--info)", fontWeight: "bold", textTransform: "uppercase", letterSpacing: "0.05em" }}>Recommended Bid Range</div>
+              <div style={{ fontSize: "20px", fontWeight: "bold", color: "#60a5fa", marginTop: "4px" }}>{upworkResult.bid}</div>
+            </div>
+            <div style={{ gridColumn: "span 2", padding: "12px", background: "rgba(20, 27, 41, 0.3)", border: "1px solid rgba(255, 255, 255, 0.06)", borderRadius: "12px" }}>
+              <strong style={{ color: "var(--text)", fontSize: "13px" }}>Bidding Strategy & Analysis:</strong>
+              <p style={{ margin: "6px 0 0 0", color: "var(--text-soft)", fontSize: "14px", lineHeight: "1.6" }}>{upworkResult.analysis}</p>
+            </div>
+          </div>
+        )
+      case "scope_breakdown":
+        return (
+          <div style={{ marginTop: "16px", padding: "16px", background: "rgba(245, 158, 11, 0.05)", border: "1px solid rgba(245, 158, 11, 0.2)", borderRadius: "14px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "12px", alignItems: "center" }}>
+              <strong style={{ color: "#fbbf24" }}>Suggested Scope Roadmap</strong>
+              <span style={{ fontSize: "12px", background: "rgba(245, 158, 11, 0.15)", color: "#fbbf24", padding: "2px 8px", borderRadius: "99px", fontWeight: "bold" }}>Est. Duration: {upworkResult.estimate}</span>
+            </div>
+            <ul style={{ margin: 0, paddingLeft: "20px", color: "var(--text-soft)", display: "grid", gap: "6px" }}>
+              {upworkResult.items.map((item: string, i: number) => (
+                <li key={i} style={{ fontSize: "14px" }}>{item}</li>
+              ))}
+            </ul>
+          </div>
+        )
+      case "invoice":
+        return (
+          <div style={{ marginTop: "16px", padding: "16px", background: "rgba(236, 72, 153, 0.05)", border: "1px solid rgba(236, 72, 153, 0.2)", borderRadius: "14px" }}>
+            <strong style={{ color: "#f472b6", display: "block", marginBottom: "12px" }}>Draft Invoice Summary</strong>
+            <pre style={{ whiteSpace: "pre-wrap", fontFamily: "inherit", color: "var(--text-soft)", fontSize: "14px", margin: "0 0 12px 0", background: "rgba(0,0,0,0.25)", padding: "12px", borderRadius: "8px", border: "1px solid rgba(255,255,255,0.04)" }}>{upworkResult.summary}</pre>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", color: "#f472b6", fontSize: "15px", borderTop: "1px solid rgba(236, 72, 153, 0.2)", paddingTop: "12px" }}>
+              <span>Total Estimated Bid:</span>
+              <strong style={{ fontSize: "20px", color: "#ec4899" }}>{upworkResult.total}</strong>
+            </div>
+          </div>
+        )
+      case "case_study":
+        return (
+          <div style={{ marginTop: "16px", padding: "16px", background: "rgba(20, 184, 166, 0.05)", border: "1px solid rgba(20, 184, 166, 0.2)", borderRadius: "14px" }}>
+            <strong style={{ color: "#2dd4bf", display: "block", marginBottom: "12px" }}>Pitch Case Study Bullets</strong>
+            <ul style={{ margin: 0, paddingLeft: "20px", color: "var(--text-soft)", display: "grid", gap: "6px" }}>
+              {upworkResult.bullets.map((bullet: string, i: number) => (
+                <li key={i} style={{ fontSize: "14px" }}>{bullet}</li>
+              ))}
+            </ul>
+          </div>
+        )
+      case "gap_analysis":
+        return (
+          <div style={{ marginTop: "16px", padding: "16px", background: "rgba(239, 68, 68, 0.05)", border: "1px solid rgba(239, 68, 68, 0.2)", borderRadius: "14px" }}>
+            <strong style={{ color: "#f87171", display: "block", marginBottom: "8px" }}>Skills Gap Audit</strong>
+            <p style={{ margin: "0 0 12px 0", fontSize: "13px", color: "var(--text-soft)" }}>Identified competencies required for this contract:</p>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+              {upworkResult.missing.map((skill: string, i: number) => (
+                <span key={i} style={{ background: "rgba(239, 68, 68, 0.15)", color: "#f87171", border: "1px solid rgba(239, 68, 68, 0.3)", padding: "4px 10px", borderRadius: "99px", fontSize: "12px", fontWeight: "bold" }}>{skill}</span>
+              ))}
+            </div>
+          </div>
+        )
+      default:
+        return (
+          <pre style={{ marginTop: "16px", padding: "12px", background: "rgba(2, 8, 20, 0.62)", border: "1px solid rgba(255, 255, 255, 0.07)", borderRadius: "14px", overflow: "auto" }}>{JSON.stringify(upworkResult, null, 2)}</pre>
+        )
+    }
+  }
 
   const healthQuery = useQuery({
     queryKey: ["health", backendUrl],
@@ -215,6 +361,67 @@ export default function OpsPage() {
 
           <div className="tutor-group">
             <h3>Made for Robert</h3>
+
+{/* UPWORK AGENT BLOCK */}
+<div className="tutor-group" style={{ marginBottom: "28px" }}>
+  <h3>Upwork Agent (Tier System)</h3>
+  <p className="tutor-panel__intro" style={{ marginBottom: "14px" }}>
+    Paste a job description or client request below, and choose a bidding strategist action to execute.
+  </p>
+
+  <textarea
+    className="agent-textarea"
+    style={{
+      width: "100%",
+      minHeight: "120px",
+      padding: "14px",
+      borderRadius: "14px",
+      fontFamily: "inherit",
+      fontSize: "14px",
+      resize: "vertical",
+      marginBottom: "14px",
+      boxSizing: "border-box"
+    }}
+    placeholder="Paste Upwork job posting description here..."
+    value={upworkInput}
+    onChange={(e) => setUpworkInput(e.target.value)}
+  />
+
+  <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "8px" }}>
+    {[
+      { action: "propose", label: "Propose Letter" },
+      { action: "rate", label: "Bid Heuristics" },
+      { action: "pitch", label: "Case Study Pitch" },
+      { action: "scope", label: "Scope Roadmap" },
+      { action: "invoice", label: "Draft Invoice" },
+      { action: "skills-gap", label: "Skills Audit" }
+    ].map((item) => (
+      <button
+        key={item.action}
+        type="button"
+        className="topbar__button"
+        style={{
+          cursor: upworkLoading ? "not-allowed" : "pointer",
+          padding: "10px",
+          textAlign: "center",
+          fontWeight: "600",
+          fontSize: "13px",
+          borderColor: activeAction === item.action ? "var(--page-accent)" : "rgba(255,255,255,0.09)",
+          background: activeAction === item.action ? "var(--page-accent-tint)" : "linear-gradient(180deg, rgba(13,18,29,0.92), rgba(13,18,29,0.82))",
+          color: activeAction === item.action ? "white" : "var(--text-soft)",
+          boxShadow: activeAction === item.action ? "0 0 12px var(--page-accent-glow)" : "none"
+        }}
+        disabled={upworkLoading}
+        onClick={() => runUpworkAction(item.action)}
+      >
+        {item.label}
+      </button>
+    ))}
+  </div>
+
+  {renderUpworkResult()}
+</div>
+
             <div className="tutor-card-list">
               {starterAutomations.map((item) => (
                 <button
@@ -396,6 +603,14 @@ export default function OpsPage() {
                 <h3>Example</h3>
                 <p>{selectedAutomation.example}</p>
               </div>
+              <AutomationRunner
+                backendUrl={backendUrl}
+                automationId={selectedAutomation.id}
+                automationTitle={selectedAutomation.title}
+                prompt={(selectedAutomation as any).prompt ?? `You are a helpful AI assistant. Complete this task: ${selectedAutomation.plainEnglish}. User input: {input}`}
+                example={selectedAutomation.example}
+                inputs={selectedAutomation.inputs}
+              />
             </>
           ) : (
             <div className="trace-empty">Select an automation to start learning.</div>
@@ -403,112 +618,11 @@ export default function OpsPage() {
         </article>
       </div>
 
-      <div className="ops-grid">
-        <DisclosurePanel title={appConfig.endpoints.health}>
-          <pre>{healthQuery.data ? formatJson(healthQuery.data) : String(healthQuery.error?.message ?? "Loading")}</pre>
-        </DisclosurePanel>
-
-        <DisclosurePanel title={appConfig.endpoints.ready}>
-          <pre>{readyQuery.data ? formatJson(readyQuery.data) : String(readyQuery.error?.message ?? "Loading")}</pre>
-        </DisclosurePanel>
-
-        <DisclosurePanel title={appConfig.endpoints.status}>
-          <pre>{statusQuery.data ? formatJson(statusQuery.data) : String(statusQuery.error?.message ?? "Loading")}</pre>
-        </DisclosurePanel>
-
-        <DisclosurePanel title={appConfig.endpoints.tools}>
-          <pre>{toolsQuery.data ? formatJson(toolsQuery.data) : String(toolsQuery.error?.message ?? "Loading")}</pre>
-        </DisclosurePanel>
-
-        <article className="ops-panel ops-panel--span-2">
-          <h2>{appConfig.endpoints.traceSummary}</h2>
-          {traceSummaryQuery.data ? (
-            <div className="trace-summary-list">
-              {traceSummary.length ? (
-                traceSummary.map((item) => (
-                  <button
-                    key={item.trace_id}
-                    type="button"
-                    className={`trace-summary-item${item.trace_id === selectedTraceId ? " trace-summary-item--active" : ""}`}
-                    onClick={() => setSelectedTraceId(item.trace_id)}
-                  >
-                    <div className="trace-summary-item__top">
-                      <span className="trace-summary-item__trace">{item.trace_id}</span>
-                      <span className="trace-summary-item__time">{formatTimestamp(item.latest_timestamp_ms)}</span>
-                    </div>
-                    <div className="trace-summary-item__meta">
-                      <span>{item.first_phase} → {item.last_status}</span>
-                      <span>{item.action_count} steps</span>
-                      <span>{formatDuration(item.total_duration_ms)}</span>
-                    </div>
-                    <div className="trace-summary-item__summary">{item.summary || "No summary"}</div>
-                  </button>
-                ))
-              ) : (
-                <div className="trace-empty">No trace summaries available.</div>
-              )}
-            </div>
-          ) : (
-            <pre>{String(traceSummaryQuery.error?.message ?? "Loading")}</pre>
-          )}
-        </article>
-
-        <article className="ops-panel ops-panel--span-2">
-          <h2>{appConfig.endpoints.traces}</h2>
-          {tracesQuery.data ? (
-            <div className="trace-events">
-              {selectedSummary ? (
-                <div className="trace-events__header">
-                  <div><strong>Selected trace:</strong> {selectedSummary.trace_id}</div>
-                  <div><strong>Latest:</strong> {formatTimestamp(selectedSummary.latest_timestamp_ms)}</div>
-                </div>
-              ) : null}
-
-              {selectedTraceEvents.length ? (
-                <div className="trace-event-list">
-                  {selectedTraceEvents.map((event, index) => (
-                    <article key={`${event.trace_id}-${event.step_id}-${event.phase}-${index}`} className="trace-event-card">
-                      <div className="trace-event-card__top">
-                        <span className="trace-event-card__phase">{event.phase}</span>
-                        <span className="trace-event-card__status">{event.status}</span>
-                      </div>
-                      <div className="trace-event-card__meta">
-                        <span><strong>Actor:</strong> {event.actor}</span>
-                        <span><strong>Action:</strong> {event.action}</span>
-                        <span><strong>Step:</strong> {event.step_id}</span>
-                        <span><strong>Time:</strong> {formatTimestamp(event.timestamp_ms)}</span>
-                        <span><strong>Duration:</strong> {formatDuration(event.duration_ms)}</span>
-                        <span><strong>Model:</strong> {event.model || "—"}</span>
-                      </div>
-                      <div className="trace-event-card__summary">{event.summary || "No summary"}</div>
-                      {event.metadata ? <pre>{formatJson(event.metadata)}</pre> : null}
-                    </article>
-                  ))}
-                </div>
-              ) : (
-                <div className="trace-empty">No raw events available for the selected trace.</div>
-              )}
-            </div>
-          ) : (
-            <pre>{String(tracesQuery.error?.message ?? "Loading")}</pre>
-          )}
-        </article>
-
-        <DisclosurePanel title={appConfig.endpoints.adminStatus}>
-          <pre>{adminStatusQuery.data ? formatJson(adminStatusQuery.data) : String(adminStatusQuery.error?.message ?? "Loading")}</pre>
-        </DisclosurePanel>
-
-        <DisclosurePanel title={appConfig.endpoints.adminDashboard}>
-          <pre>{adminDashboardQuery.data ? formatJson(adminDashboardQuery.data) : String(adminDashboardQuery.error?.message ?? "Loading")}</pre>
-        </DisclosurePanel>
-
-        <DisclosurePanel title={appConfig.endpoints.adminGeneration}>
-          <pre>{adminGenerationQuery.data ? formatJson(adminGenerationQuery.data) : String(adminGenerationQuery.error?.message ?? "Loading")}</pre>
-        </DisclosurePanel>
-      </div>
     </section>
   )
 }
+
+
 
 
 

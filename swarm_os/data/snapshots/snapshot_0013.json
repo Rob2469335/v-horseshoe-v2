@@ -1,130 +1,381 @@
 {
-  "snapshot_version": 2,
+  "snapshot_version": 4,
   "generation": 13,
   "organisms": [
     {
-      "id": "gen1_child_5514",
-      "fitness": 0.39007923560370444,
+      "id": "elite_elite_elite_elite_elite_elite_g0_c3542_g1_g2_g3_g7_g11_g12",
+      "fitness": 0.0,
       "genome": {
-        "genes": {
-          "a": 0.23962787899764537
+        "model_tier": 0.8397102540528439,
+        "model": "qwen3:14b",
+        "temperature": 0.5120907551664895,
+        "reasoning_depth": 0.43178242215514107,
+        "verbosity": 0.5980635175296092,
+        "coding_affinity": 0.31167400394603795,
+        "research_affinity": 0.3775549281335733,
+        "upwork_affinity": 0.3107710679203887,
+        "context_budget": 0.5064794872835631,
+        "retrieval_top_k": 0.5309145752525439,
+        "memory_window": 0.5537244901862818,
+        "mutation_rate": 0.09818074197754635,
+        "crossover_stability": 0.4358627912063715,
+        "parent_id": "elite_elite_elite_elite_elite_g0_c3542_g1_g2_g3_g7_g11",
+        "generation": 7,
+        "tool_genes": {
+          "web_search": 0.7637534610811592,
+          "playwright": 0.3660288492251321,
+          "filesystem": 0.6374736476142072,
+          "context7": 0.5437734901126776,
+          "code_exec": 0.3652823334241878
         },
-        "architecture": [
-          "core"
-        ],
-        "mutation_rate": 0.08621917999247126,
-        "parent_id": null,
-        "generation": 0
+        "cognition": {
+          "decomposition_bias": 0.6468103104854925,
+          "max_subtasks": 0.3966826655212844,
+          "reflection_depth": 0.516922437404695,
+          "self_critique_bias": 0.5735155556440338,
+          "verification_bias": 0.41048038733914893,
+          "hallucination_sensitivity": 0.6411733935985485,
+          "parallel_tool_calls": 0.5121781590936554,
+          "retry_aggression": 0.3552601021707773,
+          "fallback_model_bias": 0.40970802102397974,
+          "escalation_bias": 0.48866690175954597,
+          "summarization_bias": 0.5339910816815616,
+          "compression_ratio": 0.37390218906956113,
+          "memory_read_bias": 0.42609115678681697,
+          "memory_write_bias": 0.6276200246562889
+        },
+        "average_fitness": 0.024734671434917425,
+        "lifetime_fitness": 0.2968160572190091,
+        "evaluations": 12
       }
     },
     {
-      "id": "gen5_child_1049",
-      "fitness": 0.3607547723172792,
+      "id": "elite_elite_elite_elite_elite_g0_c3542_g1_g2_g3_g11_g12",
+      "fitness": 0.0,
       "genome": {
-        "genes": {
-          "a": 0.9980213194183971
+        "model_tier": 0.8397102540528439,
+        "model": "qwen3:14b",
+        "temperature": 0.5120907551664895,
+        "reasoning_depth": 0.43178242215514107,
+        "verbosity": 0.5980635175296092,
+        "coding_affinity": 0.31167400394603795,
+        "research_affinity": 0.3775549281335733,
+        "upwork_affinity": 0.3107710679203887,
+        "context_budget": 0.5064794872835631,
+        "retrieval_top_k": 0.5309145752525439,
+        "memory_window": 0.5537244901862818,
+        "mutation_rate": 0.09818074197754635,
+        "crossover_stability": 0.4358627912063715,
+        "parent_id": "elite_elite_elite_elite_g0_c3542_g1_g2_g3_g11",
+        "generation": 6,
+        "tool_genes": {
+          "web_search": 0.7637534610811592,
+          "playwright": 0.3660288492251321,
+          "filesystem": 0.6374736476142072,
+          "context7": 0.5437734901126776,
+          "code_exec": 0.3652823334241878
         },
-        "architecture": [
-          "core",
-          "module_867",
-          "module_95"
-        ],
-        "mutation_rate": 0.07253641820874161,
-        "parent_id": null,
-        "generation": 0
+        "cognition": {
+          "decomposition_bias": 0.6468103104854925,
+          "max_subtasks": 0.3966826655212844,
+          "reflection_depth": 0.516922437404695,
+          "self_critique_bias": 0.5735155556440338,
+          "verification_bias": 0.41048038733914893,
+          "hallucination_sensitivity": 0.6411733935985485,
+          "parallel_tool_calls": 0.5121781590936554,
+          "retry_aggression": 0.3552601021707773,
+          "fallback_model_bias": 0.40970802102397974,
+          "escalation_bias": 0.48866690175954597,
+          "summarization_bias": 0.5339910816815616,
+          "compression_ratio": 0.37390218906956113,
+          "memory_read_bias": 0.42609115678681697,
+          "memory_write_bias": 0.6276200246562889
+        },
+        "average_fitness": 0.024734671434917425,
+        "lifetime_fitness": 0.2968160572190091,
+        "evaluations": 12
       }
     },
     {
-      "id": "B",
-      "fitness": 0.3238234493067724,
+      "id": "elite_elite_elite_elite_elite_g0_c3542_g1_g2_g3_g7_g11",
+      "fitness": -0.0329451650229931,
       "genome": {
-        "genes": {
-          "a": 0.2
+        "model_tier": 0.8397102540528439,
+        "model": "qwen3:14b",
+        "temperature": 0.5120907551664895,
+        "reasoning_depth": 0.43178242215514107,
+        "verbosity": 0.5980635175296092,
+        "coding_affinity": 0.31167400394603795,
+        "research_affinity": 0.3775549281335733,
+        "upwork_affinity": 0.3107710679203887,
+        "context_budget": 0.5064794872835631,
+        "retrieval_top_k": 0.5309145752525439,
+        "memory_window": 0.5537244901862818,
+        "mutation_rate": 0.09818074197754635,
+        "crossover_stability": 0.4358627912063715,
+        "parent_id": "elite_elite_elite_elite_g0_c3542_g1_g2_g3_g7",
+        "generation": 6,
+        "tool_genes": {
+          "web_search": 0.7637534610811592,
+          "playwright": 0.3660288492251321,
+          "filesystem": 0.6374736476142072,
+          "context7": 0.5437734901126776,
+          "code_exec": 0.3652823334241878
         },
-        "architecture": [
-          "core"
-        ],
-        "mutation_rate": 0.1,
-        "parent_id": null,
-        "generation": 0
+        "cognition": {
+          "decomposition_bias": 0.6468103104854925,
+          "max_subtasks": 0.3966826655212844,
+          "reflection_depth": 0.516922437404695,
+          "self_critique_bias": 0.5735155556440338,
+          "verification_bias": 0.41048038733914893,
+          "hallucination_sensitivity": 0.6411733935985485,
+          "parallel_tool_calls": 0.5121781590936554,
+          "retry_aggression": 0.3552601021707773,
+          "fallback_model_bias": 0.40970802102397974,
+          "escalation_bias": 0.48866690175954597,
+          "summarization_bias": 0.5339910816815616,
+          "compression_ratio": 0.37390218906956113,
+          "memory_read_bias": 0.42609115678681697,
+          "memory_write_bias": 0.6276200246562889
+        },
+        "average_fitness": 0.024734671434917425,
+        "lifetime_fitness": 0.2968160572190091,
+        "evaluations": 12
       }
     },
     {
-      "id": "gen2_child_5820",
-      "fitness": 0.28802785848164525,
+      "id": "elite_elite_elite_elite_g0_c3542_g1_g2_g3_g11",
+      "fitness": -0.0329451650229931,
       "genome": {
-        "genes": {
-          "a": 0.23030993947133246
+        "model_tier": 0.8397102540528439,
+        "model": "qwen3:14b",
+        "temperature": 0.5120907551664895,
+        "reasoning_depth": 0.43178242215514107,
+        "verbosity": 0.5980635175296092,
+        "coding_affinity": 0.31167400394603795,
+        "research_affinity": 0.3775549281335733,
+        "upwork_affinity": 0.3107710679203887,
+        "context_budget": 0.5064794872835631,
+        "retrieval_top_k": 0.5309145752525439,
+        "memory_window": 0.5537244901862818,
+        "mutation_rate": 0.09818074197754635,
+        "crossover_stability": 0.4358627912063715,
+        "parent_id": "elite_elite_elite_g0_c3542_g1_g2_g3",
+        "generation": 5,
+        "tool_genes": {
+          "web_search": 0.7637534610811592,
+          "playwright": 0.3660288492251321,
+          "filesystem": 0.6374736476142072,
+          "context7": 0.5437734901126776,
+          "code_exec": 0.3652823334241878
         },
-        "architecture": [
-          "core",
-          "module_867"
-        ],
-        "mutation_rate": 0.07649486833205844,
-        "parent_id": null,
-        "generation": 0
+        "cognition": {
+          "decomposition_bias": 0.6468103104854925,
+          "max_subtasks": 0.3966826655212844,
+          "reflection_depth": 0.516922437404695,
+          "self_critique_bias": 0.5735155556440338,
+          "verification_bias": 0.41048038733914893,
+          "hallucination_sensitivity": 0.6411733935985485,
+          "parallel_tool_calls": 0.5121781590936554,
+          "retry_aggression": 0.3552601021707773,
+          "fallback_model_bias": 0.40970802102397974,
+          "escalation_bias": 0.48866690175954597,
+          "summarization_bias": 0.5339910816815616,
+          "compression_ratio": 0.37390218906956113,
+          "memory_read_bias": 0.42609115678681697,
+          "memory_write_bias": 0.6276200246562889
+        },
+        "average_fitness": 0.024734671434917425,
+        "lifetime_fitness": 0.2968160572190091,
+        "evaluations": 12
       }
     },
     {
-      "id": "gen1_child_4333",
-      "fitness": 0.2800339330242976,
+      "id": "elite_elite_elite_elite_g0_c3542_g1_g2_g3_g7",
+      "fitness": 0.040978804393471464,
       "genome": {
-        "genes": {
-          "a": 0.4185491686760296
+        "model_tier": 0.8397102540528439,
+        "model": "qwen3:14b",
+        "temperature": 0.5120907551664895,
+        "reasoning_depth": 0.43178242215514107,
+        "verbosity": 0.5980635175296092,
+        "coding_affinity": 0.31167400394603795,
+        "research_affinity": 0.3775549281335733,
+        "upwork_affinity": 0.3107710679203887,
+        "context_budget": 0.5064794872835631,
+        "retrieval_top_k": 0.5309145752525439,
+        "memory_window": 0.5537244901862818,
+        "mutation_rate": 0.09818074197754635,
+        "crossover_stability": 0.4358627912063715,
+        "parent_id": "elite_elite_elite_g0_c3542_g1_g2_g3",
+        "generation": 5,
+        "tool_genes": {
+          "web_search": 0.7637534610811592,
+          "playwright": 0.3660288492251321,
+          "filesystem": 0.6374736476142072,
+          "context7": 0.5437734901126776,
+          "code_exec": 0.3652823334241878
         },
-        "architecture": [
-          "core",
-          "module_867"
-        ],
-        "mutation_rate": 0.09375822889915884,
-        "parent_id": null,
-        "generation": 0
+        "cognition": {
+          "decomposition_bias": 0.6468103104854925,
+          "max_subtasks": 0.3966826655212844,
+          "reflection_depth": 0.516922437404695,
+          "self_critique_bias": 0.5735155556440338,
+          "verification_bias": 0.41048038733914893,
+          "hallucination_sensitivity": 0.6411733935985485,
+          "parallel_tool_calls": 0.5121781590936554,
+          "retry_aggression": 0.3552601021707773,
+          "fallback_model_bias": 0.40970802102397974,
+          "escalation_bias": 0.48866690175954597,
+          "summarization_bias": 0.5339910816815616,
+          "compression_ratio": 0.37390218906956113,
+          "memory_read_bias": 0.42609115678681697,
+          "memory_write_bias": 0.6276200246562889
+        },
+        "average_fitness": 0.024734671434917425,
+        "lifetime_fitness": 0.2968160572190091,
+        "evaluations": 12
       }
     },
     {
-      "id": "gen0_child_8279",
-      "fitness": 0.2634290135916477,
+      "id": "elite_elite_elite_g0_c3542_g1_g2_g3",
+      "fitness": 0.07861344154718633,
       "genome": {
-        "genes": {
-          "a": 0.918098502489808
+        "model_tier": 0.8397102540528439,
+        "model": "qwen3:14b",
+        "temperature": 0.5120907551664895,
+        "reasoning_depth": 0.43178242215514107,
+        "verbosity": 0.5980635175296092,
+        "coding_affinity": 0.31167400394603795,
+        "research_affinity": 0.3775549281335733,
+        "upwork_affinity": 0.3107710679203887,
+        "context_budget": 0.5064794872835631,
+        "retrieval_top_k": 0.5309145752525439,
+        "memory_window": 0.5537244901862818,
+        "mutation_rate": 0.09818074197754635,
+        "crossover_stability": 0.4358627912063715,
+        "parent_id": "elite_elite_g0_c3542_g1_g2",
+        "generation": 4,
+        "tool_genes": {
+          "web_search": 0.7637534610811592,
+          "playwright": 0.3660288492251321,
+          "filesystem": 0.6374736476142072,
+          "context7": 0.5437734901126776,
+          "code_exec": 0.3652823334241878
         },
-        "architecture": [
-          "core",
-          "module_95"
-        ],
-        "mutation_rate": 0.08874551899214414,
-        "parent_id": null,
-        "generation": 0
+        "cognition": {
+          "decomposition_bias": 0.6468103104854925,
+          "max_subtasks": 0.3966826655212844,
+          "reflection_depth": 0.516922437404695,
+          "self_critique_bias": 0.5735155556440338,
+          "verification_bias": 0.41048038733914893,
+          "hallucination_sensitivity": 0.6411733935985485,
+          "parallel_tool_calls": 0.5121781590936554,
+          "retry_aggression": 0.3552601021707773,
+          "fallback_model_bias": 0.40970802102397974,
+          "escalation_bias": 0.48866690175954597,
+          "summarization_bias": 0.5339910816815616,
+          "compression_ratio": 0.37390218906956113,
+          "memory_read_bias": 0.42609115678681697,
+          "memory_write_bias": 0.6276200246562889
+        },
+        "average_fitness": 0.024734671434917425,
+        "lifetime_fitness": 0.2968160572190091,
+        "evaluations": 12
       }
     },
     {
-      "id": "A",
-      "fitness": 0.1684740611019741,
+      "id": "elite_elite_elite_elite_g1_c2996_g7_g8_g9_g10",
+      "fitness": 0.0035228635483387444,
       "genome": {
-        "genes": {
-          "a": 0.5
+        "model_tier": 0.7029603879626983,
+        "model": "qwen2.5:7b-instruct",
+        "temperature": 0.3807904849021884,
+        "reasoning_depth": 0.33944648404643124,
+        "verbosity": 0.4485140849165972,
+        "coding_affinity": 0.42189927120030035,
+        "research_affinity": 0.35392562630285795,
+        "upwork_affinity": 0.2241751024968418,
+        "context_budget": 0.4244172510961648,
+        "retrieval_top_k": 0.37874184097304575,
+        "memory_window": 0.4088297670227224,
+        "mutation_rate": 0.09029708857992634,
+        "crossover_stability": 0.3713308928860136,
+        "parent_id": "elite_elite_elite_g1_c2996_g7_g8_g9",
+        "generation": 6,
+        "tool_genes": {
+          "web_search": 0.2830220656040191,
+          "playwright": 0.37886952196508583,
+          "filesystem": 0.5977079326813641,
+          "context7": 0.461137086248257,
+          "code_exec": 0.42187499990922855
         },
-        "architecture": [
-          "core"
-        ],
-        "mutation_rate": 0.1,
-        "parent_id": null,
-        "generation": 0
+        "cognition": {
+          "decomposition_bias": 0.5295473484164132,
+          "max_subtasks": 0.5249567970279801,
+          "reflection_depth": 0.5997808114819385,
+          "self_critique_bias": 0.450958131705427,
+          "verification_bias": 0.4326912930215242,
+          "hallucination_sensitivity": 0.6982613117434946,
+          "parallel_tool_calls": 0.59664359836181,
+          "retry_aggression": 0.2896285376343105,
+          "fallback_model_bias": 0.36911212119079057,
+          "escalation_bias": 0.40699562821627083,
+          "summarization_bias": 0.4037166091541159,
+          "compression_ratio": 0.546061593616515,
+          "memory_read_bias": 0.625809288706076,
+          "memory_write_bias": 0.4857790426810509
+        },
+        "average_fitness": 0.024467624591069107,
+        "lifetime_fitness": 0.2691438705017602,
+        "evaluations": 11
       }
     },
     {
-      "id": "C",
-      "fitness": 0.11889063255966463,
+      "id": "elite_elite_elite_g1_c2996_g7_g8_g10",
+      "fitness": 0.0035228635483387444,
       "genome": {
-        "genes": {
-          "a": 0.9
+        "model_tier": 0.7029603879626983,
+        "model": "qwen3:14b",
+        "temperature": 0.3807904849021884,
+        "reasoning_depth": 0.33944648404643124,
+        "verbosity": 0.4485140849165972,
+        "coding_affinity": 0.42189927120030035,
+        "research_affinity": 0.35392562630285795,
+        "upwork_affinity": 0.2241751024968418,
+        "context_budget": 0.4244172510961648,
+        "retrieval_top_k": 0.37874184097304575,
+        "memory_window": 0.4088297670227224,
+        "mutation_rate": 0.09029708857992634,
+        "crossover_stability": 0.3713308928860136,
+        "parent_id": "elite_elite_g1_c2996_g7_g8",
+        "generation": 5,
+        "tool_genes": {
+          "web_search": 0.2830220656040191,
+          "playwright": 0.37886952196508583,
+          "filesystem": 0.5977079326813641,
+          "context7": 0.461137086248257,
+          "code_exec": 0.42187499990922855
         },
-        "architecture": [
-          "core"
-        ],
-        "mutation_rate": 0.1,
-        "parent_id": null,
-        "generation": 0
+        "cognition": {
+          "decomposition_bias": 0.5295473484164132,
+          "max_subtasks": 0.5249567970279801,
+          "reflection_depth": 0.5997808114819385,
+          "self_critique_bias": 0.450958131705427,
+          "verification_bias": 0.4326912930215242,
+          "hallucination_sensitivity": 0.6982613117434946,
+          "parallel_tool_calls": 0.59664359836181,
+          "retry_aggression": 0.2896285376343105,
+          "fallback_model_bias": 0.36911212119079057,
+          "escalation_bias": 0.40699562821627083,
+          "summarization_bias": 0.4037166091541159,
+          "compression_ratio": 0.546061593616515,
+          "memory_read_bias": 0.625809288706076,
+          "memory_write_bias": 0.4857790426810509
+        },
+        "average_fitness": 0.024467624591069107,
+        "lifetime_fitness": 0.2691438705017602,
+        "evaluations": 11
       }
     }
   ]

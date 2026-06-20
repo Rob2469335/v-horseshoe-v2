@@ -5,8 +5,18 @@ def make_client():
     app = create_app()
     return TestClient(app)
 
-def get_paths(app):
-    return {getattr(route, "path", None) for route in app.routes}
+def get_paths(app_or_router):
+    paths = set()
+    routes = getattr(app_or_router, "routes", [])
+    for route in routes:
+        if hasattr(route, "path"):
+            paths.add(route.path)
+        elif type(route).__name__ == "_IncludedRouter":
+            prefix = route.include_context.prefix
+            nested_paths = get_paths(route.original_router)
+            for np in nested_paths:
+                paths.add(prefix + np)
+    return paths
 
 def test_app_boots():
     app = create_app()

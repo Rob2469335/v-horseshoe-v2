@@ -24,6 +24,21 @@ class HealingService:
             "anomalies": self.tracker.list(),
         }
 
+    async def run_once(self):
+        checks = self.detector.check()
+        failed = [name for name, r in checks.items() if not r.get('ok', False)]
+        if not failed:
+            return {'status': 'healthy', 'message': 'All systems healthy. No healing needed.', 'checks': checks, 'healed': []}
+        healed = []
+        for name in failed:
+            try:
+                anomaly = self.tracker.record(name, 'warning', f'{name} check failed', {})
+                result = await self.engine.recover(anomaly)
+                healed.append({'service': name, 'ok': result.get('ok', False), 'detail': result.get('message', '')})
+            except Exception as exc:
+                healed.append({'service': name, 'ok': False, 'detail': str(exc)})
+        return {'status': 'healed' if all(h['ok'] for h in healed) else 'partial', 'message': f'Attempted recovery on {len(healed)} service(s).', 'checks': checks, 'healed': healed}
+
     async def heal(self, source, action="recover", **payload):
         anomaly = self.tracker.record(source, "warning", payload.get("reason", "failure detected"), payload)
         result = await self.engine.recover(anomaly)
@@ -37,3 +52,4 @@ class HealingService:
             result=result
         )
         return {"anomaly": anomaly, "result": result, "event": event}
+

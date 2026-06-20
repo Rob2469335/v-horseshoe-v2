@@ -1,66 +1,334 @@
 {
-  "snapshot_version": 2,
+  "snapshot_version": 4,
   "generation": 1,
   "organisms": [
     {
-      "id": "gen0_child_8279",
+      "id": "g0_c1428",
       "fitness": 0.0,
       "genome": {
-        "genes": {
-          "a": 0.918098502489808
+        "model_tier": 0.9282259196932036,
+        "model": "qwen3:14b",
+        "temperature": 0.643608631491843,
+        "reasoning_depth": 0.439039762440347,
+        "verbosity": 0.5882872515953451,
+        "coding_affinity": 0.4470139433712357,
+        "research_affinity": 0.2603616105122987,
+        "upwork_affinity": 0.29262444611646554,
+        "context_budget": 0.3804782531283959,
+        "retrieval_top_k": 0.5380465244052918,
+        "memory_window": 0.44581619852840915,
+        "mutation_rate": 0.09801587704788507,
+        "crossover_stability": 0.5926670526317479,
+        "parent_id": "C",
+        "generation": 1,
+        "tool_genes": {
+          "web_search": 0.5486104952276905,
+          "playwright": 0.3660288492251321,
+          "filesystem": 0.6374736476142072,
+          "context7": 0.4530452444829823,
+          "code_exec": 0.3652823334241878
         },
-        "architecture": [
-          "core",
-          "module_95"
-        ],
-        "mutation_rate": 0.08874551899214414,
-        "parent_id": null,
-        "generation": 0
+        "cognition": {
+          "decomposition_bias": 0.44377389871337214,
+          "max_subtasks": 0.4124246077227401,
+          "reflection_depth": 0.6061479289099843,
+          "self_critique_bias": 0.5668888667772523,
+          "verification_bias": 0.4972358889783223,
+          "hallucination_sensitivity": 0.41611458148022595,
+          "parallel_tool_calls": 0.6032517890012392,
+          "retry_aggression": 0.6380996334196924,
+          "fallback_model_bias": 0.4127686860234319,
+          "escalation_bias": 0.4560070505276808,
+          "summarization_bias": 0.48085082803705215,
+          "compression_ratio": 0.45620107050435993,
+          "memory_read_bias": 0.3593673344988665,
+          "memory_write_bias": 0.38309879311278605
+        },
+        "average_fitness": 0.0,
+        "lifetime_fitness": 0.0,
+        "evaluations": 0
       }
     },
     {
-      "id": "B",
-      "fitness": -0.009201372964015265,
+      "id": "g0_c3542",
+      "fitness": 0.0,
       "genome": {
-        "genes": {
-          "a": 0.2
+        "model_tier": 0.8397102540528439,
+        "model": "qwen3:14b",
+        "temperature": 0.5120907551664895,
+        "reasoning_depth": 0.43178242215514107,
+        "verbosity": 0.5980635175296092,
+        "coding_affinity": 0.31167400394603795,
+        "research_affinity": 0.3775549281335733,
+        "upwork_affinity": 0.3107710679203887,
+        "context_budget": 0.5064794872835631,
+        "retrieval_top_k": 0.5309145752525439,
+        "memory_window": 0.5537244901862818,
+        "mutation_rate": 0.09818074197754635,
+        "crossover_stability": 0.4358627912063715,
+        "parent_id": "C",
+        "generation": 1,
+        "tool_genes": {
+          "web_search": 0.7637534610811592,
+          "playwright": 0.3660288492251321,
+          "filesystem": 0.6374736476142072,
+          "context7": 0.5437734901126776,
+          "code_exec": 0.3652823334241878
         },
-        "architecture": [
-          "core"
-        ],
-        "mutation_rate": 0.1,
-        "parent_id": null,
-        "generation": 0
-      }
-    },
-    {
-      "id": "C",
-      "fitness": -0.01697415999705974,
-      "genome": {
-        "genes": {
-          "a": 0.9
+        "cognition": {
+          "decomposition_bias": 0.6468103104854925,
+          "max_subtasks": 0.3966826655212844,
+          "reflection_depth": 0.516922437404695,
+          "self_critique_bias": 0.5735155556440338,
+          "verification_bias": 0.41048038733914893,
+          "hallucination_sensitivity": 0.6411733935985485,
+          "parallel_tool_calls": 0.5121781590936554,
+          "retry_aggression": 0.3552601021707773,
+          "fallback_model_bias": 0.40970802102397974,
+          "escalation_bias": 0.48866690175954597,
+          "summarization_bias": 0.5339910816815616,
+          "compression_ratio": 0.37390218906956113,
+          "memory_read_bias": 0.42609115678681697,
+          "memory_write_bias": 0.6276200246562889
         },
-        "architecture": [
-          "core"
-        ],
-        "mutation_rate": 0.1,
-        "parent_id": null,
-        "generation": 0
+        "average_fitness": 0.0,
+        "lifetime_fitness": 0.0,
+        "evaluations": 0
       }
     },
     {
       "id": "A",
-      "fitness": -0.046704157435983114,
+      "fitness": -0.002584452642594491,
       "genome": {
-        "genes": {
-          "a": 0.5
-        },
-        "architecture": [
-          "core"
-        ],
+        "model_tier": 0.5,
+        "model": "qwen2.5:7b-instruct",
+        "temperature": 0.5,
+        "reasoning_depth": 0.5,
+        "verbosity": 0.5,
+        "coding_affinity": 0.33,
+        "research_affinity": 0.33,
+        "upwork_affinity": 0.33,
+        "context_budget": 0.5,
+        "retrieval_top_k": 0.5,
+        "memory_window": 0.5,
         "mutation_rate": 0.1,
+        "crossover_stability": 0.5,
         "parent_id": null,
-        "generation": 0
+        "generation": 0,
+        "tool_genes": {
+          "web_search": 0.2830220656040191,
+          "playwright": 0.3917101947050395,
+          "filesystem": 0.5579422177485212,
+          "context7": 0.37850068238383633,
+          "code_exec": 0.4784676663942693
+        },
+        "cognition": {
+          "decomposition_bias": 0.5,
+          "max_subtasks": 0.5,
+          "reflection_depth": 0.5,
+          "self_critique_bias": 0.5,
+          "verification_bias": 0.5,
+          "hallucination_sensitivity": 0.5,
+          "parallel_tool_calls": 0.5,
+          "retry_aggression": 0.5,
+          "fallback_model_bias": 0.5,
+          "escalation_bias": 0.5,
+          "summarization_bias": 0.5,
+          "compression_ratio": 0.5,
+          "memory_read_bias": 0.5,
+          "memory_write_bias": 0.5
+        },
+        "average_fitness": -0.0030405325206994014,
+        "lifetime_fitness": -0.0030405325206994014,
+        "evaluations": 1
+      }
+    },
+    {
+      "id": "B",
+      "fitness": -0.002584452642594491,
+      "genome": {
+        "model_tier": 0.2,
+        "model": "qwen2.5:3b-instruct",
+        "temperature": 0.5,
+        "reasoning_depth": 0.5,
+        "verbosity": 0.5,
+        "coding_affinity": 0.33,
+        "research_affinity": 0.33,
+        "upwork_affinity": 0.33,
+        "context_budget": 0.5,
+        "retrieval_top_k": 0.5,
+        "memory_window": 0.5,
+        "mutation_rate": 0.1,
+        "crossover_stability": 0.5,
+        "parent_id": null,
+        "generation": 0,
+        "tool_genes": {
+          "web_search": 0.41206826182005046,
+          "playwright": 0.6932363216808521,
+          "filesystem": 0.6223990547789591,
+          "context7": 0.6413753248681171,
+          "code_exec": 0.5831055166515051
+        },
+        "cognition": {
+          "decomposition_bias": 0.5,
+          "max_subtasks": 0.5,
+          "reflection_depth": 0.5,
+          "self_critique_bias": 0.5,
+          "verification_bias": 0.5,
+          "hallucination_sensitivity": 0.5,
+          "parallel_tool_calls": 0.5,
+          "retry_aggression": 0.5,
+          "fallback_model_bias": 0.5,
+          "escalation_bias": 0.5,
+          "summarization_bias": 0.5,
+          "compression_ratio": 0.5,
+          "memory_read_bias": 0.5,
+          "memory_write_bias": 0.5
+        },
+        "average_fitness": -0.0030405325206994014,
+        "lifetime_fitness": -0.0030405325206994014,
+        "evaluations": 1
+      }
+    },
+    {
+      "id": "C",
+      "fitness": -0.002584452642594491,
+      "genome": {
+        "model_tier": 0.9,
+        "model": "qwen2.5:7b-instruct",
+        "temperature": 0.5,
+        "reasoning_depth": 0.5,
+        "verbosity": 0.5,
+        "coding_affinity": 0.33,
+        "research_affinity": 0.33,
+        "upwork_affinity": 0.33,
+        "context_budget": 0.5,
+        "retrieval_top_k": 0.5,
+        "memory_window": 0.5,
+        "mutation_rate": 0.1,
+        "crossover_stability": 0.5,
+        "parent_id": null,
+        "generation": 0,
+        "tool_genes": {
+          "web_search": 0.6361551690426452,
+          "playwright": 0.3660288492251321,
+          "filesystem": 0.6374736476142072,
+          "context7": 0.5437734901126776,
+          "code_exec": 0.3652823334241878
+        },
+        "cognition": {
+          "decomposition_bias": 0.5,
+          "max_subtasks": 0.5,
+          "reflection_depth": 0.5,
+          "self_critique_bias": 0.5,
+          "verification_bias": 0.5,
+          "hallucination_sensitivity": 0.5,
+          "parallel_tool_calls": 0.5,
+          "retry_aggression": 0.5,
+          "fallback_model_bias": 0.5,
+          "escalation_bias": 0.5,
+          "summarization_bias": 0.5,
+          "compression_ratio": 0.5,
+          "memory_read_bias": 0.5,
+          "memory_write_bias": 0.5
+        },
+        "average_fitness": -0.0030405325206994014,
+        "lifetime_fitness": -0.0030405325206994014,
+        "evaluations": 1
+      }
+    },
+    {
+      "id": "elite_A_g0",
+      "fitness": 0.0,
+      "genome": {
+        "model_tier": 0.5,
+        "model": "qwen2.5:7b-instruct",
+        "temperature": 0.5,
+        "reasoning_depth": 0.5,
+        "verbosity": 0.5,
+        "coding_affinity": 0.33333333333333337,
+        "research_affinity": 0.33333333333333337,
+        "upwork_affinity": 0.33333333333333337,
+        "context_budget": 0.5,
+        "retrieval_top_k": 0.5,
+        "memory_window": 0.5,
+        "mutation_rate": 0.1,
+        "crossover_stability": 0.5,
+        "parent_id": "A",
+        "generation": 1,
+        "tool_genes": {
+          "web_search": 0.2830220656040191,
+          "playwright": 0.3917101947050395,
+          "filesystem": 0.5579422177485212,
+          "context7": 0.37850068238383633,
+          "code_exec": 0.4784676663942693
+        },
+        "cognition": {
+          "decomposition_bias": 0.5,
+          "max_subtasks": 0.5,
+          "reflection_depth": 0.5,
+          "self_critique_bias": 0.5,
+          "verification_bias": 0.5,
+          "hallucination_sensitivity": 0.5,
+          "parallel_tool_calls": 0.5,
+          "retry_aggression": 0.5,
+          "fallback_model_bias": 0.5,
+          "escalation_bias": 0.5,
+          "summarization_bias": 0.5,
+          "compression_ratio": 0.5,
+          "memory_read_bias": 0.5,
+          "memory_write_bias": 0.5
+        },
+        "average_fitness": -0.0030405325206994014,
+        "lifetime_fitness": -0.0030405325206994014,
+        "evaluations": 1
+      }
+    },
+    {
+      "id": "elite_B_g0",
+      "fitness": 0.0,
+      "genome": {
+        "model_tier": 0.2,
+        "model": "qwen2.5:7b-instruct",
+        "temperature": 0.5,
+        "reasoning_depth": 0.5,
+        "verbosity": 0.5,
+        "coding_affinity": 0.33333333333333337,
+        "research_affinity": 0.33333333333333337,
+        "upwork_affinity": 0.33333333333333337,
+        "context_budget": 0.5,
+        "retrieval_top_k": 0.5,
+        "memory_window": 0.5,
+        "mutation_rate": 0.1,
+        "crossover_stability": 0.5,
+        "parent_id": "B",
+        "generation": 1,
+        "tool_genes": {
+          "web_search": 0.41206826182005046,
+          "playwright": 0.6932363216808521,
+          "filesystem": 0.6223990547789591,
+          "context7": 0.6413753248681171,
+          "code_exec": 0.5831055166515051
+        },
+        "cognition": {
+          "decomposition_bias": 0.5,
+          "max_subtasks": 0.5,
+          "reflection_depth": 0.5,
+          "self_critique_bias": 0.5,
+          "verification_bias": 0.5,
+          "hallucination_sensitivity": 0.5,
+          "parallel_tool_calls": 0.5,
+          "retry_aggression": 0.5,
+          "fallback_model_bias": 0.5,
+          "escalation_bias": 0.5,
+          "summarization_bias": 0.5,
+          "compression_ratio": 0.5,
+          "memory_read_bias": 0.5,
+          "memory_write_bias": 0.5
+        },
+        "average_fitness": -0.0030405325206994014,
+        "lifetime_fitness": -0.0030405325206994014,
+        "evaluations": 1
       }
     }
   ]

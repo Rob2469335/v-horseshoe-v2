@@ -1,11 +1,10 @@
-# swarm_os/services/simulation_service.py
 from __future__ import annotations
 
 import logging
 import random
+
 from swarm_os.core.settings import get_settings
 from swarm_os.kernel.environment import Environment
-from swarm_os.kernel.metrics import summarize
 from swarm_os.kernel.swarm_kernel import SwarmKernel
 from swarm_os.kernel.genetics import Genome
 import swarm_os.brain as brain_module
@@ -13,7 +12,6 @@ from swarm_os.kernel.organism import Organism
 from swarm_os.scenarios.registry import build as build_scenario
 from swarm_os.repositories.file_snapshot_repository import FileSnapshotRepository
 from swarm_os.repositories.snapshot_repository import SnapshotRepository
-from swarm_os.kernel.migrations import migrate_snapshot
 
 log = logging.getLogger(__name__)
 
@@ -22,8 +20,8 @@ def _organisms_from_snapshot(snapshot: dict, generate_fn=None) -> list[Organism]
     items = []
     for item in snapshot.get("organisms", []):
         genome = Genome.from_dict(item["genome"])
-        brain  = brain_module.registry.make("swarm", genome, "general", generate_fn=generate_fn)
-        org    = Organism(id=item["id"], brain=brain, genome=genome)
+        brain = brain_module.registry.make("swarm", genome, "general", generate_fn=generate_fn)
+        org = Organism(id=item["id"], brain=brain, genome=genome)
         org.fitness = float(item.get("fitness", 0.0))
         items.append(org)
     return items
@@ -31,13 +29,10 @@ def _organisms_from_snapshot(snapshot: dict, generate_fn=None) -> list[Organism]
 
 class SimulationService:
     def __init__(self, snapshot_repo: SnapshotRepository | None = None, generate_fn=None) -> None:
-        self.settings      = get_settings()
+        self.settings = get_settings()
         self.snapshot_repo = snapshot_repo or FileSnapshotRepository(
             self.settings.snapshots_dir
         )
-        self.generate_fn = generate_fn
-
-    def set_generate_fn(self, generate_fn) -> None:
         self.generate_fn = generate_fn
 
     async def run(
@@ -46,55 +41,39 @@ class SimulationService:
         steps: int = 15,
         scenario: str | None = None,
         generate_fn=None,
-    ) -> tuple:
+    ):
         s = self.settings
         if generate_fn is None:
             generate_fn = self.generate_fn
 
-        seed = getattr(s, "random_seed", None)
-        if seed is not None:
-            random.seed(seed)
+        if getattr(s, "random_seed", None):
+            random.seed(s.random_seed)
 
         env = Environment()
 
         if resume_path:
-            raw       = self.snapshot_repo.load(resume_path)
-            snapshot  = migrate_snapshot(raw)
+            raw = self.snapshot_repo.load(resume_path)
+            from swarm_os.kernel.migrations import migrate_snapshot
+            snapshot = migrate_snapshot(raw)
             organisms = _organisms_from_snapshot(snapshot, generate_fn=generate_fn)
-            kernel    = SwarmKernel(organisms, env, generate_fn  = generate_fn)
+
+            kernel = SwarmKernel(
+                organisms,
+                env,
+                generate_fn=generate_fn,
+                snapshot_repo=self.snapshot_repo,
+            )
             kernel.generation = snapshot.get("generation", 0)
-            log.info("resumed from %s at generation %d",
-                     resume_path, kernel.generation)
+
         else:
-            sc_name   = scenario or getattr(s, "scenario_name", "default")
-            pop_max   = getattr(s, "population_max", 8)
+            sc_name = scenario or getattr(s, "scenario_name", "default")
             organisms = build_scenario(sc_name)
-            kernel    = SwarmKernel(organisms, env, generate_fn  = generate_fn)
-            log.info("started fresh scenario=%s pop=%d", sc_name, len(organisms))
 
-        for _ in range(steps):
-            await kernel.step_async()
-            payload = {
-                "snapshot_version": 4,
-                "generation":       kernel.generation,
-                "organisms": [
-                    {
-                        "id":      o.id,
-                        "fitness": o.fitness,
-                        "genome":  o.genome.to_dict(),
-                    }
-                    for o in kernel.organisms
-                ],
-            }
-            self.snapshot_repo.save(payload, kernel.generation)
+            kernel = SwarmKernel(
+                organisms,
+                env,
+                generate_fn=generate_fn,
+                snapshot_repo=self.snapshot_repo,
+            )
 
-        metrics = summarize(kernel.organisms, kernel.generation)
-        log.info("run complete generation=%d best_fitness=%.4f",
-                 kernel.generation, metrics.best_fitness)
-        return kernel, metrics
-
-
-
-
-
-
+        return await kernel.run(steps)

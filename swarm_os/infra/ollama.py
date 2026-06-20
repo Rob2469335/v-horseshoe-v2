@@ -1,117 +1,113 @@
-from __future__ import annotations
-
-import json
-import logging
-
 import httpx
-
-from ..core.settings import get_settings
+import os
+import logging
+import json
+from typing import AsyncGenerator, Any
 
 log = logging.getLogger(__name__)
 
-
 class OllamaClient:
-    def __init__(self) -> None:
-        s = get_settings()
-        self.base_url = s.ollama_base_url.rstrip("/")
+    def __init__(self, base_url: str = "http://127.0.0.1:11434"):
+        self.base_url = base_url
+        self.client = httpx.AsyncClient(base_url=base_url, timeout=90.0)
 
-    def _extract_content(self, data: dict) -> str:
-        if "message" in data and isinstance(data["message"], dict):
-            return data["message"].get("content", "") or ""
+    async def generate(self, model: str, messages: list[dict]) -> str:
+        if "glm" in model.lower():
+            try:
+                api_key = os.environ.get("GLM_API_KEY", "")
+                base_url = os.environ.get("GLM_API_BASE", "https://open.bigmodel.cn/api/paas/v4")
+                headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+                payload = {
+                    "model": model,
+                    "messages": messages,
+                    "stream": False
+                }
+                async with httpx.AsyncClient(timeout=60.0) as cloud_client:
+                    resp = await cloud_client.post(f"{base_url}/chat/completions", json=payload, headers=headers)
+                    if resp.status_code == 200:
+                        res_data = resp.json()
+                        choices = res_data.get("choices", [])
+                        if choices:
+                            return choices[0].get("message", {}).get("content", "").strip()
+                        return f"[System Note: Cloud response missing expected structure. Raw: {res_data}]"
+                    raise RuntimeError(f"GLM cloud error {resp.status_code}: {resp.text}")
+            except Exception as e:
+                log.error(f"Error in OllamaClient.generate (GLM fork): {e}")
+                raise
+        else:
+            payload = {"model": model, "messages": messages, "stream": False}
+            try:
+                resp = await self.client.post("/api/chat", json=payload)
+                if resp.status_code == 200:
+                    return resp.json().get("message", {}).get("content", "").strip()
+                raise RuntimeError(f"Ollama error {resp.status_code}: {resp.text}")
+            except Exception as e:
+                log.error(f"Error in OllamaClient.generate: {e}")
+                raise
 
-        choices = data.get("choices", [])
-        if not choices:
-            return ""
+    async def stream_generate(self, model: str, messages: list[dict]) -> AsyncGenerator[str, None]:
+        if "glm" in model.lower():
+            try:
+                api_key = os.environ.get("GLM_API_KEY", "")
+                base_url = os.environ.get("GLM_API_BASE", "https://open.bigmodel.cn/api/paas/v4")
+                headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+                payload = {
+                    "model": model,
+                    "messages": messages,
+                    "stream": True
+                }
+                async with httpx.AsyncClient(timeout=60.0) as cloud_client:
+                    async with cloud_client.stream("POST", f"{base_url}/chat/completions", json=payload, headers=headers) as response:
+                        if response.status_code != 200:
+                            raise RuntimeError(f"GLM cloud stream error {response.status_code}")
+                        async for line in response.aiter_lines():
+                            if line.startswith("data: "):
+                                line = line[6:].strip()
+                            if not line or line == "[DONE]":
+                                continue
+                            try:
+                                data = json.loads(line)
+                                choices = data.get("choices", [])
+                                if choices:
+                                    chunk = choices[0].get("delta", {}).get("content", "")
+                                    if chunk:
+                                        yield chunk
+                            except Exception:
+                                pass
+            except Exception as e:
+                log.error(f"Error in OllamaClient.stream_generate (GLM fork): {e}")
+                raise
+        else:
+            payload = {"model": model, "messages": messages, "stream": True}
+            try:
+                async with self.client.stream("POST", "/api/chat", json=payload) as response:
+                    if response.status_code != 200:
+                        raise RuntimeError(f"Ollama stream error {response.status_code}")
+                    async for line in response.aiter_lines():
+                        if line:
+                            try:
+                                data = json.loads(line)
+                                chunk = data.get("message", {}).get("content", "")
+                                if chunk:
+                                    yield chunk
+                            except Exception:
+                                pass
+            except Exception as e:
+                log.error(f"Error in OllamaClient.stream_generate: {e}")
+                raise
 
-        choice = choices[0]
-        content_obj = choice.get("message") or choice.get("delta", {})
-
-        if isinstance(content_obj, dict):
-            return content_obj.get("content", "") or ""
-        return ""
-
-
-    def _resolve_model(self, model: str) -> str:
-        aliases = {
-            "qwen2.5": "qwen2.5:7b-instruct",
-            "qwen2.5-coder": "qwen2.5-coder:14b",
-            "qwen3": "qwen3:14b",
-            "mistral": "mistral-nemo:12b",
-        }
-        requested = (model or "").strip()
-        if not requested:
-            return "qwen2.5:7b-instruct"
-        return aliases.get(requested, requested)
-
-    def generate(self, model: str, prompt: str, timeout: int = 300) -> str:
-        model = self._resolve_model(model)
-        url = f"{self.base_url}/api/chat"
-        payload = {
-            "model": model,
-            "messages": [
-                {"role": "user", "content": prompt}
-            ],
-            "stream": False
-        }
-
-        log.debug("ollama chat model=%s url=%s", model, url)
-
+    async def is_reachable(self) -> bool:
         try:
-            with httpx.Client(timeout=timeout) as client:
-                r = client.post(url, json=payload)
-                r.raise_for_status()
-
-                body = r.text
-
-                try:
-                    data = r.json()
-                    text = self._extract_content(data)
-                    if text:
-                        return text
-                except Exception:
-                    pass
-
-                if "data:" in body:
-                    full_text = []
-                    parts = [p.strip() for p in body.splitlines() if p.strip().startswith("data:")]
-                    for part in parts:
-                        raw = part[5:].strip()
-                        if raw == "[DONE]":
-                            continue
-                        try:
-                            event = json.loads(raw)
-                            text = self._extract_content(event)
-                            if text:
-                                full_text.append(text)
-                        except json.JSONDecodeError:
-                            continue
-
-                    if full_text:
-                        return "".join(full_text)
-
-                raise RuntimeError(f"Ollama returned an empty or unparseable response from {url}")
-
-        except httpx.TimeoutException:
-            raise RuntimeError(f"Ollama timeout after {timeout}s for model {model!r}")
-        except httpx.HTTPStatusError as e:
-            raise RuntimeError(f"Ollama error {e.response.status_code}: {e.response.text}")
-
-    def is_reachable(self) -> bool:
-        try:
-            with httpx.Client(timeout=5) as client:
-                r = client.get(f"{self.base_url}/api/tags")
-                return r.status_code == 200
+            resp = await self.client.get("/")
+            return resp.status_code == 200
         except Exception:
             return False
 
-    def list_models(self) -> list[str]:
+    async def list_models(self) -> list[str]:
         try:
-            with httpx.Client(timeout=10) as client:
-                r = client.get(f"{self.base_url}/api/tags")
-                r.raise_for_status()
-                data = r.json()
-                return [m.get("name", "") for m in data.get("models", []) if m.get("name")]
-        except Exception as e:
-            log.warning("ollama list_models failed: %s", e)
+            resp = await self.client.get("/api/tags")
+            if resp.status_code == 200:
+                return [m["name"] for m in resp.json().get("models", [])]
             return []
-
+        except Exception:
+            return []

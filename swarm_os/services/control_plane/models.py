@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -76,4 +75,3 @@ class ImprovementProposal:
     requires_approval: bool = True
     created_at_ms: float = 0.0
     status: str = "pending"
-

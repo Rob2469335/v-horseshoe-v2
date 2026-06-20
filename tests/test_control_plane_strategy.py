@@ -21,7 +21,7 @@ async def test_route_model_stamps_strategy():
         profiles=[
             ModelProfile(name="qwen2.5:3b-instruct", role="fast", max_tokens=32000),
         ],
-        default_role="fast",
+        default_role="reasoning",
     )
     decision = await router.route_model(
         candidates=["qwen2.5:3b-instruct"],
@@ -36,7 +36,7 @@ async def test_route_model_stamps_strategy():
 
 @pytest.mark.asyncio
 async def test_route_model_fallback_no_candidates():
-    router = Router(default_role="fast")
+    router = Router(default_role="reasoning")
     decision = await router.route_model(
         candidates=[],
         role="fast",
@@ -55,4 +55,5 @@ async def test_orchestrator_trace_preserves_strategy():
     router_events = [event for event in traces if event.get("phase") == "router"]
     assert router_events
     assert router_events[-1]["metadata"]["strategy"] == "default"
+
 

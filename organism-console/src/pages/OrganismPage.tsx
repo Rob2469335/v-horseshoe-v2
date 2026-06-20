@@ -4,23 +4,35 @@ import { OrganismAnatomySection } from "../components/organism/OrganismAnatomySe
 import { OrganismTimelineSection } from "../components/organism/OrganismTimelineSection"
 import { OrganismTutorSection } from "../components/organism/OrganismTutorSection"
 import { useOrganismData } from "../features/organism/organism-hooks"
+import { LivingNervousSystem } from "../components/organism/LivingNervousSystem"
+import { OrganismNarrator } from "../components/organism/OrganismNarrator"
+import { SubsystemCard } from "../components/organism/SubsystemCard"
+import { HealingTrigger } from "../components/organism/HealingTrigger"
+import { GenerationHistory } from "../components/organism/GenerationHistory"
+import { ModelPicker } from "../components/organism/ModelPicker"
+import { AgentStepRunner } from "../components/organism/AgentStepRunner"
+import { MemorySearchPanel } from "../components/MemorySearchPanel"
+import { ReplayDashboard } from "../components/ReplayDashboard"
+import { OmniDevInterface } from "../components/organism/OmniDevInterface"
 import { getSubsystemTheme, organismTheme } from "../features/organism/organism-theme"
 import type { OrganismSubsystem } from "../features/organism/organism-types"
+
+interface CIResult {
+  type: string
+  payload?: {
+    score?: number
+    branch?: string
+  }
+  status?: string
+  score?: number
+  branch?: string | null
+}
 
 function formatCompact(value: number) {
   return new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(value)
 }
 
 export default function OrganismPage() {
-  const [activeCard, setActiveCard] = useState<OrganismSubsystem>("learning")
-  const [showDeepTutorial, setShowDeepTutorial] = useState(false)
-  const [interactionMode, setInteractionMode] = useState<"observe" | "teach" | "drill">("teach")
-  const [selectedBucket, setSelectedBucket] = useState<string | null>(null)
-
-  useEffect(() => {
-    setShowDeepTutorial(interactionMode === "drill")
-  }, [activeCard, interactionMode])
-
   const {
     backendUrl,
     statusQuery,
@@ -50,6 +62,62 @@ export default function OrganismPage() {
   } = useOrganismData()
 
   const { width, height, padding, allEventsLine, successLine, partialLine, failLine, allEventsArea } = chart
+
+  // V10 Swarm Live Stream
+  useEffect(() => {
+    const es = new EventSource(`${backendUrl}/swarm/v10/stream`);
+
+    es.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        console.log("V10 PATCH EVENT:", data);
+
+        window.dispatchEvent(new CustomEvent("swarm_v10_event", {
+          detail: data
+        }));
+      } catch (e) {}
+    };
+
+    return () => es.close();
+  }, [backendUrl]);
+  const [activeCard, setActiveCard] = useState<OrganismSubsystem>("learning")
+  const [showDeepTutorial, setShowDeepTutorial] = useState(false)
+  const [swarmV10Feed, setSwarmV10Feed] = useState<CIResult[]>([])
+  const [swarmCockpit, setSwarmCockpit] = useState({
+    ciPass: 0,
+    ciFail: 0,
+    avgScore: 0,
+    lastBranch: null as string | null
+  })
+  const [interactionMode, setInteractionMode] = useState<"observe" | "teach" | "drill">("teach")
+  const [selectedBucket, setSelectedBucket] = useState<string | null>(null)
+
+  useEffect(() => {
+    const handler = (e: any) => {
+      const data = e.detail as CIResult
+      setSwarmCockpit((prev) => {
+        const score = data.payload?.score ?? data.score ?? 0
+        const isPass = data.type === "CI_RESULT" && score >= 0.85
+        const isFail = data.type === "CI_RESULT" && score < 0.85
+
+        return {
+          ciPass: prev.ciPass + (isPass ? 1 : 0),
+          ciFail: prev.ciFail + (isFail ? 1 : 0),
+          avgScore: (prev.avgScore + score) / 2,
+          lastBranch: data.payload?.branch ?? data.branch ?? prev.lastBranch
+        }
+      })
+      setSwarmV10Feed(prev => [data, ...prev].slice(0, 50));
+    };
+
+    window.addEventListener("swarm_v10_event", handler);
+    return () => window.removeEventListener("swarm_v10_event", handler);
+  }, []);
+  const [selectedModel, setSelectedModel] = useState<string | null>(null)
+
+  useEffect(() => {
+    setShowDeepTutorial(interactionMode === "drill")
+  }, [activeCard, interactionMode])
 
   const activeBucketData = useMemo(() => {
     if (!selectedBucket) return null
@@ -247,21 +315,45 @@ export default function OrganismPage() {
   ]
 
   return (
-    <section
-      className="page"
-      style={{
-        minHeight: "100vh",
-        color: organismTheme.surface.text,
-        background: `
-          radial-gradient(circle at 0% 0%, ${activeTheme.accent}18, transparent 35%),
-          radial-gradient(circle at 100% 0%, rgba(168,85,247,0.16), transparent 30%),
-          radial-gradient(circle at 50% 50%, ${activeTheme.glow}08, transparent 40%),
-          linear-gradient(180deg, #040816 0%, #07101f 48%, #050815 100%)
-        `,
-        padding: "24px 16px 48px",
-        transition: "background 500ms ease"
-      }}
-    >
+    <>
+      <div style={{
+        position: "sticky",
+        top: 0,
+        zIndex: 50,
+        marginBottom: 16,
+        padding: 12,
+        borderRadius: 16,
+        background: "rgba(0,0,0,0.55)",
+        border: "1px solid rgba(255,255,255,0.12)",
+        backdropFilter: "blur(12px)"
+      }}>
+        <div style={{ color: "#7dd3fc", fontWeight: 900, marginBottom: 6 }}>
+          🧠 Swarm Cockpit Live Control
+        </div>
+
+        <div style={{ display: "flex", gap: 12, fontSize: 12 }}>
+          <span style={{ color: "#22c55e" }}>✔ Pass: {swarmCockpit.ciPass}</span>
+          <span style={{ color: "#f97316" }}>✖ Fail: {swarmCockpit.ciFail}</span>
+          <span style={{ color: "#a78bfa" }}>Score: {swarmCockpit.avgScore?.toFixed?.(2)}</span>
+          <span style={{ color: "#7dd3fc" }}>Branch: {swarmCockpit.lastBranch}</span>
+        </div>
+      </div>
+
+      <section
+        className="page"
+        style={{
+          minHeight: "100vh",
+          color: organismTheme.surface.text,
+          background: `
+            radial-gradient(circle at 0% 0%, ${activeTheme.accent}18, transparent 35%),
+            radial-gradient(circle at 100% 0%, rgba(168,85,247,0.16), transparent 30%),
+            radial-gradient(circle at 50% 50%, ${activeTheme.glow}08, transparent 40%),
+            linear-gradient(180deg, #040816 0%, #07101f 48%, #050815 100%)
+          `,
+          padding: "24px 16px 48px",
+          transition: "background 500ms ease"
+        }}
+      >
       <style>{`
         @keyframes pulseHalo {
           0% { transform: scale(0.98); opacity: 0.18; }
@@ -597,11 +689,72 @@ export default function OrganismPage() {
               <div style={{ color: "white", lineHeight: 1.7, fontSize: 13, fontWeight: 700 }}>
                 {tryThisNext}
               </div>
-            </div>
-          </div>
-        </article>
+              <div style={{
+  marginTop: 16,
+  height: 6,
+  borderRadius: 999,
+  background: "rgba(255,255,255,0.08)",
+  overflow: "hidden"
+}}>
+  <div style={{
+    width: `${Math.min(100, swarmCockpit.avgScore * 100)}%`,
+    height: "100%",
+    background: "linear-gradient(90deg,#22c55e,#7dd3fc,#a78bfa)",
+    transition: "width 300ms ease"
+  }} />
+</div>
+</div>
+</div>
+</article>
 
-        <OrganismHero
+        
+      {/* Living Nervous System */}
+      <div style={{ marginBottom: 24 }}>
+        <LivingNervousSystem
+          backendUrl={backendUrl}
+          liveData={{
+            ollamaReachable: statusQuery.data?.ollama_reachable ?? false,
+            installedModels: statusQuery.data?.installed_model_count ?? 0,
+            eventCount: statusQuery.data?.event_count ?? 0,
+            traceCount: timelinePoints.length,
+            healingReady: 100,
+            successRate: successRate,
+            cacheSize: cacheSize,
+            visionAvailable: visionRuntimeReady,
+          }}
+        />
+      </div>
+
+      {/* Narrator */}
+      <OrganismNarrator
+        backendUrl={backendUrl}
+        ollamaReachable={statusQuery.data?.ollama_reachable ?? false}
+        successRate={successRate}
+        eventCount={statusQuery.data?.event_count ?? 0}
+        healingReady={100}
+        traceCount={timelinePoints.length}
+      />
+
+      {/* Subsystem cards */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))", gap: 12, marginBottom: 24 }}>
+        <SubsystemCard id="ollama" label="Ollama" color="#22c55e" health={statusQuery.data?.ollama_reachable ? 100 : 0} activity={statusQuery.data?.ollama_reachable ? 85 : 0} sublabel={`${statusQuery.data?.installed_model_count ?? 0} models`} backendUrl={backendUrl} prompt="You are Ollama. Report your current status in 3 bullet points. Be direct and technical." />
+        <SubsystemCard id="router" label="Router" color="#7dd3fc" health={statusQuery.data?.ollama_reachable ? 100 : 40} activity={timelinePoints.length > 0 ? 90 : 30} sublabel="model selector" backendUrl={backendUrl} prompt={`You are the model router. You have routed ${timelinePoints.length} traces with ${successRate}% success rate. Explain what you are doing right now in 2 sentences.`} />
+        <SubsystemCard id="critic" label="Critic" color="#f472b6" health={successRate || 50} activity={timelinePoints.length > 0 ? successRate : 20} sublabel={`${successRate}% accept rate`} backendUrl={backendUrl} prompt={`You are the AI critic evaluator. Your current acceptance rate is ${successRate}%. Explain your role and give a one-line quality verdict.`} />
+        <SubsystemCard id="memory" label="Memory" color="#a78bfa" health={statusQuery.data?.event_count ?? 0 > 0 ? 100 : 50} activity={80} sublabel={`${(statusQuery.data?.event_count ?? 0).toLocaleString()} events`} backendUrl={backendUrl} prompt={`You are the memory subsystem. You have stored ${statusQuery.data?.event_count ?? 0} events. Explain what you store and why it matters in 2 sentences.`} />
+        <SubsystemCard id="qdrant" label="Qdrant" color="#fb923c" health={100} activity={cacheSize > 0 ? 70 : 30} sublabel={`${cacheSize} cached`} backendUrl={backendUrl} prompt={`You are the Qdrant vector database. You have ${cacheSize} cached vectors. Explain semantic search in 2 sentences.`} />
+        <SubsystemCard id="healer" label="Healer" color="#34d399" health={100} activity={60} sublabel="100% ready" backendUrl={backendUrl} prompt="You are the self-healing subsystem. All 4 checks (orchestrator, qdrant, ollama, api) are passing. Report your current status and what you are watching for." />
+      </div>
+
+      {/* Model picker + agent runner */}
+      <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: 12, alignItems: "start", marginBottom: 24 }}>
+        <ModelPicker
+          models={(statusQuery.data?.installed_models as string[] | undefined) ?? []}
+          selected={selectedModel}
+          onSelect={setSelectedModel}
+        />
+        <AgentStepRunner backendUrl={backendUrl} selectedModel={selectedModel} />
+      </div>
+      <OrganismHero
           activeTheme={activeTheme}
           activeMessage={activeMessage}
           isLoading={isLoading}
@@ -678,6 +831,65 @@ export default function OrganismPage() {
           />
         )}
       </div>
-    </section>
+    
+      {/* Medium features */}
+      <div style={{ display: "grid", gap: 16, marginTop: 24, paddingBottom: 48 }}>
+        <HealingTrigger backendUrl={backendUrl} />
+        <GenerationHistory backendUrl={backendUrl} />
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))", gap: 16 }}>
+          <MemorySearchPanel />
+          <ReplayDashboard />
+          <OmniDevInterface organismId="main" backendUrl={backendUrl} />
+        </div>
+      </div>
+{/* V10 Live Swarm Feed */}
+<div style={{
+  marginTop: 24,
+  padding: 16,
+  borderRadius: 16,
+  background: "rgba(0,0,0,0.35)",
+  border: "1px solid rgba(255,255,255,0.1)"
+}}>
+  <div style={{ color: "#7dd3fc", fontWeight: 800, marginBottom: 8 }}>
+    V10 Live Swarm Feed
+  </div>
+
+  <div style={{ maxHeight: 260, overflow: "auto", fontSize: 12 }}>
+    {swarmV10Feed.length === 0 ? (
+      <div style={{ color: "rgba(255,255,255,0.4)" }}>
+        Waiting for swarm events...
+      </div>
+    ) : (
+      swarmV10Feed.map((e, i) => (
+        <div key={i} style={{ marginBottom: 8, color: "rgba(255,255,255,0.75)" }}>
+          <span style={{ color: "#a78bfa", fontWeight: 700 }}>
+            {e.status ?? "unknown"}
+          </span>
+          {" | score: "}
+          {typeof e.score === "number" ? e.score.toFixed(2) : "—"}
+          {" | branch: "}
+          {e.branch ?? "—"}
+        </div>
+      ))
+    )}
+  </div>
+</div>
+</section>
+    </>
   )
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

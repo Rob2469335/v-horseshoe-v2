@@ -9,7 +9,7 @@ async def test_router_returns_deep_strategy_for_deep_role():
         profiles=[
             ModelProfile(name="qwen2.5:3b-instruct", role="deep", max_tokens=32000),
         ],
-        default_role="fast",
+        default_role="reasoning",
     )
 
     decision = await router.route_model(
@@ -29,7 +29,7 @@ async def test_router_keeps_default_strategy_for_fast_role():
         profiles=[
             ModelProfile(name="qwen2.5:3b-instruct", role="fast", max_tokens=32000),
         ],
-        default_role="fast",
+        default_role="reasoning",
     )
 
     decision = await router.route_model(
@@ -41,4 +41,5 @@ async def test_router_keeps_default_strategy_for_fast_role():
     assert decision.strategy == "default"
     assert decision.model == "qwen2.5:3b-instruct"
     assert decision.fallback is False
+
 

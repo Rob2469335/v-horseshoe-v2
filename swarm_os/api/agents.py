@@ -1,0 +1,143 @@
+# swarm_os/api/agents.py
+from __future__ import annotations
+
+import json
+from typing import Any, AsyncGenerator, Dict, List
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+
+router = APIRouter(tags=["agents"])
+
+class AgentCreatePayload(BaseModel):
+    agent_id: str
+    config: Dict[str, Any] | None = None
+
+class AgentStepPayload(BaseModel):
+    prompt: str
+    tools: List[str] | None = None
+    history: List[Dict[str, Any]] | None = None
+    focus_file: str | None = None
+
+class ToolCallPayload(BaseModel):
+    payload: Dict[str, Any] | None = None
+
+import logging
+logger = logging.getLogger(__name__)
+
+def get_agent_service(request: Request) -> Any:
+    runtime = getattr(request.app.state, "runtime", None)
+    if runtime is None or not hasattr(runtime, "agents") or runtime.agents is None:
+        raise HTTPException(status_code=503, detail="Agent service unavailable")
+    return runtime.agents
+
+@router.get("/agents")
+def list_agents(request: Request):
+    try:
+        runtime = getattr(request.app.state, "runtime", None)
+        if runtime is not None and hasattr(runtime, "agents") and runtime.agents is not None:
+            return runtime.agents.list_agents()
+    except Exception as exc:
+        logger.error(f"[AGENTS FALLBACK] Error listing agents from service: {exc}")
+    
+    # Safe fallback response if service fails
+    return [
+        {
+            "id": "coordinator",
+            "role": "coordinator",
+            "description": "Supreme orchestrator. Analyzes intent, delegates to specialists, synthesizes final response. (Fallback Mode)",
+            "model_role": "planner",
+            "config": {}
+        },
+        {
+            "id": "planner",
+            "role": "planner",
+            "description": "Decomposes complex tasks into ordered execution steps with dependencies and success criteria. (Fallback Mode)",
+            "model_role": "planner",
+            "config": {}
+        },
+        {
+            "id": "executor",
+            "role": "executor",
+            "description": "Executes plan steps autonomously using tools. Reads files, runs searches, writes code, patches files. (Fallback Mode)",
+            "model_role": "deep_coder",
+            "config": {}
+        }
+    ]
+
+@router.post("/agents")
+def create_agent(payload: AgentCreatePayload, request: Request):
+    try:
+        service = get_agent_service(request)
+        service.register_agent(payload.agent_id, payload.config)
+        return {"status": "created", "agent_id": payload.agent_id}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+@router.get("/agents/{agent_id}")
+def get_agent(agent_id: str, service=Depends(get_agent_service)):
+    try:
+        return service.get_agent(agent_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+@router.post("/agents/{agent_id}/step")
+async def step_agent(agent_id: str, payload: AgentStepPayload, service=Depends(get_agent_service)):
+    try:
+        chunks = []
+        async for chunk in service.step_agent_stream(agent_id, payload.prompt, payload.history or []):
+            chunks.append(chunk)
+        return chunks
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+@router.post("/agents/{agent_id}/step/stream")
+async def step_agent_stream(agent_id: str, payload: AgentStepPayload, request: Request):
+    """
+    Streaming endpoint consumed by the CLI's stream_prompt().
+    Emits newline-delimited JSON chunks.
+    """
+    runtime = getattr(request.app.state, "runtime", None)
+
+    async def generate() -> AsyncGenerator[str, None]:
+        try:
+            if runtime is None or runtime.agents is None:
+                yield json.dumps({"content": "Agent service unavailable"}) + "\n"
+                yield json.dumps({"done": True}) + "\n"
+                return
+
+            async for chunk in runtime.agents.step_agent_stream(
+                agent_id,
+                payload.prompt,
+                payload.history or [],
+            ):
+                yield json.dumps(chunk) + "\n"
+
+            yield json.dumps({"done": True}) + "\n"
+
+        except Exception as exc:
+            yield json.dumps({"error": str(exc)}) + "\n"
+            yield json.dumps({"done": True}) + "\n"
+
+    return StreamingResponse(generate(), media_type="application/x-ndjson")
+
+@router.post("/agents/{agent_id}/tools/{tool_name}")
+async def call_agent_tool(agent_id: str, tool_name: str, payload: ToolCallPayload, service=Depends(get_agent_service)):
+    try:
+        return await service.run_tool(agent_id, tool_name, payload.payload)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+@router.delete("/agents/{agent_id}")
+def delete_agent(agent_id: str, service=Depends(get_agent_service)):
+    try:
+        service.remove_agent(agent_id)
+        return {"status": "deleted", "agent_id": agent_id}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))

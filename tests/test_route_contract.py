@@ -2,12 +2,20 @@ from swarm_os.app.main import create_app
 
 def get_route_map():
     app = create_app()
-    rows = []
-    for route in app.routes:
-        path = getattr(route, "path", None)
-        methods = sorted(list(getattr(route, "methods", []) or []))
-        rows.append((path, tuple(methods)))
-    return rows
+    
+    def _collect(router_or_app, prefix=""):
+        rows = []
+        routes = getattr(router_or_app, "routes", [])
+        for route in routes:
+            if hasattr(route, "path"):
+                methods = sorted(list(getattr(route, "methods", []) or []))
+                rows.append((prefix + route.path, tuple(methods)))
+            elif type(route).__name__ == "_IncludedRouter":
+                sub_prefix = route.include_context.prefix
+                rows.extend(_collect(route.original_router, prefix + sub_prefix))
+        return rows
+
+    return _collect(app)
 
 def test_route_contract_minimum():
     route_map = dict(get_route_map())
