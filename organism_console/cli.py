@@ -258,6 +258,15 @@ def stream_prompt(agent_id, prompt, history):
                         live.start()
                     continue
 
+                if chunk_type == "agent_handoff":
+                    live.stop()
+                    from_a = chunk.get("from", agent_id)
+                    to_a = chunk.get("to", "executor")
+                    task = str(chunk.get("task", ""))[:80]
+                    ctx.console.print(render_step_micro_ui("swarm", f"{from_a} → {to_a}: {task}"))
+                    live.start()
+                    continue
+
                 if chunk_type == "tool_result":
                     tool = chunk.get("tool")
                     if ctx.trace_mode:
@@ -285,14 +294,8 @@ def stream_prompt(agent_id, prompt, history):
                         ctx.console.print(Panel(str(final_content), border_style="green"))
                     
                     # Record execution run to history
-                    ctx.state.history.append({
-                        "agent_id": agent_id,
-                        "prompt": prompt,
-                        "response": full_content,
-                        "timestamp": time.time()
-                    })
-                    ctx.state.history_pointer = len(ctx.state.history) - 1
-                    ctx.state.save()
+                    ctx.history_pointer = len(ctx.history) - 1
+                    ctx.save()
                     return history
 
                 if "ask_user" in chunk:
@@ -502,13 +505,13 @@ def run_debate_loop(goal: str, cmd_ctx: CommandContext):
     console.print("[bold yellow]Phase 1: Planner Proposal[/bold yellow]")
     prompt1 = f"Please draft a detailed implementation proposal to achieve this goal: {goal}"
     stream_prompt("planner", prompt1, [])
-    proposal = state.history[-1]["response"] if state.history else ""
+    proposal = ctx.history[-1].get("content", "") if ctx.history else ""
     
     # Phase 2: Reviewer Critique
     console.print("\n[bold yellow]Phase 2: Reviewer Critique[/bold yellow]")
     prompt2 = f"Please audit the following implementation proposal for bugs, edge cases, and design flaws:\n\n{proposal}"
     stream_prompt("reviewer", prompt2, [])
-    critique = state.history[-1]["response"] if state.history else ""
+    critique = ctx.history[-1].get("content", "") if ctx.history else ""
     
     # Phase 3: Coordinator Synthesis
     console.print("\n[bold yellow]Phase 3: Coordinator Synthesis[/bold yellow]")
@@ -583,6 +586,57 @@ def main():
             ctx.console.print(f"[bold red]Unexpected error:[/bold red] {e}")
 
     return 0
+
+
+@registry.register("clear", "Clear session history and reset context", aliases=["reset"])
+def cmd_clear(ctx: CommandContext, args: List[str]) -> None:
+    ctx.state.history = []
+    ctx.state.history_pointer = -1
+    ctx.state.current_topic = "Nexus Initialization"
+    ctx.state.current_summary = "Establishing connection to Zenith Swarm OS..."
+    ctx.state.strategic_intent = ""
+    ctx.state.delegation_chain = [ctx.state.active_agent]
+    ctx.state.save()
+    ctx.console.print("[green]✓ Session history cleared. Context reset.[/green]")
+
+
+@registry.register("agents", "List all registered agents and their roles")
+def cmd_agents(ctx: CommandContext, args: List[str]) -> None:
+    resp = ctx.call_api("/agents", "GET")
+    if not resp:
+        ctx.console.print("[bold red]✗ Backend offline[/bold red]")
+        return
+    try:
+        agents = resp.json()
+        table = Table(box=SIMPLE, header_style="bold cyan")
+        table.add_column("Agent ID", style="bold green")
+        table.add_column("Role", style="cyan")
+        table.add_column("Model Role", style="yellow")
+        table.add_column("Description", style="white")
+        for a in agents:
+            table.add_row(
+                a.get("id", "?"),
+                a.get("role", "?"),
+                a.get("model_role", "?"),
+                a.get("description", "")[:60]
+            )
+        ctx.console.print(Panel(table, title="[bold cyan]Registered Agents[/bold cyan]", border_style="cyan"))
+    except Exception as e:
+        ctx.console.print(f"[bold red]Failed to parse agents:[/bold red] {e}")
+
+
+@registry.register("tokens", "Show token usage for this session")
+def cmd_tokens_display(ctx: CommandContext, args: List[str]) -> None:
+    i = ctx.state.total_input_tokens
+    o = ctx.state.total_output_tokens
+    ctx.console.print(Panel(
+        f"[bold]Input tokens:[/bold]  {i:,}\n"
+        f"[bold]Output tokens:[/bold] {o:,}\n"
+        f"[bold]Total:[/bold]         {i+o:,}",
+        title="[bold cyan]Token Usage[/bold cyan]",
+        border_style="cyan"
+    ))
+
 
 if __name__ == "__main__":
     sys.exit(main())
