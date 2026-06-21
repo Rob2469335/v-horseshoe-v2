@@ -1,4 +1,4 @@
-# organism_console/token_tracker.py
+﻿# organism_console/token_tracker.py
 """
 Real-time token + spend + model availability tracker.
 Tracks 4 provider buckets: ollama-local, ollama-cloud, openrouter, nvidia
@@ -8,6 +8,11 @@ import os
 import time
 import threading
 import requests
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 _lock = threading.Lock()
 
@@ -110,6 +115,8 @@ def _background_loop():
 
 
 def start_background_poll():
+    _poll_openrouter()
+    _poll_ollama()
     t = threading.Thread(target=_background_loop, daemon=True)
     t.start()
 
