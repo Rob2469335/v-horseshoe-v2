@@ -16,6 +16,8 @@ import { ReplayDashboard } from "../components/ReplayDashboard"
 import { OmniDevInterface } from "../components/organism/OmniDevInterface"
 import { getSubsystemTheme, organismTheme } from "../features/organism/organism-theme"
 import type { OrganismSubsystem } from "../features/organism/organism-types"
+import { DebateRoomPanel } from "../components/organism/DebateRoomPanel"
+import { SelfHealingPosturePanel } from "../components/organism/SelfHealingPosturePanel"
 
 interface CIResult {
   type: string
@@ -834,6 +836,8 @@ export default function OrganismPage() {
     
       {/* Medium features */}
       <div style={{ display: "grid", gap: 16, marginTop: 24, paddingBottom: 48 }}>
+        <DebateRoomPanel backendUrl={backendUrl} />
+        <SelfHealingPosturePanel backendUrl={backendUrl} />
         <HealingTrigger backendUrl={backendUrl} />
         <GenerationHistory backendUrl={backendUrl} />
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))", gap: 16 }}>

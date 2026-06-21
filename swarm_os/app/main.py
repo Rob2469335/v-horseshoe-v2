@@ -8,7 +8,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(override=True)
 
 
 # ---------------------------------------------------------------------------
@@ -197,11 +197,13 @@ def create_app() -> FastAPI:
                 all_events = event_store.read_all() if event_store else []
                 orchestrator = getattr(runtime, "orchestrator", None)
                 ollama_ok = orchestrator.ollama.is_reachable() if orchestrator and hasattr(orchestrator, "ollama") else False
+                models = orchestrator.ollama.list_models() if orchestrator and hasattr(orchestrator, "ollama") else []
                 return {
                     "status": "ok" if ollama_ok else "degraded",
                     "ollama_reachable": ollama_ok,
                     "event_count": len(all_events),
-                    "installed_model_count": len(orchestrator.ollama.list_models()) if orchestrator and hasattr(orchestrator, "ollama") else 0,
+                    "installed_model_count": len(models),
+                    "installed_models": models,
                 }
         except Exception:
             pass
@@ -209,7 +211,8 @@ def create_app() -> FastAPI:
             "status": "ok",
             "ollama_reachable": True,
             "event_count": 0,
-            "installed_model_count": 5
+            "installed_model_count": 1,
+            "installed_models": ["qwen2.5:7b-instruct"]
         }
 
     return app

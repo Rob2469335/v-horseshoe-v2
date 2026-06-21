@@ -35,7 +35,6 @@ CLOUD_MODEL_SPECS = [
     # Ollama cloud
     ModelProfile(name="qwen3-coder:480b-cloud",                          role="cloud_heavy",    capabilities=["code", "long_context", "cloud", "reasoning"], metadata={"cloud": True, "provider": "ollama"}),
     # OpenRouter auto-router (picks best free model for task automatically)
-    ModelProfile(name="openrouter/fusion",                               role="cloud_auto",     capabilities=["general", "code", "reasoning", "cloud"],      metadata={"cloud": True, "provider": "openrouter"}),
     # OpenRouter paid — DeepSeek V4-Flash (best value, ~$0.10/1M tokens)
     ModelProfile(name="deepseek/deepseek-v4-flash",                      role="cloud_paid",     capabilities=["general", "code", "reasoning", "cloud"],      metadata={"cloud": True, "provider": "openrouter"}),
     # OpenRouter free tier
@@ -49,35 +48,33 @@ CLOUD_MODEL_SPECS = [
     # NVIDIA NIM
     ModelProfile(name="nvidia/llama-3.1-nemotron-nano-8b-v1",            role="cloud_fast",     capabilities=["fast", "general", "cloud"],                   metadata={"cloud": True, "provider": "nvidia"}),
     ModelProfile(name="nvidia/llama-3.3-nemotron-super-49b-v1",          role="cloud_coder",    capabilities=["code", "reasoning", "cloud"],                 metadata={"cloud": True, "provider": "nvidia"}),
-    ModelProfile(name="nvidia/llama-3.1-nemotron-ultra-253b-v1",         role="cloud_pro_nvidia",capabilities=["reasoning", "long_context", "cloud"],         metadata={"cloud": True, "provider": "nvidia"}),
+    ModelProfile(name="meta/llama-3.3-70b-instruct",                     role="cloud_pro_nvidia",capabilities=["reasoning", "long_context", "cloud"],         metadata={"cloud": True, "provider": "nvidia"}),
     ModelProfile(name="meta/llama-3.1-405b-instruct",                    role="cloud_heavy_nvidia",capabilities=["reasoning", "long_context", "cloud"],       metadata={"cloud": True, "provider": "nvidia"}),
 ]
 
-# ORDER: Local Ollama -> OpenRouter free fusion -> NVIDIA free -> OpenRouter paid
+# ORDER: single fast local model per role, planner has full fallback chain
 ROLE_POOL = {
     "fast":             ["qwen2.5:3b-instruct"],
     "coder_small":      ["qwen2.5-coder:3b"],
-    "general":          ["qwen2.5:7b-instruct",       "openrouter/fusion",               "nvidia/llama-3.1-nemotron-nano-8b-v1",    "deepseek/deepseek-v4-flash"],
-    "coder":            ["qwen2.5-coder:7b",           "qwen3-coder:480b-cloud",          "openrouter/fusion",                       "nvidia/llama-3.1-nemotron-nano-8b-v1",   "deepseek/deepseek-v4-flash"],
-    "reasoning":        ["qwen2.5:14b-instruct",       "qwen3:14b",                       "openrouter/fusion",                       "nvidia/llama-3.1-nemotron-nano-8b-v1",   "deepseek/deepseek-v4-flash"],
-    "deep_coder":       ["qwen3-coder:480b-cloud",     "openrouter/fusion",               "nvidia/llama-3.1-nemotron-nano-8b-v1",    "deepseek/deepseek-v4-flash"],
-    "planner":          ["qwen3:14b",                  "qwen3-coder:480b-cloud",          "openrouter/fusion",                       "nvidia/llama-3.1-nemotron-nano-8b-v1",   "deepseek/deepseek-v4-flash"],
-    "writer":           ["mistral-nemo:12b",            "openrouter/fusion",               "deepseek/deepseek-v4-flash"],
-    "vision":           ["qwen3-vl:8b",                "moondream:latest"],
-    "embedding":        ["qwen3-embedding:8b",          "nomic-embed-text:latest"],
+    "general":          ["qwen2.5:7b-instruct"],
+    "coder":            ["qwen2.5-coder:7b"],
+    "reasoning":        ["qwen2.5:14b-instruct"],
+    "deep_coder":       ["qwen2.5-coder:14b"],
+    "deep_coder_long":  ["qwen2.5-coder:14b"],
+    "coder_long":       ["qwen2.5-coder:7b-16k"],
+    "writer":           ["mistral-nemo:12b"],
+    "vision":           ["qwen3-vl:8b"],
+    "embedding":        ["nomic-embed-text:latest"],
     "reranker":         ["qllama/bge-reranker-v2-m3:latest"],
-    "cloud_heavy":      ["qwen3-coder:480b-cloud",     "openrouter/fusion",               "deepseek/deepseek-v4-flash"],
-    "cloud_general":    ["openrouter/fusion",           "nvidia/llama-3.1-nemotron-nano-8b-v1", "deepseek/deepseek-v4-flash"],
-    "cloud_writer":     ["openrouter/fusion",           "deepseek/deepseek-v4-flash"],
-    "cloud_reasoning":  ["qwen3-coder:480b-cloud",     "openrouter/fusion",               "nvidia/llama-3.1-nemotron-nano-8b-v1",   "deepseek/deepseek-v4-flash"],
-    "cloud_coder":      ["qwen3-coder:480b-cloud",     "openrouter/fusion",               "nvidia/llama-3.1-nemotron-nano-8b-v1",   "deepseek/deepseek-v4-flash"],
-    "cloud_fast":       ["openrouter/fusion",           "nvidia/llama-3.1-nemotron-nano-8b-v1", "deepseek/deepseek-v4-flash"],
-    "cloud_pro":        ["qwen3-coder:480b-cloud",     "openrouter/fusion",               "deepseek/deepseek-v4-flash"],
-    "reasoning_long":   ["qwen2.5:14b-instruct-32k",   "qwen3-coder:480b-cloud",          "openrouter/fusion",                       "deepseek/deepseek-v4-flash"],
-    "deep_coder_long":  ["qwen3-coder:480b-cloud",     "openrouter/fusion",               "nvidia/llama-3.1-nemotron-nano-8b-v1",   "deepseek/deepseek-v4-flash"],
-    "coder_long":       ["qwen3-coder:480b-cloud",     "openrouter/fusion",               "deepseek/deepseek-v4-flash"],
+    "cloud_heavy":      ["qwen3-coder:480b-cloud"],
+    "cloud_general":    ["qwen2.5:7b-instruct"],
+    "cloud_writer":     ["mistral-nemo:12b"],
+    "cloud_reasoning":  ["qwen2.5:14b-instruct"],
+    "cloud_coder":      ["qwen2.5-coder:14b"],
+    "cloud_fast":       ["qwen2.5:7b-instruct"],
+    "cloud_pro":        ["qwen3-coder:480b-cloud"],
+    "planner":          ["qwen3-coder:480b-cloud", "deepseek/deepseek-chat-v3-5:free", "nvidia/nemotron-3-super-120b-a12b:free", "nvidia/nemotron-3-ultra-550b-a55b:free", "openrouter/free", "qwen3:14b", "deepseek/deepseek-v4-flash"],
 }
-
 
 
 

@@ -1,0 +1,5 @@
+CRITICAL RULE: Before analyzing any codebase or suggesting fixes, you MUST ask the user for permission to read the raw files first. Do NOT assume file contents.
+
+CRITICAL TOOL RULE: 
+1. Once the user grants permission to fix a file, you MUST NOT just type the code into the chat. 
+2. You MUST immediately execute your file-writing or patching tool (e.g., write_file, dit_document, or ash tool) to apply the changes directly to the user's local disk.

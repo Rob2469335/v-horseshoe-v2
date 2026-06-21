@@ -21,6 +21,8 @@ from rich.rule import Rule
 from rich.logging import RichHandler
 from rich.status import Status
 from rich.markup import escape
+from rich.tree import Tree
+from rich.markdown import Markdown
 
 BACKEND_URL = os.getenv("ZENITH_BACKEND_URL", "http://127.0.0.1:8000")
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
@@ -117,13 +119,37 @@ def call_api(endpoint: str, method: str = "GET", payload: Any = None, stream: bo
 def print_banner():
     stats = get_system_stats()
     backend_ok = call_api("/health") is not None
-    backend_state = "[green]ONLINE[/green]" if backend_ok else "[red]OFFLINE[/red]"
-
+    backend_state = "[bold green]ONLINE[/bold green]" if backend_ok else "[bold red]OFFLINE[/bold red]"
+    
+    mode_style = "bold green" if ctx.mode == "safe" else "bold yellow"
+    
+    # Progress bar for RAM usage
+    ram_pct = stats['ram_pct']
+    bar_width = 10
+    filled = int(ram_pct / 100 * bar_width)
+    bar = "█" * filled + "░" * (bar_width - filled)
+    
+    table = Table.grid(padding=(0, 2))
+    table.add_column(style="bold cyan")
+    table.add_column()
+    
+    table.add_row("🤖 Active Agent", f"[cyan]{ctx.active_agent}[/cyan]")
+    table.add_row("🧠 Active Model", f"[green]{ctx.active_model}[/green]")
+    table.add_row("🛡️  System Mode", f"[{mode_style}]{ctx.mode.upper()}[/{mode_style}]")
+    table.add_row("🔌 Backend API", backend_state)
+    table.add_row("💻 System Load", f"CPU {stats['cpu']:.0f}% | RAM {stats['ram_used_gb']:.1f}GB/{stats['ram_total_gb']:.1f}GB [dim][{bar}][/dim]")
+    
+    banner_panel = Panel(
+        table,
+        title="[bold bright_white]⚡ ZENITH Swarm OS Control Terminal[/bold bright_white]",
+        subtitle=f"[dim]v{VERSION}[/dim]",
+        border_style="bold blue",
+        expand=False,
+        padding=(1, 4)
+    )
+    
     ctx.console.print()
-    ctx.console.print(Rule(style="bold blue"))
-    ctx.console.print(f" [bold bright_white]ZENITH Swarm Control Terminal[/bold bright_white] [dim]v{VERSION}[/dim]")
-    ctx.console.print(f" [dim]System:[/dim] RAM {stats['ram_used_gb']:.1f}GB ({stats['ram_pct']:.0f}%) | CPU {stats['cpu']:.0f}% | [dim]Backend:[/dim] {backend_state}")
-    ctx.console.print(Rule(style="bold blue"))
+    ctx.console.print(banner_panel)
     ctx.console.print()
 
 def status_bar(agent, model, phase, ram_pct):
@@ -176,6 +202,7 @@ def stream_prompt(agent_id, prompt, history):
     model = "zenith-core"
     phase = "thinking"
     tool_calls = []
+    handoffs_list = []
     start_time = time.time()
 
     ctx.console.print(Rule(style="dim blue"))
@@ -263,6 +290,7 @@ def stream_prompt(agent_id, prompt, history):
                     from_a = chunk.get("from", agent_id)
                     to_a = chunk.get("to", "executor")
                     task = str(chunk.get("task", ""))[:80]
+                    handoffs_list.append({"from": from_a, "to": to_a, "task": task})
                     ctx.console.print(render_step_micro_ui("swarm", f"{from_a} → {to_a}: {task}"))
                     live.start()
                     continue
@@ -293,10 +321,13 @@ def stream_prompt(agent_id, prompt, history):
                     elif final_content:
                         ctx.console.print(Panel(str(final_content), border_style="green"))
                     
-                    # Record execution run to history
+                    new_history = list(history)
+                    new_history.append({"role": "user", "content": prompt})
+                    new_history.append({"role": "assistant", "content": final_content or full_content})
+                    ctx.history = new_history
                     ctx.history_pointer = len(ctx.history) - 1
                     ctx.save()
-                    return history
+                    return new_history
 
                 if "ask_user" in chunk:
                     params = chunk["ask_user"]
@@ -306,6 +337,21 @@ def stream_prompt(agent_id, prompt, history):
                     live.stop()
                     ctx.console.print()
 
+                    if "APPROVAL REQUIRED" in question:
+                        ctx.console.print(Panel(
+                            Markdown(question),
+                            title="🛡️  [bold yellow]Security Gate - Action Approval[/bold yellow]",
+                            border_style="yellow",
+                            padding=(1, 2)
+                        ))
+                    else:
+                        ctx.console.print(Panel(
+                            Markdown(question),
+                            title="❓  [bold cyan]Agent Request[/bold cyan]",
+                            border_style="cyan",
+                            padding=(0, 1)
+                        ))
+
                     if options:
                         from rich.prompt import Prompt
                         choices = []
@@ -314,9 +360,9 @@ def stream_prompt(agent_id, prompt, history):
                                 choices.append(str(o.get("label", o.get("value", i))))
                             else:
                                 choices.append(str(o))
-                        answer = Prompt.ask(f"[bold cyan]{question}[/bold cyan]", choices=choices)
+                        answer = Prompt.ask("[bold cyan]Choose option[/bold cyan]", choices=choices)
                     else:
-                        answer = ctx.console.input(f"[bold cyan]{question}[/bold cyan] ").strip()
+                        answer = ctx.console.input("[bold cyan]Your response:[/bold cyan] ").strip()
 
                     new_history = list(history)
                     new_history.append({"role": "user", "content": prompt})
@@ -384,6 +430,25 @@ def stream_prompt(agent_id, prompt, history):
                 if display:
                     layout.add_row(Panel(display, border_style="bright_blue dim", padding=(0, 1)))
 
+                # Construct Live Handoff Tracer Tree
+                if ctx.delegation_chain:
+                    tree_obj = Tree("[bold magenta]🐝 Swarm Handoff Trace[/bold magenta]")
+                    curr_node = tree_obj
+                    for i, agent in enumerate(ctx.delegation_chain):
+                        task_desc = ""
+                        if i > 0:
+                            from_agent = ctx.delegation_chain[i-1]
+                            to_agent = ctx.delegation_chain[i]
+                            for h in handoffs_list:
+                                if h["from"] == from_agent and h["to"] == to_agent:
+                                    task_desc = f" [dim]({h['task']})[/dim]"
+                                    break
+                        if i == len(ctx.delegation_chain) - 1:
+                            curr_node = curr_node.add(f"[bold green]▶ {agent}[/bold green] (active){task_desc}")
+                        else:
+                            curr_node = curr_node.add(f"[cyan]✓ {agent}[/cyan]{task_desc}")
+                    layout.add_row(Panel(tree_obj, border_style="magenta dim", title="[bold magenta]Live Handoff Trace[/bold magenta]"))
+
                 live.update(layout)
 
         except Exception as e:
@@ -407,16 +472,86 @@ def stream_prompt(agent_id, prompt, history):
     ctx.save()
     return new_history
 
+def run_syntax_checks() -> tuple[bool, str]:
+    import ast
+    try:
+        git_diff = subprocess.run(
+            ["git", "diff", "--name-only"],
+            capture_output=True,
+            text=True,
+            cwd=PROJECT_ROOT,
+            timeout=5
+        )
+        if git_diff.returncode == 0:
+            modified_files = [line.strip() for line in git_diff.stdout.splitlines() if line.strip()]
+            for f in modified_files:
+                file_path = PROJECT_ROOT / f
+                if file_path.suffix == ".py" and file_path.exists():
+                    try:
+                        content = file_path.read_text(encoding="utf-8", errors="ignore")
+                        ast.parse(content, filename=str(file_path))
+                    except SyntaxError as exc:
+                        lines = content.splitlines()
+                        err_line = exc.lineno
+                        context_lines = []
+                        if err_line:
+                            start = max(0, err_line - 4)
+                            end = min(len(lines), err_line + 3)
+                            for idx in range(start, end):
+                                prefix = ">>> " if idx + 1 == err_line else "    "
+                                context_lines.append(f"{prefix}{idx+1}: {lines[idx]}")
+                        context_str = "\n".join(context_lines)
+                        return False, f"File: {f}\nError: {exc.msg} at line {exc.lineno}\nCode Context:\n```python\n{context_str}\n```"
+    except Exception as e:
+        return False, f"Syntax checks crashed: {e}"
+    return True, ""
+
 def run_test_suite(goal_text: str = "") -> tuple[bool, str]:
-    # Detect if goal mentions a test file specifically
-    test_target = None
+    # 1. Detect if goal mentions a test file specifically
+    test_targets = []
     m = re.search(r"tests/[a-zA-Z0-9_]+\.py", goal_text)
     if m:
-        test_target = m.group(0)
+        test_targets.append(m.group(0))
     
+    # 2. If no target in goal, find modified files in git
+    if not test_targets:
+        try:
+            git_diff = subprocess.run(
+                ["git", "diff", "--name-only"],
+                capture_output=True,
+                text=True,
+                cwd=PROJECT_ROOT,
+                timeout=5
+            )
+            if git_diff.returncode == 0:
+                modified_files = [line.strip() for line in git_diff.stdout.splitlines() if line.strip()]
+                for f in modified_files:
+                    # If the file itself is a test, add it
+                    if f.startswith("tests/") and f.endswith(".py"):
+                        test_targets.append(f)
+                    else:
+                        # Find related tests by matching name substring
+                        base = Path(f).stem
+                        # Ignore common files or short names
+                        if len(base) > 3 and base not in ("main", "__init__"):
+                            # Search in tests folder
+                            tests_dir = PROJECT_ROOT / "tests"
+                            for t_file in tests_dir.glob("test_*.py"):
+                                if base in t_file.name or t_file.name.replace("test_", "").replace(".py", "") in base:
+                                    test_targets.append(f"tests/{t_file.name}")
+        except Exception:
+            pass
+
+    # Deduplicate test targets
+    test_targets = list(set(test_targets))
+
     cmd = [sys.executable, "-m", "pytest", "--tb=short"]
-    if test_target:
-        cmd.append(test_target)
+    if test_targets:
+        cmd.extend(test_targets)
+    else:
+        # Fallback to run smoke tests only if no specific modifications
+        cmd.append("tests/test_agents_smoke.py")
+        cmd.append("tests/test_backend_smoke.py")
         
     try:
         result = subprocess.run(
@@ -433,6 +568,60 @@ def run_test_suite(goal_text: str = "") -> tuple[bool, str]:
     except Exception as e:
         return False, f"Failed to execute tests: {e}"
 
+def draft_plan_first(goal: str, cmd_ctx: CommandContext) -> str:
+    console = cmd_ctx.console
+    state = cmd_ctx.state
+    
+    console.print("[dim]Drafting structured implementation plan...[/dim]")
+    prompt = f"""
+    You are an elite software architect. Create a structured markdown Implementation Plan for the objective: "{goal}".
+    
+    Structure your plan as follows:
+    # Goal Description
+    - Summary of changes
+    ## Proposed Changes
+    - Specify the exact files to modify and what changes to make in each.
+    ## Verification Plan
+    - Tests to run and manual verification steps.
+    
+    Return ONLY valid markdown text.
+    """
+    
+    model = state.active_model or "qwen2.5:7b-instruct"
+    try:
+        resp = cmd_ctx.call_api("/generate", "POST", {"model": model, "prompt": prompt})
+        if resp and resp.status_code == 200:
+            plan_text = resp.json().get("response", "").strip()
+            return plan_text
+    except Exception as e:
+        console.print(f"[red]Error calling generator: {e}[/red]")
+    return ""
+
+def draft_task_list(plan_text: str, cmd_ctx: CommandContext) -> str:
+    console = cmd_ctx.console
+    state = cmd_ctx.state
+    
+    console.print("[dim]Drafting task checklist...[/dim]")
+    prompt = f"""
+    Based on the following Implementation Plan, generate a checklist of specific tasks.
+    Each item must start with `- [ ]`.
+    
+    Plan:
+    {plan_text}
+    
+    Return ONLY the list of items starting with `- [ ]`.
+    """
+    
+    model = state.active_model or "qwen2.5:3b-instruct"
+    try:
+        resp = cmd_ctx.call_api("/generate", "POST", {"model": model, "prompt": prompt})
+        if resp and resp.status_code == 200:
+            task_text = resp.json().get("response", "").strip()
+            return task_text
+    except Exception:
+        pass
+    return "- [ ] Implement proposed changes\n- [ ] Verify execution"
+
 def run_autonomous_goal_loop(goal: str, cmd_ctx: CommandContext):
     console = cmd_ctx.console
     state = cmd_ctx.state
@@ -442,6 +631,39 @@ def run_autonomous_goal_loop(goal: str, cmd_ctx: CommandContext):
     console.print(f"🎯 [bold]Goal[/bold]: [cyan]{goal}[/cyan]")
     console.print(f"👥 [bold]Initial Agent[/bold]: [cyan]{state.active_agent}[/cyan]")
     console.print()
+    
+    from rich.prompt import Confirm
+    plan_first = Confirm.ask("[bold yellow]Enable Plan-First Mode (generate plan & task list first)?[/bold yellow]")
+    
+    if plan_first:
+        docs_dir = PROJECT_ROOT / "docs"
+        docs_dir.mkdir(parents=True, exist_ok=True)
+        plan_file = docs_dir / "implementation_plan.md"
+        task_file = docs_dir / "task.md"
+        
+        while True:
+            plan_text = draft_plan_first(goal, cmd_ctx)
+            if not plan_text:
+                console.print("[red]Failed to generate plan. Falling back to immediate execution.[/red]")
+                break
+                
+            console.print()
+            console.print(Panel(plan_text, title="📋 [bold green]Implementation Plan Proposal[/bold green]", border_style="green"))
+            console.print()
+            
+            if Confirm.ask("[bold cyan]Approve this plan and proceed to task creation?[/bold cyan]"):
+                # Save the plan
+                plan_file.write_text(plan_text, encoding="utf-8")
+                console.print(f"[green]✓ Saved implementation plan to {plan_file}[/green]")
+                
+                # Generate task list
+                task_text = draft_task_list(plan_text, cmd_ctx)
+                task_file.write_text(task_text, encoding="utf-8")
+                console.print(f"[green]✓ Saved task checklist to {task_file}[/green]")
+                break
+            else:
+                refinement = console.input("[yellow]Provide feedback/refinements to regenerate the plan: [/yellow]").strip()
+                goal = f"{goal} (Feedback: {refinement})"
     
     current_prompt = f"Goal: {goal}\n\nPlease audit, refactor, and fix the codebase to achieve this goal using your tools. Ensure syntax correctness and that all tests pass."
     
@@ -454,9 +676,17 @@ def run_autonomous_goal_loop(goal: str, cmd_ctx: CommandContext):
         # 1. Run the agent stream
         history = stream_prompt(state.active_agent, current_prompt, history)
         
-        # 2. Run test verification
-        console.print("[dim]Running test verification suite...[/dim]")
-        passed, logs = run_test_suite(goal)
+        # 1.5. Run fast syntax checks (Fail-fast optimization)
+        console.print("[dim]Running fast syntax checks...[/dim]")
+        syntax_passed, syntax_error_msg = run_syntax_checks()
+        if not syntax_passed:
+            passed = False
+            logs = f"Syntax Error detected in modified files:\n\n{syntax_error_msg}"
+            console.print("[bold red]✗ Fast Syntax Check Failed.[/bold red]")
+        else:
+            # 2. Run test verification
+            console.print("[dim]Running test verification suite...[/dim]")
+            passed, logs = run_test_suite(goal)
         
         if passed:
             console.print()
@@ -469,7 +699,7 @@ def run_autonomous_goal_loop(goal: str, cmd_ctx: CommandContext):
             # Extract traceback and key failures
             failures = []
             for line in logs.splitlines():
-                if line.startswith("E   ") or "FAIL" in line or "AssertionError" in line:
+                if line.startswith("E   ") or "FAIL" in line or "AssertionError" in line or "Syntax Error" in line or "File:" in line or "Error:" in line:
                     failures.append(line)
             
             trace_preview = "\n".join(failures[:20])
@@ -479,15 +709,15 @@ def run_autonomous_goal_loop(goal: str, cmd_ctx: CommandContext):
             console.print(f"[bold red]✗ Verification Failed on Attempt {attempt}.[/bold red]")
             if attempt == max_attempts:
                 console.print(Panel(
-                    f"[bold red]✗ FAILURE: Max attempts ({max_attempts}) reached. Tests are still failing.[/bold red]",
+                    f"[bold red]✗ FAILURE: Max attempts ({max_attempts}) reached. Tests/Checks are still failing.[/bold red]",
                     border_style="red"
                 ))
                 break
                 
             # Formulate correction feedback
-            console.print("[yellow]Feeding back traceback to agent context for correction...[/yellow]")
+            console.print("[yellow]Feeding back failure logs to agent context for correction...[/yellow]")
             current_prompt = (
-                f"The test verification suite failed with the following traceback/logs:\n\n"
+                f"The verification checks failed with the following traceback/logs:\n\n"
                 f"```\n{trace_preview}\n```\n\n"
                 f"Please analyze these errors, modify the code using your capabilities, and verify syntax to fix them."
             )
@@ -574,6 +804,9 @@ def main():
             # Process command or prompt
             execute_prompt = registry.handle_line(cmd_line, cmd_ctx)
             if execute_prompt:
+                if len(ctx.history) > 12:
+                    ctx.console.print("[dim]⚡ [bold yellow]Context pressure warning:[/bold yellow] history exceeds 12 messages. Auto-compressing context in background...[/dim]")
+                    registry.handle_line("/compress", cmd_ctx)
                 ctx.history = stream_prompt(ctx.active_agent, execute_prompt, ctx.history)
 
         except KeyboardInterrupt:

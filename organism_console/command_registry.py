@@ -597,6 +597,263 @@ def cmd_patch(ctx: CommandContext, args: List[str]) -> None:
         ctx.console.print(f"[bold red]Error writing file: {e}[/bold red]")
 
 
+@registry.register("commit", "Create a Conventional Commit with an AI-generated message. Usage: /commit")
+def cmd_commit(ctx: CommandContext, args: List[str]) -> None:
+    import subprocess
+    project_root = Path(__file__).parent.parent.resolve()
+    try:
+        # 1. Run git diff to see changes
+        diff_res = subprocess.run(["git", "diff"], capture_output=True, text=True, cwd=project_root)
+        diff_staged = subprocess.run(["git", "diff", "--staged"], capture_output=True, text=True, cwd=project_root)
+        
+        diff_text = diff_res.stdout + "\n" + diff_staged.stdout
+        if not diff_text.strip():
+            ctx.console.print("[yellow]No changes detected in repository workspace.[/yellow]")
+            return
+            
+        ctx.console.print("[bold cyan]Analyzing diff and generating Conventional Commit message...[/bold cyan]")
+        
+        prompt = f"""
+        Analyze this git diff and write a concise, professional commit message adhering strictly to Conventional Commits:
+        
+        {diff_text[:3000]}
+        
+        Your output must follow this format:
+        <type>(<scope>): <short description>
+        
+        Do not output any introductory or concluding text, only the commit message itself.
+        """
+        
+        model = ctx.state.active_model or "qwen2.5:7b-instruct"
+        resp = ctx.call_api("/generate", "POST", {"model": model, "prompt": prompt})
+        if resp and resp.status_code == 200:
+            commit_msg = resp.json().get("response", "").strip().splitlines()[0]
+            ctx.console.print(Panel(commit_msg, title="Generated Commit Message", border_style="green"))
+            
+            from rich.prompt import Confirm
+            if Confirm.ask("[bold yellow]Do you want to stage all changes and commit?[/bold yellow]"):
+                subprocess.run(["git", "add", "."], cwd=project_root)
+                commit_res = subprocess.run(["git", "commit", "-m", commit_msg], capture_output=True, text=True, cwd=project_root)
+                ctx.console.print(f"[green]✓ git add . executed.[/green]")
+                if commit_res.returncode == 0:
+                    ctx.console.print(f"[bold green]✓ Successfully committed changes![/bold green]")
+                else:
+                    ctx.console.print(f"[bold red]Failed to commit: {commit_res.stderr}[/bold red]")
+        else:
+            ctx.console.print("[bold red]Failed to generate commit message from backend.[/bold red]")
+    except Exception as e:
+        ctx.console.print(f"[bold red]Commit command error: {e}[/bold red]")
+
+
+@registry.register("branch", "Create or checkout a Git branch. Usage: /branch <branch_name>")
+def cmd_branch(ctx: CommandContext, args: List[str]) -> None:
+    import subprocess
+    if not args:
+        # Show active branch
+        project_root = Path(__file__).parent.parent.resolve()
+        res = subprocess.run(["git", "branch", "--show-current"], capture_output=True, text=True, cwd=project_root)
+        if res.returncode == 0:
+            ctx.console.print(f"Active branch: [bold green]{res.stdout.strip()}[/bold green]")
+        else:
+            ctx.console.print("[red]Failed to get current branch.[/red]")
+        return
+        
+    branch_name = args[0].strip()
+    project_root = Path(__file__).parent.parent.resolve()
+    
+    ctx.console.print(f"[bold cyan]Checking out branch [green]{branch_name}[/green]...[/bold cyan]")
+    # Try checking out the branch. If it doesn't exist, create it.
+    checkout_res = subprocess.run(["git", "checkout", branch_name], capture_output=True, text=True, cwd=project_root)
+    if checkout_res.returncode != 0:
+        # Try checking out with -b
+        checkout_res = subprocess.run(["git", "checkout", "-b", branch_name], capture_output=True, text=True, cwd=project_root)
+        
+    if checkout_res.returncode == 0:
+        ctx.console.print(f"[bold green]✓ Switched to branch '{branch_name}'[/bold green]")
+    else:
+        ctx.console.print(f"[bold red]Failed to switch branch: {checkout_res.stderr}[/bold red]")
+
+
+@registry.register("debug", "Run a script/command and analyze failures. Usage: /debug <command>")
+def cmd_debug(ctx: CommandContext, args: List[str]) -> None:
+    import subprocess
+    import sys
+    if not args:
+        ctx.console.print("[yellow]Usage: /debug <command>. Example: /debug python main.py[/yellow]")
+        return
+        
+    command = args
+    ctx.console.print(f"[bold cyan]Executing command: [white]{' '.join(command)}[/white]...[/bold cyan]")
+    
+    project_root = Path(__file__).parent.parent.resolve()
+    # Execute the command
+    try:
+        res = subprocess.run(command, capture_output=True, text=True, cwd=project_root, timeout=60)
+        stdout = res.stdout
+        stderr = res.stderr
+        exit_code = res.returncode
+    except subprocess.TimeoutExpired:
+        ctx.console.print("[bold red]Error: Execution timed out (60s limit).[/bold red]")
+        return
+    except Exception as e:
+        ctx.console.print(f"[bold red]Execution error: {e}[/bold red]")
+        return
+        
+    if exit_code == 0:
+        ctx.console.print("[bold green]✓ Execution succeeded with exit code 0.[/bold green]")
+        if stdout.strip():
+            ctx.console.print(Panel(stdout, title="Output", border_style="green"))
+        return
+        
+    ctx.console.print(f"[bold red]✗ Execution failed with exit code {exit_code}.[/bold red]")
+    ctx.console.print(Panel(stderr or stdout, title="Error Output / Stacktrace", border_style="red"))
+    
+    ctx.console.print("[bold cyan]Submitting failure trace to LLM for automated diagnostic guide...[/bold cyan]")
+    
+    prompt = f"""
+    The following developer command failed:
+    Command: {' '.join(command)}
+    Exit Code: {exit_code}
+    
+    Stderr / Traceback:
+    {stderr or stdout}
+    
+    Explain what caused this crash and provide a clear, step-by-step diagnostic guide on how to fix it.
+    """
+    
+    model = ctx.state.active_model or "qwen2.5:7b-instruct"
+    resp = ctx.call_api("/generate", "POST", {"model": model, "prompt": prompt})
+    if resp and resp.status_code == 200:
+        diag = resp.json().get("response", "").strip()
+        ctx.console.print(Panel(diag, title="AI Diagnostic Guide", border_style="yellow"))
+        
+        from rich.prompt import Confirm
+        if Confirm.ask("[bold yellow]Would you like the agent to automatically repair this crash?[/bold yellow]"):
+            goal_text = f"Fix the crash/failure of command '{' '.join(command)}' which failed with traceback:\n{stderr or stdout}"
+            if ctx.run_goal_loop:
+                ctx.run_goal_loop(goal_text)
+            else:
+                ctx.console.print("[red]Goal loop runner unavailable.[/red]")
+    else:
+        ctx.console.print("[bold red]Failed to fetch diagnostic guide from backend.[/bold red]")
+
+
+@registry.register("prompt", "View or override system mandates for an agent. Usage: /prompt <agent_id> [new_mandate]")
+def cmd_prompt(ctx: CommandContext, args: List[str]) -> None:
+    import json
+    if not args:
+        ctx.console.print("[yellow]Usage: /prompt <agent_id> [new_mandate]. Example: /prompt coder Be very brief.[/yellow]")
+        return
+        
+    agent_id = args[0].lower()
+    project_root = Path(__file__).parent.parent.resolve()
+    mandates_file = project_root / "docs" / "agent_mandates.json"
+    
+    # Load existing custom mandates if any
+    custom_mandates = {}
+    if mandates_file.exists():
+        try:
+            custom_mandates = json.loads(mandates_file.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+            
+    if len(args) < 2:
+        # Just show current prompt
+        if agent_id in custom_mandates:
+            ctx.console.print(Panel(custom_mandates[agent_id], title=f"Custom Prompt Mandate for '{agent_id}'", border_style="green"))
+        else:
+            ctx.console.print(f"[dim]Agent '{agent_id}' has no custom override. It uses the default role mandate.[/dim]")
+        return
+        
+    new_mandate = " ".join(args[1:])
+    custom_mandates[agent_id] = new_mandate
+    
+    try:
+        mandates_file.parent.mkdir(parents=True, exist_ok=True)
+        mandates_file.write_text(json.dumps(custom_mandates, indent=2), encoding="utf-8")
+        ctx.console.print(f"[bold green]✓ Custom system prompt mandate for '{agent_id}' successfully updated![/bold green]")
+        ctx.console.print(f"[dim]Backend will automatically apply this override on the next query.[/dim]")
+    except Exception as e:
+        ctx.console.print(f"[bold red]Error saving prompt mandate override: {e}[/bold red]")
+
+
+@registry.register("memory", "Query or inject memory into Qdrant store. Usage: /memory query|inject <value>")
+def cmd_memory(ctx: CommandContext, args: List[str]) -> None:
+    import json
+    from datetime import datetime
+    if len(args) < 2:
+        ctx.console.print("[yellow]Usage: /memory query <term> OR /memory inject <text>[/yellow]")
+        return
+        
+    action = args[0].lower()
+    text = " ".join(args[1:])
+    
+    if action == "query":
+        ctx.console.print(f"[bold cyan]Searching vector memories for: [green]{text}[/green]...[/bold cyan]")
+        try:
+            import requests
+            emb_resp = requests.post("http://127.0.0.1:11434/api/embeddings", json={"model": "nomic-embed-text", "prompt": text}, timeout=10.0)
+            if emb_resp.status_code == 200:
+                vector = emb_resp.json().get("embedding", [0.0]*768)
+            else:
+                vector = [0.0]*768 # fallback
+                
+            q_resp = requests.post("http://127.0.0.1:6333/collections/upwork_learning/points/search", json={
+                "vector": vector,
+                "limit": 5,
+                "with_payload": True
+            }, timeout=10.0)
+            
+            if q_resp.status_code == 200:
+                results = q_resp.json().get("result", [])
+                if not results:
+                    ctx.console.print("[dim]No vector memory matches found.[/dim]")
+                    return
+                table = Table(box=SIMPLE, header_style="bold cyan")
+                table.add_column("Score", style="bold yellow")
+                table.add_column("Memory Payload", style="white")
+                for r in results:
+                    score = r.get("score", 0.0)
+                    payload = r.get("payload", {})
+                    table.add_row(f"{score:.2f}", json.dumps(payload, indent=1))
+                ctx.console.print(table)
+            else:
+                ctx.console.print(f"[bold red]Qdrant search failed with status {q_resp.status_code}.[/bold red]")
+        except Exception as e:
+            ctx.console.print(f"[bold red]Failed to query memory store: {e}[/bold red]")
+            
+    elif action == "inject":
+        ctx.console.print(f"[bold cyan]Injecting text into vector memory store...[/bold cyan]")
+        try:
+            import requests
+            import uuid
+            # Generate embedding
+            emb_resp = requests.post("http://127.0.0.1:11434/api/embeddings", json={"model": "nomic-embed-text", "prompt": text}, timeout=10.0)
+            if emb_resp.status_code == 200:
+                vector = emb_resp.json().get("embedding", [0.0]*768)
+            else:
+                ctx.console.print("[bold red]Failed to generate text embedding from Ollama.[/bold red]")
+                return
+                
+            q_resp = requests.put("http://127.0.0.1:6333/collections/upwork_learning/points", json={
+                "points": [{
+                    "id": str(uuid.uuid4()),
+                    "vector": vector,
+                    "payload": {
+                        "text": text,
+                        "created_at": datetime.utcnow().isoformat()
+                    }
+                }]
+            }, timeout=10.0)
+            
+            if q_resp.status_code == 200:
+                ctx.console.print(f"[bold green]✓ Text successfully stored in vector memory![/bold green]")
+            else:
+                ctx.console.print(f"[bold red]Qdrant upsert failed with status {q_resp.status_code}.[/bold red]")
+        except Exception as e:
+            ctx.console.print(f"[bold red]Failed to inject memory: {e}[/bold red]")
+
+
 @registry.register("heal", "Evaluate and trigger self-heal run. Usage: /heal run")
 def cmd_heal(ctx: CommandContext, args: List[str]) -> None:
     if not args or args[0].lower() != "run":
@@ -978,3 +1235,112 @@ def cmd_exit(ctx: CommandContext, args: List[str]) -> None:
     ctx.console.print("[bold blue]Zenith Swarm Control Terminal terminated.[/bold blue]")
     import sys
     sys.exit(0)
+
+
+@registry.register("benchmark", "Test latencies, token throughput, and success rates across local Ollama models.")
+def cmd_benchmark(ctx: CommandContext, args: List[str]) -> None:
+    models = ctx.installed_models
+    if not models:
+        ctx.console.print("[yellow]No installed models found to benchmark.[/yellow]")
+        return
+        
+    if args:
+        target_model = args[0]
+        matching_models = [m for m in models if target_model.lower() in m.lower()]
+        if not matching_models:
+            ctx.console.print(f"[yellow]No models matching '{target_model}' found. Available models: {', '.join(models)}[/yellow]")
+            return
+        models = matching_models
+    
+    from rich.table import Table
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+    
+    table = Table(title="[bold cyan]Ollama Models Benchmark Engine[/bold cyan]", border_style="cyan")
+    table.add_column("Model", style="bold green")
+    table.add_column("Status", style="yellow")
+    table.add_column("Latency (s)", style="magenta", justify="right")
+    table.add_column("Throughput (t/s)", style="blue", justify="right")
+    table.add_column("Output Preview", style="white")
+    
+    benchmark_prompt = "Explain why gravity is weaker than electromagnetism in exactly 2 sentences."
+    
+    ctx.console.print(f"[cyan]Initiating concurrent benchmarking across {len(models)} models...[/cyan]")
+    
+    def test_model(model_name: str):
+        start = time.time()
+        try:
+            payload = {"model": model_name, "prompt": benchmark_prompt}
+            resp = ctx.call_api("/generate", "POST", payload=payload)
+            duration = time.time() - start
+            if resp and resp.status_code == 200:
+                data = resp.json()
+                response_text = data.get("response", "").strip()
+                tokens = max(1, len(response_text) // 4)
+                tokens_per_sec = tokens / max(0.1, duration)
+                preview = response_text[:50].replace("\n", " ") + "..."
+                return model_name, "[green]SUCCESS[/green]", duration, tokens_per_sec, preview
+            else:
+                return model_name, "[red]FAILED[/red]", duration, 0.0, f"HTTP Status {resp.status_code if resp else 'No response'}"
+        except Exception as e:
+            duration = time.time() - start
+            return model_name, "[red]ERROR[/red]", duration, 0.0, str(e)[:50]
+
+    with ThreadPoolExecutor(max_workers=min(len(models), 4)) as executor:
+        results = list(executor.map(test_model, models))
+        
+    for m, status, dur, tps, prev in results:
+        table.add_row(m, status, f"{dur:.2f}s", f"{tps:.1f} t/s", prev)
+        
+    ctx.console.print(table)
+
+
+@registry.register("compress", "Summarize older turns in history to free up context window space.")
+def cmd_compress(ctx: CommandContext, args: List[str]) -> None:
+    history = ctx.state.history
+    if not history or len(history) <= 4:
+        ctx.console.print("[yellow]History is too short to compress (requires > 4 messages).[/yellow]")
+        return
+    
+    to_summarize = history[:-4]
+    keep = history[-4:]
+    
+    conv_text = ""
+    for msg in to_summarize:
+        role = msg.get("role", "unknown").upper()
+        content = msg.get("content", "")
+        conv_text += f"{role}: {content}\n\n"
+        
+    prompt = (
+        "You are a conversation summarization helper. Provide a very short summary of the following conversation history in exactly 2-3 sentences. "
+        "Focus strictly on key actions, decisions, and current focus so the assistant can continue the task without full context.\n\n"
+        f"CONVERSATION HISTORY:\n{conv_text}"
+    )
+    
+    fast_model = "qwen2.5:7b-instruct"
+    for m in ctx.installed_models:
+        if "3b" in m or "7b" in m:
+            fast_model = m
+            break
+            
+    ctx.console.print(f"[cyan]Compressing {len(to_summarize)} history messages using [bold green]{fast_model}[/bold green]...[/cyan]")
+    
+    try:
+        payload = {"model": fast_model, "prompt": prompt}
+        resp = ctx.call_api("/generate", "POST", payload=payload)
+        if resp and resp.status_code == 200:
+            summary = resp.json().get("response", "").strip()
+            compressed_msg = {
+                "role": "system",
+                "content": f"[Conversation History Compressed Summary: {summary}]"
+            }
+            new_history = [compressed_msg] + keep
+            ctx.state.history = new_history
+            ctx.state.save()
+            ctx.console.print("[green]✓ History successfully compressed! Summary prepended to active context.[/green]")
+            from rich.panel import Panel
+            ctx.console.print(Panel(summary, title="[bold cyan]Compressed Summary[/bold cyan]", border_style="cyan"))
+        else:
+            ctx.console.print(f"[red]Failed to generate summary: Status {resp.status_code if resp else 'No response'}[/red]")
+    except Exception as e:
+        ctx.console.print(f"[red]Error during compression: {e}[/red]")

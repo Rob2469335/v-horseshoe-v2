@@ -330,3 +330,117 @@ class TestDummyHandler:
     finally:
         rich.prompt.Prompt.ask = original_ask
 
+
+def test_new_cli_commands(tmp_path, monkeypatch):
+    session_file = tmp_path / ".session.json"
+    state = SessionState(session_file)
+    state.history = [
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "world"},
+        {"role": "user", "content": "foo"},
+        {"role": "assistant", "content": "bar"},
+        {"role": "user", "content": "baz"},
+        {"role": "assistant", "content": "qux"},
+    ]
+    state.save()
+    console = Console()
+    
+    # Mock call_api
+    class MockResponse:
+        def __init__(self, json_data, status_code=200):
+            self.json_data = json_data
+            self.status_code = status_code
+        def json(self):
+            return self.json_data
+            
+    def mock_call_api(endpoint, method="GET", payload=None, stream=False):
+        if endpoint == "/generate":
+            return MockResponse({"response": "feat(core): dummy commit message\nDetailed body"})
+        if endpoint == "/agents":
+            return MockResponse([{"id": "coordinator", "role": "coordinator", "description": "dummy"}])
+        return MockResponse({})
+        
+    ctx = CommandContext(
+        state=state,
+        console=console,
+        call_api=mock_call_api,
+        run_prompt=lambda *a: None,
+        get_system_stats=lambda: {},
+        installed_models=["model_a", "model_b"]
+    )
+    
+    # 1. Mock subprocess.run
+    import subprocess
+    class MockCompletedProcess:
+        def __init__(self, stdout="", stderr="", returncode=0):
+            self.stdout = stdout
+            self.stderr = stderr
+            self.returncode = returncode
+            
+    def mock_run(cmd, *args, **kwargs):
+        if cmd[0] == "git" and "diff" in cmd:
+            return MockCompletedProcess(stdout="diff content")
+        if cmd[0] == "git" and "branch" in cmd:
+            return MockCompletedProcess(stdout="main")
+        return MockCompletedProcess()
+        
+    monkeypatch.setattr(subprocess, "run", mock_run)
+    
+    # 2. Mock rich.prompt.Confirm.ask to always return False
+    import rich.prompt
+    monkeypatch.setattr(rich.prompt.Confirm, "ask", lambda *a, **k: False)
+    
+    # 3. Test /commit
+    registry.handle_line("/commit", ctx)
+    
+    # 4. Test /branch
+    registry.handle_line("/branch", ctx)
+    registry.handle_line("/branch test-branch", ctx)
+    
+    # 5. Test /debug
+    registry.handle_line("/debug echo hello", ctx)
+    
+    # 6. Test /prompt
+    # Change project root temporarily for mandates_file
+    import organism_console.command_registry as reg_mod
+    original_path = reg_mod.Path
+    class MockPath:
+        def __init__(self, *args):
+            self._real_path = original_path(*args)
+        def __truediv__(self, other):
+            if other == "docs":
+                return tmp_path
+            return MockPath(self._real_path / other)
+        def __getattr__(self, item):
+            return getattr(self._real_path, item)
+        def resolve(self):
+            return self
+    monkeypatch.setattr(reg_mod, "Path", lambda *a: MockPath(*a) if a else original_path())
+    
+    registry.handle_line("/prompt coordinator", ctx)
+    registry.handle_line("/prompt coordinator Be polite.", ctx)
+    
+    # 7. Test /memory
+    class MockRequests:
+        @staticmethod
+        def post(url, json=None, **kwargs):
+            if "embeddings" in url:
+                return MockResponse({"embedding": [0.1] * 768})
+            # search
+            return MockResponse({"result": [{"score": 0.99, "payload": {"text": "hello"}}]})
+        @staticmethod
+        def put(url, json=None, **kwargs):
+            return MockResponse({})
+            
+    import sys
+    monkeypatch.setitem(sys.modules, "requests", MockRequests)
+    
+    registry.handle_line("/memory query test", ctx)
+    registry.handle_line("/memory inject hello", ctx)
+    
+    # 8. Test /benchmark
+    registry.handle_line("/benchmark", ctx)
+    
+    # 9. Test /compress
+    registry.handle_line("/compress", ctx)
+

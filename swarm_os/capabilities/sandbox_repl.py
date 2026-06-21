@@ -4,24 +4,65 @@ import sys
 
 class SandboxReplHandler:
     async def execute(self, payload) -> dict:
-        code = payload.get("code", "") if isinstance(payload, dict) else payload.code
-        if not code.strip():
-            return {"stdout": "", "stderr": "No code provided.", "exit_code": 1}
+        if isinstance(payload, dict):
+            language = payload.get("language", "python")
+            code = payload.get("code", "")
+            command = payload.get("command", "")
+            path = payload.get("path", "")
+        else:
+            language = getattr(payload, "language", "python")
+            code = getattr(payload, "code", "")
+            command = getattr(payload, "command", "")
+            path = getattr(payload, "path", "")
+
+        language = str(language).lower().strip()
+
+        if language == "python":
+            cmd = [r"C:\Python314\python.exe", "-c", str(code)]
+            timeout = 30.0
+        elif language == "powershell":
+            cmd = ["pwsh", "-Command", str(command)]
+            timeout = 30.0
+        elif language == "pytest":
+            cmd = [r"C:\Python314\python.exe", "-m", "pytest", str(path), "-v", "--tb=short"]
+            timeout = 60.0
+        else:
+            return {
+                "ok": False,
+                "stdout": "",
+                "stderr": f"Unsupported language: {language}",
+                "returncode": 1
+            }
+
         try:
             proc = await asyncio.create_subprocess_exec(
-                sys.executable, "-c", code,
+                *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
             try:
-                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=10.0)
+                stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+                return {
+                    "ok": True,
+                    "stdout": stdout_bytes.decode("utf-8", errors="replace"),
+                    "stderr": stderr_bytes.decode("utf-8", errors="replace"),
+                    "returncode": proc.returncode if proc.returncode is not None else 0
+                }
             except asyncio.TimeoutError:
-                proc.kill()
-                return {"stdout": "", "stderr": "Execution timed out (10s limit).", "exit_code": 1}
-            return {
-                "stdout": stdout.decode("utf-8", errors="replace"),
-                "stderr": stderr.decode("utf-8", errors="replace"),
-                "exit_code": proc.returncode,
-            }
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                return {
+                    "ok": False,
+                    "stdout": "",
+                    "stderr": f"Execution timed out ({timeout}s limit).",
+                    "returncode": -1
+                }
         except Exception as e:
-            return {"stdout": "", "stderr": str(e), "exit_code": 1}
+            return {
+                "ok": False,
+                "stdout": "",
+                "stderr": str(e),
+                "returncode": 1
+            }
