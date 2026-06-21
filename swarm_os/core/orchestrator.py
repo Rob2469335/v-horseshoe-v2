@@ -39,6 +39,8 @@ class Orchestrator:
         self.bridge = MemoryBridge()
         self.simulation = SimulationService(generate_fn=self.generate)
         self.mcp = mcp_registry
+        self.total_tokens_used = 0
+        self.max_tokens_budget = 500000
 
         self.router = Router(
             profiles=[
@@ -108,28 +110,7 @@ class Orchestrator:
         return None
 
     async def _get_memory_context(self, query: str) -> str:
-        try:
-            vec = await self.bridge._embed(query)
-            if vec is not None:
-                async with self.bridge.lock_vector:
-                    results = await asyncio.to_thread(
-                        self.bridge.vs.search,
-                        query_vector=vec,
-                        limit=3,
-                    )
-                if results:
-                    context_parts = ["### Relevant historical context from swarm runs:"]
-                    for hit in results:
-                        payload = hit.get("payload", {}) or {}
-                        summary = payload.get("summary", "")
-                        models = payload.get("models", [])
-                        outcome = payload.get("dominant_outcome", "unknown")
-                        if summary:
-                            context_parts.append(f"- Summary: {summary} (Models: {', '.join(models)}, Outcome: {outcome})")
-                    return "\n".join(context_parts) + "\n"
-        except Exception as e:
-            log.warning("Failed to retrieve memory context: %s", e)
-        return ""
+        return await self.bridge.get_memory_context(query)
 
     async def generate(self, model: str | None, messages: list[dict] | None = None, prompt: str | None = None) -> tuple[str, str]:
         messages = list(messages or [])
@@ -152,6 +133,25 @@ class Orchestrator:
             
         if not messages:
             raise ValueError("Either messages or prompt must be provided")
+
+        # Dynamic Tool Schema Discovery & Injection
+        schemas = self.mcp.get_tools_schema()
+        schemas_str = json.dumps(schemas, indent=2)
+        tools_instruction = (
+            "\n### Available MCP Tools:\n"
+            "You have access to the following tools. To call a tool, generate one of the following formats:\n"
+            '<tool_call name="tool_name">{"arg": "val"}</tool_call>\n'
+            '<tool>tool_name</tool> {"arg": "val"}\n\n'
+            f"Tool Schemas:\n{schemas_str}\n"
+        )
+        inserted = False
+        for msg in messages:
+            if msg.get("role") == "system":
+                msg["content"] = (msg.get("content") or "") + tools_instruction
+                inserted = True
+                break
+        if not inserted and messages:
+            messages[0]["content"] = tools_instruction + "\n" + (messages[0].get("content") or "")
 
         trace_id = self.trace.new_trace_id()
         start_ms = time.time() * 1000.0
@@ -193,10 +193,17 @@ class Orchestrator:
         final_result = ""
         for step in range(max_steps):
             try:
+                # Token budget check
+                if self.total_tokens_used >= self.max_tokens_budget:
+                    raise ValueError(f"Token budget exceeded: {self.total_tokens_used} used (limit {self.max_tokens_budget})")
+
                 print(f"[Orchestrator] generate() Turn {step + 1}/{max_steps} starting with model={chosen_model}", flush=True)
                 result = await self.ollama.generate(model=chosen_model, messages=messages)
                 print(f"[Orchestrator] generate() Turn result: {result!r}", flush=True)
                 
+                # Update tokens used
+                self.total_tokens_used += int(len(result) / 4) + 1
+
                 tool_info = self._parse_tool_call(result)
                 if tool_info:
                     tool_name, params_str = tool_info
@@ -212,6 +219,18 @@ class Orchestrator:
                     observation = await self.mcp.call(tool_name, params)
                     print(f"[Orchestrator] Tool execution result: {observation}", flush=True)
                     
+                    # Critic evaluation
+                    critic_res = self.critic.evaluate_step(observation, expected_kind="tool")
+                    if not critic_res.accepted:
+                        print(f"[Orchestrator] Critic rejected tool execution: {critic_res.reason}", flush=True)
+                        messages.append({"role": "assistant", "content": result})
+                        messages.append({"role": "tool", "content": f"Observation: {json.dumps(observation)}"})
+                        messages.append({
+                            "role": "user",
+                            "content": f"Critic Feedback: The tool execution returned an error or was rejected: {critic_res.reason}. Please correct the parameters and call the tool again."
+                        })
+                        continue
+
                     # Inject back into history
                     messages.append({"role": "assistant", "content": result})
                     messages.append({"role": "tool", "content": f"Observation: {json.dumps(observation)}"})
@@ -240,6 +259,7 @@ class Orchestrator:
 
         return final_result, chosen_model
 
+
     async def stream_generate(self, model: str | None, messages: list[dict] | None = None, prompt: str | None = None):
         log.info("[Orchestrator] Entering stream_generate. model=%s, prompt=%s, messages=%s", model, prompt, messages)
         print(f"[Orchestrator] Entering stream_generate. model={model}, prompt={prompt}", flush=True)
@@ -267,6 +287,25 @@ class Orchestrator:
             yield f"\n[Error: No input provided]", "none", "none"
             return
 
+        # Dynamic Tool Schema Discovery & Injection
+        schemas = self.mcp.get_tools_schema()
+        schemas_str = json.dumps(schemas, indent=2)
+        tools_instruction = (
+            "\n### Available MCP Tools:\n"
+            "You have access to the following tools. To call a tool, generate one of the following formats:\n"
+            '<tool_call name="tool_name">{"arg": "val"}</tool_call>\n'
+            '<tool>tool_name</tool> {"arg": "val"}\n\n'
+            f"Tool Schemas:\n{schemas_str}\n"
+        )
+        inserted = False
+        for msg in messages:
+            if msg.get("role") == "system":
+                msg["content"] = (msg.get("content") or "") + tools_instruction
+                inserted = True
+                break
+        if not inserted and messages:
+            messages[0]["content"] = tools_instruction + "\n" + (messages[0].get("content") or "")
+
         trace_id = self.trace.new_trace_id()
         start_ms = time.time() * 1000.0
 
@@ -290,6 +329,11 @@ class Orchestrator:
         
         max_steps = 5
         for step in range(max_steps):
+            # Token budget check
+            if self.total_tokens_used >= self.max_tokens_budget:
+                yield f"\n[Error: Token budget exceeded ({self.total_tokens_used} used)]", chosen_model, trace_id
+                break
+
             print(f"[Orchestrator] stream_generate() Turn {step + 1}/{max_steps} starting with model={chosen_model}", flush=True)
             accumulated_text = ""
             print(f"[Orchestrator] OllamaClient beginning stream for model={chosen_model}", flush=True)
@@ -300,6 +344,9 @@ class Orchestrator:
                     print(f"[Orchestrator] Received chunk from Ollama: {chunk!r}", flush=True)
                     yield chunk, chosen_model, trace_id
                 
+                # Update tokens used
+                self.total_tokens_used += int(len(accumulated_text) / 4) + 1
+
                 tool_info = self._parse_tool_call(accumulated_text)
                 if tool_info:
                     tool_name, params_str = tool_info
@@ -315,6 +362,21 @@ class Orchestrator:
                     observation = await self.mcp.call(tool_name, params)
                     print(f"[Orchestrator] Tool execution result: {observation}", flush=True)
                     
+                    # Critic evaluation
+                    critic_res = self.critic.evaluate_step(observation, expected_kind="tool")
+                    if not critic_res.accepted:
+                        print(f"[Orchestrator] Critic rejected tool execution: {critic_res.reason}", flush=True)
+                        obs_text = f"\n[Critic Rejection: {critic_res.reason}. Requesting self-correction...]\n"
+                        yield obs_text, chosen_model, trace_id
+                        
+                        messages.append({"role": "assistant", "content": accumulated_text})
+                        messages.append({"role": "tool", "content": f"Observation: {json.dumps(observation)}"})
+                        messages.append({
+                            "role": "user",
+                            "content": f"Critic Feedback: The tool execution returned an error or was rejected: {critic_res.reason}. Please correct the parameters and call the tool again."
+                        })
+                        continue
+
                     # Yield observation back to the stream so the client receives it
                     obs_text = f"\n[Observation: {json.dumps(observation)}]\n"
                     yield obs_text, chosen_model, trace_id
@@ -344,6 +406,7 @@ class Orchestrator:
             model=chosen_model,
             summary="Stream completed"
         )
+
 
     async def evolve(self) -> None:
         pass

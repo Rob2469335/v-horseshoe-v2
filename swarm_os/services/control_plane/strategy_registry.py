@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .strategy import DefaultStrategy, DeepStrategy, RoutingStrategy
+from .strategy import DefaultStrategy, DeepStrategy, BanditStrategy, RoutingStrategy
 
 class StrategyRegistry:
     def __init__(self) -> None:
@@ -26,6 +26,10 @@ class StrategyRegistry:
         role = (context.get("role") or "").lower()
         candidates = context.get("candidates") or []
         allow_fallback = bool(context.get("allow_fallback", True))
+        strategy_override = context.get("strategy")
+
+        if strategy_override and strategy_override in self._strategies:
+            return self._strategies[strategy_override]
 
         if role == "vision" and "vision" in self._strategies:
             return self._strategies["vision"]
@@ -59,4 +63,5 @@ class StrategyRegistry:
 strategy_registry = StrategyRegistry()
 strategy_registry.register(DefaultStrategy())
 strategy_registry.register(DeepStrategy())
+strategy_registry.register(BanditStrategy())
 strategy_registry.set_default("default")

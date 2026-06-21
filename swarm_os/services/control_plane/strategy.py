@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+import random
 from abc import ABC, abstractmethod
 
 from .models import RouteDecision
@@ -222,3 +223,109 @@ class DeepStrategy(DefaultStrategy):
             meta["deep_bias"] = long_bias
             meta["score"] = score
         return score, reason, meta
+
+
+class BanditStrategy(RoutingStrategy):
+    def __init__(self, epsilon: float = 0.1) -> None:
+        self.epsilon = epsilon
+
+    @property
+    def name(self) -> str:
+        return "bandit"
+
+    def select_model(
+        self,
+        *,
+        router: object,
+        candidates: list[str],
+        role: str | None = None,
+        allow_fallback: bool = True,
+    ) -> RouteDecision:
+        strategy_name = self.name
+        desired_role = role or router.default_role
+
+        if not candidates:
+            return RouteDecision(
+                model="",
+                role=desired_role,
+                reason="no_candidates",
+                fallback=True,
+                strategy=strategy_name,
+                metadata={"strategy": strategy_name, "desired_role": desired_role},
+            )
+
+        # Epsilon-greedy exploration
+        if random.random() < self.epsilon:
+            chosen = random.choice(candidates)
+            state = router.get_state(chosen)
+            return RouteDecision(
+                model=chosen,
+                role=state.role,
+                reason="bandit_exploration",
+                fallback=False,
+                strategy=strategy_name,
+                metadata={"strategy": strategy_name, "desired_role": desired_role, "exploration": True},
+            )
+
+        # Exploitation based on success rate and latency penalty
+        now = time.time()
+        best_model = None
+        best_score = -1e9
+        best_meta = {}
+
+        for name in candidates:
+            state = router.get_state(name)
+            if state.cooldown_until > now:
+                continue
+
+            successes = state.successes
+            total = state.total_requests
+            success_rate = successes / total if total > 0 else 1.0
+
+            # Penalize by average latency
+            avg_latency = state.total_latency_ms / total if total > 0 else 0.0
+            latency_penalty = min(30.0, avg_latency / 175.0)
+
+            # Failure penalty
+            failure_penalty = min(60.0, float(state.failures * 6))
+
+            # Base score from profile match
+            profile = router.profiles.get(name)
+            base_score = 0.0
+            if profile:
+                if profile.role == desired_role:
+                    base_score += 50.0
+                elif desired_role == router.default_role and profile.role == router.default_role:
+                    base_score += 20.0
+
+            score = (success_rate * 100.0) - failure_penalty - latency_penalty + base_score
+            
+            if score > best_score:
+                best_score = score
+                best_model = name
+                best_meta = {
+                    "success_rate": success_rate,
+                    "failure_penalty": failure_penalty,
+                    "latency_penalty": latency_penalty,
+                    "base_score": base_score,
+                    "score": score,
+                }
+
+        if best_model is None:
+            # Fallback to the first non-cooldown candidate or any candidate
+            non_cooldown = [c for c in candidates if router.get_state(c).cooldown_until <= now]
+            best_model = random.choice(non_cooldown) if non_cooldown else random.choice(candidates)
+            best_score = -1.0
+            best_meta = {"fallback_choice": True}
+
+        best_state = router.get_state(best_model)
+        
+        return RouteDecision(
+            model=best_model,
+            role=best_state.role,
+            reason="bandit_exploitation",
+            fallback=False,
+            strategy=strategy_name,
+            metadata={"strategy": strategy_name, "desired_role": desired_role, **best_meta},
+        )
+

@@ -53,7 +53,106 @@ class MCPRegistry:
         self.trace_hook("qdrant_recall", result)
         return result
 
+    def get_tools_schema(self) -> list[dict]:
+        return [
+            {
+                "name": "filesystem",
+                "description": "Read, write, list, patch, or grep files in the local sandboxed workspace.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "operation": {
+                            "type": "string",
+                            "enum": ["read", "write", "patch", "list", "grep"],
+                            "description": "The filesystem operation to perform."
+                        },
+                        "path": {
+                            "type": "string",
+                            "description": "Relative path to file or directory within the workspace sandbox."
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": "Complete text content for 'write' operation."
+                        },
+                        "old": {
+                            "type": "string",
+                            "description": "The exact string segment to replace for 'patch' operation."
+                        },
+                        "new": {
+                            "type": "string",
+                            "description": "The new string replacement content for 'patch' operation."
+                        },
+                        "pattern": {
+                            "type": "string",
+                            "description": "Literal search pattern for 'grep' operation."
+                        },
+                        "recursive": {
+                            "type": "boolean",
+                            "description": "Whether to grep recursively."
+                        }
+                    },
+                    "required": ["operation", "path"]
+                }
+            },
+            {
+                "name": "playwright",
+                "description": "Execute browser automation using playwright.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": ["navigate", "click", "fill", "screenshot", "extract_text"],
+                            "description": "The browser action to take."
+                        },
+                        "url": {
+                            "type": "string",
+                            "description": "Target URL for navigate."
+                        },
+                        "selector": {
+                            "type": "string",
+                            "description": "CSS selector for click/fill operations."
+                        },
+                        "text": {
+                            "type": "string",
+                            "description": "Text to fill."
+                        }
+                    },
+                    "required": ["action"]
+                }
+            },
+            {
+                "name": "web_search",
+                "description": "Search the web for real-time information.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Search engine query."
+                        }
+                    },
+                    "required": ["query"]
+                }
+            },
+            {
+                "name": "context7",
+                "description": "Fetch project context information.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "scope": {
+                            "type": "string",
+                            "description": "Context retrieval scope."
+                        }
+                    },
+                    "required": ["scope"]
+                }
+            }
+        ]
+
 registry = MCPRegistry()
 
 async def call(tool: str, params: Dict[str, Any]) -> Dict[str, Any]:
     return await registry.call(tool, params)
+

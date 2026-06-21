@@ -431,6 +431,144 @@ class MemoryBridge:
             encoding="utf-8",
         )
 
+    async def get_memory_context(self, query: str) -> str:
+        """
+        Retrieves similar memories and applies keyword boosting (hybrid search).
+        """
+        try:
+            vec = await self._embed(query)
+            if vec is None:
+                return ""
+
+            async with self.lock_vector:
+                results = await asyncio.to_thread(
+                    self.vs.search,
+                    query_vector=vec,
+                    limit=5,
+                )
+
+            if not results:
+                return ""
+
+            # Keyword Boosting (lexical relevance)
+            query_words = set(query.lower().split())
+            boosted_results = []
+            for hit in results:
+                payload = hit.get("payload", {}) or {}
+                summary = payload.get("summary", "")
+                
+                # Check for exact matches of key task words
+                boost = 0.0
+                summary_words = set(summary.lower().split())
+                matching_words = query_words & summary_words
+                if matching_words:
+                    boost += len(matching_words) * 0.05
+                
+                # Boost if query mentions a specific outcome or model
+                outcome = payload.get("dominant_outcome", "").lower()
+                if outcome and outcome in query.lower():
+                    boost += 0.1
+                
+                score = hit.get("score", 0.0) + boost
+                boosted_results.append((score, hit))
+
+            # Re-sort by boosted score and limit to top 3
+            boosted_results.sort(key=lambda x: x[0], reverse=True)
+            top_hits = [item[1] for item in boosted_results[:3]]
+
+            context_parts = ["### Relevant historical context from swarm runs:"]
+            for hit in top_hits:
+                payload = hit.get("payload", {}) or {}
+                summary = payload.get("summary", "")
+                models = payload.get("models", [])
+                outcome = payload.get("dominant_outcome", "unknown")
+                if summary:
+                    context_parts.append(f"- Summary: {summary} (Models: {', '.join(models)}, Outcome: {outcome})")
+            
+            return "\n".join(context_parts) + "\n"
+        except Exception as e:
+            logger.warning("Failed to retrieve memory context: %s", e)
+            return ""
+
+    async def consolidate_memories(self) -> bool:
+        """
+        Periodically retrieve all memory nodes, summarize groups of related entries,
+        and upsert a unified consolidated summary while deleting the old individual entries.
+        """
+        try:
+            # Retrieve up to 100 entries from Qdrant
+            records, _ = await asyncio.to_thread(
+                self.vs.client.scroll,
+                collection_name=self.vs.collection_name,
+                limit=100,
+                with_payload=True,
+                with_vectors=False
+            )
+            if not records or len(records) < 3:
+                return False
+
+            # Group them by dominant_outcome
+            groups: dict[str, list[Any]] = {}
+            for r in records:
+                payload = r.payload or {}
+                if payload.get("consolidated"):
+                    continue
+                outcome = payload.get("dominant_outcome", "unknown")
+                groups.setdefault(outcome, []).append(r)
+
+            consolidated_any = False
+            for outcome, items in groups.items():
+                if len(items) < 2:
+                    continue
+
+                summaries = [it.payload.get("summary", "") for it in items if it.payload.get("summary")]
+                combined_text = " | ".join(summaries)
+                
+                prompt = f"Summarize these agent swarm run summaries into a single cohesive sentence summarizing the outcome '{outcome}':\n{combined_text}"
+                
+                try:
+                    response = await self.http.post(
+                        f"{OLLAMA}/api/generate",
+                        json={
+                            "model": SUM_MODEL,
+                            "prompt": prompt,
+                            "stream": False,
+                            "options": {"temperature": 0},
+                        },
+                    )
+                    response.raise_for_status()
+                    new_summary = (response.json().get("response") or "").strip()
+                except Exception:
+                    new_summary = f"Consolidated summary for {len(items)} runs with outcome {outcome}: " + ", ".join(summaries[:3])
+
+                vec = await self._embed(new_summary)
+                if vec is None:
+                    continue
+
+                payload = {
+                    "summary": new_summary,
+                    "dominant_outcome": outcome,
+                    "models": list(dict.fromkeys(sum([it.payload.get("models", []) for it in items], []))),
+                    "types": list(dict.fromkeys(sum([it.payload.get("types", []) for it in items], []))),
+                    "tasks": list(dict.fromkeys(sum([it.payload.get("tasks", []) for it in items], []))),
+                    "event_count": sum([it.payload.get("event_count", 0) for it in items]),
+                    "consolidated": True,
+                    "source": "memory_bridge_consolidator",
+                    "indexed_at": time.time(),
+                }
+
+                success = await self._store(vec, payload)
+                if success:
+                    for it in items:
+                        await asyncio.to_thread(self.vs.delete, doc_id=it.id)
+                    consolidated_any = True
+
+            return consolidated_any
+        except Exception as exc:
+            logger.warning("Memory consolidation failed: %s", exc)
+            return False
+
     async def close(self) -> None:
         self._save_state()
         await self.http.aclose()
+
