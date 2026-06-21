@@ -1,8 +1,9 @@
 from __future__ import annotations
 import re
-
 import logging
 import time
+import json
+import asyncio
 
 from ..config.settings import settings as swarm_settings
 from ..core.settings import get_settings
@@ -16,6 +17,7 @@ from swarm_os.services.control_plane.policy import PolicyEngine
 from swarm_os.services.control_plane.router import Router
 from swarm_os.services.control_plane.trace import TraceCollector
 from swarm_os.memory.memory_bridge import MemoryBridge
+from swarm_os.lib.mcp.registry import registry as mcp_registry
 
 log = logging.getLogger(__name__)
 
@@ -36,6 +38,7 @@ class Orchestrator:
         
         self.bridge = MemoryBridge()
         self.simulation = SimulationService(generate_fn=self.generate)
+        self.mcp = mcp_registry
 
         self.router = Router(
             profiles=[
@@ -93,10 +96,59 @@ class Orchestrator:
         except Exception:
             return ["qwen2.5:7b-instruct", "qwen2.5:3b-instruct"]
 
+    def _parse_tool_call(self, text: str) -> tuple[str, str] | None:
+        # Check Pattern A: <tool_call name="tool">params</tool_call>
+        match_a = re.search(r'<tool_call\s+name="([^"]+)">\s*(\{.*?\})\s*</tool_call>', text, re.DOTALL)
+        if match_a:
+            return match_a.group(1).strip(), match_a.group(2).strip()
+        # Check Pattern B: <tool>tool</tool> params
+        match_b = re.search(r'<tool>([^<]+)</tool>\s*(\{.*?\})', text, re.DOTALL)
+        if match_b:
+            return match_b.group(1).strip(), match_b.group(2).strip()
+        return None
+
+    async def _get_memory_context(self, query: str) -> str:
+        try:
+            vec = await self.bridge._embed(query)
+            if vec is not None:
+                async with self.bridge.lock_vector:
+                    results = await asyncio.to_thread(
+                        self.bridge.vs.search,
+                        query_vector=vec,
+                        limit=3,
+                    )
+                if results:
+                    context_parts = ["### Relevant historical context from swarm runs:"]
+                    for hit in results:
+                        payload = hit.get("payload", {}) or {}
+                        summary = payload.get("summary", "")
+                        models = payload.get("models", [])
+                        outcome = payload.get("dominant_outcome", "unknown")
+                        if summary:
+                            context_parts.append(f"- Summary: {summary} (Models: {', '.join(models)}, Outcome: {outcome})")
+                    return "\n".join(context_parts) + "\n"
+        except Exception as e:
+            log.warning("Failed to retrieve memory context: %s", e)
+        return ""
+
     async def generate(self, model: str | None, messages: list[dict] | None = None, prompt: str | None = None) -> tuple[str, str]:
         messages = list(messages or [])
+        # Context Injection
         if prompt:
-            messages.append({"role": "user", "content": prompt})
+            mem_context = await self._get_memory_context(prompt)
+            if mem_context:
+                full_prompt = f"{mem_context}\n### Current Task:\n{prompt}"
+            else:
+                full_prompt = prompt
+            messages.append({"role": "user", "content": full_prompt})
+        elif messages:
+            for msg in reversed(messages):
+                if msg.get("role") == "user":
+                    content = msg.get("content", "")
+                    mem_context = await self._get_memory_context(content)
+                    if mem_context:
+                        msg["content"] = f"{mem_context}\n### Current Task:\n{content}"
+                    break
             
         if not messages:
             raise ValueError("Either messages or prompt must be provided")
@@ -137,35 +189,81 @@ class Orchestrator:
             },
         )
 
-        try:
-            result = await self.ollama.generate(model=chosen_model, messages=messages)
-            duration_ms = (time.time() * 1000.0) - start_ms
+        max_steps = 5
+        final_result = ""
+        for step in range(max_steps):
+            try:
+                print(f"[Orchestrator] generate() Turn {step + 1}/{max_steps} starting with model={chosen_model}", flush=True)
+                result = await self.ollama.generate(model=chosen_model, messages=messages)
+                print(f"[Orchestrator] generate() Turn result: {result!r}", flush=True)
+                
+                tool_info = self._parse_tool_call(result)
+                if tool_info:
+                    tool_name, params_str = tool_info
+                    print(f"[Orchestrator] Intercepted tool call in generate(): {tool_name} with params: {params_str}", flush=True)
+                    try:
+                        params = json.loads(params_str)
+                    except Exception as e:
+                        params = {}
+                        print(f"[Orchestrator] Failed to parse tool params JSON: {e}", flush=True)
+                    
+                    # Execute tool
+                    print(f"[Orchestrator] Executing tool {tool_name}...", flush=True)
+                    observation = await self.mcp.call(tool_name, params)
+                    print(f"[Orchestrator] Tool execution result: {observation}", flush=True)
+                    
+                    # Inject back into history
+                    messages.append({"role": "assistant", "content": result})
+                    messages.append({"role": "tool", "content": f"Observation: {json.dumps(observation)}"})
+                    continue
+                else:
+                    final_result = result
+                    print(f"[Orchestrator] Final result received in generate(). Exiting loop.", flush=True)
+                    break
+            except Exception as exc:
+                self.router.record_failure(model=chosen_model, cooldown_seconds=60.0)
+                log.exception("Generation failed")
+                raise
 
-            self.trace.add(
-                trace_id=trace_id,
-                step_id="generate",
-                phase="generator",
-                actor="orchestrator",
-                action="generate",
-                status="completed",
-                duration_ms=duration_ms,
-                model=chosen_model,
-                summary="Generation completed"
-            )
+        duration_ms = (time.time() * 1000.0) - start_ms
+        self.trace.add(
+            trace_id=trace_id,
+            step_id="generate",
+            phase="generator",
+            actor="orchestrator",
+            action="generate",
+            status="completed",
+            duration_ms=duration_ms,
+            model=chosen_model,
+            summary="Generation completed"
+        )
 
-            return result, chosen_model
-
-        except Exception as exc:
-            self.router.record_failure(model=chosen_model, cooldown_seconds=60.0)
-            log.exception("Generation failed")
-            raise
+        return final_result, chosen_model
 
     async def stream_generate(self, model: str | None, messages: list[dict] | None = None, prompt: str | None = None):
+        log.info("[Orchestrator] Entering stream_generate. model=%s, prompt=%s, messages=%s", model, prompt, messages)
+        print(f"[Orchestrator] Entering stream_generate. model={model}, prompt={prompt}", flush=True)
         messages = list(messages or [])
+        
+        # Context Injection
         if prompt:
-            messages.append({"role": "user", "content": prompt})
+            mem_context = await self._get_memory_context(prompt)
+            if mem_context:
+                full_prompt = f"{mem_context}\n### Current Task:\n{prompt}"
+            else:
+                full_prompt = prompt
+            messages.append({"role": "user", "content": full_prompt})
+        elif messages:
+            for msg in reversed(messages):
+                if msg.get("role") == "user":
+                    content = msg.get("content", "")
+                    mem_context = await self._get_memory_context(content)
+                    if mem_context:
+                        msg["content"] = f"{mem_context}\n### Current Task:\n{content}"
+                    break
 
         if not messages:
+            log.warning("[Orchestrator] No input messages provided for stream_generate")
             yield f"\n[Error: No input provided]", "none", "none"
             return
 
@@ -188,26 +286,64 @@ class Orchestrator:
 
         chosen_model = route_decision.model or "qwen2.5:7b-instruct"
 
-        try:
-            async for chunk in self.ollama.stream_generate(model=chosen_model, messages=messages):
-                yield chunk, chosen_model, trace_id
-            
-            duration_ms = (time.time() * 1000.0) - start_ms
-            self.trace.add(
-                trace_id=trace_id,
-                step_id="generate_stream",
-                phase="generator",
-                actor="orchestrator",
-                action="generate",
-                status="completed",
-                duration_ms=duration_ms,
-                model=chosen_model,
-                summary="Stream completed"
-            )
+        log.info("[Orchestrator] Routing decision: %s. Starting Ollama stream...", chosen_model)
+        
+        max_steps = 5
+        for step in range(max_steps):
+            print(f"[Orchestrator] stream_generate() Turn {step + 1}/{max_steps} starting with model={chosen_model}", flush=True)
+            accumulated_text = ""
+            print(f"[Orchestrator] OllamaClient beginning stream for model={chosen_model}", flush=True)
+            try:
+                async for chunk in self.ollama.stream_generate(model=chosen_model, messages=messages):
+                    accumulated_text += chunk
+                    log.info("[Orchestrator] Received chunk: %r", chunk)
+                    print(f"[Orchestrator] Received chunk from Ollama: {chunk!r}", flush=True)
+                    yield chunk, chosen_model, trace_id
+                
+                tool_info = self._parse_tool_call(accumulated_text)
+                if tool_info:
+                    tool_name, params_str = tool_info
+                    print(f"[Orchestrator] Intercepted tool call in stream_generate(): {tool_name} with params: {params_str}", flush=True)
+                    try:
+                        params = json.loads(params_str)
+                    except Exception as e:
+                        params = {}
+                        print(f"[Orchestrator] Failed to parse tool params JSON: {e}", flush=True)
+                    
+                    # Execute tool
+                    print(f"[Orchestrator] Executing tool {tool_name}...", flush=True)
+                    observation = await self.mcp.call(tool_name, params)
+                    print(f"[Orchestrator] Tool execution result: {observation}", flush=True)
+                    
+                    # Yield observation back to the stream so the client receives it
+                    obs_text = f"\n[Observation: {json.dumps(observation)}]\n"
+                    yield obs_text, chosen_model, trace_id
+                    
+                    # Inject back into history
+                    messages.append({"role": "assistant", "content": accumulated_text})
+                    messages.append({"role": "tool", "content": f"Observation: {json.dumps(observation)}"})
+                    continue
+                else:
+                    print(f"[Orchestrator] Final stream result received. Exiting loop.", flush=True)
+                    break
+            except Exception as exc:
+                log.exception("[Orchestrator] Streaming failed with error")
+                yield f"\n[Stream Error: {exc}]", chosen_model, trace_id
+                break
 
-        except Exception as exc:
-            log.exception("Streaming failed")
-            yield f"\n[Stream Error: {exc}]", chosen_model, trace_id
+        duration_ms = (time.time() * 1000.0) - start_ms
+        log.info("[Orchestrator] Stream completed successfully. Duration: %.2f ms", duration_ms)
+        self.trace.add(
+            trace_id=trace_id,
+            step_id="generate_stream",
+            phase="generator",
+            actor="orchestrator",
+            action="generate",
+            status="completed",
+            duration_ms=duration_ms,
+            model=chosen_model,
+            summary="Stream completed"
+        )
 
     async def evolve(self) -> None:
         pass
