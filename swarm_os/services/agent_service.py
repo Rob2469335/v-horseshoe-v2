@@ -217,7 +217,7 @@ class AgentService:
             if proposed_msg.get("role") == "assistant":
                 proposed_content = proposed_msg.get("content", "")
                 match = re.search(
-                    r'<tool_call name="([^"]+)">\s*(\{.*?\})\s*</tool_call>',
+                    r'<tool_call name="([^"]+)">\s*(\{.*?\})\s*(?:</tool_call>|$)',
                     proposed_content,
                     re.DOTALL,
                 )
@@ -556,7 +556,7 @@ class AgentService:
 
             # Turn-level duplicate or near-identical narrative check
             clean_content = re.sub(r'<plan>.*?</plan>', '', full_chunk_content, flags=re.DOTALL)
-            clean_content = re.sub(r'<tool_call[^>]*>.*?</tool_call>', '', clean_content, flags=re.DOTALL)
+            clean_content = re.sub(r'<tool_call[^>]*>.*?(?:</tool_call>|$)', '', clean_content, flags=re.DOTALL)
             clean_content = clean_content.strip()
             
             is_duplicate = False
@@ -586,7 +586,7 @@ class AgentService:
             previous_outputs.append(clean_content)
 
             match = re.search(
-                r'<tool_call name="([^"]+)">\s*(\{.*?\})\s*</tool_call>',
+                r'<tool_call name="([^"]+)">\s*(\{.*?\})\s*(?:</tool_call>|$)',
                 full_chunk_content,
                 re.DOTALL,
             )

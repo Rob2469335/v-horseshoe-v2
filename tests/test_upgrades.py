@@ -191,3 +191,21 @@ async def test_memory_consolidation():
     consolidated_run = [r for r in info if r.payload.get("consolidated")][0]
     assert consolidated_run.payload["summary"] == "Unified task runs successfully completed."
     assert consolidated_run.payload["event_count"] == 9
+
+
+def test_relaxed_tool_call_regex():
+    from swarm_os.core.orchestrator import Orchestrator
+    orchestrator = Orchestrator()
+    
+    # Complete tag
+    text_complete = '<tool_call name="filesystem">{"operation": "read", "path": "abc.txt"}</tool_call>'
+    tool_complete, payload_complete = orchestrator._parse_tool_call(text_complete)
+    assert tool_complete == "filesystem"
+    assert "abc.txt" in payload_complete
+
+    # Missing tag (end of string)
+    text_missing = '<tool_call name="web_search">{"query": "modern style guide"}'
+    tool_missing, payload_missing = orchestrator._parse_tool_call(text_missing)
+    assert tool_missing == "web_search"
+    assert "modern style guide" in payload_missing
+

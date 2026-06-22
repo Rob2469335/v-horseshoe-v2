@@ -72,12 +72,21 @@ class VectorStore:
         filter_condition: Optional[models.Filter] = None
     ) -> List[Dict[str, Any]]:
         """Search for similar vectors."""
-        results = self.client.search(
-            collection_name=self.collection_name,
-            query_vector=query_vector,
-            limit=limit,
-            query_filter=filter_condition
-        )
+        if hasattr(self.client, "query_points"):
+            response = self.client.query_points(
+                collection_name=self.collection_name,
+                query=query_vector,
+                limit=limit,
+                query_filter=filter_condition
+            )
+            results = response.points
+        else:
+            results = self.client.search(
+                collection_name=self.collection_name,
+                query_vector=query_vector,
+                limit=limit,
+                query_filter=filter_condition
+            )
 
         return [
             {
@@ -87,6 +96,7 @@ class VectorStore:
             }
             for result in results
         ]
+
 
     def get(self, doc_id: str) -> Optional[Dict[str, Any]]:
         """Retrieve a document by ID."""
