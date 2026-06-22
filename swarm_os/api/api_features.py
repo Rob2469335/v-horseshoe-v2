@@ -44,9 +44,106 @@ async def semantic_search(req: QueryRequest):
 async def chat_search_status():
     return {"status": "stub", "message": "chat_search handler not yet implemented"}
 
+@router.post("/chat-search")
+async def chat_search_stream(req: QueryRequest, request: Request):
+    import json
+    from fastapi.responses import StreamingResponse
+    from .routes import get_orchestrator
+    from ..capabilities.chat_search import ChatSearchHandler
+    from ..capabilities.models import ChatSearchRequest
+    
+    try:
+        handler = ChatSearchHandler()
+        search_req = ChatSearchRequest(query=req.query, max_results=10)
+        search_res = await handler.execute(search_req)
+        results = search_res.results
+    except Exception as e:
+        log.exception("ChatSearchHandler execution failed")
+        results = []
+
+    context_lines = []
+    for r in results:
+        context_lines.append(f"[{r.timestamp}] {r.sender}: {r.message}")
+    context = "\n".join(context_lines)
+
+    prompt = (
+        "You are Librarian, a specialized Swarm OS search agent. Your job is to answer the user's question "
+        "using the retrieved event logs from the system database. "
+        "If the logs don't contain the answer, use your own knowledge about Swarm OS, but prefer the logs if they are relevant.\n\n"
+        f"Retrieved Event Logs:\n{context}\n\n"
+        f"User Question: {req.query}\n\n"
+        "Provide a helpful, precise, and concise explanation."
+    )
+
+    orch = get_orchestrator(request)
+    
+    async def sse_generator():
+        try:
+            async for chunk, _, _ in orch.stream_generate(model=None, prompt=prompt):
+                if chunk:
+                    clean_chunk = chunk.replace("Assistant: <tool>", "").strip()
+                    if clean_chunk:
+                        yield f"data: {json.dumps({'content': clean_chunk})}\n\n"
+        except Exception as e:
+            log.exception("stream_generate failed in chat-search")
+            yield f"data: {json.dumps({'content': f'[Error: {e}]'})}\n\n"
+            
+    return StreamingResponse(sse_generator(), media_type="text/event-stream")
+
 @router.get("/upwork")
 async def upwork_status():
     return {"status": "stub", "message": "upwork_analyzer handler not yet implemented"}
+
+@router.post("/upwork")
+async def upwork_stream(req: QueryRequest, request: Request):
+    import json
+    from fastapi.responses import StreamingResponse
+    from .routes import get_orchestrator
+    from ..capabilities.upwork_analyzer import UpworkAnalyzerHandler
+    from ..capabilities.models import UpworkAnalysisRequest
+    
+    try:
+        handler = UpworkAnalyzerHandler()
+        analysis_req = UpworkAnalysisRequest(job_description=req.query)
+        res = await handler.analyze_job(analysis_req)
+        
+        context = (
+            f"Job Analysis Result:\n"
+            f"- Primary Domain: {res.primary_domain}\n"
+            f"- Match Score: {res.match_score}\n"
+            f"- Fit Metrics: {res.fit_metrics}\n"
+            f"- Should Bid: {res.should_bid}\n"
+        )
+        if res.recommended_bid:
+            context += f"- Recommended Bid Rate: {res.recommended_bid.projected_rate}\n"
+    except Exception as e:
+        log.exception("UpworkAnalyzerHandler execution failed")
+        context = "No pre-computed analysis available."
+
+    prompt = (
+        "You are Scout, a specialized Swarm OS Upwork bidding agent. "
+        "Your task is to analyze the job description, review the computed match metrics, "
+        "and draft a compelling bid pitch and strategy for the job posting.\n\n"
+        f"Job Description: {req.query}\n\n"
+        f"Computed Analysis Metrics:\n{context}\n\n"
+        "Draft a professional bid proposal strategy, recommending why we should (or should not) bid, "
+        "the reasoning behind the bid rate, and 2-3 cover letter bullet highlights."
+    )
+
+    orch = get_orchestrator(request)
+    
+    async def sse_generator():
+        try:
+            async for chunk, _, _ in orch.stream_generate(model=None, prompt=prompt):
+                if chunk:
+                    clean_chunk = chunk.replace("Assistant: <tool>", "").strip()
+                    if clean_chunk:
+                        yield f"data: {json.dumps({'content': clean_chunk})}\n\n"
+        except Exception as e:
+            log.exception("stream_generate failed in upwork")
+            yield f"data: {json.dumps({'content': f'[Error: {e}]'})}\n\n"
+            
+    return StreamingResponse(sse_generator(), media_type="text/event-stream")
 
 @router.get("/vscode")
 async def vscode_status():
