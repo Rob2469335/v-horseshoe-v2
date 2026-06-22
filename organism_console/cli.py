@@ -176,6 +176,7 @@ def status_bar(agent, model, phase, ram_pct):
     return (
         f"[bold blue]topic[/bold blue]:[bright_white]{escape(ctx.current_topic)}[/bright_white] | "
         f"[bold blue]agent[/bold blue]:[cyan]{agent}[/cyan] | "
+        f"[bold blue]model[/bold blue]:[green]{model}[/green] | "
         f"[bold blue]phase[/bold blue]:[{pc}]{phase}[/{pc}] | "
         f"[bold blue]ram[/bold blue]:[{stats['ram_color']}]{ram_pct:.0f}%[/{stats['ram_color']}]"
     )
@@ -379,7 +380,11 @@ def stream_prompt(agent_id, prompt, history):
                     return stream_prompt(agent_id, "", new_history)
 
                 piece = chunk.get("content", "") or chunk.get("thinking", "")
-                model = chunk.get("model", model)
+                new_model = chunk.get("model")
+                if new_model and new_model != model:
+                    model = new_model
+                    ctx.active_model = model
+                    ctx.save()
                 full_content += piece
 
                 # Deduce execution phase
