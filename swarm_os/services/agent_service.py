@@ -269,7 +269,8 @@ class AgentService:
                         "model": current_model,
                         "messages": messages,
                         "stream": True,
-                        "temperature": temperature
+                        "temperature": temperature,
+                        "max_tokens": 1500
                     }
                 elif current_provider == "nvidia":
                     api_key = _os.environ.get("NVIDIA_API_KEY", "").strip()
@@ -283,7 +284,8 @@ class AgentService:
                         "model": current_model,
                         "messages": messages,
                         "stream": True,
-                        "temperature": temperature
+                        "temperature": temperature,
+                        "max_tokens": 1500
                     }
                 elif current_provider == "gemini":
                     api_key = _os.environ.get("GEMINI_API_KEY", "").strip()
@@ -297,7 +299,8 @@ class AgentService:
                         "model": current_model,
                         "messages": messages,
                         "stream": True,
-                        "temperature": temperature
+                        "temperature": temperature,
+                        "max_tokens": 1500
                     }
                 else:
                     url = "http://127.0.0.1:11434/api/chat"
@@ -307,7 +310,7 @@ class AgentService:
                         "messages": messages,
                         "stream": True,
                         "keep_alive": 0,
-                        "options": {"temperature": temperature},
+                        "options": {"temperature": temperature, "num_predict": 1500},
                     }
 
                 try:
@@ -350,6 +353,19 @@ class AgentService:
                                         "content": piece,
                                         "model": current_model,
                                     }
+                                    
+                                    # Stream repetition checker: halts loops within a single streaming response
+                                    if len(full_chunk_content) > 120:
+                                        has_rep = False
+                                        for length in range(30, min(100, len(full_chunk_content) // 3)):
+                                            suffix = full_chunk_content[-length:]
+                                            if (full_chunk_content[-2*length:-length] == suffix and 
+                                                full_chunk_content[-3*length:-2*length] == suffix):
+                                                has_rep = True
+                                                break
+                                        if has_rep:
+                                            logger.warning(f"Detected repetition loop in LLM stream for model {current_model}. Halting stream.")
+                                            break
                     success = True
                 except Exception as exc:
                     logger.warning(f"Request failed using provider {current_provider} with model {current_model}: {exc}")

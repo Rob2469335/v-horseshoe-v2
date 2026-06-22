@@ -279,13 +279,14 @@ def test_g_syntax_check_fail_fast():
     mock_git_diff.returncode = 0
     mock_git_diff.stdout = "modified_file.py\n"
     
-    import py_compile
-    # Mock compile to raise PyCompileError
-    mock_compile = MagicMock(side_effect=py_compile.PyCompileError(SyntaxError, SyntaxError("invalid syntax"), "modified_file.py", "invalid syntax"))
+    import ast
+    exc = SyntaxError("invalid syntax")
+    exc.lineno = 1
     
     with patch("subprocess.run", return_value=mock_git_diff), \
          patch("pathlib.Path.exists", return_value=True), \
-         patch("py_compile.compile", mock_compile):
+         patch("pathlib.Path.read_text", return_value="dummy_content"), \
+         patch("ast.parse", side_effect=exc):
         passed, msg = run_syntax_checks()
         assert passed is False
         assert "invalid syntax" in msg
@@ -328,4 +329,97 @@ def test_h_debug_command_auto_repair():
         args, kwargs = mock_ctx.run_goal_loop.call_args
         assert "Fix the crash/failure" in args[0]
         assert "non_existent" in args[0]
+
+@pytest.mark.asyncio
+async def test_i_stream_repetition_loop_detection(mock_agent_service):
+    """
+    Test I: stream repetition loop detection
+    Assert: stream is halted early if identical blocks repeat consecutively.
+    """
+    pattern = "1234567890123456789012345678901234567890"  # 40 chars
+    lines = [
+        json.dumps({"message": {"content": "a" * 50}}),
+        json.dumps({"message": {"content": pattern}}),
+        json.dumps({"message": {"content": pattern}}),
+        json.dumps({"message": {"content": pattern}}),
+        json.dumps({"message": {"content": "this should not be yielded!"}}),
+        json.dumps({"done": True})
+    ]
+    
+    with patch("httpx.AsyncClient.stream", return_value=MockResponse(lines)):
+        chunks = []
+        async for chunk in mock_agent_service.step_agent_stream(
+            agent_id="coordinator",
+            prompt="Test repetition",
+            history=[]
+        ):
+            chunks.append(chunk)
+            
+        # Verify that we got chunks but halted before the fifth chunk
+        contents = [c.get("content", "") for c in chunks if "content" in c]
+        # Should not contain "this should not be yielded!" anywhere
+        assert not any("this should not be yielded!" in c for c in contents)
+        assert len(contents) == 5
+
+def test_j_debug_command_syntax_error_warning():
+    """
+    Test J: debug command displays syntax error warning panel on failure if syntax errors are present.
+    """
+    from organism_console.command_registry import cmd_debug
+    
+    mock_ctx = MagicMock()
+    mock_ctx.console = MagicMock()
+    mock_ctx.run_goal_loop = MagicMock()
+    mock_ctx.state = MagicMock()
+    mock_ctx.state.active_model = "test-model"
+    
+    # Mock subprocess.run to:
+    # 1. Simulate crash for command execution (exit_code = 1)
+    # 2. Simulate git diff --name-only to return a modified file
+    mock_res_cmd = MagicMock()
+    mock_res_cmd.returncode = 1
+    mock_res_cmd.stdout = ""
+    mock_res_cmd.stderr = "Traceback..."
+    
+    mock_res_git = MagicMock()
+    mock_res_git.returncode = 0
+    mock_res_git.stdout = "broken_file.py\n"
+    
+    def side_effect(cmd, *args, **kwargs):
+        if cmd[0] == "git" and cmd[1] == "diff":
+            return mock_res_git
+        return mock_res_cmd
+
+    # Mock call_api to return diagnostic
+    mock_api_resp = MagicMock()
+    mock_api_resp.status_code = 200
+    mock_api_resp.json.return_value = {"response": "AI Diagnostic Guide"}
+    mock_ctx.call_api.return_value = mock_api_resp
+    
+    import ast
+    exc = SyntaxError("invalid syntax")
+    exc.lineno = 2
+    
+    with patch("subprocess.run", side_effect=side_effect), \
+         patch("pathlib.Path.exists", return_value=True), \
+         patch("pathlib.Path.read_text", return_value="def broken_fn():\n  pass\n  invalid syntax"), \
+         patch("ast.parse", side_effect=exc), \
+         patch("rich.prompt.Confirm.ask", return_value=False):
+         
+        cmd_debug(mock_ctx, ["python", "broken_file.py"])
+        
+        # Verify console printed the syntax error panel
+        # Let's check calls to console.print
+        print_calls = [call[0][0] if call[0] else "" for call in mock_ctx.console.print.call_args_list]
+        
+        # We expect a Panel with title starting with "⚠️  SYNTAX ERROR DETECTED IN MODIFIED FILES" or similar
+        panel_found = False
+        from rich.panel import Panel
+        for call_arg in print_calls:
+            if isinstance(call_arg, Panel):
+                title = call_arg.title
+                if title and "SYNTAX ERROR DETECTED IN MODIFIED FILES" in str(title):
+                    panel_found = True
+                    break
+        assert panel_found is True
 

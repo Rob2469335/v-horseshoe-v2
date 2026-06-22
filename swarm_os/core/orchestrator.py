@@ -118,9 +118,9 @@ class Orchestrator:
         if prompt:
             mem_context = await self._get_memory_context(prompt)
             if mem_context:
-                full_prompt = f"{mem_context}\n### Current Task:\n{prompt}"
+                full_prompt = f"{mem_context}\n### Current Task:\n{prompt}\n\nAssistant: <tool>"
             else:
-                full_prompt = prompt
+                full_prompt = f"{prompt}\n\nAssistant: <tool>"
             messages.append({"role": "user", "content": full_prompt})
         elif messages:
             for msg in reversed(messages):
@@ -139,7 +139,7 @@ class Orchestrator:
         schemas_str = json.dumps(schemas, indent=2)
         tools_instruction = (
             "\n### Available MCP Tools:\n"
-            "You have access to the following tools. To call a tool, generate one of the following formats:\n"
+            "You have access to the following tools. STOP YAPPING AND START ACTING. You MUST use the exact XML tags below to execute a tool. Do not just write out your plan. To call a tool, generate one of the following formats:\n"
             '<tool_call name="tool_name">{"arg": "val"}</tool_call>\n'
             '<tool>tool_name</tool> {"arg": "val"}\n\n'
             f"Tool Schemas:\n{schemas_str}\n"
@@ -224,7 +224,7 @@ class Orchestrator:
                     if not critic_res.accepted:
                         print(f"[Orchestrator] Critic rejected tool execution: {critic_res.reason}", flush=True)
                         messages.append({"role": "assistant", "content": result})
-                        messages.append({"role": "tool", "content": f"Observation: {json.dumps(observation)}"})
+                        messages.append({"role": "user", "content": f"TOOL OBSERVATION:\n{json.dumps(observation)}\n\nPlease proceed based on this observation."})
                         messages.append({
                             "role": "user",
                             "content": f"Critic Feedback: The tool execution returned an error or was rejected: {critic_res.reason}. Please correct the parameters and call the tool again."
@@ -233,7 +233,7 @@ class Orchestrator:
 
                     # Inject back into history
                     messages.append({"role": "assistant", "content": result})
-                    messages.append({"role": "tool", "content": f"Observation: {json.dumps(observation)}"})
+                    messages.append({"role": "user", "content": f"TOOL OBSERVATION:\n{json.dumps(observation)}\n\nPlease proceed based on this observation."})
                     continue
                 else:
                     final_result = result
@@ -269,9 +269,9 @@ class Orchestrator:
         if prompt:
             mem_context = await self._get_memory_context(prompt)
             if mem_context:
-                full_prompt = f"{mem_context}\n### Current Task:\n{prompt}"
+                full_prompt = f"{mem_context}\n### Current Task:\n{prompt}\n\nAssistant: <tool>"
             else:
-                full_prompt = prompt
+                full_prompt = f"{prompt}\n\nAssistant: <tool>"
             messages.append({"role": "user", "content": full_prompt})
         elif messages:
             for msg in reversed(messages):
@@ -292,7 +292,7 @@ class Orchestrator:
         schemas_str = json.dumps(schemas, indent=2)
         tools_instruction = (
             "\n### Available MCP Tools:\n"
-            "You have access to the following tools. To call a tool, generate one of the following formats:\n"
+            "You have access to the following tools. STOP YAPPING AND START ACTING. You MUST use the exact XML tags below to execute a tool. Do not just write out your plan. To call a tool, generate one of the following formats:\n"
             '<tool_call name="tool_name">{"arg": "val"}</tool_call>\n'
             '<tool>tool_name</tool> {"arg": "val"}\n\n'
             f"Tool Schemas:\n{schemas_str}\n"
@@ -370,7 +370,7 @@ class Orchestrator:
                         yield obs_text, chosen_model, trace_id
                         
                         messages.append({"role": "assistant", "content": accumulated_text})
-                        messages.append({"role": "tool", "content": f"Observation: {json.dumps(observation)}"})
+                        messages.append({"role": "user", "content": f"TOOL OBSERVATION:\n{json.dumps(observation)}\n\nPlease proceed based on this observation."})
                         messages.append({
                             "role": "user",
                             "content": f"Critic Feedback: The tool execution returned an error or was rejected: {critic_res.reason}. Please correct the parameters and call the tool again."
@@ -383,7 +383,7 @@ class Orchestrator:
                     
                     # Inject back into history
                     messages.append({"role": "assistant", "content": accumulated_text})
-                    messages.append({"role": "tool", "content": f"Observation: {json.dumps(observation)}"})
+                    messages.append({"role": "user", "content": f"TOOL OBSERVATION:\n{json.dumps(observation)}\n\nPlease proceed based on this observation."})
                     continue
                 else:
                     print(f"[Orchestrator] Final stream result received. Exiting loop.", flush=True)
@@ -421,4 +421,7 @@ class Orchestrator:
 
 def build_orchestrator(settings=None, event_store=None):
     return Orchestrator()
+
+
+
 

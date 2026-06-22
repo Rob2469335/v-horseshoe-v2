@@ -9,6 +9,14 @@ import subprocess
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Callable
 
+# Force UTF-8 encoding on standard I/O streams for Unicode stability (e.g. redirected pipes)
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 import requests
 import psutil
 from rich.console import Console
@@ -234,11 +242,11 @@ def stream_prompt(agent_id, prompt, history):
                             {"requested_role": requested_role, "delegation_path": " -> ".join(ctx.delegation_chain)},
                             "cyan"
                         )
-                        ctx.console.print(panel)
+                        # TEMP disabled during Rich Live test ctx.console.print(panel)
                         live.start()
                     else:
                         live.stop()
-                        ctx.console.print(render_step_micro_ui("planning", f"Formulating plan for role: {requested_role}"))
+                        # TEMP disabled during Rich Live test ctx.console.print(render_step_micro_ui("planning", f"Formulating plan for role: {requested_role}"))
                         live.start()
                     continue
 
@@ -259,11 +267,11 @@ def stream_prompt(agent_id, prompt, history):
                             },
                             "green"
                         )
-                        ctx.console.print(panel)
+                        # TEMP disabled during Rich Live test ctx.console.print(panel)
                         live.start()
                     else:
                         live.stop()
-                        ctx.console.print(render_step_micro_ui("model_selected", f"selected {model}"))
+                        # TEMP disabled during Rich Live test ctx.console.print(render_step_micro_ui("model_selected", f"selected {model}"))
                         live.start()
                     continue
 
@@ -277,11 +285,11 @@ def stream_prompt(agent_id, prompt, history):
                             {"from_model": from_model, "escalated_reason": reason, "status": "switching to secondary/cloud"},
                             "red"
                         )
-                        ctx.console.print(panel)
+                        # TEMP disabled during Rich Live test ctx.console.print(panel)
                         live.start()
                     else:
                         live.stop()
-                        ctx.console.print(render_step_micro_ui("escalation", f"Escalated from {from_model} due to error: {reason}"))
+                        # TEMP disabled during Rich Live test ctx.console.print(render_step_micro_ui("escalation", f"Escalated from {from_model} due to error: {reason}"))
                         live.start()
                     continue
 
@@ -291,7 +299,7 @@ def stream_prompt(agent_id, prompt, history):
                     to_a = chunk.get("to", "executor")
                     task = str(chunk.get("task", ""))[:80]
                     handoffs_list.append({"from": from_a, "to": to_a, "task": task})
-                    ctx.console.print(render_step_micro_ui("swarm", f"{from_a} → {to_a}: {task}"))
+                    # TEMP disabled during Rich Live test ctx.console.print(render_step_micro_ui("swarm", f"{from_a} → {to_a}: {task}"))
                     live.start()
                     continue
 
@@ -304,22 +312,22 @@ def stream_prompt(agent_id, prompt, history):
                             {"tool": tool, "executing_model": chunk.get("model", "unknown")},
                             "yellow"
                         )
-                        ctx.console.print(panel)
+                        # TEMP disabled during Rich Live test ctx.console.print(panel)
                         live.start()
                     else:
                         live.stop()
-                        ctx.console.print(render_step_micro_ui("tool_call", f"executing tool {tool}"))
+                        # TEMP disabled during Rich Live test ctx.console.print(render_step_micro_ui("tool_call", f"executing tool {tool}"))
                         live.start()
                     continue
 
                 if chunk_type == "final":
                     live.stop()
                     final_content = chunk.get("content", "")
-                    ctx.console.print()
+                    # TEMP disabled during Rich Live test ctx.console.print()
                     if isinstance(final_content, dict):
-                        ctx.console.print(Panel(json.dumps(final_content, indent=2), border_style="green"))
+                        pass
                     elif final_content:
-                        ctx.console.print(Panel(str(final_content), border_style="green"))
+                        pass
                     
                     new_history = list(history)
                     new_history.append({"role": "user", "content": prompt})
@@ -335,22 +343,22 @@ def stream_prompt(agent_id, prompt, history):
                     options = params.get("options", [])
 
                     live.stop()
-                    ctx.console.print()
+                    # TEMP disabled during Rich Live test ctx.console.print()
 
                     if "APPROVAL REQUIRED" in question:
-                        ctx.console.print(Panel(
-                            Markdown(question),
-                            title="🛡️  [bold yellow]Security Gate - Action Approval[/bold yellow]",
-                            border_style="yellow",
-                            padding=(1, 2)
-                        ))
+                        pass
+                            # TEMP disabled during Rich Live test Markdown(question),
+                            # TEMP disabled during Rich Live test title="🛡️  [bold yellow]Security Gate - Action Approval[/bold yellow]",
+                            # TEMP disabled during Rich Live test border_style="yellow",
+                            # TEMP disabled during Rich Live test padding=(1, 2)
+                        # TEMP disabled during Rich Live test ))
                     else:
-                        ctx.console.print(Panel(
-                            Markdown(question),
-                            title="❓  [bold cyan]Agent Request[/bold cyan]",
-                            border_style="cyan",
-                            padding=(0, 1)
-                        ))
+                        pass
+                            # TEMP disabled during Rich Live test Markdown(question),
+                            # TEMP disabled during Rich Live test title="❓  [bold cyan]Agent Request[/bold cyan]",
+                            # TEMP disabled during Rich Live test border_style="cyan",
+                            # TEMP disabled during Rich Live test padding=(0, 1)
+                        # TEMP disabled during Rich Live test ))
 
                     if options:
                         from rich.prompt import Prompt
@@ -449,7 +457,7 @@ def stream_prompt(agent_id, prompt, history):
                             curr_node = curr_node.add(f"[cyan]✓ {agent}[/cyan]{task_desc}")
                     layout.add_row(Panel(tree_obj, border_style="magenta dim", title="[bold magenta]Live Handoff Trace[/bold magenta]"))
 
-                live.update(layout)
+                live.update(layout, refresh=True)
 
         except Exception as e:
             log.exception("Streaming exception")
@@ -873,3 +881,4 @@ def cmd_tokens_display(ctx: CommandContext, args: List[str]) -> None:
 
 if __name__ == "__main__":
     sys.exit(main())
+
