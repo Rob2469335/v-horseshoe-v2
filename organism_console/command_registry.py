@@ -285,6 +285,21 @@ def cmd_model(ctx: CommandContext, args: List[str]) -> None:
     ctx.console.print(f"[green]✓ Active model set to[/green] [bold green]{model_name}[/bold green]")
 
 
+@registry.register("speak", "Speak text aloud. Usage: /speak <text>")
+def cmd_speak(ctx: CommandContext, args: List[str]) -> None:
+    if not args:
+        ctx.console.print("[yellow]Error: Specify the text to speak. Example: `/speak hello world`[/yellow]")
+        return
+
+    text = " ".join(args)
+    ctx.console.print(f"[dim]Vocalizing: {text}[/dim]")
+    try:
+        from organism_console.speech import speak_async
+        speak_async(text)
+    except Exception as e:
+        ctx.console.print(f"[red]Error synthesizing speech: {e}[/red]")
+
+
 @registry.register("agent", "Switch the active agent. Usage: /agent <name>")
 def cmd_agent(ctx: CommandContext, args: List[str]) -> None:
     if not args:

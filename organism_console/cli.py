@@ -329,6 +329,12 @@ def stream_prompt(agent_id, prompt, history):
                         ctx.console.print(Panel(json.dumps(final_content, indent=2), border_style="green"))
                     elif final_content:
                         ctx.console.print(Panel(str(final_content), border_style="green"))
+                        if getattr(ctx, "voice_mode", False):
+                            try:
+                                from organism_console.speech import speak_async
+                                speak_async(str(final_content))
+                            except Exception as e:
+                                log.debug(f"Failed to trigger speak_async: {e}")
                     
                     new_history = list(history)
                     new_history.append({"role": "user", "content": prompt})

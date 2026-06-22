@@ -270,3 +270,38 @@ async def test_model_fallback_chain(monkeypatch):
     assert final_events[0]["content"] == "Resolved local fallback answer"
 
 
+def test_speech_synthesis_logic(monkeypatch):
+    from organism_console.speech import clean_text_for_speech, speak_async
+    
+    # Test cleaning logic
+    input_text = "# Title\nHello **world**! <plan>internal thinking</plan> <tool_call name='foo'>{}</tool_call> [link](http://foo.com)"
+    cleaned = clean_text_for_speech(input_text)
+    assert "Title" in cleaned
+    assert "Hello world!" in cleaned
+    assert "link" in cleaned
+    assert "internal thinking" not in cleaned
+    assert "tool_call" not in cleaned
+
+    # Test speech synthesis async dispatching (mock subprocess.run)
+    called_args = None
+    def mock_run(args, **kwargs):
+        nonlocal called_args
+        called_args = args
+        return MagicMock()
+
+    import subprocess
+    monkeypatch.setattr(subprocess, "run", mock_run)
+    
+    # Trigger speak
+    speak_async("Hello test")
+    
+    # Wait for the thread to dispatch
+    import time
+    time.sleep(0.5)
+    
+    assert called_args is not None
+    assert "powershell" in called_args
+    assert "System.Speech.Synthesis.SpeechSynthesizer" in called_args[2]
+    assert "Hello test" in called_args[2]
+
+
