@@ -357,7 +357,7 @@ class AgentService:
                                     # Stream repetition checker: halts loops within a single streaming response
                                     if len(full_chunk_content) > 120:
                                         has_rep = False
-                                        for length in range(30, min(100, len(full_chunk_content) // 3)):
+                                        for length in range(20, min(400, len(full_chunk_content) // 3)):
                                             suffix = full_chunk_content[-length:]
                                             if (full_chunk_content[-2*length:-length] == suffix and 
                                                 full_chunk_content[-3*length:-2*length] == suffix):

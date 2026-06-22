@@ -336,7 +336,7 @@ async def test_i_stream_repetition_loop_detection(mock_agent_service):
     Test I: stream repetition loop detection
     Assert: stream is halted early if identical blocks repeat consecutively.
     """
-    pattern = "1234567890123456789012345678901234567890"  # 40 chars
+    pattern = "abcdefghijklmnopqrstuvwxyz1234567890!@#$"  # 40 chars
     lines = [
         json.dumps({"message": {"content": "a" * 50}}),
         json.dumps({"message": {"content": pattern}}),

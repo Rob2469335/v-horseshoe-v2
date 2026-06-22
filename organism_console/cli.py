@@ -242,11 +242,11 @@ def stream_prompt(agent_id, prompt, history):
                             {"requested_role": requested_role, "delegation_path": " -> ".join(ctx.delegation_chain)},
                             "cyan"
                         )
-                        # TEMP disabled during Rich Live test ctx.console.print(panel)
+                        ctx.console.print(panel)
                         live.start()
                     else:
                         live.stop()
-                        # TEMP disabled during Rich Live test ctx.console.print(render_step_micro_ui("planning", f"Formulating plan for role: {requested_role}"))
+                        ctx.console.print(render_step_micro_ui("planning", f"Formulating plan for role: {requested_role}"))
                         live.start()
                     continue
 
@@ -267,11 +267,11 @@ def stream_prompt(agent_id, prompt, history):
                             },
                             "green"
                         )
-                        # TEMP disabled during Rich Live test ctx.console.print(panel)
+                        ctx.console.print(panel)
                         live.start()
                     else:
                         live.stop()
-                        # TEMP disabled during Rich Live test ctx.console.print(render_step_micro_ui("model_selected", f"selected {model}"))
+                        ctx.console.print(render_step_micro_ui("model_selected", f"selected {model}"))
                         live.start()
                     continue
 
@@ -285,11 +285,11 @@ def stream_prompt(agent_id, prompt, history):
                             {"from_model": from_model, "escalated_reason": reason, "status": "switching to secondary/cloud"},
                             "red"
                         )
-                        # TEMP disabled during Rich Live test ctx.console.print(panel)
+                        ctx.console.print(panel)
                         live.start()
                     else:
                         live.stop()
-                        # TEMP disabled during Rich Live test ctx.console.print(render_step_micro_ui("escalation", f"Escalated from {from_model} due to error: {reason}"))
+                        ctx.console.print(render_step_micro_ui("escalation", f"Escalated from {from_model} due to error: {reason}"))
                         live.start()
                     continue
 
@@ -299,7 +299,7 @@ def stream_prompt(agent_id, prompt, history):
                     to_a = chunk.get("to", "executor")
                     task = str(chunk.get("task", ""))[:80]
                     handoffs_list.append({"from": from_a, "to": to_a, "task": task})
-                    # TEMP disabled during Rich Live test ctx.console.print(render_step_micro_ui("swarm", f"{from_a} → {to_a}: {task}"))
+                    ctx.console.print(render_step_micro_ui("swarm", f"{from_a} → {to_a}: {task}"))
                     live.start()
                     continue
 
@@ -312,22 +312,22 @@ def stream_prompt(agent_id, prompt, history):
                             {"tool": tool, "executing_model": chunk.get("model", "unknown")},
                             "yellow"
                         )
-                        # TEMP disabled during Rich Live test ctx.console.print(panel)
+                        ctx.console.print(panel)
                         live.start()
                     else:
                         live.stop()
-                        # TEMP disabled during Rich Live test ctx.console.print(render_step_micro_ui("tool_call", f"executing tool {tool}"))
+                        ctx.console.print(render_step_micro_ui("tool_call", f"executing tool {tool}"))
                         live.start()
                     continue
 
                 if chunk_type == "final":
                     live.stop()
                     final_content = chunk.get("content", "")
-                    # TEMP disabled during Rich Live test ctx.console.print()
+                    ctx.console.print()
                     if isinstance(final_content, dict):
-                        pass
+                        ctx.console.print(Panel(json.dumps(final_content, indent=2), border_style="green"))
                     elif final_content:
-                        pass
+                        ctx.console.print(Panel(str(final_content), border_style="green"))
                     
                     new_history = list(history)
                     new_history.append({"role": "user", "content": prompt})
@@ -343,22 +343,22 @@ def stream_prompt(agent_id, prompt, history):
                     options = params.get("options", [])
 
                     live.stop()
-                    # TEMP disabled during Rich Live test ctx.console.print()
+                    ctx.console.print()
 
                     if "APPROVAL REQUIRED" in question:
-                        pass
-                            # TEMP disabled during Rich Live test Markdown(question),
-                            # TEMP disabled during Rich Live test title="🛡️  [bold yellow]Security Gate - Action Approval[/bold yellow]",
-                            # TEMP disabled during Rich Live test border_style="yellow",
-                            # TEMP disabled during Rich Live test padding=(1, 2)
-                        # TEMP disabled during Rich Live test ))
+                        ctx.console.print(Panel(
+                            Markdown(question),
+                            title="🛡️  [bold yellow]Security Gate - Action Approval[/bold yellow]",
+                            border_style="yellow",
+                            padding=(1, 2)
+                        ))
                     else:
-                        pass
-                            # TEMP disabled during Rich Live test Markdown(question),
-                            # TEMP disabled during Rich Live test title="❓  [bold cyan]Agent Request[/bold cyan]",
-                            # TEMP disabled during Rich Live test border_style="cyan",
-                            # TEMP disabled during Rich Live test padding=(0, 1)
-                        # TEMP disabled during Rich Live test ))
+                        ctx.console.print(Panel(
+                            Markdown(question),
+                            title="❓  [bold cyan]Agent Request[/bold cyan]",
+                            border_style="cyan",
+                            padding=(0, 1)
+                        ))
 
                     if options:
                         from rich.prompt import Prompt
