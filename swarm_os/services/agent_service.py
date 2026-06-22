@@ -526,6 +526,12 @@ class AgentService:
                         next_model, next_provider = fallback_chain[chain_idx]
                         logger.warning(f"Escalating from {current_model} ({current_provider}) to {next_model} ({next_provider})...")
                         
+                        try:
+                            from organism_console.speech import play_chime_async
+                            play_chime_async("escalation")
+                        except Exception:
+                            pass
+
                         yield {
                             "agent_id": agent_id,
                             "type": "model_escalation",
@@ -538,6 +544,11 @@ class AgentService:
                         full_chunk_content = ""
                     else:
                         logger.error("All models in the fallback chain have been exhausted!")
+                        try:
+                            from organism_console.speech import play_chime_async
+                            play_chime_async("error")
+                        except Exception:
+                            pass
                         raise exc
 
 

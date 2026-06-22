@@ -300,6 +300,73 @@ def cmd_speak(ctx: CommandContext, args: List[str]) -> None:
         ctx.console.print(f"[red]Error synthesizing speech: {e}[/red]")
 
 
+@registry.register("clip", "Manage system clipboard. Usage: /clip [copy <text> | last]")
+def cmd_clip(ctx: CommandContext, args: List[str]) -> None:
+    import subprocess
+    if not args:
+        try:
+            res = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", "Get-Clipboard"],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            clipboard_text = res.stdout.strip()
+            if not clipboard_text:
+                ctx.console.print("[yellow]Clipboard is empty or does not contain text.[/yellow]")
+                return
+            
+            ctx.console.print(f"[green]✓ Pasted from clipboard:[/green] [dim]{clipboard_text[:120]}[/dim]...")
+            ctx.run_prompt(clipboard_text)
+        except Exception as e:
+            ctx.console.print(f"[red]Error reading clipboard: {e}[/red]")
+        return
+
+    subcmd = args[0].lower()
+    if subcmd == "copy":
+        if len(args) < 2:
+            ctx.console.print("[yellow]Error: Specify the text to copy. Usage: `/clip copy <text>`[/yellow]")
+            return
+        
+        text_to_copy = " ".join(args[1:])
+        try:
+            escaped_text = text_to_copy.replace("'", "''")
+            cmd = f"Set-Clipboard -Value '{escaped_text}'"
+            subprocess.run(
+                ["powershell", "-NoProfile", "-Command", cmd],
+                capture_output=True,
+                check=True
+            )
+            ctx.console.print("[green]✓ Copied text successfully to clipboard.[/green]")
+        except Exception as e:
+            ctx.console.print(f"[red]Error copying to clipboard: {e}[/red]")
+            
+    elif subcmd == "last":
+        last_assistant_msg = None
+        for msg in reversed(ctx.state.history or []):
+            if msg.get("role") == "assistant" and msg.get("content"):
+                last_assistant_msg = msg["content"]
+                break
+                
+        if not last_assistant_msg:
+            ctx.console.print("[yellow]No assistant response found in session history.[/yellow]")
+            return
+            
+        try:
+            escaped_text = str(last_assistant_msg).replace("'", "''")
+            cmd = f"Set-Clipboard -Value '{escaped_text}'"
+            subprocess.run(
+                ["powershell", "-NoProfile", "-Command", cmd],
+                capture_output=True,
+                check=True
+            )
+            ctx.console.print("[green]✓ Copied last assistant response successfully to clipboard.[/green]")
+        except Exception as e:
+            ctx.console.print(f"[red]Error copying to clipboard: {e}[/red]")
+    else:
+        ctx.console.print("[yellow]Unknown subcommand. Usage: `/clip` (paste), `/clip copy <text>`, or `/clip last`[/yellow]")
+
+
 @registry.register("agent", "Switch the active agent. Usage: /agent <name>")
 def cmd_agent(ctx: CommandContext, args: List[str]) -> None:
     if not args:

@@ -47,3 +47,25 @@ def speak_async(text: str):
             logger.debug(f"Speech synthesis execution failed: {e}")
             
     threading.Thread(target=run, daemon=True).start()
+
+
+def play_chime_async(type_name: str):
+    import winsound
+    def run():
+        try:
+            if type_name == "listening":
+                winsound.Beep(880, 80)
+                winsound.Beep(1200, 80)
+                winsound.Beep(1500, 120)
+            elif type_name == "success":
+                winsound.Beep(1500, 100)
+                winsound.Beep(2000, 150)
+            elif type_name == "escalation":
+                winsound.Beep(600, 150)
+                winsound.Beep(450, 250)
+            elif type_name == "error":
+                winsound.Beep(300, 350)
+        except Exception:
+            pass
+            
+    threading.Thread(target=run, daemon=True).start()

@@ -305,3 +305,47 @@ def test_speech_synthesis_logic(monkeypatch):
     assert "Hello test" in called_args[2]
 
 
+def test_clipboard_and_chime_logic(monkeypatch):
+    from organism_console.speech import play_chime_async
+    
+    called_beep = []
+    def mock_beep(freq, dur):
+        called_beep.append((freq, dur))
+        
+    import winsound
+    monkeypatch.setattr(winsound, "Beep", mock_beep)
+    
+    play_chime_async("listening")
+    
+    import time
+    time.sleep(0.5)
+    
+    assert len(called_beep) == 3
+    assert called_beep[0][0] == 880
+    assert called_beep[1][0] == 1200
+    assert called_beep[2][0] == 1500
+
+    from organism_console.command_registry import cmd_clip
+    
+    run_args = []
+    def mock_run_cmd(args, **kwargs):
+        run_args.append(args)
+        mock_result = MagicMock()
+        mock_result.stdout = "Pasted text from clipboard"
+        return mock_result
+
+    import subprocess
+    monkeypatch.setattr(subprocess, "run", mock_run_cmd)
+
+    ctx_mock = MagicMock()
+    cmd_clip(ctx_mock, [])
+    assert len(run_args) == 1
+    assert any("Get-Clipboard" in arg for arg in run_args[0])
+    ctx_mock.run_prompt.assert_called_once_with("Pasted text from clipboard")
+
+    cmd_clip(ctx_mock, ["copy", "Hello", "Zenith"])
+    assert len(run_args) == 2
+    assert any("Set-Clipboard" in arg for arg in run_args[1])
+    assert any("Hello Zenith" in arg for arg in run_args[1])
+
+

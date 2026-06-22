@@ -815,6 +815,11 @@ def main():
         if use_voice and winmm:
             try:
                 winmm.mciSendStringW("open new type waveaudio alias recsound", None, 0, 0)
+                try:
+                    from organism_console.speech import play_chime_async
+                    play_chime_async("listening")
+                except Exception:
+                    pass
                 winmm.mciSendStringW("record recsound", None, 0, 0)
             except Exception as e:
                 log.debug(f"Failed to initiate background voice recording: {e}")
@@ -850,12 +855,27 @@ def main():
                         text = transcribe_wav(ctx.console, wav_path)
                         if text:
                             ctx.console.print(f"[bold yellow]Transcribed:[/bold yellow] [green]\"{text}\"[/green]")
+                            try:
+                                from organism_console.speech import play_chime_async
+                                play_chime_async("success")
+                            except Exception:
+                                pass
                             cmd_line = text
                         else:
                             ctx.console.print("[yellow]No speech detected or transcription failed.[/yellow]")
+                            try:
+                                from organism_console.speech import play_chime_async
+                                play_chime_async("error")
+                            except Exception:
+                                pass
                             continue
                     except Exception as e:
                         ctx.console.print(f"[bold red]Failed to save/transcribe voice input: {e}[/bold red]")
+                        try:
+                            from organism_console.speech import play_chime_async
+                            play_chime_async("error")
+                        except Exception:
+                            pass
                         try:
                             winmm.mciSendStringW("close recsound", None, 0, 0)
                         except Exception:
