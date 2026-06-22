@@ -115,3 +115,86 @@ async def test_mcp_client_manager_nonexistent_config():
     manager = ExternalMCPClientManager(config_path="nonexistent_config.json")
     tools = await manager.start()
     assert tools == []
+
+
+@pytest.mark.anyio
+async def test_web_search_handler_serpapi(monkeypatch):
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    monkeypatch.delenv("SERPER_API_KEY", raising=False)
+    monkeypatch.delenv("BRAVE_API_KEY", raising=False)
+    monkeypatch.setenv("SERPAPI_KEY", "serpapi-test-key")
+    
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "organic_results": [
+            {"title": "SerpApi Title", "link": "https://serpapi.com", "snippet": "SerpApi Snippet"}
+        ]
+    }
+    
+    async def mock_get(*args, **kwargs):
+        return mock_response
+        
+    monkeypatch.setattr(httpx.AsyncClient, "get", mock_get)
+    
+    res = await web_search_handler({"query": "test query", "max_results": 1})
+    assert res["ok"] is True
+    assert res["provider"] == "serpapi"
+    assert len(res["results"]) == 1
+    assert res["results"][0]["title"] == "SerpApi Title"
+
+
+@pytest.mark.anyio
+async def test_web_search_handler_exa(monkeypatch):
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    monkeypatch.delenv("SERPER_API_KEY", raising=False)
+    monkeypatch.delenv("BRAVE_API_KEY", raising=False)
+    monkeypatch.delenv("SERPAPI_KEY", raising=False)
+    monkeypatch.setenv("EXA_API_KEY", "exa-test-key")
+    
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "results": [
+            {"title": "Exa Title", "url": "https://exa.ai", "text": "Exa Text"}
+        ]
+    }
+    
+    async def mock_post(*args, **kwargs):
+        return mock_response
+        
+    monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+    
+    res = await web_search_handler({"query": "test query", "max_results": 1})
+    assert res["ok"] is True
+    assert res["provider"] == "exa"
+    assert len(res["results"]) == 1
+    assert res["results"][0]["title"] == "Exa Title"
+
+
+@pytest.mark.anyio
+async def test_web_search_handler_tinyfish(monkeypatch):
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    monkeypatch.delenv("SERPER_API_KEY", raising=False)
+    monkeypatch.delenv("BRAVE_API_KEY", raising=False)
+    monkeypatch.delenv("SERPAPI_KEY", raising=False)
+    monkeypatch.delenv("EXA_API_KEY", raising=False)
+    monkeypatch.setenv("TINYFISH_API_KEY", "tinyfish-test-key")
+    
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = [
+        {"title": "Tinyfish Title", "url": "https://tinyfish.ai", "snippet": "Tinyfish Snippet"}
+    ]
+    
+    async def mock_get(*args, **kwargs):
+        return mock_response
+        
+    monkeypatch.setattr(httpx.AsyncClient, "get", mock_get)
+    
+    res = await web_search_handler({"query": "test query", "max_results": 1})
+    assert res["ok"] is True
+    assert res["provider"] == "tinyfish"
+    assert len(res["results"]) == 1
+    assert res["results"][0]["title"] == "Tinyfish Title"
+

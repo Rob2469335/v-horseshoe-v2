@@ -11,8 +11,8 @@ logger = logging.getLogger(__name__)
 
 async def web_search_handler(params: Dict[str, Any], trace_hook=None) -> Dict[str, Any]:
     """
-    Handles web search operations using Tavily, Serper, Brave Search,
-    or falls back to a custom DuckDuckGo HTML parser.
+    Handles web search operations using Tavily, Serper, Brave, SerpApi,
+    Exa, Tinyfish, or falls back to a custom DuckDuckGo HTML parser.
     """
     query = params.get("query", "").strip()
     max_results = int(params.get("max_results", 5))
@@ -106,7 +106,99 @@ async def web_search_handler(params: Dict[str, Any], trace_hook=None) -> Dict[st
         except Exception as e:
             logger.error(f"Brave API exception: {e}")
 
-    # 4. Fallback: DuckDuckGo HTML Scraper
+    # 4. Try SerpApi (Google Search) API
+    serpapi_key = os.environ.get("SERPAPI_KEY")
+    if serpapi_key:
+        try:
+            logger.info("Performing SerpApi Search call...")
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(
+                    "https://serpapi.com/search.json",
+                    params={"q": query, "api_key": serpapi_key, "num": max_results}
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    raw_results = data.get("organic_results", [])
+                    results = []
+                    for r in raw_results:
+                        results.append({
+                            "title": r.get("title", ""),
+                            "url": r.get("link", ""),
+                            "snippet": r.get("snippet", "")
+                        })
+                    if trace_hook:
+                        trace_hook("web_search", {"provider": "serpapi", "query": query, "count": len(results)})
+                    return {"ok": True, "query": query, "results": results, "provider": "serpapi"}
+                else:
+                    logger.warning(f"SerpApi failed with status {resp.status_code}: {resp.text}")
+        except Exception as e:
+            logger.error(f"SerpApi exception: {e}")
+
+    # 5. Try Exa AI Search API
+    exa_key = os.environ.get("EXA_API_KEY")
+    if exa_key:
+        try:
+            logger.info("Performing Exa AI Search call...")
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.post(
+                    "https://api.exa.ai/search",
+                    headers={"x-api-key": exa_key, "Content-Type": "application/json"},
+                    json={"query": query, "numResults": max_results, "useAutoprompt": True}
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    raw_results = data.get("results", [])
+                    results = []
+                    for r in raw_results:
+                        # Fetch description/snippet from text or highlight
+                        snippet = r.get("text", "")
+                        if not snippet and r.get("highlights"):
+                            snippet = r.get("highlights")[0]
+                        results.append({
+                            "title": r.get("title", ""),
+                            "url": r.get("url", ""),
+                            "snippet": snippet[:300] if snippet else ""
+                        })
+                    if trace_hook:
+                        trace_hook("web_search", {"provider": "exa", "query": query, "count": len(results)})
+                    return {"ok": True, "query": query, "results": results, "provider": "exa"}
+                else:
+                    logger.warning(f"Exa AI failed with status {resp.status_code}: {resp.text}")
+        except Exception as e:
+            logger.error(f"Exa AI exception: {e}")
+
+    # 6. Try Tinyfish Search API
+    tinyfish_key = os.environ.get("TINYFISH_API_KEY")
+    if tinyfish_key:
+        try:
+            logger.info("Performing Tinyfish Search call...")
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(
+                    "https://api.search.tinyfish.ai",
+                    headers={"X-API-Key": tinyfish_key},
+                    params={"query": query, "location": "US", "language": "en"}
+                )
+                if resp.status_code == 200:
+                    # Tinyfish returns a list of results directly or in a nested "results" property.
+                    data = resp.json()
+                    raw_results = data if isinstance(data, list) else data.get("results", [])
+                    results = []
+                    for r in raw_results:
+                        results.append({
+                            "title": r.get("title", ""),
+                            "url": r.get("url", ""),
+                            "snippet": r.get("snippet", "")
+                        })
+                    results = results[:max_results]
+                    if trace_hook:
+                        trace_hook("web_search", {"provider": "tinyfish", "query": query, "count": len(results)})
+                    return {"ok": True, "query": query, "results": results, "provider": "tinyfish"}
+                else:
+                    logger.warning(f"Tinyfish failed with status {resp.status_code}: {resp.text}")
+        except Exception as e:
+            logger.error(f"Tinyfish exception: {e}")
+
+    # 7. Fallback: DuckDuckGo HTML Scraper
     try:
         logger.info("No active API keys responded. Falling back to DuckDuckGo HTML parser...")
         async with httpx.AsyncClient(timeout=15.0) as client:
