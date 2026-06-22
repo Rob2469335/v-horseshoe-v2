@@ -209,3 +209,10 @@ def test_relaxed_tool_call_regex():
     assert tool_missing == "web_search"
     assert "modern style guide" in payload_missing
 
+    # Middle of string / lookahead match
+    text_middle = '<tool_call name="vscode_automation">{"command": "ls", "args": ["."]}<strategic_intent>Identify'
+    tool_middle, payload_middle = orchestrator._parse_tool_call(text_middle)
+    assert tool_middle == "vscode_automation"
+    assert "ls" in payload_middle
+
+

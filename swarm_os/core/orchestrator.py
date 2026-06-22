@@ -100,7 +100,7 @@ class Orchestrator:
 
     def _parse_tool_call(self, text: str) -> tuple[str, str] | None:
         # Check Pattern A: <tool_call name="tool">params</tool_call>
-        match_a = re.search(r'<tool_call\s+name="([^"]+)">\s*(\{.*?\})\s*(?:</tool_call>|$)', text, re.DOTALL)
+        match_a = re.search(r'<tool_call\s+name="([^"]+)">\s*(\{.*?\})\s*(?:</tool_call>|<strategic_intent|<plan|<tool_call|<topic_update|$)', text, re.DOTALL)
         if match_a:
             return match_a.group(1).strip(), match_a.group(2).strip()
         # Check Pattern B: <tool>tool</tool> params

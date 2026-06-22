@@ -217,7 +217,7 @@ class AgentService:
             if proposed_msg.get("role") == "assistant":
                 proposed_content = proposed_msg.get("content", "")
                 match = re.search(
-                    r'<tool_call name="([^"]+)">\s*(\{.*?\})\s*(?:</tool_call>|$)',
+                    r'<tool_call\s+name="([^"]+)">\s*(\{.*?\})\s*(?:</tool_call>|<strategic_intent|<plan|<tool_call|<topic_update|$)',
                     proposed_content,
                     re.DOTALL,
                 )
@@ -422,7 +422,8 @@ class AgentService:
                         "messages": messages,
                         "stream": True,
                         "temperature": temperature,
-                        "max_tokens": 1500
+                        "max_tokens": 1500,
+                        "stop": ["</tool_call>"]
                     }
                 elif current_provider == "nvidia":
                     api_key = _os.environ.get("NVIDIA_API_KEY", "").strip()
@@ -437,7 +438,8 @@ class AgentService:
                         "messages": messages,
                         "stream": True,
                         "temperature": temperature,
-                        "max_tokens": 1500
+                        "max_tokens": 1500,
+                        "stop": ["</tool_call>"]
                     }
                 elif current_provider == "gemini":
                     api_key = _os.environ.get("GEMINI_API_KEY", "").strip()
@@ -452,7 +454,8 @@ class AgentService:
                         "messages": messages,
                         "stream": True,
                         "temperature": temperature,
-                        "max_tokens": 1500
+                        "max_tokens": 1500,
+                        "stop": ["</tool_call>"]
                     }
                 else:
                     url = "http://127.0.0.1:11434/api/chat"
@@ -462,7 +465,7 @@ class AgentService:
                         "messages": messages,
                         "stream": True,
                         "keep_alive": 0,
-                        "options": {"temperature": temperature, "num_predict": 1500},
+                        "options": {"temperature": temperature, "num_predict": 1500, "stop": ["</tool_call>"]},
                     }
 
                 try:
@@ -586,7 +589,7 @@ class AgentService:
             previous_outputs.append(clean_content)
 
             match = re.search(
-                r'<tool_call name="([^"]+)">\s*(\{.*?\})\s*(?:</tool_call>|$)',
+                r'<tool_call\s+name="([^"]+)">\s*(\{.*?\})\s*(?:</tool_call>|<strategic_intent|<plan|<tool_call|<topic_update|$)',
                 full_chunk_content,
                 re.DOTALL,
             )
