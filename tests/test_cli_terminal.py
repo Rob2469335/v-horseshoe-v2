@@ -444,3 +444,83 @@ def test_new_cli_commands(tmp_path, monkeypatch):
     # 9. Test /compress
     registry.handle_line("/compress", ctx)
 
+
+def test_natural_language_intent_routing(tmp_path, monkeypatch):
+    import requests
+    from organism_console.state_store import SessionState
+    from organism_console.command_registry import registry, CommandContext
+    
+    session_file = tmp_path / ".session.json"
+    state = SessionState(session_file)
+    console = Console()
+    
+    calls = []
+    def mock_call_api(endpoint, method="GET", payload=None, stream=False):
+        calls.append(("api", endpoint, method))
+        class MockResp:
+            def json(self):
+                if endpoint == "/readyz":
+                    return {"ready": True, "status": "ok", "health_score": 100, "checks": {"ollama_reachable": True}}
+                return {}
+            @property
+            def status_code(self):
+                return 200
+        return MockResp()
+        
+    ctx = CommandContext(
+        state=state,
+        console=console,
+        call_api=mock_call_api,
+        run_prompt=lambda *a: None,
+        get_system_stats=lambda: {"cpu": 10.0, "ram_pct": 50.0, "ram_color": "green", "ram_used_gb": 8.0, "ram_total_gb": 16.0},
+        installed_models=["qwen2.5:7b"]
+    )
+    
+    import subprocess
+    class MockCompletedProcess:
+        def __init__(self, stdout="", stderr="", returncode=0):
+            self.stdout = stdout
+            self.stderr = stderr
+            self.returncode = returncode
+            
+    def mock_run(cmd, *args, **kwargs):
+        if cmd[0] == "git" and "diff" in cmd:
+            calls.append("git_diff")
+            return MockCompletedProcess(stdout="diff content")
+        return MockCompletedProcess()
+        
+    monkeypatch.setattr(subprocess, "run", mock_run)
+    
+    # 1. Test fast-path routing keyword (should call git diff immediately)
+    res = registry.handle_line("what changed", ctx)
+    assert res is None
+    assert "git_diff" in calls
+    
+    # 2. Test fast-path goal routing (should execute /goal fix bugs)
+    calls.clear()
+    import rich.prompt
+    monkeypatch.setattr(rich.prompt.Confirm, "ask", lambda *a, **k: False)
+    res = registry.handle_line("fix the login page routing", ctx)
+    assert "fix the login page routing" in state.command_history[-1]
+    
+    # 3. Test LLM classification routing
+    calls.clear()
+    class MockRequests:
+        @staticmethod
+        def post(url, json=None, **kwargs):
+            calls.append(("requests_post", url))
+            class MockResp:
+                @property
+                def status_code(self):
+                    return 200
+                def json(self):
+                    return {"response": '{"command": "/status", "confidence": 0.95}'}
+            return MockResp()
+            
+    monkeypatch.setattr(requests, "post", MockRequests.post)
+    
+    res = registry.handle_line("how is my system looking", ctx)
+    assert res is None
+    assert any(c[0] == "requests_post" for c in calls)
+    assert any(c[0] == "api" and c[1] == "/readyz" for c in calls)
+

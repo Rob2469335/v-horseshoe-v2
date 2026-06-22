@@ -54,6 +54,129 @@ class CommandRegistry:
             return func
         return decorator
 
+def route_natural_language_keywords(raw: str) -> tuple[Optional[str], list[str]]:
+    import re
+    clean = raw.lower().strip().strip("?!.")
+    
+    # Simple direct mappings (fast path)
+    if clean in ("show diff", "diff", "git diff", "what changed", "changes", "show changes", "show me what changed"):
+        return "diff", []
+        
+    if clean in ("status", "health", "check health", "system status", "check status", "how is the system"):
+        return "status", []
+        
+    if clean in ("help", "commands", "what can you do", "show commands", "list commands", "menu"):
+        return "help", []
+        
+    if clean in ("commit", "make a commit", "git commit", "save changes", "commit changes"):
+        return "commit", []
+        
+    if clean in ("heal", "self heal", "run healing", "fix system", "run heal"):
+        return "heal", ["run"]
+        
+    if clean in ("clear", "reset", "clear history", "reset context", "start over"):
+        return "clear", []
+        
+    if clean in ("exit", "quit", "bye", "close", "shutdown"):
+        return "exit", []
+        
+    if clean in ("tokens", "token usage", "cost", "how many tokens"):
+        return "tokens", []
+
+    if clean in ("benchmark", "run benchmark", "test models"):
+        return "benchmark", []
+
+    # Regex matches
+    m_debate = re.match(r"^(?:debate about|discuss|debate|talk about)\s+(.+)$", clean)
+    if m_debate:
+        return "debate", [m_debate.group(1)]
+        
+    # Check for direct action instruction prefixes to run in the autonomous goal loop
+    goal_words = ("fix", "implement", "add", "create", "refactor", "change", "run tests", "verify", "debug", "test")
+    if any(clean.startswith(w) for w in goal_words):
+        # We need to map to goal, with the original untouched line as the goal argument
+        return "goal", [raw.strip()]
+        
+    return None, []
+
+def classify_intent_with_llm(raw: str, ctx: CommandContext) -> tuple[Optional[str], list[str]]:
+    import json
+    import re
+    
+    # Fallback model checking
+    model = "qwen2.5:7b-instruct"
+    if ctx.installed_models:
+        for m in ctx.installed_models:
+            if "llama3" in m.lower() or "qwen2.5:7b" in m.lower() or "instruct" in m.lower():
+                model = m
+                break
+        else:
+            model = ctx.installed_models[0]
+            
+    prompt = (
+        "You are the intent routing classification system for Swarm OS CLI. "
+        "Classify the following natural language user input into one of these commands:\n"
+        "- \"/diff\" (if they want to see git changes, modifications, diff)\n"
+        "- \"/status\" (if they want to check health, status, system health)\n"
+        "- \"/commit\" (if they want to save changes to git or commit)\n"
+        "- \"/heal run\" (if they want to run a healing/repair cycle)\n"
+        "- \"/clear\" (if they want to clear history or reset the context)\n"
+        "- \"/exit\" (if they want to quit or close the terminal)\n"
+        "- \"/tokens\" (if they want to check token count or session cost)\n"
+        "- \"/benchmark\" (if they want to run model latency benchmarks)\n"
+        "- \"/debate <goal>\" (if they want to discuss or debate a development plan/objective)\n"
+        "- \"/goal <goal>\" (if they want to execute an instruction, write code, fix something, add a feature, refactor, run tests, or debug)\n"
+        "- \"/chat\" (if it's a general question, discussion, explanation request, or just talking to you)\n\n"
+        f"Input: \"{raw}\"\n\n"
+        "Return a JSON object with keys:\n"
+        "- \"command\": the selected slash command (e.g. \"/diff\", \"/goal fix the routes\", \"/chat\")\n"
+        "- \"confidence\": float between 0.0 and 1.0\n\n"
+        "Return ONLY the valid JSON, no explanations before or after."
+    )
+    
+    try:
+        import requests
+        url = "http://127.0.0.1:8000/generate"
+        r = requests.post(url, json={"model": model, "prompt": prompt}, timeout=2.0)
+        if r.status_code == 200:
+            data = r.json()
+            response_text = data.get("response", "").strip()
+            if "```" in response_text:
+                m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", response_text, re.DOTALL)
+                if m:
+                    response_text = m.group(1)
+            parsed = json.loads(response_text)
+            command_str = parsed.get("command", "/chat").strip()
+            confidence = float(parsed.get("confidence", 0.0))
+            
+            if confidence >= 0.7 and command_str.startswith("/"):
+                parts = command_str.split()
+                cmd = parts[0][1:].lower()
+                args = parts[1:]
+                return cmd, args
+    except Exception:
+        pass
+        
+    return None, []
+
+
+class CommandRegistry:
+    def __init__(self) -> None:
+        self.commands: Dict[str, Dict[str, Any]] = {}
+
+    def register(self, name: str, description: str, aliases: Optional[List[str]] = None) -> Callable:
+        def decorator(func: Callable) -> Callable:
+            cmd_info = {
+                "func": func,
+                "description": description,
+                "aliases": aliases or []
+            }
+            self.commands[name] = cmd_info
+            for alias in cmd_info["aliases"]:
+                self.commands[alias] = cmd_info
+            return func
+        return decorator
+
     def handle_line(self, line: str, ctx: CommandContext) -> Optional[str]:
         """
         Parses and executes a command if it starts with '/'.
@@ -63,9 +186,35 @@ class CommandRegistry:
         if not raw:
             return None
         
+        cmd_name = None
+        args = []
         if not raw.startswith("/"):
-            # Not a command, pass it back to REPL as a prompt
-            return raw
+            # 1. Fast-path keyword matching
+            cmd_name, args = route_natural_language_keywords(raw)
+            # 2. LLM-based intent routing if fast-path is not found
+            if not cmd_name:
+                cmd_name, args = classify_intent_with_llm(raw, ctx)
+                
+            if cmd_name:
+                if cmd_name in self.commands:
+                    ctx.console.print(f"[bold cyan]ℹ Auto-Routing intent to command: [green]/{cmd_name} {' '.join(args)}[/green][/bold cyan]")
+                    # Record entered command to command history
+                    ctx.state.command_history.append(f"/{cmd_name} {' '.join(args)}")
+                    ctx.state.save()
+                    cmd_info = self.commands[cmd_name]
+                    try:
+                        return cmd_info["func"](ctx, args)
+                    except Exception as e:
+                        ctx.console.print(f"[bold red]Command failed:[/bold red] {e}")
+                        ctx.state.last_error = str(e)
+                        ctx.state.save()
+                        return None
+                else:
+                    ctx.console.print(f"[bold red]Unknown command:[/bold red] /{cmd_name}. Type `/help` to list commands.")
+                    return None
+            else:
+                # Not a command, pass it back to REPL as a prompt
+                return raw
 
         parts = raw.split()
         cmd_name = parts[0][1:].lower()  # Strip '/'
