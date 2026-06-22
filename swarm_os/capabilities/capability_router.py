@@ -7,6 +7,7 @@ from swarm_os.capabilities.vscode_automation import VSCodeAutomationHandler
 from swarm_os.capabilities.refactor import RefactorHandler
 from swarm_os.capabilities.models import ModelsHandler
 from swarm_os.capabilities.sandbox_repl import SandboxReplHandler
+from swarm_os.capabilities.subagent import SubagentHandler
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +24,9 @@ class CapabilityRouter:
         "refactor": RefactorHandler,
         "models": ModelsHandler,
         "sandbox_repl": SandboxReplHandler,
+        "subagent": SubagentHandler,
     }
+
 
     def __init__(self, config: Dict[str, Any] = None):
         self.config = config or {}

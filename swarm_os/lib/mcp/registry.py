@@ -42,16 +42,35 @@ class MCPRegistry:
 
     async def _qdrant_recall(self, params: Dict[str, Any]) -> Dict[str, Any]:
         query = str(params.get("query", ""))
-        collection = str(params.get("collection", ""))
+        collection = str(params.get("collection", "swarm_memory"))
+        limit = int(params.get("limit", 5))
 
-        result = {
-            "ok": True,
-            "results": [],
-            "query": query,
-            "collection": collection,
-        }
-        self.trace_hook("qdrant_recall", result)
-        return result
+        if not query:
+            return {"ok": False, "error": "Query is required"}
+
+        try:
+            from swarm_os.services.vector_store import VectorStore
+            from swarm_os.services.embedding_service import EmbeddingService
+            
+            emb = EmbeddingService()
+            vector = emb.embed(query)
+            
+            # Connect to local Qdrant instance
+            store = VectorStore(collection_name=collection, use_memory=False)
+            search_results = store.search(query_vector=vector, limit=limit)
+            
+            result = {
+                "ok": True,
+                "results": search_results,
+                "query": query,
+                "collection": collection,
+            }
+            if self.trace_hook:
+                self.trace_hook("qdrant_recall", result)
+            return result
+        except Exception as e:
+            logger.error(f"Vector recall failed: {e}")
+            return {"ok": False, "error": str(e)}
 
     def get_tools_schema(self) -> list[dict]:
         return [
@@ -147,6 +166,28 @@ class MCPRegistry:
                         }
                     },
                     "required": ["scope"]
+                }
+            },
+            {
+                "name": "qdrant_recall",
+                "description": "Perform codebase semantic search using local vector storage.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "The search query to match semantically against codebase blocks."
+                        },
+                        "collection": {
+                            "type": "string",
+                            "description": "Vector store collection name (defaults to 'swarm_memory')."
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Number of results to retrieve (default is 5)."
+                        }
+                    },
+                    "required": ["query"]
                 }
             }
         ]
