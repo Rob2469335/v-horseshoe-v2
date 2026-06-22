@@ -790,9 +790,66 @@ def main():
         ctx.console.print("[bold red]✗ Backend appears offline.[/bold red] Use '/boot' (cmd line) or check logs.")
 
     while True:
+        use_voice = False
+        import ctypes
+        winmm = None
+        if getattr(ctx, "voice_mode", False):
+            try:
+                winmm = ctypes.windll.winmm
+                if winmm.waveInGetNumDevs() > 0:
+                    use_voice = True
+            except Exception:
+                pass
+
+        if use_voice and winmm:
+            try:
+                winmm.mciSendStringW("open new type waveaudio alias recsound", None, 0, 0)
+                winmm.mciSendStringW("record recsound", None, 0, 0)
+            except Exception as e:
+                log.debug(f"Failed to initiate background voice recording: {e}")
+                use_voice = False
+
         try:
-            prompt_str = f"[bold bright_white]zenith[/bold bright_white][blue]@[/blue][cyan]{ctx.active_agent}[/cyan] [bold blue]❯[/bold blue] "
+            if use_voice:
+                prompt_str = f"[bold bright_white]zenith[/bold bright_white][blue]@[/blue][cyan]{ctx.active_agent}[/cyan] [bold blue]❯[/bold blue] [dim](🎙️  listening...)[/dim] "
+            else:
+                prompt_str = f"[bold bright_white]zenith[/bold bright_white][blue]@[/blue][cyan]{ctx.active_agent}[/cyan] [bold blue]❯[/bold blue] "
+            
             cmd_line = ctx.console.input(prompt_str).strip()
+
+            if use_voice and winmm:
+                try:
+                    winmm.mciSendStringW("stop recsound", None, 0, 0)
+                except Exception:
+                    pass
+
+                if cmd_line:
+                    try:
+                        winmm.mciSendStringW("close recsound", None, 0, 0)
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        wav_path = str(PROJECT_ROOT / "dictation.wav")
+                        save_cmd = f'save recsound "{wav_path}"'
+                        winmm.mciSendStringW(save_cmd, None, 0, 0)
+                        winmm.mciSendStringW("close recsound", None, 0, 0)
+                        
+                        from organism_console.command_registry import transcribe_wav
+                        text = transcribe_wav(ctx.console, wav_path)
+                        if text:
+                            ctx.console.print(f"[bold yellow]Transcribed:[/bold yellow] [green]\"{text}\"[/green]")
+                            cmd_line = text
+                        else:
+                            ctx.console.print("[yellow]No speech detected or transcription failed.[/yellow]")
+                            continue
+                    except Exception as e:
+                        ctx.console.print(f"[bold red]Failed to save/transcribe voice input: {e}[/bold red]")
+                        try:
+                            winmm.mciSendStringW("close recsound", None, 0, 0)
+                        except Exception:
+                            pass
+                        continue
 
             if not cmd_line:
                 continue
@@ -818,6 +875,14 @@ def main():
                 ctx.history = stream_prompt(ctx.active_agent, execute_prompt, ctx.history)
 
         except KeyboardInterrupt:
+            if getattr(ctx, "voice_mode", False):
+                try:
+                    import ctypes
+                    winmm = ctypes.windll.winmm
+                    winmm.mciSendStringW("stop recsound", None, 0, 0)
+                    winmm.mciSendStringW("close recsound", None, 0, 0)
+                except Exception:
+                    pass
             ctx.console.print("\n[dim]Use '/exit' to quit properly.[/dim]")
             continue
         except EOFError:

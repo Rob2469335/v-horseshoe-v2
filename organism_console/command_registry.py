@@ -86,6 +86,12 @@ def route_natural_language_keywords(raw: str) -> tuple[Optional[str], list[str]]
     if clean in ("benchmark", "run benchmark", "test models"):
         return "benchmark", []
 
+    if clean in ("voice", "start voice", "voice mode", "turn on voice", "start recording", "record my voice", "listen to me", "microphone", "mic mode"):
+        return "voice-mode", ["on"]
+        
+    if clean in ("stop voice", "voice off", "turn off voice", "stop listening", "disable microphone", "mic off"):
+        return "voice-mode", ["off"]
+
     # Regex matches
     m_debate = re.match(r"^(?:debate about|discuss|debate|talk about)\s+(.+)$", clean)
     if m_debate:
@@ -124,6 +130,8 @@ def classify_intent_with_llm(raw: str, ctx: CommandContext) -> tuple[Optional[st
         "- \"/exit\" (if they want to quit or close the terminal)\n"
         "- \"/tokens\" (if they want to check token count or session cost)\n"
         "- \"/benchmark\" (if they want to run model latency benchmarks)\n"
+        "- \"/voice\" (if they want to transcribe an audio file or record voice prompt)\n"
+        "- \"/voice-mode on|off\" (if they want to enable or disable continuous voice listening)\n"
         "- \"/debate <goal>\" (if they want to discuss or debate a development plan/objective)\n"
         "- \"/goal <goal>\" (if they want to execute an instruction, write code, fix something, add a feature, refactor, run tests, or debug)\n"
         "- \"/chat\" (if it's a general question, discussion, explanation request, or just talking to you)\n\n"
@@ -1534,3 +1542,132 @@ def cmd_compress(ctx: CommandContext, args: List[str]) -> None:
             ctx.console.print(f"[red]Failed to generate summary: Status {resp.status_code if resp else 'No response'}[/red]")
     except Exception as e:
         ctx.console.print(f"[red]Error during compression: {e}[/red]")
+
+
+_whisper_model = None
+
+def get_whisper_model(console: Console) -> Any:
+    global _whisper_model
+    if _whisper_model is None:
+        console.print("[dim]⚡ Loading Faster-Whisper large-v3 model...[/dim]")
+        from faster_whisper import WhisperModel
+        _whisper_model = WhisperModel("large-v3", device="cpu", compute_type="int8")
+    return _whisper_model
+
+
+def record_wav(console: Console, output_path: str) -> bool:
+    import ctypes
+    import sys
+    try:
+        winmm = ctypes.windll.winmm
+        if winmm.waveInGetNumDevs() == 0:
+            console.print("[bold red]✗ Error: No microphone detected.[/bold red]")
+            return False
+            
+        # Open device
+        res = winmm.mciSendStringW("open new type waveaudio alias recsound", None, 0, 0)
+        if res != 0:
+            console.print(f"[bold red]✗ Error opening recording device (MCI error code {res}).[/bold red]")
+            return False
+            
+        # Record
+        res = winmm.mciSendStringW("record recsound", None, 0, 0)
+        if res != 0:
+            console.print(f"[bold red]✗ Error starting recording (MCI error code {res}).[/bold red]")
+            winmm.mciSendStringW("close recsound", None, 0, 0)
+            return False
+            
+        console.print("[bold yellow]🎙️  Recording... Speak your prompt and press [Enter] to stop.[/bold yellow]")
+        try:
+            input()  # Wait for Enter
+        except (KeyboardInterrupt, EOFError):
+            console.print("\n[yellow]Recording cancelled.[/yellow]")
+            
+        # Stop
+        winmm.mciSendStringW("stop recsound", None, 0, 0)
+        
+        # Save
+        full_path = str(Path(output_path).resolve())
+        save_cmd = f'save recsound "{full_path}"'
+        res = winmm.mciSendStringW(save_cmd, None, 0, 0)
+        
+        # Close
+        winmm.mciSendStringW("close recsound", None, 0, 0)
+        
+        if res != 0:
+            console.print(f"[bold red]✗ Error saving audio file (MCI error code {res}).[/bold red]")
+            return False
+        return True
+    except Exception as e:
+        console.print(f"[bold red]✗ Recording exception: {e}[/bold red]")
+        return False
+
+
+def transcribe_wav(console: Console, wav_path: str) -> str:
+    try:
+        model = get_whisper_model(console)
+        path_obj = Path(wav_path).resolve()
+        if not path_obj.exists():
+            console.print(f"[bold red]✗ Audio file not found: {wav_path}[/bold red]")
+            return ""
+            
+        console.print("[dim]Transcribing speech to text...[/dim]")
+        segments, info = model.transcribe(str(path_obj), beam_size=5)
+        text = " ".join([seg.text for seg in segments]).strip()
+        return text
+    except Exception as e:
+        console.print(f"[bold red]✗ Transcription failed: {e}[/bold red]")
+        return ""
+
+
+@registry.register("voice", "Transcribe an audio file or record from microphone and execute it as a prompt. Usage: /voice [audio_file_path]", aliases=["dictate"])
+def cmd_voice(ctx: CommandContext, args: List[str]) -> Optional[str]:
+    import os
+    if args:
+        wav_path = args[0]
+    else:
+        wav_path = "dictation.wav"
+        success = record_wav(ctx.console, wav_path)
+        if not success:
+            return None
+            
+    text = transcribe_wav(ctx.console, wav_path)
+    if not text:
+        ctx.console.print("[yellow]No speech detected or transcription failed.[/yellow]")
+        return None
+        
+    ctx.console.print(f"[bold yellow]Transcribed:[/bold yellow] [green]\"{text}\"[/green]")
+    return text
+
+
+@registry.register("voice-mode", "Toggle continuous voice listening mode. Usage: /voice-mode on|off")
+def cmd_voice_mode(ctx: CommandContext, args: List[str]) -> None:
+    if not args:
+        state_str = "ON" if ctx.state.voice_mode else "OFF"
+        ctx.console.print(f"Continuous voice mode is currently [bold]{state_str}[/bold]")
+        ctx.console.print("To change: `/voice-mode on|off`")
+        return
+
+    arg = args[0].lower()
+    if arg == "on":
+        import ctypes
+        try:
+            winmm = ctypes.windll.winmm
+            has_mic = winmm.waveInGetNumDevs() > 0
+        except Exception:
+            has_mic = False
+            
+        if not has_mic:
+            ctx.console.print("[bold red]✗ Error: No recording device (microphone) detected on your system.[/bold red]")
+            return
+            
+        ctx.state.voice_mode = True
+        ctx.state.save()
+        ctx.console.print("[green]✓ Continuous voice mode enabled.[/green]")
+        ctx.console.print("[dim]The CLI will automatically listen to your microphone. Press [Enter] on an empty line to submit speech, or type any text to override.[/dim]")
+    elif arg == "off":
+        ctx.state.voice_mode = False
+        ctx.state.save()
+        ctx.console.print("[yellow]! Continuous voice mode disabled.[/yellow]")
+    else:
+        ctx.console.print("[yellow]Usage: /voice-mode on|off[/yellow]")

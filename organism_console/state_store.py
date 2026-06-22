@@ -30,6 +30,7 @@ class SessionState:
         self.total_input_tokens: int = 0
         self.total_output_tokens: int = 0
         self.history_pointer: int = -1
+        self.voice_mode: bool = False
 
         self.load()
 
@@ -62,6 +63,7 @@ class SessionState:
             self.total_input_tokens = data.get("total_input_tokens", self.total_input_tokens)
             self.total_output_tokens = data.get("total_output_tokens", self.total_output_tokens)
             self.history_pointer = data.get("history_pointer", self.history_pointer)
+            self.voice_mode = data.get("voice_mode", self.voice_mode)
         except Exception:
             pass
 
@@ -90,6 +92,7 @@ class SessionState:
                     "total_input_tokens": self.total_input_tokens,
                     "total_output_tokens": self.total_output_tokens,
                     "history_pointer": self.history_pointer,
+                    "voice_mode": self.voice_mode,
                 }, fh, indent=2, default=str)
         except Exception:
             pass

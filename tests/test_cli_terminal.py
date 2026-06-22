@@ -524,3 +524,71 @@ def test_natural_language_intent_routing(tmp_path, monkeypatch):
     assert any(c[0] == "requests_post" for c in calls)
     assert any(c[0] == "api" and c[1] == "/readyz" for c in calls)
 
+
+def test_voice_and_voice_mode_commands(tmp_path, monkeypatch):
+    from organism_console.state_store import SessionState
+    from organism_console.command_registry import registry, CommandContext
+    import organism_console.command_registry as cmd_reg
+    
+    session_file = tmp_path / ".session.json"
+    state = SessionState(session_file)
+    console = Console()
+    
+    # 1. Mock recording and transcription
+    monkeypatch.setattr(cmd_reg, "record_wav", lambda c, p: True)
+    monkeypatch.setattr(cmd_reg, "transcribe_wav", lambda c, p: "hello local computer")
+    
+    # Mock ctypes.windll.winmm.waveInGetNumDevs
+    class MockWinmm:
+        def waveInGetNumDevs(self):
+            return 1
+    class MockWindll:
+        winmm = MockWinmm()
+    import ctypes
+    monkeypatch.setattr(ctypes, "windll", MockWindll())
+    
+    ctx = CommandContext(
+        state=state,
+        console=console,
+        call_api=lambda *a, **k: None,
+        run_prompt=lambda *a: None,
+        get_system_stats=lambda: {},
+        installed_models=[]
+    )
+    
+    # 2. Test /voice command with argument
+    res = registry.handle_line("/voice some_file.wav", ctx)
+    assert res == "hello local computer"
+    
+    # 3. Test /voice command without argument (microphone record)
+    res_mic = registry.handle_line("/voice", ctx)
+    assert res_mic == "hello local computer"
+    
+    # 4. Test /voice-mode commands
+    # Initially off
+    assert state.voice_mode is False
+    
+    # Query status
+    registry.handle_line("/voice-mode", ctx)
+    
+    # Toggle ON
+    registry.handle_line("/voice-mode on", ctx)
+    assert state.voice_mode is True
+    
+    # Toggle OFF
+    registry.handle_line("/voice-mode off", ctx)
+    assert state.voice_mode is False
+    
+    # Toggle invalid argument
+    registry.handle_line("/voice-mode invalid", ctx)
+    
+    # 5. Test keyword routing to voice-mode
+    # "voice mode" should turn voice-mode ON
+    registry.handle_line("voice mode", ctx)
+    assert state.voice_mode is True
+    
+    # "stop listening" should turn voice-mode OFF
+    registry.handle_line("stop listening", ctx)
+    assert state.voice_mode is False
+
+
