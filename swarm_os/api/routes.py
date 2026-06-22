@@ -230,3 +230,64 @@ def timeline(window_minutes: int = 60):
                 continue
     points = [TimelinePointResponse(bucket=bucket, **values) for bucket, values in sorted(buckets.items())]
     return TimelineResponse(window_minutes=window_minutes, points=points)
+
+@router.get("/traces/summary")
+def trace_summary(orch: Any = Depends(get_orchestrator), limit: int = 50) -> dict[str, Any]:
+    try:
+        items = orch.get_recent_traces(limit=limit) if orch is not None else []
+
+        status_counts = Counter()
+        phase_counts = Counter()
+        model_counts = Counter()
+        durations: list[float] = []
+
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            status = item.get("status")
+            phase = item.get("phase")
+            model = item.get("model")
+            duration_ms = item.get("duration_ms")
+
+            if status:
+                status_counts[str(status)] += 1
+            if phase:
+                phase_counts[str(phase)] += 1
+            if model:
+                model_counts[str(model)] += 1
+            if isinstance(duration_ms, (int, float)):
+                durations.append(float(duration_ms))
+
+        return {
+            "count": len(items),
+            "window": {"limit": limit},
+            "status_counts": dict(status_counts),
+            "phase_counts": dict(phase_counts),
+            "model_counts": dict(model_counts),
+            "latency_ms": {
+                "count": len(durations),
+                "avg": round(mean(durations), 3) if durations else 0.0,
+                "max": round(max(durations), 3) if durations else 0.0,
+                "min": round(min(durations), 3) if durations else 0.0,
+            },
+        }
+    except Exception as exc:
+        return {
+            "count": 0,
+            "window": {"limit": limit},
+            "status_counts": {},
+            "phase_counts": {},
+            "model_counts": {},
+            "latency_ms": {"count": 0, "avg": 0.0, "max": 0.0, "min": 0.0},
+            "error": str(exc),
+        }
+
+@router.get("/healing/evaluate")
+async def root_evaluate_health(request: Request) -> dict:
+    from swarm_os.api.admin import evaluate_health
+    return await evaluate_health(request)
+
+@router.post("/healing/evaluate")
+async def root_post_evaluate_health(request: Request) -> dict:
+    from swarm_os.api.admin import run_heal_cycle
+    return await run_heal_cycle(request)

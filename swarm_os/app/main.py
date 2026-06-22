@@ -171,10 +171,12 @@ def create_app() -> FastAPI:
     from swarm_os.api.routes import router as api_router
     from swarm_os.api.agents import router as agents_router
     from swarm_os.upwork.routes import router as upwork_router
+    from swarm_os.api.swarm_stream import router as swarm_stream_router
 
     app.include_router(api_router)
     app.include_router(agents_router)
     app.include_router(upwork_router)
+    app.include_router(swarm_stream_router)
 
     @app.get("/")
     def read_root():

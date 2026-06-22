@@ -18,13 +18,29 @@ def get_route_map():
     return _collect(app)
 
 def test_route_contract_minimum():
-    route_map = dict(get_route_map())
-    assert "/health" in route_map
-    assert "/api/admin/status" in route_map
-    assert "/api/admin/run-state" in route_map
-    assert "/api/admin/dashboard" in route_map
-    assert "/api/admin/generation" in route_map
-    assert "/tools" in route_map
-    assert "/tools/execute" in route_map
-    assert "GET" in route_map["/health"]
-    assert "POST" in route_map["/tools/execute"]
+    routes = get_route_map()
+    route_paths = [r[0] for r in routes]
+    
+    assert "/health" in route_paths
+    assert "/api/admin/status" in route_paths
+    assert "/api/admin/run-state" in route_paths
+    assert "/api/admin/dashboard" in route_paths
+    assert "/api/admin/generation" in route_paths
+    assert "/tools" in route_paths
+    assert "/tools/execute" in route_paths
+    
+    # Check specific methods
+    health_methods = next(methods for path, methods in routes if path == "/health")
+    assert "GET" in health_methods
+    
+    execute_methods = next(methods for path, methods in routes if path == "/tools/execute")
+    assert "POST" in execute_methods
+    
+    # New alignment route assertions
+    assert "/swarm/v10/stream" in route_paths
+    assert "/traces/summary" in route_paths
+    assert "/healing/evaluate" in route_paths
+    
+    evaluate_methods = {m for path, methods in routes if path == "/healing/evaluate" for m in methods}
+    assert "GET" in evaluate_methods
+    assert "POST" in evaluate_methods
