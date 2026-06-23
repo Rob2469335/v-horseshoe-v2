@@ -13,6 +13,7 @@ def test_list_agents_shape(client):
     assert r.status_code == 200
     agents = r.json()
     assert isinstance(agents, list)
+    assert len(agents) == 6
 
 def test_create_agent_shape(client):
     payload = {

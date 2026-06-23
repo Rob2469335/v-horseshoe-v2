@@ -228,6 +228,29 @@ def stream_prompt(agent_id, prompt, history):
                 chunk = json.loads(line)
                 chunk_type = chunk.get("type")
 
+                if "delegated_by" in chunk and "agent_id" in chunk:
+                    parent = chunk["delegated_by"]
+                    child = chunk["agent_id"]
+                    if child not in ctx.delegation_chain:
+                        if parent in ctx.delegation_chain:
+                            idx = ctx.delegation_chain.index(parent)
+                            ctx.delegation_chain = ctx.delegation_chain[:idx+1] + [child]
+                        else:
+                            ctx.delegation_chain.append(child)
+                        ctx.save()
+
+                if "error" in chunk:
+                    live.stop()
+                    err_agent = chunk.get("agent_id", ctx.active_agent)
+                    err_tool = chunk.get("tool", "unknown")
+                    err_msg = chunk.get("error")
+                    ctx.console.print(Panel(
+                        f"[bold red]Error in {err_agent} (Tool: {err_tool}):[/bold red]\n{err_msg}",
+                        border_style="red"
+                    ))
+                    live.start()
+                    continue
+
                 # Handle trace and step display
                 if chunk_type == "model_plan":
                     requested_role = chunk.get("requested_role", "unknown")

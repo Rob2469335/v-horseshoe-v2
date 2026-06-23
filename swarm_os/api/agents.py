@@ -46,21 +46,42 @@ def list_agents(request: Request):
             "id": "coordinator",
             "role": "coordinator",
             "description": "Supreme orchestrator. Analyzes intent, delegates to specialists, synthesizes final response. (Fallback Mode)",
-            "model_role": "planner",
+            "model_role": "reasoning",
             "config": {}
         },
         {
             "id": "planner",
             "role": "planner",
             "description": "Decomposes complex tasks into ordered execution steps with dependencies and success criteria. (Fallback Mode)",
-            "model_role": "planner",
+            "model_role": "reasoning",
             "config": {}
         },
         {
             "id": "executor",
             "role": "executor",
             "description": "Executes plan steps autonomously using tools. Reads files, runs searches, writes code, patches files. (Fallback Mode)",
-            "model_role": "deep_coder",
+            "model_role": "fast",
+            "config": {}
+        },
+        {
+            "id": "tool-runner",
+            "role": "tool-runner",
+            "description": "Specialized agent for executing capability and tool calls. (Fallback Mode)",
+            "model_role": "fast",
+            "config": {}
+        },
+        {
+            "id": "reviewer",
+            "role": "reviewer",
+            "description": "Audits code and proposals, finds bugs and design flaws. (Fallback Mode)",
+            "model_role": "reasoning",
+            "config": {}
+        },
+        {
+            "id": "coder",
+            "role": "coder",
+            "description": "Code-writing specialist focusing on high-quality modifications. (Fallback Mode)",
+            "model_role": "fast",
             "config": {}
         }
     ]

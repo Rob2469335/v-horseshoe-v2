@@ -123,7 +123,11 @@ class Orchestrator:
                     if "tool_name" in obj and isinstance(obj["tool_name"], str):
                         params = obj.get("params", {})
                         return obj["tool_name"].strip(), json.dumps(params)
-                    if "command" in obj and isinstance(obj.get("command"), str) and obj["command"].startswith("/"):
+                    _cmd_val = obj.get("command", "")
+                    _CLI_ONLY = {"/goal", "/plan", "/debug", "/compress", "/boot", "/exit", "/debate"}
+                    if ("command" in obj and isinstance(_cmd_val, str)
+                            and _cmd_val.startswith("/")
+                            and not any(_cmd_val.startswith(c) for c in _CLI_ONLY)):
                         return "command", json.dumps(obj)
             except Exception:
                 pass

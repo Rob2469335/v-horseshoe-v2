@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from typing import Iterable
+from typing import Any, Iterable
 
 from .models import ModelProfile, ModelState, PlanStep, RouteDecision, StepDecision
 from .strategy_registry import strategy_registry
@@ -50,7 +50,7 @@ class Router:
         }
 
     def import_states(self, data: dict[str, dict[str, Any]]) -> None:
-        from typing import Any
+
         for name, values in data.items():
             state = self.get_state(name)
             state.failures = values.get("failures", 0)
@@ -82,7 +82,7 @@ class Router:
                 capability_fallback.append(name)
             elif role == "retrieval" and ("embedding" in caps or "rerank" in caps):
                 capability_fallback.append(name)
-            elif role in {"coder", "deep_coder"} and "code" in caps:
+            elif role in {"coding", "coder", "deep_coder"} and "code" in caps:
                 capability_fallback.append(name)
             elif role in {"planner", "reasoning"} and ("reasoning" in caps or "long_context" in caps):
                 capability_fallback.append(name)
@@ -152,7 +152,7 @@ class Router:
             target = assigned
             if raw_assigned == "none":
                 if any(k in goal for k in ("code", "refactor", "bug", "patch", "implement")):
-                    target = "coder"
+                    target = "coding"
                 elif any(k in goal for k in ("plan", "strategy", "architect", "design")):
                     target = "planner"
                 elif any(k in goal for k in ("write", "draft", "summar", "explain")):
@@ -172,6 +172,8 @@ def evolve_plugin_weights(registry: object) -> dict[str, float]:
         return {}
     ranked = registry.ranked()
     return {getattr(item, "name", ""): float(getattr(item, "fitness", 0.0)) for item in ranked if getattr(item, "name", "")}
+
+
 
 
 

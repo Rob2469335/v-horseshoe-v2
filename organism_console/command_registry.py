@@ -281,7 +281,7 @@ def cmd_model(ctx: CommandContext, args: List[str]) -> None:
 def cmd_agent(ctx: CommandContext, args: List[str]) -> None:
     if not args:
         ctx.console.print(f"Active agent: [bold cyan]{ctx.state.active_agent}[/bold cyan]")
-        ctx.console.print("To change: `/agent <name>` (coordinator, planner, executor, coder, reviewer)")
+        ctx.console.print("To change: `/agent <name>` (coordinator, planner, executor, coder, tool-runner, reviewer)")
         return
 
     agent_name = args[0].lower()
