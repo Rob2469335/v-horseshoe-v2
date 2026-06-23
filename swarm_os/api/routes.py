@@ -189,7 +189,10 @@ async def execute_tool(payload: ToolExecuteRequest, runtime=Depends(runtime_dep)
 @router.post("/generate", response_model=GenerateResponse)
 async def generate(payload: GenerateRequest, orch=Depends(get_orchestrator)):
     try:
-        response, chosen_model = await orch.generate(model=payload.model, prompt=payload.prompt)
+        _model = (payload.model or "").strip()
+        _MODEL_ALIASES = {"qwen2.5:7b": "qwen2.5:7b-instruct", "qwen2.5:14b": "qwen2.5:14b-instruct", "qwen2.5:3b": "qwen2.5:3b-instruct"}
+        _model = _MODEL_ALIASES.get(_model, _model) or None
+        response, chosen_model = await orch.generate(model=_model, prompt=payload.prompt)
         return GenerateResponse(response=response, model=chosen_model)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc))
