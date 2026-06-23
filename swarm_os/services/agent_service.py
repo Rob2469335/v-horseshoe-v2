@@ -180,6 +180,16 @@ class AgentService:
             "- delegate: {target_agent: 'planner'|'executor'|'coder'|'tool-runner', task: '...'}",
             "",
             "Think step-by-step. Be concise. Be agentic.",
+            "",
+            "ROLE RULES:",
+            "- planner: delegate to executor, coder, or tool-runner; planner should not do implementation work directly.",
+            "- executor: execute tasks directly with tools; NEVER delegate to executor.",
+            "- coder: write or patch code; NEVER delegate to coder unless the task specifically requires code changes.",
+            "- tool-runner: run tools and checks; NEVER delegate to tool-runner unless a concrete tool action is needed.",
+            "- Only use ask_user if agent_id is coordinator.",
+            "- If you are executor and need code changes, delegate to coder.",
+            "- If you are executor and need tool execution or verification, use tools directly or delegate to tool-runner.",
+            "- Never delegate to yourself. Choose a different agent or use a tool directly.",
         ]
         return "\n".join(instruction)
 
@@ -604,50 +614,70 @@ class AgentService:
             )
 
             if not match:
-                if final_emitted:
-                    logger.info("Final response already emitted for agent '%s'.", agent_id)
+                delegate_tag = re.search(
+                    r'<delegate\s+target_agent="([^"]+)"\s+task="([^"]+)"\s*/?>',
+                    full_chunk_content,
+                    re.DOTALL,
+                )
+                if delegate_tag:
+                    tool_name = "delegate"
+                    payload = {
+                        "target_agent": delegate_tag.group(1).strip(),
+                        "task": delegate_tag.group(2).strip(),
+                    }
+                else:
+                    if final_emitted:
+                        logger.info("Final response already emitted for agent '%s'.", agent_id)
+                        return
+                    logger.info("Final response generated without tool call for agent '%s'.", agent_id)
+                    final_emitted = True
+                    yield {
+                        "agent_id": agent_id,
+                        "type": "final",
+                        "model": current_model,
+                        "provider": current_provider,
+                        "content": full_chunk_content,
+                    }
                     return
-                logger.info("Final response generated without tool call for agent '%s'.", agent_id)
-                final_emitted = True
-                yield {
-                    "agent_id": agent_id,
-                    "type": "final",
-                    "model": current_model,
-                    "provider": current_provider,
-                    "content": full_chunk_content,
-                }
-                return
-
-            tool_name = match.group(1).strip()
-
-            if tool_calls_made >= 1 and agent_id in ("executor", "coder", "tool-runner"):
-                logger.info("Second tool call suppressed for agent '%s'; emitting final response.", agent_id)
-                final_emitted = True
-                yield {
-                    "agent_id": agent_id,
-                    "type": "final",
-                    "model": current_model,
-                    "provider": current_provider,
-                    "content": full_chunk_content,
-                }
-                return
-
-            try:
-                payload = json.loads(match.group(2).strip())
-            except Exception as exc:
-                yield {
-                    "agent_id": agent_id,
-                    "error": f"Invalid tool payload JSON: {exc}",
-                    "tool": tool_name,
-                }
-                return
+            else:
+                tool_name = match.group(1).strip()
+                raw_payload = match.group(2).strip()
+                try:
+                    payload = json.loads(raw_payload)
+                except Exception:
+                    payload = {}
 
             available_tools = set(runtime.list_tools())
             mapped_tool_name, payload = reconcile_and_repair_tool_call(tool_name, payload, available_tools)
 
+
+            if mapped_tool_name == "ask_user" and agent_id != "coordinator":
+                logger.warning(f"ask_user blocked for non-coordinator agent: {agent_id}")
+                yield {
+                    "agent_id": agent_id,
+                    "type": "final",
+                    "model": current_model,
+                    "provider": current_provider,
+                    "content": "Only the coordinator agent is allowed to ask the user questions."
+                }
+                return
+
+
+
             if mapped_tool_name == "__delegate__":
                 target = payload.get("target_agent", "executor")
                 task = payload.get("task") or payload.get("content") or payload.get("message") or payload.get("instruction") or str(payload)
+
+                if target == agent_id:
+                    logger.warning(f"Self-delegation blocked: {agent_id} -> {target}")
+                    yield {
+                        "agent_id": agent_id,
+                        "type": "final",
+                        "model": current_model,
+                        "provider": current_provider,
+                        "content": f"Self-delegation blocked for agent: {agent_id}."
+                    }
+                    return
                 
                 yield {
                     "agent_id": agent_id,
