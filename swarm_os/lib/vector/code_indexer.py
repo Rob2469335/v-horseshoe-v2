@@ -22,7 +22,7 @@ OLLAMA_URL = "http://127.0.0.1:11434"
 QDRANT_URL = "http://127.0.0.1:6333"
 
 INCLUDE_EXTS = {".py", ".ts", ".tsx", ".js", ".jsx", ".md", ".yaml", ".toml"}
-EXCLUDE_DIRS = {"node_modules", "__pycache__", ".git", "dist", "build", ".venv", "_legacy_kernel_backup", "storage", "logs", ".data", ".system_generated", ".agents"}
+EXCLUDE_DIRS = {"node_modules", "__pycache__", ".git", "dist", "build", ".venv", "_legacy_kernel_backup"}
 CHUNK_LINES = 60
 OVERLAP_LINES = 10
 
@@ -113,18 +113,6 @@ def index_project(root: str | Path) -> int:
     """
     root = Path(root)
     _ensure_collection()
-
-    try:
-        r = httpx.get(f"{QDRANT_URL}/collections/{COLLECTION}", timeout=5)
-        if r.status_code == 200:
-            data = r.json()
-            cnt = data.get("result", {}).get("points_count", 0)
-            if cnt > 0:
-                logger.info(f"Collection '{COLLECTION}' already contains {cnt} points. Skipping indexing.")
-                return cnt
-    except Exception as e:
-        logger.warning(f"Failed to check collection size: {e}")
-
 
     total = 0
     batch: list[dict] = []

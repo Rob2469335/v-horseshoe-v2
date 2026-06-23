@@ -80,21 +80,11 @@ async def search(collection_key: str, query: str, top_k: int = 20) -> list[dict]
     name = COLLECTIONS.get(collection_key, collection_key)
     vector = await _embed(query)
     client = get_client()
-    if hasattr(client, "query_points"):
-        response = await client.query_points(
-            collection_name=name,
-            query=vector,
-            limit=top_k,
-            with_payload=True,
-        )
-        results = response.points
-    else:
-        results = await client.search(
-            collection_name=name,
-            query_vector=vector,
-            limit=top_k,
-            with_payload=True,
-        )
+    results = await client.search(
+        collection_name=name,
+        query_vector=vector,
+        limit=top_k,
+        with_payload=True,
+    )
     return [{"score": r.score, "payload": r.payload} for r in results]
-
 
