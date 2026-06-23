@@ -22,6 +22,58 @@ except Exception:
 logger = logging.getLogger(__name__)
 
 
+_LIVE_OPENROUTER_MODELS = None
+_LIVE_NVIDIA_MODELS = None
+_LAST_FETCH_TIME = 0.0
+_CACHE_DURATION = 1800.0  # 30 minutes
+
+async def fetch_live_models_if_needed():
+    global _LIVE_OPENROUTER_MODELS, _LIVE_NVIDIA_MODELS, _LAST_FETCH_TIME
+    import time
+    now = time.time()
+    if (
+        _LIVE_OPENROUTER_MODELS is not None 
+        and _LIVE_NVIDIA_MODELS is not None 
+        and (now - _LAST_FETCH_TIME) < _CACHE_DURATION
+    ):
+        return
+
+    # Fetch OpenRouter models
+    try:
+        async with httpx.AsyncClient(timeout=5.0, verify=False) as client:
+            resp = await client.get("https://openrouter.ai/api/v1/models")
+            if resp.status_code == 200:
+                data = resp.json()
+                _LIVE_OPENROUTER_MODELS = [m["id"] for m in data.get("data", [])]
+            else:
+                _LIVE_OPENROUTER_MODELS = []
+    except Exception as e:
+        logger.warning(f"Failed to fetch live OpenRouter models: {e}")
+        if _LIVE_OPENROUTER_MODELS is None:
+            _LIVE_OPENROUTER_MODELS = []
+
+    # Fetch Nvidia models
+    api_key = _os.environ.get("NVIDIA_API_KEY", "").strip()
+    if api_key:
+        try:
+            headers = {"Authorization": f"Bearer {api_key}"}
+            async with httpx.AsyncClient(timeout=5.0, verify=False) as client:
+                resp = await client.get("https://integrate.api.nvidia.com/v1/models", headers=headers)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    _LIVE_NVIDIA_MODELS = [m["id"] for m in data.get("data", [])]
+                else:
+                    _LIVE_NVIDIA_MODELS = []
+        except Exception as e:
+            logger.warning(f"Failed to fetch live Nvidia models: {e}")
+            if _LIVE_NVIDIA_MODELS is None:
+                _LIVE_NVIDIA_MODELS = []
+    else:
+        _LIVE_NVIDIA_MODELS = []
+
+    _LAST_FETCH_TIME = now
+
+
 def _resolve_runtime_config(agent: dict):
     model = _os.environ.get("ZENITH_MODEL")
     temp = _os.environ.get("ZENITH_TEMP", "0.7")
@@ -143,6 +195,15 @@ class AgentService:
         history = history or []
         delegation_chain = delegation_chain or [agent_id]
 
+        if len(delegation_chain) >= 6:
+            logger.warning(f"Delegation depth exceeded: {delegation_chain}")
+            yield {
+                "agent_id": agent_id,
+                "type": "error",
+                "content": f"Delegation depth exceeded: {' -> '.join(delegation_chain)}"
+            }
+            return
+
         system_msg = self._build_system_instruction(agent)
         messages = [{"role": "system", "content": system_msg}] + history
         if prompt:
@@ -165,7 +226,7 @@ class AgentService:
             if proposed_msg.get("role") == "assistant":
                 proposed_content = proposed_msg.get("content", "")
                 match = re.search(
-                    r'<tool_call name="([^"]+)">\s*(\{.*?\})\s*</tool_call>',
+                    r'<tool_call\s+name="([^"]+)">\s*(\{.*?\})\s*(?:</tool_call>|<strategic_intent|<plan|<tool_call|<topic_update|$)',
                     proposed_content,
                     re.DOTALL,
                 )
@@ -238,10 +299,97 @@ class AgentService:
                     for spec in CLOUD_MODEL_SPECS:
                         if spec.metadata.get("provider") == "openrouter" and "reasoning" in spec.capabilities and "free" in spec.name:
                             return spec.name, "openrouter"
-                return "qwen2.5:3b-instruct", "ollama"
+                return "qwen2.5:7b-instruct", "ollama"
 
-        chosen_model, provider = resolve_model_and_provider(agent_id)
+        # Resolve initial configs
         _, temperature = _resolve_runtime_config(agent)
+
+        # 1. 480cloud
+        fallback_chain = [("qwen3-coder:480b-cloud", "ollama")]
+
+        # 2. Nvidia big models
+        predefined_nvidia = [
+            ("meta/llama-3.1-405b-instruct", "nvidia"),
+            ("meta/llama-3.3-70b-instruct", "nvidia"),
+            ("nvidia/nemotron-3-ultra-550b-a55b:free", "openrouter"),
+            ("nvidia/nemotron-3-super-120b-a12b:free", "openrouter"),
+        ]
+
+        try:
+            await fetch_live_models_if_needed()
+        except Exception as e:
+            logger.warning(f"Error fetching live models: {e}")
+
+        global _LIVE_NVIDIA_MODELS, _LIVE_OPENROUTER_MODELS
+        nvidia_candidates = []
+        if _LIVE_NVIDIA_MODELS:
+            for m in _LIVE_NVIDIA_MODELS:
+                m_lower = m.lower()
+                is_big = False
+                if any(x in m_lower for x in ["405b", "70b", "large", "super", "pro"]):
+                    is_big = True
+                elif "nemotron" in m_lower and not any(x in m_lower for x in ["nano", "8b", "vl"]):
+                    is_big = True
+                
+                if is_big and any(x in m_lower for x in ["llama-3", "nemotron", "deepseek", "yi"]):
+                    nvidia_candidates.append((m, "nvidia"))
+
+        if nvidia_candidates:
+            fallback_chain.extend(nvidia_candidates)
+            if _LIVE_OPENROUTER_MODELS:
+                for m in _LIVE_OPENROUTER_MODELS:
+                    if "nvidia/nemotron" in m.lower() and m.endswith(":free"):
+                        fallback_chain.append((m, "openrouter"))
+            else:
+                fallback_chain.append(("nvidia/nemotron-3-ultra-550b-a55b:free", "openrouter"))
+                fallback_chain.append(("nvidia/nemotron-3-super-120b-a12b:free", "openrouter"))
+        else:
+            fallback_chain.extend(predefined_nvidia)
+
+        # 3. OpenRouter free big models
+        predefined_or_free = [
+            ("deepseek/deepseek-chat-v3-5:free", "openrouter"),
+            ("openrouter/free", "openrouter"),
+            ("qwen/qwen3-coder:free", "openrouter"),
+            ("deepseek/deepseek-v4-flash:free", "openrouter"),
+        ]
+        or_free_candidates = []
+        if _LIVE_OPENROUTER_MODELS:
+            for m in _LIVE_OPENROUTER_MODELS:
+                m_lower = m.lower()
+                if m_lower.endswith(":free"):
+                    if any(x in m_lower for x in ["nemotron", "llama-3", "deepseek", "qwen", "gemma-4", "mixtral", "command-r", "phi-4"]):
+                        if not any(x in m_lower for x in ["-8b", "-3b", "-2b", "nano", "mini-code"]):
+                            or_free_candidates.append((m, "openrouter"))
+
+        if or_free_candidates:
+            for item in or_free_candidates:
+                if item not in fallback_chain:
+                    fallback_chain.append(item)
+        else:
+            for item in predefined_or_free:
+                if item not in fallback_chain:
+                    fallback_chain.append(item)
+
+        # 4. Local 14b coder
+        fallback_chain.append(("qwen3:14b", "ollama"))
+        fallback_chain.append(("qwen2.5-coder:14b", "ollama"))
+
+        # Prepend ZENITH_MODEL if it was set explicitly
+        env_model = _os.environ.get("ZENITH_MODEL")
+        if env_model and env_model.strip():
+            if "/" in env_model or any(x in env_model.lower() for x in ["openrouter", "deepseek"]):
+                env_provider = "openrouter"
+            elif "nvidia" in env_model.lower():
+                env_provider = "nvidia"
+            elif "gemini" in env_model.lower():
+                env_provider = "gemini"
+            else:
+                env_provider = "ollama"
+            
+            custom_item = (env_model.strip(), env_provider)
+            if custom_item not in fallback_chain:
+                fallback_chain.insert(0, custom_item)
 
         limit = STEP_LIMIT if agent_id in ("executor", "coder") else 5
         final_emitted = False
@@ -250,11 +398,24 @@ class AgentService:
 
         for turn in range(limit):
             full_chunk_content = ""
-            current_model = chosen_model
-            current_provider = provider
+            chain_idx = 0
+            current_model, current_provider = fallback_chain[chain_idx]
             success = False
 
             while not success:
+                # Emit model selection metadata to caller/CLI conditionally
+                is_default_local = (current_provider == "ollama" and current_model in ("qwen2.5:3b-instruct", "qwen2.5-coder:7b"))
+                if chain_idx > 0 or not is_default_local:
+                    yield {
+                        "agent_id": agent_id,
+                        "type": "model_selected",
+                        "model": current_model,
+                        "provider": current_provider,
+                        "requested_role": agent.get("model_role", "general"),
+                        "attempt": chain_idx + 1,
+                        "temperature": temperature
+                    }
+
                 if current_provider == "openrouter":
                     api_key = _os.environ.get("OPENROUTER_API_KEY", "").strip()
                     base_url = _os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").strip()
@@ -270,7 +431,8 @@ class AgentService:
                         "messages": messages,
                         "stream": True,
                         "temperature": temperature,
-                        "max_tokens": 1500
+                        "max_tokens": 1500,
+                        "stop": ["</tool_call>"]
                     }
                 elif current_provider == "nvidia":
                     api_key = _os.environ.get("NVIDIA_API_KEY", "").strip()
@@ -285,7 +447,8 @@ class AgentService:
                         "messages": messages,
                         "stream": True,
                         "temperature": temperature,
-                        "max_tokens": 1500
+                        "max_tokens": 1500,
+                        "stop": ["</tool_call>"]
                     }
                 elif current_provider == "gemini":
                     api_key = _os.environ.get("GEMINI_API_KEY", "").strip()
@@ -300,7 +463,8 @@ class AgentService:
                         "messages": messages,
                         "stream": True,
                         "temperature": temperature,
-                        "max_tokens": 1500
+                        "max_tokens": 1500,
+                        "stop": ["</tool_call>"]
                     }
                 else:
                     url = "http://127.0.0.1:11434/api/chat"
@@ -310,7 +474,7 @@ class AgentService:
                         "messages": messages,
                         "stream": True,
                         "keep_alive": 0,
-                        "options": {"temperature": temperature, "num_predict": 1500},
+                        "options": {"temperature": temperature, "num_predict": 1500, "stop": ["</tool_call>"]},
                     }
 
                 try:
@@ -369,22 +533,42 @@ class AgentService:
                     success = True
                 except Exception as exc:
                     logger.warning(f"Request failed using provider {current_provider} with model {current_model}: {exc}")
-                    if current_provider != "ollama":
-                        logger.warning("Attempting local Ollama fallback execution...")
-                        if agent_id in ("executor", "coder", "tool-runner"):
-                            current_model = "qwen2.5-coder:7b"
-                        else:
-                            current_model = "qwen2.5:3b-instruct"
-                        current_provider = "ollama"
+                    chain_idx += 1
+                    if chain_idx < len(fallback_chain):
+                        next_model, next_provider = fallback_chain[chain_idx]
+                        logger.warning(f"Escalating from {current_model} ({current_provider}) to {next_model} ({next_provider})...")
+                        
+                        try:
+                            from organism_console.speech import play_chime_async
+                            play_chime_async("escalation")
+                        except Exception:
+                            pass
+
+                        yield {
+                            "agent_id": agent_id,
+                            "type": "model_escalation",
+                            "from_model": current_model,
+                            "reason": f"{exc.__class__.__name__}: {str(exc)[:100]}",
+                        }
+                        
+                        current_model = next_model
+                        current_provider = next_provider
                         full_chunk_content = ""
                     else:
+                        logger.error("All models in the fallback chain have been exhausted!")
+                        try:
+                            from organism_console.speech import play_chime_async
+                            play_chime_async("error")
+                        except Exception:
+                            pass
                         raise exc
+
 
             messages.append({"role": "assistant", "content": full_chunk_content})
 
             # Turn-level duplicate or near-identical narrative check
             clean_content = re.sub(r'<plan>.*?</plan>', '', full_chunk_content, flags=re.DOTALL)
-            clean_content = re.sub(r'<tool_call[^>]*>.*?</tool_call>', '', clean_content, flags=re.DOTALL)
+            clean_content = re.sub(r'<tool_call[^>]*>.*?(?:</tool_call>|$)', '', clean_content, flags=re.DOTALL)
             clean_content = clean_content.strip()
             
             is_duplicate = False
@@ -414,7 +598,7 @@ class AgentService:
             previous_outputs.append(clean_content)
 
             match = re.search(
-                r'<tool_call name="([^"]+)">\s*(\{.*?\})\s*</tool_call>',
+                r'<tool_call\s+name="([^"]+)">\s*(\{.*?\})\s*(?:</tool_call>|<strategic_intent|<plan|<tool_call|<topic_update|$)',
                 full_chunk_content,
                 re.DOTALL,
             )
@@ -619,5 +803,6 @@ def construct_approval_question(tool_name: str, payload: dict) -> str:
         
     lines.append("\nDo you approve this action?")
     return "\n".join(lines)
+
 
 
