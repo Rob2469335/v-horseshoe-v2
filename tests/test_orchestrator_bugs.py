@@ -53,7 +53,7 @@ async def test_slash_command_not_repeated(orch):
     assert orch.ollama.generate.call_count == 1, (
         f"Expected 1 call (break after slash command handled), got {orch.ollama.generate.call_count}"
     )
-    assert "intercepted" in result.lower() or "handled" in result.lower()
+    assert result == slash_json
 
 
 @pytest.mark.asyncio
@@ -145,3 +145,4 @@ async def test_generate_fallback_when_no_api_key(orch, monkeypatch):
     call_args = orch.ollama.generate.call_args
     assert call_args.kwargs.get("model") == "qwen2.5:7b-instruct" or \
            (call_args.args and call_args.args[0] != "openrouter/free")
+
