@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 import pytest
 import json
 import asyncio
@@ -101,8 +101,11 @@ async def test_critic_reflection_loop(tmp_path):
     tool_call_invalid = '<tool_call name="filesystem">{"operation": "read", "path": "does_not_exist.txt"}</tool_call>'
     final_response = "I see the file does not exist, so I am reporting back."
     
-    orchestrator.ollama.generate = AsyncMock()
-    orchestrator.ollama.generate.side_effect = [tool_call_invalid, final_response]
+    orchestrator.ollama.generate = AsyncMock(side_effect=[
+        tool_call_invalid,
+        final_response,
+        AssertionError("generate() called a 3rd time -- loop did not break on plain-text response"),
+    ])
     
     messages = [{"role": "user", "content": "Read non_existent file"}]
     result, _ = await orchestrator.generate(model="qwen2.5:7b-instruct", messages=messages)
