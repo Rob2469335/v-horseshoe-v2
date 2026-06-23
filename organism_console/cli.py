@@ -321,6 +321,15 @@ def stream_prompt(agent_id, prompt, history):
                     from_a = chunk.get("from", agent_id)
                     to_a = chunk.get("to", "executor")
                     task = str(chunk.get("task", ""))[:80]
+
+                    if to_a not in ctx.delegation_chain:
+                        if from_a in ctx.delegation_chain:
+                            idx = ctx.delegation_chain.index(from_a)
+                            ctx.delegation_chain = ctx.delegation_chain[:idx+1] + [to_a]
+                        else:
+                            ctx.delegation_chain.append(to_a)
+                        ctx.save()
+
                     handoffs_list.append({"from": from_a, "to": to_a, "task": task})
                     ctx.console.print(render_step_micro_ui("swarm", f"{from_a} → {to_a}: {task}"))
                     live.start()
@@ -904,4 +913,5 @@ def cmd_tokens_display(ctx: CommandContext, args: List[str]) -> None:
 
 if __name__ == "__main__":
     sys.exit(main())
+
 
