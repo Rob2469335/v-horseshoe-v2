@@ -32,8 +32,13 @@ if (-not $env:NVIDIAAPIKEY -and $env:NVIDIA_API_KEY) { $env:NVIDIAAPIKEY = $env:
 if (-not $env:OPENROUTER_API_KEY -and $env:OPENROUTERAPIKEY) { $env:OPENROUTER_API_KEY = $env:OPENROUTERAPIKEY }
 if (-not $env:OPENROUTERAPIKEY -and $env:OPENROUTER_API_KEY) { $env:OPENROUTERAPIKEY = $env:OPENROUTER_API_KEY }
 
-Write-Host "NVIDIA key present: $([bool]$env:NVIDIA_API_KEY)" -ForegroundColor Gray
-Write-Host "OpenRouter key present: $([bool]$env:OPENROUTER_API_KEY)" -ForegroundColor Gray
+Write-Host "NVIDIA key present:      $([bool]$env:NVIDIA_API_KEY)" -ForegroundColor Gray
+Write-Host "OpenRouter key present:   $([bool]$env:OPENROUTER_API_KEY)" -ForegroundColor Gray
+Write-Host "Gemini key present:       $([bool]$env:GEMINI_API_KEY)" -ForegroundColor Gray
+Write-Host "Groq key present:         $([bool]$env:GROQ_API_KEY)" -ForegroundColor Gray
+Write-Host "Tavily key present:       $([bool]$env:TAVILY_API_KEY)" -ForegroundColor Gray
+Write-Host "Brave key present:        $([bool]$env:BRAVE_API_KEY)" -ForegroundColor Gray
+Write-Host "Exa key present:          $([bool]$env:EXA_API_KEY)" -ForegroundColor Gray
 
 # STEP 1 - Cleanup
 Write-Host "`n[STEP 1] Cleaning up..." -ForegroundColor Yellow
@@ -68,6 +73,17 @@ $backendEnv = @{
     NVIDIAAPIKEY        = $env:NVIDIAAPIKEY
     OPENROUTER_API_KEY  = $env:OPENROUTER_API_KEY
     OPENROUTERAPIKEY    = $env:OPENROUTERAPIKEY
+    GEMINI_API_KEY      = $env:GEMINI_API_KEY
+    GROQ_API_KEY        = $env:GROQ_API_KEY
+    BRAVE_API_KEY       = $env:BRAVE_API_KEY
+    TAVILY_API_KEY      = $env:TAVILY_API_KEY
+    EXA_API_KEY         = $env:EXA_API_KEY
+    SERPAPI_KEY         = $env:SERPAPI_KEY
+    SERPER_API_KEY      = $env:SERPER_API_KEY
+    TINYFISH_API_KEY    = $env:TINYFISH_API_KEY
+    OPENROUTER_BASE_URL = $env:OPENROUTER_BASE_URL
+    NVIDIA_BASE_URL     = $env:NVIDIA_BASE_URL
+    SWARM_SEARXNG_URL   = $env:SWARM_SEARXNG_URL
 }
 
 $backendJob = Start-Job -ScriptBlock {
@@ -80,7 +96,11 @@ $backendJob = Start-Job -ScriptBlock {
         }
     }
 
-    & "C:\Python314\python.exe" -m uvicorn swarm_os.app.main:app --host 127.0.0.1 --port 8000 2>&1
+    Write-Host "DEBUG root=$r"
+Write-Host "DEBUG pwd=$(Get-Location)"
+Write-Host "DEBUG PYTHONPATH=$env:PYTHONPATH"
+& "C:\Python314\python.exe" -c "import os,sys,importlib; print('DEBUG cwd=', os.getcwd()); print('DEBUG sys.path[0]=', sys.path[0]); m=importlib.import_module('swarm_os.app.main'); print('DEBUG module=', m.__file__)"
+& "C:\Python314\python.exe" -m uvicorn --app-dir $r swarm_os.app.main:app --host 127.0.0.1 --port 8000 2>&1
 } -ArgumentList $root, $backendEnv
 
 for ($i = 0; $i -lt 20; $i++) {
@@ -122,3 +142,4 @@ try {
         Get-Process -Name $svc -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     }
 }
+

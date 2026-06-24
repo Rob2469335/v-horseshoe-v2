@@ -1,98 +1,209 @@
 # swarm_os/services/agent_service.py
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os as _os
 import re
+import time
 from typing import Any, Dict, List, AsyncGenerator
 
 import httpx
 
 from swarm_os.agent_runtime import AgentRuntime
 from swarm_os.core.event_bus import event_bus
+from swarm_os.kernel.model_router import ModelRouter
 
 try:
     from swarm_os.lib.vector.context_retriever import build_context_prompt as _build_ctx
-except Exception:
+except ImportError:
     def _build_ctx(q):
         return q
 
-
 logger = logging.getLogger(__name__)
-
 
 _LIVE_OPENROUTER_MODELS = None
 _LIVE_NVIDIA_MODELS = None
+_LIVE_GROQ_MODELS = None
+_LIVE_GEMINI_MODELS = None
 _LAST_FETCH_TIME = 0.0
 _CACHE_DURATION = 1800.0  # 30 minutes
 
-async def fetch_live_models_if_needed():
-    global _LIVE_OPENROUTER_MODELS, _LIVE_NVIDIA_MODELS, _LAST_FETCH_TIME
-    import time
-    now = time.time()
-    if (
-        _LIVE_OPENROUTER_MODELS is not None 
-        and _LIVE_NVIDIA_MODELS is not None 
-        and (now - _LAST_FETCH_TIME) < _CACHE_DURATION
-    ):
-        return
+_ASYNC_CLIENT = None
 
-    # Fetch OpenRouter models
+def get_async_client() -> httpx.AsyncClient:
+    global _ASYNC_CLIENT
+    if _ASYNC_CLIENT is None or _ASYNC_CLIENT.is_closed:
+        _ASYNC_CLIENT = httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0), verify=False)
+    return _ASYNC_CLIENT
+
+async def _fetch_openrouter_models():
+    global _LIVE_OPENROUTER_MODELS
     try:
-        async with httpx.AsyncClient(timeout=5.0, verify=False) as client:
-            resp = await client.get("https://openrouter.ai/api/v1/models")
-            if resp.status_code == 200:
-                data = resp.json()
-                _LIVE_OPENROUTER_MODELS = [m["id"] for m in data.get("data", [])]
-            else:
-                _LIVE_OPENROUTER_MODELS = []
+        client = get_async_client()
+        resp = await client.get("https://openrouter.ai/api/v1/models")
+        if resp.status_code == 200:
+            data = resp.json()
+            _LIVE_OPENROUTER_MODELS = [m["id"] for m in data.get("data", [])]
+        else:
+            _LIVE_OPENROUTER_MODELS = []
     except Exception as e:
         logger.warning(f"Failed to fetch live OpenRouter models: {e}")
-        if _LIVE_OPENROUTER_MODELS is None:
-            _LIVE_OPENROUTER_MODELS = []
+        _LIVE_OPENROUTER_MODELS = []
 
-    # Fetch Nvidia models
+async def _fetch_nvidia_models():
+    global _LIVE_NVIDIA_MODELS
     api_key = _os.environ.get("NVIDIA_API_KEY", "").strip()
     if api_key:
         try:
             headers = {"Authorization": f"Bearer {api_key}"}
-            async with httpx.AsyncClient(timeout=5.0, verify=False) as client:
-                resp = await client.get("https://integrate.api.nvidia.com/v1/models", headers=headers)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    _LIVE_NVIDIA_MODELS = [m["id"] for m in data.get("data", [])]
-                else:
-                    _LIVE_NVIDIA_MODELS = []
+            client = get_async_client()
+            resp = await client.get("https://integrate.api.nvidia.com/v1/models", headers=headers)
+            if resp.status_code == 200:
+                data = resp.json()
+                _LIVE_NVIDIA_MODELS = [m["id"] for m in data.get("data", [])]
+            else:
+                _LIVE_NVIDIA_MODELS = []
         except Exception as e:
             logger.warning(f"Failed to fetch live Nvidia models: {e}")
-            if _LIVE_NVIDIA_MODELS is None:
-                _LIVE_NVIDIA_MODELS = []
+            _LIVE_NVIDIA_MODELS = []
     else:
         _LIVE_NVIDIA_MODELS = []
 
-    _LAST_FETCH_TIME = now
+async def _fetch_groq_models():
+    global _LIVE_GROQ_MODELS
+    groq_key = _os.environ.get("GROQ_API_KEY", "").strip()
+    if groq_key:
+        try:
+            headers = {"Authorization": f"Bearer {groq_key}"}
+            client = get_async_client()
+            resp = await client.get("https://api.groq.com/openai/v1/models", headers=headers)
+            if resp.status_code == 200:
+                data = resp.json()
+                _LIVE_GROQ_MODELS = [m["id"] for m in data.get("data", [])]
+            else:
+                _LIVE_GROQ_MODELS = []
+        except Exception as e:
+            logger.warning(f"Failed to fetch live Groq models: {e}")
+            _LIVE_GROQ_MODELS = []
+    else:
+        _LIVE_GROQ_MODELS = []
 
+async def _fetch_gemini_models():
+    global _LIVE_GEMINI_MODELS
+    gemini_key = _os.environ.get("GEMINI_API_KEY", "").strip()
+    if gemini_key:
+        _LIVE_GEMINI_MODELS = ["gemini-2.5-flash", "gemini-2.5-pro"]
+    else:
+        _LIVE_GEMINI_MODELS = []
+
+async def fetch_live_models_if_needed():
+    global _LIVE_OPENROUTER_MODELS, _LIVE_NVIDIA_MODELS, _LIVE_GROQ_MODELS, _LIVE_GEMINI_MODELS, _LAST_FETCH_TIME
+    now = time.time()
+    if (
+        _LIVE_OPENROUTER_MODELS is not None
+        and _LIVE_NVIDIA_MODELS is not None
+        and _LIVE_GROQ_MODELS is not None
+        and _LIVE_GEMINI_MODELS is not None
+        and (now - _LAST_FETCH_TIME) < _CACHE_DURATION
+    ):
+        return
+
+    try:
+        await asyncio.gather(
+            _fetch_openrouter_models(),
+            _fetch_nvidia_models(),
+            _fetch_groq_models(),
+            _fetch_gemini_models(),
+            return_exceptions=True
+        )
+    except Exception as e:
+        logger.error(f"Error updating live models concurrently: {e}")
+
+    _LAST_FETCH_TIME = now
 
 def _resolve_runtime_config(agent: dict):
     model = _os.environ.get("ZENITH_MODEL")
     temp = _os.environ.get("ZENITH_TEMP", "0.7")
-
     try:
         temp = float(temp)
     except Exception:
         temp = 0.7
-
     role = agent.get("model_role", "fast")
-
     if not model or not model.strip():
         model = "qwen3:14b" if role == "reasoning" else "qwen2.5:7b-instruct"
-
     return model, temp
-
 
 STEP_LIMIT = 2
 
+def reconcile_and_repair_tool_call(tool_name: str, payload: dict, available_tools: set[str]) -> tuple[str, dict]:
+    mapped_name = tool_name
+    new_payload = dict(payload or {})
+
+    if tool_name in {"delegate", "handoff", "transfer", "route"}:
+        return "__delegate__", new_payload
+
+    if tool_name not in available_tools:
+        if tool_name in {"read_file", "write_file", "patch_file", "file_read", "file_write", "file_patch"}:
+            mapped_name = "filesystem"
+            op = "read" if "read" in tool_name else "write" if "write" in tool_name else "patch"
+            new_payload["operation"] = op
+        elif tool_name in {"search", "google_search", "web", "search_web"}:
+            mapped_name = "web_search"
+        elif tool_name in {"scout", "grep", "cat", "vscode", "vscode_scout"}:
+            mapped_name = "vscode_automation"
+            if "command" not in new_payload:
+                if tool_name == "grep":
+                    new_payload["command"] = "grep"
+                elif tool_name == "cat":
+                    new_payload["command"] = "cat"
+                else:
+                    new_payload["command"] = "scout"
+            if "args" not in new_payload:
+                new_payload["args"] = []
+
+    return mapped_name, new_payload
+
+def construct_approval_question(tool_name: str, payload: dict) -> str:
+    lines = [
+        "⚠️ APPROVAL REQUIRED for state-changing action:",
+        f"• Action: Execute '{tool_name}'",
+    ]
+
+    if tool_name == "filesystem":
+        op = payload.get("operation", "")
+        path = payload.get("path", "")
+        lines.append(f"• Operation: {op}")
+        lines.append(f"• Affected File: {path}")
+
+        if op == "write":
+            content = payload.get("content", "")
+            lines.append("• Expected Outcome: Write new content to file.")
+            lines.append("• Risks: Overwriting existing file content.")
+            preview = content[:200] + ("..." if len(content) > 200 else "")
+            lines.append(f"• Content Preview:\n```\n{preview}\n```")
+        elif op == "patch":
+            old = payload.get("old", "")
+            new = payload.get("new", "")
+            lines.append("• Expected Outcome: Apply patch modifications.")
+            lines.append("• Risks: Code syntax errors if patch fails to apply correctly.")
+            lines.append(f"• Patch Diff:\n```diff\n- {old}\n+ {new}\n```")
+        elif op == "delete":
+            lines.append("• Expected Outcome: Delete file.")
+            lines.append("• Risks: Permanent loss of file.")
+
+    elif tool_name == "sandbox_repl":
+        lang = payload.get("language", "")
+        code = payload.get("code", "") or payload.get("command", "")
+        lines.append(f"• Language: {lang}")
+        lines.append("• Expected Outcome: Run execution command/script.")
+        lines.append("• Risks: Executing arbitrary code with environment side effects.")
+        preview = code[:200] + ("..." if len(code) > 200 else "")
+        lines.append(f"• Command Preview:\n```\n{preview}\n```")
+
+    lines.append("\nDo you approve this action?")
+    return "\n".join(lines)
 
 class AgentService:
     def __init__(self, orchestrator: Any, cache: Any = None, settings: Any = None):
@@ -193,9 +304,8 @@ class AgentService:
             "- You are the COORDINATOR. Your FIRST and ONLY action is ALWAYS to delegate to planner.",
             "- NEVER use filesystem, vscode_automation, sandbox_repl, web_search, or playwright directly.",
             "- OUTPUT EXACTLY THIS as your first response:",
-            '- <tool_call name=\"delegate\">{\"target_agent\": \"planner\", \"task\": \"<restate the user task>\"}</tool_call>',
+            '- <tool_call name="delegate">{"target_agent": "planner", "task": "<restate the user task>"}</tool_call>',
             "- Do NOT read files. Do NOT analyze. Do NOT plan. Just delegate immediately.",
-            "",
             "",
             "Think step-by-step. Be concise. Be agentic.",
             "",
@@ -209,6 +319,30 @@ class AgentService:
             "- If you are executor and need tool execution or verification, use tools directly or delegate to tool-runner.",
             "- Never delegate to yourself. Choose a different agent or use a tool directly.",
         ]
+
+        role_id = agent["id"]
+        if role_id == "planner":
+            instruction.append("PLANNER RULES:")
+            instruction.append("- Output a <plan> block, then IMMEDIATELY delegate the first step to executor.")
+            instruction.append('- ALWAYS end your response with: <tool_call name="delegate">{"target_agent": "executor", "task": "<first step>"}</tool_call>')
+            instruction.append("- NEVER just output a plan and stop. Always delegate.")
+        elif role_id == "executor":
+            instruction.append("EXECUTOR RULES:")
+            instruction.append("- Use filesystem to read files. Use tools to execute tasks.")
+            instruction.append("- When done, delegate to coder if code changes needed, else delegate to tool-runner.")
+        elif role_id == "coder":
+            instruction.append("CODER RULES:")
+            instruction.append("- Use filesystem patch to make code changes. Verify syntax after.")
+            instruction.append('- When done, delegate to tool-runner to verify: <tool_call name="delegate">{"target_agent": "tool-runner", "task": "verify the changes"}</tool_call>')
+        elif role_id == "tool-runner":
+            instruction.append("TOOL-RUNNER RULES:")
+            instruction.append("- Run verification tools. Check files exist. Run tests if needed.")
+            instruction.append('- When done, delegate to reviewer: <tool_call name="delegate">{"target_agent": "reviewer", "task": "review the changes"}</tool_call>')
+        elif role_id in ("reviewer", "critic"):
+            instruction.append("REVIEWER RULES:")
+            instruction.append("- Read the modified files. Check for bugs, correctness, and quality.")
+            instruction.append("- Output a final verdict. Do NOT delegate further.")
+
         return "\n".join(instruction)
 
     async def step_agent_stream(
@@ -228,7 +362,7 @@ class AgentService:
             yield {
                 "agent_id": agent_id,
                 "type": "error",
-                "content": f"Delegation depth exceeded: {' -> '.join(delegation_chain)}"
+                "content": f"Delegation depth exceeded: {' -> '.join(delegation_chain)}",
             }
             return
 
@@ -237,11 +371,10 @@ class AgentService:
         if prompt:
             messages.append({"role": "user", "content": _build_ctx(prompt)})
 
-        # Check if the last assistant proposed action is approved or denied
         if history and len(history) >= 2:
             last_msg = history[-1]
             proposed_msg = history[-2]
-            
+
             is_approve = False
             is_deny = False
             if last_msg.get("role") == "user":
@@ -250,7 +383,7 @@ class AgentService:
                     is_approve = True
                 elif "deny" in content.lower():
                     is_deny = True
-            
+
             if proposed_msg.get("role") == "assistant":
                 proposed_content = proposed_msg.get("content", "")
                 match = re.search(
@@ -264,17 +397,18 @@ class AgentService:
                         prop_payload = json.loads(match.group(2).strip())
                     except Exception:
                         prop_payload = {}
-                    
+
                     available_tools = set(runtime.list_tools())
                     mapped_prop_tool, prop_payload = reconcile_and_repair_tool_call(prop_tool, prop_payload, available_tools)
-                    
+
                     if is_approve:
                         logger.info(f"Executing approved tool call '{mapped_prop_tool}' immediately.")
-                        # Register approval with runtime
-                        runtime.approved_actions.append({
-                            "tool": mapped_prop_tool,
-                            "payload": prop_payload
-                        })
+                        runtime.approved_actions.append(
+                            {
+                                "tool": mapped_prop_tool,
+                                "payload": prop_payload,
+                            }
+                        )
                         try:
                             result = await runtime.call_tool(mapped_prop_tool, prop_payload)
                             yield {
@@ -291,64 +425,7 @@ class AgentService:
                         logger.info(f"Tool call '{mapped_prop_tool}' was denied by user.")
                         messages.append({"role": "tool", "content": "Observation: User denied approval for this operation."})
 
-        def resolve_model_and_provider(agent_id_arg: str) -> tuple[str, str]:
-            env_model = _os.environ.get("ZENITH_MODEL")
-            if env_model and env_model.strip():
-                if "/" in env_model or any(x in env_model.lower() for x in ["openrouter", "deepseek"]):
-                    return env_model.strip(), "openrouter"
-                elif "nvidia" in env_model.lower():
-                    return env_model.strip(), "nvidia"
-                elif "gemini" in env_model.lower():
-                    return env_model.strip(), "gemini"
-                else:
-                    return env_model.strip(), "ollama"
-
-            from swarm_os.services.control_plane.shared_model_registry import CLOUD_MODEL_SPECS
-            nvidia_key = _os.environ.get("NVIDIA_API_KEY", "").strip()
-            openrouter_key = _os.environ.get("OPENROUTER_API_KEY", "").strip()
-            logger.warning(f"DEBUG ENV KEYS: nvidia_key len={len(nvidia_key)} starts={nvidia_key[:10]} | openrouter_key len={len(openrouter_key)}")
-
-            if agent_id_arg in ("executor", "coder", "tool-runner"):
-                if nvidia_key:
-                    for spec in CLOUD_MODEL_SPECS:
-                        if spec.metadata.get("provider") == "nvidia" and "code" in spec.capabilities and spec.role == "cloud_coder":
-                            return spec.name, "nvidia"
-                if openrouter_key:
-                    for spec in CLOUD_MODEL_SPECS:
-                        if spec.metadata.get("provider") == "openrouter" and "code" in spec.capabilities and "free" in spec.name:
-                            return spec.name, "openrouter"
-                return "qwen2.5-coder:7b", "ollama"
-            else:
-                if nvidia_key:
-                    for spec in CLOUD_MODEL_SPECS:
-                        if spec.metadata.get("provider") == "nvidia" and "reasoning" in spec.capabilities and spec.role == "cloud_pro_nvidia":
-                            return spec.name, "nvidia"
-                if openrouter_key:
-                    for spec in CLOUD_MODEL_SPECS:
-                        if spec.metadata.get("provider") == "openrouter" and "reasoning" in spec.capabilities and "free" in spec.name:
-                            return spec.name, "openrouter"
-                return "qwen2.5:7b-instruct", "ollama"
-
-        # Resolve initial configs
         _, temperature = _resolve_runtime_config(agent)
-
-        # Coordinator uses fast local model — it only delegates, no heavy lifting
-        if agent_id == "coordinator":
-            fallback_chain = [("qwen2.5:7b-instruct", "ollama")]
-        # Executor and tool-runner use fast coder model
-        elif agent_id in ("executor", "tool-runner"):
-            fallback_chain = [("qwen2.5-coder:7b", "ollama")]
-        else:
-            # 1. 480cloud for planner, coder, reviewer
-            fallback_chain = [("qwen3-coder:480b-cloud", "ollama")]
-
-        # 2. Nvidia big models
-        predefined_nvidia = [
-            ("meta/llama-3.1-405b-instruct", "nvidia"),
-            ("meta/llama-3.3-70b-instruct", "nvidia"),
-            ("nvidia/nemotron-3-ultra-550b-a55b:free", "openrouter"),
-            ("nvidia/nemotron-3-super-120b-a12b:free", "openrouter"),
-        ]
 
         try:
             await fetch_live_models_if_needed()
@@ -356,75 +433,11 @@ class AgentService:
             logger.warning(f"Error fetching live models: {e}")
 
         global _LIVE_NVIDIA_MODELS, _LIVE_OPENROUTER_MODELS
-        nvidia_candidates = []
-        if _LIVE_NVIDIA_MODELS:
-            for m in _LIVE_NVIDIA_MODELS:
-                m_lower = m.lower()
-                is_big = False
-                if any(x in m_lower for x in ["405b", "70b", "large", "super", "pro"]):
-                    is_big = True
-                elif "nemotron" in m_lower and not any(x in m_lower for x in ["nano", "8b", "vl"]):
-                    is_big = True
-                
-                if is_big and any(x in m_lower for x in ["llama-3", "nemotron", "deepseek", "yi"]):
-                    nvidia_candidates.append((m, "nvidia"))
-
-        if nvidia_candidates:
-            fallback_chain.extend(nvidia_candidates)
-            if _LIVE_OPENROUTER_MODELS:
-                for m in _LIVE_OPENROUTER_MODELS:
-                    if "nvidia/nemotron" in m.lower() and m.endswith(":free"):
-                        fallback_chain.append((m, "openrouter"))
-            else:
-                fallback_chain.append(("nvidia/nemotron-3-ultra-550b-a55b:free", "openrouter"))
-                fallback_chain.append(("nvidia/nemotron-3-super-120b-a12b:free", "openrouter"))
-        else:
-            fallback_chain.extend(predefined_nvidia)
-
-        # 3. OpenRouter free big models
-        predefined_or_free = [
-            ("deepseek/deepseek-chat-v3-5:free", "openrouter"),
-            ("openrouter/free", "openrouter"),
-            ("qwen/qwen3-coder:free", "openrouter"),
-            ("deepseek/deepseek-v4-flash:free", "openrouter"),
-        ]
-        or_free_candidates = []
-        if _LIVE_OPENROUTER_MODELS:
-            for m in _LIVE_OPENROUTER_MODELS:
-                m_lower = m.lower()
-                if m_lower.endswith(":free"):
-                    if any(x in m_lower for x in ["nemotron", "llama-3", "deepseek", "qwen", "gemma-4", "mixtral", "command-r", "phi-4"]):
-                        if not any(x in m_lower for x in ["-8b", "-3b", "-2b", "nano", "mini-code"]):
-                            or_free_candidates.append((m, "openrouter"))
-
-        if or_free_candidates:
-            for item in or_free_candidates:
-                if item not in fallback_chain:
-                    fallback_chain.append(item)
-        else:
-            for item in predefined_or_free:
-                if item not in fallback_chain:
-                    fallback_chain.append(item)
-
-        # 4. Local 14b coder
-        fallback_chain.append(("qwen3:14b", "ollama"))
-        fallback_chain.append(("qwen2.5-coder:14b", "ollama"))
-
-        # Prepend ZENITH_MODEL if it was set explicitly
-        env_model = _os.environ.get("ZENITH_MODEL")
-        if env_model and env_model.strip():
-            if "/" in env_model or any(x in env_model.lower() for x in ["openrouter", "deepseek"]):
-                env_provider = "openrouter"
-            elif "nvidia" in env_model.lower():
-                env_provider = "nvidia"
-            elif "gemini" in env_model.lower():
-                env_provider = "gemini"
-            else:
-                env_provider = "ollama"
-            
-            custom_item = (env_model.strip(), env_provider)
-            if custom_item not in fallback_chain:
-                fallback_chain.insert(0, custom_item)
+        fallback_chain = ModelRouter.build_fallback_chain(
+            agent_id,
+            _LIVE_NVIDIA_MODELS,
+            _LIVE_OPENROUTER_MODELS
+        )
 
         limit = STEP_LIMIT if agent_id in ("executor", "coder") else 5
         final_emitted = False
@@ -438,7 +451,6 @@ class AgentService:
             success = False
 
             while not success:
-                # Emit model selection metadata to caller/CLI conditionally
                 is_default_local = (current_provider == "ollama" and current_model in ("qwen2.5:3b-instruct", "qwen2.5-coder:7b"))
                 if chain_idx > 0 or not is_default_local:
                     yield {
@@ -448,7 +460,7 @@ class AgentService:
                         "provider": current_provider,
                         "requested_role": agent.get("model_role", "general"),
                         "attempt": chain_idx + 1,
-                        "temperature": temperature
+                        "temperature": temperature,
                     }
 
                 if current_provider == "openrouter":
@@ -459,7 +471,7 @@ class AgentService:
                         "Authorization": f"Bearer {api_key}",
                         "Content-Type": "application/json",
                         "HTTP-Referer": "https://github.com/v-horseshoe-v2",
-                        "X-Title": "Swarm OS"
+                        "X-Title": "Swarm OS",
                     }
                     payload = {
                         "model": current_model,
@@ -467,7 +479,7 @@ class AgentService:
                         "stream": True,
                         "temperature": temperature,
                         "max_tokens": 1500,
-                        "stop": ["</tool_call>"]
+                        "stop": ["</tool_call>"],
                     }
                 elif current_provider == "nvidia":
                     api_key = _os.environ.get("NVIDIA_API_KEY", "").strip()
@@ -475,7 +487,7 @@ class AgentService:
                     url = f"{base_url}/chat/completions"
                     headers = {
                         "Authorization": f"Bearer {api_key}",
-                        "Content-Type": "application/json"
+                        "Content-Type": "application/json",
                     }
                     payload = {
                         "model": current_model,
@@ -483,7 +495,7 @@ class AgentService:
                         "stream": True,
                         "temperature": temperature,
                         "max_tokens": 1500,
-                        "stop": ["</tool_call>"]
+                        "stop": ["</tool_call>"],
                     }
                 elif current_provider == "gemini":
                     api_key = _os.environ.get("GEMINI_API_KEY", "").strip()
@@ -491,7 +503,7 @@ class AgentService:
                     url = f"{base_url}/chat/completions"
                     headers = {
                         "Authorization": f"Bearer {api_key}",
-                        "Content-Type": "application/json"
+                        "Content-Type": "application/json",
                     }
                     payload = {
                         "model": current_model,
@@ -499,7 +511,21 @@ class AgentService:
                         "stream": True,
                         "temperature": temperature,
                         "max_tokens": 1500,
-                        "stop": ["</tool_call>"]
+                        "stop": ["</tool_call>"],
+                    }
+                elif current_provider == "groq":
+                    api_key = _os.environ.get("GROQ_API_KEY", "").strip()
+                    url = "https://api.groq.com/openai/v1/chat/completions"
+                    headers = {
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    }
+                    payload = {
+                        "model": current_model,
+                        "messages": messages,
+                        "stream": True,
+                        "temperature": temperature,
+                        "max_tokens": 1500,
                     }
                 else:
                     url = "http://127.0.0.1:11434/api/chat"
@@ -518,7 +544,7 @@ class AgentService:
                             "POST",
                             url,
                             json=payload,
-                            headers=headers
+                            headers=headers,
                         ) as response:
                             response.raise_for_status()
                             async for line in response.aiter_lines():
@@ -543,7 +569,7 @@ class AgentService:
                                             break
                                         piece = evt.get("message", {}).get("content", "")
                                     except Exception:
-                                        pass
+                                        piece = line
 
                                 if piece:
                                     full_chunk_content += piece
@@ -552,14 +578,15 @@ class AgentService:
                                         "content": piece,
                                         "model": current_model,
                                     }
-                                    
-                                    # Stream repetition checker: halts loops within a single streaming response
+
                                     if len(full_chunk_content) > 120:
                                         has_rep = False
                                         for length in range(20, min(400, len(full_chunk_content) // 3)):
                                             suffix = full_chunk_content[-length:]
-                                            if (full_chunk_content[-2*length:-length] == suffix and 
-                                                full_chunk_content[-3*length:-2*length] == suffix):
+                                            if (
+                                                full_chunk_content[-2 * length:-length] == suffix
+                                                and full_chunk_content[-3 * length:-2 * length] == suffix
+                                            ):
                                                 has_rep = True
                                                 break
                                         if has_rep:
@@ -572,7 +599,7 @@ class AgentService:
                     if chain_idx < len(fallback_chain):
                         next_model, next_provider = fallback_chain[chain_idx]
                         logger.warning(f"Escalating from {current_model} ({current_provider}) to {next_model} ({next_provider})...")
-                        
+
                         try:
                             from organism_console.speech import play_chime_async
                             play_chime_async("escalation")
@@ -585,7 +612,7 @@ class AgentService:
                             "from_model": current_model,
                             "reason": f"{exc.__class__.__name__}: {str(exc)[:100]}",
                         }
-                        
+
                         current_model = next_model
                         current_provider = next_provider
                         full_chunk_content = ""
@@ -598,27 +625,24 @@ class AgentService:
                             pass
                         raise exc
 
+            clean_assistant = re.sub(r'<tool_call[^>]*>.*?(?:</tool_call>|$)', '', full_chunk_content, flags=re.DOTALL).strip()
+            messages.append({"role": "assistant", "content": clean_assistant})
 
-            messages.append({"role": "assistant", "content": full_chunk_content})
+            duplicate_check_text = re.sub(r'<plan>.*?</plan>', '', full_chunk_content, flags=re.DOTALL).strip()
 
-            # Turn-level duplicate or near-identical narrative check
-            clean_content = re.sub(r'<plan>.*?</plan>', '', full_chunk_content, flags=re.DOTALL)
-            clean_content = re.sub(r'<tool_call[^>]*>.*?(?:</tool_call>|$)', '', clean_content, flags=re.DOTALL)
-            clean_content = clean_content.strip()
-            
             is_duplicate = False
             for prev in previous_outputs:
-                if clean_content == prev:
+                if duplicate_check_text == prev:
                     is_duplicate = True
                     break
-                words1 = set(clean_content.lower().split())
+                words1 = set(duplicate_check_text.lower().split())
                 words2 = set(prev.lower().split())
                 if words1 and words2:
                     overlap = len(words1 & words2) / max(len(words1), len(words2))
                     if overlap > 0.85:
                         is_duplicate = True
                         break
-            
+
             if is_duplicate:
                 logger.warning(f"Detected duplicate or near-identical assistant output in turn {turn}. Terminating loop.")
                 yield {
@@ -630,26 +654,37 @@ class AgentService:
                 }
                 return
 
-            previous_outputs.append(clean_content)
+            previous_outputs.append(duplicate_check_text)
 
-            match = re.search(
-                r'<tool_call\s+name="([^"]+)">\s*(\{.*?\})\s*(?:</tool_call>|<strategic_intent|<plan|<tool_call|<topic_update|$)',
-                full_chunk_content,
-                re.DOTALL,
-            )
+            pending_calls = []
+            for match in re.finditer(r'<tool_call\s+name="([^"]+)">\s*(.*?)\s*</tool_call>', full_chunk_content, re.DOTALL):
+                tool_name = match.group(1).strip()
+                raw_payload = match.group(2).strip()
+                try:
+                    payload = json.loads(raw_payload)
+                except Exception as e:
+                    logger.warning(
+                        f"Malformed tool payload from agent '{agent_id}' for tool '{tool_name}': {e}; payload={raw_payload[:300]!r}"
+                    )
+                    payload = {}
+                pending_calls.append((tool_name, payload))
 
-            if not match:
+            if not pending_calls:
                 delegate_tag = re.search(
                     r'<delegate\s+target_agent="([^"]+)"\s+task="([^"]+)"\s*/?>',
                     full_chunk_content,
                     re.DOTALL,
                 )
                 if delegate_tag:
-                    tool_name = "delegate"
-                    payload = {
-                        "target_agent": delegate_tag.group(1).strip(),
-                        "task": delegate_tag.group(2).strip(),
-                    }
+                    pending_calls.append(
+                        (
+                            "delegate",
+                            {
+                                "target_agent": delegate_tag.group(1).strip(),
+                                "task": delegate_tag.group(2).strip(),
+                            },
+                        )
+                    )
                 else:
                     if final_emitted:
                         logger.info("Final response already emitted for agent '%s'.", agent_id)
@@ -664,32 +699,86 @@ class AgentService:
                         "content": full_chunk_content,
                     }
                     return
-            else:
-                tool_name = match.group(1).strip()
-                raw_payload = match.group(2).strip()
-                try:
-                    payload = json.loads(raw_payload)
-                except Exception:
-                    payload = {}
 
             available_tools = set(runtime.list_tools())
-            mapped_tool_name, payload = reconcile_and_repair_tool_call(tool_name, payload, available_tools)
+            normal_calls = []
+            delegate_calls = []
 
+            for tool_name, payload in pending_calls:
+                mapped_tool_name, payload = reconcile_and_repair_tool_call(tool_name, payload, available_tools)
 
-            if mapped_tool_name == "ask_user" and agent_id != "coordinator":
-                logger.warning(f"ask_user blocked for non-coordinator agent: {agent_id}")
-                yield {
-                    "agent_id": agent_id,
-                    "type": "final",
-                    "model": current_model,
-                    "provider": current_provider,
-                    "content": "Only the coordinator agent is allowed to ask the user questions."
-                }
-                return
+                if mapped_tool_name == "ask_user" and agent_id != "coordinator":
+                    logger.warning(f"ask_user blocked for non-coordinator agent: {agent_id}")
+                    yield {
+                        "agent_id": agent_id,
+                        "type": "final",
+                        "model": current_model,
+                        "provider": current_provider,
+                        "content": "Only the coordinator agent is allowed to ask the user questions.",
+                    }
+                    return
 
+                if mapped_tool_name == "__delegate__":
+                    delegate_calls.append((tool_name, mapped_tool_name, payload))
+                else:
+                    normal_calls.append((tool_name, mapped_tool_name, payload))
 
+            for tool_name, mapped_tool_name, payload in normal_calls:
+                if mapped_tool_name not in available_tools:
+                    yield {
+                        "agent_id": agent_id,
+                        "type": "error",
+                        "error": f"Unknown tool '{mapped_tool_name}'",
+                        "tool": tool_name,
+                    }
+                    return
 
-            if mapped_tool_name == "__delegate__":
+                try:
+                    result = await runtime.call_tool(mapped_tool_name, payload or {})
+                    tool_calls_made += 1
+
+                    yield {
+                        "agent_id": agent_id,
+                        "type": "tool_result",
+                        "tool": mapped_tool_name,
+                        "result": result,
+                    }
+
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "content": f"Observation: {json.dumps(result, ensure_ascii=False)}",
+                        }
+                    )
+
+                    if isinstance(result, dict) and result.get("final"):
+                        return
+                except Exception as err:
+                    from swarm_os.exceptions import ApprovalRequiredError
+
+                    if isinstance(err, ApprovalRequiredError):
+                        question_text = construct_approval_question(err.tool_name, err.payload)
+                        yield {
+                            "ask_user": {
+                                "question": question_text,
+                                "options": ["approve", "deny"]
+                            }
+                        }
+                        return
+                    yield {
+                        "agent_id": agent_id,
+                        "type": "error",
+                        "error": str(err),
+                        "tool": mapped_tool_name,
+                    }
+                    return
+
+            if len(delegate_calls) > 1:
+                logger.warning(f"Multiple delegate calls emitted by agent '{agent_id}'. Only the first delegate will execute.")
+                delegate_calls = delegate_calls[:1]
+
+            if delegate_calls:
+                tool_name, mapped_tool_name, payload = delegate_calls[0]
                 target = payload.get("target_agent", "executor")
                 task = payload.get("task") or payload.get("content") or payload.get("message") or payload.get("instruction") or str(payload)
 
@@ -700,26 +789,37 @@ class AgentService:
                         "type": "final",
                         "model": current_model,
                         "provider": current_provider,
-                        "content": f"Self-delegation blocked for agent: {agent_id}."
+                        "content": f"Self-delegation blocked for agent: {agent_id}.",
                     }
                     return
-                
+
                 yield {
                     "agent_id": agent_id,
                     "type": "agent_handoff",
                     "from": agent_id,
                     "to": target,
-                    "task": task
+                    "task": task,
                 }
 
-                if target in delegation_chain:
+                visit_count = delegation_chain.count(target)
+                if visit_count >= 2:
+                    logger.warning(f"Repeated delegation target blocked: {delegation_chain} -> {target}")
+                    yield {
+                        "agent_id": agent_id,
+                        "type": "final",
+                        "model": current_model,
+                        "provider": current_provider,
+                        "content": f"Repeated delegation target blocked between agents: {' -> '.join(delegation_chain)} -> {target}.",
+                    }
+                    return
+                elif visit_count >= 1:
                     logger.warning(f"Circular delegation loop detected: {delegation_chain} -> {target}")
                     yield {
                         "agent_id": agent_id,
                         "type": "final",
                         "model": current_model,
                         "provider": current_provider,
-                        "content": f"Circular delegation loop detected between agents: {' -> '.join(delegation_chain)} -> {target}."
+                        "content": f"Circular delegation loop detected between agents: {' -> '.join(delegation_chain)} -> {target}.",
                     }
                     return
 
@@ -729,139 +829,29 @@ class AgentService:
                         target,
                         task,
                         history=delegate_history,
-                        delegation_chain=delegation_chain + [target]
+                        delegation_chain=delegation_chain + [target],
                     ):
                         sub_chunk["delegated_by"] = agent_id
                         yield sub_chunk
-                else:
-                    yield {
-                        "agent_id": agent_id,
-                        "type": "final",
-                        "model": current_model,
-                        "provider": current_provider,
-                        "content": f"Agent '{target}' not found. Task: {task}"
-                    }
-                return
-
-            if mapped_tool_name not in available_tools:
-                yield {
-                    "agent_id": agent_id,
-                    "error": f"Unknown tool '{mapped_tool_name}'",
-                    "tool": tool_name,
-                }
-                return
-
-            try:
-                result = await runtime.call_tool(mapped_tool_name, payload or {})
-                tool_calls_made += 1
+                    return
 
                 yield {
                     "agent_id": agent_id,
-                    "type": "tool_result",
-                    "tool": mapped_tool_name,
-                    "result": result,
+                    "type": "final",
+                    "model": current_model,
+                    "provider": current_provider,
+                    "content": f"Agent '{target}' not found. Task: {task}",
                 }
+                return
 
-                messages.append(
-                    {
-                        "role": "tool",
-                        "content": f"Observation: {json.dumps(result, ensure_ascii=False)}",
-                    }
-                )
-
-                if isinstance(result, dict) and result.get("final"):
-                    return
-            except Exception as err:
-                from swarm_os.exceptions import ApprovalRequiredError
-                if isinstance(err, ApprovalRequiredError):
-                    question_text = construct_approval_question(err.tool_name, err.payload)
-                    yield {
-                        "ask_user": {
-                            "question": question_text,
-                            "options": ["approve", "deny"]
-                        }
-                    }
-                    return
-                else:
-                    yield {
-                        "agent_id": agent_id,
-                        "error": str(err),
-                        "tool": mapped_tool_name,
-                    }
-                    return
-
-
-def reconcile_and_repair_tool_call(tool_name: str, payload: dict, available_tools: set[str]) -> tuple[str, dict]:
-    mapped_name = tool_name
-    new_payload = dict(payload)
-
-    # Always map delegate aliases regardless of available_tools
-    if tool_name in {"delegate", "handoff", "transfer", "route"}:
-        return "__delegate__", dict(payload)
-
-    if tool_name not in available_tools:
-        if tool_name in {"read_file", "write_file", "patch_file", "file_read", "file_write", "file_patch"}:
-            mapped_name = "filesystem"
-            op = "read" if "read" in tool_name else "write" if "write" in tool_name else "patch"
-            new_payload["operation"] = op
-        elif tool_name in {"search", "google_search", "web", "search_web"}:
-            mapped_name = "web_search"
-        elif tool_name in {"delegate", "handoff", "transfer", "route"}:
-            mapped_name = "__delegate__"
-        elif tool_name in {"scout", "grep", "cat", "vscode", "vscode_scout"}:
-            mapped_name = "vscode_automation"
-            if "command" not in new_payload:
-                if tool_name == "grep":
-                    new_payload["command"] = "grep"
-                elif tool_name == "cat":
-                    new_payload["command"] = "cat"
-                else:
-                    new_payload["command"] = "scout"
-            if "args" not in new_payload:
-                new_payload["args"] = []
-
-    return mapped_name, new_payload
-
-
-def construct_approval_question(tool_name: str, payload: dict) -> str:
-    lines = [
-        f"⚠️  APPROVAL REQUIRED for state-changing action:",
-        f"• Action: Execute '{tool_name}'",
-    ]
-    
-    if tool_name == "filesystem":
-        op = payload.get("operation", "")
-        path = payload.get("path", "")
-        lines.append(f"• Operation: {op}")
-        lines.append(f"• Affected File: {path}")
-        
-        if op == "write":
-            content = payload.get("content", "")
-            lines.append("• Expected Outcome: Write new content to file.")
-            lines.append("• Risks: Overwriting existing file content.")
-            preview = content[:200] + ("..." if len(content) > 200 else "")
-            lines.append(f"• Content Preview:\n```\n{preview}\n```")
-        elif op == "patch":
-            old = payload.get("old", "")
-            new = payload.get("new", "")
-            lines.append("• Expected Outcome: Apply patch modifications.")
-            lines.append("• Risks: Code syntax errors if patch fails to apply correctly.")
-            lines.append(f"• Patch Diff:\n```diff\n- {old}\n+ {new}\n```")
-        elif op == "delete":
-            lines.append("• Expected Outcome: Delete file.")
-            lines.append("• Risks: Permanent loss of file.")
-            
-    elif tool_name == "sandbox_repl":
-        lang = payload.get("language", "")
-        code = payload.get("code", "") or payload.get("command", "")
-        lines.append(f"• Language: {lang}")
-        lines.append("• Expected Outcome: Run execution command/script.")
-        lines.append("• Risks: Executing arbitrary code with environment side effects.")
-        preview = code[:200] + ("..." if len(code) > 200 else "")
-        lines.append(f"• Command Preview:\n```\n{preview}\n```")
-        
-    lines.append("\nDo you approve this action?")
-    return "\n".join(lines)
-
-
-
+            if tool_calls_made == 0 and not final_emitted:
+                logger.info("No tool calls made and no final emitted for agent '%s'; emitting final.", agent_id)
+                final_emitted = True
+                yield {
+                    "agent_id": agent_id,
+                    "type": "final",
+                    "model": current_model,
+                    "provider": current_provider,
+                    "content": full_chunk_content,
+                }
+                return
