@@ -143,6 +143,6 @@ async def test_generate_fallback_when_no_api_key(orch, monkeypatch):
     orch.ollama.generate.assert_called_once()
     # Model should have been changed to local fallback
     call_args = orch.ollama.generate.call_args
-    assert call_args.kwargs.get("model") == "qwen2.5:7b-instruct" or \
-           (call_args.args and call_args.args[0] != "openrouter/free")
+    call_model = call_args.kwargs.get("model") or (call_args.args[0] if call_args.args else "")
+    assert call_model != "openrouter/free", f"Expected local fallback, got {call_model}"
 

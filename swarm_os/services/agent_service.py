@@ -126,6 +126,16 @@ class AgentService:
                 "description": "Specialized agent for executing capability and tool calls.",
                 "model_role": "fast",
             },
+            "reviewer": {
+                "role": "reviewer",
+                "description": "Audits code and proposals, finds bugs and design flaws.",
+                "model_role": "reasoning",
+            },
+            "coder": {
+                "role": "coder",
+                "description": "Code-writing specialist focusing on high-quality modifications.",
+                "model_role": "fast",
+            },
         }
         for agent_id, config in roles.items():
             self.register_agent(agent_id, config)
@@ -205,7 +215,7 @@ class AgentService:
         history = history or []
         delegation_chain = delegation_chain or [agent_id]
 
-        if len(delegation_chain) >= 6:
+        if len(delegation_chain) >= 7:
             logger.warning(f"Delegation depth exceeded: {delegation_chain}")
             yield {
                 "agent_id": agent_id,
