@@ -332,8 +332,15 @@ class AgentService:
         # Resolve initial configs
         _, temperature = _resolve_runtime_config(agent)
 
-        # 1. 480cloud
-        fallback_chain = [("qwen3-coder:480b-cloud", "ollama")]
+        # Coordinator uses fast local model — it only delegates, no heavy lifting
+        if agent_id == "coordinator":
+            fallback_chain = [("qwen2.5:7b-instruct", "ollama")]
+        # Executor and tool-runner use fast coder model
+        elif agent_id in ("executor", "tool-runner"):
+            fallback_chain = [("qwen2.5-coder:7b", "ollama")]
+        else:
+            # 1. 480cloud for planner, coder, reviewer
+            fallback_chain = [("qwen3-coder:480b-cloud", "ollama")]
 
         # 2. Nvidia big models
         predefined_nvidia = [

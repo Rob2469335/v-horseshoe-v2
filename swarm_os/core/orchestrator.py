@@ -124,7 +124,7 @@ class Orchestrator:
                         params = obj.get("params", {})
                         return obj["tool_name"].strip(), json.dumps(params)
                     _cmd_val = obj.get("command", "")
-                    _CLI_ONLY = {"/goal", "/plan", "/debug", "/compress", "/boot", "/exit", "/debate"}
+                    _CLI_ONLY = {"/goal", "/plan", "/debug", "/compress", "/boot", "/exit", "/debate", "/chat", "/agents", "/tokens", "/trace", "/compress", "/boot", "/exit", "/clear", "/model", "/focus"}
                     if ("command" in obj and isinstance(_cmd_val, str)
                             and _cmd_val.startswith("/")
                             and not any(_cmd_val.startswith(c) for c in _CLI_ONLY)):

@@ -9,7 +9,7 @@ log = logging.getLogger(__name__)
 class OllamaClient:
     def __init__(self, base_url: str = "http://127.0.0.1:11434"):
         self.base_url = base_url
-        self.client = httpx.AsyncClient(base_url=base_url, timeout=90.0)
+        self.client = httpx.AsyncClient(base_url=base_url, timeout=600.0)
 
     async def generate(self, model: str, messages: list[dict]) -> str:
         if "glm" in model.lower():
