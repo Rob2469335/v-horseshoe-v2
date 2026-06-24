@@ -190,10 +190,11 @@ class AgentService:
             "- delegate: {target_agent: 'planner'|'executor'|'coder'|'tool-runner', task: '...'}",
             "",
             "COORDINATOR RULES (only if agent_id == coordinator):",
-            "- You are the COORDINATOR. You NEVER implement, code, or run tools yourself.",
-            "- Your ONLY job is to delegate. ALWAYS start by delegating to planner.",
-            "- delegate to planner first, then let planner delegate to executor/coder/tool-runner/reviewer.",
-            "- If you catch yourself about to use filesystem, sandbox_repl, or vscode_automation — STOP. Delegate instead.",
+            "- You are the COORDINATOR. Your FIRST and ONLY action is ALWAYS to delegate to planner.",
+            "- NEVER use filesystem, vscode_automation, sandbox_repl, web_search, or playwright directly.",
+            "- OUTPUT EXACTLY THIS as your first response:",
+            '- <tool_call name=\"delegate\">{\"target_agent\": \"planner\", \"task\": \"<restate the user task>\"}</tool_call>',
+            "- Do NOT read files. Do NOT analyze. Do NOT plan. Just delegate immediately.",
             "",
             "",
             "Think step-by-step. Be concise. Be agentic.",
@@ -786,6 +787,10 @@ class AgentService:
 def reconcile_and_repair_tool_call(tool_name: str, payload: dict, available_tools: set[str]) -> tuple[str, dict]:
     mapped_name = tool_name
     new_payload = dict(payload)
+
+    # Always map delegate aliases regardless of available_tools
+    if tool_name in {"delegate", "handoff", "transfer", "route"}:
+        return "__delegate__", dict(payload)
 
     if tool_name not in available_tools:
         if tool_name in {"read_file", "write_file", "patch_file", "file_read", "file_write", "file_patch"}:
