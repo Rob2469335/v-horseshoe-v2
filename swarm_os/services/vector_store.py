@@ -72,12 +72,30 @@ class VectorStore:
         filter_condition: Optional[models.Filter] = None
     ) -> List[Dict[str, Any]]:
         """Search for similar vectors."""
-        results = self.client.search(
-            collection_name=self.collection_name,
-            query_vector=query_vector,
-            limit=limit,
-            query_filter=filter_condition
-        )
+        try:
+            if hasattr(self.client, "search"):
+                results = self.client.search(
+                    collection_name=self.collection_name,
+                    query_vector=query_vector,
+                    limit=limit,
+                    query_filter=filter_condition
+                )
+            else:
+                response = self.client.query_points(
+                    collection_name=self.collection_name,
+                    query=query_vector,
+                    limit=limit,
+                    query_filter=filter_condition,
+                )
+                results = getattr(response, "points", response)
+        except Exception as exc:
+            logger.warning(
+                "Qdrant search failed once for collection=%s error=%s: %s",
+                self.collection_name,
+                exc.__class__.__name__,
+                exc,
+            )
+            return []
 
         return [
             {
@@ -123,6 +141,5 @@ class VectorStore:
             return info.points_count or 0
         except Exception:
             return 0
-
 
 

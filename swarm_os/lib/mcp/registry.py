@@ -42,11 +42,27 @@ class MCPRegistry:
 
     async def _qdrant_recall(self, params: Dict[str, Any]) -> Dict[str, Any]:
         query = str(params.get("query", ""))
-        collection = str(params.get("collection", ""))
+        collection = str(params.get("collection", "swarm_memory"))
+        top_k = int(params.get("top_k", params.get("limit", 5)))
+
+        if not query:
+            return {"ok": False, "error": "query is required", "results": [], "query": query, "collection": collection}
+
+        try:
+            from swarm_os.services.embedding_service import EmbeddingService
+            from swarm_os.services.vector_store import VectorStore
+
+            embedding_service = EmbeddingService()
+            vector_store = VectorStore(collection_name=collection)
+            vector = embedding_service.embed(query)
+            results = vector_store.search(query_vector=vector, limit=top_k)
+        except Exception as exc:
+            logger.warning("qdrant_recall failed: %s", exc)
+            results = []
 
         result = {
             "ok": True,
-            "results": [],
+            "results": results,
             "query": query,
             "collection": collection,
         }
@@ -155,4 +171,3 @@ registry = MCPRegistry()
 
 async def call(tool: str, params: Dict[str, Any]) -> Dict[str, Any]:
     return await registry.call(tool, params)
-

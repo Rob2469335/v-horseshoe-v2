@@ -80,11 +80,28 @@ async def search(collection_key: str, query: str, top_k: int = 20) -> list[dict]
     name = COLLECTIONS.get(collection_key, collection_key)
     vector = await _embed(query)
     client = get_client()
-    results = await client.search(
-        collection_name=name,
-        query_vector=vector,
-        limit=top_k,
-        with_payload=True,
-    )
+    try:
+        if hasattr(client, "search"):
+            results = await client.search(
+                collection_name=name,
+                query_vector=vector,
+                limit=top_k,
+                with_payload=True,
+            )
+        else:
+            response = await client.query_points(
+                collection_name=name,
+                query=vector,
+                limit=top_k,
+                with_payload=True,
+            )
+            results = getattr(response, "points", response)
+    except Exception as exc:
+        log.warning(
+            "Qdrant search failed once for collection=%s error=%s: %s",
+            name,
+            exc.__class__.__name__,
+            exc,
+        )
+        return []
     return [{"score": r.score, "payload": r.payload} for r in results]
-

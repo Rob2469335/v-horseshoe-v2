@@ -188,14 +188,11 @@ async def execute_tool(payload: ToolExecuteRequest, runtime=Depends(runtime_dep)
 
 @router.post("/generate", response_model=GenerateResponse)
 async def generate(payload: GenerateRequest, orch=Depends(get_orchestrator)):
-    try:
-        _model = (payload.model or "").strip()
-        _MODEL_ALIASES = {"qwen2.5:7b": "qwen2.5:7b-instruct", "qwen2.5:14b": "qwen2.5:14b-instruct", "qwen2.5:3b": "qwen2.5:3b-instruct"}
-        _model = _MODEL_ALIASES.get(_model, _model) or None
-        response, chosen_model = await orch.generate(model=_model, prompt=payload.prompt)
-        return GenerateResponse(response=response, model=chosen_model)
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc))
+    _model = (payload.model or "").strip() or "disabled"
+    return GenerateResponse(
+        response="Direct /generate is disabled for agent workflows; use /agents/{agent_id}/step/stream.",
+        model=_model,
+    )
 
 @router.post("/assign", response_model=AssignResponse)
 def assign(payload: AssignRequest, orch=Depends(get_orchestrator)):
@@ -294,3 +291,4 @@ async def root_evaluate_health(request: Request) -> dict:
 async def root_post_evaluate_health(request: Request) -> dict:
     from swarm_os.api.admin import run_heal_cycle
     return await run_heal_cycle(request)
+

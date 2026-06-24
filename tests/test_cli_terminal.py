@@ -291,7 +291,7 @@ class TestDummyHandler:
 """
     
     def mock_call_api(endpoint, method, payload=None, stream=False):
-        if endpoint == "/generate":
+        if "/agents/coordinator" in endpoint or endpoint == "/generate":
             return MockResponse({"response": f"```python\n{mock_code}\n```"})
         return MockResponse({"capabilities": ["chat_search"], "count": 1})
         
@@ -354,7 +354,7 @@ def test_new_cli_commands(tmp_path, monkeypatch):
             return self.json_data
             
     def mock_call_api(endpoint, method="GET", payload=None, stream=False):
-        if endpoint == "/generate":
+        if "/agents/coordinator" in endpoint or endpoint == "/generate":
             return MockResponse({"response": "feat(core): dummy commit message\nDetailed body"})
         if endpoint == "/agents":
             return MockResponse([{"id": "coordinator", "role": "coordinator", "description": "dummy"}])
@@ -523,4 +523,6 @@ def test_natural_language_intent_routing(tmp_path, monkeypatch):
     assert res is None
     assert any(c[0] == "requests_post" for c in calls)
     assert any(c[0] == "api" and c[1] == "/readyz" for c in calls)
+
+
 

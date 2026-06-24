@@ -41,11 +41,19 @@ def store_proposal(job_vector, proposal_vector, payload: dict):
 
 def search_similar(vector, limit=30):
     try:
-        return client.search(
+        if hasattr(client, "search"):
+            return client.search(
+                collection_name=COLLECTION,
+                query_vector=vector,
+                limit=limit,
+                with_payload=True
+            )
+        response = client.query_points(
             collection_name=COLLECTION,
-            query_vector=vector,
+            query=vector,
             limit=limit,
-            with_payload=True
+            with_payload=True,
         )
+        return getattr(response, "points", response)
     except Exception:
         return []

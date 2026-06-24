@@ -168,3 +168,5 @@ def test_cli_delegation_chain_update():
             ctx.delegation_chain.append(child)
 
     assert ctx.delegation_chain == ["coordinator", "planner"]
+
+
