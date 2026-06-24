@@ -39,6 +39,9 @@ Write-Host "Groq key present:         $([bool]$env:GROQ_API_KEY)" -ForegroundCol
 Write-Host "Tavily key present:       $([bool]$env:TAVILY_API_KEY)" -ForegroundColor Gray
 Write-Host "Brave key present:        $([bool]$env:BRAVE_API_KEY)" -ForegroundColor Gray
 Write-Host "Exa key present:          $([bool]$env:EXA_API_KEY)" -ForegroundColor Gray
+Write-Host "Serper key present:       $([bool]$env:SERPER_API_KEY)" -ForegroundColor Gray
+Write-Host "SerpApi key present:      $([bool]$env:SERPAPI_KEY)" -ForegroundColor Gray
+Write-Host "TinyFish key present:     $([bool]$env:TINYFISH_API_KEY)" -ForegroundColor Gray
 
 # STEP 1 - Cleanup
 Write-Host "`n[STEP 1] Cleaning up..." -ForegroundColor Yellow
