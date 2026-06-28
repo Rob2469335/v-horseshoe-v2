@@ -368,69 +368,17 @@ class AgentService:
                         messages.append({"role": "tool", "content": "Observation: User denied approval for this operation."})
 
         def resolve_model_and_provider(agent_id_arg: str) -> tuple[str, str]:
-            env_model = _os.environ.get("ZENITH_MODEL")
-            if env_model and env_model.strip():
-                if "/" in env_model or any(x in env_model.lower() for x in ["openrouter", "deepseek"]):
-                    return env_model.strip(), "openrouter"
-                elif "nvidia" in env_model.lower():
-                    return env_model.strip(), "nvidia"
-                elif "groq" in env_model.lower():
-                    return env_model.strip(), "groq"
-                elif "gemini" in env_model.lower():
-                    return env_model.strip(), "gemini"
-                else:
-                    return env_model.strip(), "ollama"
-
-            from swarm_os.services.control_plane.shared_model_registry import CLOUD_MODEL_SPECS
-            nvidia_key = _os.environ.get("NVIDIA_API_KEY", "").strip()
-            openrouter_key = _os.environ.get("OPENROUTER_API_KEY", "").strip()
-            gemini_key = _os.environ.get("GEMINI_API_KEY", "").strip()
-            groq_key = _os.environ.get("GROQ_API_KEY", "").strip()
-            logger.warning(f"DEBUG ENV KEYS: nvidia_key len={len(nvidia_key)} starts={nvidia_key[:10]} | openrouter_key len={len(openrouter_key)} | gemini_key len={len(gemini_key)} | groq_key len={len(groq_key)}")
-
-            if agent_id_arg in ("executor", "coder", "tool-runner"):
-                if openrouter_key:
-                    for spec in CLOUD_MODEL_SPECS:
-                        if spec.metadata.get("provider") == "openrouter" and "code" in spec.capabilities and "free" in spec.name:
-                            return spec.name, "openrouter"
-                if gemini_key:
-                    return "gemini-2.5-flash", "gemini"
-                if groq_key:
-                    return "openai/gpt-oss-120b", "groq"
-                if nvidia_key:
-                    for spec in CLOUD_MODEL_SPECS:
-                        if spec.metadata.get("provider") == "nvidia" and "code" in spec.capabilities and spec.role == "cloud_coder":
-                            return spec.name, "nvidia"
+            try:
+                from runtime_v2.services.model_registry import get_model
+                return get_model(agent_id_arg)
+            except ImportError:
                 return "qwen2.5-coder:7b", "ollama"
-            else:
-                if openrouter_key:
-                    for spec in CLOUD_MODEL_SPECS:
-                        if spec.metadata.get("provider") == "openrouter" and "reasoning" in spec.capabilities and "free" in spec.name:
-                            return spec.name, "openrouter"
-                if gemini_key:
-                    return "gemini-2.5-pro", "gemini"
-                if groq_key:
-                    return "openai/gpt-oss-120b", "groq"
-                if nvidia_key:
-                    for spec in CLOUD_MODEL_SPECS:
-                        if spec.metadata.get("provider") == "nvidia" and "reasoning" in spec.capabilities and spec.role == "cloud_pro_nvidia":
-                            return spec.name, "nvidia"
-                return "qwen2.5:7b-instruct", "ollama"
 
         # Resolve initial configs
         _, temperature = _resolve_runtime_config(agent)
 
-        # Resolve initial configs
-        _, temperature = _resolve_runtime_config(agent)
-
-        # Coordinator uses fast local model — it only delegates, no heavy lifting
-        if agent_id == "coordinator":
-            fallback_chain = [("qwen2.5:7b-instruct", "ollama")]
-        # Executor and tool-runner use fast coder model
-        elif agent_id in ("executor", "tool-runner"):
-            fallback_chain = [("qwen2.5-coder:7b", "ollama")]
-        else:
-            fallback_chain = []
+        target_model, target_provider = resolve_model_and_provider(agent_id)
+        fallback_chain = [(target_model, target_provider)]
 
         try:
             await fetch_live_models_if_needed()
