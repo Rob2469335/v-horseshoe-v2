@@ -37,6 +37,15 @@ PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 VERSION = "8.2.0"
 LOG_DIR = PROJECT_ROOT / "swarm_os" / "logs"
 
+RE_TOOL_CALL = re.compile(r'<tool_call name="([^"]+)">')
+RE_TOPIC_UPDATE = re.compile(r'<topic_update title="(.*?)" summary="(.*?)"')
+RE_INTENT = re.compile(r'<strategic_intent>(.*?)</strategic_intent>', re.DOTALL)
+RE_PLAN_CLEAN = re.compile(r"<plan>.*?(?:</plan>|$)", re.DOTALL)
+RE_INTENT_CLEAN = re.compile(r"<strategic_intent>.*?(?:</strategic_intent>|$)", re.DOTALL)
+RE_TOPIC_CLEAN = re.compile(r"<topic_update.*?>")
+RE_TOOL_CLEAN = re.compile(r"<tool_call[^>]*>.*?(?:</tool_call>|$)", re.DOTALL)
+RE_PLAN_MATCH = re.compile(r"<plan>(.*?)</plan>", re.DOTALL)
+
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -100,7 +109,7 @@ def run_async(coro):
 
 def get_system_stats():
     ram = psutil.virtual_memory()
-    cpu = psutil.cpu_percent(interval=0.05)
+    cpu = psutil.cpu_percent(interval=None)
     return {
         "cpu": cpu,
         "ram_pct": ram.percent,
@@ -219,7 +228,7 @@ def stream_prompt(agent_id, prompt, history):
     ctx.delegation_chain = [agent_id]
     ctx.save()
 
-    with Live(console=ctx.console, refresh_per_second=8, vertical_overflow="visible") as live:
+    with Live(console=ctx.console, refresh_per_second=15, vertical_overflow="visible") as live:
         try:
             for line in resp.iter_lines():
                 if not line:
@@ -239,11 +248,14 @@ def stream_prompt(agent_id, prompt, history):
                             ctx.delegation_chain.append(child)
                         ctx.save()
 
-                if "error" in chunk:
+                err_msg = chunk.get("error")
+                if not err_msg and isinstance(chunk.get("result"), dict) and "error" in chunk.get("result", {}):
+                    err_msg = chunk["result"]["error"]
+
+                if err_msg:
                     live.stop()
                     err_agent = chunk.get("agent_id", ctx.active_agent)
                     err_tool = chunk.get("tool", "unknown")
-                    err_msg = chunk.get("error")
                     ctx.console.print(Panel(
                         f"[bold red]Error in {err_agent} (Tool: {err_tool}):[/bold red]\n{err_msg}",
                         border_style="red"
@@ -350,6 +362,84 @@ def stream_prompt(agent_id, prompt, history):
                         live.stop()
                         ctx.console.print(render_step_micro_ui("tool_call", f"executing tool {tool}"))
                         live.start()
+                    continue
+                if "content" in chunk or "thinking" in chunk:
+                    piece = chunk.get("content", "") or chunk.get("thinking", "")
+                    model = chunk.get("model", model)
+                    full_content += piece
+
+                    if "<plan>" in full_content and "</plan>" not in full_content:
+                        phase = "planning"
+                    elif "[Singularity:" in piece:
+                        phase = "resume"
+                    elif "Observation:" in piece:
+                        phase = "sensing"
+                    elif "[Self-Heal:" in piece:
+                        phase = "repair"
+                    elif "<tool_call" in piece:
+                        phase = "executing"
+
+                    if "<tool_call" in piece:
+                        m = RE_TOOL_CALL.search(piece)
+                        if m:
+                            tool_calls.append(m.group(1))
+
+                    topic_match = RE_TOPIC_UPDATE.search(full_content)
+                    if topic_match:
+                        ctx.current_topic = topic_match.group(1)
+                        ctx.current_summary = topic_match.group(2)
+
+                    intent_match = RE_INTENT.search(full_content)
+                    if intent_match:
+                        ctx.strategic_intent = intent_match.group(1).strip()
+
+                    elapsed = time.time() - start_time
+                    stats = get_system_stats()
+
+                    display = RE_PLAN_CLEAN.sub("", full_content)
+                    display = RE_INTENT_CLEAN.sub("", display)
+                    display = RE_TOPIC_CLEAN.sub("", display)
+                    display = RE_TOOL_CLEAN.sub("", display).strip()
+
+                    layout = Table.grid(padding=(0, 0))
+                    layout.add_column()
+                    layout.add_row(Text.from_markup(status_bar(agent_id, model, phase, stats["ram_pct"]) + f" [dim]{elapsed:.1f}s[/dim]"))
+
+                    if ctx.strategic_intent:
+                        layout.add_row(Text.from_markup(f" [bold blue]intent[/bold blue]: [cyan]{ctx.strategic_intent}[/cyan]"))
+
+                    if ctx.current_topic != "Nexus Initialization":
+                        layout.add_row(Panel(escape(ctx.current_summary), title=f"[bold bright_white]{escape(ctx.current_topic)}[/bold bright_white]", border_style="blue dim"))
+
+                    plan_match = RE_PLAN_MATCH.search(full_content)
+                    if plan_match:
+                        layout.add_row(Panel(plan_match.group(1).strip(), title="Plan", border_style="yellow dim"))
+
+                    if tool_calls:
+                        layout.add_row(Text.from_markup(f"[dim]Tools:[/dim] {' '.join(f'[cyan]⚙ {t}[/cyan]' for t in tool_calls[-3:])}"))
+
+                    if display:
+                        layout.add_row(Panel(display, border_style="bright_blue dim", padding=(0, 1)))
+
+                    if ctx.delegation_chain:
+                        tree_obj = Tree("[bold magenta]🐝 Swarm Handoff Trace[/bold magenta]")
+                        curr_node = tree_obj
+                        for i, agent in enumerate(ctx.delegation_chain):
+                            task_desc = ""
+                            if i > 0:
+                                from_agent = ctx.delegation_chain[i-1]
+                                to_agent = ctx.delegation_chain[i]
+                                for h in handoffs_list:
+                                    if h["from"] == from_agent and h["to"] == to_agent:
+                                        task_desc = f" [dim]({h['task']})[/dim]"
+                                        break
+                            if i == len(ctx.delegation_chain) - 1:
+                                curr_node = curr_node.add(f"[bold green]▶ {agent}[/bold green] (active){task_desc}")
+                            else:
+                                curr_node = curr_node.add(f"[cyan]✓ {agent}[/cyan]{task_desc}")
+                        layout.add_row(Panel(tree_obj, border_style="magenta dim", title="[bold magenta]Live Handoff Trace[/bold magenta]"))
+
+                    live.update(layout)
                     continue
 
                 if chunk_type == "final":
@@ -489,13 +579,17 @@ def stream_prompt(agent_id, prompt, history):
                             curr_node = curr_node.add(f"[cyan]✓ {agent}[/cyan]{task_desc}")
                     layout.add_row(Panel(tree_obj, border_style="magenta dim", title="[bold magenta]Live Handoff Trace[/bold magenta]"))
 
-                live.update(layout, refresh=True)
+                live.update(layout)
 
         except Exception as e:
             log.exception("Streaming exception")
             ctx.console.print(f"[bold red]Stream failed:[/bold red] {e}")
 
     ctx.console.print(Rule(style="dim blue"))
+
+    if full_content and full_content.strip():
+        ctx.console.print()
+        ctx.console.print(Panel(str(full_content), border_style="green"))
 
     # Estimate and update tokens
     input_text = prompt + json.dumps(history)
@@ -629,7 +723,7 @@ def draft_plan_first(goal: str, cmd_ctx: CommandContext) -> str:
     
     model = state.active_model or "qwen2.5:7b-instruct"
     try:
-        resp = cmd_ctx.call_api("/generate", "POST", {"model": model, "prompt": prompt})
+        resp = requests.post("http://127.0.0.1:11434/api/generate", json={"model": model, "prompt": prompt, "stream": False})
         if resp and resp.status_code == 200:
             plan_text = resp.json().get("response", "").strip()
             return plan_text
@@ -654,7 +748,7 @@ def draft_task_list(plan_text: str, cmd_ctx: CommandContext) -> str:
     
     model = state.active_model or "qwen2.5:3b-instruct"
     try:
-        resp = cmd_ctx.call_api("/generate", "POST", {"model": model, "prompt": prompt})
+        resp = requests.post("http://127.0.0.1:11434/api/generate", json={"model": model, "prompt": prompt, "stream": False})
         if resp and resp.status_code == 200:
             task_text = resp.json().get("response", "").strip()
             return task_text
@@ -705,7 +799,10 @@ def run_autonomous_goal_loop(goal: str, cmd_ctx: CommandContext):
                 refinement = console.input("[yellow]Provide feedback/refinements to regenerate the plan: [/yellow]").strip()
                 goal = f"{goal} (Feedback: {refinement})"
     
-    current_prompt = f"Goal: {goal}\n\nPlease audit, refactor, and fix the codebase to achieve this goal using your tools. Ensure syntax correctness and that all tests pass."
+    current_prompt = f"Goal: {goal}\n\n"
+    if plan_first and 'plan_text' in locals() and 'task_text' in locals():
+        current_prompt += f"Implementation Plan:\n{plan_text}\n\nTask Checklist:\n{task_text}\n\n"
+    current_prompt += "Please audit, refactor, and fix the codebase to achieve this goal using your tools. Ensure syntax correctness and that all tests pass."
     
     history = list(ctx.history)
     max_attempts = 5
@@ -757,9 +854,11 @@ def run_autonomous_goal_loop(goal: str, cmd_ctx: CommandContext):
             # Formulate correction feedback
             console.print("[yellow]Feeding back failure logs to agent context for correction...[/yellow]")
             current_prompt = (
+                f"<EPHEMERAL_MESSAGE>\n"
                 f"The verification checks failed with the following traceback/logs:\n\n"
                 f"```\n{trace_preview}\n```\n\n"
-                f"Please analyze these errors, modify the code using your capabilities, and verify syntax to fix them."
+                f"Please analyze these errors, modify the code using your capabilities, and verify syntax to fix them.\n"
+                f"</EPHEMERAL_MESSAGE>"
             )
 
 def run_debate_loop(goal: str, cmd_ctx: CommandContext):
@@ -798,6 +897,12 @@ def run_debate_loop(goal: str, cmd_ctx: CommandContext):
         "[bold green]✓ Swarm debate complete. Final plan recorded in history. Run /plan show to inspect.[/bold green]",
         border_style="green"
     ))
+    
+    from rich.prompt import Confirm
+    if Confirm.ask("[bold cyan]Approve this synthesized plan for execution by the Executor agent?[/bold cyan]"):
+        state.active_agent = "executor"
+        state.save()
+        run_autonomous_goal_loop("Execute the synthesized debate plan", cmd_ctx)
 
 def main():
     if len(sys.argv) > 1:
@@ -844,8 +949,8 @@ def main():
             # Process command or prompt
             execute_prompt = registry.handle_line(cmd_line, cmd_ctx)
             if execute_prompt:
-                if len(ctx.history) > 12:
-                    ctx.console.print("[dim]⚡ [bold yellow]Context pressure warning:[/bold yellow] history exceeds 12 messages. Auto-compressing context in background...[/dim]")
+                if ctx.total_input_tokens > 15000:
+                    ctx.console.print("[dim]⚡ [bold yellow]Context pressure warning:[/bold yellow] tokens exceed 15000. Auto-compressing context in background...[/dim]")
                     registry.handle_line("/compress", cmd_ctx)
                 ctx.history = stream_prompt(ctx.active_agent, execute_prompt, ctx.history)
 

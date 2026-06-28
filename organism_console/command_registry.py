@@ -1031,7 +1031,7 @@ def cmd_memory(ctx: CommandContext, args: List[str]) -> None:
                     "vector": vector,
                     "payload": {
                         "text": text,
-                        "created_at": datetime.utcnow().isoformat()
+                        "created_at": datetime.now(datetime.UTC).isoformat()
                     }
                 }]
             }, timeout=10.0)
@@ -1534,3 +1534,4 @@ def cmd_compress(ctx: CommandContext, args: List[str]) -> None:
             ctx.console.print(f"[red]Failed to generate summary: Status {resp.status_code if resp else 'No response'}[/red]")
     except Exception as e:
         ctx.console.print(f"[red]Error during compression: {e}[/red]")
+

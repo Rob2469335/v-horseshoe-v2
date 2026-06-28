@@ -168,6 +168,11 @@ class AgentService:
                 "description": "Code-writing specialist focusing on high-quality modifications.",
                 "model_role": "fast",
             },
+            "debugger": {
+                "role": "debugger",
+                "description": "Troubleshoots and debugs complex code errors and logical flaws.",
+                "model_role": "reasoning",
+            },
         }
         for agent_id, config in roles.items():
             self.register_agent(agent_id, config)
@@ -219,7 +224,7 @@ class AgentService:
             "- ask_user: {question: '...', options?: [...]}",
             "- playwright: {operation: 'goto'|'click'|'type'|'content'|'screenshot', url: '...', selector?: '...', text?: '...'}",
             "- context7: {operation: 'read'|'write'|'clear', session_id: '...', content?: '...', limit?: 10}",
-            "- delegate: {target_agent: 'planner'|'executor'|'coder'|'tool-runner', task: '...'}",
+            "- delegate: {target_agent: 'planner'|'executor'|'coder'|'tool-runner'|'debugger', task: '...'}",
             "",
             "COORDINATOR RULES (only if agent_id == coordinator):",
             "- You are the COORDINATOR. Your FIRST and ONLY action is ALWAYS to delegate to planner.",
@@ -235,9 +240,11 @@ class AgentService:
             "- planner: delegate to executor, coder, or tool-runner; planner should not do implementation work directly.",
             "- executor: execute tasks directly with tools; NEVER delegate to executor.",
             "- coder: write or patch code; NEVER delegate to coder unless the task specifically requires code changes.",
+            "- debugger: troubleshoot bugs and find root causes.",
             "- tool-runner: run tools and checks; NEVER delegate to tool-runner unless a concrete tool action is needed.",
             "- Only use ask_user if agent_id is coordinator.",
             "- If you are executor and need code changes, delegate to coder.",
+            "- If you are executor and need debugging, delegate to debugger.",
             "- If you are executor and need tool execution or verification, use tools directly or delegate to tool-runner.",
             "- Never delegate to yourself. Choose a different agent or use a tool directly.",
         ]
@@ -279,7 +286,7 @@ class AgentService:
         history = history or []
         delegation_chain = delegation_chain or [agent_id]
 
-        if len(delegation_chain) >= 7:
+        if len(delegation_chain) >= 8:
             logger.warning(f"Delegation depth exceeded: {delegation_chain}")
             yield {
                 "agent_id": agent_id,

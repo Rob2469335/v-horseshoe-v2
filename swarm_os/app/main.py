@@ -83,12 +83,12 @@ async def lifespan(app: FastAPI):
         healing = None
 
     try:
-        from swarm_os.services.agent_service import AgentService
-        agent_service = AgentService(
+        from runtime_v2.api.agent_service_v2 import AgentServiceV2
+        agent_service = AgentServiceV2(
             orchestrator=orchestrator,
             settings=settings,
         )
-        log.info("AgentService ready")
+        log.info("AgentServiceV2 ready")
     except Exception as exc:
         log.warning(f"AgentService unavailable: {exc}")
         agent_service = None
@@ -191,15 +191,15 @@ def create_app() -> FastAPI:
         }
 
     @app.get("/status")
-    def status_endpoint(request: Request):
+    async def status_endpoint(request: Request):
         runtime = getattr(request.app.state, "runtime", None)
         try:
             if runtime is not None:
                 event_store = getattr(runtime, "event_store", None)
                 all_events = event_store.read_all() if event_store else []
                 orchestrator = getattr(runtime, "orchestrator", None)
-                ollama_ok = orchestrator.ollama.is_reachable() if orchestrator and hasattr(orchestrator, "ollama") else False
-                models = orchestrator.ollama.list_models() if orchestrator and hasattr(orchestrator, "ollama") else []
+                ollama_ok = await orchestrator.ollama.is_reachable() if orchestrator and hasattr(orchestrator, "ollama") else False
+                models = await orchestrator.ollama.list_models() if orchestrator and hasattr(orchestrator, "ollama") else []
                 return {
                     "status": "ok" if ollama_ok else "degraded",
                     "ollama_reachable": ollama_ok,
@@ -207,17 +207,32 @@ def create_app() -> FastAPI:
                     "installed_model_count": len(models),
                     "installed_models": models,
                 }
-        except Exception:
+        except Exception as e:
             pass
-        return {
-            "status": "ok",
-            "ollama_reachable": True,
-            "event_count": 0,
-            "installed_model_count": 1,
-            "installed_models": ["qwen2.5:7b-instruct"]
-        }
+        
+        # Fallback to direct Ollama query if runtime state fails
+        try:
+            from swarm_os.infra.ollama import OllamaClient
+            client = OllamaClient(base_url="http://127.0.0.1:11434")
+            models = await client.list_models()
+            return {
+                "status": "ok",
+                "ollama_reachable": True,
+                "event_count": 0,
+                "installed_model_count": len(models),
+                "installed_models": models
+            }
+        except Exception:
+            return {
+                "status": "degraded",
+                "ollama_reachable": False,
+                "event_count": 0,
+                "installed_model_count": 0,
+                "installed_models": []
+            }
 
     return app
 
 
 app = create_app()
+

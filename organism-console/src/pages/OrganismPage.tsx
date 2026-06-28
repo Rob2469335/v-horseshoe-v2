@@ -18,6 +18,7 @@ import { getSubsystemTheme, organismTheme } from "../features/organism/organism-
 import type { OrganismSubsystem } from "../features/organism/organism-types"
 import { DebateRoomPanel } from "../components/organism/DebateRoomPanel"
 import { SelfHealingPosturePanel } from "../components/organism/SelfHealingPosturePanel"
+import { SwarmDashboard2027 } from "../components/organism/SwarmDashboard2027"
 
 interface CIResult {
   type: string
@@ -340,6 +341,8 @@ export default function OrganismPage() {
           <span style={{ color: "#7dd3fc" }}>Branch: {swarmCockpit.lastBranch}</span>
         </div>
       </div>
+
+      <SwarmDashboard2027 backendUrl={backendUrl} />
 
       <section
         className="page"

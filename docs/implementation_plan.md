@@ -1,0 +1,1 @@
+Direct /generate is disabled for agent workflows; use /agents/{agent_id}/step/stream.
