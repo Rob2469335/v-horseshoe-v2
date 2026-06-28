@@ -85,15 +85,46 @@ class AgentServiceV2:
             log.info("[%s] turn %d action=%s", agent_id, _turn, action)
             yield {"agent_id": agent_id, "content": f"[{action}]", "model": model}
 
-            if action == "ask_user" and agent_id != "coordinator":
-                yield {"agent_id": agent_id, "type": "final", "model": model,
-                       "provider": provider,
-                       "content": "Only the coordinator agent is allowed to ask the user questions."}
-                return
+            from runtime_v2.prompts.system_prompts import _AGENT_TOOLS
+            allowed_tools = _AGENT_TOOLS.get(agent_id, ["delegate", "final", "filesystem"])
+            if action not in allowed_tools:
+                error_msg = f"Unauthorized tool '{action}' for role '{agent_id}'. Allowed: {allowed_tools}"
+                yield {"agent_id": agent_id, "type": "tool_result", "tool": action, "result": {"error": error_msg}}
+                messages.append({"role": "assistant", "content": f"I called {action}"})
+                messages.append({"role": "user", "content": f"Result: {json.dumps({'error': error_msg})}"})
+                continue
+
+            if action == "ask_user":
+                if agent_id not in ["coordinator", "planner"]:
+                    error_msg = f"ask_user not allowed for {agent_id}"
+                    yield {"agent_id": agent_id, "type": "tool_result", "tool": "ask_user", "result": {"error": error_msg}}
+                    messages.append({"role": "assistant", "content": f"I called ask_user"})
+                    messages.append({"role": "user", "content": f"Result: {json.dumps({'error': error_msg})}"})
+                    continue
+                question = decision.get("question", "What do you want me to do?")
+                yield {"agent_id": agent_id, "type": "tool_result", "tool": "ask_user", "result": "Waiting for user input..."}
+                print(f"\n[AGENT {agent_id.upper()} ASKS]: {question}")
+                answer = input("Your answer: ")
+                yield {"agent_id": agent_id, "type": "tool_result", "tool": "ask_user", "result": answer}
+                messages.append({"role": "assistant", "content": f'I called ask_user with {json.dumps({"question": question})}'})
+                messages.append({"role": "user", "content": f"User's answer: {answer}\n\nContinue."})
+                continue
 
             if action == "final":
                 response_text = decision.get("response", "Task complete.")
                 yield {"agent_id": agent_id, "content": response_text, "model": model}
+                
+                if agent_id == "reviewer" and "VERDICT: FAIL" in response_text.upper():
+                    handoff_task = f"The reviewer failed your code with the following feedback: {response_text}"
+                    yield {"agent_id": agent_id, "type": "agent_handoff", "from": agent_id, "to": "coder", "task": handoff_task}
+                    async for chunk in self.step_agent_stream(
+                        "coder", handoff_task, history=[],
+                        delegation_chain=chain + ["coder"],
+                    ):
+                        chunk.setdefault("delegated_by", agent_id)
+                        yield chunk
+                    return
+
                 yield {"agent_id": agent_id, "type": "final", "model": model,
                        "provider": provider, "content": response_text}
                 return
@@ -135,7 +166,7 @@ class AgentServiceV2:
                        "from": agent_id, "to": target, "task": task}
 
                 async for chunk in self.step_agent_stream(
-                    target, task, history=list(messages),
+                    target, task, history=[],
                     delegation_chain=chain + [target],
                 ):
                     chunk.setdefault("delegated_by", agent_id)

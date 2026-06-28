@@ -37,9 +37,9 @@ async def get_tool_decision(model: str, messages: list, agent_id: str) -> Option
         "model": model,
         "messages": messages,
         "stream": False,
-        "keep_alive": 0,
+        "keep_alive": "1h",
         "format": TOOL_CALL_SCHEMA,
-        "options": {"temperature": 0.1},
+        "options": {"temperature": 0.1, "num_ctx": 4096},
     }
     try:
         async with httpx.AsyncClient(timeout=600.0) as client:
@@ -60,8 +60,8 @@ async def stream_content(model: str, messages: list, agent_id: str) -> AsyncGene
         "model": model,
         "messages": messages,
         "stream": True,
-        "keep_alive": 0,
-        "options": {"temperature": 0.2, "num_predict": -1},
+        "keep_alive": "1h",
+        "options": {"temperature": 0.2, "num_predict": -1, "num_ctx": 4096},
     }
     try:
         async with httpx.AsyncClient(timeout=600.0) as client:
