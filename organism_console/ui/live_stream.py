@@ -41,15 +41,16 @@ def status_bar(ctx, agent, model, phase, ram_pct, tps: float = 0.0):
         "executing": "bright_green",
     }
     pc = phase_colors.get(phase, "white")
-    tps_str = f" | [bold blue]tps[/bold blue]:[bright_green]{tps:.1f}[/bright_green]" if tps > 0 else ""
+    tps_str = f" | tps:[bright_green]{tps:.1f}[/bright_green]" if tps > 0 else ""
     topic_str = str(ctx.current_topic)
-    if len(topic_str) > 25:
-        topic_str = topic_str[:22] + "..."
+    if len(topic_str) > 15:
+        topic_str = topic_str[:12] + "..."
+    agent_str = agent[:10]
     return (
-        f"[bold blue]topic[/bold blue]:[bright_white]{escape(topic_str)}[/bright_white] | "
-        f"[bold blue]agent[/bold blue]:[cyan]{agent}[/cyan] | "
-        f"[bold blue]phase[/bold blue]:[{pc}]{phase}[/{pc}] | "
-        f"[bold blue]ram[/bold blue]:[{stats['ram_color']}]{ram_pct:.0f}%[/{stats['ram_color']}]"
+        f"T:[bright_white]{escape(topic_str)}[/bright_white] | "
+        f"A:[cyan]{agent_str}[/cyan] | "
+        f"P:[{pc}]{phase}[/{pc}] | "
+        f"RAM:[{stats['ram_color']}]{ram_pct:.0f}%[/{stats['ram_color']}]"
         f"{tps_str}"
     )
 
@@ -310,13 +311,6 @@ def stream_prompt(ctx, agent_id, prompt, history):
                     final_content = chunk.get("content", "")
                     ctx.last_provider = chunk.get("provider", "ollama")
 
-                    if "rate_limit_remaining" in chunk:
-                        remaining = int(chunk["rate_limit_remaining"])
-                        true_used = max(0, ctx.cloud_token_quota - remaining)
-                        ctx.cloud_input_tokens = true_used
-                        ctx.cloud_output_tokens = 0
-
-                    ctx.console.print()
                     if isinstance(final_content, dict):
                         ctx.console.print(Panel(json.dumps(final_content, indent=2), border_style="green"))
                     elif final_content:
