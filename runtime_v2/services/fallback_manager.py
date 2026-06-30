@@ -24,7 +24,7 @@ SAFE_DEFAULTS = [
     "groq/llama-3.1-8b-instant",
 ]
 
-async def _fetch_openrouter_free() -> list[str]:
+async def _fetch_openrouter_free() -> list[dict]:
     """Scrape OpenRouter API for currently free models."""
     models = []
     try:
@@ -35,12 +35,17 @@ async def _fetch_openrouter_free() -> list[str]:
             for m in data:
                 pricing = m.get("pricing", {})
                 if pricing.get("prompt") == "0" and pricing.get("completion") == "0":
-                    models.append(f"openrouter/{m['id']}")
+                    models.append({
+                        "model": f"openrouter/{m['id']}",
+                        "context_length": m.get("context_length", 8192),
+                        "pricing": "Free",
+                        "provider": "OpenRouter"
+                    })
     except Exception as e:
         log.warning(f"Failed to fetch OpenRouter free models: {e}")
     return models
 
-async def _fetch_groq_models() -> list[str]:
+async def _fetch_groq_models() -> list[dict]:
     """Scrape Groq API for currently available models."""
     models = []
     api_key = os.getenv("GROQ_API_KEY")
@@ -53,7 +58,12 @@ async def _fetch_groq_models() -> list[str]:
             resp.raise_for_status()
             data = resp.json().get("data", [])
             for m in data:
-                models.append(f"groq/{m['id']}")
+                models.append({
+                    "model": f"groq/{m['id']}",
+                    "context_length": 8192, # Default fallback
+                    "pricing": "Premium",
+                    "provider": "Groq"
+                })
     except Exception as e:
         log.warning(f"Failed to fetch Groq models: {e}")
     return models
@@ -75,7 +85,10 @@ async def refresh_fallbacks_if_needed():
     )
     
     # Assemble Groq static fallback models (Groq is fastest for fallback)
-    groq_static = ["groq/llama-3.3-70b-versatile", "groq/llama-3.1-8b-instant"]
+    groq_static = [
+        {"model": "groq/llama-3.3-70b-versatile", "context_length": 8192, "pricing": "Premium", "provider": "Groq"},
+        {"model": "groq/llama-3.1-8b-instant", "context_length": 8192, "pricing": "Premium", "provider": "Groq"}
+    ]
     gemini_models = []  # Gemini disabled — API key issues
     nvidia_models = []  # Nvidia disabled — bad provider prefix in LiteLLM
     
@@ -87,7 +100,7 @@ async def refresh_fallbacks_if_needed():
     
     if not all_fallbacks:
         # Emergency fail-safe
-        all_fallbacks = SAFE_DEFAULTS.copy()
+        all_fallbacks = [{"model": m, "context_length": 8192, "pricing": "?", "provider": "Fallback"} for m in SAFE_DEFAULTS]
         
     _cached_fallbacks = all_fallbacks
     _cached_stats = {
@@ -102,7 +115,7 @@ async def refresh_fallbacks_if_needed():
 async def get_live_fallbacks() -> list[dict]:
     """Get the live array of fallback models for LiteLLM."""
     await refresh_fallbacks_if_needed()
-    return [{"model": m} for m in _cached_fallbacks]
+    return _cached_fallbacks
 
 def get_fallback_stats() -> dict:
     """Get the latest synchronous telemetry on the fallback array."""

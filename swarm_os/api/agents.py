@@ -30,7 +30,7 @@ class ModelOverridePayload(BaseModel):
 async def get_cloud_models():
     from runtime_v2.services.fallback_manager import get_live_fallbacks
     fallbacks = await get_live_fallbacks()
-    return {"models": [f["model"] for f in fallbacks]}
+    return {"models": fallbacks}
 
 @router.post("/agents/{agent_id}/model")
 def override_agent_model(agent_id: str, payload: ModelOverridePayload):
