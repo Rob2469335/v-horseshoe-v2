@@ -52,40 +52,34 @@ def cmd_tokens_display(ctx: CommandContext, args: List[str]) -> None:
         border_style="cyan"
     ))
 
-@registry.register("model", "Switch model for an agent: /model <agent> <model_name>")
+@registry.register("picker", "Launch interactive interactive model picker", aliases=["models", "model"])
 def cmd_model(cmd_ctx: CommandContext, args: List[str]) -> None:
-    import importlib
-    from runtime_v2.services import model_registry as _reg
+    from organism_console.ui.picker import launch_picker, push_model_override, parse_backend
 
-    if len(args) < 2:
-        cmd_ctx.console.print("[yellow]Usage: /model <agent_id> <model_name>[/yellow]")
-        cmd_ctx.console.print("[dim]Example: /model coordinator llama3-groq-tool-use:8b[/dim]")
+    if not args:
+        launch_picker(cmd_ctx)
         return
 
     agent_id = args[0].lower()
-    model_name = args[1]
-
-    if agent_id not in _reg._AGENT_MODELS:
-        cmd_ctx.console.print(f"[red]Unknown agent: {agent_id}[/red]")
-        cmd_ctx.console.print(f"[dim]Valid agents: {', '.join(_reg._AGENT_MODELS.keys())}[/dim]")
+    model_name = args[1] if len(args) > 1 else ""
+    
+    if not model_name:
+        cmd_ctx.console.print("[yellow]Usage: /model <agent_id> <model_name>[/yellow]")
+        cmd_ctx.console.print("[dim]Or just run /model with no arguments for the interactive picker.[/dim]")
         return
 
-    current_model, current_backend = _reg._AGENT_MODELS[agent_id]
-    if ":" in model_name and "/" not in model_name:
-        backend = "ollama"
-    elif model_name.startswith("gemini"):
-        backend = "gemini"
-    elif model_name.startswith("groq/"):
-        backend = "groq"
-        model_name = model_name[5:]
+    backend, clean_model_name = parse_backend(model_name)
+    
+    cmd_ctx.console.print(f"[dim]Syncing {agent_id} model override to backend...[/dim]")
+    success = push_model_override(agent_id, clean_model_name, backend)
+    if success:
+        from runtime_v2.services import model_registry as _reg
+        _reg._AGENT_MODELS[agent_id] = (clean_model_name, backend)
+        cmd_ctx.console.print(f"[bold green]✓ LIVE OVERRIDE ACTIVE[/bold green] | {agent_id.upper()} → [cyan]{clean_model_name}[/cyan] [dim]({backend})[/dim]")
+        if hasattr(cmd_ctx.state, "reset_router"):
+            cmd_ctx.state.reset_router()
     else:
-        backend = current_backend
-
-    _reg._AGENT_MODELS[agent_id] = (model_name, backend)
-    # The CLI context router rebuild must be handled globally or we can do it via a callback.
-    # To keep things clean without importing the global ctx, we assume cmd_ctx.state has a reset_router method.
-    cmd_ctx.state.reset_router()
-    cmd_ctx.console.print(f"[bold green]✓ {agent_id}[/bold green] → [cyan]{model_name}[/cyan] [dim]({backend})[/dim]")
+        cmd_ctx.console.print("[bold red]✗ Failed to sync override to backend.[/bold red]")
 
 @registry.register("status", "Show full system status including fallback pool and agent models")
 def cmd_status(cmd_ctx: CommandContext, args: List[str]) -> None:

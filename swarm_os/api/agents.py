@@ -22,6 +22,22 @@ class AgentStepPayload(BaseModel):
 class ToolCallPayload(BaseModel):
     payload: Dict[str, Any] | None = None
 
+class ModelOverridePayload(BaseModel):
+    model_name: str
+    backend: str
+
+@router.get("/models/cloud")
+async def get_cloud_models():
+    from runtime_v2.services.fallback_manager import get_live_fallbacks
+    fallbacks = await get_live_fallbacks()
+    return {"models": [f["model"] for f in fallbacks]}
+
+@router.post("/agents/{agent_id}/model")
+def override_agent_model(agent_id: str, payload: ModelOverridePayload):
+    from runtime_v2.services.model_registry import _AGENT_MODELS
+    _AGENT_MODELS[agent_id] = (payload.model_name, payload.backend)
+    return {"status": "ok", "agent_id": agent_id, "model": payload.model_name}
+
 import logging
 logger = logging.getLogger(__name__)
 
