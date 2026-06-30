@@ -16,11 +16,10 @@ _last_fetch_time = 0
 _cached_fallbacks = []
 _cached_stats = {"openrouter": 0, "groq": 0, "gemini": 0, "nvidia": 0, "total": 0}
 
-# Hardcoded safe defaults in case the network fails entirely
 SAFE_DEFAULTS = [
     "openrouter/meta-llama/llama-3.1-8b-instruct:free",
     "openrouter/mistralai/mistral-7b-instruct:free",
-    "openrouter/google/gemini-flash-1.5:free",
+    "openrouter/meta-llama/llama-3.3-70b-instruct:free",
     "groq/llama-3.3-70b-versatile",
     "groq/llama-3.1-8b-instant",
 ]

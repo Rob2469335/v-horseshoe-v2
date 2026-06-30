@@ -13,10 +13,10 @@ _AGENT_MODELS: dict[str, Tuple[str, str]] = {
     "coder":       ("qwen3-coder:480b-cloud",             "ollama"),
     # Tool-runner: Groq Llama 3.3 is incredibly fast and great at tools
     "tool-runner": ("llama-3.3-70b-versatile",            "groq"),
-    # Reviewer: OpenRouter Gemini Flash 1.5 free tier
-    "reviewer":    ("google/gemini-flash-1.5:free",       "openrouter"),
-    # Debugger: OpenRouter Gemini Flash 1.5 free tier
-    "debugger":    ("google/gemini-flash-1.5:free",       "openrouter"),
+    # Reviewer: OpenRouter Llama 3.3 free tier
+    "reviewer":    ("meta-llama/llama-3.3-70b-instruct:free", "openrouter"),
+    # Debugger: OpenRouter Llama 3.3 free tier
+    "debugger":    ("meta-llama/llama-3.3-70b-instruct:free", "openrouter"),
 }
 
 def get_model(agent_id: str) -> Tuple[str, str]:
