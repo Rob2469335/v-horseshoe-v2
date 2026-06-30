@@ -17,76 +17,66 @@ def is_prime(n):
         i += 6
     return True
 
-def find_primes(start, end, result_queue):
-    primes = []
+def check_range(start, end, queue):
     for num in range(start, end):
         if is_prime(num):
-            primes.append(num)
-    result_queue.put(primes)
+            queue.put(num)
 
-def main():
-    start_time = time.time()
-    
-    # Number of primes to find
-    target_count = 10000
-    
-    # Use all available CPU cores
-    num_processes = mp.cpu_count()
-    
-    # Create a manager queue to collect results
+def find_primes(limit, num_processes):
     manager = mp.Manager()
-    result_queue = manager.Queue()
-    
-    # Create process pool
+    queue = manager.Queue()
     pool = mp.Pool(processes=num_processes)
     
-    # Calculate range for each process
-    # We'll use a reasonable upper bound estimation for 10,000 primes
-    # Prime number theorem: nth prime ~ n * ln(n)
-    # For n=10000, this is approximately 10000 * ln(10000) ≈ 92000
-    # We'll use 120000 to be safe
-    upper_bound = 120000
-    chunk_size = upper_bound // num_processes
+    # Estimate upper bound for the nth prime (n=limit)
+    if limit < 6:
+        upper_bound = 12  # Small fixed upper bound for small limits
+    else:
+        n = limit
+        upper_bound = int(n * (math.log(n) + math.log(math.log(n)))) + 10000
     
-    # Start processes
+    chunk_size = upper_bound // num_processes
     processes = []
+    
+    start_time = time.time()
+    
     for i in range(num_processes):
         start = i * chunk_size
-        end = start + chunk_size if i < num_processes - 1 else upper_bound
-        p = pool.apply_async(find_primes, args=(start, end, result_queue))
+        end = start + chunk_size if i != num_processes - 1 else upper_bound
+        p = pool.apply_async(check_range, args=(start, end, queue))
         processes.append(p)
     
-    # Close pool and wait for completion
+    for p in processes:
+        p.get()
+    
     pool.close()
     pool.join()
     
-    # Collect all results
-    all_primes = []
-    while not result_queue.empty():
-        all_primes.extend(result_queue.get())
+    primes = []
+    while not queue.empty():
+        primes.append(queue.get())
     
-    # Sort and take first 10,000 primes
-    all_primes.sort()
-    first_10000_primes = all_primes[:target_count]
+    primes.sort()
+    primes = primes[:limit]
     
     end_time = time.time()
     execution_time = end_time - start_time
     
-    # Save to JSON file
-    result_data = {
-        "primes": first_10000_primes,
-        "execution_time_seconds": execution_time,
-        "count": len(first_10000_primes)
+    return primes, execution_time
+
+def main():
+    num_processes = mp.cpu_count()
+    primes, execution_time = find_primes(10000, num_processes)
+    
+    result = {
+        "primes": primes,
+        "count": len(primes),
+        "execution_time": execution_time
     }
     
     with open("primes.json", "w") as f:
-        json.dump(result_data, f, indent=2)
+        json.dump(result, f, indent=2)
     
-    print(f"Found {len(first_10000_primes)} prime numbers in {execution_time:.4f} seconds")
-    print(f"Results saved to primes.json")
-    
-    # Print first 20 primes as verification
-    print(f"First 20 primes: {first_10000_primes[:20]}")
+    print(f"Found {len(primes)} primes in {execution_time:.4f} seconds.")
 
 if __name__ == "__main__":
     main()

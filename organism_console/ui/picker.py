@@ -15,6 +15,26 @@ from organism_console.config import BACKEND_URL
 
 FAVORITES_FILE = Path(__file__).parent.parent / "config" / "favorites.json"
 
+def push_model_override(agent_id: str, model_name: str, backend: str) -> bool:
+    try:
+        import urllib3
+        urllib3.disable_warnings()
+        r = requests.post(
+            f"{BACKEND_URL}/agents/{agent_id}/model",
+            json={"model_name": model_name, "backend": backend},
+            timeout=3,
+            verify=False
+        )
+        return r.status_code == 200
+    except:
+        return False
+
+def parse_backend(model: str) -> tuple[str, str]:
+    if model.startswith("openrouter/"): return "openrouter", model[11:]
+    if model.startswith("groq/"): return "groq", model[5:]
+    if model.startswith("ollama/"): return "ollama", model[7:]
+    return "ollama", model
+
 class ModelPickerApp(App):
     CSS = """
     Screen {
@@ -104,6 +124,12 @@ class ModelPickerApp(App):
             self.agents = []
             
         try:
+            r = requests.get(f"{BACKEND_URL}/agents/models", timeout=3, verify=False)
+            self.agent_models = r.json() if r.status_code == 200 else {}
+        except:
+            self.agent_models = {}
+            
+        try:
             r = requests.get(f"{BACKEND_URL}/models/cloud", timeout=3, verify=False)
             if r.status_code == 200:
                 self.models = r.json().get("models", [])
@@ -120,7 +146,13 @@ class ModelPickerApp(App):
     def populate_agents(self):
         agent_list = self.query_one("#agent_list", OptionList)
         for a in self.agents:
-            agent_list.add_option(Option(f"{a['id'].upper()} - {a.get('model_role', '')}", id=a['id']))
+            agent_id = a['id']
+            # Lookup currently assigned model via the fetched dict
+            current_assignment = self.agent_models.get(agent_id, {})
+            current_model = current_assignment.get("model", "Unknown")
+            
+            label = f"{agent_id.upper():<12} - {a.get('model_role', '')}\n[dim]Current: {current_model}[/dim]"
+            agent_list.add_option(Option(label, id=agent_id))
 
     def sort_models(self, m):
         return (0 if m['model'] in self.favorites else 1, m['model'])
@@ -129,10 +161,17 @@ class ModelPickerApp(App):
         model_list = self.query_one("#model_list", OptionList)
         model_list.clear_options()
         
-        filtered = [m for m in self.models if query.lower() in m['model'].lower()]
+        # Only show free/local/free-tier models
+        free_models = [m for m in self.models if m.get("pricing", "").lower() != "premium"]
+        
+        filtered = [m for m in free_models if query.lower() in m['model'].lower()]
         filtered.sort(key=self.sort_models)
         
+        seen = set()
         for m in filtered:
+            if m['model'] in seen:
+                continue
+            seen.add(m['model'])
             fav = "★ " if m['model'] in self.favorites else "  "
             model_list.add_option(Option(f"{fav}{m['model']}", id=m['model']))
 
@@ -183,30 +222,20 @@ class ModelPickerApp(App):
         m_id = model_list.get_option_at_index(model_list.highlighted).id
         m_id_clean = m_id.replace("★ ", "").strip()
         
-        backend, clean_name = self.parse_backend(m_id_clean)
+        backend, clean_name = parse_backend(m_id_clean)
         
         try:
-            requests.post(
-                f"{BACKEND_URL}/agents/{a_id}/model",
-                json={"model_name": clean_name, "backend": backend},
-                timeout=3,
-                verify=False
-            )
-            from runtime_v2.services import model_registry as _reg
-            _reg._AGENT_MODELS[a_id] = (clean_name, backend)
-            if hasattr(self.ctx.state, "reset_router"):
-                self.ctx.state.reset_router()
-            self.ctx.console.print(f"[bold green]✓ LIVE OVERRIDE ACTIVE[/bold green] | {a_id.upper()} → [cyan]{clean_name}[/cyan] [dim]({backend})[/dim]")
+            success = push_model_override(a_id, clean_name, backend)
+            if success:
+                if hasattr(self.ctx.state, "reset_router"):
+                    self.ctx.state.reset_router()
+                self.ctx.console.print(f"[bold green]✓ LIVE OVERRIDE ACTIVE[/bold green] | {a_id.upper()} → [cyan]{clean_name}[/cyan] [dim]({backend})[/dim]")
+            else:
+                self.ctx.console.print(f"[bold red]✗ Failed to sync override to backend.[/bold red]")
         except Exception as e:
             self.ctx.console.print(f"[bold red]✗ Failed to sync override to backend:[/bold red] {e}")
             
         self.exit()
-
-    def parse_backend(self, model: str) -> tuple[str, str]:
-        if model.startswith("openrouter/"): return "openrouter", model[11:]
-        if model.startswith("groq/"): return "groq", model[5:]
-        if model.startswith("ollama/"): return "ollama", model[7:]
-        return "ollama", model
 
 def launch_picker(ctx):
     app = ModelPickerApp(ctx)

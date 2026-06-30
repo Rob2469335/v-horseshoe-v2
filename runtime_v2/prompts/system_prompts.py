@@ -1,8 +1,9 @@
 """System prompt builder."""
 
 _ROLE_RULES: dict[str, str] = {
-    "coordinator": """YOUR ONLY JOB: delegate immediately to planner.
-Output action=delegate with target_agent=planner.""",
+    "coordinator": """YOUR ONLY JOB: delegate immediately to planner, or respond directly to trivial user greetings.
+Output action=delegate with target_agent=planner.
+For trivial greetings or questions not needing tasks, use action=final.""",
 
     "planner": """YOUR JOB: create a plan then delegate to EXECUTOR.
 IMPORTANT: target_agent must be executor, never planner.
@@ -12,7 +13,7 @@ Output action=delegate, target_agent=executor, task=detailed description.""",
     "executor": """YOUR JOB: use tools to complete the task.
 You MUST read .swarm_brain/plan.md using the filesystem tool before taking any other action.
 Use web_search, filesystem, sandbox_repl as needed.
-When tools are done: delegate to coder if code changes needed, else delegate to tool-runner.
+When tools are done: if the task required code changes (e.g. fix, write, implement, patch), delegate to coder. Otherwise, delegate to tool-runner.
 NEVER set target_agent=executor.""",
 
     "coder": """YOUR JOB: write or patch code using filesystem.
@@ -24,9 +25,10 @@ Run tests with sandbox_repl, check files with filesystem.
 When done: delegate to reviewer.""",
 
     "reviewer": """YOUR JOB: review all work and give final verdict.
-Read files if needed. Output detailed feedback.
-End with VERDICT: PASS or VERDICT: FAIL.
-Use action=final. Do NOT delegate.""",
+Read files if needed using filesystem tool.
+When finished reviewing, use action=final.
+If passing, set response to VERDICT: PASS.
+If failing, set response to VERDICT: FAIL followed by FIXES_NEEDED: and a detailed list of required changes. Do NOT delegate.""",
 
     "debugger": """YOUR JOB: troubleshoot bugs and fix failures.
 Use filesystem and sandbox_repl to diagnose errors.
@@ -34,7 +36,7 @@ When the bug is fixed, delegate to tool-runner to verify, or to coder if a major
 }
 
 _TOOL_DEFINITIONS = {
-    "delegate": "- action=delegate  requires: target_agent (planner|executor|coder|tool-runner|reviewer), task",
+    "delegate": "- action=delegate  requires: target_agent (planner|executor|coder|tool-runner|reviewer|debugger), task",
     "web_search": "- action=web_search  requires: query",
     "filesystem": "- action=filesystem  requires: operation (read|write|patch|list|grep), path (relative to workspace); optional: content, old, new",
     "sandbox_repl": "- action=sandbox_repl  requires: language (python|powershell|pytest), code or command or path",
@@ -44,7 +46,7 @@ _TOOL_DEFINITIONS = {
 }
 
 _AGENT_TOOLS = {
-    "coordinator": ["delegate", "ask_user"],
+    "coordinator": ["delegate", "ask_user", "final"],
     "planner": ["delegate", "filesystem", "web_search", "ask_user"],
     "executor": ["delegate", "filesystem", "web_search", "sandbox_repl", "vscode_automation"],
     "coder": ["delegate", "filesystem", "vscode_automation"],

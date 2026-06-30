@@ -3,7 +3,8 @@ import logging
 from pathlib import Path
 
 log = logging.getLogger(__name__)
-_ROOT = Path("C:/Users/rober/Projects/v-horseshoe-v2")
+import os
+_ROOT = Path(os.getenv("ZENITH_PROJECT_ROOT", Path(__file__).resolve().parent.parent.parent))
 
 async def run(tool_name: str, payload: dict) -> dict:
     try:
@@ -15,7 +16,11 @@ async def run(tool_name: str, payload: dict) -> dict:
             result = await web_search_handler(payload)
         elif tool_name == "sandbox_repl":
             from swarm_os.capabilities.sandbox_repl import SandboxReplHandler
-            result = await SandboxReplHandler().execute(payload)
+            import asyncio
+            try:
+                result = await asyncio.wait_for(SandboxReplHandler().execute(payload), timeout=60.0)
+            except asyncio.TimeoutError:
+                result = {"ok": False, "error": "Execution timed out after 60 seconds."}
         elif tool_name == "vscode_automation":
             from swarm_os.capabilities.vscode_automation import VSCodeAutomationHandler
             result = await VSCodeAutomationHandler(str(_ROOT)).execute(payload)

@@ -137,12 +137,11 @@ def draft_task_list(plan_text: str, cmd_ctx) -> str:
     Return ONLY the list of items starting with `- [ ]`.
     """
     
-    model = state.active_model or "phi4-mini:latest"
     try:
-        resp = requests.post("http://127.0.0.1:11434/api/generate", json={"model": model, "prompt": prompt, "stream": False})
+        resp = call_api("/generate", "POST", {"prompt": prompt, "agent_id": state.active_agent})
         if resp and resp.status_code == 200:
-            task_text = resp.json().get("response", "").strip()
-            return task_text
+            data = resp.json()
+            return data.get("response", data.get("content", "")).strip()
     except Exception:
         pass
     return "- [ ] Implement proposed changes\\n- [ ] Verify execution"
@@ -233,6 +232,9 @@ def run_autonomous_goal_loop(goal: str, cmd_ctx):
                     f"[bold red]✗ FAILURE: Max attempts ({max_attempts}) reached. Tests/Checks are still failing.[/bold red]",
                     border_style="red"
                 ))
+                if Confirm.ask("[bold yellow]Do you want to run `git stash` to revert the broken changes and safely exit?[/bold yellow]"):
+                    subprocess.run(["git", "stash"], cwd=PROJECT_ROOT)
+                    console.print("[green]Working directory reverted.[/green]")
                 break
                 
             console.print("[yellow]Feeding back failure logs to agent context for correction...[/yellow]")

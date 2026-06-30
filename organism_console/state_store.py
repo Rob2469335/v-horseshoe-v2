@@ -70,8 +70,9 @@ class SessionState:
             self.cloud_token_quota = data.get("cloud_token_quota", self.cloud_token_quota)
             self.history_pointer = data.get("history_pointer", self.history_pointer)
             self.last_provider = data.get("last_provider", self.last_provider)
-        except Exception:
-            pass
+        except Exception as e:
+            import logging
+            logging.getLogger("zenith_cli").error(f"Failed to load session state: {e}")
 
     def save(self) -> None:
         try:
@@ -103,5 +104,6 @@ class SessionState:
                     "last_provider": self.last_provider,
                     "history_pointer": self.history_pointer,
                 }, fh, indent=2, default=str)
-        except Exception:
-            pass
+        except Exception as e:
+            import logging
+            logging.getLogger("zenith_cli").error(f"Failed to save session state: {e}")

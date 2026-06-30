@@ -12,6 +12,7 @@ from organism_console.api_client import call_api
 
 _WEATHER_CACHE = "Weather: [dim]Syncing...[/dim]"
 _WEATHER_LAST_FETCH = 0
+_WEATHER_LOCK = threading.Lock()
 
 _BANNER_CACHE: dict = {"agents": None, "status": None, "last": 0}
 _BANNER_LOCK = threading.Lock()
@@ -43,6 +44,7 @@ def _refresh_banner_cache():
 
 def get_banner_data() -> dict:
     if time.time() - _BANNER_CACHE["last"] > 5:
+        _BANNER_CACHE["last"] = time.time()
         threading.Thread(target=_refresh_banner_cache, daemon=True).start()
     return _BANNER_CACHE
 
@@ -50,33 +52,56 @@ def fetch_weather_bg(city=None):
     global _WEATHER_CACHE
     city = city or os.getenv("ZENITH_WEATHER_CITY", "auto")
     try:
-        resp = requests.get(f"https://wttr.in/{city}?format=j1", timeout=2, verify=False)
-        resp.raise_for_status()
-        data = resp.json()
-        current = data.get('current_condition', [{}])[0]
-        if current:
-            desc = current.get('weatherDesc', [{}])[0].get('value', 'N/A')
-            temp = current.get('temp_F', 'N/A')
-            hum = current.get('humidity', 'N/A')
+        lat, lon = None, None
+        
+        # 1. Geocode
+        if city == "auto":
+            geo_resp = requests.get("http://ip-api.com/json/", timeout=2).json()
+            lat, lon = geo_resp.get("lat"), geo_resp.get("lon")
+            city_name = geo_resp.get("city", "auto")
+        else:
+            geo_resp = requests.get(f"https://geocoding-api.open-meteo.com/v1/search?name={city}&count=1", timeout=2).json()
+            results = geo_resp.get("results")
+            if results:
+                lat, lon = results[0]["latitude"], results[0]["longitude"]
+                city_name = results[0]["name"]
+            else:
+                raise ValueError("City not found")
+
+        if lat is None or lon is None:
+            raise ValueError("Geocoding failed")
+
+        # 2. Get Weather
+        weather_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,relative_humidity_2m,weather_code&temperature_unit=fahrenheit"
+        w_resp = requests.get(weather_url, timeout=2).json()
+        current = w_resp.get("current", {})
+        
+        temp = round(current.get("temperature_2m", 0))
+        hum = current.get("relative_humidity_2m", 0)
+        
+        # 3. WMO Code mapping
+        code = current.get("weather_code", 0)
+        desc = "Sunny" if code <= 1 else "Cloudy" if code <= 3 else "Fog" if code <= 49 else "Rain" if code <= 69 else "Snow" if code <= 79 else "Storm"
+        
+        with _WEATHER_LOCK:
             _WEATHER_CACHE = f"[bold #00ffcc]{desc}[/bold #00ffcc] | Temp: [bold #ffaa00]{temp}°F[/bold #ffaa00] | Hum: [bold #00aaff]{hum}%[/bold #00aaff]"
-    except Exception:
-        _WEATHER_CACHE = "[dim]Weather Offline[/dim]"
+    except Exception as e:
+        with _WEATHER_LOCK:
+            _WEATHER_CACHE = "[dim]Weather Offline[/dim]"
 
 def get_weather_stats() -> str:
     global _WEATHER_LAST_FETCH, _WEATHER_CACHE
-    if _WEATHER_LAST_FETCH == 0:
-        _WEATHER_LAST_FETCH = time.time()
-        fetch_weather_bg()
-    elif time.time() - _WEATHER_LAST_FETCH > 600:
-        _WEATHER_LAST_FETCH = time.time()
-        threading.Thread(target=fetch_weather_bg, daemon=True).start()
-    return _WEATHER_CACHE
+    with _WEATHER_LOCK:
+        if _WEATHER_LAST_FETCH == 0 or time.time() - _WEATHER_LAST_FETCH > 600:
+            _WEATHER_LAST_FETCH = time.time()
+            threading.Thread(target=fetch_weather_bg, daemon=True).start()
+        return _WEATHER_CACHE
 
 def run_startup_checks(ctx):
     import concurrent.futures
     services = [
         ("Backend",  f"{BACKEND_URL}/health"),
-        ("Ollama",   "http://127.0.0.1:11434/api/tags"),
+        ("Swarm API", f"{BACKEND_URL}/readyz"),
     ]
 
     def check(name, url):
@@ -86,10 +111,11 @@ def run_startup_checks(ctx):
             ms = int((time.time() - t0) * 1000)
             ok = r.status_code == 200
             extra = ""
-            if name == "Ollama" and ok:
+            if name == "Swarm API" and ok:
                 try:
-                    models = r.json().get("models", [])
-                    extra = f" [dim]({len(models)} models)[/dim]"
+                    data = r.json()
+                    ready = data.get("ready", False)
+                    extra = f" [dim]({'READY' if ready else 'NOT READY'})[/dim]"
                 except Exception:
                     pass
             return name, ok, ms, extra

@@ -75,7 +75,8 @@ def render_dashboard(
     system_stats: Dict[str, Any],
     backend_ok: bool,
     ollama_ok: bool,
-    installed_models: List[str]
+    installed_models: List[str],
+    available_tools: str = "index_codebase, vscode_automation, chat_search"
 ) -> Panel:
     """Builds a comprehensive status dashboard view."""
     # Main outer table splits the dashboard into columns
@@ -117,11 +118,9 @@ def render_dashboard(
     if not models_str:
         models_str = "[dim](no models installed)[/dim]"
     
-    running_tools = "index_codebase, vscode_automation, upwork_analyzer, chat_search"
-
     summary_table = Table(show_header=False, box=SIMPLE)
     summary_table.add_row("Installed Models", models_str)
-    summary_table.add_row("Available Tools", running_tools)
+    summary_table.add_row("Available Tools", available_tools)
     summary_panel = Panel(summary_table, title="[bold yellow]Capabilities[/bold yellow]", border_style="yellow")
 
     # Stack the columns and capabilities panel

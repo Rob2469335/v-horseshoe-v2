@@ -113,7 +113,9 @@ def main():
             if execute_prompt:
                 current_context_tokens = estimate_tokens(execute_prompt + json.dumps(ctx.history))
                 if current_context_tokens > 15000:
-                    ctx.console.print("[dim]Context pressure warning: tokens exceed 15000. Auto-compressing context in background...[/dim]")
+                    ctx.console.print("[dim]Context pressure warning: tokens exceed 15000. Auto-truncating oldest history...[/dim]")
+                    if len(ctx.history) > 10:
+                        ctx.history = ctx.history[:1] + ctx.history[-10:]
                     registry.handle_line("/compress", cmd_ctx)
                 
                 ctx.history = stream_prompt_with_retry(ctx, ctx.active_agent, execute_prompt, ctx.history)

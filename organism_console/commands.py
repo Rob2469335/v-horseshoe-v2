@@ -73,8 +73,6 @@ def cmd_model(cmd_ctx: CommandContext, args: List[str]) -> None:
     cmd_ctx.console.print(f"[dim]Syncing {agent_id} model override to backend...[/dim]")
     success = push_model_override(agent_id, clean_model_name, backend)
     if success:
-        from runtime_v2.services import model_registry as _reg
-        _reg._AGENT_MODELS[agent_id] = (clean_model_name, backend)
         cmd_ctx.console.print(f"[bold green]✓ LIVE OVERRIDE ACTIVE[/bold green] | {agent_id.upper()} → [cyan]{clean_model_name}[/cyan] [dim]({backend})[/dim]")
         if hasattr(cmd_ctx.state, "reset_router"):
             cmd_ctx.state.reset_router()
@@ -83,14 +81,17 @@ def cmd_model(cmd_ctx: CommandContext, args: List[str]) -> None:
 
 @registry.register("status", "Show full system status including fallback pool and agent models")
 def cmd_status(cmd_ctx: CommandContext, args: List[str]) -> None:
-    from runtime_v2.services import model_registry as _reg
-
     resp = cmd_ctx.call_api("/status", "GET")
+    model_resp = cmd_ctx.call_api("/agents/models", "GET")
+    agent_models = model_resp.json() if model_resp and model_resp.status_code == 200 else {}
+    
     table = Table(box=SIMPLE, header_style="bold cyan", show_header=True)
     table.add_column("Component", style="bold #555555", justify="right")
     table.add_column("Status")
 
-    for agent_id, (model_name, backend) in _reg._AGENT_MODELS.items():
+    for agent_id, data in agent_models.items():
+        model_name = data.get("model", "Unknown")
+        backend = data.get("backend", "Unknown")
         color = "#00aaff" if backend == "ollama" else "#ffaa00" if backend == "groq" else "#ff00ff"
         table.add_row(agent_id.upper(), f"[{color}]{model_name}[/{color}] [dim]({backend})[/dim]")
 
@@ -146,3 +147,25 @@ def cmd_perf(cmd_ctx: CommandContext, args: List[str]) -> None:
         )
 
     cmd_ctx.console.print(Panel(table, title="[bold cyan]Agent Performance[/bold cyan]", border_style="cyan"))
+
+@registry.register("history", "View or clear conversation history")
+def cmd_history(cmd_ctx: CommandContext, args: List[str]) -> None:
+    if args and args[0] == "clear":
+        return cmd_clear(cmd_ctx, [])
+    
+    history = cmd_ctx.state.history
+    if not history:
+        cmd_ctx.console.print("[dim]History is empty.[/dim]")
+        return
+        
+    cmd_ctx.console.print(f"[bold cyan]Session History ({len(history)} turns)[/bold cyan]")
+    for idx, msg in enumerate(history):
+        role = msg.get("role", "unknown")
+        content = str(msg.get("content", ""))
+        
+        # truncate large content for display
+        if len(content) > 300:
+            content = content[:300] + "... [truncated]"
+            
+        color = "green" if role == "user" else "magenta"
+        cmd_ctx.console.print(f"[{color}][{idx}] {role.upper()}:[/{color}] {content}")

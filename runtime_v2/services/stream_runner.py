@@ -45,8 +45,8 @@ TOOL_CALL_SCHEMA = {
 # exactly what JSON it must produce. This is the most important instruction
 # for keeping routing stable across all providers (local and cloud).
 TOOL_DECISION_SYSTEM = (
-    "You are a routing agent inside the ZENITH swarm OS. "
-    "Your ONLY job is to output a single valid JSON object.\n\n"
+    "\n\n*** CRITICAL FORMATTING INSTRUCTION ***\n"
+    "You must express your decision as a SINGLE VALID JSON OBJECT.\n"
     "The JSON must have the key \"action\" which must be one of:\n"
     "  delegate, web_search, filesystem, sandbox_repl, vscode_automation, final\n\n"
     "Example valid outputs:\n"
@@ -60,10 +60,9 @@ TOOL_DECISION_SYSTEM = (
 def _get_litellm_model(agent_id: str, fallback_model: str) -> str:
     """Resolve the litellm provider/model string based on the registry backend."""
     from runtime_v2.services.model_registry import get_model
-    model, backend = get_model(agent_id)
+    default_model, backend = get_model(agent_id)
     
-    if not model:
-        model = fallback_model
+    model = fallback_model if fallback_model else default_model
 
     if backend == "ollama":
         return f"ollama/{model}"
@@ -82,27 +81,7 @@ def _get_litellm_model(agent_id: str, fallback_model: str) -> str:
         return f"{backend}/{model}"
 
 
-# Set provider-specific API bases globally so they don't bleed across fallbacks
-import os
-import certifi
-import ssl
-
-# Force all SSL connections in Python to use the certifi CA bundle
-# This fixes [SSL: CERTIFICATE_VERIFY_FAILED] for aiohttp/httpx on Windows Python 3.14
-os.environ["OLLAMA_API_BASE"] = "http://127.0.0.1:11434"
-os.environ["SSL_CERT_FILE"] = certifi.where()
-os.environ["REQUESTS_CA_BUNDLE"] = certifi.where()
-
-if not hasattr(ssl, "_zenith_patched_ssl"):
-    _original_create_default_context = ssl.create_default_context
-
-    def custom_ssl_context(*args, **kwargs):
-        kwargs['cafile'] = certifi.where()
-        return _original_create_default_context(*args, **kwargs)
-
-    ssl._create_default_https_context = custom_ssl_context
-    ssl.create_default_context = custom_ssl_context
-    ssl._zenith_patched_ssl = True
+# removed SSL patching to swarm_os/bootstrap.py
 
 def _build_kwargs(litellm_model: str, extra: dict, fallbacks: list) -> dict:
     """
@@ -121,7 +100,7 @@ def _inject_system_prompt(messages: list, system: str) -> list:
     messages = list(messages)
     for i, m in enumerate(messages):
         if m.get("role") == "system":
-            messages[i] = {"role": "system", "content": system + "\n\n" + m["content"]}
+            messages[i] = {"role": "system", "content": m["content"] + system}
             return messages
     return [{"role": "system", "content": system}] + messages
 
@@ -136,18 +115,41 @@ def _extract_json(text: str) -> dict:
     match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
     if match:
         return json.loads(match.group(1).strip())
-    # 2. First/last brace
+    # 2. Brace counting
     start = text.find("{")
-    end = text.rfind("}")
-    if start != -1 and end != -1 and end >= start:
-        return json.loads(text[start:end + 1].strip())
+    if start != -1:
+        brace_count = 0
+        in_string = False
+        escape_next = False
+        for i in range(start, len(text)):
+            c = text[i]
+            if escape_next:
+                escape_next = False
+                continue
+            
+            if c == '\\':
+                escape_next = True
+                continue
+                
+            if c == '"':
+                in_string = not in_string
+                continue
+                
+            if not in_string:
+                if c == '{':
+                    brace_count += 1
+                elif c == '}':
+                    brace_count -= 1
+                    if brace_count == 0:
+                        return json.loads(text[start:i + 1].strip())
     raise ValueError(f"No JSON object found in model output: {text[:300]}")
 
 
 async def get_tool_decision(model: str, messages: list, agent_id: str) -> Optional[dict]:
     """Ask model what action to take next. Returns structured dict or None on error."""
     litellm_model = _get_litellm_model(agent_id, model)
-    fallbacks = await get_live_fallbacks()
+    raw_fallbacks = await get_live_fallbacks()
+    fallbacks = [f["model"] for f in raw_fallbacks]
 
     # Always inject the routing system prompt so every provider knows the format
     messages = _inject_system_prompt(messages, TOOL_DECISION_SYSTEM)
@@ -180,7 +182,8 @@ async def get_tool_decision(model: str, messages: list, agent_id: str) -> Option
 async def stream_content(model: str, messages: list, agent_id: str) -> AsyncGenerator[tuple, None]:
     """Stream free-text response - used for reviewer final verdict."""
     litellm_model = _get_litellm_model(agent_id, model)
-    fallbacks = await get_live_fallbacks()
+    raw_fallbacks = await get_live_fallbacks()
+    fallbacks = [f["model"] for f in raw_fallbacks]
 
     extra = {
         "messages": messages,

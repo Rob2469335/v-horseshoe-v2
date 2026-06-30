@@ -16,19 +16,25 @@ def run_debate_loop(goal: str, cmd_ctx):
     cmd_ctx.run_prompt_with_agent("planner", prompt1)
     proposal = state.history[-1].get("content", "") if state.history else ""
     
-    console.print("\\n[bold yellow]Phase 2: Reviewer Critique[/bold yellow]")
-    prompt2 = f"Please audit the following implementation proposal for bugs, edge cases, and design flaws:\\n\\n{proposal}"
-    cmd_ctx.run_prompt_with_agent("reviewer", prompt2)
+    console.print("\n[bold yellow]Phase 2: Executor Implementation Strategy[/bold yellow]")
+    prompt2 = f"Based on the following proposal, draft the specific code changes and commands needed:\n\n{proposal}"
+    cmd_ctx.run_prompt_with_agent("executor", prompt2)
+    execution_plan = state.history[-1].get("content", "") if state.history else ""
+
+    console.print("\n[bold yellow]Phase 3: Reviewer Critique[/bold yellow]")
+    prompt3 = f"Please audit the following implementation proposal and code plan for bugs, edge cases, and design flaws:\n\nPROPOSAL:\n{proposal}\n\nEXECUTION PLAN:\n{execution_plan}"
+    cmd_ctx.run_prompt_with_agent("reviewer", prompt3)
     critique = state.history[-1].get("content", "") if state.history else ""
     
-    console.print("\\n[bold yellow]Phase 3: Coordinator Synthesis[/bold yellow]")
-    prompt3 = (
-        f"You are the coordinator. Review the proposal and the critic's critique, resolve any disagreements, "
-        f"and output a final corrected implementation plan.\\n\\n"
-        f"PROPOSAL:\\n{proposal}\\n\\n"
-        f"CRITIQUE:\\n{critique}"
+    console.print("\n[bold yellow]Phase 4: Coordinator Synthesis[/bold yellow]")
+    prompt4 = (
+        f"You are the coordinator. Review the proposal, execution plan, and the critic's critique, resolve any disagreements, "
+        f"and output a final corrected implementation plan.\n\n"
+        f"PROPOSAL:\n{proposal}\n\n"
+        f"EXECUTION PLAN:\n{execution_plan}\n\n"
+        f"CRITIQUE:\n{critique}"
     )
-    cmd_ctx.run_prompt_with_agent("coordinator", prompt3)
+    cmd_ctx.run_prompt_with_agent("coordinator", prompt4)
     
     console.print()
     console.print(Panel(

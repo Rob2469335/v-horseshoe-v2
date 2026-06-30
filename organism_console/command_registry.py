@@ -37,23 +37,6 @@ class CommandContext:
         self.run_debate = run_debate
 
 
-class CommandRegistry:
-    def __init__(self) -> None:
-        self.commands: Dict[str, Dict[str, Any]] = {}
-
-    def register(self, name: str, description: str, aliases: Optional[List[str]] = None) -> Callable:
-        def decorator(func: Callable) -> Callable:
-            cmd_info = {
-                "func": func,
-                "description": description,
-                "aliases": aliases or []
-            }
-            self.commands[name] = cmd_info
-            for alias in cmd_info["aliases"]:
-                self.commands[alias] = cmd_info
-            return func
-        return decorator
-
 def route_natural_language_keywords(raw: str) -> tuple[Optional[str], list[str]]:
     import re
     clean = raw.lower().strip().strip("?!.")
@@ -138,10 +121,8 @@ def classify_intent_with_llm(raw: str, ctx: CommandContext) -> tuple[Optional[st
     )
     
     try:
-        import requests
-        url = "http://127.0.0.1:8000/generate"
-        r = requests.post(url, json={"model": model, "prompt": prompt}, timeout=2.0)
-        if r.status_code == 200:
+        r = ctx.call_api("/generate", "POST", {"model": model, "prompt": prompt})
+        if r and r.status_code == 200:
             data = r.json()
             response_text = data.get("response", "").strip()
             if "```" in response_text:
@@ -511,12 +492,24 @@ def cmd_dashboard(ctx: CommandContext, args: List[str]) -> None:
         except Exception:
             pass
             
+    tools_resp = ctx.call_api("/tools", "GET")
+    tools_str = "None"
+    if tools_resp:
+        try:
+            tools_list = tools_resp.json().get("capabilities", [])
+            tools_str = ", ".join(tools_list[:6])
+            if len(tools_list) > 6:
+                tools_str += "..."
+        except Exception:
+            pass
+
     dashboard_panel = render_dashboard(
         state=ctx.state,
         system_stats=system_stats,
         backend_ok=backend_ok,
         ollama_ok=ollama_ok,
-        installed_models=ctx.installed_models
+        installed_models=ctx.installed_models,
+        available_tools=tools_str
     )
     ctx.console.print(dashboard_panel)
 

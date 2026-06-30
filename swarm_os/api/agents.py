@@ -18,6 +18,7 @@ class AgentStepPayload(BaseModel):
     tools: List[str] | None = None
     history: List[Dict[str, Any]] | None = None
     focus_file: str | None = None
+    delegation_chain: List[str] | None = None
 
 class ToolCallPayload(BaseModel):
     payload: Dict[str, Any] | None = None
@@ -37,6 +38,11 @@ def override_agent_model(agent_id: str, payload: ModelOverridePayload):
     from runtime_v2.services.model_registry import _AGENT_MODELS
     _AGENT_MODELS[agent_id] = (payload.model_name, payload.backend)
     return {"status": "ok", "agent_id": agent_id, "model": payload.model_name}
+
+@router.get("/agents/models")
+def get_agent_models():
+    from runtime_v2.services.model_registry import _AGENT_MODELS
+    return {k: {"model": v[0], "backend": v[1]} for k, v in _AGENT_MODELS.items()}
 
 import logging
 logger = logging.getLogger(__name__)
@@ -151,6 +157,7 @@ async def step_agent_stream(agent_id: str, payload: AgentStepPayload, request: R
                 agent_id,
                 payload.prompt,
                 payload.history or [],
+                payload.delegation_chain,
             ):
                 yield json.dumps(chunk) + "\n"
 

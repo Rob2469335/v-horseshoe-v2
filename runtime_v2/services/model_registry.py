@@ -25,11 +25,12 @@ def get_model(agent_id: str) -> Tuple[str, str]:
 
 PREDICTIVE_TOPOLOGY: dict[str, str] = {
     "coordinator": "planner",
-    "planner":     "coder",
-    "coder":       "executor",
-    "executor":    "reviewer",
-    "reviewer":    "debugger",
-    "debugger":    "coder",
+    "planner":     "executor",
+    "executor":    "coder",
+    "coder":       "tool-runner",
+    "tool-runner": "reviewer",
+    "reviewer":    "coder",
+    "debugger":    "tool-runner",
 }
 
 def get_predicted_next_model(current_agent_id: str) -> str:

@@ -8,6 +8,8 @@ log = logging.getLogger(__name__)
 MAX_TURNS = 8
 MAX_DEPTH = 15
 
+_BACKGROUND_TASKS = set()
+
 _DEFAULTS = {
     "coordinator": ("coordinator", "Delegates work to planner.",        "reasoning"),
     "planner":     ("planner",     "Breaks tasks into steps.",          "reasoning"),
@@ -66,41 +68,46 @@ class AgentServiceV2:
                    "content": f"Max delegation depth: {' -> '.join(chain)}"}
             return
 
-        model, provider = get_model(agent_id)
-        messages = [{"role": "system", "content": build(agent_id)}] + history
+        role = self._agents.get(agent_id, {}).get("model_role", "fast")
+        start_time = 0
+        if self.orchestrator and hasattr(self.orchestrator, "router"):
+            import time
+            start_time = time.time()
+            decision = await self.orchestrator.router.route_model(role=role)
+            model = decision.model
+            provider = "router"
+            if not model:
+                model, provider = get_model(agent_id)
+        else:
+            model, provider = get_model(agent_id)
+
+        # Inject visited chain into system prompt
+        sys_prompt = build(agent_id)
+        if len(chain) > 1:
+            sys_prompt += f"\n\nAlready visited: {' -> '.join(chain)}. Do NOT re-delegate to these agents."
+
+        messages = [{"role": "system", "content": sys_prompt}] + history
         if prompt:
             messages.append({"role": "user", "content": prompt})
 
         yield {"agent_id": agent_id, "type": "model_selected", "model": model,
                "provider": provider,
-               "requested_role": self._agents.get(agent_id, {}).get("model_role", "fast"),
+               "requested_role": role,
                "attempt": 1, "temperature": 0.1}
 
-        if agent_id == "reviewer":
-            full_text = ""
-            async for piece, kind in stream_content(model, messages, agent_id):
-                if kind == "error":
-                    yield {"agent_id": agent_id, "type": "error", "content": piece}
-                    return
-                full_text += piece
-                yield {"agent_id": agent_id, "content": piece, "model": model}
-            yield {"agent_id": agent_id, "type": "final", "model": model,
-                   "provider": provider, "content": full_text}
-            
-            if "VERDICT: FAIL" in full_text.upper():
-                handoff_task = f"The reviewer failed your code with the following feedback: {full_text}"
-                yield {"agent_id": agent_id, "type": "agent_handoff", "from": agent_id, "to": "coder", "task": handoff_task}
-                async for chunk in self.step_agent_stream(
-                    "coder", handoff_task, history=messages[1:],
-                    delegation_chain=chain + ["coder"],
-                ):
-                    chunk.setdefault("delegated_by", agent_id)
-                    yield chunk
-            return
+        from runtime_v2.services.model_registry import get_predicted_next_model
+        next_model = get_predicted_next_model(agent_id)
+        if next_model:
+            import asyncio
+            task = asyncio.create_task(self._preload_model(next_model))
+            _BACKGROUND_TASKS.add(task)
+            task.add_done_callback(_BACKGROUND_TASKS.discard)
 
         for _turn in range(MAX_TURNS):
             decision = await get_tool_decision(model, messages, agent_id)
             if not decision:
+                if start_time and model:
+                    self.orchestrator.router.record_failure(model)
                 yield {"agent_id": agent_id, "type": "error",
                        "content": "Failed to get tool decision from model"}
                 return
@@ -126,22 +133,45 @@ class AgentServiceV2:
                     messages.append({"role": "user", "content": f"Result: {json.dumps({'error': error_msg})}"})
                     continue
                 question = decision.get("question", "What do you want me to do?")
-                yield {"agent_id": agent_id, "type": "tool_result", "tool": "ask_user", "result": "Waiting for user input..."}
-                print(f"\n[AGENT {agent_id.upper()} ASKS]: {question}")
-                answer = input("Your answer: ")
-                yield {"agent_id": agent_id, "type": "tool_result", "tool": "ask_user", "result": answer}
-                messages.append({"role": "assistant", "content": f'I called ask_user with {json.dumps({"question": question})}'})
-                messages.append({"role": "user", "content": f"User's answer: {answer}\n\nContinue."})
-                continue
+                yield {"agent_id": agent_id, "content": question, "model": model}
+                yield {"agent_id": agent_id, "type": "ask_user", "model": model, "provider": provider, "question": question}
+                if start_time and model:
+                    import time
+                    self.orchestrator.router.record_success(model, (time.time() - start_time) * 1000)
+                return
 
             if action == "final":
                 response_text = decision.get("response", "Task complete.")
-                yield {"agent_id": agent_id, "content": response_text, "model": model}
                 
+                if agent_id == "reviewer" and ("FAIL" in response_text.upper() or decision.get("verdict", "").upper() == "FAIL"):
+                    target = "coder"
+                    if chain.count("reviewer") >= 2:
+                        target = "coordinator"
+                    
+                    import re
+                    m = re.search(r"FIXES_NEEDED:(.*)", response_text, re.DOTALL)
+                    fixes = m.group(1).strip() if m else response_text
+                    
+                    handoff_task = f"The reviewer failed the code. Feedback:\n{fixes}"
+                    yield {"agent_id": agent_id, "content": response_text, "model": model}
+                    yield {"agent_id": agent_id, "type": "agent_handoff", "from": agent_id, "to": target, "task": handoff_task}
+                    async for chunk in self.step_agent_stream(
+                        target, handoff_task, history=messages[1:],
+                        delegation_chain=chain + [target],
+                    ):
+                        chunk.setdefault("delegated_by", agent_id)
+                        yield chunk
+                    if start_time and model:
+                        import time
+                        self.orchestrator.router.record_success(model, (time.time() - start_time) * 1000)
+                    return
 
-
+                yield {"agent_id": agent_id, "content": response_text, "model": model}
                 yield {"agent_id": agent_id, "type": "final", "model": model,
                        "provider": provider, "content": response_text}
+                if start_time and model:
+                    import time
+                    self.orchestrator.router.record_success(model, (time.time() - start_time) * 1000)
                 return
 
             if action == "delegate":
@@ -198,7 +228,20 @@ class AgentServiceV2:
                 "content": f"I called {action} with {json.dumps(tool_payload)}"})
             messages.append({"role": "user",
                 "content": f"TOOL RESULT ({action}):\n{json.dumps(result, ensure_ascii=False)}\n\nContinue."})
+                
+            tool_turns = [i for i, m in enumerate(messages) if m["role"] == "assistant" and m["content"].startswith("I called")]
+            if len(tool_turns) > 2:
+                first_to_keep = tool_turns[-2]
+                first_user_idx = 1
+                for i, m in enumerate(messages):
+                    if m["role"] == "user":
+                        first_user_idx = i
+                        break
+                messages = [m for i, m in enumerate(messages) if i <= first_user_idx or i >= first_to_keep]
 
         yield {"agent_id": agent_id, "type": "final", "model": model,
                "provider": provider, "content": "[System: max turns reached]"}
+        if start_time and model:
+            import time
+            self.orchestrator.router.record_success(model, (time.time() - start_time) * 1000)
 

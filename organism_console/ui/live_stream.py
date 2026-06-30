@@ -19,6 +19,16 @@ log = logging.getLogger("zenith_cli")
 
 _AGENT_PERF: dict = {}  # {agent_id: {"total": float, "count": int, "last": float}}
 
+def update_token_metrics(ctx, prompt, history, output_content, model):
+    input_tokens = estimate_tokens(prompt + json.dumps(history))
+    output_tokens = estimate_tokens(output_content)
+    ctx.total_input_tokens += input_tokens
+    ctx.total_output_tokens += output_tokens
+    is_cloud = "cloud" in model.lower() or "groq" in model.lower() or "openrouter" in model.lower()
+    if is_cloud or getattr(ctx, "last_provider", "ollama") != "ollama":
+        ctx.cloud_input_tokens += input_tokens
+        ctx.cloud_output_tokens += output_tokens
+
 RE_TOOL_CALL = re.compile(r'<tool_call name="([^"]+)">')
 RE_TOPIC_UPDATE = re.compile(r'<topic_update title="(.*?)" summary="(.*?)"')
 RE_INTENT = re.compile(r'<strategic_intent>(.*?)</strategic_intent>', re.DOTALL)
@@ -26,6 +36,7 @@ RE_PLAN_CLEAN = re.compile(r"<plan>.*?(?:</plan>|$)", re.DOTALL)
 RE_INTENT_CLEAN = re.compile(r"<strategic_intent>.*?(?:</strategic_intent>|$)", re.DOTALL)
 RE_TOPIC_CLEAN = re.compile(r"<topic_update.*?>")
 RE_TOOL_CLEAN = re.compile(r"<tool_call[^>]*>.*?(?:</tool_call>|$)", re.DOTALL)
+RE_THINK_CLEAN = re.compile(r"<think>.*?(?:</think>|$)", re.DOTALL)
 RE_PLAN_MATCH = re.compile(r"<plan>(.*?)</plan>", re.DOTALL)
 
 def status_bar(ctx, agent, model, phase, ram_pct, tps: float = 0.0):
@@ -64,6 +75,7 @@ def stream_prompt(ctx, agent_id, prompt, history):
         "prompt": prompt,
         "history": history,
         "focus_file": getattr(ctx, "focus_file", None),
+        "delegation_chain": getattr(ctx, "delegation_chain", [agent_id]),
     }
     resp = call_api(f"/agents/{agent_id}/step/stream", "POST", payload, stream=True)
 
@@ -79,10 +91,14 @@ def stream_prompt(ctx, agent_id, prompt, history):
     start_time = time.time()
     _tokens_counted = False
     _char_count = 0
+    _last_redraw = 0.0
 
     ctx.console.print(Rule(style="dim blue"))
-    ctx.delegation_chain = [agent_id]
+    if not getattr(ctx, "delegation_chain", None):
+        ctx.delegation_chain = [agent_id]
     ctx.save()
+
+    _stream_errored = False
 
     with Live(console=ctx.console, refresh_per_second=15) as live:
         try:
@@ -90,7 +106,10 @@ def stream_prompt(ctx, agent_id, prompt, history):
                 if not line:
                     continue
 
-                chunk = json.loads(line)
+                try:
+                    chunk = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
                 chunk_type = chunk.get("type")
 
                 if "delegated_by" in chunk and "agent_id" in chunk:
@@ -239,10 +258,7 @@ def stream_prompt(ctx, agent_id, prompt, history):
                     elif "<tool_call" in piece:
                         phase = "executing"
 
-                    if "<tool_call" in piece:
-                        m = RE_TOOL_CALL.search(piece)
-                        if m:
-                            tool_calls.append(m.group(1))
+                    tool_calls = RE_TOOL_CALL.findall(full_content)
 
                     topic_match = RE_TOPIC_UPDATE.search(full_content)
                     if topic_match:
@@ -259,7 +275,8 @@ def stream_prompt(ctx, agent_id, prompt, history):
                     display = RE_PLAN_CLEAN.sub("", full_content)
                     display = RE_INTENT_CLEAN.sub("", display)
                     display = RE_TOPIC_CLEAN.sub("", display)
-                    display = RE_TOOL_CLEAN.sub("", display).strip()
+                    display = RE_TOOL_CLEAN.sub("", display)
+                    display = RE_THINK_CLEAN.sub("", display).strip()
 
                     layout = Table.grid(padding=(0, 0))
                     layout.add_column()
@@ -274,6 +291,12 @@ def stream_prompt(ctx, agent_id, prompt, history):
                     plan_match = RE_PLAN_MATCH.search(full_content)
                     if plan_match:
                         layout.add_row(Panel(plan_match.group(1).strip(), title="Plan", border_style="yellow dim"))
+
+                    think_match = re.search(r"<think>(.*?)(?:</think>|$)", full_content, re.DOTALL)
+                    if think_match:
+                        think_content = think_match.group(1).strip()
+                        if think_content:
+                            layout.add_row(Panel(think_content, title="Thinking", border_style="dim white"))
 
                     if tool_calls:
                         layout.add_row(Text.from_markup(f"[dim]Tools:[/dim] {' '.join(f'[cyan]⚙ {t}[/cyan]' for t in tool_calls[-3:])}"))
@@ -303,7 +326,10 @@ def stream_prompt(ctx, agent_id, prompt, history):
                                 curr_node = curr_node.add(f"[cyan]✓ {agent}[/cyan]{task_desc}")
                         layout.add_row(Panel(tree_obj, border_style="magenta dim", title="[bold magenta]Live Handoff Trace[/bold magenta]"))
 
-                    live.update(layout)
+                    now = time.time()
+                    if now - _last_redraw > 0.05:
+                        _last_redraw = now
+                        live.update(layout)
                     continue
 
                 if chunk_type == "final":
@@ -323,15 +349,7 @@ def stream_prompt(ctx, agent_id, prompt, history):
                     ctx.history_pointer = len(ctx.history) - 1
 
                     elapsed_total = time.time() - start_time
-                    input_tokens = estimate_tokens(prompt + json.dumps(history))
-                    output_tokens = estimate_tokens(final_content or full_content)
-                    ctx.total_input_tokens += input_tokens
-                    ctx.total_output_tokens += output_tokens
-                    
-                    is_cloud = "cloud" in model.lower() or "groq" in model.lower() or "openrouter" in model.lower()
-                    if is_cloud or getattr(ctx, "last_provider", "ollama") != "ollama":
-                        ctx.cloud_input_tokens += input_tokens
-                        ctx.cloud_output_tokens += output_tokens
+                    update_token_metrics(ctx, prompt, history, final_content or full_content, model)
 
                     perf = _AGENT_PERF.setdefault(agent_id, {"total": 0.0, "count": 0, "last": 0.0})
                     perf["total"] += elapsed_total
@@ -342,10 +360,9 @@ def stream_prompt(ctx, agent_id, prompt, history):
                     _tokens_counted = True
                     return new_history
 
-                if "ask_user" in chunk:
-                    params = chunk["ask_user"]
-                    question = params.get("question", "Input requested:")
-                    options = params.get("options", [])
+                if chunk_type == "ask_user":
+                    question = chunk.get("question", "Input requested:")
+                    options = chunk.get("options", [])
 
                     live.stop()
                     ctx.console.print()
@@ -381,22 +398,16 @@ def stream_prompt(ctx, agent_id, prompt, history):
                     new_history.append({"role": "user", "content": prompt})
                     new_history.append({"role": "assistant", "content": full_content})
                     new_history.append({"role": "user", "content": f"Observation: {json.dumps({'answer': answer})}"})
-                    return stream_prompt(ctx, agent_id, "", new_history)
+                    return stream_prompt(ctx, chunk.get("agent_id", agent_id), "", new_history)
 
         except Exception as e:
             log.exception("Streaming exception")
             ctx.console.print(f"[bold red]Stream failed:[/bold red] {e}")
             if not _tokens_counted:
-                input_tokens = estimate_tokens(prompt + json.dumps(history))
-                output_tokens = estimate_tokens(full_content)
-                ctx.total_input_tokens += input_tokens
-                ctx.total_output_tokens += output_tokens
-                is_cloud = "cloud" in model.lower() or "groq" in model.lower() or "openrouter" in model.lower()
-                if is_cloud or getattr(ctx, "last_provider", "ollama") != "ollama":
-                    ctx.cloud_input_tokens += input_tokens
-                    ctx.cloud_output_tokens += output_tokens
+                update_token_metrics(ctx, prompt, history, full_content, model)
                 ctx.save()
                 _tokens_counted = True
+            _stream_errored = True
 
     ctx.console.print(Rule(style="dim blue"))
 
@@ -405,14 +416,10 @@ def stream_prompt(ctx, agent_id, prompt, history):
         ctx.console.print(Panel(str(full_content), border_style="green"))
 
     if not _tokens_counted:
-        input_tokens = estimate_tokens(prompt + json.dumps(history))
-        output_tokens = estimate_tokens(full_content)
-        ctx.total_input_tokens += input_tokens
-        ctx.total_output_tokens += output_tokens
-        is_cloud = "cloud" in model.lower() or "groq" in model.lower() or "openrouter" in model.lower()
-        if is_cloud or getattr(ctx, "last_provider", "ollama") != "ollama":
-            ctx.cloud_input_tokens += input_tokens
-            ctx.cloud_output_tokens += output_tokens
+        update_token_metrics(ctx, prompt, history, full_content, model)
+
+    if _stream_errored:
+        return history
 
     new_history = list(history)
     new_history.append({"role": "user", "content": prompt})
@@ -425,7 +432,7 @@ def stream_prompt_with_retry(ctx, agent_id, prompt, history, max_retries=3):
     delays = [2, 5, 10]
     for attempt in range(max_retries):
         result = stream_prompt(ctx, agent_id, prompt, history)
-        if result is not history and result != history:
+        if len(result) > len(history):
             return result
         if attempt < max_retries - 1:
             delay = delays[attempt]

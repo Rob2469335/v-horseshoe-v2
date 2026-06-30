@@ -11,7 +11,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 log = logging.getLogger(__name__)
 
 # Global state for the 30-minute cache
-_CACHE_TTL = 1800  # 30 minutes in seconds
+_CACHE_TTL = 300  # 5 minutes in seconds
 _last_fetch_time = 0
 _cached_fallbacks = []
 _cached_stats = {"openrouter": 0, "groq": 0, "gemini": 0, "nvidia": 0, "total": 0}
@@ -61,7 +61,7 @@ async def _fetch_groq_models() -> list[dict]:
                 models.append({
                     "model": f"groq/{m['id']}",
                     "context_length": 8192, # Default fallback
-                    "pricing": "Premium",
+                    "pricing": "Free",
                     "provider": "Groq"
                 })
     except Exception as e:
@@ -86,17 +86,30 @@ async def refresh_fallbacks_if_needed():
     
     # Assemble Groq static fallback models (Groq is fastest for fallback)
     groq_static = [
-        {"model": "groq/llama-3.3-70b-versatile", "context_length": 8192, "pricing": "Premium", "provider": "Groq"},
-        {"model": "groq/llama-3.1-8b-instant", "context_length": 8192, "pricing": "Premium", "provider": "Groq"}
+        {"model": "groq/llama-3.3-70b-versatile", "context_length": 8192, "pricing": "Free", "provider": "Groq"},
+        {"model": "groq/llama-3.1-8b-instant", "context_length": 8192, "pricing": "Free", "provider": "Groq"}
     ]
-    gemini_models = []  # Gemini disabled — API key issues
-    nvidia_models = []  # Nvidia disabled — bad provider prefix in LiteLLM
+    # Gemini models
+    gemini_models = [
+        {"model": "gemini/gemini-1.5-flash", "context_length": 1048576, "pricing": "Free Tier", "provider": "Google"},
+        {"model": "gemini/gemini-1.5-pro", "context_length": 2097152, "pricing": "Premium", "provider": "Google"},
+        {"model": "gemini/gemini-2.0-flash-exp", "context_length": 1048576, "pricing": "Free Tier", "provider": "Google"}
+    ]
     
-    # Construct fallback pool — Groq first (fastest), then OpenRouter
+    # Nvidia NIM models
+    nvidia_models = [
+        {"model": "nvidia_nim/meta/llama-3.1-70b-instruct", "context_length": 131072, "pricing": "Free Tier", "provider": "NVIDIA"},
+        {"model": "nvidia_nim/meta/llama-3.1-405b-instruct", "context_length": 131072, "pricing": "Free Tier", "provider": "NVIDIA"},
+        {"model": "nvidia_nim/nvidia/llama-3.1-nemotron-70b-instruct", "context_length": 131072, "pricing": "Free Tier", "provider": "NVIDIA"}
+    ]
+    
+    # Construct fallback pool — Groq first (fastest), then OpenRouter, then others
     all_fallbacks = []
     all_fallbacks.extend(groq_static)
     all_fallbacks.extend(groq_models)
     all_fallbacks.extend(openrouter_models)
+    all_fallbacks.extend(gemini_models)
+    all_fallbacks.extend(nvidia_models)
     
     if not all_fallbacks:
         # Emergency fail-safe
