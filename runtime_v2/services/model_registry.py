@@ -11,12 +11,12 @@ _AGENT_MODELS: dict[str, Tuple[str, str]] = {
     "executor":    ("qwen2.5-coder:7b",                    "ollama"),
     # Coder: qwen3-coder:480b-cloud is an extremely powerful cloud-backed model for code
     "coder":       ("qwen3-coder:480b-cloud",             "ollama"),
-    # Tool-runner: llama3-groq-tool-use is purpose-built for tool calling
-    "tool-runner": ("llama3-groq-tool-use:8b",            "ollama"),
-    # Reviewer: gemma4:e4b is rigorous at finding bugs
-    "reviewer":    ("gemma4:e4b",                         "ollama"),
-    # Debugger: gemma4:e4b helps root-cause test failures
-    "debugger":    ("gemma4:e4b",                         "ollama"),
+    # Tool-runner: Groq Llama 3.3 is incredibly fast and great at tools
+    "tool-runner": ("llama-3.3-70b-versatile",            "groq"),
+    # Reviewer: OpenRouter Gemini Flash 1.5 free tier
+    "reviewer":    ("google/gemini-flash-1.5:free",       "openrouter"),
+    # Debugger: OpenRouter Gemini Flash 1.5 free tier
+    "debugger":    ("google/gemini-flash-1.5:free",       "openrouter"),
 }
 
 def get_model(agent_id: str) -> Tuple[str, str]:
