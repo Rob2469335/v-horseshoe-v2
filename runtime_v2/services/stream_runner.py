@@ -1,9 +1,19 @@
-"""Stream runner - uses Ollama structured output for tool decisions."""
+"""Stream runner - uses litellm for multi-provider structured output and streaming."""
 import json
+import re
 import logging
 from typing import AsyncGenerator, Optional
-import httpx
-from runtime_v2.services.model_registry import OLLAMA_URL
+import litellm
+from dotenv import load_dotenv
+from runtime_v2.services.model_registry import get_model
+from runtime_v2.services.fallback_manager import get_live_fallbacks
+
+# Load environment variables (.env) so litellm automatically picks up API keys
+load_dotenv()
+
+# Suppress litellm telemetry and noisy success logging
+litellm.telemetry = False
+litellm.suppress_debug_info = True
 
 log = logging.getLogger(__name__)
 
@@ -31,54 +41,157 @@ TOOL_CALL_SCHEMA = {
     "required": ["action"]
 }
 
+# System prompt injected into every tool-decision call so the model knows
+# exactly what JSON it must produce. This is the most important instruction
+# for keeping routing stable across all providers (local and cloud).
+TOOL_DECISION_SYSTEM = (
+    "You are a routing agent inside the ZENITH swarm OS. "
+    "Your ONLY job is to output a single valid JSON object.\n\n"
+    "The JSON must have the key \"action\" which must be one of:\n"
+    "  delegate, web_search, filesystem, sandbox_repl, vscode_automation, final\n\n"
+    "Example valid outputs:\n"
+    "{\"action\": \"delegate\", \"target_agent\": \"coder\", \"task\": \"Write the function\"}\n"
+    "{\"action\": \"final\", \"response\": \"Here is my answer...\"}\n"
+    "{\"action\": \"web_search\", \"query\": \"Python multiprocessing best practices\"}\n\n"
+    "DO NOT output anything other than the JSON object."
+)
+
+
+def _get_litellm_model(agent_id: str, fallback_model: str) -> str:
+    """Resolve the litellm provider/model string based on the registry backend."""
+    from runtime_v2.services.model_registry import get_model
+    model, backend = get_model(agent_id)
+    
+    if not model:
+        model = fallback_model
+
+    if backend == "ollama":
+        return f"ollama/{model}"
+    elif backend == "openrouter":
+        return f"openrouter/{model}"
+    elif backend == "groq":
+        return f"groq/{model}"
+    elif backend == "nvidia":
+        # nvidia NIM is OpenAI-compatible
+        return f"openai/{model}"
+    elif backend == "gemini":
+        return f"gemini/{model}"
+    else:
+        if "/" in model:
+            return model
+        return f"{backend}/{model}"
+
+
+# Set provider-specific API bases globally so they don't bleed across fallbacks
+import os
+import certifi
+import ssl
+
+# Force all SSL connections in Python to use the certifi CA bundle
+# This fixes [SSL: CERTIFICATE_VERIFY_FAILED] for aiohttp/httpx on Windows Python 3.14
+os.environ["OLLAMA_API_BASE"] = "http://127.0.0.1:11434"
+os.environ["SSL_CERT_FILE"] = certifi.where()
+os.environ["REQUESTS_CA_BUNDLE"] = certifi.where()
+
+_original_create_default_context = ssl.create_default_context
+
+def custom_ssl_context(*args, **kwargs):
+    kwargs['cafile'] = certifi.where()
+    return _original_create_default_context(*args, **kwargs)
+
+ssl._create_default_https_context = custom_ssl_context
+ssl.create_default_context = custom_ssl_context
+
+def _build_kwargs(litellm_model: str, extra: dict, fallbacks: list) -> dict:
+    """
+    Build kwargs for litellm.acompletion safely.
+    """
+    kwargs = {
+        "model": litellm_model,
+        "fallbacks": fallbacks,
+        **extra
+    }
+    return kwargs
+
+
+def _inject_system_prompt(messages: list, system: str) -> list:
+    """Prepend or merge the routing system prompt into the message list."""
+    messages = list(messages)
+    for i, m in enumerate(messages):
+        if m.get("role") == "system":
+            messages[i] = {"role": "system", "content": system + "\n\n" + m["content"]}
+            return messages
+    return [{"role": "system", "content": system}] + messages
+
+
+def _extract_json(text: str) -> dict:
+    """Robustly extract a JSON object from model output that may contain prose."""
+    text = text.strip()
+    # 1. Markdown code block
+    match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    if match:
+        return json.loads(match.group(1).strip())
+    # 2. First/last brace
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end != -1 and end >= start:
+        return json.loads(text[start:end + 1].strip())
+    raise ValueError(f"No JSON object found in model output: {text[:300]}")
+
+
 async def get_tool_decision(model: str, messages: list, agent_id: str) -> Optional[dict]:
     """Ask model what action to take next. Returns structured dict or None on error."""
-    payload = {
-        "model": model,
+    litellm_model = _get_litellm_model(agent_id, model)
+    fallbacks = await get_live_fallbacks()
+
+    # Always inject the routing system prompt so every provider knows the format
+    messages = _inject_system_prompt(messages, TOOL_DECISION_SYSTEM)
+
+    extra = {
         "messages": messages,
-        "stream": False,
-        "keep_alive": "1h",
-        "format": TOOL_CALL_SCHEMA,
-        "options": {"temperature": 0.1, "num_ctx": 4096},
+        "temperature": 0.2,
+        "timeout": 300.0,  # Deepseek reasoning can take a while
     }
+    
+    # We intentionally DO NOT enforce structured JSON format natively for any provider.
+    # Native strict JSON modes (like Ollama's format= or Groq's response_format) often
+    # cause models (especially Qwen or DeepSeek) to return empty content or crash when
+    # they want to output thought blocks or markdown backticks first.
+    # Instead, we rely entirely on the system prompt and our robust _extract_json regex.
+
+    kwargs = _build_kwargs(litellm_model, extra, fallbacks)
+
     try:
-        async with httpx.AsyncClient(timeout=600.0) as client:
-            resp = await client.post(OLLAMA_URL, json=payload)
-            resp.raise_for_status()
-            text = resp.json()["message"]["content"].strip()
-            if text.startswith("```json"): text = text[7:]
-            elif text.startswith("```"): text = text[3:]
-            if text.endswith("```"): text = text[:-3]
-            return json.loads(text.strip())
+        response = await litellm.acompletion(**kwargs)
+        content = response.choices[0].message.content
+        if not content or not content.strip():
+            raise ValueError("Model returned empty content")
+        return _extract_json(content)
     except Exception as exc:
         log.error("[%s] tool decision failed: %s", agent_id, exc)
         return None
 
+
 async def stream_content(model: str, messages: list, agent_id: str) -> AsyncGenerator[tuple, None]:
     """Stream free-text response - used for reviewer final verdict."""
-    payload = {
-        "model": model,
+    litellm_model = _get_litellm_model(agent_id, model)
+    fallbacks = await get_live_fallbacks()
+
+    extra = {
         "messages": messages,
         "stream": True,
-        "keep_alive": "1h",
-        "options": {"temperature": 0.2, "num_predict": -1, "num_ctx": 4096},
+        "temperature": 0.2,
+        "timeout": 300.0,
     }
+    # CRITICAL: _build_kwargs scopes api_base to Ollama only — never leaks to fallbacks
+    kwargs = _build_kwargs(litellm_model, extra, fallbacks)
+
     try:
-        async with httpx.AsyncClient(timeout=600.0) as client:
-            async with client.stream("POST", OLLAMA_URL, json=payload) as resp:
-                resp.raise_for_status()
-                async for line in resp.aiter_lines():
-                    if not line.strip():
-                        continue
-                    try:
-                        evt = json.loads(line)
-                        if evt.get("done"):
-                            break
-                        piece = evt.get("message", {}).get("content", "")
-                        if piece:
-                            yield piece, "content"
-                    except Exception:
-                        pass
+        response = await litellm.acompletion(**kwargs)
+        async for chunk in response:
+            piece = chunk.choices[0].delta.content or ""
+            if piece:
+                yield piece, "content"
     except Exception as exc:
         log.error("[%s] stream error: %s", agent_id, exc)
         yield str(exc), "error"

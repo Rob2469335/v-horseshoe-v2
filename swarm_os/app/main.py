@@ -10,6 +10,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 load_dotenv(override=True)
 
+import os
+import ssl
+try:
+    ssl._create_default_https_context = ssl._create_unverified_context
+    ssl.create_default_context = ssl._create_unverified_context # Patch for aiohttp/httpx
+    os.environ["LITELLM_VERIFY_SSL"] = "False"
+    os.environ["CURL_CA_BUNDLE"] = ""
+    os.environ["REQUESTS_CA_BUNDLE"] = ""
+except Exception:
+    pass
+
 
 # ---------------------------------------------------------------------------
 # RuntimeGraph — every service the routes need, built once at startup
@@ -138,12 +149,30 @@ async def lifespan(app: FastAPI):
         if "pytest" in sys.modules:
             log.info("Test environment detected, skipping background indexing")
             return
+        import os, time
+        marker_path = r"C:\Users\rober\Projects\v-horseshoe-v2\.last_indexed"
+        codebase_path = r"C:\Users\rober\Projects\v-horseshoe-v2\swarm_os"
+        try:
+            marker_time = os.path.getmtime(marker_path) if os.path.exists(marker_path) else 0
+            newest_file_time = max(
+                (os.path.getmtime(os.path.join(root, f))
+                 for root, dirs, files in os.walk(codebase_path)
+                 for f in files if f.endswith((".py", ".ts", ".tsx", ".js", ".jsx", ".md", ".yaml", ".toml"))),
+                default=0
+            )
+            if marker_time >= newest_file_time:
+                log.info("Codebase unchanged since last index, skipping background indexing")
+                return
+        except Exception as exc:
+            log.warning(f"Index freshness check failed, proceeding with indexing: {exc}")
         try:
             from swarm_os.lib.vector.code_indexer import index_project
             n = await asyncio.get_running_loop().run_in_executor(
-                None, index_project, r"C:\Users\rober\Projects\v-horseshoe-v2\swarm_os"
+                None, index_project, codebase_path
             )
             log.info(f"Background indexing complete: {n} chunks")
+            with open(marker_path, "w") as f:
+                f.write(str(time.time()))
         except Exception as exc:
             log.warning(f"Background indexing failed: {exc}")
     asyncio.create_task(_bg_index())
@@ -200,12 +229,14 @@ def create_app() -> FastAPI:
                 orchestrator = getattr(runtime, "orchestrator", None)
                 ollama_ok = await orchestrator.ollama.is_reachable() if orchestrator and hasattr(orchestrator, "ollama") else False
                 models = await orchestrator.ollama.list_models() if orchestrator and hasattr(orchestrator, "ollama") else []
+                from runtime_v2.services.fallback_manager import get_fallback_stats
                 return {
                     "status": "ok" if ollama_ok else "degraded",
                     "ollama_reachable": ollama_ok,
                     "event_count": len(all_events),
                     "installed_model_count": len(models),
                     "installed_models": models,
+                    "fallback_pool": get_fallback_stats()
                 }
         except Exception as e:
             pass

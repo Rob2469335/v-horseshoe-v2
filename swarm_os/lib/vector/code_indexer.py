@@ -60,7 +60,7 @@ def _embed(text: str) -> list[float]:
         r = httpx.post(
             f"{OLLAMA_URL}/api/embeddings",
             json={"model": EMBED_MODEL, "prompt": text},
-            timeout=60.0,
+            timeout=300.0,
         )
         r.raise_for_status()
         response_data = r.json()

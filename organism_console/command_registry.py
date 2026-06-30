@@ -103,11 +103,14 @@ def classify_intent_with_llm(raw: str, ctx: CommandContext) -> tuple[Optional[st
     import json
     import re
     
-    # Fallback model checking
-    model = "qwen2.5:7b-instruct"
+    # Use the best fast local model that is actually installed
+    model = "qwen2.5-coder:7b"
     if ctx.installed_models:
         for m in ctx.installed_models:
-            if "llama3" in m.lower() or "qwen2.5:7b" in m.lower() or "instruct" in m.lower():
+            if "llama3-groq" in m.lower() or "deepseek-r1-tool" in m.lower():
+                model = m
+                break
+            if "qwen2.5-coder:7b" in m.lower() or "ministral" in m.lower():
                 model = m
                 break
         else:
@@ -365,6 +368,26 @@ def cmd_trace(ctx: CommandContext, args: List[str]) -> None:
     else:
         ctx.console.print("[yellow]Usage: /trace on|off|export[/yellow]")
 
+
+@registry.register("cloud", "Toggle cloud models on or off")
+def cmd_cloud(ctx: CommandContext, args: List[str]) -> None:
+    ctx.state.cloud_enabled = not ctx.state.cloud_enabled
+    ctx.state.save()
+    status = "[bold green]ON[/bold green]" if ctx.state.cloud_enabled else "[bold red]OFF[/bold red]"
+    ctx.console.print(f"☁️  Cloud models are now {status}.")
+
+@registry.register("quota", "Set daily cloud token quota (e.g. /quota 100000)")
+def cmd_quota(ctx: CommandContext, args: List[str]) -> None:
+    if not args:
+        ctx.console.print(f"Current cloud quota: {ctx.state.cloud_token_quota:,} tokens")
+        return
+    try:
+        quota = int(args[0])
+        ctx.state.cloud_token_quota = quota
+        ctx.state.save()
+        ctx.console.print(f"☁️  Cloud token quota set to [bold cyan]{quota:,}[/bold cyan] tokens.")
+    except ValueError:
+        ctx.console.print("[bold red]Invalid quota amount.[/bold red] Usage: /quota 100000")
 
 @registry.register("tokens", "Show estimated token counts and session cost")
 def cmd_tokens(ctx: CommandContext, args: List[str]) -> None:
@@ -1319,7 +1342,7 @@ def cmd_vote(ctx: CommandContext, args: List[str]) -> None:
             models = resp.json().get("installed_models", [])
             
     if not models:
-        models = ["qwen2.5:7b-instruct", "qwen2.5-coder:7b", "qwen2.5:3b-instruct"]
+        models = ["qwen2.5-coder:7b", "qwen2.5-coder:7b", "qwen2.5-coder:7b"]
         
     targets = models[:3]
     while len(targets) < 3:
@@ -1507,7 +1530,7 @@ def cmd_compress(ctx: CommandContext, args: List[str]) -> None:
         f"CONVERSATION HISTORY:\n{conv_text}"
     )
     
-    fast_model = "qwen2.5:7b-instruct"
+    fast_model = "qwen2.5-coder:7b"
     for m in ctx.installed_models:
         if "3b" in m or "7b" in m:
             fast_model = m

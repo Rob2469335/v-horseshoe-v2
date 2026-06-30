@@ -3,14 +3,39 @@ from typing import Tuple
 OLLAMA_URL = "http://127.0.0.1:11434/api/chat"
 
 _AGENT_MODELS: dict[str, Tuple[str, str]] = {
-    "coordinator": ("gemma4:e4b",              "ollama"),
-    "planner":     ("gemma4:e4b",              "ollama"),
-    "executor":    ("llama3-groq-tool-use:8b", "ollama"),
-    "coder":       ("qwen3:8b-q4_K_M",         "ollama"),
-    "tool-runner": ("llama3-groq-tool-use:8b", "ollama"),
-    "debugger":    ("gemma4:e4b",              "ollama"),
-    "reviewer":    ("gemma4:e4b",              "ollama"),
+    # Coordinator: deepseek-r1-tool-calling specializes in routing/tool decisions
+    "coordinator": ("qwen3-coder:480b-cloud",             "ollama"),
+    # Planner: qwen3.5:9b is the strongest reasoning model installed
+    "planner":     ("qwen3-coder:480b-cloud",             "ollama"),
+    # Executor: qwen2.5-coder:7b handles general task orchestration reliably without freezing
+    "executor":    ("qwen2.5-coder:7b",                    "ollama"),
+    # Coder: qwen3-coder:480b-cloud is an extremely powerful cloud-backed model for code
+    "coder":       ("qwen3-coder:480b-cloud",             "ollama"),
+    # Tool-runner: llama3-groq-tool-use is purpose-built for tool calling
+    "tool-runner": ("llama3-groq-tool-use:8b",            "ollama"),
+    # Reviewer: gemma4:e4b is rigorous at finding bugs
+    "reviewer":    ("gemma4:e4b",                         "ollama"),
+    # Debugger: gemma4:e4b helps root-cause test failures
+    "debugger":    ("gemma4:e4b",                         "ollama"),
 }
 
 def get_model(agent_id: str) -> Tuple[str, str]:
-    return _AGENT_MODELS.get(agent_id, ("gemma4:e4b", "ollama"))
+    return _AGENT_MODELS.get(agent_id, ("qwen3-coder:480b-cloud", "ollama"))
+
+
+PREDICTIVE_TOPOLOGY: dict[str, str] = {
+    "coordinator": "planner",
+    "planner":     "coder",
+    "coder":       "executor",
+    "executor":    "reviewer",
+    "reviewer":    "debugger",
+    "debugger":    "coder",
+}
+
+def get_predicted_next_model(current_agent_id: str) -> str:
+    next_agent = PREDICTIVE_TOPOLOGY.get(current_agent_id)
+    if not next_agent:
+        return ""
+    model, backend = get_model(next_agent)
+    return model if backend == "ollama" else ""
+

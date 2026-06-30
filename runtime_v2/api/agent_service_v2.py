@@ -1,10 +1,12 @@
 from __future__ import annotations
 import json, logging
+import asyncio
+import httpx
 from typing import AsyncGenerator, Dict, List, Optional
 
 log = logging.getLogger(__name__)
 MAX_TURNS = 8
-MAX_DEPTH = 7
+MAX_DEPTH = 15
 
 _DEFAULTS = {
     "coordinator": ("coordinator", "Delegates work to planner.",        "reasoning"),
@@ -34,6 +36,18 @@ class AgentServiceV2:
             "description": c.get("description",""), "model_role": c.get("model_role","fast"), "config": c}
     def remove_agent(self, agent_id: str) -> None: self._agents.pop(agent_id, None)
 
+
+    async def _preload_model(self, model_name: str):
+        try:
+            async with httpx.AsyncClient() as client:
+                await client.post(
+                    "http://127.0.0.1:11434/api/generate",
+                    json={"model": model_name, "keep_alive": "5m"},
+                    timeout=2.0
+                )
+        except Exception as e:
+            log.debug(f"Preload failed for {model_name}: {e}")
+
     async def step_agent_stream(
         self, agent_id: str, prompt: str,
         history: Optional[List[dict]] = None,
@@ -46,7 +60,7 @@ class AgentServiceV2:
 
         history = list(history or [])
         chain = list(delegation_chain or [agent_id])
-
+        
         if len(chain) >= MAX_DEPTH:
             yield {"agent_id": agent_id, "type": "error",
                    "content": f"Max delegation depth: {' -> '.join(chain)}"}
@@ -72,6 +86,16 @@ class AgentServiceV2:
                 yield {"agent_id": agent_id, "content": piece, "model": model}
             yield {"agent_id": agent_id, "type": "final", "model": model,
                    "provider": provider, "content": full_text}
+            
+            if "VERDICT: FAIL" in full_text.upper():
+                handoff_task = f"The reviewer failed your code with the following feedback: {full_text}"
+                yield {"agent_id": agent_id, "type": "agent_handoff", "from": agent_id, "to": "coder", "task": handoff_task}
+                async for chunk in self.step_agent_stream(
+                    "coder", handoff_task, history=messages[1:],
+                    delegation_chain=chain + ["coder"],
+                ):
+                    chunk.setdefault("delegated_by", agent_id)
+                    yield chunk
             return
 
         for _turn in range(MAX_TURNS):
@@ -114,16 +138,7 @@ class AgentServiceV2:
                 response_text = decision.get("response", "Task complete.")
                 yield {"agent_id": agent_id, "content": response_text, "model": model}
                 
-                if agent_id == "reviewer" and "VERDICT: FAIL" in response_text.upper():
-                    handoff_task = f"The reviewer failed your code with the following feedback: {response_text}"
-                    yield {"agent_id": agent_id, "type": "agent_handoff", "from": agent_id, "to": "coder", "task": handoff_task}
-                    async for chunk in self.step_agent_stream(
-                        "coder", handoff_task, history=[],
-                        delegation_chain=chain + ["coder"],
-                    ):
-                        chunk.setdefault("delegated_by", agent_id)
-                        yield chunk
-                    return
+
 
                 yield {"agent_id": agent_id, "type": "final", "model": model,
                        "provider": provider, "content": response_text}
@@ -141,20 +156,7 @@ class AgentServiceV2:
                         messages.append({"role": "assistant", "content": f'I called delegate with {json.dumps({"target_agent": target, "task": task})}'})
                         messages.append({"role": "user", "content": f"Result: {json.dumps({'error': error_msg})}"})
                         continue
-                if agent_id == "executor" and target.lower().strip() in ["planner", "coordinator"]:
-                    target = "coder"
-                if agent_id == "coder" and target.lower().strip() in ["executor", "planner"]:
-                    target = "tool-runner"
-                if agent_id == "tool-runner" and target.lower().strip() in ["coder", "executor"]:
-                    target = "reviewer"
                 
-                if target in chain:
-                    error_msg = f"Circular delegation: {' -> '.join(chain)} -> {target}."
-                    print(f"DEBUG CIRCULAR: agent={agent_id}, target={target}, chain={chain}")
-                    yield {"agent_id": agent_id, "type": "tool_result", "tool": "delegate", "result": {"error": error_msg}}
-                    messages.append({"role": "assistant", "content": f'I called delegate with {json.dumps({"target_agent": target, "task": task})}'})
-                    messages.append({"role": "user", "content": f"Result: {json.dumps({'error': error_msg})}"})
-                    continue
                 if target not in self._agents:
                     error_msg = f"Agent '{target}' not found."
                     yield {"agent_id": agent_id, "type": "tool_result", "tool": "delegate", "result": {"error": error_msg}}
@@ -166,7 +168,7 @@ class AgentServiceV2:
                        "from": agent_id, "to": target, "task": task}
 
                 async for chunk in self.step_agent_stream(
-                    target, task, history=[],
+                    target, task, history=messages[1:],
                     delegation_chain=chain + [target],
                 ):
                     chunk.setdefault("delegated_by", agent_id)

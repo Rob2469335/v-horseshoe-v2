@@ -27,3 +27,6 @@ rich>=13.7.0          # console output / logging
 # Architecture validation
 import-linter>=2.11
 pydantic>=2.0
+
+# Cloud Model Gateway
+litellm>=1.40.0

@@ -118,7 +118,7 @@ def _resolve_runtime_config(agent: dict):
     role = agent.get("model_role", "fast")
 
     if not model or not model.strip():
-        model = "qwen3:14b" if role == "reasoning" else "qwen2.5:7b-instruct"
+        model = "qwen3:8b-q4_K_M" if role == "reasoning" else "qwen2.5-coder:7b"
 
     return model, temp
 

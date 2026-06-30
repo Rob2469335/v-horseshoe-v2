@@ -17,7 +17,9 @@ async def filesystem_handler(params: Dict[str, Any], root: Path, trace_hook=None
     root = root.resolve()
     
     def resolve_in_sandbox(requested_path_str: str) -> Path:
-        requested_path = Path(requested_path_str or "")
+        # Strip leading slashes so Path() doesn't treat it as absolute root
+        requested_path_str = requested_path_str.lstrip("\\/")
+        requested_path = Path(requested_path_str or ".")
         target_path = (root / requested_path).resolve()
         try:
             target_path.relative_to(root)

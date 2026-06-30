@@ -12,7 +12,7 @@ class SessionState:
         
         # Default states
         self.active_agent: str = "coordinator"
-        self.active_model: str = "qwen2.5:7b-instruct"
+        self.active_model: str = "qwen2.5-coder:7b"
         self.execution_phase: str = "thinking"
         self.last_tool_call: Optional[Dict[str, Any]] = None
         self.last_error: Optional[str] = None
@@ -29,7 +29,11 @@ class SessionState:
         self.temp: str = "0.7"
         self.total_input_tokens: int = 0
         self.total_output_tokens: int = 0
+        self.cloud_input_tokens: int = 0
+        self.cloud_output_tokens: int = 0
+        self.cloud_token_quota: int = 100000
         self.history_pointer: int = -1
+        self.last_provider: str = "ollama"
 
         self.load()
 
@@ -61,7 +65,11 @@ class SessionState:
             self.temp = data.get("temp", self.temp)
             self.total_input_tokens = data.get("total_input_tokens", self.total_input_tokens)
             self.total_output_tokens = data.get("total_output_tokens", self.total_output_tokens)
+            self.cloud_input_tokens = data.get("cloud_input_tokens", self.cloud_input_tokens)
+            self.cloud_output_tokens = data.get("cloud_output_tokens", self.cloud_output_tokens)
+            self.cloud_token_quota = data.get("cloud_token_quota", self.cloud_token_quota)
             self.history_pointer = data.get("history_pointer", self.history_pointer)
+            self.last_provider = data.get("last_provider", self.last_provider)
         except Exception:
             pass
 
@@ -89,6 +97,10 @@ class SessionState:
                     "temp": self.temp,
                     "total_input_tokens": self.total_input_tokens,
                     "total_output_tokens": self.total_output_tokens,
+                    "cloud_input_tokens": self.cloud_input_tokens,
+                    "cloud_output_tokens": self.cloud_output_tokens,
+                    "cloud_token_quota": self.cloud_token_quota,
+                    "last_provider": self.last_provider,
                     "history_pointer": self.history_pointer,
                 }, fh, indent=2, default=str)
         except Exception:

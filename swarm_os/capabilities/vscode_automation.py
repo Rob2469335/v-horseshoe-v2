@@ -24,6 +24,7 @@ class VSCodeAutomationHandler:
             "diff": ["git", "diff"],
             "log": ["git", "log", "-n", "5"],
             "scout": ["powershell.exe", "-Command", "Write-Host 'Active Branch:'; git branch --show-current; Write-Host '`nRecent Changes:'; git status -s; Write-Host '`nProject Tree:'; Get-ChildItem -Depth 1"],
+            "find_symbol": [],
         }
         logger.info(f"Initialized operational secure VSCodeAutomationHandler at {workspace_root}")
 
@@ -118,6 +119,50 @@ class VSCodeAutomationHandler:
                             rel_file = str(p.relative_to(Path(self.workspace_root).resolve())).replace("\\", "/")
                             found_files.append(rel_file)
                 output = "\n".join(found_files)
+
+            elif command == "lint":
+                if not args:
+                    raise ValueError("lint requires a path argument")
+                target = self._resolve_path(args[0])
+                if not target.exists():
+                    raise FileNotFoundError(f"Path not found: {args[0]}")
+                import subprocess
+                result = subprocess.run(["python", "-m", "flake8", str(target)], capture_output=True, text=True)
+                if result.returncode == 0:
+                    output = "No linting errors found. Code looks good!"
+                else:
+                    output = result.stdout + "\n" + result.stderr
+
+            elif command == "find_symbol":
+                if not args:
+                    raise ValueError("find_symbol requires a symbol name argument")
+                symbol_name = args[0]
+                search_path = args[1] if len(args) > 1 else ""
+                target_dir = self._resolve_path(search_path)
+                
+                matches = []
+                import ast
+                
+                def check_file(file_path: Path):
+                    try:
+                        content = file_path.read_text(encoding="utf-8")
+                        tree = ast.parse(content)
+                        for node in ast.walk(tree):
+                            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                                if node.name == symbol_name:
+                                    rel_file = str(file_path.relative_to(Path(self.workspace_root).resolve())).replace("\\", "/")
+                                    matches.append(f"{rel_file}:{node.lineno} -> {node.name}")
+                    except Exception:
+                        pass
+                
+                if target_dir.is_file():
+                    if target_dir.suffix == ".py":
+                        check_file(target_dir)
+                elif target_dir.is_dir():
+                    for p in target_dir.rglob("*.py"):
+                        if not any(part.startswith('.') or part in ('node_modules', '.venv') for part in p.parts):
+                            check_file(p)
+                output = "\n".join(matches) if matches else f"Symbol '{symbol_name}' not found."
 
             elif command == "scout":
                 if not args:

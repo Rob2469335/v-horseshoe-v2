@@ -188,9 +188,26 @@ async def execute_tool(payload: ToolExecuteRequest, runtime=Depends(runtime_dep)
 
 @router.post("/generate", response_model=GenerateResponse)
 async def generate(payload: GenerateRequest, orch=Depends(get_orchestrator)):
-    _model = (payload.model or "").strip() or "disabled"
+    _model = (payload.model or "").strip() or "qwen2.5-coder:7b"
+    
+    litellm_model = _model if "/" in _model else f"ollama/{_model}"
+    import os
+    os.environ["OLLAMA_API_BASE"] = "http://127.0.0.1:11434"
+    
+    try:
+        import litellm
+        resp = await litellm.acompletion(
+            model=litellm_model,
+            messages=[{"role": "user", "content": payload.prompt}],
+            temperature=0.7
+        )
+        content = resp.choices[0].message.content or ""
+    except Exception as e:
+        log.error(f"Generation failed: {e}")
+        content = f"Error during generation: {e}"
+
     return GenerateResponse(
-        response="Direct /generate is disabled for agent workflows; use /agents/{agent_id}/step/stream.",
+        response=content,
         model=_model,
     )
 

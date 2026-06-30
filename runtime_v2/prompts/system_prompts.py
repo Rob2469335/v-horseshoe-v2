@@ -27,6 +27,10 @@ When done: delegate to reviewer.""",
 Read files if needed. Output detailed feedback.
 End with VERDICT: PASS or VERDICT: FAIL.
 Use action=final. Do NOT delegate.""",
+
+    "debugger": """YOUR JOB: troubleshoot bugs and fix failures.
+Use filesystem and sandbox_repl to diagnose errors.
+When the bug is fixed, delegate to tool-runner to verify, or to coder if a major rewrite is needed.""",
 }
 
 _TOOL_DEFINITIONS = {
@@ -45,7 +49,8 @@ _AGENT_TOOLS = {
     "executor": ["delegate", "filesystem", "web_search", "sandbox_repl", "vscode_automation"],
     "coder": ["delegate", "filesystem", "vscode_automation"],
     "tool-runner": ["delegate", "sandbox_repl", "vscode_automation", "filesystem"],
-    "reviewer": ["final", "filesystem", "vscode_automation"]
+    "reviewer": ["final", "filesystem", "vscode_automation"],
+    "debugger": ["delegate", "filesystem", "sandbox_repl", "vscode_automation"]
 }
 
 _BASE = "You are Zenith agent ({agent_id}). Act immediately.\n\n{role_rules}\n\nAVAILABLE ACTIONS (pick exactly one):\n{tools}"
