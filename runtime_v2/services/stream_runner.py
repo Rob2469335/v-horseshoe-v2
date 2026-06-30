@@ -93,14 +93,16 @@ os.environ["OLLAMA_API_BASE"] = "http://127.0.0.1:11434"
 os.environ["SSL_CERT_FILE"] = certifi.where()
 os.environ["REQUESTS_CA_BUNDLE"] = certifi.where()
 
-_original_create_default_context = ssl.create_default_context
+if not hasattr(ssl, "_zenith_patched_ssl"):
+    _original_create_default_context = ssl.create_default_context
 
-def custom_ssl_context(*args, **kwargs):
-    kwargs['cafile'] = certifi.where()
-    return _original_create_default_context(*args, **kwargs)
+    def custom_ssl_context(*args, **kwargs):
+        kwargs['cafile'] = certifi.where()
+        return _original_create_default_context(*args, **kwargs)
 
-ssl._create_default_https_context = custom_ssl_context
-ssl.create_default_context = custom_ssl_context
+    ssl._create_default_https_context = custom_ssl_context
+    ssl.create_default_context = custom_ssl_context
+    ssl._zenith_patched_ssl = True
 
 def _build_kwargs(litellm_model: str, extra: dict, fallbacks: list) -> dict:
     """
@@ -126,7 +128,10 @@ def _inject_system_prompt(messages: list, system: str) -> list:
 
 def _extract_json(text: str) -> dict:
     """Robustly extract a JSON object from model output that may contain prose."""
-    text = text.strip()
+    # Strip deepseek-style thinking blocks first
+    import re
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+    
     # 1. Markdown code block
     match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
     if match:
