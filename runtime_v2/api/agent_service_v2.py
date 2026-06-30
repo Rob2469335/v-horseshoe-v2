@@ -8,11 +8,10 @@ log = logging.getLogger(__name__)
 MAX_TURNS = 8
 MAX_DEPTH = 15
 
-_BACKGROUND_TASKS = set()
-
 _DEFAULTS = {
     "coordinator": ("coordinator", "Delegates work to planner.",        "reasoning"),
     "planner":     ("planner",     "Breaks tasks into steps.",          "reasoning"),
+    "researcher":  ("researcher",  "Gathers context via web and codebase search.", "fast"),
     "executor":    ("executor",    "Executes steps with tools.",        "fast"),
     "coder":       ("coder",       "Writes and patches code.",          "coding"),
     "tool-runner": ("tool-runner", "Runs tests and verifications.",     "fast"),
@@ -23,6 +22,7 @@ _DEFAULTS = {
 class AgentServiceV2:
     def __init__(self, orchestrator=None, cache=None, settings=None):
         self.orchestrator = orchestrator
+        self._background_tasks = set()
         self._agents: Dict[str, dict] = {
             k: {"id": k, "role": r, "description": d, "model_role": m, "config": {}}
             for k, (r, d, m) in _DEFAULTS.items()
@@ -100,24 +100,32 @@ class AgentServiceV2:
         if next_model:
             import asyncio
             task = asyncio.create_task(self._preload_model(next_model))
-            _BACKGROUND_TASKS.add(task)
-            task.add_done_callback(_BACKGROUND_TASKS.discard)
+            self._background_tasks.add(task)
+            task.add_done_callback(self._background_tasks.discard)
+
+        initial_messages_len = len(messages)
 
         for _turn in range(MAX_TURNS):
             decision = await get_tool_decision(model, messages, agent_id)
-            if not decision:
+            if not decision or not isinstance(decision, dict):
                 if start_time and model:
                     self.orchestrator.router.record_failure(model)
                 yield {"agent_id": agent_id, "type": "error",
-                       "content": "Failed to get tool decision from model"}
+                       "content": "Failed to get a valid JSON dictionary tool decision from model"}
                 return
 
-            action = decision.get("action", "final")
-            log.info("[%s] turn %d action=%s", agent_id, _turn, action)
-            yield {"agent_id": agent_id, "content": f"[{action}]", "model": model}
+            if "action" not in decision:
+                error_msg = "Missing 'action' key in JSON response."
+                yield {"agent_id": agent_id, "type": "tool_result", "tool": "unknown", "result": {"error": error_msg}}
+                messages.append({"role": "user", "content": error_msg})
+                continue
 
             from runtime_v2.prompts.system_prompts import _AGENT_TOOLS
             allowed_tools = _AGENT_TOOLS.get(agent_id, ["delegate", "final", "filesystem"])
+            action = str(decision["action"]).strip()
+            log.info("[%s] turn %d action=%s", agent_id, _turn, action)
+            yield {"agent_id": agent_id, "content": f"[{action}]", "model": model}
+
             if action not in allowed_tools:
                 error_msg = f"Unauthorized tool '{action}' for role '{agent_id}'. Allowed: {allowed_tools}"
                 yield {"agent_id": agent_id, "type": "tool_result", "tool": action, "result": {"error": error_msg}}
@@ -141,12 +149,14 @@ class AgentServiceV2:
                 return
 
             if action == "final":
-                response_text = decision.get("response", "Task complete.")
+                response_text = str(decision.get("response", "Task complete."))
                 
-                if agent_id == "reviewer" and ("FAIL" in response_text.upper() or decision.get("verdict", "").upper() == "FAIL"):
-                    target = "coder"
+                if agent_id == "reviewer" and ("FAIL" in response_text.upper() or str(decision.get("verdict", "")).upper() == "FAIL"):
                     if chain.count("reviewer") >= 2:
-                        target = "coordinator"
+                        yield {"agent_id": agent_id, "content": response_text, "model": model}
+                        yield {"agent_id": agent_id, "type": "error", "content": "Reviewer failed twice. Aborting delegation loop."}
+                        return
+                    target = "coder"
                     
                     import re
                     m = re.search(r"FIXES_NEEDED:(.*)", response_text, re.DOTALL)
@@ -203,19 +213,13 @@ class AgentServiceV2:
                 ):
                     chunk.setdefault("delegated_by", agent_id)
                     yield chunk
+                    
+                if start_time and model:
+                    import time
+                    self.orchestrator.router.record_success(model, (time.time() - start_time) * 1000)
                 return
 
-            tool_payload = {}
-            if action == "web_search":
-                tool_payload = {"query": decision.get("query", "")}
-            elif action == "filesystem":
-                tool_payload = {k: decision[k] for k in
-                    ["operation","path","content","old","new","pattern"] if k in decision}
-            elif action == "sandbox_repl":
-                tool_payload = {k: decision[k] for k in
-                    ["language","code","command","path"] if k in decision}
-            elif action == "vscode_automation":
-                tool_payload = {"command": decision.get("command",""), "args": decision.get("args",[])}
+            tool_payload = {k: v for k, v in decision.items() if k not in ["action", "response", "thought", "target_agent", "task", "verdict"]}
 
             yield {"agent_id": agent_id, "type": "tool_result",
                    "tool": action, "result": "executing..."}
@@ -223,6 +227,7 @@ class AgentServiceV2:
             log.info("[%s] %s ok=%s", agent_id, action, result.get("ok"))
             yield {"agent_id": agent_id, "type": "tool_result",
                    "tool": action, "result": result}
+            yield {"agent_id": agent_id, "content": f"\nI called {action} with {json.dumps(tool_payload)} and got: {json.dumps(result, ensure_ascii=False)}\n"}
 
             messages.append({"role": "assistant",
                 "content": f"I called {action} with {json.dumps(tool_payload)}"})
@@ -232,12 +237,8 @@ class AgentServiceV2:
             tool_turns = [i for i, m in enumerate(messages) if m["role"] == "assistant" and m["content"].startswith("I called")]
             if len(tool_turns) > 2:
                 first_to_keep = tool_turns[-2]
-                first_user_idx = 1
-                for i, m in enumerate(messages):
-                    if m["role"] == "user":
-                        first_user_idx = i
-                        break
-                messages = [m for i, m in enumerate(messages) if i <= first_user_idx or i >= first_to_keep]
+                first_to_keep = max(first_to_keep, initial_messages_len)
+                messages = messages[:initial_messages_len] + messages[first_to_keep:]
 
         yield {"agent_id": agent_id, "type": "final", "model": model,
                "provider": provider, "content": "[System: max turns reached]"}

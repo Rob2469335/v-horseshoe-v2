@@ -3,6 +3,7 @@ import os
 import requests
 import psutil
 import threading
+import copy
 from rich.table import Table
 from rich.panel import Panel
 from rich.box import SIMPLE
@@ -43,10 +44,11 @@ def _refresh_banner_cache():
         pass
 
 def get_banner_data() -> dict:
-    if time.time() - _BANNER_CACHE["last"] > 5:
-        _BANNER_CACHE["last"] = time.time()
-        threading.Thread(target=_refresh_banner_cache, daemon=True).start()
-    return _BANNER_CACHE
+    with _BANNER_LOCK:
+        if time.time() - _BANNER_CACHE["last"] > 5:
+            _BANNER_CACHE["last"] = time.time()
+            threading.Thread(target=_refresh_banner_cache, daemon=True).start()
+        return copy.deepcopy(_BANNER_CACHE)
 
 def fetch_weather_bg(city=None):
     global _WEATHER_CACHE
@@ -97,7 +99,14 @@ def get_weather_stats() -> str:
             threading.Thread(target=fetch_weather_bg, daemon=True).start()
         return _WEATHER_CACHE
 
+_STARTUP_CHECKS_DONE = False
+
 def run_startup_checks(ctx):
+    global _STARTUP_CHECKS_DONE
+    if _STARTUP_CHECKS_DONE:
+        return
+    _STARTUP_CHECKS_DONE = True
+    
     import concurrent.futures
     services = [
         ("Backend",  f"{BACKEND_URL}/health"),
@@ -227,6 +236,7 @@ def print_banner(ctx):
 
     n_coord = style_node("COORDINATOR", "#ff00ff")
     n_plan = style_node("PLANNER", "#00aaff")
+    n_rsch = style_node("RESEARCHER", "#5555ff")
     n_exec = style_node("EXECUTOR", "#aaaa00")
     n_coder = style_node("CODER", "#ffaa00")
     n_tool = style_node("TOOL-RUNNER", "#55ff55")
@@ -234,11 +244,11 @@ def print_banner(ctx):
     n_debug = style_node("DEBUGGER", "#ff3333")
 
     topology = f"""[dim]
-      [#00ffff]USER[/#00ffff] ──> {n_coord} ──> {n_plan} ──> {n_exec}
-                                          │
-                                          ├──> {n_coder} ──> {n_tool} ──> {n_review}
-                                          │
-                                          └──> {n_debug}[/dim]"""
+      [#00ffff]USER[/#00ffff] ──> {n_coord} ──> {n_plan} ──> {n_rsch} ──> {n_exec}
+                                                            │
+                                                            ├──> {n_coder} ──> {n_tool} ──> {n_review}
+                                                            │
+                                                            └──> {n_debug}[/dim]"""
                      
     table.add_row("TOPOLOGY", topology)
     

@@ -24,7 +24,8 @@ def update_token_metrics(ctx, prompt, history, output_content, model):
     output_tokens = estimate_tokens(output_content)
     ctx.total_input_tokens += input_tokens
     ctx.total_output_tokens += output_tokens
-    is_cloud = "cloud" in model.lower() or "groq" in model.lower() or "openrouter" in model.lower()
+    model_name = (model or "unknown").lower()
+    is_cloud = "cloud" in model_name or "groq" in model_name or "openrouter" in model_name
     if is_cloud or getattr(ctx, "last_provider", "ollama") != "ollama":
         ctx.cloud_input_tokens += input_tokens
         ctx.cloud_output_tokens += output_tokens
@@ -91,7 +92,6 @@ def stream_prompt(ctx, agent_id, prompt, history):
     start_time = time.time()
     _tokens_counted = False
     _char_count = 0
-    _last_redraw = 0.0
 
     ctx.console.print(Rule(style="dim blue"))
     if not getattr(ctx, "delegation_chain", None):
@@ -115,13 +115,8 @@ def stream_prompt(ctx, agent_id, prompt, history):
                 if "delegated_by" in chunk and "agent_id" in chunk:
                     parent = chunk["delegated_by"]
                     child = chunk["agent_id"]
-                    if child not in ctx.delegation_chain:
-                        if parent in ctx.delegation_chain:
-                            idx = ctx.delegation_chain.index(parent)
-                            ctx.delegation_chain = ctx.delegation_chain[:idx+1] + [child]
-                        else:
-                            ctx.delegation_chain.append(child)
-                        ctx.save()
+                    ctx.delegation_chain.append(child)
+                    ctx.save()
 
                 err_msg = chunk.get("error")
                 if not err_msg and isinstance(chunk.get("result"), dict) and "error" in chunk.get("result", {}):
@@ -208,13 +203,8 @@ def stream_prompt(ctx, agent_id, prompt, history):
                     to_a = chunk.get("to", "executor")
                     task = str(chunk.get("task", ""))[:80]
 
-                    if to_a not in ctx.delegation_chain:
-                        if from_a in ctx.delegation_chain:
-                            idx = ctx.delegation_chain.index(from_a)
-                            ctx.delegation_chain = ctx.delegation_chain[:idx+1] + [to_a]
-                        else:
-                            ctx.delegation_chain.append(to_a)
-                        ctx.save()
+                    ctx.delegation_chain.append(to_a)
+                    ctx.save()
 
                     handoffs_list.append({"from": from_a, "to": to_a, "task": task})
                     ctx.console.print(render_step_micro_ui("swarm", f"{from_a} → {to_a}: {task}"))
@@ -240,7 +230,7 @@ def stream_prompt(ctx, agent_id, prompt, history):
 
                 if "content" in chunk or "thinking" in chunk:
                     piece = chunk.get("content", "") or chunk.get("thinking", "")
-                    model = chunk.get("model", model)
+                    model = chunk.get("model") or model
                     full_content += piece
                     _char_count += len(piece)
 
@@ -326,10 +316,7 @@ def stream_prompt(ctx, agent_id, prompt, history):
                                 curr_node = curr_node.add(f"[cyan]✓ {agent}[/cyan]{task_desc}")
                         layout.add_row(Panel(tree_obj, border_style="magenta dim", title="[bold magenta]Live Handoff Trace[/bold magenta]"))
 
-                    now = time.time()
-                    if now - _last_redraw > 0.05:
-                        _last_redraw = now
-                        live.update(layout)
+                    live.update(layout)
                     continue
 
                 if chunk_type == "final":
@@ -343,7 +330,8 @@ def stream_prompt(ctx, agent_id, prompt, history):
                         ctx.console.print(Panel(Markdown(str(final_content)), border_style="green", padding=(1, 2)))
 
                     new_history = list(history)
-                    new_history.append({"role": "user", "content": prompt})
+                    if prompt:
+                        new_history.append({"role": "user", "content": prompt})
                     new_history.append({"role": "assistant", "content": final_content or full_content})
                     ctx.history = new_history
                     ctx.history_pointer = len(ctx.history) - 1
@@ -395,7 +383,8 @@ def stream_prompt(ctx, agent_id, prompt, history):
                         answer = ctx.console.input("[bold cyan]Your response:[/bold cyan] ").strip()
 
                     new_history = list(history)
-                    new_history.append({"role": "user", "content": prompt})
+                    if prompt:
+                        new_history.append({"role": "user", "content": prompt})
                     new_history.append({"role": "assistant", "content": full_content})
                     new_history.append({"role": "user", "content": f"Observation: {json.dumps({'answer': answer})}"})
                     return stream_prompt(ctx, chunk.get("agent_id", agent_id), "", new_history)
@@ -422,7 +411,8 @@ def stream_prompt(ctx, agent_id, prompt, history):
         return history
 
     new_history = list(history)
-    new_history.append({"role": "user", "content": prompt})
+    if prompt:
+        new_history.append({"role": "user", "content": prompt})
     new_history.append({"role": "assistant", "content": full_content})
     ctx.history = new_history
     ctx.save()

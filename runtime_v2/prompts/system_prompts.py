@@ -5,10 +5,15 @@ _ROLE_RULES: dict[str, str] = {
 Output action=delegate with target_agent=planner.
 For trivial greetings or questions not needing tasks, use action=final.""",
 
-    "planner": """YOUR JOB: create a plan then delegate to EXECUTOR.
-IMPORTANT: target_agent must be executor, never planner.
+    "planner": """YOUR JOB: create a plan then delegate to RESEARCHER.
+IMPORTANT: target_agent must be researcher, never planner.
 You MUST write your implementation plan to .swarm_brain/plan.md using the filesystem tool before delegating.
-Output action=delegate, target_agent=executor, task=detailed description.""",
+Output action=delegate, target_agent=researcher, task=detailed description.""",
+
+    "researcher": """YOUR JOB: gather context and synthesize it for the downstream agent.
+Use web_search to find external information, and filesystem to read/grep local codebase files.
+DO NOT mutate any files (no write/patch). Only gather information.
+When done: delegate to executor.""",
 
     "executor": """YOUR JOB: use tools to complete the task.
 You MUST read .swarm_brain/plan.md using the filesystem tool before taking any other action.
@@ -36,7 +41,7 @@ When the bug is fixed, delegate to tool-runner to verify, or to coder if a major
 }
 
 _TOOL_DEFINITIONS = {
-    "delegate": "- action=delegate  requires: target_agent (planner|executor|coder|tool-runner|reviewer|debugger), task",
+    "delegate": "- action=delegate  requires: target_agent (planner|researcher|executor|coder|tool-runner|reviewer|debugger), task",
     "web_search": "- action=web_search  requires: query",
     "filesystem": "- action=filesystem  requires: operation (read|write|patch|list|grep), path (relative to workspace); optional: content, old, new",
     "sandbox_repl": "- action=sandbox_repl  requires: language (python|powershell|pytest), code or command or path",
@@ -48,6 +53,7 @@ _TOOL_DEFINITIONS = {
 _AGENT_TOOLS = {
     "coordinator": ["delegate", "ask_user", "final"],
     "planner": ["delegate", "filesystem", "web_search", "ask_user"],
+    "researcher": ["delegate", "filesystem", "web_search", "vscode_automation"],
     "executor": ["delegate", "filesystem", "web_search", "sandbox_repl", "vscode_automation"],
     "coder": ["delegate", "filesystem", "vscode_automation"],
     "tool-runner": ["delegate", "sandbox_repl", "vscode_automation", "filesystem"],
