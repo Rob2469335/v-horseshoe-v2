@@ -75,13 +75,13 @@ def main():
             state=ctx,
             console=ctx.console,
             call_api=call_api,
-            run_prompt=lambda p: stream_prompt(ctx, ctx.active_agent, p, ctx.history),
+            run_prompt=lambda p: stream_prompt_with_retry(ctx, ctx.active_agent, p, ctx.history),
             get_system_stats=get_system_stats,
             installed_models=get_installed_models()
         )
         cmd_ctx.run_goal_loop = lambda g: run_autonomous_goal_loop(g, cmd_ctx)
         cmd_ctx.run_debate = lambda g: run_debate_loop(g, cmd_ctx)
-        cmd_ctx.run_prompt_with_agent = lambda agent, prompt: stream_prompt(ctx, agent, prompt, ctx.history)
+        cmd_ctx.run_prompt_with_agent = lambda agent, prompt: stream_prompt_with_retry(ctx, agent, prompt, ctx.history)
         registry.handle_line(cmd_line, cmd_ctx)
         return 0
 
@@ -102,13 +102,13 @@ def main():
                 state=ctx,
                 console=ctx.console,
                 call_api=call_api,
-                run_prompt=lambda p: stream_prompt(ctx, ctx.active_agent, p, ctx.history),
+                run_prompt=lambda p: stream_prompt_with_retry(ctx, ctx.active_agent, p, ctx.history),
                 get_system_stats=get_system_stats,
                 installed_models=get_installed_models()
             )
             cmd_ctx.run_goal_loop = lambda g: run_autonomous_goal_loop(g, cmd_ctx)
             cmd_ctx.run_debate = lambda g: run_debate_loop(g, cmd_ctx)
-            cmd_ctx.run_prompt_with_agent = lambda agent, prompt: stream_prompt(ctx, agent, prompt, ctx.history)
+            cmd_ctx.run_prompt_with_agent = lambda agent, prompt: stream_prompt_with_retry(ctx, agent, prompt, ctx.history)
 
             execute_prompt = registry.handle_line(cmd_line, cmd_ctx)
             if execute_prompt:
