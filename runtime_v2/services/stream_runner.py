@@ -61,8 +61,19 @@ def _get_litellm_model(agent_id: str, fallback_model: str) -> str:
     """Resolve the litellm provider/model string based on the registry backend."""
     from runtime_v2.services.model_registry import get_model
     default_model, backend = get_model(agent_id)
-    
+
     model = fallback_model if fallback_model else default_model
+
+    if model.startswith("router/"):
+        model = model.split("/", 1)[1]
+
+    if model.startswith("ollama/"):
+        return model
+
+    if backend == "router":
+        if "/" in model and not model.startswith("ollama/"):
+            model = model.split("/", 1)[1]
+        return f"ollama/{model}"
 
     if backend == "ollama":
         return f"ollama/{model}"
@@ -71,7 +82,6 @@ def _get_litellm_model(agent_id: str, fallback_model: str) -> str:
     elif backend == "groq":
         return f"groq/{model}"
     elif backend == "nvidia":
-        # nvidia NIM is OpenAI-compatible
         return f"openai/{model}"
     elif backend == "gemini":
         return f"gemini/{model}"
@@ -79,14 +89,10 @@ def _get_litellm_model(agent_id: str, fallback_model: str) -> str:
         if "/" in model:
             return model
         return f"{backend}/{model}"
-
-
-# removed SSL patching to swarm_os/bootstrap.py
-
 def _build_kwargs(litellm_model: str, extra: dict, fallbacks: list) -> dict:
-    """
-    Build kwargs for litellm.acompletion safely.
-    """
+# os.environ["SSL_CERT_FILE"] = certifi.where()  # DISABLED: conflicts with monkey-patch causing recursion
+# os.environ["REQUESTS_CA_BUNDLE"] = certifi.where()  # DISABLED: see above
+    """Build kwargs for litellm.acompletion safely."""
     kwargs = {
         "model": litellm_model,
         "fallbacks": fallbacks,
@@ -142,6 +148,14 @@ def _extract_json(text: str) -> dict:
                     brace_count -= 1
                     if brace_count == 0:
                         return json.loads(text[start:i + 1].strip())
+    # Try fixing single-quoted Python dict output from models
+    try:
+        import ast
+        py_obj = ast.literal_eval(text.strip())
+        if isinstance(py_obj, dict):
+            return py_obj
+    except Exception:
+        pass
     raise ValueError(f"No JSON object found in model output: {text[:300]}")
 
 
@@ -203,3 +217,6 @@ async def stream_content(model: str, messages: list, agent_id: str) -> AsyncGene
     except Exception as exc:
         log.error("[%s] stream error: %s", agent_id, exc)
         yield str(exc), "error"
+
+
+

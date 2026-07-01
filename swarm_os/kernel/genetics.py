@@ -16,9 +16,9 @@ MCP_TOOL_REGISTRY: List[str] = [
 ]
 
 MODEL_TIERS: Dict[str, str] = {
-    "triage": "qwen2.5:3b-instruct",
+    "triage": "phi4-mini:latest",
     "fast": "qwen2.5:7b-instruct",
-    "heavy": "qwen3:14b",
+    "heavy": "qwen3.5:9b",
 }
 
 
@@ -254,3 +254,4 @@ def normalize_affinities(genome: Genome) -> Genome:
     genome.research_affinity /= total
     genome.upwork_affinity /= total
     return genome
+

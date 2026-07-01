@@ -46,9 +46,9 @@ class Orchestrator:
 
         self.router = Router(
             profiles=[
-                ModelProfile(name="qwen2.5:3b-instruct", role="fast", max_tokens=32000),
+                ModelProfile(name="phi4-mini:latest", role="fast", max_tokens=32000),
                 ModelProfile(name="qwen2.5-coder:7b", role="coding", max_tokens=32000),
-                ModelProfile(name="qwen3:7b", role="reasoning", max_tokens=32000),
+                ModelProfile(name="qwen3.5:9b", role="reasoning", max_tokens=32000),
                 
                 ModelProfile(name="qwen2.5-coder:3b", role="coding", max_tokens=32000),
                 ModelProfile(name="qwen2.5-coder:7b", role="coding", max_tokens=32000),
@@ -98,7 +98,7 @@ class Orchestrator:
             data = response.json()
             return [m.get("name") for m in data.get("models", []) if m.get("name")]
         except Exception:
-            return ["qwen3:7b", "qwen2.5-coder:7b"]
+            return ["qwen3.5:9b", "qwen2.5-coder:7b"]
 
     def _parse_tool_call(self, text: str) -> tuple[str, str] | None:
         # Check Pattern A: <tool_call name="tool">params</tool_call>
@@ -277,7 +277,7 @@ class Orchestrator:
             allow_fallback=True,
         )
 
-        chosen_model = route_decision.model or "qwen3:7b"
+        chosen_model = route_decision.model or "qwen3.5:9b"
 
         self.trace.add(
             trace_id=trace_id,
@@ -305,7 +305,7 @@ class Orchestrator:
             "OPENROUTER_API_KEY" if provider == "openrouter" else "NVIDIA_API_KEY", ""
         ).strip():
             print(f"[Orchestrator] No API key for {provider}, falling back to local model", flush=True)
-            chosen_model = "qwen3:7b"
+            chosen_model = "qwen3.5:9b"
             provider = "ollama"
 
         max_steps = 5
@@ -488,7 +488,7 @@ class Orchestrator:
             allow_fallback=True,
         )
 
-        chosen_model = route_decision.model or "qwen3:7b"
+        chosen_model = route_decision.model or "qwen3.5:9b"
 
         log.info("[Orchestrator] Routing decision: %s. Starting Ollama stream...", chosen_model)
         
@@ -501,7 +501,7 @@ class Orchestrator:
             "OPENROUTER_API_KEY" if provider == "openrouter" else "NVIDIA_API_KEY", ""
         ).strip():
             print(f"[Orchestrator] No API key for {provider}, falling back to local model", flush=True)
-            chosen_model = "qwen3:7b"
+            chosen_model = "qwen3.5:9b"
             provider = "ollama"
 
         max_steps = 5
@@ -635,6 +635,7 @@ class Orchestrator:
 
 def build_orchestrator(settings=None, event_store=None):
     return Orchestrator()
+
 
 
 

@@ -20,7 +20,7 @@ class ModelRouter:
         self.tiers = {
             "fast": ModelTier(
                 name="fast",
-                models=["qwen2.5:3b-instruct", "qwen2.5-coder:3b"],
+                models=["phi4-mini:latest", "qwen2.5-coder:3b"],
                 capability="fast",
                 is_cloud=False
             ),
@@ -263,3 +263,4 @@ class ModelRouter:
         """Track cloud usage for limits"""
         self.cloud_usage["requests_today"] += 1
         self.cloud_usage["tokens_today"] += tokens_used
+

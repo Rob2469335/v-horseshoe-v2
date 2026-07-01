@@ -13,7 +13,7 @@ _SEMAPHORE_LIMIT = max(1, int(os.environ.get("SWARMMODELCONCURRENCY", "2")))
 _THREAD_POOL = ThreadPoolExecutor(max_workers=_SEMAPHORE_LIMIT)
 MODEL_SEMAPHORE = asyncio.Semaphore(_SEMAPHORE_LIMIT)
 
-SWARM_MODEL = os.environ.get("SWARMMODEL", "qwen3:14b")
+SWARM_MODEL = os.environ.get("SWARMMODEL", "qwen3.5:9b")
 EMBED_MODEL = os.environ.get("EMBEDMODEL", "nomic-embed-text:latest")
 FAST_MODEL = os.environ.get("FASTMODEL", "mistral-nemo:12b")
 AGENT_MODEL = os.environ.get("SWARMAGENTMODEL", os.environ.get("ROUTEAGENTMODEL", SWARM_MODEL))
@@ -84,7 +84,7 @@ def _sync_chat(messages: List[Dict[str, Any]], model: str, tools: Optional[List[
             chat_kwargs = dict(model=model, messages=messages, options=options, keep_alive=keep_alive)
             if think is not None:
                 chat_kwargs["think"] = think
-            if tools and model != "qwen2.5:3b-instruct":
+            if tools and model != "phi4-mini:latest":
                 chat_kwargs["tools"] = tools
             response = ollama.chat(**chat_kwargs)
             if isinstance(response, dict):
@@ -161,3 +161,4 @@ def get_cloud_client(config: dict):
         api_key=api_key,
         base_url=config["base_url"],
     )
+

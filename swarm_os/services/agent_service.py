@@ -452,7 +452,7 @@ class AgentService:
             fallback_chain.append(("qwen3-coder:480b-cloud", "ollama"))
 
         # 6. Local 7b coder
-        for item in [("qwen2.5-coder:7b", "ollama"), ("qwen3:7b", "ollama")]:
+        for item in [("qwen2.5-coder:7b", "ollama"), ("qwen3.5:9b", "ollama")]:
             if item not in fallback_chain:
                 fallback_chain.append(item)
 
@@ -487,7 +487,7 @@ class AgentService:
 
             while not success:
                 # Emit model selection metadata to caller/CLI conditionally
-                is_default_local = (current_provider == "ollama" and current_model in ("qwen2.5:3b-instruct", "qwen2.5-coder:7b"))
+                is_default_local = (current_provider == "ollama" and current_model in ("phi4-mini:latest", "qwen2.5-coder:7b"))
                 if chain_idx > 0 or not is_default_local:
                     yield {
                         "agent_id": agent_id,
@@ -927,4 +927,5 @@ def reconcile_and_repair_tool_call(
 def construct_approval_question(tool_name: str, payload: dict) -> str:
     payload_text = json.dumps(payload or {}, ensure_ascii=False)
     return f"APPROVAL REQUIRED: tool '{tool_name}' with payload: {payload_text}"
+
 

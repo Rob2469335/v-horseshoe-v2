@@ -69,17 +69,15 @@ class AgentServiceV2:
             return
 
         role = self._agents.get(agent_id, {}).get("model_role", "fast")
+        model, provider = get_model(agent_id)
         start_time = 0
         if self.orchestrator and hasattr(self.orchestrator, "router"):
             import time
             start_time = time.time()
-            decision = await self.orchestrator.router.route_model(role=role)
-            model = decision.model
+            decision = await self.orchestrator.router.route_model(candidates=[model], role=role)
+            if decision.model:
+                model = decision.model
             provider = "router"
-            if not model:
-                model, provider = get_model(agent_id)
-        else:
-            model, provider = get_model(agent_id)
 
         # Inject visited chain into system prompt
         sys_prompt = build(agent_id)
