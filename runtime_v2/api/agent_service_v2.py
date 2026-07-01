@@ -195,6 +195,13 @@ class AgentServiceV2:
                         messages.append({"role": "user", "content": f"Result: {json.dumps({'error': error_msg})}"})
                         continue
                 
+                if target in chain:
+                    error_msg = f"Circular delegation blocked. '{target}' is already active in the chain ({' -> '.join(chain)}). Use 'final' to return results back up the chain."
+                    yield {"agent_id": agent_id, "type": "tool_result", "tool": "delegate", "result": {"error": error_msg}}
+                    messages.append({"role": "assistant", "content": f'I called delegate with {json.dumps({"target_agent": target, "task": task})}'})
+                    messages.append({"role": "user", "content": f"Result: {json.dumps({'error': error_msg})}"})
+                    continue
+
                 if target not in self._agents:
                     error_msg = f"Agent '{target}' not found."
                     yield {"agent_id": agent_id, "type": "tool_result", "tool": "delegate", "result": {"error": error_msg}}
