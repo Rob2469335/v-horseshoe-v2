@@ -137,6 +137,10 @@ def classify_intent_with_llm(raw: str, ctx: CommandContext) -> tuple[Optional[st
                 parts = command_str.split()
                 cmd = parts[0][1:].lower()
                 args = parts[1:]
+                
+                if cmd in ("goal", "debate") and not args:
+                    args = [raw.strip()]
+                    
                 return cmd, args
     except Exception:
         pass
@@ -180,6 +184,9 @@ class CommandRegistry:
                 cmd_name, args = classify_intent_with_llm(raw, ctx)
                 
             if cmd_name:
+                if cmd_name == "chat":
+                    return raw
+                    
                 if cmd_name in self.commands:
                     ctx.console.print(f"[bold cyan]ℹ Auto-Routing intent to command: [green]/{cmd_name} {' '.join(args)}[/green][/bold cyan]")
                     # Record entered command to command history

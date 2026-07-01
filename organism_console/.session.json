@@ -350,7 +350,9 @@
     "/picker",
     "/picker",
     "/picker",
-    "/picker"
+    "/picker",
+    "/goal ",
+    "/tokens "
   ],
   "focus_file": null,
   "cloud_enabled": true,

@@ -17,43 +17,36 @@ def is_prime(n):
         i += 6
     return True
 
-def check_range(start, end, queue):
+def get_primes_in_range(args):
+    start, end = args
+    primes = []
     for num in range(start, end):
         if is_prime(num):
-            queue.put(num)
+            primes.append(num)
+    return primes
 
-def find_primes(limit, num_processes):
-    manager = mp.Manager()
-    queue = manager.Queue()
-    pool = mp.Pool(processes=num_processes)
-    
+def find_primes_multiprocess(limit, num_processes):
     # Estimate upper bound for the nth prime (n=limit)
     if limit < 6:
-        upper_bound = 12  # Small fixed upper bound for small limits
+        upper_bound = 12
     else:
         n = limit
         upper_bound = int(n * (math.log(n) + math.log(math.log(n)))) + 10000
     
-    chunk_size = upper_bound // num_processes
-    processes = []
-    
-    start_time = time.time()
-    
+    chunk_size = max(1, upper_bound // num_processes)
+    ranges = []
     for i in range(num_processes):
         start = i * chunk_size
         end = start + chunk_size if i != num_processes - 1 else upper_bound
-        p = pool.apply_async(check_range, args=(start, end, queue))
-        processes.append(p)
+        ranges.append((start, end))
     
-    for p in processes:
-        p.get()
-    
-    pool.close()
-    pool.join()
+    start_time = time.time()
+    with mp.Pool(processes=num_processes) as pool:
+        results = pool.map(get_primes_in_range, ranges)
     
     primes = []
-    while not queue.empty():
-        primes.append(queue.get())
+    for r in results:
+        primes.extend(r)
     
     primes.sort()
     primes = primes[:limit]
@@ -63,20 +56,52 @@ def find_primes(limit, num_processes):
     
     return primes, execution_time
 
+def find_primes_single(limit):
+    if limit < 6:
+        upper_bound = 12
+    else:
+        n = limit
+        upper_bound = int(n * (math.log(n) + math.log(math.log(n)))) + 10000
+        
+    start_time = time.time()
+    primes = get_primes_in_range((0, upper_bound))
+    primes.sort()
+    primes = primes[:limit]
+    execution_time = time.time() - start_time
+    return primes, execution_time
+
 def main():
+    target = 500000
+    print(f"--- Benchmarking First {target} Primes ---")
+    
+    # 1. Single Thread
+    print("\nRunning Single-Threaded...")
+    single_primes, single_time = find_primes_single(target)
+    print(f"Single-Threaded Time: {single_time:.4f} seconds")
+    
+    # 2. Multi-Process
     num_processes = mp.cpu_count()
-    primes, execution_time = find_primes(10000, num_processes)
+    print(f"\nRunning Multi-Processed ({num_processes} cores)...")
+    multi_primes, multi_time = find_primes_multiprocess(target, num_processes)
+    print(f"Multi-Processed Time: {multi_time:.4f} seconds")
+    
+    # Validation
+    assert single_primes == multi_primes, "Mismatch in calculated primes!"
+    
+    print(f"\nSpeedup: {single_time / multi_time:.2f}x")
+    print("Verification Passed! Primes match.")
+    print(f"Last Prime Found (10,000th): {multi_primes[-1]}")
     
     result = {
-        "primes": primes,
-        "count": len(primes),
-        "execution_time": execution_time
+        "target": target,
+        "primes": multi_primes,
+        "single_thread_time": single_time,
+        "multi_process_time": multi_time,
+        "speedup": single_time / multi_time
     }
     
-    with open("primes.json", "w") as f:
+    with open("primes_benchmark.json", "w") as f:
         json.dump(result, f, indent=2)
-    
-    print(f"Found {len(primes)} primes in {execution_time:.4f} seconds.")
 
 if __name__ == "__main__":
     main()
