@@ -156,7 +156,7 @@ def run_autonomous_goal_loop(goal: str, cmd_ctx):
     console.print(f"👥 [bold]Initial Agent[/bold]: [cyan]{state.active_agent}[/cyan]")
     console.print()
     
-    plan_first = Confirm.ask("[bold yellow]Enable Plan-First Mode (generate plan & task list first)?[/bold yellow]")
+    plan_first = False
     
     if plan_first:
         docs_dir = PROJECT_ROOT / "docs"

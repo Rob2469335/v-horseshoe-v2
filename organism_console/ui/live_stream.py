@@ -419,6 +419,7 @@ def stream_prompt(ctx, agent_id, prompt, history):
     return new_history
 
 def stream_prompt_with_retry(ctx, agent_id, prompt, history, max_retries=3):
+    ctx.delegation_chain = [agent_id]
     delays = [2, 5, 10]
     for attempt in range(max_retries):
         result = stream_prompt(ctx, agent_id, prompt, history)

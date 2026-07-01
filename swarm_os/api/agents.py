@@ -35,14 +35,14 @@ async def get_cloud_models():
 
 @router.post("/agents/{agent_id}/model")
 def override_agent_model(agent_id: str, payload: ModelOverridePayload):
-    from runtime_v2.services.model_registry import _AGENT_MODELS
-    _AGENT_MODELS[agent_id] = (payload.model_name, payload.backend)
+    from runtime_v2.services.model_registry import AGENT_MODELS
+    AGENT_MODELS[agent_id] = (payload.model_name, payload.backend)
     return {"status": "ok", "agent_id": agent_id, "model": payload.model_name}
 
 @router.get("/agents/models")
 def get_agent_models():
-    from runtime_v2.services.model_registry import _AGENT_MODELS
-    return {k: {"model": v[0], "backend": v[1]} for k, v in _AGENT_MODELS.items()}
+    from runtime_v2.services.model_registry import AGENT_MODELS
+    return {k: {"model": v[0], "backend": v[1]} for k, v in AGENT_MODELS.items()}
 
 import logging
 logger = logging.getLogger(__name__)

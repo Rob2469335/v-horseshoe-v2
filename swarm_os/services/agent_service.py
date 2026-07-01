@@ -451,8 +451,8 @@ class AgentService:
         if ("qwen3-coder:480b-cloud", "ollama") not in fallback_chain:
             fallback_chain.append(("qwen3-coder:480b-cloud", "ollama"))
 
-        # 6. Local 14b coder
-        for item in [("qwen2.5-coder:14b", "ollama"), ("qwen3:14b", "ollama")]:
+        # 6. Local 7b coder
+        for item in [("qwen2.5-coder:7b", "ollama"), ("qwen3:7b", "ollama")]:
             if item not in fallback_chain:
                 fallback_chain.append(item)
 

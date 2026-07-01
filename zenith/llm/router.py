@@ -26,13 +26,13 @@ class ModelRouter:
             ),
             "balanced": ModelTier(
                 name="balanced", 
-                models=["qwen2.5:7b-instruct", "qwen2.5:14b-instruct", "qwen2.5-coder:7b", "qwen2.5-coder:7b-16k"],
+                models=["qwen2.5:7b-instruct", "qwen2.5:7b-instruct", "qwen2.5-coder:7b", "qwen2.5-coder:7b-16k"],
                 capability="balanced",
                 is_cloud=False
             ),
             "smart": ModelTier(
                 name="smart",
-                models=["qwen2.5:14b-instruct", "qwen2.5:14b-instruct-32k", "qwen2.5-coder:14b", "qwen2.5-coder:14b-32k"],
+                models=["qwen2.5:7b-instruct", "qwen2.5:7b-instruct-32k", "qwen2.5-coder:7b", "qwen2.5-coder:7b-32k"],
                 capability="smart",
                 is_cloud=False
             ),
@@ -57,7 +57,7 @@ class ModelRouter:
             ),
             "cloud_balanced": ModelTier(
                 name="cloud_balanced",
-                models=["ollama-cloud/llama3.1:70b", "ollama-cloud/qwen2.5-coder:14b"],
+                models=["ollama-cloud/llama3.1:70b", "ollama-cloud/qwen2.5-coder:7b"],
                 capability="balanced",
                 is_cloud=True
             ),

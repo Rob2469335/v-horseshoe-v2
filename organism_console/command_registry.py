@@ -138,7 +138,7 @@ def classify_intent_with_llm(raw: str, ctx: CommandContext) -> tuple[Optional[st
                 cmd = parts[0][1:].lower()
                 args = parts[1:]
                 
-                if cmd in ("goal", "debate") and not args:
+                if cmd in ("goal", "debate"):
                     args = [raw.strip()]
                     
                 return cmd, args
@@ -1067,10 +1067,10 @@ def cmd_memory(ctx: CommandContext, args: List[str]) -> None:
             ctx.console.print(f"[bold red]Failed to inject memory: {e}[/bold red]")
 
 
-@registry.register("heal", "Evaluate and trigger self-heal run. Usage: /heal run")
+@registry.register("heal", "Evaluate and trigger self-heal run. Usage: /heal run [force]")
 def cmd_heal(ctx: CommandContext, args: List[str]) -> None:
     if not args or args[0].lower() != "run":
-        ctx.console.print("To run healing cycle: `/heal run`")
+        ctx.console.print("To run healing cycle: `/heal run` or `/heal run force`")
         return
 
     ctx.console.print("[bold magenta]Initiating autonomous self-heal...[/bold magenta]")
@@ -1081,13 +1081,26 @@ def cmd_heal(ctx: CommandContext, args: List[str]) -> None:
         
     d = resp.json()
     color = "green" if d.get("last_heal_success", True) else "red"
+    anomalies = d.get("active_anomalies", 0)
     
     table = Table(show_header=False, box=SIMPLE)
     table.add_row("Readiness", f"{d.get('recovery_readiness', 0)}%")
-    table.add_row("Active Anomalies", str(d.get("active_anomalies", 0)))
+    table.add_row("Active Anomalies", str(anomalies))
     table.add_row("Last Heal", f"[{color}]Success[/{color}]" if d.get("last_heal_success", True) else "[red]Failed[/red]")
     
     ctx.console.print(Panel(table, title="[bold magenta]Healing Cycle Evaluation[/bold magenta]", border_style="magenta"))
+    
+    if anomalies > 0 or "force" in map(str.lower, args):
+        ctx.console.print("[bold cyan]Dispatching Internet Self-Healing Goal Loop...[/bold cyan]")
+        if ctx.run_goal_loop:
+            goal_payload = (
+                "Analyze the system's active anomalies (or recent failures in logs), "
+                "use `web_search` to research the root cause and modern syntax fixes on the internet, "
+                "and use `filesystem` to autonomously rewrite the broken Python code."
+            )
+            ctx.run_goal_loop(goal_payload)
+        else:
+            ctx.console.print("[red]Goal loop runner unavailable.[/red]")
 
 
 @registry.register("goal", "Run an autonomous self-correcting loop to achieve a goal. Usage: /goal <objective>")

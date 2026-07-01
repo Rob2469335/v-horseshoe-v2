@@ -123,7 +123,7 @@ class AgentServiceV2:
             from runtime_v2.prompts.system_prompts import _AGENT_TOOLS
             allowed_tools = _AGENT_TOOLS.get(agent_id, ["delegate", "final", "filesystem"])
             action = str(decision["action"]).strip()
-            log.info("[%s] turn %d action=%s", agent_id, _turn, action)
+            log.error("[%s] action=%s decision=%s", agent_id, action, decision)
             yield {"agent_id": agent_id, "content": f"[{action}]", "model": model}
 
             if action not in allowed_tools:

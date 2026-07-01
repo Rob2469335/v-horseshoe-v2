@@ -58,6 +58,8 @@ async def _fetch_groq_models() -> list[dict]:
             resp.raise_for_status()
             data = resp.json().get("data", [])
             for m in data:
+                if 'canopylabs' in m['id']:
+                    continue
                 models.append({
                     "model": f"groq/{m['id']}",
                     "context_length": 8192, # Default fallback

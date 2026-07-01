@@ -1,6 +1,7 @@
 import sys
 import json
 import logging
+import swarm_os.bootstrap
 from rich.console import Console
 from rich.logging import RichHandler
 
