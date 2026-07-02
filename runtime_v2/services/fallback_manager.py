@@ -71,20 +71,27 @@ async def _fetch_groq_models() -> list[dict]:
     return models
 
 async def refresh_fallbacks_if_needed():
-    """Check TTL and refresh background lists if older than 30 minutes."""
+    """Check TTL and refresh background lists if older than cache TTL (optimized for speed)."""
     global _last_fetch_time, _cached_fallbacks, _cached_stats
     
     current_time = time.time()
     if current_time - _last_fetch_time < _CACHE_TTL and _cached_fallbacks:
         return  # Cache is still valid
 
-    log.debug("Refreshing cloud fallback arrays (30-minute TTL expired)...")
+    log.debug("Refreshing cloud fallback arrays (5-min TTL expired)...")
     
-    # Only fetch OpenRouter (more reliable than Groq which is rate-limited)
+    # Fetch OpenRouter in parallel with Groq fallback (no waiting)
     try:
-        openrouter_models = await _fetch_openrouter_free()
+        # Use timeout to fail fast
+        openrouter_models = await asyncio.wait_for(
+            _fetch_openrouter_free(), 
+            timeout=3.0  # Fail fast after 3s
+        )
+    except asyncio.TimeoutError:
+        log.debug("OpenRouter fetch timed out, using safe defaults")
+        openrouter_models = []
     except Exception as e:
-        log.warning(f"Failed to fetch OpenRouter: {e}")
+        log.debug(f"Failed to fetch OpenRouter: {e}")
         openrouter_models = []
     
     # Minimal Groq static fallback (avoid rate limits)
@@ -92,7 +99,7 @@ async def refresh_fallbacks_if_needed():
         {"model": "groq/llama-3.1-8b-instant", "context_length": 8192, "pricing": "Free", "provider": "Groq"}
     ]
     
-    # Gemini models (more reliable)
+    # Gemini models (more reliable, cached)
     gemini_models = [
         {"model": "gemini/gemini-1.5-flash", "context_length": 1048576, "pricing": "Free Tier", "provider": "Google"},
     ]

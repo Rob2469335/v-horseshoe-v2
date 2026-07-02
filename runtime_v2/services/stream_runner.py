@@ -2,11 +2,14 @@
 import json
 import re
 import logging
+import asyncio
 from typing import AsyncGenerator, Optional
 import litellm
 from dotenv import load_dotenv
 from runtime_v2.services.model_registry import get_model
 from runtime_v2.services.fallback_manager import get_live_fallbacks
+from functools import lru_cache
+from datetime import datetime, timedelta
 
 load_dotenv()
 
@@ -14,6 +17,10 @@ litellm.telemetry = False
 litellm.suppress_debug_info = True
 
 log = logging.getLogger(__name__)
+
+# Performance: Cache for recent tool decisions (TTL: 5 min)
+_decision_cache = {}
+_cache_ttl = 300  # seconds
 
 TOOL_CALL_SCHEMA = {
     "type": "object",
@@ -222,14 +229,46 @@ async def _complete_for_tool_decision(litellm_model: str, messages: list, fallba
     extra = {
         "messages": messages,
         "temperature": 0.2,
-        "timeout": 60.0,  # Reduced from 300s to fail faster
+        "timeout": 45.0,  # Reduced from 60s for faster recovery
+        "max_retries": 0,  # No retries at this level
     }
     kwargs = _build_kwargs(litellm_model, extra, fallbacks)
     return await litellm.acompletion(**kwargs)
 
+def _get_cache_key(messages: list, agent_id: str) -> str:
+    """Generate a cache key for decision caching."""
+    # Hash the last message (context) with agent ID
+    if messages:
+        last_msg = messages[-1].get("content", "")[:200]  # First 200 chars
+        return f"{agent_id}:{hash(last_msg)}"
+    return f"{agent_id}:default"
+
+def _get_cached_decision(cache_key: str) -> Optional[dict]:
+    """Get cached decision if fresh (< 5 min old)."""
+    if cache_key in _decision_cache:
+        decision, timestamp = _decision_cache[cache_key]
+        if datetime.now() - timestamp < timedelta(seconds=_cache_ttl):
+            return decision
+        else:
+            del _decision_cache[cache_key]
+    return None
+
+def _cache_decision(cache_key: str, decision: dict):
+    """Cache a decision with timestamp."""
+    _decision_cache[cache_key] = (decision, datetime.now())
+
 async def get_tool_decision(model: str, messages: list, agent_id: str) -> Optional[dict]:
     """Ask model what action to take next. Returns structured dict or None on error."""
+    
+    # Check cache first
+    cache_key = _get_cache_key(messages, agent_id)
+    cached = _get_cached_decision(cache_key)
+    if cached:
+        log.debug("[%s] Tool decision (cached): %s", agent_id, cached.get("action"))
+        return cached
+    
     litellm_model = _get_litellm_model(agent_id, model)
+    # Fetch fallbacks in parallel instead of sequential
     raw_fallbacks = await get_live_fallbacks()
     # Limit fallbacks to 2 to avoid cascading failures
     fallbacks = [f["model"] for f in raw_fallbacks[:2]]
@@ -244,6 +283,7 @@ async def get_tool_decision(model: str, messages: list, agent_id: str) -> Option
             return {"action": "final", "response": "Model returned empty response."}
         result = _extract_json(_normalize_model_json(content))
         log.debug("[%s] Tool decision: %s", agent_id, result.get("action"))
+        _cache_decision(cache_key, result)  # Cache the result
         return result
     except Exception as first_exc:
         log.warning("[%s] Tool decision request failed: %s (will use default)", agent_id, str(first_exc)[:100])
