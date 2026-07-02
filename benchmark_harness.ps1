@@ -5,8 +5,8 @@ $Models = @(
     "llama3-groq-tool-use:8b",
     "MFDoom/deepseek-r1-tool-calling:8b",
     "gemma4:e4b",
-    "ministral-3:8b",
-    "qwen3.5:9b",
+    "MFDoom/deepseek-r1-tool-calling:8b",
+    "llama3-groq-tool-use:8b",
     "qwen3:8b-q4_K_M",
     "qwen2.5-coder:7b"
 )
@@ -184,5 +184,6 @@ $results | Group-Object Model | ForEach-Object {
         Runs     = $_.Count
     }
 } | Sort-Object AvgScore -Descending | Format-Table -AutoSize
+
 
 

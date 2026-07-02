@@ -461,6 +461,8 @@ def test_natural_language_intent_routing(tmp_path, monkeypatch):
             def json(self):
                 if endpoint == "/readyz":
                     return {"ready": True, "status": "ok", "health_score": 100, "checks": {"ollama_reachable": True}}
+                if endpoint == "/generate":
+                    return {"response": '{"command": "/status", "confidence": 0.95}'}
                 return {}
             @property
             def status_code(self):
@@ -505,23 +507,10 @@ def test_natural_language_intent_routing(tmp_path, monkeypatch):
     
     # 3. Test LLM classification routing
     calls.clear()
-    class MockRequests:
-        @staticmethod
-        def post(url, json=None, **kwargs):
-            calls.append(("requests_post", url))
-            class MockResp:
-                @property
-                def status_code(self):
-                    return 200
-                def json(self):
-                    return {"response": '{"command": "/status", "confidence": 0.95}'}
-            return MockResp()
-            
-    monkeypatch.setattr(requests, "post", MockRequests.post)
     
     res = registry.handle_line("how is my system looking", ctx)
     assert res is None
-    assert any(c[0] == "requests_post" for c in calls)
+    assert any(c[0] == "api" and c[1] == "/generate" for c in calls)
     assert any(c[0] == "api" and c[1] == "/readyz" for c in calls)
 
 

@@ -20,7 +20,7 @@ class ModelRouter:
         self.tiers = {
             "fast": ModelTier(
                 name="fast",
-                models=["phi4-mini:latest", "qwen2.5-coder:3b"],
+                models=["phi4-mini:latest", "qwen2.5-coder:7b"],
                 capability="fast",
                 is_cloud=False
             ),

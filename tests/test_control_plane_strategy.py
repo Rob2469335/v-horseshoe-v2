@@ -48,8 +48,13 @@ async def test_route_model_fallback_no_candidates():
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_trace_preserves_strategy():
+async def test_orchestrator_trace_preserves_strategy(monkeypatch):
     orchestrator = Orchestrator()
+    
+    async def mock_generate(*args, **kwargs):
+        return "mocked response"
+    monkeypatch.setattr(orchestrator.ollama, "generate", mock_generate)
+
     await orchestrator.generate(model="qwen2.5:3b-instruct", prompt="hello")
     traces = orchestrator.get_recent_traces(limit=10)
     router_events = [event for event in traces if event.get("phase") == "router"]

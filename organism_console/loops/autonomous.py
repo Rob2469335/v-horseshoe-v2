@@ -153,7 +153,11 @@ def run_autonomous_goal_loop(goal: str, cmd_ctx):
     console.print()
     console.print(Rule("[bold magenta]🤖 Swarm OS Autonomous Verification Loop[/bold magenta]"))
     console.print(f"🎯 [bold]Goal[/bold]: [cyan]{goal}[/cyan]")
-    console.print(f"👥 [bold]Initial Agent[/bold]: [cyan]{state.active_agent}[/cyan]")
+    entry_agent = "coordinator"
+    state.active_agent = entry_agent
+    state.delegation_chain = [entry_agent]
+    state.save()
+    console.print(f"👥 [bold]Initial Agent[/bold]: [cyan]{entry_agent}[/cyan]")
     console.print()
     
     plan_first = False
@@ -197,7 +201,7 @@ def run_autonomous_goal_loop(goal: str, cmd_ctx):
     for attempt in range(1, max_attempts + 1):
         console.print(Rule(f"Attempt {attempt}/{max_attempts}", style="magenta dim"))
         
-        history = cmd_ctx.run_prompt(current_prompt)
+        history = stream_prompt(entry_agent, current_prompt, history)
         
         console.print("[dim]Running fast syntax checks...[/dim]")
         syntax_passed, syntax_error_msg = run_syntax_checks()
@@ -245,3 +249,5 @@ def run_autonomous_goal_loop(goal: str, cmd_ctx):
                 f"Please analyze these errors, modify the code using your capabilities, and verify syntax to fix them.\\n"
                 f"</EPHEMERAL_MESSAGE>"
             )
+
+

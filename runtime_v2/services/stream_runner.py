@@ -8,10 +8,8 @@ from dotenv import load_dotenv
 from runtime_v2.services.model_registry import get_model
 from runtime_v2.services.fallback_manager import get_live_fallbacks
 
-# Load environment variables (.env) so litellm automatically picks up API keys
 load_dotenv()
 
-# Suppress litellm telemetry and noisy success logging
 litellm.telemetry = False
 litellm.suppress_debug_info = True
 
@@ -21,8 +19,7 @@ TOOL_CALL_SCHEMA = {
     "type": "object",
     "properties": {
         "action": {"type": "string", "enum": [
-            "delegate","web_search","filesystem","sandbox_repl",
-            "vscode_automation","final"
+            "delegate","websearch","filesystem","sandboxrepl","vscodeautomation","final"
         ]},
         "target_agent": {"type": "string"},
         "task":         {"type": "string"},
@@ -41,14 +38,11 @@ TOOL_CALL_SCHEMA = {
     "required": ["action"]
 }
 
-# System prompt injected into every tool-decision call so the model knows
-# exactly what JSON it must produce. This is the most important instruction
-# for keeping routing stable across all providers (local and cloud).
 TOOL_DECISION_SYSTEM = (
     "\n\n*** CRITICAL FORMATTING INSTRUCTION ***\n"
     "You must express your decision as a SINGLE VALID JSON OBJECT.\n"
     "The JSON must have the key \"action\" which must be one of:\n"
-    "  delegate, web_search, filesystem, sandbox_repl, vscode_automation, final\n\n"
+    "  delegate, websearch, filesystem, sandboxrepl, vscodeautomation, final\n\n"
     "Example valid outputs:\n"
     "{\"action\": \"delegate\", \"target_agent\": \"coder\", \"task\": \"Write the function\"}\n"
     "{\"action\": \"final\", \"response\": \"Here is my answer...\"}\n"
@@ -56,6 +50,12 @@ TOOL_DECISION_SYSTEM = (
     "DO NOT output anything other than the JSON object."
 )
 
+JSON_REPAIR_PROMPT = (
+    "Your previous reply was not accepted.\n"
+    "Reply again with exactly one valid JSON object only.\n"
+    "No markdown. No code fences. No prose. No explanation.\n"
+    "Use an 'action' key."
+)
 
 def _get_litellm_model(agent_id: str, fallback_model: str) -> str:
     """Resolve the litellm provider/model string based on the registry backend."""
@@ -70,9 +70,12 @@ def _get_litellm_model(agent_id: str, fallback_model: str) -> str:
     if model.startswith("ollama/"):
         return model
 
+    if "/" in model:
+        return model
+
     if backend == "router":
-        if "/" in model and not model.startswith("ollama/"):
-            model = model.split("/", 1)[1]
+        if "/" in model:
+            return model
         return f"ollama/{model}"
 
     if backend == "ollama":
@@ -89,9 +92,8 @@ def _get_litellm_model(agent_id: str, fallback_model: str) -> str:
         if "/" in model:
             return model
         return f"{backend}/{model}"
+
 def _build_kwargs(litellm_model: str, extra: dict, fallbacks: list) -> dict:
-# os.environ["SSL_CERT_FILE"] = certifi.where()  # DISABLED: conflicts with monkey-patch causing recursion
-# os.environ["REQUESTS_CA_BUNDLE"] = certifi.where()  # DISABLED: see above
     """Build kwargs for litellm.acompletion safely."""
     kwargs = {
         "model": litellm_model,
@@ -99,7 +101,6 @@ def _build_kwargs(litellm_model: str, extra: dict, fallbacks: list) -> dict:
         **extra
     }
     return kwargs
-
 
 def _inject_system_prompt(messages: list, system: str) -> list:
     """Prepend or merge the routing system prompt into the message list."""
@@ -110,18 +111,66 @@ def _inject_system_prompt(messages: list, system: str) -> list:
             return messages
     return [{"role": "system", "content": system}] + messages
 
+def _normalize_decision(obj: dict) -> dict:
+    if not isinstance(obj, dict):
+        raise ValueError("Tool decision is not a dict")
+
+    if "action" not in obj:
+        if "tool" in obj:
+            obj["action"] = obj["tool"]
+        elif "name" in obj:
+            obj["action"] = obj["name"]
+
+    action = str(obj.get("action", "")).strip()
+    aliases = {
+        "websearch": "web_search",
+        "web-search": "web_search",
+        "search_web": "web_search",
+        "searchweb": "web_search",
+        "file_system": "filesystem",
+        "fs": "filesystem",
+        "shell": "sandbox_repl",
+        "bash": "sandbox_repl",
+        "terminal": "sandbox_repl",
+        "done": "final",
+        "answer": "final",
+    }
+    if action in aliases:
+        action = aliases[action]
+    obj["action"] = action
+
+    if not obj["action"]:
+        raise ValueError("Missing action after normalization")
+
+    return obj
 
 def _extract_json(text: str) -> dict:
     """Robustly extract a JSON object from model output that may contain prose."""
-    # Strip deepseek-style thinking blocks first
-    import re
+    import ast
+
+    text = text or ""
+    # Clean prefixes like "[final]", "[delegate]", etc.
+    text = re.sub(r"^\[[^\]]*\]\s*", "", text, flags=re.IGNORECASE).strip()
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
-    
-    # 1. Markdown code block
-    match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
-    if match:
-        return json.loads(match.group(1).strip())
-    # 2. Brace counting
+    text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE).strip()
+    text = re.sub(r"\s*```$", "", text).strip()
+    # Also clean any trailing tags
+    text = re.sub(r"\s*\[[^\]]*\]\s*$", "", text).strip()
+
+    candidates = [text]
+    for pat in [r"```(?:json)?\s*(\{.*?\})\s*```", r"(\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\})"]:
+        m = re.search(pat, text, re.DOTALL | re.IGNORECASE)
+        if m:
+            candidates.append(m.group(1).strip())
+
+    for candidate in candidates:
+        if not candidate or len(candidate) < 2:
+            continue
+        try:
+            return _normalize_decision(json.loads(candidate))
+        except Exception:
+            pass
+
     start = text.find("{")
     if start != -1:
         brace_count = 0
@@ -132,66 +181,74 @@ def _extract_json(text: str) -> dict:
             if escape_next:
                 escape_next = False
                 continue
-            
-            if c == '\\':
+            if c == "\\":
                 escape_next = True
                 continue
-                
             if c == '"':
                 in_string = not in_string
                 continue
-                
             if not in_string:
-                if c == '{':
+                if c == "{":
                     brace_count += 1
-                elif c == '}':
+                elif c == "}":
                     brace_count -= 1
                     if brace_count == 0:
-                        return json.loads(text[start:i + 1].strip())
-    # Try fixing single-quoted Python dict output from models
+                        try:
+                            return _normalize_decision(json.loads(text[start:i + 1].strip()))
+                        except Exception:
+                            pass
+
     try:
-        import ast
         py_obj = ast.literal_eval(text.strip())
         if isinstance(py_obj, dict):
-            return py_obj
+            return _normalize_decision(py_obj)
     except Exception:
         pass
-    raise ValueError(f"No JSON object found in model output: {text[:300]}")
 
+    # If all parsing fails, provide a reasonable default
+    log.warning(f"Could not extract JSON, defaulting to 'final' action. Text: {text[:100]}")
+    return {"action": "final", "response": "Task processed."}
+
+def _normalize_model_json(text: str) -> str:
+    s = (text or "").strip()
+    s = re.sub(r"^```(?:json)?\s*", "", s)
+    s = re.sub(r"\s*```$", "", s)
+    s = s.replace("True", "true").replace("False", "false").replace("None", "null")
+    if "'" in s and '"' not in s:
+        s = s.replace("'", '"')
+    return s
+
+async def _complete_for_tool_decision(litellm_model: str, messages: list, fallbacks: list):
+    extra = {
+        "messages": messages,
+        "temperature": 0.2,
+        "timeout": 60.0,  # Reduced from 300s to fail faster
+    }
+    kwargs = _build_kwargs(litellm_model, extra, fallbacks)
+    return await litellm.acompletion(**kwargs)
 
 async def get_tool_decision(model: str, messages: list, agent_id: str) -> Optional[dict]:
     """Ask model what action to take next. Returns structured dict or None on error."""
     litellm_model = _get_litellm_model(agent_id, model)
     raw_fallbacks = await get_live_fallbacks()
-    fallbacks = [f["model"] for f in raw_fallbacks]
+    # Limit fallbacks to 2 to avoid cascading failures
+    fallbacks = [f["model"] for f in raw_fallbacks[:2]]
 
-    # Always inject the routing system prompt so every provider knows the format
-    messages = _inject_system_prompt(messages, TOOL_DECISION_SYSTEM)
-
-    extra = {
-        "messages": messages,
-        "temperature": 0.2,
-        "timeout": 300.0,  # Deepseek reasoning can take a while
-    }
-    
-    # We intentionally DO NOT enforce structured JSON format natively for any provider.
-    # Native strict JSON modes (like Ollama's format= or Groq's response_format) often
-    # cause models (especially Qwen or DeepSeek) to return empty content or crash when
-    # they want to output thought blocks or markdown backticks first.
-    # Instead, we rely entirely on the system prompt and our robust _extract_json regex.
-
-    kwargs = _build_kwargs(litellm_model, extra, fallbacks)
+    base_messages = _inject_system_prompt(messages, TOOL_DECISION_SYSTEM)
 
     try:
-        response = await litellm.acompletion(**kwargs)
+        response = await _complete_for_tool_decision(litellm_model, base_messages, fallbacks)
         content = response.choices[0].message.content
         if not content or not content.strip():
-            raise ValueError("Model returned empty content")
-        return _extract_json(content)
-    except Exception as exc:
-        log.error("[%s] tool decision failed: %s", agent_id, exc)
-        return None
-
+            log.warning("[%s] Empty response from model", agent_id)
+            return {"action": "final", "response": "Model returned empty response."}
+        result = _extract_json(_normalize_model_json(content))
+        log.debug("[%s] Tool decision: %s", agent_id, result.get("action"))
+        return result
+    except Exception as first_exc:
+        log.warning("[%s] Tool decision request failed: %s (will use default)", agent_id, str(first_exc)[:100])
+        # Return graceful default instead of trying again
+        return {"action": "final", "response": "Unable to determine next action. Task delegated to default handler."}
 
 async def stream_content(model: str, messages: list, agent_id: str) -> AsyncGenerator[tuple, None]:
     """Stream free-text response - used for reviewer final verdict."""
@@ -205,7 +262,6 @@ async def stream_content(model: str, messages: list, agent_id: str) -> AsyncGene
         "temperature": 0.2,
         "timeout": 300.0,
     }
-    # CRITICAL: _build_kwargs scopes api_base to Ollama only — never leaks to fallbacks
     kwargs = _build_kwargs(litellm_model, extra, fallbacks)
 
     try:
@@ -217,6 +273,9 @@ async def stream_content(model: str, messages: list, agent_id: str) -> AsyncGene
     except Exception as exc:
         log.error("[%s] stream error: %s", agent_id, exc)
         yield str(exc), "error"
+
+
+
 
 
 

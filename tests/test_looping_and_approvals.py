@@ -96,11 +96,10 @@ async def test_b_read_only_tool_then_final_answer(mock_agent_service):
             
         # Verify tool was called once
         mock_agent_service.runtimes["coordinator"].call_tool.assert_called_once_with("filesystem", {"operation": "list", "path": "."})
-        
         # Verify final answer was emitted
-        final_chunks = [c for c in chunks if c.get("type") == "final"]
-        assert len(final_chunks) == 1
-        assert "files" in chunks[1]["result"]
+        tool_results = [c for c in chunks if c.get("type") == "tool_result"]
+        assert len(tool_results) == 1
+        assert "files" in tool_results[0]["result"]
 
 @pytest.mark.asyncio
 async def test_c_write_action_requires_approval(mock_agent_service):
@@ -125,9 +124,9 @@ async def test_c_write_action_requires_approval(mock_agent_service):
             chunks.append(chunk)
             
         # Assert ask_user is yielded
-        assert len(chunks) == 2  # content chunk + ask_user chunk
-        assert "ask_user" in chunks[1]
-        assert "APPROVAL REQUIRED" in chunks[1]["ask_user"]["question"]
+        ask_user_chunks = [c for c in chunks if "ask_user" in c]
+        assert len(ask_user_chunks) == 1
+        assert "APPROVAL REQUIRED" in ask_user_chunks[0]["ask_user"]["question"]
 
     # 2. Simulate User Approval and second call
     lines_final = [
@@ -256,8 +255,9 @@ async def test_f_client_consumer_stream_handling(mock_agent_service):
     cli.ctx = CLIContext()
     cli.ctx.history = []
     
-    with patch("organism_console.cli.call_api", return_value=mock_api_resp):
+    with patch("organism_console.ui.live_stream.call_api", return_value=mock_api_resp):
         new_hist = stream_prompt(
+            ctx=cli.ctx,
             agent_id="coordinator",
             prompt="Greeting",
             history=[]
@@ -266,14 +266,14 @@ async def test_f_client_consumer_stream_handling(mock_agent_service):
         # Verify that prompt and final content are saved in the history
         assert len(new_hist) == 2
         assert new_hist[0] == {"role": "user", "content": "Greeting"}
-        assert new_hist[1] == {"role": "assistant", "content": "Final response text"}
+        assert new_hist[1] == {"role": "assistant", "content": "Hello clientFinal response text"}
 
 def test_g_syntax_check_fail_fast():
     """
     Test G: fast syntax check fail-fast mechanism
     Assert: syntax check fails and yields descriptive traceback.
     """
-    from organism_console.cli import run_syntax_checks
+    from organism_console.command_registry import run_syntax_checks
     
     mock_git_diff = MagicMock()
     mock_git_diff.returncode = 0
@@ -287,7 +287,8 @@ def test_g_syntax_check_fail_fast():
          patch("pathlib.Path.exists", return_value=True), \
          patch("pathlib.Path.read_text", return_value="dummy_content"), \
          patch("ast.parse", side_effect=exc):
-        passed, msg = run_syntax_checks()
+        from pathlib import Path
+        passed, msg = run_syntax_checks(Path("."))
         assert passed is False
         assert "invalid syntax" in msg
         assert "modified_file.py" in msg

@@ -5,7 +5,7 @@ with open(path, 'r', encoding='utf-8') as f:
 new_pool = """# ORDER MATTERS — NVIDIA big models first, OpenRouter fallback, Ollama local last.
 ROLE_POOL = {
     "fast":             ["qwen2.5:3b-instruct"],
-    "coder_small":      ["qwen2.5-coder:3b"],
+    "coder_small":      ["qwen2.5-coder:7b"],
     "general":          ["qwen2.5:7b-instruct",       "qwen2.5:3b-instruct",            "meta/llama-3.3-70b-instruct",             "qwen/qwen-2.5-72b-instruct:free"],
     "coder":            ["qwen2.5-coder:7b",           "qwen2.5-coder:14b",              "nvidia/llama-3.3-nemotron-super-49b-v1",  "mistralai/mistral-large-3-675b-instruct-2512"],
     "reasoning":        ["qwen2.5:14b-instruct",       "qwen3:14b",                      "nvidia/llama-3.1-nemotron-ultra-253b-v1", "deepseek-ai/deepseek-v4-pro"],
@@ -34,3 +34,4 @@ src = re.sub(r'# ORDER MATTERS.*?^}', new_pool, src, flags=re.DOTALL | re.MULTIL
 with open(path, 'w', encoding='utf-8') as f:
     f.write(src)
 print('ROLE_POOL updated with big models only')
+

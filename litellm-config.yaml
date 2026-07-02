@@ -1,0 +1,48 @@
+litellm_settings:
+  num_retries: 2
+  timeout: 20
+  drop_params: true
+
+model_list:
+  # Cloud-first reasoning roles
+  - model_name: coordinator-reasoning
+    litellm_params:
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: planner-reasoning
+    litellm_params:
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: reviewer-reasoning
+    litellm_params:
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: debugger-reasoning
+    litellm_params:
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  # Cloud-first fast/tool roles
+  - model_name: executor-fast
+    litellm_params:
+      api_key: os.environ/GROQ_API_KEY
+
+  - model_name: coder-fast
+    litellm_params:
+      api_key: os.environ/GROQ_API_KEY
+
+  - model_name: tool-runner-tools
+    litellm_params:
+      api_key: os.environ/GROQ_API_KEY
+
+fallbacks:
+  # Cloud → local Ollama fallbacks when rate-limited or failing
+  - { coordinator-reasoning: ["ollama/llama3-groq-tool-use:8b", "ollama/MFDoom/deepseek-r1-tool-calling:8b"] }
+  - { planner-reasoning:     ["ollama/llama3-groq-tool-use:8b", "ollama/MFDoom/deepseek-r1-tool-calling:8b"] }
+  - { reviewer-reasoning:    ["ollama/llama3-groq-tool-use:8b"] }
+  - { debugger-reasoning:    ["ollama/gemma4:e4b"] }
+
+  - { executor-fast:         ["ollama/qwen3:8b-q4_K_M", "ollama/qwen2.5-coder:7b"] }
+  - { coder-fast:            ["ollama/qwen3:8b-q4_K_M", "ollama/qwen2.5-coder:7b"] }
+  - { tool-runner-tools:     ["ollama/llama3-groq-tool-use:8b", "ollama/qwen3:8b-q4_K_M"] }
+
+

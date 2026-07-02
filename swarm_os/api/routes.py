@@ -56,14 +56,13 @@ def get_orchestrator(request: Request) -> Any:
 def _safe_health_report(runtime: Any) -> dict[str, Any]:
     try:
         healing = getattr(runtime, "healing", None)
-        detector = getattr(healing, "detector", None)
-        if detector is None:
-            return {"status": "ok", "health_score": 100, "overall": "healing detector unavailable"}
-        report = detector.status() if hasattr(detector, "status") else detector.check()
+        if healing is None:
+            return {"status": "ok", "health_score": 100, "overall": "healing service unavailable"}
+        report = healing.status() if hasattr(healing, "status") else {}
         return {
             "status": "ok" if report.get("health_score", report.get("recovery_readiness", 0)) >= 80 else "degraded",
             "health_score": report.get("health_score", report.get("recovery_readiness", 0)),
-            "overall": report.get("overall", "active" if report.get("active_anomalies", 0) > 0 else "unknown"),
+            "overall": report.get("overall", "active" if report.get("active_anomalies", 0) > 0 else "healthy"),
         }
     except Exception as exc:
         return {"status": "error", "health_score": 0, "overall": f"health check failed: {exc}"}

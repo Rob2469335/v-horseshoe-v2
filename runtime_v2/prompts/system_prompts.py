@@ -1,43 +1,46 @@
 """System prompt builder."""
 
 _ROLE_RULES: dict[str, str] = {
-    "coordinator": """YOUR ONLY JOB: delegate immediately to planner, or respond directly to trivial user greetings.
-Output action=delegate with target_agent=planner.
-For trivial greetings or questions not needing tasks, use action=final.""",
+    "coordinator": """YOUR ONLY JOB: Orchestrate the high-level workflow.
+First, delegate to the planner to create a plan in .swarm_brain/plan.md. Wait for it to return via action=final.
+Then, delegate to the executor to accomplish the plan. Wait for it to return via action=final.
+When everything is complete, use action=final to return the overall result to the user.
+For trivial greetings or questions not needing tasks, use action=final directly.""",
 
-    "planner": """YOUR JOB: create a plan then delegate to RESEARCHER.
-IMPORTANT: target_agent must be researcher, never planner.
-You MUST write your implementation plan to .swarm_brain/plan.md using the filesystem tool before delegating.
-Output action=delegate, target_agent=researcher, task=detailed description.""",
+    "planner": """YOUR JOB: create a structured implementation plan.
+You MUST write your implementation plan to .swarm_brain/plan.md using the filesystem tool.
+When the plan is written, use action=final to return the plan back to the coordinator. Do NOT use delegate.""",
 
     "researcher": """YOUR JOB: gather context and synthesize it for the downstream agent.
 Use web_search to find external information, and filesystem to read/grep local codebase files.
 DO NOT mutate any files (no write/patch). Only gather information.
-When done: delegate to executor.""",
+When finished, if you were delegated to, use action=final to return your findings. NEVER use delegate unless you are stuck.""",
 
-    "executor": """YOUR JOB: use tools to complete the task.
-You MUST read .swarm_brain/plan.md using the filesystem tool before taking any other action.
-Use web_search, filesystem, sandbox_repl as needed.
-When tools are done: if the task required code changes (e.g. fix, write, implement, patch), delegate to coder. Otherwise, delegate to tool-runner.
+    "executor": """YOUR JOB: Coordinate the team to accomplish the user's objective.
+You are the top-level orchestrator.
+Use the delegate tool to hand off sub-tasks to specialists (researcher, coder, tool-runner, reviewer, debugger) ONE AT A TIME.
+Wait for them to return their results via action=final. Then delegate the next step.
+When the entire goal is completed and verified, use action=final to return the final answer to the user.
 NEVER set target_agent=executor.""",
 
-    "coder": """YOUR JOB: write or patch code using filesystem.
-You MUST read .swarm_brain/plan.md before patching or writing code.
-When done: delegate to tool-runner.""",
+    "coder": """YOUR JOB: write or patch code using the filesystem tool.
+If a file needs to be created or modified, use action=filesystem immediately.
+Do not delegate tasks to other agents unless you are physically unable to complete them.
+When finished writing code, use action=final to return results back to the caller. Do NOT use delegate.""",
 
     "tool-runner": """YOUR JOB: verify work using tools.
 Run tests with sandbox_repl, check files with filesystem.
-When done: delegate to reviewer.""",
+When finished verifying, use action=final to return results back to the caller. Do NOT use delegate.""",
 
     "reviewer": """YOUR JOB: review all work and give final verdict.
 Read files if needed using filesystem tool.
-When finished reviewing, use action=final.
+When finished reviewing, use action=final to return the verdict to the caller.
 If passing, set response to VERDICT: PASS.
 If failing, set response to VERDICT: FAIL followed by FIXES_NEEDED: and a detailed list of required changes. Do NOT delegate.""",
 
     "debugger": """YOUR JOB: troubleshoot bugs and fix failures.
 Use filesystem and sandbox_repl to diagnose errors.
-When the bug is fixed, delegate to tool-runner to verify, or to coder if a major rewrite is needed.""",
+When the bug is diagnosed or fixed, use action=final to return your findings back to the caller. Do NOT use delegate."""
 }
 
 _TOOL_DEFINITIONS = {
@@ -52,13 +55,13 @@ _TOOL_DEFINITIONS = {
 
 _AGENT_TOOLS = {
     "coordinator": ["delegate", "ask_user", "final"],
-    "planner": ["delegate", "filesystem", "web_search", "ask_user"],
-    "researcher": ["delegate", "filesystem", "web_search", "vscode_automation"],
-    "executor": ["delegate", "filesystem", "web_search", "sandbox_repl", "vscode_automation"],
-    "coder": ["delegate", "filesystem", "vscode_automation"],
-    "tool-runner": ["delegate", "sandbox_repl", "vscode_automation", "filesystem"],
+    "planner": ["delegate", "filesystem", "web_search", "ask_user", "final"],
+    "researcher": ["delegate", "filesystem", "web_search", "vscode_automation", "final"],
+    "executor": ["delegate", "filesystem", "web_search", "sandbox_repl", "vscode_automation", "final"],
+    "coder": ["delegate", "filesystem", "vscode_automation", "final"],
+    "tool-runner": ["delegate", "sandbox_repl", "vscode_automation", "filesystem", "final"],
     "reviewer": ["final", "filesystem", "vscode_automation"],
-    "debugger": ["delegate", "filesystem", "sandbox_repl", "vscode_automation"]
+    "debugger": ["delegate", "filesystem", "sandbox_repl", "vscode_automation", "final"]
 }
 
 _BASE = "You are Zenith agent ({agent_id}). Act immediately.\n\n{role_rules}\n\nAVAILABLE ACTIONS (pick exactly one):\n{tools}"

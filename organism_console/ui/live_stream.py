@@ -115,22 +115,23 @@ def stream_prompt(ctx, agent_id, prompt, history):
                 if "delegated_by" in chunk and "agent_id" in chunk:
                     parent = chunk["delegated_by"]
                     child = chunk["agent_id"]
-                    ctx.delegation_chain.append(child)
-                    ctx.save()
+                    if not getattr(ctx, "delegation_chain", None):
+                        ctx.delegation_chain = [parent]
+                    if ctx.delegation_chain[-1] != child:
+                        ctx.delegation_chain.append(child)
+                        ctx.save()
 
                 err_msg = chunk.get("error")
                 if not err_msg and isinstance(chunk.get("result"), dict) and "error" in chunk.get("result", {}):
                     err_msg = chunk["result"]["error"]
 
                 if err_msg:
-                    live.stop()
                     err_agent = chunk.get("agent_id", ctx.active_agent)
                     err_tool = chunk.get("tool", "unknown")
                     ctx.console.print(Panel(
-                        f"[bold red]Error in {err_agent} (Tool: {err_tool}):[/bold red]\\n{err_msg}",
+                        f"[bold red]Error in {err_agent} (Tool: {err_tool}):[/bold red]\n{err_msg}",
                         border_style="red"
                     ))
-                    live.start()
                     continue
 
                 if chunk_type == "model_plan":
@@ -140,18 +141,14 @@ def stream_prompt(ctx, agent_id, prompt, history):
                     ctx.save()
 
                     if ctx.trace_mode:
-                        live.stop()
                         panel = render_trace_panel(
                             "Router Decision & Path Planning",
                             {"requested_role": requested_role, "delegation_path": " -> ".join(ctx.delegation_chain)},
                             "cyan"
                         )
                         ctx.console.print(panel)
-                        live.start()
                     else:
-                        live.stop()
                         ctx.console.print(render_step_micro_ui("planning", f"Formulating plan for role: {requested_role}"))
-                        live.start()
                     continue
 
                 if chunk_type == "model_selected":
@@ -160,7 +157,6 @@ def stream_prompt(ctx, agent_id, prompt, history):
                     ctx.save()
 
                     if ctx.trace_mode:
-                        live.stop()
                         panel = render_trace_panel(
                             "Model Selection",
                             {
@@ -172,17 +168,13 @@ def stream_prompt(ctx, agent_id, prompt, history):
                             "green"
                         )
                         ctx.console.print(panel)
-                        live.start()
                     else:
-                        live.stop()
                         ctx.console.print(render_step_micro_ui("model_selected", f"selected {model}"))
-                        live.start()
                     continue
 
                 if chunk_type == "model_escalation":
                     from_model = chunk.get("from_model")
                     reason = chunk.get("reason")
-                    live.stop()
                     ctx.console.print(
                         f"[bold yellow]  Fallback:[/bold yellow] [dim]{from_model}[/dim] timed out "
                         f"[bold yellow]→ Escalating to cloud[/bold yellow] [dim]({reason})[/dim]"
@@ -194,11 +186,9 @@ def stream_prompt(ctx, agent_id, prompt, history):
                             "red"
                         )
                         ctx.console.print(panel)
-                    live.start()
                     continue
 
                 if chunk_type == "agent_handoff":
-                    live.stop()
                     from_a = chunk.get("from", agent_id)
                     to_a = chunk.get("to", "executor")
                     task = str(chunk.get("task", ""))[:80]
@@ -208,24 +198,19 @@ def stream_prompt(ctx, agent_id, prompt, history):
 
                     handoffs_list.append({"from": from_a, "to": to_a, "task": task})
                     ctx.console.print(render_step_micro_ui("swarm", f"{from_a} → {to_a}: {task}"))
-                    live.start()
                     continue
 
                 if chunk_type == "tool_result":
                     tool = chunk.get("tool")
                     if ctx.trace_mode:
-                        live.stop()
                         panel = render_trace_panel(
                             "Tool Execution Details",
                             {"tool": tool, "executing_model": chunk.get("model", "unknown")},
                             "yellow"
                         )
                         ctx.console.print(panel)
-                        live.start()
                     else:
-                        live.stop()
                         ctx.console.print(render_step_micro_ui("tool_call", f"executing tool {tool}"))
-                        live.start()
                     continue
 
                 if "content" in chunk or "thinking" in chunk:

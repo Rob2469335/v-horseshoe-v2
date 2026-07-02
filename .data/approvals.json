@@ -1609,5 +1609,137 @@
     "decision_note": "should stay approved state or be explicitly overwritten",
     "created_at": "2026-06-26T14:13:07.390379+00:00",
     "decided_at": "2026-06-26T14:13:07.408383+00:00"
+  },
+  {
+    "request_id": "0fefeacaaef744508642f4f890989835",
+    "component": "system",
+    "action": "restart_component",
+    "reason": "manual review required",
+    "status": "executed",
+    "decision_note": "approved for execution",
+    "created_at": "2026-07-01T14:56:28.936271+00:00",
+    "decided_at": "2026-07-01T14:56:28.947471+00:00",
+    "executed_at": "2026-07-01T14:56:28.959265+00:00",
+    "execution_result": {}
+  },
+  {
+    "request_id": "4a826b66795c4894847e40ca04950632",
+    "component": "system",
+    "action": "restart_component",
+    "reason": "manual review required",
+    "status": "rejected",
+    "decision_note": "should stay approved state or be explicitly overwritten",
+    "created_at": "2026-07-01T14:56:29.008122+00:00",
+    "decided_at": "2026-07-01T14:56:29.044890+00:00"
+  },
+  {
+    "request_id": "a844cba662f44c798852f8e90a76c59a",
+    "component": "system",
+    "action": "restart_component",
+    "reason": "manual review required",
+    "status": "executed",
+    "decision_note": "approved for execution",
+    "created_at": "2026-07-01T15:13:52.665996+00:00",
+    "decided_at": "2026-07-01T15:13:52.674208+00:00",
+    "executed_at": "2026-07-01T15:13:52.682885+00:00",
+    "execution_result": {}
+  },
+  {
+    "request_id": "ccac235c0f27440bad80e7f77e4ef9dc",
+    "component": "system",
+    "action": "restart_component",
+    "reason": "manual review required",
+    "status": "rejected",
+    "decision_note": "should stay approved state or be explicitly overwritten",
+    "created_at": "2026-07-01T15:13:52.706092+00:00",
+    "decided_at": "2026-07-01T15:13:52.728538+00:00"
+  },
+  {
+    "request_id": "08a539460b214b2c97975b3eaacc5a8e",
+    "component": "system",
+    "action": "restart_component",
+    "reason": "manual review required",
+    "status": "executed",
+    "decision_note": "approved for execution",
+    "created_at": "2026-07-01T15:16:04.237972+00:00",
+    "decided_at": "2026-07-01T15:16:04.250749+00:00",
+    "executed_at": "2026-07-01T15:16:04.265067+00:00",
+    "execution_result": {}
+  },
+  {
+    "request_id": "c506a2cb7ac24e77a3d327c8dbbed0fa",
+    "component": "system",
+    "action": "restart_component",
+    "reason": "manual review required",
+    "status": "rejected",
+    "decision_note": "should stay approved state or be explicitly overwritten",
+    "created_at": "2026-07-01T15:16:04.310789+00:00",
+    "decided_at": "2026-07-01T15:16:04.347310+00:00"
+  },
+  {
+    "request_id": "179c5b420a2a418788b5ec8aa8b1effc",
+    "component": "system",
+    "action": "restart_component",
+    "reason": "manual review required",
+    "status": "executed",
+    "decision_note": "approved for execution",
+    "created_at": "2026-07-01T15:17:31.578497+00:00",
+    "decided_at": "2026-07-01T15:17:31.589322+00:00",
+    "executed_at": "2026-07-01T15:17:31.599871+00:00",
+    "execution_result": {}
+  },
+  {
+    "request_id": "e9542c60c33f4df2931950bf76f79a0e",
+    "component": "system",
+    "action": "restart_component",
+    "reason": "manual review required",
+    "status": "rejected",
+    "decision_note": "should stay approved state or be explicitly overwritten",
+    "created_at": "2026-07-01T15:17:31.639889+00:00",
+    "decided_at": "2026-07-01T15:17:31.677575+00:00"
+  },
+  {
+    "request_id": "a2de6fbee0534b19b4deb76a9b5d97a0",
+    "component": "system",
+    "action": "restart_component",
+    "reason": "manual review required",
+    "status": "executed",
+    "decision_note": "approved for execution",
+    "created_at": "2026-07-01T15:29:14.367019+00:00",
+    "decided_at": "2026-07-01T15:29:14.377902+00:00",
+    "executed_at": "2026-07-01T15:29:14.387505+00:00",
+    "execution_result": {}
+  },
+  {
+    "request_id": "195b0093508746829f31ec4b9531edea",
+    "component": "system",
+    "action": "restart_component",
+    "reason": "manual review required",
+    "status": "rejected",
+    "decision_note": "should stay approved state or be explicitly overwritten",
+    "created_at": "2026-07-01T15:29:14.419674+00:00",
+    "decided_at": "2026-07-01T15:29:14.448235+00:00"
+  },
+  {
+    "request_id": "41bb9d1ce3e744bd9c5d6670e19bd76f",
+    "component": "system",
+    "action": "restart_component",
+    "reason": "manual review required",
+    "status": "executed",
+    "decision_note": "approved for execution",
+    "created_at": "2026-07-01T15:39:58.696724+00:00",
+    "decided_at": "2026-07-01T15:39:58.707324+00:00",
+    "executed_at": "2026-07-01T15:39:58.718375+00:00",
+    "execution_result": {}
+  },
+  {
+    "request_id": "21fb1c96dd904cd3ab69eb4e16da3f74",
+    "component": "system",
+    "action": "restart_component",
+    "reason": "manual review required",
+    "status": "rejected",
+    "decision_note": "should stay approved state or be explicitly overwritten",
+    "created_at": "2026-07-01T15:39:58.756189+00:00",
+    "decided_at": "2026-07-01T15:39:58.789061+00:00"
   }
 ]

@@ -87,7 +87,7 @@ def main() -> None:
 
     for gen in range(args.generations):
         try:
-            summary = asyncio.run(kernel.step())
+            summary = kernel.step()
             top      = summary["top_organisms"]
             diversity = summary.get("diversity", {})
 

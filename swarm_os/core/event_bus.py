@@ -22,8 +22,11 @@ class EventBus:
         }
         
         # 1. Persist to Disk (for history/recovery)
-        with open(self.persistent_path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(event) + "\n")
+        try:
+            with open(self.persistent_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(event) + "\n")
+        except Exception:
+            pass  # Prevent race conditions or serialization errors from crashing the app
             
         # 2. Dispatch to SSE Subscribers (Real-time)
         self._dispatch_to_subscribers(event)

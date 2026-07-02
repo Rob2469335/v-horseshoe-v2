@@ -13,7 +13,7 @@ _SEMAPHORE_LIMIT = max(1, int(os.environ.get("SWARMMODELCONCURRENCY", "2")))
 _THREAD_POOL = ThreadPoolExecutor(max_workers=_SEMAPHORE_LIMIT)
 MODEL_SEMAPHORE = asyncio.Semaphore(_SEMAPHORE_LIMIT)
 
-SWARM_MODEL = os.environ.get("SWARMMODEL", "qwen3.5:9b")
+SWARM_MODEL = os.environ.get("SWARMMODEL", "llama3-groq-tool-use:8b")
 EMBED_MODEL = os.environ.get("EMBEDMODEL", "nomic-embed-text:latest")
 FAST_MODEL = os.environ.get("FASTMODEL", "mistral-nemo:12b")
 AGENT_MODEL = os.environ.get("SWARMAGENTMODEL", os.environ.get("ROUTEAGENTMODEL", SWARM_MODEL))

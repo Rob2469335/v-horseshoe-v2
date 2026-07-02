@@ -153,6 +153,9 @@ class ModelPickerApp(App):
             
             label = f"{agent_id.upper():<12} - {a.get('model_role', '')}\n[dim]Current: {current_model}[/dim]"
             agent_list.add_option(Option(label, id=agent_id))
+            
+        if agent_list.option_count > 0:
+            agent_list.highlighted = 0
 
     def sort_models(self, m):
         return (0 if m['model'] in self.favorites else 1, m['model'])
@@ -174,10 +177,19 @@ class ModelPickerApp(App):
             seen.add(m['model'])
             fav = "★ " if m['model'] in self.favorites else "  "
             model_list.add_option(Option(f"{fav}{m['model']}", id=m['model']))
+            
+        if model_list.option_count > 0:
+            model_list.highlighted = 0
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "search_input":
             self.populate_models(event.value)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self.action_submit()
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        self.action_submit()
 
     def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
         if event.option_list.id == "agent_list":

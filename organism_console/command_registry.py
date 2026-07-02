@@ -5,6 +5,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 import ast
 import re
 import concurrent.futures
+import subprocess
 from pathlib import Path
 from rich.console import Console
 from rich.table import Table
@@ -12,6 +13,39 @@ from rich.panel import Panel
 from rich.box import SIMPLE
 
 from organism_console.renderer import render_dashboard
+
+def run_syntax_checks(root: Path) -> tuple[bool, str]:
+    try:
+        git_diff = subprocess.run(
+            ["git", "diff", "--name-only"],
+            capture_output=True,
+            text=True,
+            cwd=root,
+            timeout=5
+        )
+        if git_diff.returncode == 0:
+            modified_files = [line.strip() for line in git_diff.stdout.splitlines() if line.strip()]
+            for f in modified_files:
+                file_path = root / f
+                if file_path.suffix == ".py" and file_path.exists():
+                    try:
+                        content = file_path.read_text(encoding="utf-8", errors="ignore")
+                        ast.parse(content, filename=str(file_path))
+                    except SyntaxError as exc:
+                        lines = content.splitlines()
+                        err_line = exc.lineno
+                        context_lines = []
+                        if err_line:
+                            start = max(0, err_line - 4)
+                            end = min(len(lines), err_line + 3)
+                            for idx in range(start, end):
+                                prefix = ">>> " if idx + 1 == err_line else "    "
+                                context_lines.append(f"{prefix}{idx+1}: {lines[idx]}")
+                        context_str = "\n".join(context_lines)
+                        return False, f"File: {f}\nError: {exc.msg} at line {exc.lineno}\nCode Context:\n```python\n{context_str}\n```"
+    except Exception as e:
+        return False, f"Syntax checks crashed: {e}"
+    return True, ""
 
 
 
@@ -880,40 +914,7 @@ def cmd_debug(ctx: CommandContext, args: List[str]) -> None:
     ctx.console.print(f"[bold red]✗ Execution failed with exit code {exit_code}.[/bold red]")
     ctx.console.print(Panel(stderr or stdout, title="Error Output / Stacktrace", border_style="red"))
     
-    def _local_syntax_checks(root: Path) -> tuple[bool, str]:
-        try:
-            git_diff = subprocess.run(
-                ["git", "diff", "--name-only"],
-                capture_output=True,
-                text=True,
-                cwd=root,
-                timeout=5
-            )
-            if git_diff.returncode == 0:
-                modified_files = [line.strip() for line in git_diff.stdout.splitlines() if line.strip()]
-                for f in modified_files:
-                    file_path = root / f
-                    if file_path.suffix == ".py" and file_path.exists():
-                        try:
-                            content = file_path.read_text(encoding="utf-8", errors="ignore")
-                            ast.parse(content, filename=str(file_path))
-                        except SyntaxError as exc:
-                            lines = content.splitlines()
-                            err_line = exc.lineno
-                            context_lines = []
-                            if err_line:
-                                start = max(0, err_line - 4)
-                                end = min(len(lines), err_line + 3)
-                                for idx in range(start, end):
-                                    prefix = ">>> " if idx + 1 == err_line else "    "
-                                    context_lines.append(f"{prefix}{idx+1}: {lines[idx]}")
-                            context_str = "\n".join(context_lines)
-                            return False, f"File: {f}\nError: {exc.msg} at line {exc.lineno}\nCode Context:\n```python\n{context_str}\n```"
-        except Exception as e:
-            return False, f"Syntax checks crashed: {e}"
-        return True, ""
-
-    syntax_passed, syntax_error_msg = _local_syntax_checks(project_root)
+    syntax_passed, syntax_error_msg = run_syntax_checks(project_root)
     if not syntax_passed:
         ctx.console.print(Panel(
             syntax_error_msg,

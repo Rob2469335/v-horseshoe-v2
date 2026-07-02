@@ -232,6 +232,7 @@ def create_app() -> FastAPI:
                 from runtime_v2.services.fallback_manager import get_fallback_stats
                 return {
                     "status": "ok" if ollama_ok else "degraded",
+                    "ready": ollama_ok,
                     "ollama_reachable": ollama_ok,
                     "event_count": len(all_events),
                     "installed_model_count": len(models),
@@ -248,6 +249,7 @@ def create_app() -> FastAPI:
             models = await client.list_models()
             return {
                 "status": "ok",
+                "ready": True,
                 "ollama_reachable": True,
                 "event_count": 0,
                 "installed_model_count": len(models),
@@ -256,6 +258,7 @@ def create_app() -> FastAPI:
         except Exception:
             return {
                 "status": "degraded",
+                "ready": False,
                 "ollama_reachable": False,
                 "event_count": 0,
                 "installed_model_count": 0,

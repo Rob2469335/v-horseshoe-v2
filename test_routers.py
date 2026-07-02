@@ -27,7 +27,7 @@ async def test_all():
     providers = {
         'OpenRouter (Llama 3.3 70B)': 'openrouter/meta-llama/llama-3.3-70b-instruct:free',
         'Gemini (Flash)': 'gemini/gemini-1.5-flash',
-        'Ollama (Qwen 3.5 9B)': 'ollama/qwen3.5:9b',
+        'Ollama (Qwen 3.5 9B)': 'ollama/llama3-groq-tool-use:8b',
     }
     
     for name, model in providers.items():
@@ -46,3 +46,4 @@ async def test_all():
 
 if __name__ == '__main__':
     asyncio.run(test_all())
+

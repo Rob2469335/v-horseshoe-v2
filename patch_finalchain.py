@@ -6,7 +6,7 @@ import re
 new_pool = """# ORDER: Local Ollama -> OpenRouter free fusion -> NVIDIA free -> OpenRouter paid
 ROLE_POOL = {
     "fast":             ["qwen2.5:3b-instruct"],
-    "coder_small":      ["qwen2.5-coder:3b"],
+    "coder_small":      ["qwen2.5-coder:7b"],
     "general":          ["qwen2.5:7b-instruct",       "openrouter/fusion",               "nvidia/llama-3.1-nemotron-nano-8b-v1",    "deepseek/deepseek-v4-flash"],
     "coder":            ["qwen2.5-coder:7b",           "qwen3-coder:480b-cloud",          "openrouter/fusion",                       "nvidia/llama-3.1-nemotron-nano-8b-v1",   "deepseek/deepseek-v4-flash"],
     "reasoning":        ["qwen2.5:14b-instruct",       "qwen3:14b",                       "openrouter/fusion",                       "nvidia/llama-3.1-nemotron-nano-8b-v1",   "deepseek/deepseek-v4-flash"],
@@ -32,3 +32,4 @@ src = re.sub(r'# ORDER.*?^}', new_pool, src, flags=re.DOTALL | re.MULTILINE)
 with open(path, 'w', encoding='utf-8') as f:
     f.write(src)
 print('ROLE_POOL updated — Ollama 480b -> OpenRouter fusion -> NVIDIA -> DeepSeek V4-Flash')
+
