@@ -11,7 +11,7 @@ $Models = @(
     "qwen2.5-coder:7b"
 )
 
-$Roles = @("coordinator","planner","executor","coder","tool-runner","debugger","reviewer")
+$Roles = @("coordinator","planner","researcher","executor","coder","tool-runner","debugger","reviewer")
 $TeacherModel = "qwen2.5-coder:7b"
 $OutputDir = Join-Path $PWD "output"
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
@@ -184,6 +184,7 @@ $results | Group-Object Model | ForEach-Object {
         Runs     = $_.Count
     }
 } | Sort-Object AvgScore -Descending | Format-Table -AutoSize
+
 
 
 

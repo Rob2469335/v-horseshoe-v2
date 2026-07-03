@@ -10,11 +10,11 @@ class MockOrchestrator:
 def agent_service():
     return AgentService(orchestrator=MockOrchestrator())
 
-def test_seven_agents_registered(agent_service):
+def test_agents_registered(agent_service):
     agents = agent_service.list_agents()
-    assert len(agents) == 7
+    assert len(agents) == 8
     ids = {a["id"] for a in agents}
-    assert ids == {"coordinator", "planner", "executor", "coder", "debugger", "tool-runner", "reviewer"}
+    assert ids == {"coordinator", "planner", "researcher", "executor", "coder", "tool-runner", "reviewer", "debugger"}
 
     coordinator = agent_service.get_agent("coordinator")
     assert coordinator["role"] == "coordinator"
@@ -65,7 +65,7 @@ async def test_delegation_emits_handoff_and_depth_limit(agent_service, monkeypat
     assert handoff_chunk["to"] == "planner"
 
 @pytest.mark.asyncio
-async def test_complex_task_forces_full_seven_agent_chain(monkeypatch):
+async def test_complex_task_forces_full_eight_agent_chain(monkeypatch):
     import swarm_os.services.agent_service as agent_service_mod
 
     # Each agent delegates to the next in the chain; reviewer gives a final answer
@@ -173,5 +173,6 @@ def test_cli_delegation_chain_update():
             ctx.delegation_chain.append(child)
 
     assert ctx.delegation_chain == ["coordinator", "planner"]
+
 
 

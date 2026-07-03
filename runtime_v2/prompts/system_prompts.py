@@ -64,7 +64,7 @@ _AGENT_TOOLS = {
     "debugger": ["delegate", "filesystem", "sandbox_repl", "vscode_automation", "final"]
 }
 
-_BASE = "You are Zenith agent ({agent_id}). Act immediately.\n\n{role_rules}\n\nAVAILABLE ACTIONS (pick exactly one):\n{tools}"
+_BASE = "You are Zenith agent ({agent_id}). Act immediately.\n\n{role_rules}\n\nAVAILABLE ACTIONS (pick exactly one):\n{tools}\n\nCRITICAL: You MUST respond with ONLY a valid JSON object matching the chosen action's parameters. Do not wrap it in markdown block quotes. Provide no other text."
 
 def build(agent_id: str) -> str:
     rules = _ROLE_RULES.get(agent_id, "Complete the task using available actions.")

@@ -10,6 +10,7 @@ from rich.box import SIMPLE
 
 from organism_console.config import BACKEND_URL, VERSION, START_TIME
 from organism_console.api_client import call_api
+from swarm_os.config.settings import settings
 
 _WEATHER_CACHE = "Weather: [dim]Syncing...[/dim]"
 _WEATHER_LAST_FETCH = 0
@@ -32,8 +33,8 @@ def get_system_stats():
 def _refresh_banner_cache():
     global _BANNER_CACHE
     try:
-        agents_resp = requests.get(f"{BACKEND_URL}/agents", timeout=3, verify=False)
-        status_resp = requests.get(f"{BACKEND_URL}/status", timeout=3, verify=False)
+        agents_resp = requests.get(f"{BACKEND_URL}/agents", timeout=3, verify=settings.ssl_verify)
+        status_resp = requests.get(f"{BACKEND_URL}/status", timeout=3, verify=settings.ssl_verify)
         with _BANNER_LOCK:
             if agents_resp and agents_resp.status_code == 200:
                 _BANNER_CACHE["agents"] = agents_resp.json()
@@ -116,7 +117,7 @@ def run_startup_checks(ctx):
     def check(name, url):
         try:
             t0 = time.time()
-            r = requests.get(url, timeout=2, verify=False)
+            r = requests.get(url, timeout=2, verify=settings.ssl_verify)
             ms = int((time.time() - t0) * 1000)
             ok = r.status_code == 200
             extra = ""

@@ -96,6 +96,7 @@ def stream_prompt(ctx, agent_id, prompt, history):
     ctx.console.print(Rule(style="dim blue"))
     if not getattr(ctx, "delegation_chain", None):
         ctx.delegation_chain = [agent_id]
+    ctx.last_stream_status = "interrupted"
     ctx.save()
 
     _stream_errored = False
@@ -329,11 +330,13 @@ def stream_prompt(ctx, agent_id, prompt, history):
                     perf["count"] += 1
                     perf["last"] = elapsed_total
 
+                    ctx.last_stream_status = "completed"
                     ctx.save()
                     _tokens_counted = True
                     return new_history
 
                 if chunk_type == "ask_user":
+                    ctx.last_stream_status = "completed"
                     question = chunk.get("question", "Input requested:")
                     options = chunk.get("options", [])
 

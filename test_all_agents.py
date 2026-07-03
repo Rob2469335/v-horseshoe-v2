@@ -1,16 +1,16 @@
 import asyncio
 from runtime_v2.api.agent_service_v2 import AgentServiceV2
-from runtime_v2.services.model_registry import _AGENT_MODELS
+from runtime_v2.services.model_registry import AGENT_MODELS
 import runtime_v2.services.stream_runner  # Trigger the monkey patches
 
 async def main():
     service = AgentServiceV2()
-    print("Testing all 7 agents in the registry...")
+    print("Testing all 8 agents in the registry...")
     
-    agents = list(_AGENT_MODELS.keys())
+    agents = list(AGENT_MODELS.keys())
     
     for agent in agents:
-        print(f"\n--- Testing Agent: {agent} ({_AGENT_MODELS[agent][0]}) ---")
+        print(f"\n--- Testing Agent: {agent} ({AGENT_MODELS[agent][0]}) ---")
         try:
             messages = [{"role": "user", "content": "Reply with exactly one word: OK"}]
             success = False
@@ -31,3 +31,5 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+

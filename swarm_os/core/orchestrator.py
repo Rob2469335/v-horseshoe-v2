@@ -189,7 +189,7 @@ class Orchestrator:
         }
 
         if not stream:
-            async with httpx.AsyncClient(timeout=120.0, verify=False) as client:
+            async with httpx.AsyncClient(timeout=120.0, verify=swarm_settings.ssl_verify) as client:
                 resp = await client.post(url, json=payload, headers=headers)
                 resp.raise_for_status()
                 data = resp.json()
@@ -200,7 +200,7 @@ class Orchestrator:
 
     async def _cloud_stream_generate(self, url: str, payload: dict, headers: dict):
         """Async generator that streams from a cloud provider."""
-        async with httpx.AsyncClient(timeout=300.0, verify=False) as client:
+        async with httpx.AsyncClient(timeout=300.0, verify=swarm_settings.ssl_verify) as client:
             async with client.stream("POST", url, json=payload, headers=headers) as response:
                 response.raise_for_status()
                 async for line in response.aiter_lines():

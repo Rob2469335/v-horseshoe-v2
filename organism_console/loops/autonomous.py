@@ -10,7 +10,7 @@ from rich.prompt import Confirm
 
 from organism_console.config import PROJECT_ROOT
 from organism_console.api_client import call_api
-
+from organism_console.ui.live_stream import stream_prompt
 def run_syntax_checks() -> tuple[bool, str]:
     try:
         git_diff = subprocess.run(
@@ -201,17 +201,22 @@ def run_autonomous_goal_loop(goal: str, cmd_ctx):
     for attempt in range(1, max_attempts + 1):
         console.print(Rule(f"Attempt {attempt}/{max_attempts}", style="magenta dim"))
         
-        history = stream_prompt(entry_agent, current_prompt, history)
+        history = stream_prompt(cmd_ctx.state, entry_agent, current_prompt, history)
         
-        console.print("[dim]Running fast syntax checks...[/dim]")
-        syntax_passed, syntax_error_msg = run_syntax_checks()
-        if not syntax_passed:
+        if getattr(cmd_ctx.state, "last_stream_status", "") != "completed":
             passed = False
-            logs = f"Syntax Error detected in modified files:\\n\\n{syntax_error_msg}"
-            console.print("[bold red]✗ Fast Syntax Check Failed.[/bold red]")
+            logs = "Agent stream interrupted prematurely (e.g., hit max tokens, fell into a repetition loop, or the backend crashed).\\nNo changes were finalized."
+            console.print("[bold red]✗ Agent execution failed (Interrupted).[/bold red]")
         else:
-            console.print("[dim]Running test verification suite...[/dim]")
-            passed, logs = run_test_suite(goal)
+            console.print("[dim]Running fast syntax checks...[/dim]")
+            syntax_passed, syntax_error_msg = run_syntax_checks()
+            if not syntax_passed:
+                passed = False
+                logs = f"Syntax Error detected in modified files:\\n\\n{syntax_error_msg}"
+                console.print("[bold red]✗ Fast Syntax Check Failed.[/bold red]")
+            else:
+                console.print("[dim]Running test verification suite...[/dim]")
+                passed, logs = run_test_suite(goal)
         
         if passed:
             console.print()
