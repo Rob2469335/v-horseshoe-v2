@@ -1572,3 +1572,53 @@ def cmd_compress(ctx: CommandContext, args: List[str]) -> None:
     except Exception as e:
         ctx.console.print(f"[red]Error during compression: {e}[/red]")
 
+
+@registry.register("autoassign", "Analyze local models via cloud benchmarks and auto-assign them to agents.")
+def cmd_autoassign(ctx: CommandContext, args: List[str]) -> None:
+    ctx.console.print("[cyan]Requesting dynamic AI auto-assignment from backend...[/cyan]")
+    resp = ctx.call_api("/models/autoassign", "POST", {})
+    if not resp or resp.status_code != 200:
+        ctx.console.print(f"[bold red]Failed to auto-assign:[/bold red] {resp.text if resp else 'No response'}")
+        return
+    mapping = resp.json().get("mapping", {})
+    if not mapping:
+        ctx.console.print("[bold red]No valid mapping returned.[/bold red]")
+        return
+    table = Table(box=SIMPLE, header_style="bold cyan")
+    table.add_column("Agent Role", style="bold green")
+    table.add_column("Assigned Model", style="yellow")
+    for role, model in mapping.items():
+        table.add_row(role, model)
+    ctx.console.print(Panel(table, title="[bold cyan]Dynamic Auto-Assignment Complete[/bold cyan]", border_style="cyan"))
+
+
+@registry.register("local", "Force local-only routing for model fallbacks.")
+def cmd_local(ctx: CommandContext, args: List[str]) -> None:
+    import os
+    os.environ["SWARM_ROUTING_MODE"] = "local_only"
+    ctx.console.print("[bold green]Routing mode:[/bold green] local_only")
+
+@registry.register("auto", "Use local-first routing, then cloud fallbacks if needed.")
+def cmd_auto(ctx: CommandContext, args: List[str]) -> None:
+    import os
+    os.environ["SWARM_ROUTING_MODE"] = "auto"
+    ctx.console.print("[bold cyan]Routing mode:[/bold cyan] auto")
+
+@registry.register("cloud-on", "Allow cloud escalation in fallback routing.")
+def cmd_cloud_on(ctx: CommandContext, args: List[str]) -> None:
+    import os
+    os.environ["SWARM_ROUTING_MODE"] = "cloud_allowed"
+    ctx.console.print("[bold yellow]Routing mode:[/bold yellow] cloud_allowed")
+
+@registry.register("routing", "Show current routing mode.")
+def cmd_routing(ctx: CommandContext, args: List[str]) -> None:
+    import os
+    mode = os.environ.get("SWARM_ROUTING_MODE", "auto")
+    ctx.console.print(f"[bold magenta]Routing mode:[/bold magenta] {mode}")
+
+
+@registry.register("cloud-off", "Disable cloud fallback routing and stay local-only.")
+def cmd_cloud_off(ctx: CommandContext, args: List[str]) -> None:
+    import os
+    os.environ["SWARM_ROUTING_MODE"] = "local_only"
+    ctx.console.print("[bold green]Routing mode:[/bold green] local_only")

@@ -10,9 +10,9 @@ AGENT_MODELS: dict[str, Tuple[str, str]] = {
     "researcher": ("llama3-groq-tool-use:8b", "ollama"),
     "executor": ("qwen2.5-coder:7b", "ollama"),
     "coder": ("qwen2.5-coder:7b", "ollama"),
-    "tool-runner": ("llama3-groq-tool-use:8b", "ollama"),
+    "tool-runner": ("qwen3:8b-q4_K_M", "ollama"),
     "reviewer": ("llama3-groq-tool-use:8b", "ollama"),
-    "debugger": ("MFDoom/deepseek-r1-tool-calling:8b", "ollama"),
+    "debugger": ("qwen3.5:9b", "ollama"),
 }
 
 CONFIG_FILE = Path(__file__).parent.parent.parent / "config" / "agent_models.json"
@@ -31,7 +31,17 @@ load_overrides()
 
 def save_overrides():
     CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(json.dumps(AGENT_MODELS))
+    CONFIG_FILE.write_text(json.dumps(AGENT_MODELS, indent=2))
+
+def update_model_mapping(new_mapping: dict[str, str]):
+    """Update AGENT_MODELS dynamically and persist to disk.
+    new_mapping is expected to be {agent_id: model_name}.
+    We assume backend is 'ollama' for all auto-assigned local models.
+    """
+    for agent_id, model_name in new_mapping.items():
+        if agent_id in AGENT_MODELS:
+            AGENT_MODELS[agent_id] = (model_name, "ollama")
+    save_overrides()
 
 def get_model(agent_id: str) -> Tuple[str, str]:
     return AGENT_MODELS.get(agent_id, ("llama3-groq-tool-use:8b", "ollama"))
@@ -53,3 +63,5 @@ def get_predicted_next_model(current_agent_id: str) -> str:
         return ""
     model, backend = get_model(next_agent)
     return model if backend == "ollama" else ""
+
+

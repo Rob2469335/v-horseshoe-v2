@@ -20,7 +20,7 @@ _DEFAULTS = {
 }
 
 class AgentServiceV2:
-    def __init__(self, orchestrator=None, cache=None, settings=None):
+    def __init__(self, orchestrator: Any = None, cache: Any = None, settings: Any = None) -> None:
         self.orchestrator = orchestrator
         self._background_tasks = set()
         self._agents: Dict[str, dict] = {
@@ -241,11 +241,11 @@ class AgentServiceV2:
             messages.append({"role": "user",
                 "content": f"TOOL RESULT ({action}):\n{json.dumps(result, ensure_ascii=False)}\n\nContinue."})
 
-            tool_turns = [i for i, m in enumerate(messages) if m["role"] == "assistant" and m["content"].startswith("I called")]
-            if len(tool_turns) > 2:
-                first_to_keep = tool_turns[-2]
-                first_to_keep = max(first_to_keep, initial_messages_len)
-                messages = messages[:initial_messages_len] + messages[first_to_keep:]
+            new_messages = messages[initial_messages_len:]
+            new_tool_turns = [i for i, m in enumerate(new_messages) if m["role"] == "assistant" and m["content"].startswith("I called")]
+            if len(new_tool_turns) > 2:
+                first_to_keep = new_tool_turns[-2]
+                messages = messages[:initial_messages_len] + new_messages[first_to_keep:]
 
         yield {"agent_id": agent_id, "type": "final", "model": model,
                "provider": provider, "content": "[System: max turns reached]"}

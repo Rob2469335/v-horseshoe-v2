@@ -9,6 +9,7 @@ from typing import Any, Dict, List, AsyncGenerator
 
 import httpx
 
+from swarm_os.config.settings import settings
 from swarm_os.agent_runtime import AgentRuntime
 from swarm_os.core.event_bus import event_bus
 
@@ -42,7 +43,7 @@ async def fetch_live_models_if_needed():
     ):
         return
     try:
-        async with httpx.AsyncClient(timeout=5.0, verify=False) as client:
+        async with httpx.AsyncClient(timeout=5.0, verify=settings.ssl_verify) as client:
             resp = await client.get("https://openrouter.ai/api/v1/models")
             if resp.status_code == 200:
                 data = resp.json()
@@ -59,7 +60,7 @@ async def fetch_live_models_if_needed():
     if api_key:
         try:
             headers = {"Authorization": f"Bearer {api_key}"}
-            async with httpx.AsyncClient(timeout=5.0, verify=False) as client:
+            async with httpx.AsyncClient(timeout=5.0, verify=settings.ssl_verify) as client:
                 resp = await client.get("https://integrate.api.nvidia.com/v1/models", headers=headers)
                 if resp.status_code == 200:
                     data = resp.json()
@@ -79,7 +80,7 @@ async def fetch_live_models_if_needed():
     if groq_key:
         try:
             headers = {"Authorization": f"Bearer {groq_key}"}
-            async with httpx.AsyncClient(timeout=5.0, verify=False) as client:
+            async with httpx.AsyncClient(timeout=5.0, verify=settings.ssl_verify) as client:
                 resp = await client.get("https://api.groq.com/openai/v1/models", headers=headers)
                 if resp.status_code == 200:
                     data = resp.json()
@@ -577,7 +578,7 @@ class AgentService:
                     }
 
                 try:
-                    async with httpx.AsyncClient(timeout=300.0, verify=False) as client:
+                    async with httpx.AsyncClient(timeout=300.0, verify=settings.ssl_verify) as client:
                         async with client.stream(
                             "POST",
                             url,

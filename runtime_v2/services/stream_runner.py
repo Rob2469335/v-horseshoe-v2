@@ -3,12 +3,12 @@ import json
 import re
 import logging
 import asyncio
+import os
 from typing import AsyncGenerator, Optional
 import litellm
 from dotenv import load_dotenv
 from runtime_v2.services.model_registry import get_model
 from runtime_v2.services.fallback_manager import get_live_fallbacks
-from functools import lru_cache
 from datetime import datetime, timedelta
 
 load_dotenv()
@@ -18,9 +18,8 @@ litellm.suppress_debug_info = True
 
 log = logging.getLogger(__name__)
 
-# Performance: Cache for recent tool decisions (TTL: 5 min)
 _decision_cache = {}
-_cache_ttl = 300  # seconds
+_cache_ttl = 300
 
 TOOL_CALL_SCHEMA = {
     "type": "object",
@@ -29,18 +28,18 @@ TOOL_CALL_SCHEMA = {
             "delegate","websearch","filesystem","sandboxrepl","vscodeautomation","final"
         ]},
         "target_agent": {"type": "string"},
-        "task":         {"type": "string"},
-        "query":        {"type": "string"},
-        "operation":    {"type": "string"},
-        "path":         {"type": "string"},
-        "content":      {"type": "string"},
-        "old":          {"type": "string"},
-        "new":          {"type": "string"},
-        "language":     {"type": "string"},
-        "code":         {"type": "string"},
-        "command":      {"type": "string"},
-        "args":         {"type": "array", "items": {"type": "string"}},
-        "response":     {"type": "string"}
+        "task": {"type": "string"},
+        "query": {"type": "string"},
+        "operation": {"type": "string"},
+        "path": {"type": "string"},
+        "content": {"type": "string"},
+        "old": {"type": "string"},
+        "new": {"type": "string"},
+        "language": {"type": "string"},
+        "code": {"type": "string"},
+        "command": {"type": "string"},
+        "args": {"type": "array", "items": {"type": "string"}},
+        "response": {"type": "string"}
     },
     "required": ["action"]
 }
@@ -49,11 +48,13 @@ TOOL_DECISION_SYSTEM = (
     "\n\n*** CRITICAL FORMATTING INSTRUCTION ***\n"
     "You must express your decision as a SINGLE VALID JSON OBJECT.\n"
     "The JSON must have the key \"action\" which must be one of:\n"
-    "  delegate, websearch, filesystem, sandboxrepl, vscodeautomation, final\n\n"
+    "  delegate, web_search, filesystem, sandbox_repl, vscodeautomation, final\n\n"
     "Example valid outputs:\n"
     "{\"action\": \"delegate\", \"target_agent\": \"coder\", \"task\": \"Write the function\"}\n"
     "{\"action\": \"final\", \"response\": \"Here is my answer...\"}\n"
     "{\"action\": \"web_search\", \"query\": \"Python multiprocessing best practices\"}\n\n"
+    "Do not use any other top-level keys unless needed for the selected action.\n"
+    "For action=final, use only: {\"action\":\"final\",\"response\":\"...\"}\n"
     "DO NOT output anything other than the JSON object."
 )
 
@@ -64,53 +65,44 @@ JSON_REPAIR_PROMPT = (
     "Use an 'action' key."
 )
 
-def _get_litellm_model(agent_id: str, fallback_model: str) -> str:
-    """Resolve the litellm provider/model string based on the registry backend."""
-    from runtime_v2.services.model_registry import get_model
-    default_model, backend = get_model(agent_id)
+def _get_routing_mode() -> str:
+    mode = os.getenv("SWARM_ROUTING_MODE", "auto").strip().lower()
+    if mode not in ("auto", "local_only", "cloud_allowed"):
+        return "auto"
+    return mode
 
+def _get_litellm_model(agent_id: str, fallback_model: str) -> str:
+    default_model, backend = get_model(agent_id)
     model = fallback_model if fallback_model else default_model
 
     if model.startswith("router/"):
         model = model.split("/", 1)[1]
 
-    if model.startswith("ollama/"):
+    if model.startswith("ollama_chat/") or model.startswith("ollama/"):
         return model
 
     if "/" in model:
         return model
 
     if backend == "router":
-        if "/" in model:
-            return model
-        return f"ollama/{model}"
+        return f"ollama_chat/{model}"
 
     if backend == "ollama":
-        return f"ollama/{model}"
-    elif backend == "openrouter":
+        return f"ollama_chat/{model}"
+    if backend == "openrouter":
         return f"openrouter/{model}"
-    elif backend == "groq":
+    if backend == "groq":
         return f"groq/{model}"
-    elif backend == "nvidia":
+    if backend == "nvidia":
         return f"openai/{model}"
-    elif backend == "gemini":
+    if backend == "gemini":
         return f"gemini/{model}"
-    else:
-        if "/" in model:
-            return model
-        return f"{backend}/{model}"
+    return f"{backend}/{model}" if "/" not in model else model
 
 def _build_kwargs(litellm_model: str, extra: dict, fallbacks: list) -> dict:
-    """Build kwargs for litellm.acompletion safely."""
-    kwargs = {
-        "model": litellm_model,
-        "fallbacks": fallbacks,
-        **extra
-    }
-    return kwargs
+    return {"model": litellm_model, "fallbacks": fallbacks, **extra}
 
 def _inject_system_prompt(messages: list, system: str) -> list:
-    """Prepend or merge the routing system prompt into the message list."""
     messages = list(messages)
     for i, m in enumerate(messages):
         if m.get("role") == "system":
@@ -127,6 +119,14 @@ def _normalize_decision(obj: dict) -> dict:
             obj["action"] = obj["tool"]
         elif "name" in obj:
             obj["action"] = obj["name"]
+        elif "text" in obj:
+            txt = obj.get("text")
+            if isinstance(txt, list):
+                txt = " ".join(str(x) for x in txt if x is not None).strip()
+            else:
+                txt = str(txt).strip()
+            obj["action"] = "final"
+            obj["response"] = txt or "Task processed."
 
     action = str(obj.get("action", "")).strip()
     aliases = {
@@ -152,16 +152,12 @@ def _normalize_decision(obj: dict) -> dict:
     return obj
 
 def _extract_json(text: str) -> dict:
-    """Robustly extract a JSON object from model output that may contain prose."""
     import ast
-
     text = text or ""
-    # Clean prefixes like "[final]", "[delegate]", etc.
     text = re.sub(r"^\[[^\]]*\]\s*", "", text, flags=re.IGNORECASE).strip()
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
     text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE).strip()
     text = re.sub(r"\s*```$", "", text).strip()
-    # Also clean any trailing tags
     text = re.sub(r"\s*\[[^\]]*\]\s*$", "", text).strip()
 
     candidates = [text]
@@ -212,7 +208,9 @@ def _extract_json(text: str) -> dict:
     except Exception:
         pass
 
-    # If all parsing fails, provide a reasonable default
+    if text.strip():
+        return {"action": "final", "response": text.strip()}
+
     log.warning(f"Could not extract JSON, defaulting to 'final' action. Text: {text[:100]}")
     return {"action": "final", "response": "Task processed."}
 
@@ -229,49 +227,44 @@ async def _complete_for_tool_decision(litellm_model: str, messages: list, fallba
     extra = {
         "messages": messages,
         "temperature": 0.2,
-        "timeout": 45.0,  # Reduced from 60s for faster recovery
-        "max_retries": 0,  # No retries at this level
+        "max_tokens": 4096,
+        "timeout": 180.0,
+        "max_retries": 0,
     }
     kwargs = _build_kwargs(litellm_model, extra, fallbacks)
+    kwargs["num_retries"] = 0
+    kwargs["timeout"] = 600
+    kwargs["format"] = "json"
     return await litellm.acompletion(**kwargs)
 
 def _get_cache_key(messages: list, agent_id: str) -> str:
-    """Generate a cache key for decision caching."""
-    # Hash the last message (context) with agent ID
     if messages:
-        last_msg = messages[-1].get("content", "")[:200]  # First 200 chars
+        last_msg = messages[-1].get("content", "")[:200]
         return f"{agent_id}:{hash(last_msg)}"
     return f"{agent_id}:default"
 
 def _get_cached_decision(cache_key: str) -> Optional[dict]:
-    """Get cached decision if fresh (< 5 min old)."""
     if cache_key in _decision_cache:
         decision, timestamp = _decision_cache[cache_key]
         if datetime.now() - timestamp < timedelta(seconds=_cache_ttl):
             return decision
-        else:
-            del _decision_cache[cache_key]
+        del _decision_cache[cache_key]
     return None
 
 def _cache_decision(cache_key: str, decision: dict):
-    """Cache a decision with timestamp."""
     _decision_cache[cache_key] = (decision, datetime.now())
 
 async def get_tool_decision(model: str, messages: list, agent_id: str) -> Optional[dict]:
-    """Ask model what action to take next. Returns structured dict or None on error."""
-    
-    # Check cache first
     cache_key = _get_cache_key(messages, agent_id)
     cached = _get_cached_decision(cache_key)
     if cached:
         log.debug("[%s] Tool decision (cached): %s", agent_id, cached.get("action"))
         return cached
-    
+
     litellm_model = _get_litellm_model(agent_id, model)
-    # Fetch fallbacks in parallel instead of sequential
-    raw_fallbacks = await get_live_fallbacks()
-    # Limit fallbacks to 2 to avoid cascading failures
-    fallbacks = [f["model"] for f in raw_fallbacks[:2]]
+    routing_mode = _get_routing_mode()
+    raw_fallbacks = await get_live_fallbacks(mode=routing_mode)
+    fallbacks = [f["model"] for f in raw_fallbacks[:5]]
 
     base_messages = _inject_system_prompt(messages, TOOL_DECISION_SYSTEM)
 
@@ -283,28 +276,30 @@ async def get_tool_decision(model: str, messages: list, agent_id: str) -> Option
             return {"action": "final", "response": "Model returned empty response."}
         result = _extract_json(_normalize_model_json(content))
         log.debug("[%s] Tool decision: %s", agent_id, result.get("action"))
-        _cache_decision(cache_key, result)  # Cache the result
+        _cache_decision(cache_key, result)
         return result
     except Exception as first_exc:
         log.warning("[%s] Tool decision request failed: %s (will use default)", agent_id, str(first_exc)[:100])
-        # Return graceful default instead of trying again
         return {"action": "final", "response": "Unable to determine next action. Task delegated to default handler."}
 
 async def stream_content(model: str, messages: list, agent_id: str) -> AsyncGenerator[tuple, None]:
-    """Stream free-text response - used for reviewer final verdict."""
     litellm_model = _get_litellm_model(agent_id, model)
-    raw_fallbacks = await get_live_fallbacks()
+    routing_mode = _get_routing_mode()
+    raw_fallbacks = await get_live_fallbacks(mode=routing_mode)
     fallbacks = [f["model"] for f in raw_fallbacks]
 
     extra = {
         "messages": messages,
         "stream": True,
         "temperature": 0.2,
+        "max_tokens": 4096,
         "timeout": 300.0,
     }
     kwargs = _build_kwargs(litellm_model, extra, fallbacks)
 
     try:
+        kwargs["num_retries"] = 0
+        kwargs["timeout"] = 600
         response = await litellm.acompletion(**kwargs)
         async for chunk in response:
             piece = chunk.choices[0].delta.content or ""
@@ -313,6 +308,13 @@ async def stream_content(model: str, messages: list, agent_id: str) -> AsyncGene
     except Exception as exc:
         log.error("[%s] stream error: %s", agent_id, exc)
         yield str(exc), "error"
+
+
+
+
+
+
+
 
 
 

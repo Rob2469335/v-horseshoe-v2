@@ -29,6 +29,13 @@ def _env_str(name: str, default: str) -> str:
     return os.getenv(name, default)
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    val = os.getenv(name)
+    if val is None:
+        return default
+    return str(val).lower() in ("true", "1", "yes", "t", "y")
+
+
 @dataclass(frozen=True)
 class Settings:
     log_path: str = _env_str("SWARM_LOG_PATH", "swarm_os/logs/organism_diary.jsonl")
@@ -38,6 +45,7 @@ class Settings:
     swarm_url: str = _env_str("SWARM_URL", "http://127.0.0.1:11436")
     swarm_timeout: float = float(_env_int("SWARM_TIMEOUT", 30))
     snapshot_dir: str = _env_str("SWARM_SNAPSHOT_DIR", "data/snapshots")
+    ssl_verify: bool = _env_bool("SWARM_SSL_VERIFY", False)
 
 
 settings = Settings()
