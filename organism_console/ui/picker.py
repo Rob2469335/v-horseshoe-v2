@@ -150,17 +150,6 @@ class ModelPickerApp(App):
         if not self.cloud_enabled:
             self.models = [m for m in self.models if str(m.get("model", "")).startswith("ollama/")]
 
-            static_locals = [
-                {"model": "ollama/qwen3-coder:480b-cloud", "context_length": 32000, "pricing": "Local", "provider": "Ollama"},
-                {"model": "ollama/llama3-groq-tool-use:8b", "context_length": 8192, "pricing": "Local", "provider": "Ollama"},
-                {"model": "ollama/qwen2.5-coder:7b", "context_length": 32000, "pricing": "Local", "provider": "Ollama"}
-            ]
-
-            seen = {m.get("model") for m in self.models}
-            for item in static_locals:
-                if item["model"] not in seen:
-                    self.models.append(item)
-
     def update_routing_status(self) -> None:
         status = self.query_one("#routing_status", Static)
         mode_text = "[#00ff66]LOCAL ONLY[/#00ff66]" if not self.cloud_enabled else "[#00ccff]CLOUD ENABLED[/#00ccff]"
@@ -319,5 +308,4 @@ class ModelPickerApp(App):
 def launch_picker(ctx):
     app = ModelPickerApp(ctx)
     app.run()
-
 
