@@ -23,6 +23,7 @@ from swarm_os.api.schemas import (
     GenerateResponse,
     AssignRequest,
     AssignResponse,
+    AutoAssignResponse,
     TimelineResponse,
     TimelinePointResponse,
 )
@@ -55,16 +56,48 @@ def get_orchestrator(request: Request) -> Any:
 # --- Helper Functions ---
 def _safe_health_report(runtime: Any) -> dict[str, Any]:
     try:
+        import psutil
+        import requests
+        
+        # Check system resources
+        mem = psutil.virtual_memory()
+        disk = psutil.disk_usage("/")
+        
+        # Check dependencies
+        ollama_ok = False
+        try:
+            r = requests.get("http://127.0.0.1:11434/", timeout=1)
+            ollama_ok = r.status_code == 200
+        except Exception:
+            pass
+            
+        qdrant_ok = False
+        try:
+            r = requests.get("http://127.0.0.1:6333/", timeout=1)
+            qdrant_ok = r.status_code == 200
+        except Exception:
+            pass
+
         healing = getattr(runtime, "healing", None)
-        if healing is None:
-            return {"status": "ok", "health_score": 100, "overall": "healing service unavailable"}
         report = healing.status() if hasattr(healing, "status") else {}
+        
+        health_score = report.get("health_score", report.get("recovery_readiness", 100))
+        if not ollama_ok or mem.percent > 95:
+            health_score -= 20
+            
         return {
-            "status": "ok" if report.get("health_score", report.get("recovery_readiness", 0)) >= 80 else "degraded",
-            "health_score": report.get("health_score", report.get("recovery_readiness", 0)),
+            "status": "ok" if health_score >= 80 else "degraded",
+            "health_score": health_score,
             "overall": report.get("overall", "active" if report.get("active_anomalies", 0) > 0 else "healthy"),
+            "system": {
+                "memory_percent": mem.percent,
+                "disk_percent": disk.percent,
+                "ollama_connected": ollama_ok,
+                "qdrant_connected": qdrant_ok
+            }
         }
     except Exception as exc:
+        log.exception("Health check failed")
         return {"status": "error", "health_score": 0, "overall": f"health check failed: {exc}"}
 
 async def _safe_ollama_reachable(runtime: Any) -> bool:
@@ -216,6 +249,89 @@ def assign(payload: AssignRequest, orch=Depends(get_orchestrator)):
     accepted = True
     return AssignResponse(accepted=accepted, node_id=payload.node.get("node_id", "default"), job_id=payload.job.get("job_id", "default"), score=score)
 
+@router.post("/models/autoassign", response_model=AutoAssignResponse)
+async def autoassign():
+    from runtime_v2.services.fallback_manager import get_live_fallbacks
+    from runtime_v2.services.model_registry import update_model_mapping
+    import httpx
+    import litellm
+    import json
+    # 1. Fetch local Ollama models
+    local_models = []
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.get("http://127.0.0.1:11434/api/tags")
+            if resp.status_code == 200:
+                for m in resp.json().get("models", []):
+                    name = m["name"].lower()
+                    if "embed" in name or "rerank" in name or "vl" in name or "moondream" in name:
+                        continue
+                    local_models.append(m["name"])
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch local models: {e}")
+        
+    if not local_models:
+        raise HTTPException(status_code=400, detail="No suitable local chat models found.")
+        
+    # 2. Get best cloud model
+    fallbacks = await get_live_fallbacks()
+    cloud_models = [f["model"] for f in fallbacks if "ollama" not in f["model"]]
+    if not cloud_models:
+        raise HTTPException(status_code=500, detail="No cloud API keys available to perform the reasoning task.")
+    
+    best_cloud_model = cloud_models[0]
+    
+    # 3. Formulate Prompt
+    prompt = f"""You are an elite AI system architect. 
+The user has the following local AI models running in Ollama: {local_models}
+They have a multi-agent system with exactly 8 roles:
+- coordinator: High-level routing and synthesis.
+- planner: Deep reasoning and system design.
+- researcher: Information gathering and summarization.
+- executor: Following exact step-by-step instructions.
+- coder: Writing complex code.
+- tool-runner: Executing API/OS tools (needs strong tool calling).
+- reviewer: Pedantic code reviewing and bug finding.
+- debugger: Deep logic and error trace analysis.
+
+Based on public benchmark knowledge of these local models (parameter sizes, domain strengths), assign the best model to each of the 8 roles.
+Rules:
+1. ONLY use the models from the provided local list.
+2. You can assign the same model to multiple roles if it's the best fit.
+3. Return ONLY a raw JSON object mapping the exact role name to the exact model name. No markdown blocks, no formatting. Example: {{"coder": "qwen2.5-coder:7b"}}"""
+
+    # 4. Get LLM response
+    try:
+        custom_client = httpx.AsyncClient(timeout=60.0)
+        litellm_fallbacks = [{"model": m} for m in cloud_models[1:]]
+        resp = await litellm.acompletion(
+            model=best_cloud_model,
+            fallbacks=litellm_fallbacks,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1,
+            response_format={"type": "json_object"},
+            client=custom_client
+        )
+        content = resp.choices[0].message.content or "{}"
+        
+        # Clean up possible markdown if provider ignored format
+        content = content.replace("```json", "").replace("```", "").strip()
+        mapping = json.loads(content)
+        
+        # 5. Verify and apply
+        valid_roles = ["coordinator", "planner", "researcher", "executor", "coder", "tool-runner", "reviewer", "debugger"]
+        final_mapping = {}
+        for r in valid_roles:
+            if r in mapping and mapping[r] in local_models:
+                final_mapping[r] = mapping[r]
+                
+        update_model_mapping(final_mapping)
+        return AutoAssignResponse(mapping=final_mapping)
+        
+    except Exception as e:
+        log.error(f"AutoAssign failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.get("/timeline", response_model=TimelineResponse)
 def timeline(window_minutes: int = 60):
     events_path = Path("data/events/events.jsonl")
@@ -307,4 +423,3 @@ async def root_evaluate_health(request: Request) -> dict:
 async def root_post_evaluate_health(request: Request) -> dict:
     from swarm_os.api.admin import run_heal_cycle
     return await run_heal_cycle(request)
-
