@@ -139,6 +139,14 @@ class ModelPickerApp(App):
         except:
             self.agent_models = {}
 
+        local_model_names = []
+        try:
+            r = requests.get("http://127.0.0.1:11434/api/tags", timeout=3, verify=settings.ssl_verify)
+            if r.status_code == 200:
+                local_model_names = [m.get("model") or m.get("name") for m in r.json().get("models", [])]
+        except:
+            local_model_names = []
+
         self.models = []
         try:
             r = requests.get(self.get_models_endpoint(), timeout=3, verify=settings.ssl_verify)
@@ -148,7 +156,7 @@ class ModelPickerApp(App):
             self.models = []
 
         if not self.cloud_enabled:
-            self.models = [m for m in self.models if str(m.get("model", "")).startswith("ollama/")]
+            self.models = [m for m in self.models if m.get("model") in local_model_names or m.get("name") in local_model_names]
 
     def update_routing_status(self) -> None:
         status = self.query_one("#routing_status", Static)
@@ -308,4 +316,5 @@ class ModelPickerApp(App):
 def launch_picker(ctx):
     app = ModelPickerApp(ctx)
     app.run()
+
 
