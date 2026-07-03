@@ -1,1 +1,34 @@
-{"coordinator": ["gemini/gemini-2.0-flash", "ollama"], "planner": ["groq/llama-3.3-70b-versatile", "ollama"], "researcher": ["llama-3.3-70b-versatile", "groq"], "executor": ["qwen2.5-coder:7b", "ollama"], "coder": ["groq/llama-3.3-70b-versatile", "ollama"], "tool-runner": ["gemini/gemini-2.0-flash", "ollama"], "reviewer": ["gemini/gemini-2.0-flash", "ollama"], "debugger": ["gemini/gemini-2.0-flash", "ollama"]}
+{
+  "coordinator": [
+    "qwen3:8b-q4_K_M",
+    "ollama"
+  ],
+  "planner": [
+    "ollama_chat/qwen3:8b-q4_K_M",
+    "ollama"
+  ],
+  "researcher": [
+    "ministral-3:8b-instruct-2512-q4_K_M",
+    "ollama"
+  ],
+  "executor": [
+    "llama3-groq-tool-use:8b-q4_K_M",
+    "ollama"
+  ],
+  "coder": [
+    "qwen2.5-coder:14b-base-q3_K_S",
+    "ollama"
+  ],
+  "tool-runner": [
+    "ollama_chat/MFDoom/deepseek-r1-tool-calling:8b-llama-distill-q4_K_M",
+    "ollama"
+  ],
+  "reviewer": [
+    "qwen2.5-coder:7b",
+    "ollama"
+  ],
+  "debugger": [
+    "qwen3:8b-q4_K_M",
+    "ollama"
+  ]
+}

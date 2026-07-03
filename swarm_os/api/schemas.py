@@ -90,3 +90,7 @@ class TimelinePointResponse(BaseModel):
 class TimelineResponse(BaseModel):
     window_minutes: int
     points: List[TimelinePointResponse] = Field(default_factory=list)
+
+class AutoAssignResponse(BaseModel):
+    mapping: Dict[str, str]
+
