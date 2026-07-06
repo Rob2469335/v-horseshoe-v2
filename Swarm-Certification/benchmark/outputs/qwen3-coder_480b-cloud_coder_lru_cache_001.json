@@ -1,0 +1,13 @@
+{
+  "RuntimeMs": 7776.8425,
+  "Category": "Coder",
+  "TaskId": "coder_lru_cache_001",
+  "TokenUsage": 317,
+  "Output": "```python\nclass LRUCache:\n    def __init__(self, capacity: int):\n        self.capacity = capacity\n        self.cache = {}\n        self.head = Node(0, 0)\n        self.tail = Node(0, 0)\n        self.head.next = self.tail\n        self.tail.prev = self.head\n    \n    def get(self, key: int) -> int:\n        if key in self.cache:\n            node = self.cache[key]\n            self._remove(node)\n            self._add(node)\n            return node.value\n        return -1\n    \n    def put(self, key: int, value: int) -> None:\n        if key in self.cache:\n            self._remove(self.cache[key])\n        \n        node = Node(key, value)\n        self.cache[key] = node\n        self._add(node)\n        \n        if len(self.cache) > self.capacity:\n            lru = self.head.next\n            self._remove(lru)\n            del self.cache[lru.key]\n    \n    def _remove(self, node):\n        prev = node.prev\n        next = node.next\n        prev.next = next\n        next.prev = prev\n    \n    def _add(self, node):\n        prev = self.tail.prev\n        prev.next = node\n        node.prev = prev\n        node.next = self.tail\n        self.tail.prev = node\n\nclass Node:\n    def __init__(self, key, value):\n        self.key = key\n        self.value = value\n        self.prev = None\n        self.next = None\n```",
+  "PromptEval": 40,
+  "TestCommand": "python -m pytest tests/coder/test_lru_cache.py",
+  "TokensPerSec": 0,
+  "Error": null,
+  "Model": "qwen3-coder:480b-cloud",
+  "Timestamp": "2026-07-04T14:06:25.0444226-04:00"
+}

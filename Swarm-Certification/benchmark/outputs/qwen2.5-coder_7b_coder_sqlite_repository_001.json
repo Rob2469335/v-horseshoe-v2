@@ -1,0 +1,13 @@
+{
+  "RuntimeMs": 90518.5784,
+  "Category": "Coder",
+  "TaskId": "coder_sqlite_repository_001",
+  "TokenUsage": 501,
+  "Output": "```python\nimport sqlite3\n\nclass SQLiteRepository:\n    def __init__(self, db_path):\n        self.connection = sqlite3.connect(db_path)\n        self.cursor = self.connection.cursor()\n\n    def create_table(self, table_name, columns):\n        columns_str = ', '.join([f'{col} {dtype}' for col, dtype in columns.items()])\n        query = f'CREATE TABLE IF NOT EXISTS {table_name} ({columns_str})'\n        self.cursor.execute(query)\n        self.connection.commit()\n\n    def insert_data(self, table_name, data):\n        placeholders = ', '.join(['?' for _ in data.values()])\n        columns = ', '.join(data.keys())\n        query = f'INSERT INTO {table_name} ({columns}) VALUES ({placeholders})'\n        self.cursor.execute(query, list(data.values()))\n        self.connection.commit()\n\n    def select_data(self, table_name, conditions=None):\n        query = f'SELECT * FROM {table_name}'\n        if conditions:\n            where_clause = ' AND '.join([f'{col} = ?' for col in conditions.keys()])\n            query += f' WHERE {where_clause}'\n            self.cursor.execute(query, list(conditions.values()))\n        else:\n            self.cursor.execute(query)\n        return self.cursor.fetchall()\n\n    def update_data(self, table_name, data, conditions):\n        set_clause = ', '.join([f'{col} = ?' for col in data.keys()])\n        where_clause = ' AND '.join([f'{col} = ?' for col in conditions.keys()])\n        query = f'UPDATE {table_name} SET {set_clause} WHERE {where_clause}'\n        all_values = list(data.values()) + list(conditions.values())\n        self.cursor.execute(query, all_values)\n        self.connection.commit()\n\n    def delete_data(self, table_name, conditions):\n        where_clause = ' AND '.join([f'{col} = ?' for col in conditions.keys()])\n        query = f'DELETE FROM {table_name} WHERE {where_clause}'\n        self.cursor.execute(query, list(conditions.values()))\n        self.connection.commit()\n\n    def close(self):\n        self.connection.close()\n```\n\nThis SQLite repository pattern uses parameterized queries to prevent SQL injection attacks. It provides methods for creating tables, inserting data, selecting data with conditions, updating data with conditions, and deleting data with conditions. The `close` method is used to properly close the database connection when it's no longer needed.",
+  "PromptEval": 57,
+  "TestCommand": "python -m pytest tests/coder/test_sqlite_repo.py",
+  "TokensPerSec": 5.76,
+  "Error": null,
+  "Model": "qwen2.5-coder:7b",
+  "Timestamp": "2026-07-04T12:33:36.8642327-04:00"
+}

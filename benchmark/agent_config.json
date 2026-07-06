@@ -1,0 +1,10 @@
+{
+  "Coordinator": "qwen2.5-coder:3b",
+  "Planner": "llama3-groq-tool-use:8b-q4_K_M",
+  "Reviewer": "qwen2.5-coder:3b",
+  "ToolRunner": "qwen2.5-coder:3b",
+  "Debugger": "qwen2.5-coder:3b",
+  "Researcher": "qwen2.5-coder:3b",
+  "Coder": "qwen2.5-coder:3b",
+  "Executor": "qwen2.5-coder:3b"
+}

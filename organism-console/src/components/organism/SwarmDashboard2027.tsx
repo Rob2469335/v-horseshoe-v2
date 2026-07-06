@@ -82,7 +82,7 @@ const agentColors: Record<string, string> = {
   reviewer: '#fbbf24',
 };
 
-const agentOrder = ['coordinator', 'planner', 'executor', 'coder', 'tool-runner', 'debugger', 'reviewer'];
+const agentOrder = ['coordinator', 'planner', 'researcher', 'executor', 'coder', 'tool-runner', 'debugger', 'reviewer'];
 
 const RadarChart = ({ backendUrl }: { backendUrl: string }) => {
   const [scores, setScores] = useState<Record<string, number>>(
@@ -496,3 +496,4 @@ export const SwarmDashboard2027 = ({ backendUrl }: { backendUrl: string }) => {
     </div>
   );
 };
+

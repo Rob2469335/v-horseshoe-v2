@@ -1,23 +1,21 @@
 from __future__ import annotations
-
 import time
 from dataclasses import dataclass
+from .failure_detector import FailureDetector
+from .governor import Governor
 
 
 @dataclass
 class HealingState:
     last_action: str | None = None
     last_heal_time: float | None = None
-
-
-class DefaultDetector:
-    def check(self):
-        return {"health_score": 100, "signals": []}
+    last_incident_id: str | None = None
 
 
 class HealingLoop:
-    def __init__(self, cooldown_seconds: int = 5) -> None:
-        self.detector = DefaultDetector()
+    def __init__(self, cooldown_seconds: int = 30, detector=None, governor=None) -> None:
+        self.detector = detector or FailureDetector()
+        self.governor = governor or Governor()
         self.state = HealingState()
         self.cooldown_seconds = cooldown_seconds
 
@@ -27,19 +25,20 @@ class HealingLoop:
             return {"status": "throttled", "cooldown_remaining": (self.state.last_heal_time + self.cooldown_seconds - now)}
 
         report = self.detector.check()
-        signals = report.get('signals', [])
+        signals = report.get("signals", [])
         if not signals:
-            return {"status": "stable"}
+            return {"status": "stable", "health_score": report.get("health_score", 100)}
 
-        # find first unhealthy signal
-        for s in signals:
-            if not s.get('ok', True):
-                comp = s.get('component')
-                # choose action based on component
-                action = 'restart_vector_layer' if comp == 'qdrant' else 'restart_component'
-                # simulate healing
-                self.state.last_action = action
-                self.state.last_heal_time = now
-                return {"status": "healing_executed", "result": {"action": action}}
+        symptom = signals[0]
+        decision = self.governor.decide(symptom)
 
-        return {"status": "stable"}
+        self.state.last_action = decision.get("mode", "unknown")
+        self.state.last_heal_time = now
+        self.state.last_incident_id = decision.get("incident_id")
+
+        return {
+            "status": "healing_decision",
+            "component": symptom.get("component"),
+            "decision": decision,
+            "all_signals": signals,
+        }

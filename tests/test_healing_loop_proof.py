@@ -18,9 +18,9 @@ def test_healing_loop_detects_and_repairs_qdrant():
     # 2. First tick should trigger healing
     result = loop.tick()
     
-    assert result["status"] == "healing_executed"
-    assert result["result"]["action"] == "restart_vector_layer"
-    assert loop.state.last_action == "restart_vector_layer"
+    assert result["status"] == "healing_decision"
+    assert result["decision"]["mode"] == "approval_required"
+    assert loop.state.last_action == "approval_required"
     
     # 3. Subsequent tick should be throttled (cooldown)
     result2 = loop.tick()

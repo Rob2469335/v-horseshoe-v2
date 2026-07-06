@@ -1,0 +1,13 @@
+{
+  "RuntimeMs": 47107.871,
+  "Category": "Coder",
+  "TaskId": "coder_git_wrapper_001",
+  "TokenUsage": 256,
+  "Output": "```python\nimport subprocess\n\nclass GitWrapper:\n    def __init__(self, repo_path):\n        self.repo_path = repo_path\n\n    def run_git_command(self, command, *args):\n        full_command = ['git', '-C', self.repo_path] + [command] + list(args)\n        try:\n            result = subprocess.run(full_command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)\n            return result.stdout\n        except subprocess.CalledProcessError as e:\n            print(f\"Git command failed: {e.stderr}\")\n            raise\n\n    def clone_repo(self, url):\n        self.run_git_command('clone', url)\n\n    def pull_repo(self):\n        self.run_git_command('pull')\n\n    def push_repo(self):\n        self.run_git_command('push')\n\n    def add_all_files(self):\n        self.run_git_command('add', '.')\n\n    def commit_changes(self, message):\n        self.run_git_command('commit', '-m', message)\n\n# Example usage:\n# git_wrapper = GitWrapper('/path/to/repo')\n# git_wrapper.clone_repo('https://github.com/user/repo.git')\n# git_wrapper.add_all_files()\n# git_wrapper.commit_changes('Initial commit')\n# git_wrapper.push_repo()\n```",
+  "PromptEval": 59,
+  "TestCommand": "python -m pytest tests/coder/test_git_wrapper.py",
+  "TokensPerSec": 5.85,
+  "Error": null,
+  "Model": "qwen2.5-coder:7b",
+  "Timestamp": "2026-07-04T12:36:38.0250574-04:00"
+}

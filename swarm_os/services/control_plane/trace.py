@@ -23,7 +23,8 @@ class TraceEvent:
 
 class TraceCollector:
     def __init__(self) -> None:
-        self._events: list[TraceEvent] = []
+        from collections import deque
+        self._events: deque[TraceEvent] = deque(maxlen=2000)
 
     def new_trace_id(self) -> str:
         return uuid.uuid4().hex
@@ -67,7 +68,7 @@ class TraceCollector:
 
     def get_raw_events(self) -> list[TraceEvent]:
         """Fixes contract mismatch by exposing the raw objects for attribute-based access."""
-        return self._events
+        return list(self._events)
 
     def clear(self) -> None:
         self._events.clear()

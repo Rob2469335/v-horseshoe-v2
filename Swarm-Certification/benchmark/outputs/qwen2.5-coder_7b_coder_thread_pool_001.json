@@ -1,0 +1,13 @@
+{
+  "RuntimeMs": 39880.5323,
+  "Category": "Coder",
+  "TaskId": "coder_thread_pool_001",
+  "TokenUsage": 215,
+  "Output": "```java\nimport java.util.concurrent.*;\n\npublic class BoundedThreadPool {\n    private final ExecutorService executor;\n    private final BlockingQueue<Runnable> taskQueue;\n\n    public BoundedThreadPool(int corePoolSize, int maximumPoolSize, long keepAliveTime, TimeUnit unit, int capacity) {\n        this.taskQueue = new ArrayBlockingQueue<>(capacity);\n        this.executor = new ThreadPoolExecutor(\n            corePoolSize,\n            maximumPoolSize,\n            keepAliveTime,\n            unit,\n            taskQueue\n        );\n    }\n\n    public void execute(Runnable command) throws RejectedExecutionException {\n        if (taskQueue.size() >= taskQueue.capacity()) {\n            throw new RejectedExecutionException(\"Task queue is full\");\n        }\n        executor.execute(command);\n    }\n\n    public void shutdown() {\n        executor.shutdown();\n        try {\n            if (!executor.awaitTermination(60, TimeUnit.SECONDS)) {\n                executor.shutdownNow();\n            }\n        } catch (InterruptedException e) {\n            executor.shutdownNow();\n            Thread.currentThread().interrupt();\n        }\n    }\n}\n```",
+  "PromptEval": 56,
+  "TestCommand": "python -m pytest tests/coder/test_thread_pool.py",
+  "TokensPerSec": 5.89,
+  "Error": null,
+  "Model": "qwen2.5-coder:7b",
+  "Timestamp": "2026-07-04T12:35:23.6445509-04:00"
+}

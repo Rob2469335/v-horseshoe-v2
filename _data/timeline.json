@@ -1,0 +1,1277 @@
+{
+  "failures": [
+    {
+      "incident_id": "inc-7b100516",
+      "symptom": {
+        "component": "qdrant",
+        "ok": false,
+        "status": "unhealthy"
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-4dba4fde",
+          "hypothesis": "unknown",
+          "confidence": 0.3,
+          "explanation": "Insufficient data \u2014 require deeper probes."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.3,
+      "outcome": "OPEN",
+      "service": "qdrant",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1783310126.2723484
+    },
+    {
+      "incident_id": "inc-51814fcb",
+      "symptom": {
+        "component": "swarm_api",
+        "ok": false,
+        "detail": {
+          "ok": false,
+          "error": "HTTPConnectionPool(host='127.0.0.1', port=8000): Read timed out. (read timeout=2)"
+        }
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-5a8c7937",
+          "hypothesis": "network_timeout",
+          "confidence": 0.6,
+          "explanation": "Requests timed out \u2014 network or upstream may be slow."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.6,
+      "outcome": "OPEN",
+      "service": "swarm_api",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1783309750.1891446
+    },
+    {
+      "incident_id": "inc-5b42dae5",
+      "symptom": {
+        "component": "swarm_api",
+        "ok": false,
+        "detail": {
+          "ok": false,
+          "error": "HTTPConnectionPool(host='127.0.0.1', port=8000): Read timed out. (read timeout=2)"
+        }
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-6e51b5f0",
+          "hypothesis": "network_timeout",
+          "confidence": 0.6,
+          "explanation": "Requests timed out \u2014 network or upstream may be slow."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.6,
+      "outcome": "OPEN",
+      "service": "swarm_api",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1783309542.9078472
+    },
+    {
+      "incident_id": "inc-e067349e",
+      "symptom": {
+        "component": "swarm_api",
+        "ok": false,
+        "detail": {
+          "ok": false,
+          "error": "HTTPConnectionPool(host='127.0.0.1', port=8000): Read timed out. (read timeout=2)"
+        }
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-93e1bfc4",
+          "hypothesis": "network_timeout",
+          "confidence": 0.6,
+          "explanation": "Requests timed out \u2014 network or upstream may be slow."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.6,
+      "outcome": "OPEN",
+      "service": "swarm_api",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1783309401.204618
+    },
+    {
+      "incident_id": "inc-c9af105c",
+      "symptom": {
+        "component": "swarm_api",
+        "ok": false,
+        "detail": {
+          "ok": false,
+          "error": "HTTPConnectionPool(host='127.0.0.1', port=8000): Read timed out. (read timeout=2)"
+        }
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-f80e6c8c",
+          "hypothesis": "network_timeout",
+          "confidence": 0.6,
+          "explanation": "Requests timed out \u2014 network or upstream may be slow."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.6,
+      "outcome": "OPEN",
+      "service": "swarm_api",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1783308975.3715858
+    },
+    {
+      "incident_id": "inc-56b2a0c0",
+      "symptom": {
+        "component": "swarm_api",
+        "ok": false,
+        "detail": {
+          "ok": false,
+          "error": "HTTPConnectionPool(host='127.0.0.1', port=8000): Read timed out. (read timeout=2)"
+        }
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-27a67086",
+          "hypothesis": "network_timeout",
+          "confidence": 0.6,
+          "explanation": "Requests timed out \u2014 network or upstream may be slow."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.6,
+      "outcome": "OPEN",
+      "service": "swarm_api",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1783308828.4675374
+    },
+    {
+      "incident_id": "inc-dd788fdc",
+      "symptom": {
+        "component": "backend",
+        "ok": false,
+        "detail": {
+          "ok": false,
+          "error": "HTTPConnectionPool(host='127.0.0.1', port=8000): Max retries exceeded with url: /health (Caused by ConnectTimeoutError(<HTTPConnection(host='127.0.0.1', port=8000) at 0x19977c8f890>, 'Connection to 127.0.0.1 timed out. (connect timeout=2)'))"
+        }
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-17b001ab",
+          "hypothesis": "network_timeout",
+          "confidence": 0.6,
+          "explanation": "Requests timed out \u2014 network or upstream may be slow."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.6,
+      "outcome": "OPEN",
+      "service": "backend",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1783308781.6234434
+    },
+    {
+      "incident_id": "inc-b6d2f368",
+      "symptom": {
+        "component": "qdrant",
+        "ok": false,
+        "status": "unhealthy"
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-052ae40b",
+          "hypothesis": "unknown",
+          "confidence": 0.3,
+          "explanation": "Insufficient data \u2014 require deeper probes."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.3,
+      "outcome": "OPEN",
+      "service": "qdrant",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1783308737.7260747
+    },
+    {
+      "incident_id": "inc-15c92098",
+      "symptom": {
+        "component": "swarm_api",
+        "ok": false,
+        "detail": {
+          "ok": false,
+          "error": "HTTPConnectionPool(host='127.0.0.1', port=8000): Read timed out. (read timeout=2)"
+        }
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-2a61931c",
+          "hypothesis": "network_timeout",
+          "confidence": 0.6,
+          "explanation": "Requests timed out \u2014 network or upstream may be slow."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.6,
+      "outcome": "OPEN",
+      "service": "swarm_api",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1783308373.401336
+    },
+    {
+      "incident_id": "inc-aacfaa7e",
+      "symptom": {
+        "component": "backend",
+        "ok": false,
+        "detail": {
+          "ok": false,
+          "error": "HTTPConnectionPool(host='127.0.0.1', port=8000): Read timed out. (read timeout=2)"
+        }
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-f62cdf60",
+          "hypothesis": "network_timeout",
+          "confidence": 0.6,
+          "explanation": "Requests timed out \u2014 network or upstream may be slow."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.6,
+      "outcome": "OPEN",
+      "service": "backend",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1783308258.728608
+    },
+    {
+      "incident_id": "inc-ec90b6c5",
+      "symptom": {
+        "component": "swarm_api",
+        "ok": false,
+        "detail": {
+          "ok": false,
+          "error": "HTTPConnectionPool(host='127.0.0.1', port=8000): Read timed out. (read timeout=2)"
+        }
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-c15d5ff1",
+          "hypothesis": "network_timeout",
+          "confidence": 0.6,
+          "explanation": "Requests timed out \u2014 network or upstream may be slow."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.6,
+      "outcome": "OPEN",
+      "service": "swarm_api",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1783308156.9315813
+    },
+    {
+      "incident_id": "inc-8f6c0ff8",
+      "symptom": {
+        "component": "swarm_api",
+        "ok": false,
+        "detail": {
+          "ok": false,
+          "error": "HTTPConnectionPool(host='127.0.0.1', port=8000): Read timed out. (read timeout=2)"
+        }
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-c3a05197",
+          "hypothesis": "network_timeout",
+          "confidence": 0.6,
+          "explanation": "Requests timed out \u2014 network or upstream may be slow."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.6,
+      "outcome": "OPEN",
+      "service": "swarm_api",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1783308073.9454262
+    },
+    {
+      "incident_id": "inc-fba4b9f7",
+      "symptom": {
+        "component": "swarm_api",
+        "ok": false,
+        "detail": {
+          "ok": false,
+          "error": "HTTPConnectionPool(host='127.0.0.1', port=8000): Read timed out. (read timeout=2)"
+        }
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-4590db11",
+          "hypothesis": "network_timeout",
+          "confidence": 0.6,
+          "explanation": "Requests timed out \u2014 network or upstream may be slow."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.6,
+      "outcome": "OPEN",
+      "service": "swarm_api",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1783307980.7468517
+    },
+    {
+      "incident_id": "inc-17e86d13",
+      "symptom": {
+        "component": "swarm_api",
+        "ok": false,
+        "detail": {
+          "ok": false,
+          "error": "HTTPConnectionPool(host='127.0.0.1', port=8000): Read timed out. (read timeout=2)"
+        }
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-b3bf0273",
+          "hypothesis": "network_timeout",
+          "confidence": 0.6,
+          "explanation": "Requests timed out \u2014 network or upstream may be slow."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.6,
+      "outcome": "OPEN",
+      "service": "swarm_api",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1783307591.9889083
+    },
+    {
+      "incident_id": "inc-ff354b37",
+      "symptom": {
+        "component": "swarm_api",
+        "ok": false,
+        "detail": {
+          "ok": false,
+          "error": "HTTPConnectionPool(host='127.0.0.1', port=8000): Read timed out. (read timeout=2)"
+        }
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-4e095556",
+          "hypothesis": "network_timeout",
+          "confidence": 0.6,
+          "explanation": "Requests timed out \u2014 network or upstream may be slow."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.6,
+      "outcome": "OPEN",
+      "service": "swarm_api",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1783307054.8913386
+    },
+    {
+      "incident_id": "inc-f4fffb51",
+      "symptom": {
+        "component": "swarm_api",
+        "ok": false,
+        "detail": {
+          "ok": false,
+          "error": "HTTPConnectionPool(host='127.0.0.1', port=8000): Read timed out. (read timeout=2)"
+        }
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-9c1667df",
+          "hypothesis": "network_timeout",
+          "confidence": 0.6,
+          "explanation": "Requests timed out \u2014 network or upstream may be slow."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.6,
+      "outcome": "OPEN",
+      "service": "swarm_api",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1783306791.1565144
+    },
+    {
+      "incident_id": "inc-73727518",
+      "symptom": {
+        "component": "swarm_api",
+        "ok": false,
+        "detail": {
+          "ok": false,
+          "error": "HTTPConnectionPool(host='127.0.0.1', port=8000): Read timed out. (read timeout=2)"
+        }
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-6c44d452",
+          "hypothesis": "network_timeout",
+          "confidence": 0.6,
+          "explanation": "Requests timed out \u2014 network or upstream may be slow."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.6,
+      "outcome": "OPEN",
+      "service": "swarm_api",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1783304877.0341494
+    },
+    {
+      "incident_id": "inc-ea8f16c2",
+      "symptom": {
+        "component": "swarm_api",
+        "ok": false,
+        "detail": {
+          "ok": false,
+          "error": "HTTPConnectionPool(host='127.0.0.1', port=8000): Read timed out. (read timeout=2)"
+        }
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-6a02beee",
+          "hypothesis": "network_timeout",
+          "confidence": 0.6,
+          "explanation": "Requests timed out \u2014 network or upstream may be slow."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.6,
+      "outcome": "OPEN",
+      "service": "swarm_api",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1783299714.0624113
+    },
+    {
+      "incident_id": "inc-bd652d64",
+      "symptom": {
+        "component": "swarm_api",
+        "ok": false,
+        "detail": {
+          "ok": false,
+          "error": "HTTPConnectionPool(host='127.0.0.1', port=8000): Read timed out. (read timeout=2)"
+        }
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-8c02d9b1",
+          "hypothesis": "network_timeout",
+          "confidence": 0.6,
+          "explanation": "Requests timed out \u2014 network or upstream may be slow."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.6,
+      "outcome": "OPEN",
+      "service": "swarm_api",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1783298609.7961118
+    },
+    {
+      "incident_id": "inc-e6cc7256",
+      "symptom": {
+        "component": "qdrant",
+        "ok": false,
+        "status": "unhealthy"
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-036d610e",
+          "hypothesis": "unknown",
+          "confidence": 0.3,
+          "explanation": "Insufficient data \u2014 require deeper probes."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.3,
+      "outcome": "OPEN",
+      "service": "qdrant",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1783298429.2202742
+    },
+    {
+      "incident_id": "inc-9e2660ce",
+      "symptom": {
+        "component": "qdrant",
+        "ok": false,
+        "status": "unhealthy"
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-6b7a6f33",
+          "hypothesis": "unknown",
+          "confidence": 0.3,
+          "explanation": "Insufficient data \u2014 require deeper probes."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.3,
+      "outcome": "OPEN",
+      "service": "qdrant",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1783296319.4501529
+    },
+    {
+      "incident_id": "inc-cb64f4d1",
+      "symptom": {
+        "component": "swarm_api",
+        "ok": false,
+        "detail": {
+          "ok": false,
+          "error": "HTTPConnectionPool(host='127.0.0.1', port=8000): Read timed out. (read timeout=2)"
+        }
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-f332837d",
+          "hypothesis": "network_timeout",
+          "confidence": 0.6,
+          "explanation": "Requests timed out \u2014 network or upstream may be slow."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.6,
+      "outcome": "OPEN",
+      "service": "swarm_api",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1783294877.7416494
+    },
+    {
+      "incident_id": "inc-9ecd3b57",
+      "symptom": {
+        "component": "qdrant",
+        "ok": false,
+        "status": "unhealthy"
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-73bdfef5",
+          "hypothesis": "unknown",
+          "confidence": 0.3,
+          "explanation": "Insufficient data \u2014 require deeper probes."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.3,
+      "outcome": "OPEN",
+      "service": "qdrant",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1783294598.3068426
+    },
+    {
+      "incident_id": "inc-2c011da7",
+      "symptom": {
+        "component": "qdrant",
+        "ok": false,
+        "status": "unhealthy"
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-e7d87dc8",
+          "hypothesis": "unknown",
+          "confidence": 0.3,
+          "explanation": "Insufficient data \u2014 require deeper probes."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.3,
+      "outcome": "OPEN",
+      "service": "qdrant",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1783294031.0398972
+    },
+    {
+      "incident_id": "inc-0e6f1ef0",
+      "symptom": {
+        "component": "qdrant",
+        "ok": false,
+        "status": "unhealthy"
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-3c3e7303",
+          "hypothesis": "unknown",
+          "confidence": 0.3,
+          "explanation": "Insufficient data \u2014 require deeper probes."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.3,
+      "outcome": "OPEN",
+      "service": "qdrant",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1783293710.6168091
+    },
+    {
+      "incident_id": "inc-17145577",
+      "symptom": {
+        "component": "qdrant",
+        "ok": false,
+        "status": "unhealthy"
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-673d5ad8",
+          "hypothesis": "unknown",
+          "confidence": 0.3,
+          "explanation": "Insufficient data \u2014 require deeper probes."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.3,
+      "outcome": "OPEN",
+      "service": "qdrant",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1783293691.8161435
+    },
+    {
+      "incident_id": "inc-8540b597",
+      "symptom": {
+        "component": "qdrant",
+        "ok": false,
+        "status": "unhealthy"
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-0d874eb7",
+          "hypothesis": "unknown",
+          "confidence": 0.3,
+          "explanation": "Insufficient data \u2014 require deeper probes."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.3,
+      "outcome": "OPEN",
+      "service": "qdrant",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1783293662.7680378
+    },
+    {
+      "incident_id": "inc-41241af1",
+      "symptom": {
+        "component": "qdrant",
+        "ok": false,
+        "status": "unhealthy"
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-dd99dfd0",
+          "hypothesis": "unknown",
+          "confidence": 0.3,
+          "explanation": "Insufficient data \u2014 require deeper probes."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.3,
+      "outcome": "OPEN",
+      "service": "qdrant",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1783293653.7446098
+    },
+    {
+      "incident_id": "inc-d23936d8",
+      "symptom": {
+        "component": "qdrant",
+        "ok": false,
+        "status": "unhealthy"
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-ab3e1177",
+          "hypothesis": "unknown",
+          "confidence": 0.3,
+          "explanation": "Insufficient data \u2014 require deeper probes."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.3,
+      "outcome": "OPEN",
+      "service": "qdrant",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1783293616.9221528
+    },
+    {
+      "incident_id": "inc-f9debd40",
+      "symptom": {
+        "component": "swarm_api",
+        "ok": false,
+        "detail": {
+          "ok": false,
+          "error": "HTTPConnectionPool(host='127.0.0.1', port=8000): Read timed out. (read timeout=2)"
+        }
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-5373de23",
+          "hypothesis": "network_timeout",
+          "confidence": 0.6,
+          "explanation": "Requests timed out \u2014 network or upstream may be slow."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.6,
+      "outcome": "OPEN",
+      "service": "swarm_api",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1783292214.7882338
+    },
+    {
+      "incident_id": "inc-57eb1307",
+      "symptom": {
+        "component": "swarm_api",
+        "ok": false,
+        "detail": {
+          "ok": false,
+          "error": "HTTPConnectionPool(host='127.0.0.1', port=8000): Read timed out. (read timeout=2)"
+        }
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-a573379d",
+          "hypothesis": "network_timeout",
+          "confidence": 0.6,
+          "explanation": "Requests timed out \u2014 network or upstream may be slow."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.6,
+      "outcome": "OPEN",
+      "service": "swarm_api",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1783291455.612719
+    },
+    {
+      "incident_id": "inc-711735a0",
+      "symptom": {
+        "component": "swarm_api",
+        "ok": false,
+        "detail": {
+          "ok": false,
+          "error": "HTTPConnectionPool(host='127.0.0.1', port=8000): Read timed out. (read timeout=2)"
+        }
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-1c93f15e",
+          "hypothesis": "network_timeout",
+          "confidence": 0.6,
+          "explanation": "Requests timed out \u2014 network or upstream may be slow."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.6,
+      "outcome": "OPEN",
+      "service": "swarm_api",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1783289834.577717
+    },
+    {
+      "incident_id": "inc-86b51384",
+      "symptom": {
+        "component": "swarm_api",
+        "ok": false,
+        "detail": {
+          "ok": false,
+          "error": "HTTPConnectionPool(host='127.0.0.1', port=8000): Read timed out. (read timeout=2)"
+        }
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-c01e04ec",
+          "hypothesis": "network_timeout",
+          "confidence": 0.6,
+          "explanation": "Requests timed out \u2014 network or upstream may be slow."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.6,
+      "outcome": "OPEN",
+      "service": "swarm_api",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1783238777.2782762
+    },
+    {
+      "incident_id": "inc-ffd49482",
+      "symptom": {
+        "component": "swarm_api",
+        "ok": false,
+        "detail": {
+          "ok": false,
+          "error": "HTTPConnectionPool(host='127.0.0.1', port=8000): Read timed out. (read timeout=2)"
+        }
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-a3839a59",
+          "hypothesis": "network_timeout",
+          "confidence": 0.6,
+          "explanation": "Requests timed out \u2014 network or upstream may be slow."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.6,
+      "outcome": "OPEN",
+      "service": "swarm_api",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1783234982.8582137
+    },
+    {
+      "incident_id": "inc-1125e875",
+      "symptom": {
+        "component": "swarm_api",
+        "ok": false,
+        "detail": {
+          "ok": false,
+          "error": "HTTPConnectionPool(host='127.0.0.1', port=8000): Read timed out. (read timeout=2)"
+        }
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-33915849",
+          "hypothesis": "network_timeout",
+          "confidence": 0.6,
+          "explanation": "Requests timed out \u2014 network or upstream may be slow."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.6,
+      "outcome": "OPEN",
+      "service": "swarm_api",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1783233685.0260248
+    },
+    {
+      "incident_id": "inc-3e5bb0e8",
+      "symptom": {
+        "component": "swarm_api",
+        "ok": false,
+        "detail": {
+          "ok": false,
+          "error": "HTTPConnectionPool(host='127.0.0.1', port=8000): Read timed out. (read timeout=2)"
+        }
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-f17f2d33",
+          "hypothesis": "network_timeout",
+          "confidence": 0.6,
+          "explanation": "Requests timed out \u2014 network or upstream may be slow."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.6,
+      "outcome": "OPEN",
+      "service": "swarm_api",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1783232547.1769302
+    },
+    {
+      "incident_id": "inc-3859f420",
+      "symptom": {
+        "component": "swarm_api",
+        "ok": false,
+        "detail": {
+          "ok": false,
+          "error": "HTTPConnectionPool(host='127.0.0.1', port=8000): Read timed out. (read timeout=2)"
+        }
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-1e9a0f8a",
+          "hypothesis": "network_timeout",
+          "confidence": 0.6,
+          "explanation": "Requests timed out \u2014 network or upstream may be slow."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.6,
+      "outcome": "OPEN",
+      "service": "swarm_api",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1783230208.0400493
+    },
+    {
+      "incident_id": "inc-8e334e47",
+      "symptom": {
+        "component": "swarm_api",
+        "ok": false,
+        "detail": {
+          "ok": false,
+          "error": "HTTPConnectionPool(host='127.0.0.1', port=8000): Read timed out. (read timeout=2)"
+        }
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-fc8dc690",
+          "hypothesis": "network_timeout",
+          "confidence": 0.6,
+          "explanation": "Requests timed out \u2014 network or upstream may be slow."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.6,
+      "outcome": "OPEN",
+      "service": "swarm_api",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1783229530.2233975
+    },
+    {
+      "incident_id": "inc-ac3006e8",
+      "symptom": {
+        "component": "swarm_api",
+        "ok": false,
+        "detail": {
+          "ok": false,
+          "error": "HTTPConnectionPool(host='127.0.0.1', port=8000): Read timed out. (read timeout=2)"
+        }
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-7ae57558",
+          "hypothesis": "network_timeout",
+          "confidence": 0.6,
+          "explanation": "Requests timed out \u2014 network or upstream may be slow."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.6,
+      "outcome": "OPEN",
+      "service": "swarm_api",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1783227943.9552715
+    },
+    {
+      "incident_id": "inc-5882cf57",
+      "symptom": {
+        "component": "swarm_api",
+        "ok": false,
+        "detail": {
+          "ok": false,
+          "error": "HTTPConnectionPool(host='127.0.0.1', port=8000): Read timed out. (read timeout=2)"
+        }
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-df6d9e57",
+          "hypothesis": "network_timeout",
+          "confidence": 0.6,
+          "explanation": "Requests timed out \u2014 network or upstream may be slow."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.6,
+      "outcome": "OPEN",
+      "service": "swarm_api",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1783226964.7682567
+    },
+    {
+      "incident_id": "inc-62c7538b",
+      "symptom": {
+        "component": "swarm_api",
+        "ok": false,
+        "detail": {
+          "ok": false,
+          "error": "HTTPConnectionPool(host='127.0.0.1', port=8000): Read timed out. (read timeout=2)"
+        }
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-6ea3ba56",
+          "hypothesis": "network_timeout",
+          "confidence": 0.6,
+          "explanation": "Requests timed out \u2014 network or upstream may be slow."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.6,
+      "outcome": "OPEN",
+      "service": "swarm_api",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1783225221.8564777
+    },
+    {
+      "incident_id": "inc-a3860ec6",
+      "symptom": {
+        "component": "swarm_api",
+        "ok": false,
+        "detail": {
+          "ok": false,
+          "error": "HTTPConnectionPool(host='127.0.0.1', port=8000): Read timed out. (read timeout=2)"
+        }
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-37f8de94",
+          "hypothesis": "network_timeout",
+          "confidence": 0.6,
+          "explanation": "Requests timed out \u2014 network or upstream may be slow."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.6,
+      "outcome": "OPEN",
+      "service": "swarm_api",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1783134500.0212717
+    },
+    {
+      "incident_id": "inc-450ed2ad",
+      "symptom": {
+        "component": "backend",
+        "ok": false,
+        "detail": {
+          "ok": false,
+          "error": "HTTPConnectionPool(host='127.0.0.1', port=8000): Read timed out. (read timeout=2)"
+        }
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-92916fe7",
+          "hypothesis": "network_timeout",
+          "confidence": 0.6,
+          "explanation": "Requests timed out \u2014 network or upstream may be slow."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.6,
+      "outcome": "OPEN",
+      "service": "backend",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1783116972.2877965
+    },
+    {
+      "incident_id": "inc-c880fe56",
+      "symptom": {
+        "component": "swarm_api",
+        "ok": false,
+        "detail": {
+          "ok": false,
+          "error": "HTTPConnectionPool(host='127.0.0.1', port=8000): Read timed out. (read timeout=2)"
+        }
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-9ebefeec",
+          "hypothesis": "network_timeout",
+          "confidence": 0.6,
+          "explanation": "Requests timed out \u2014 network or upstream may be slow."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.6,
+      "outcome": "OPEN",
+      "service": "swarm_api",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1783116367.9406123
+    },
+    {
+      "incident_id": "inc-cd3a93f9",
+      "symptom": {
+        "component": "swarm_api",
+        "ok": false,
+        "detail": {
+          "ok": false,
+          "error": "HTTPConnectionPool(host='127.0.0.1', port=8000): Read timed out. (read timeout=2)"
+        }
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-096b1869",
+          "hypothesis": "network_timeout",
+          "confidence": 0.6,
+          "explanation": "Requests timed out \u2014 network or upstream may be slow."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.6,
+      "outcome": "OPEN",
+      "service": "swarm_api",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1783114390.2967858
+    }
+  ],
+  "reflections": []
+}

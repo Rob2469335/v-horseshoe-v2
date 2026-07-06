@@ -1,0 +1,56 @@
+Your response must be indented with exactly two spaces, and it must begin o[1D[K
+on a new line. Example:
+    {
+      "agent": "[AGENT]",
+      "action": ["[ACTION]", {"param1": "[PARAMETER 1]", "param2: [PARAMETE[9D[K
+[PARAMETER 2]"}]
+    }
+{
+  "agent": "Project Manager",
+  "action": [
+    {
+      "param": "Read project"
+    },
+    {
+      "param": "Search documentation"
+    },
+    {
+      "param": "Write Python code"
+    },
+    {
+      "param": "Review code"
+    },
+    {
+      "param": "Fix failing unit tests"
+    }
+  ]
+}
+{
+  "agent": "Code Reviewer",
+  "action": [
+    {
+      "param": "Execute git commands"
+    }
+  ]
+}
+{
+  "agent": "Project Manager",
+  "action": [
+    {
+      "param": "Summarize results"
+    },
+    {
+      "param": "Review code again (if necessary)"
+    }
+  ] 
+}
+
+[1GΓáÖ [K[1GΓáÖ [K[1GΓá╕ [K[1GΓá╝ [K[1GΓá┤ [K[1GΓáª [K[1GΓáº [K[1GΓáç [K[1GΓáÅ [K[1GΓáÅ [K[1GΓáÖ [K[1GΓáÖ [K[1GΓá╕ [K[1GΓá╝ [K[1GΓá┤ [K[1GΓá┤ [K[1GΓáº [K[1GΓáç [K[1GΓáÅ [K[1GΓáï [K[1GΓáÖ [K[1GΓá╣ [K[1GΓá╣ [K[1GΓá╝ [K[1GΓá┤ [K[1GΓáª [K[1GΓáº [K[1GΓáº [K[1GΓáÅ [K[1GΓáï [K[1GΓáÖ [K[1GΓá╣ [K[1GΓá╕ [K[1GΓá╝ [K[1GΓá┤ [K[1GΓá┤ [K[1GΓáº [K[1GΓáç [K[1GΓáÅ [K[1GΓáÅ [K[1GΓáÖ [K[1GΓá╣ [K[1GΓá╕ [K[1GΓá╝ [K[1GΓá┤ [K[1GΓáª [K[1GΓáº [K[1GΓáç [K[1GΓáÅ [K[1GΓáï [K[1GΓáÖ [K[1GΓá╣ [K[1GΓá╕ [K[1GΓá╕ [K[1GΓá┤ [K[1GΓáª [K[1GΓáº [K[1GΓáº [K[1GΓáÅ [K[1GΓáÅ [K[1GΓáÖ [K[1GΓáÖ [K[1GΓá╣ [K[1GΓá╝ [K[1GΓá┤ [K[1GΓá┤ [K[1GΓáº [K[1GΓáº [K[1GΓáÅ [K[1GΓáï [K[1GΓáÖ [K[1GΓá╣ [K[1GΓá╕ [K[1GΓá╝ [K[1GΓá╝ [K[1GΓáª [K[1GΓáª [K[1GΓáç [K[1GΓáç [K[1GΓáÅ [K[1GΓáÖ [K[1GΓáÖ [K[1GΓá╕ [K[1GΓá╕ [K[1GΓá╝ [K[1GΓáª [K[1GΓáº [K[1GΓáç [K[1GΓáÅ [K[1GΓáï [K[1GΓáï [K[1GΓáÖ [K[1GΓá╣ [K[1GΓá╝ [K[1GΓá┤ [K[1GΓáª [K[1GΓáº [K[1GΓáº [K[1GΓáÅ [K[1GΓáï [K[1GΓáï [K[1GΓáÖ [K[1GΓá╕ [K[1GΓá╝ [K[1GΓá┤ [K[1GΓáª [K[1GΓáª [K[1GΓáç [K[1GΓáÅ [K[1GΓáÅ [K[1GΓáÖ [K[1GΓá╣ [K[1GΓá╕ [K[1GΓá╝ [K[1GΓá┤ [K[1GΓáª [K[1GΓáª [K[1GΓáç [K[1GΓáç [K[1GΓáï [K[1GΓáÖ [K[1GΓáÖ [K[1GΓá╣ [K[1GΓá╝ [K[1GΓá┤ [K[1GΓáª [K[1GΓáº [K[1GΓáç [K[1GΓáÅ [K[1GΓáï [K[1GΓáÖ [K[1GΓáÖ [K[1GΓá╕ [K[1GΓá╝ [K[1GΓá╝ [K[1GΓáª [K[1GΓáº [K[1GΓáç [K[1GΓáÅ [K[1GΓáï [K[1GΓáÖ [K[1GΓá╣ [K[1GΓá╕ [K[1GΓá╕ [K[1G[K[2K[1Gtotal duration:       1m39.5548717s
+load duration:        12.9085992s
+prompt eval count:    58 token(s)
+prompt eval duration: 1.577686s
+prompt eval rate:     36.76 tokens/s
+eval count:           224 token(s)
+eval duration:        1m25.061939s
+eval rate:            2.63 tokens/s
+

@@ -18,7 +18,7 @@ def test_session_state_load_save(tmp_path: Path):
     state.trace_mode = True
     state.mode = "dev"
     state.history.append({"agent_id": "coordinator", "prompt": "hello", "response": "world"})
-    state.save()
+    state.save(sync=True)
     
     # Reload and assert values are persistent
     reloaded = SessionState(session_file)
@@ -79,7 +79,7 @@ def test_command_registry_parsing(tmp_path: Path):
     state.history = [
         {"agent_id": "coordinator", "prompt": "explain quantum computing", "response": "quantum computing uses qubits..."}
     ]
-    state.save()
+    state.save(sync=True)
     
     res5 = registry.handle_line("/replay 0", ctx)
     assert res5 == "explain quantum computing"
@@ -146,7 +146,7 @@ def test_tokens_diff_and_export_commands(tmp_path: Path):
     state.history = [
         {"agent_id": "coordinator", "prompt": "hello", "response": "world", "timestamp": 123456789.0}
     ]
-    state.save()
+    state.save(sync=True)
     
     console = Console()
     ctx = CommandContext(
@@ -188,7 +188,7 @@ def test_debates_and_time_travel_commands(tmp_path: Path):
         {"agent_id": "reviewer", "prompt": "run 3", "response": "res 3", "timestamp": 3.0}
     ]
     state.history_pointer = -1
-    state.save()
+    state.save(sync=True)
     
     console = Console()
     debate_invoked = []
@@ -342,7 +342,7 @@ def test_new_cli_commands(tmp_path, monkeypatch):
         {"role": "user", "content": "baz"},
         {"role": "assistant", "content": "qux"},
     ]
-    state.save()
+    state.save(sync=True)
     console = Console()
     
     # Mock call_api

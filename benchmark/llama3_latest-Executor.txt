@@ -1,0 +1,18 @@
+Here are the PowerShell commands:
+
+```
+python -m venv myenv
+myenv\Scripts\activate
+pip install fastapi
+uvicorn main:app --host 0.0.0.0 --port 8000
+[1GΓáÖ [K[1GΓáÖ [K[1GΓá╕ [K[1GΓá╕ [K[1GΓá┤ [K[1GΓá┤ [K[1GΓáª [K[1GΓáç [K[1GΓáç [K[1GΓáï [K[1GΓáÖ [K[1GΓáÖ [K[1GΓá╣ [K[1GΓá╝ [K[1GΓá┤ [K[1GΓáª [K[1G[K[2K[1Gtotal duration:       10.6691989s
+```
+load duration:        379.1405ms
+prompt eval count:    35 token(s)
+prompt eval duration: 671.32ms
+prompt eval rate:     52.14 tokens/s
+eval count:           51 token(s)
+eval duration:        9.053256s
+eval rate:            5.63 tokens/s
+
+

@@ -1,0 +1,13 @@
+{
+  "RuntimeMs": 0,
+  "Category": "Debugger",
+  "TaskId": "debugging_call_fanout_001",
+  "TokenUsage": 0,
+  "Output": "",
+  "PromptEval": 0,
+  "TestCommand": "python -m pytest tests/test_call_fanout_budget.py",
+  "TokensPerSec": 0,
+  "Error": "MODEL_CALL_FAILED after 1 retries: The request was canceled due to the configured HttpClient.Timeout of 240 seconds elapsing.",
+  "Model": "XianYu_bi/DeepSeek-R1-Distill-Qwen-14B-Q3_K_M:latest",
+  "Timestamp": "2026-07-04T13:36:14.9831403-04:00"
+}

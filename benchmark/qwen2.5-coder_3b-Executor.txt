@@ -1,0 +1,23 @@
+```powershell
+# Create a Python virtual environment named "venv"
+python -m venv venv
+
+# Activate the virtual environment
+.\venv\Scripts\activate
+
+# Install FastAPI in the virtual environment
+pip install fastapi
+
+# Run uvicorn to start a simple FastAPI server
+uvicorn myapp:main
+```
+[1GΓáÖ [K[1GΓáÖ [K[1GΓá╕ [K[1GΓá╝ [K[1GΓá╝ [K[1GΓáª [K[1GΓáº [K[1GΓáç [K[1G[K[2K[1Gtotal duration:       5.7544985s
+
+load duration:        214.9739ms
+prompt eval count:    54 token(s)
+prompt eval duration: 401.417ms
+prompt eval rate:     134.52 tokens/s
+eval count:           72 token(s)
+eval duration:        4.920149s
+eval rate:            14.63 tokens/s
+

@@ -1,0 +1,13 @@
+{
+  "RuntimeMs": 123903.5418,
+  "Category": "Debugger",
+  "TaskId": "debugging_partial_patch_001",
+  "TokenUsage": 250,
+  "Output": " Not any explanation needed. Thanks\n\nimport ast\nfrom typing import List\n\n\ndef name_error_with_function_call(definition: str) -> bool:\n\n    try:\n        tree = ast.parse(definition)\n    except SyntaxError as e:\n        if \"assignment to keyword argument\" in str(e):\n            return True\n        else:\n            return False\n    \n    for node in ast.walk(tree.body[0].value):\n        \n        function_name = None\n        \n        if isinstance(node, ast.FunctionDef): \n           function_name = node.name\n            \n            \n        elif isinstance(node, ast.Assign): \n            \n            try: target_id = node.targets[0].id\n                except AttributeError as error:\n                    continue\n                \n                \n               assigned_value_exprs = [ast.unparse(assigned_val) for assigned_val in node.value.elts]\n            \n            \n            \n           if function_name is not None and all([f\"{function_name}(\" in expr for expr in assigned_value_exprs]):\n               \n                   return True\n            \n    return False\n\n\nif __name__ == \"__main__\":\n    \n   code_snippet = '''\ndef func(x, y):\n   z = x + y\n   \nfunc(1) # should cause NameError'''\n   \nprint(name_error_with_function_call(code_snippet))",
+  "PromptEval": 35,
+  "TestCommand": "python -c \"import py_compile; py_compile.compile('router.py', doraise=True)\"",
+  "TokensPerSec": 2.13,
+  "Error": null,
+  "Model": "qwen2.5-coder:14b-base-q3_K_S",
+  "Timestamp": "2026-07-04T12:20:16.2404637-04:00"
+}

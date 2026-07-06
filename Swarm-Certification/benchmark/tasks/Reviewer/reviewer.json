@@ -1,0 +1,18 @@
+{
+  "tasks": [
+    {
+      "id": "reviewer_flawed_patch_security_001",
+      "description": "Review a patch that introduces a security flaw in a script runner and identify the issue.",
+      "expected_fix": "Flag the vulnerability and recommend a safer implementation.",
+      "test_command": "pwsh -File tests/reviewer/Test-SecurityReview.ps1",
+      "category": "Reviewer"
+    },
+    {
+      "id": "reviewer_performance_regression_001",
+      "description": "Review a patch that slows down task execution and identify the regression.",
+      "expected_fix": "Explain the performance issue and suggest a fix.",
+      "test_command": "pwsh -File tests/reviewer/Test-PerformanceReview.ps1",
+      "category": "Reviewer"
+    }
+  ]
+}

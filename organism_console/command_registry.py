@@ -1104,6 +1104,25 @@ def cmd_heal(ctx: CommandContext, args: List[str]) -> None:
             ctx.console.print("[red]Goal loop runner unavailable.[/red]")
 
 
+@registry.register("upgrade", "Autonomously go on the internet, find SOTA architectures, and upgrade the Zenith OS codebase")
+def cmd_upgrade(ctx: CommandContext, args: List[str]) -> None:
+    custom_task = " ".join(args) if args else ""
+    objective = (
+        "You are tasked with a self-improvement cycle. Use `web_search` to find the absolute cutting-edge state of the art for Python AI agent frameworks (e.g. agent memory, multi-agent routing, or self-healing systems). "
+        "Search highly technical sources like GitHub repositories (e.g. 'site:github.com AI agent framework 2026'), Arxiv papers, HuggingFace discussions, and subreddits like r/LocalLLaMA. "
+        "Analyze the current Zenith OS codebase. If you find a missing advanced feature or an outdated pattern, write a plan to implement it, and then use `filesystem` to upgrade the codebase."
+    )
+    if custom_task:
+        objective += f"\n\nSPECIFIC USER TASK: {custom_task}"
+        
+    if ctx.run_goal_loop:
+        ctx.console.print(f"[bold magenta]🚀 Initiating Autonomous Self-Upgrade Cycle...[/bold magenta]")
+        if custom_task:
+            ctx.console.print(f"[cyan]Targeting specific task:[/cyan] {custom_task}")
+        ctx.run_goal_loop(objective)
+    else:
+        ctx.console.print("[red]Error: Autonomous goal loop is not configured in this context.[/red]")
+
 @registry.register("goal", "Run an autonomous self-correcting loop to achieve a goal. Usage: /goal <objective>")
 def cmd_goal(ctx: CommandContext, args: List[str]) -> None:
     if not args:
@@ -1119,6 +1138,8 @@ def cmd_goal(ctx: CommandContext, args: List[str]) -> None:
 
 @registry.register("prev", "Step back in execution history to inspect past decisions")
 def cmd_prev(ctx: CommandContext, args: List[str]) -> None:
+    from rich.panel import Panel
+    from rich.markup import escape
     if not ctx.state.history:
         ctx.console.print("[yellow]No history available.[/yellow]")
         return
@@ -1132,6 +1153,7 @@ def cmd_prev(ctx: CommandContext, args: List[str]) -> None:
         
     ctx.state.history_pointer -= 1
     ctx.state.save()
+    ctx.console.print(f"[green]Stepped back to history state {ctx.state.history_pointer}.[/green]")
     
     run = ctx.state.history[ctx.state.history_pointer]
     ctx.console.print(Panel(
@@ -1142,7 +1164,53 @@ def cmd_prev(ctx: CommandContext, args: List[str]) -> None:
         border_style="cyan"
     ))
 
+@registry.register("map", "Map the codebase and save to .swarm_brain/repo_map.md for agents to use")
+def cmd_map(ctx: CommandContext, args: List[str]) -> None:
+    ctx.console.print("[blue]Mapping codebase...[/blue]")
+    try:
+        import sys
+        import os
+        from pathlib import Path
+        
+        # Ensure the project root is in sys.path so we can import runtime_v2
+        if os.getcwd() not in sys.path:
+            sys.path.insert(0, os.getcwd())
+            
+        from runtime_v2.services.mapper import generate_repo_map
+        
+        map_content = generate_repo_map(os.getcwd())
+        
+        brain_dir = Path(".swarm_brain")
+        brain_dir.mkdir(exist_ok=True)
+        
+        map_file = brain_dir / "repo_map.md"
+        map_file.write_text(map_content, encoding="utf-8")
+        
+        # Calculate tokens roughly (1 token ~ 4 chars)
+        approx_tokens = len(map_content) // 4
+        
+        ctx.console.print(f"[green]✔ Codebase mapped successfully! (~{approx_tokens:,} tokens)[/green]")
+        ctx.console.print(f"Saved to {map_file}. Agents will now use this for context.")
+    except Exception as e:
+        ctx.console.print(f"[red]Error mapping codebase: {e}[/red]")
 
+
+@registry.register("index", "Index the codebase into the local Qdrant vector database for semantic search.")
+def cmd_index(ctx: CommandContext, args: List[str]) -> None:
+    ctx.console.print("[blue]Building semantic codebase index... This may take a moment depending on codebase size.[/blue]")
+    try:
+        import sys
+        import os
+        if os.getcwd() not in sys.path:
+            sys.path.insert(0, os.getcwd())
+            
+        from runtime_v2.services.indexer import index_codebase
+        
+        files, chunks = index_codebase(os.getcwd())
+        ctx.console.print(f"[green]✔ Codebase successfully indexed! ({files} files, {chunks} semantic chunks)[/green]")
+        ctx.console.print("Agents can now use the `semantic_search` tool to query the codebase.")
+    except Exception as e:
+        ctx.console.print(f"[red]Error indexing codebase: {e}[/red]")
 @registry.register("next", "Step forward in execution history to inspect past decisions")
 def cmd_next(ctx: CommandContext, args: List[str]) -> None:
     if not ctx.state.history:

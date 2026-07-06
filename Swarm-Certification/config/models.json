@@ -1,0 +1,17 @@
+{
+  "models": [
+    { "name": "qwen2.5-coder:14b-base-q3_K_S", "provider": "ollama", "roles": ["Coder", "Debugger"], "context_length": 32768, "cost_tier": "local", "tags": ["coding", "python", "powershell"] },
+    { "name": "qwen2.5-coder:7b", "provider": "ollama", "roles": ["Coder", "Debugger"], "context_length": 32768, "cost_tier": "local", "tags": ["coding"] },
+    { "name": "qwen2.5-coder:3b", "provider": "ollama", "roles": ["Executor", "Coder"], "context_length": 32768, "cost_tier": "local_light", "tags": ["coding", "fast"] },
+    { "name": "qwen3.5:9b", "provider": "ollama", "roles": ["Coordinator", "Planner", "Reviewer"], "context_length": 32768, "cost_tier": "local", "tags": ["reasoning", "planning"] },
+    { "name": "qwen3:8b-q4_K_M", "provider": "ollama", "roles": ["Planner", "Reviewer"], "context_length": 32768, "cost_tier": "local", "tags": ["reasoning"] },
+    { "name": "XianYu_bi/DeepSeek-R1-Distill-Qwen-14B-Q3_K_M:latest", "provider": "ollama", "roles": ["Researcher", "Debugger", "Coordinator"], "context_length": 32768, "cost_tier": "local", "tags": ["reasoning", "research"] },
+    { "name": "MFDoom/deepseek-r1-tool-calling:8b-llama-distill-q4_K_M", "provider": "ollama", "roles": ["ToolRunner", "Debugger"], "context_length": 16384, "cost_tier": "local", "tags": ["tool-use"] },
+    { "name": "llama3-groq-tool-use:8b-q4_K_M", "provider": "ollama", "roles": ["ToolRunner"], "context_length": 8192, "cost_tier": "local", "tags": ["tool-use"] },
+    { "name": "ministral-3:8b-instruct-2512-q4_K_M", "provider": "ollama", "roles": ["Coordinator", "Planner"], "context_length": 32768, "cost_tier": "local", "tags": ["reasoning"] },
+    { "name": "gemma4:e4b-it-q4_K_M", "provider": "ollama", "roles": ["Reviewer", "Planner"], "context_length": 8192, "cost_tier": "local", "tags": ["reasoning"] },
+    { "name": "phi4-mini:latest", "provider": "ollama", "roles": ["Executor"], "context_length": 4096, "cost_tier": "local_light", "tags": ["fast"] },
+    { "name": "llama3:latest", "provider": "ollama", "roles": ["Reviewer"], "context_length": 8192, "cost_tier": "local", "tags": ["general"] },
+    { "name": "qwen3-coder:480b-cloud", "provider": "ollama", "roles": ["Coder", "Debugger", "Researcher"], "context_length": 131072, "cost_tier": "cloud", "tags": ["coding", "large"] }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "task_id": "executor_resume_recovery_001",
+  "status": "success",
+  "response": "Resume from the last successful task and preserve existing outputs without rerunning completed steps.",
+  "actions_taken": ["Loaded prior state", "Skipped completed tasks", "Continued remaining tasks"]
+}

@@ -19,9 +19,55 @@ _DEFAULTS = {
     "debugger":    ("debugger",    "Diagnoses failures and routes fixes.", "coding"),
 }
 
+async def _evaluate_task_complexity(prompt: str, agent_id: str) -> str:
+    from runtime_v2.services.model_registry import get_sidecar, get_model
+    import httpx
+    
+    heavy_model, _ = get_model(agent_id)
+    sidecar_model, backend = get_sidecar(agent_id)
+    
+    if heavy_model == sidecar_model:
+        return heavy_model
+        
+    eval_msgs = [
+        {"role": "system", "content": "You are a task classifier. Reply with exactly the word 'EASY' if the user's task is simple, routine, or requires no deep code reasoning. Reply with 'HARD' if it is complex, requires writing code, deep analysis, or reading long files."},
+        {"role": "user", "content": f"Task: {prompt[:1000]}"}
+    ]
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "http://127.0.0.1:11434/api/chat",
+                json={
+                    "model": sidecar_model,
+                    "messages": eval_msgs,
+                    "stream": False,
+                    "options": {
+                        "temperature": 0.0,
+                        "num_predict": 10
+                    }
+                },
+                timeout=60.0  # Strict timeout prevents indefinite hangs
+            )
+            response.raise_for_status()
+            verdict = response.json()["message"]["content"].strip().upper()
+            
+        if "EASY" in verdict:
+            log.info("[%s] Adaptive Router classified task as EASY. Bypassing heavy model -> (%s).", agent_id, sidecar_model)
+            return sidecar_model
+        else:
+            log.info("[%s] Adaptive Router classified task as HARD. Using heavy model -> (%s).", agent_id, heavy_model)
+            return heavy_model
+    except Exception as e:
+        log.warning("[%s] Adaptive Routing failed (%s). Defaulting to heavy model.", agent_id, repr(e))
+        return heavy_model
+
 class AgentServiceV2:
     def __init__(self, orchestrator: Any = None, cache: Any = None, settings: Any = None) -> None:
         self.orchestrator = orchestrator
+        from swarm_os.agent_runtime import AgentRuntime
+        from runtime_v2.services.learning.evolving_critic import EvolvingCritic
+        self.agent_runtime = AgentRuntime()
+        self.learning_critic = EvolvingCritic()
         self._background_tasks = set()
         self._agents: Dict[str, dict] = {
             k: {"id": k, "role": r, "description": d, "model_role": m, "config": {}}
@@ -58,6 +104,7 @@ class AgentServiceV2:
         from runtime_v2.prompts.system_prompts import build
         from runtime_v2.services.tool_executor import run as run_tool
         from runtime_v2.services.stream_runner import get_tool_decision, stream_content
+        from runtime_v2.services.memory_core import get_relevant_memories
 
         history = list(history or [])
         chain = list(delegation_chain or [agent_id])
@@ -68,7 +115,24 @@ class AgentServiceV2:
             return
 
         role = self._agents.get(agent_id, {}).get("model_role", "fast")
-        model, provider = get_model(agent_id)
+        
+        # Adaptive Task Routing: Dynamically evaluate task complexity to pick the best loaded model
+        # We pass the raw, unmodified prompt to the 4B router so it isn't distracted by injected memories
+        print("DEBUG: Before _evaluate_task_complexity", flush=True)
+        adaptive_model = await _evaluate_task_complexity(prompt, agent_id)
+        print("DEBUG: After _evaluate_task_complexity", flush=True)
+        model, provider = adaptive_model, "ollama" # Assume ollama since they are locally loaded
+
+        # Auto-inject episodic memories if this is the first interaction in the chain
+        # We do this AFTER the 4B router runs so that the memory models (nomic-embed-text, bge-reranker)
+        # do not have to share system memory with the 4B router.
+        if not history and prompt:
+            print("DEBUG: Before get_relevant_memories", flush=True)
+            memories = await asyncio.to_thread(get_relevant_memories, prompt)
+            print("DEBUG: After get_relevant_memories", flush=True)
+            if memories:
+                prompt = f"{prompt}\n\n{memories}"
+        
         start_time = 0
         if self.orchestrator and hasattr(self.orchestrator, "router"):
             import time
@@ -91,31 +155,31 @@ class AgentServiceV2:
                "requested_role": role,
                "attempt": 1, "temperature": 0.1}
 
-        from runtime_v2.services.model_registry import get_predicted_next_model
-        next_model = get_predicted_next_model(agent_id)
-        if next_model:
-            import asyncio
-            task = asyncio.create_task(self._preload_model(next_model))
-            self._background_tasks.add(task)
-            task.add_done_callback(self._background_tasks.discard)
-
         initial_messages_len = len(messages)
         researcher_websearch_count = 0
-
+        from runtime_v2.prompts.system_prompts import _AGENT_TOOLS
+        allowed_tools = _AGENT_TOOLS.get(agent_id, ["delegate", "final", "filesystem"])
+        from runtime_v2.services.model_registry import get_sidecar
+        sidecar_model_name, _ = get_sidecar(agent_id)
+        
+        consecutive_errors = 0
         for _turn in range(MAX_TURNS):
-            decision = await get_tool_decision(model, messages, agent_id)
+            print(f"DEBUG: Before get_tool_decision (turn {_turn})", flush=True)
+            decision = await get_tool_decision(sidecar_model_name, messages, agent_id, allowed_tools=allowed_tools)
+            print(f"DEBUG: After get_tool_decision (turn {_turn})", flush=True)
 
             if not decision or not isinstance(decision, dict) or "action" not in decision:
                 # This should rarely happen now, but handle it gracefully
                 log.warning("[%s] Invalid decision, using final action", agent_id)
                 decision = {"action": "final", "response": "Task completed with default handler."}
+                consecutive_errors += 1
+            else:
+                # We will check tool success later
+                pass
 
             action = decision.get("action", "final").strip()
             log.info("[%s] action=%s", agent_id, action)
             yield {"agent_id": agent_id, "content": f"[{action}]", "model": model}
-            
-            from runtime_v2.prompts.system_prompts import _AGENT_TOOLS
-            allowed_tools = _AGENT_TOOLS.get(agent_id, ["delegate", "final", "filesystem"])
             
             if agent_id == "researcher" and action == "web_search":
                 researcher_websearch_count += 1
@@ -232,6 +296,21 @@ class AgentServiceV2:
                    "tool": action, "result": "executing..."}
             result = await run_tool(action, tool_payload)
             log.info("[%s] %s ok=%s", agent_id, action, result.get("ok"))
+            success = result.get("ok", False)
+            
+            # Step 1: The Critic observes the outcome and adjusts its weights (Metacognition)
+            adjusted_weights = self.learning_critic.score(success=success, confidence=0.8)
+            yield {"agent_id": agent_id, "type": "critic_update", "weights": adjusted_weights}
+            
+            if not success:
+                consecutive_errors += 1
+                # Step 2: Reflexion - Store failure semantic critique
+                from runtime_v2.services.memory_core import remember_fact
+                critique = f"Agent {agent_id} called {action} which failed with {result.get('error', 'unknown error')}. Strategy needs adjustment."
+                await asyncio.to_thread(remember_fact, critique, category="self_reflection")
+            else:
+                consecutive_errors = 0
+                
             yield {"agent_id": agent_id, "type": "tool_result",
                    "tool": action, "result": result}
             yield {"agent_id": agent_id, "content": f"\nI called {action} with {json.dumps(tool_payload)} and got: {json.dumps(result, ensure_ascii=False)}\n"}
@@ -240,6 +319,21 @@ class AgentServiceV2:
                 "content": f"I called {action} with {json.dumps(tool_payload)}"})
             messages.append({"role": "user",
                 "content": f"TOOL RESULT ({action}):\n{json.dumps(result, ensure_ascii=False)}\n\nContinue."})
+
+            # Open-Sable SOTA: Six-Stage Healing Circuit Breaker
+            if consecutive_errors >= 3:
+                yield {"agent_id": agent_id, "type": "error", "content": f"Circuit Breaker Tripped! {consecutive_errors} consecutive failures. Initiating Autonomous Self-Healing Sequence..."}
+                heal_task = f"The agent '{agent_id}' has failed {consecutive_errors} times consecutively while executing tools. Review the last few tool errors and write a plan to fix the code, syntax, or environment so they can succeed. Provide a 'final' action when healed."
+                yield {"agent_id": agent_id, "type": "agent_handoff", "from": agent_id, "to": "debugger", "task": heal_task}
+                
+                # Isolate the healing loop to prevent chain-pollution
+                async for chunk in self.step_agent_stream("debugger", heal_task, history=messages[-6:], delegation_chain=["debugger"]):
+                    chunk.setdefault("delegated_by", agent_id)
+                    yield chunk
+                
+                consecutive_errors = 0
+                messages.append({"role": "user", "content": "The autonomous self-healing cycle has finished. Please retry your last action with the newly fixed system."})
+                continue
 
             new_messages = messages[initial_messages_len:]
             new_tool_turns = [i for i, m in enumerate(new_messages) if m["role"] == "assistant" and m["content"].startswith("I called")]
@@ -252,6 +346,7 @@ class AgentServiceV2:
         if start_time and model:
             import time
             self.orchestrator.router.record_success(model, (time.time() - start_time) * 1000)
+
 
 
 

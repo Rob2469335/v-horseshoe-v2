@@ -1,0 +1,12 @@
+{
+  "TokenUsage": 220,
+  "TokensPerSec": 2.46,
+  "Output": " Do not include explanations or descriptions in your response.\r\n```\r\nimport asyncio\r\n\r\nclass AsyncProducerConsumerQueue():\r\n    def __init__(self, max_size=5):\r\n        self.max_size = max_size\r\n        self.queue = []\r\n        self.lock = asyncio.Lock()\r\n        \r\n    async def enqueue(self, item): # producer function to add items to the queue\r\n        async with self.lock:\r\n            while len(self.queue) >= self.max_size: \r\n                print('queue is full!')\r\n                await asyncio.sleep(0)\r\n            \r\n            self.queue.append(item)\r\n\r\n    async def dequeue(self):\r\n        async with self.lock:\r\n            if not self.queue: # producer function to remove items from the queue\r\n                raise Exception(\"Queue is empty!\")\r\n                \r\n            item = self.queue.pop()\r\n            return item\r\n\r\nasync def main():\r\n    q = AsyncProducerConsumerQueue()\r\n\r\n    print('Adding item(s)')\r\n    \r\n    for i in range(6):\r\n        asyncio.create_task(q.enqueue(i))\r\n        \r\n    await asyncio.sleep(.1)\r\n\r\nif __name__ == '__main__':\r\n    asyncio.run(main())\r\n\r\n```",
+  "TestCommand": "python -m pytest tests/coder/test_async_queue.py",
+  "TaskId": "coder_async_queue_001",
+  "RuntimeMs": 92769.9166,
+  "Model": "qwen2.5-coder:14b-base-q3_K_S",
+  "Category": "Coder",
+  "Timestamp": "2026-07-04T11:57:40.4587269-04:00",
+  "Error": null
+}

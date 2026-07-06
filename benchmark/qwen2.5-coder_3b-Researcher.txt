@@ -1,0 +1,50 @@
+### Comparison Table: FastAPI vs Flask
+
+| Aspect | FastAPI | Flask |
+|---|---|---|
+| **Language** | Python | Python |
+| **Framework Type** | Web framework | Web framework |
+| **Asynchronous Support** | Built-in asynchronous support | Asynchronous s[1D[K
+support through third-party libraries (e.g., `aiohttp` for HTTP) |
+| **Built-in ORMs** | No built-in ORM | Uses SQLAlchemy, Peewee, etc. for d[1D[K
+database interactions |
+| **Type Hinting** | Strong type hinting built into the framework | Optiona[7D[K
+Optional; use with third-party libraries like `pydantic` |
+| **Community and Support** | Growing community support; active development[11D[K
+development and updates | Established community; well-supported by Flask Co[2D[K
+Community |
+| **Documentation** | Well-documented, includes extensive examples and tuto[4D[K
+tutorials | Comprehensive documentation but less detailed compared to FastA[5D[K
+FastAPI |
+| **Performance** | Generally faster than Flask due to built-in optimizatio[11D[K
+optimizations | May be slower without proper performance tuning |
+| **Ease of Use** | Easy to get started with; good for small projects | Mor[3D[K
+More complex setup due to lack of built-in features |
+
+### Recommendations
+
+- **Flask**: If you are looking for a simple, lightweight framework suitabl[7D[K
+suitable for quick development and have a preference for Python's standard [K
+library or third-party libraries for ORMs. It is also easier to integrate w[1D[K
+with existing Flask applications.
+
+- **FastAPI**: Ideal for larger applications that require advanced features[8D[K
+features such as built-in asynchronous support, strong type hinting, and ef[2D[K
+efficient performance. It is also well-suited for projects where performanc[10D[K
+performance and scalability are critical.
+
+For a local AI server, FastAPI would be recommended due to its built-in asy[3D[K
+asynchronous capabilities and potential for better performance in scenarios[9D[K
+scenarios involving high traffic or real-time processing. However, this dec[3D[K
+decision should also consider the specific requirements of your application[11D[K
+application and the available resources.
+
+[1GΓáÖ [K[1GΓá╣ [K[1GΓá╕ [K[1GΓá╝ [K[1GΓá┤ [K[1GΓáª [K[1GΓáª [K[1GΓáç [K[1GΓáÅ [K[1G[K[2K[1Gtotal duration:       27.2549856s
+load duration:        259.631ms
+prompt eval count:    54 token(s)
+prompt eval duration: 397.237ms
+prompt eval rate:     135.94 tokens/s
+eval count:           381 token(s)
+eval duration:        26.313366s
+eval rate:            14.48 tokens/s
+

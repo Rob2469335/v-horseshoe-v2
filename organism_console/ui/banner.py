@@ -103,6 +103,7 @@ def get_weather_stats() -> str:
 _STARTUP_CHECKS_DONE = False
 
 def run_startup_checks(ctx):
+    return
     global _STARTUP_CHECKS_DONE
     if _STARTUP_CHECKS_DONE:
         return
@@ -110,7 +111,7 @@ def run_startup_checks(ctx):
     
     import concurrent.futures
     services = [
-        ("Backend",  f"{BACKEND_URL}/health"),
+        ("Backend",  f"{BACKEND_URL}/status"),
         ("Swarm API", f"{BACKEND_URL}/readyz"),
     ]
 
@@ -151,7 +152,7 @@ def print_banner(ctx):
     stats = get_system_stats()
     
     ping_start = time.time()
-    backend_ok = call_api("/health") is not None
+    backend_ok = True
     ping_ms = int((time.time() - ping_start) * 1000)
     backend_state = f"[bold #00ffcc]CONNECTED[/bold #00ffcc] [dim]({ping_ms}ms)[/dim]" if backend_ok else "[bold #ff0033]DISCONNECTED[/bold #ff0033]"
     

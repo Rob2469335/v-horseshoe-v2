@@ -87,6 +87,17 @@ async def web_search_handler(params: Dict[str, Any], trace_hook=None) -> Dict[st
                                      "snippet": i.get("snippet","")} for i in items]}
             logger.warning("SerpAPI %s, trying next", r.status_code)
 
+        try:
+            from duckduckgo_search import DDGS
+            with DDGS() as ddgs:
+                results = list(ddgs.text(query, max_results=max_results))
+            if results:
+                return {"ok": True, "provider": "duckduckgo", "query": query,
+                        "results": [{"title": i.get("title",""), "url": i.get("href",""),
+                                     "snippet": i.get("body","")} for i in results]}
+        except Exception as ddg_err:
+            logger.warning(f"DuckDuckGo search failed: {ddg_err}")
+
         logger.warning("All search providers failed or unconfigured, using simulated results")
         return {"ok": True, "provider": "simulated", "query": query,
                 "results": [

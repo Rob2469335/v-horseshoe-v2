@@ -1,0 +1,62 @@
+Here's a summary of the main differences between FastAPI and Flask:
+
+**Summary:**
+
+FastAPI is a newer, more modern framework that builds upon the strengths of[2D[K
+of Flask. It aims to provide better performance, improved support for async[5D[K
+async/await, and more robust features for building scalable web application[11D[K
+applications. Flask, on the other hand, is a lightweight and flexible frame[5D[K
+framework that excels at simplicity and ease of use.
+
+**Comparison Table:**
+
+| Feature | FastAPI | Flask |
+| --- | --- | --- |
+| **Async Support** | Built-in support for async/await | No built-in suppor[6D[K
+support (but can be used with libraries) |
+| **Performance** | Optimized for performance, using ASGI | Can be slow due[3D[K
+due to WSGI limitations |
+| **Type Hinting** | Strongly typed, uses Python 3.7+ type hinting | Not st[2D[K
+strongly typed, relies on convention over configuration |
+| **Documentation** | Automatic OpenAPI (Swagger) and API documentation | M[1D[K
+Manual documentation required |
+| **Routing** | Supports both traditional routing and path converters | Tra[3D[K
+Traditional routing only |
+| **Dependency Injection** | Built-in support for dependency injection | No[2D[K
+No built-in support |
+| **Testing** | Supports unittest and pytest, with built-in test client | S[1D[K
+Supports unittest and pytest, but requires additional setup |
+
+**Recommendation:**
+
+For a local AI server, I would recommend using FastAPI. Here's why:
+
+1. **Performance**: FastAPI is designed to provide better performance, whic[4D[K
+which is essential for an AI server that may need to process large amounts [K
+of data.
+2. **Async Support**: FastAPI's built-in support for async/await makes it e[1D[K
+easier to handle concurrent requests and improve overall responsiveness.
+3. **Type Hinting**: FastAPI's strong type hinting helps catch errors at co[2D[K
+compile-time, reducing the risk of runtime errors.
+4. **Documentation**: FastAPI's automatic OpenAPI documentation simplifies [K
+API design and makes it easier to explore and understand your API.
+
+That being said, Flask is still a great choice if you:
+
+1. Need a lightweight framework for simple projects or prototyping.
+2. Prefer a more flexible framework with fewer constraints.
+3. Are comfortable handling async/await manually (although this can lead to[2D[K
+to more complex code).
+
+Ultimately, the choice between FastAPI and Flask depends on your specific n[1D[K
+needs and preferences.
+
+[1GΓáÖ [K[1GΓá╣ [K[1GΓá╕ [K[1GΓá╝ [K[1GΓá┤ [K[1GΓáª [K[1GΓáº [K[1GΓáç [K[1GΓáÅ [K[1GΓáï [K[1GΓáï [K[1GΓá╣ [K[1GΓá╣ [K[1GΓá╝ [K[1GΓá┤ [K[1GΓáª [K[1GΓáº [K[1GΓáç [K[1GΓáÅ [K[1GΓáï [K[1GΓáÖ [K[1GΓáÖ [K[1GΓá╣ [K[1GΓá╝ [K[1GΓá┤ [K[1G[K[2K[1Gtotal duration:       1m28.7991505s
+load duration:        481.1486ms
+prompt eval count:    35 token(s)
+prompt eval duration: 673.835ms
+prompt eval rate:     51.94 tokens/s
+eval count:           475 token(s)
+eval duration:        1m26.262735s
+eval rate:            5.51 tokens/s
+

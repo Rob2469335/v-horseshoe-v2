@@ -72,3 +72,4 @@ swarm_os.egg-info/
 *.bak
 *.tmp
 *.temp
+.aider*

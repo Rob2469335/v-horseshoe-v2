@@ -1,0 +1,5 @@
+A Python regex to validate email addresses can be written as: `^[a-zA-Z0-9_[13D[K
+`^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$` and it checks if the str[3D[K
+string follows the general structure of an email address.
+
+[1GΓáÖ [K[1GΓáÖ [K[1GΓá╣ [K[1GΓá╝ [K[1GΓá┤ [K[1GΓá┤ [K[1GΓáº [K[1GΓáç [K[1GΓáÅ [K[1GΓáï [K[1GΓáÖ [K[1G[K[2K[1G

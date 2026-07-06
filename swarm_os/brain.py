@@ -351,8 +351,9 @@ def make_swarm_brain(genome, task_domain: str = "general", generate_fn=None) -> 
                     "response_preview": body_text[:1000],
                 }
 
-            choice = data["choices"][0]
-            content = choice["message"].get("content", "")
+            choice = data.get("choices", [{}])[0]
+            message = choice.get("message", {})
+            content = message.get("content", "")
             usage = data.get("usage", {})
             total_tokens = usage.get("total_tokens", 0)
 
@@ -364,14 +365,14 @@ def make_swarm_brain(genome, task_domain: str = "general", generate_fn=None) -> 
                 "total_tokens": total_tokens,
                 "prompt_tokens": usage.get("prompt_tokens", 0),
                 "finish_reason": choice.get("finish_reason", ""),
-                "tool_calls": choice["message"].get("tool_calls", []),
+                "tool_calls": message.get("tool_calls", []),
                 "cost": total_tokens / 1000.0,
                 "retrieval_top_k": top_k,
                 "system_prompt_len": len(system_prompt),
             }
 
         except httpx.TimeoutException:
-            log.warning("brain timeout org=%s model=%s", org_id, model)
+            log.warning("brain timeout org=%s model=%s", org_id, requested_model or _safe_model(genome))
             return {
                 "error": "timeout",
                 "cost": 5.0,

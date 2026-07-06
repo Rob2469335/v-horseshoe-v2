@@ -39,6 +39,7 @@ RE_TOPIC_CLEAN = re.compile(r"<topic_update.*?>")
 RE_TOOL_CLEAN = re.compile(r"<tool_call[^>]*>.*?(?:</tool_call>|$)", re.DOTALL)
 RE_THINK_CLEAN = re.compile(r"<think>.*?(?:</think>|$)", re.DOTALL)
 RE_PLAN_MATCH = re.compile(r"<plan>(.*?)</plan>", re.DOTALL)
+RE_THINK_MATCH = re.compile(r"<think>(.*?)(?:</think>|$)", re.DOTALL)
 
 def status_bar(ctx, agent, model, phase, ram_pct, tps: float = 0.0):
     stats = get_system_stats()
@@ -67,45 +68,54 @@ def status_bar(ctx, agent, model, phase, ram_pct, tps: float = 0.0):
     )
 
 def stream_prompt(ctx, agent_id, prompt, history):
-    stats = get_system_stats()
-    if stats["ram_pct"] > 90:
-        ctx.console.print("[bold red]WARNING:[/bold red] RAM critical, expect slower response.")
+    while True:
+        stats = get_system_stats()
+        if stats["ram_pct"] > 90:
+            ctx.console.print("[bold red]WARNING:[/bold red] RAM critical, expect slower response.")
 
-    payload = {
-        "agent_id": agent_id,
-        "prompt": prompt,
-        "history": history,
-        "focus_file": getattr(ctx, "focus_file", None),
-        "delegation_chain": getattr(ctx, "delegation_chain", [agent_id]),
-    }
-    resp = call_api(f"/agents/{agent_id}/step/stream", "POST", payload, stream=True)
+        payload = {
+            "agent_id": agent_id,
+            "prompt": prompt,
+            "history": history,
+            "focus_file": getattr(ctx, "focus_file", None),
+            "delegation_chain": getattr(ctx, "delegation_chain", [agent_id]),
+        }
+        resp = call_api(f"/agents/{agent_id}/step/stream", "POST", payload, stream=True)
 
-    if not resp:
-        ctx.console.print("[bold red]ERROR:[/bold red] Backend unreachable.")
-        return history
+        if not resp:
+            ctx.console.print("[bold red]ERROR:[/bold red] Backend unreachable.")
+            return history
 
-    full_content = ""
-    model = "zenith-core"
-    phase = "thinking"
-    tool_calls = []
-    handoffs_list = []
-    start_time = time.time()
-    _tokens_counted = False
-    _char_count = 0
+        full_content = ""
+        model = "zenith-core"
+        phase = "thinking"
+        tool_calls = []
+        handoffs_list = []
+        start_time = time.time()
+        _tokens_counted = False
+        _char_count = 0
 
-    ctx.console.print(Rule(style="dim blue"))
-    if not getattr(ctx, "delegation_chain", None):
-        ctx.delegation_chain = [agent_id]
-    ctx.last_stream_status = "interrupted"
-    ctx.save()
+        ctx.console.print(Rule(style="dim blue"))
+        if not getattr(ctx, "delegation_chain", None):
+            ctx.delegation_chain = [agent_id]
+        ctx.last_stream_status = "interrupted"
+        ctx.save()
 
-    _stream_errored = False
+        _stream_errored = False
+        _ask_user_triggered = False
 
-    with Live(console=ctx.console, refresh_per_second=15) as live:
-        try:
-            for line in resp.iter_lines():
-                if not line:
-                    continue
+        with Live(console=ctx.console, refresh_per_second=15) as live:
+            def safe_print(*args, **kwargs):
+                live.stop()
+                ctx.console.print(*args, **kwargs)
+                live.start()
+
+            try:
+                for line in resp.iter_lines():
+                    if isinstance(line, bytes):
+                        line = line.decode("utf-8", errors="replace")
+                    if not line:
+                        continue
 
                 try:
                     chunk = json.loads(line)
@@ -129,7 +139,7 @@ def stream_prompt(ctx, agent_id, prompt, history):
                 if err_msg:
                     err_agent = chunk.get("agent_id", ctx.active_agent)
                     err_tool = chunk.get("tool", "unknown")
-                    ctx.console.print(Panel(
+                    safe_print(Panel(
                         f"[bold red]Error in {err_agent} (Tool: {err_tool}):[/bold red]\n{err_msg}",
                         border_style="red"
                     ))
@@ -147,9 +157,9 @@ def stream_prompt(ctx, agent_id, prompt, history):
                             {"requested_role": requested_role, "delegation_path": " -> ".join(ctx.delegation_chain)},
                             "cyan"
                         )
-                        ctx.console.print(panel)
+                        safe_print(panel)
                     else:
-                        ctx.console.print(render_step_micro_ui("planning", f"Formulating plan for role: {requested_role}"))
+                        safe_print(render_step_micro_ui("planning", f"Formulating plan for role: {requested_role}"))
                     continue
 
                 if chunk_type == "model_selected":
@@ -168,15 +178,15 @@ def stream_prompt(ctx, agent_id, prompt, history):
                             },
                             "green"
                         )
-                        ctx.console.print(panel)
+                        safe_print(panel)
                     else:
-                        ctx.console.print(render_step_micro_ui("model_selected", f"selected {model}"))
+                        safe_print(render_step_micro_ui("model_selected", f"selected {model}"))
                     continue
 
                 if chunk_type == "model_escalation":
                     from_model = chunk.get("from_model")
                     reason = chunk.get("reason")
-                    ctx.console.print(
+                    safe_print(
                         f"[bold yellow]  Fallback:[/bold yellow] [dim]{from_model}[/dim] timed out "
                         f"[bold yellow]→ Escalating to cloud[/bold yellow] [dim]({reason})[/dim]"
                     )
@@ -186,7 +196,7 @@ def stream_prompt(ctx, agent_id, prompt, history):
                             {"from_model": from_model, "escalated_reason": reason, "status": "switching to secondary/cloud"},
                             "red"
                         )
-                        ctx.console.print(panel)
+                        safe_print(panel)
                     continue
 
                 if chunk_type == "agent_handoff":
@@ -198,7 +208,7 @@ def stream_prompt(ctx, agent_id, prompt, history):
                     ctx.save()
 
                     handoffs_list.append({"from": from_a, "to": to_a, "task": task})
-                    ctx.console.print(render_step_micro_ui("swarm", f"{from_a} → {to_a}: {task}"))
+                    safe_print(render_step_micro_ui("swarm", f"{from_a} → {to_a}: {task}"))
                     continue
 
                 if chunk_type == "tool_result":
@@ -209,9 +219,9 @@ def stream_prompt(ctx, agent_id, prompt, history):
                             {"tool": tool, "executing_model": chunk.get("model", "unknown")},
                             "yellow"
                         )
-                        ctx.console.print(panel)
+                        safe_print(panel)
                     else:
-                        ctx.console.print(render_step_micro_ui("tool_call", f"executing tool {tool}"))
+                        safe_print(render_step_micro_ui("tool_call", f"executing tool {tool}"))
                     continue
 
                 if "content" in chunk or "thinking" in chunk:
@@ -268,7 +278,7 @@ def stream_prompt(ctx, agent_id, prompt, history):
                     if plan_match:
                         layout.add_row(Panel(plan_match.group(1).strip(), title="Plan", border_style="yellow dim"))
 
-                    think_match = re.search(r"<think>(.*?)(?:</think>|$)", full_content, re.DOTALL)
+                    think_match = RE_THINK_MATCH.search(full_content)
                     if think_match:
                         think_content = think_match.group(1).strip()
                         if think_content:
@@ -375,27 +385,38 @@ def stream_prompt(ctx, agent_id, prompt, history):
                         new_history.append({"role": "user", "content": prompt})
                     new_history.append({"role": "assistant", "content": full_content})
                     new_history.append({"role": "user", "content": f"Observation: {json.dumps({'answer': answer})}"})
-                    return stream_prompt(ctx, chunk.get("agent_id", agent_id), "", new_history)
+                    
+                    history = new_history
+                    prompt = ""
+                    agent_id = chunk.get("agent_id", agent_id)
+                    _ask_user_triggered = True
+                    break
 
-        except Exception as e:
-            log.exception("Streaming exception")
-            ctx.console.print(f"[bold red]Stream failed:[/bold red] {e}")
-            if not _tokens_counted:
-                update_token_metrics(ctx, prompt, history, full_content, model)
-                ctx.save()
-                _tokens_counted = True
-            _stream_errored = True
+            except Exception as e:
+                log.exception("Streaming exception")
+                safe_print(f"[bold red]Stream failed:[/bold red] {e}")
+                if not _tokens_counted:
+                    update_token_metrics(ctx, prompt, history, full_content, model)
+                    ctx.save()
+                    _tokens_counted = True
+                _stream_errored = True
 
-    ctx.console.print(Rule(style="dim blue"))
+        if _ask_user_triggered:
+            continue
+            
+        ctx.console.print(Rule(style="dim blue"))
 
-    if full_content and full_content.strip():
-        ctx.console.print()
-        ctx.console.print(Panel(str(full_content), border_style="green"))
+        if full_content and full_content.strip():
+            ctx.console.print()
+            ctx.console.print(Panel(str(full_content), border_style="green"))
 
-    if not _tokens_counted:
-        update_token_metrics(ctx, prompt, history, full_content, model)
+        if not _tokens_counted:
+            update_token_metrics(ctx, prompt, history, full_content, model)
 
-    if _stream_errored:
+        if _stream_errored:
+            return history
+            
+        return history
         return history
 
     new_history = list(history)
@@ -419,6 +440,8 @@ def stream_prompt_with_retry(ctx, agent_id, prompt, history, max_retries=3):
                 f"[bold yellow]  Retry {attempt+1}/{max_retries - 1}[/bold yellow] "
                 f"[dim]in {delay}s...[/dim]"
             )
-            time.sleep(delay)
+            import sys
+            for _ in range(delay * 10):
+                time.sleep(0.1)
     ctx.console.print("[bold red]All retry attempts exhausted.[/bold red]")
     return history

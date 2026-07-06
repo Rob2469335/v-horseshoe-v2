@@ -1,0 +1,16 @@
+```powershell
+python -m venv myenv
+.\myenv\Scripts\activate
+pip install fastapi uvicorn
+uvicorn main:app --reload
+[1GΓáÖ [K[1GΓáÖ [K[1GΓá╕ [K[1GΓá╕ [K[1GΓá┤ [K[1GΓá┤ [K[1GΓáº [K[1GΓáº [K[1GΓáÅ [K[1GΓáÅ [K[1GΓáÖ [K[1GΓáÖ [K[1GΓá╕ [K[1GΓá╕ [K[1GΓá┤ [K[1GΓá┤ [K[1GΓáº [K[1GΓáç [K[1GΓáÅ [K[1GΓáÅ [K[1GΓáÖ [K[1GΓáÖ [K[1GΓá╕ [K[1GΓá╕ [K[1GΓá┤ [K[1GΓá┤ [K[1GΓáº [K[1GΓáº [K[1GΓáÅ [K[1GΓáÅ [K[1GΓáÖ [K[1GΓáÖ [K[1GΓá╕ [K[1GΓá╝ [K[1G[K[2K[1Gtotal duration:       10.9447783s
+```
+
+load duration:        289.2167ms
+prompt eval count:    580 token(s)
+prompt eval duration: 945.21ms
+prompt eval rate:     613.62 tokens/s
+eval count:           39 token(s)
+eval duration:        7.515453s
+eval rate:            5.19 tokens/s
+

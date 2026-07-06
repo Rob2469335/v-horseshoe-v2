@@ -1,0 +1,12 @@
+```python
+def two_sum(nums, target):
+    num_dict = {}
+    for i, num in enumerate(nums):
+        complement = target - num
+        if complement in num_dict:
+            return [num_dict[complement], i]
+        num_dict[num] = i
+    raise ValueError("No two sum solution")
+```
+
+[1GΓáÖ [K[1GΓá╣ [K[1GΓá╣ [K[1GΓá╝ [K[1GΓá╝ [K[1GΓáª [K[1GΓáª [K[1GΓáç [K[1GΓáç [K[1GΓáï [K[1G[K[2K[1G

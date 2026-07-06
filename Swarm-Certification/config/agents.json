@@ -1,0 +1,12 @@
+{
+  "agents": {
+    "Coordinator": { "model": "qwen3.5:9b", "max_tokens": 4096, "temperature": 0.2 },
+    "Planner":     { "model": "qwen3.5:9b", "max_tokens": 4096, "temperature": 0.2 },
+    "Researcher":  { "model": "XianYu_bi/DeepSeek-R1-Distill-Qwen-14B-Q3_K_M:latest", "max_tokens": 4096, "temperature": 0.1 },
+    "Executor":    { "model": "qwen2.5-coder:3b", "max_tokens": 4096, "temperature": 0.1 },
+    "Coder":       { "model": "qwen2.5-coder:14b-base-q3_K_S", "max_tokens": 4096, "temperature": 0.0 },
+    "Reviewer":    { "model": "qwen3.5:9b", "max_tokens": 4096, "temperature": 0.1 },
+    "Debugger":    { "model": "qwen2.5-coder:14b-base-q3_K_S", "max_tokens": 4096, "temperature": 0.0 },
+    "ToolRunner":  { "model": "llama3-groq-tool-use:8b-q4_K_M", "max_tokens": 4096, "temperature": 0.0 }
+  }
+}

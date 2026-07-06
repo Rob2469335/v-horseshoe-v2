@@ -1,0 +1,13 @@
+{
+  "RuntimeMs": 27554.1039,
+  "Category": "Coder",
+  "TaskId": "coder_async_queue_001",
+  "TokenUsage": 357,
+  "Output": "```python\nimport asyncio\nfrom collections import deque\n\nclass AsyncProducerConsumerQueue:\n    def __init__(self, capacity):\n        self.queue = deque()\n        self.capacity = capacity\n        self.full_condition = asyncio.Condition()\n        self.empty_condition = asyncio.Condition()\n\n    async def put(self, item):\n        await self.empty_condition.acquire()\n        while len(self.queue) >= self.capacity:\n            await self.full_condition.wait()\n        self.queue.append(item)\n        self.full_condition.notify_all()\n        self.empty_condition.release()\n\n    async def get(self):\n        await self.full_condition.acquire()\n        while not self.queue:\n            await self.empty_condition.wait()\n        item = self.queue.popleft()\n        self.empty_condition.notify_all()\n        self.full_condition.release()\n        return item\n\nasync def producer(queue, n_items):\n    for i in range(n_items):\n        await queue.put(f\"Item {i}\")\n\nasync def consumer(queue, n_items):\n    for _ in range(n_items):\n        item = await queue.get()\n        print(item)\n\nasync def main():\n    q = AsyncProducerConsumerQueue(10)\n    producer_task = asyncio.create_task(producer(q, 20))\n    consumer_task = asyncio.create_task(consumer(q, 20))\n    await asyncio.gather(producer_task, consumer_task)\n\nif __name__ == \"__main__\":\n    asyncio.run(main())\n```\n\nThis code defines an `AsyncProducerConsumerQueue` class that implements an asynchronous producer-consumer queue with backpressure using Python's `asyncio` library. The queue has a maximum capacity and uses conditions to manage concurrency between producers and consumers, ensuring that the queue does not exceed its capacity and that producers wait for space in the queue while consumers wait for items to be available.",
+  "PromptEval": 58,
+  "TestCommand": "python -m pytest tests/coder/test_async_queue.py",
+  "TokensPerSec": 14.48,
+  "Error": null,
+  "Model": "qwen2.5-coder:3b",
+  "Timestamp": "2026-07-04T12:45:46.6469632-04:00"
+}

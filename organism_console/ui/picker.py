@@ -149,14 +149,26 @@ class ModelPickerApp(App):
 
         self.models = []
         try:
-            r = requests.get(self.get_models_endpoint(), timeout=3, verify=settings.ssl_verify)
+            endpoint = self.get_models_endpoint() if self.cloud_enabled else "http://127.0.0.1:11434/api/tags"
+            verify_ssl = settings.ssl_verify if self.cloud_enabled else False
+            r = requests.get(endpoint, timeout=3, verify=verify_ssl)
             if r.status_code == 200:
                 self.models = r.json().get("models", [])
         except:
             self.models = []
 
         if not self.cloud_enabled:
-            self.models = [m for m in self.models if m.get("model") in local_model_names or m.get("name") in local_model_names]
+            self.models = [
+                {
+                    "model": m.get("model") or m.get("name"),
+                    "name": m.get("name") or m.get("model"),
+                    "context_length": ((m.get("details") or {}).get("context_length")),
+                    "pricing": "Local",
+                    "provider": "Ollama"
+                }
+                for m in self.models
+                if not any(x in str((m.get("model") or m.get("name") or "")).lower() for x in ("embed","rerank","vl","moondream"))
+            ]
 
     def update_routing_status(self) -> None:
         status = self.query_one("#routing_status", Static)
@@ -316,5 +328,6 @@ class ModelPickerApp(App):
 def launch_picker(ctx):
     app = ModelPickerApp(ctx)
     app.run()
+
 
 

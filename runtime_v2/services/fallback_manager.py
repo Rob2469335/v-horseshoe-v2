@@ -126,7 +126,7 @@ async def _fetch_ollama_models() -> list[dict]:
         pass
     return models
 
-async def refresh_fallbacks_if_needed():
+async def refresh_fallbacks_if_needed(mode: str = "auto"):
     global _last_fetch_time, _cached_fallbacks, _cached_stats
 
     current_time = time.time()
@@ -135,14 +135,21 @@ async def refresh_fallbacks_if_needed():
 
     log.debug("Refreshing fallback arrays (30-min TTL expired)...")
 
-    results = await asyncio.gather(
-        _fetch_openrouter_models(),
-        _fetch_groq_models(),
-        _fetch_nvidia_models(),
-        _fetch_gemini_models(),
-        _fetch_ollama_models(),
-        return_exceptions=True
-    )
+    if mode == "local_only":
+        results = await asyncio.gather(
+            _fetch_ollama_models(),
+            return_exceptions=True
+        )
+        results = [[], [], [], [], results[0]]
+    else:
+        results = await asyncio.gather(
+            _fetch_openrouter_models(),
+            _fetch_groq_models(),
+            _fetch_nvidia_models(),
+            _fetch_gemini_models(),
+            _fetch_ollama_models(),
+            return_exceptions=True
+        )
 
     openrouter_models = results[0] if isinstance(results[0], list) else []
     groq_models = results[1] if isinstance(results[1], list) else []
@@ -182,7 +189,7 @@ async def refresh_fallbacks_if_needed():
     _last_fetch_time = current_time
 
 async def get_live_fallbacks(mode: str = "auto") -> list[dict]:
-    await refresh_fallbacks_if_needed()
+    await refresh_fallbacks_if_needed(mode)
 
     local_models = [f for f in _cached_fallbacks if str(f.get("model", "")).startswith("ollama/")]
     cloud_models = [f for f in _cached_fallbacks if not str(f.get("model", "")).startswith("ollama/")]

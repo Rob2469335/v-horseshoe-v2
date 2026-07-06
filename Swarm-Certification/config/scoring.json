@@ -1,0 +1,25 @@
+{
+  "researcher_scoring": {
+    "official_docs_referenced": 25,
+    "official_github_referenced": 15,
+    "stackoverflow_used_correctly": 10,
+    "version_numbers_included": 10,
+    "confidence_score": 10,
+    "hallucination_penalty": -30,
+    "missing_citations_penalty": -20,
+    "wrong_recommendation_penalty": -25
+  },
+  "dimensions": {
+    "Correctness": { "weight": 0.4, "checks": ["tests_pass", "schema_valid", "non_empty_output"] },
+    "InstructionFollowing": { "weight": 0.2, "checks": ["non_boilerplate", "format_respected"] },
+    "Robustness": { "weight": 0.15, "checks": ["edge_cases_handled"] },
+    "Efficiency": { "weight": 0.15, "checks": ["runtime_under_threshold", "token_usage_under_budget"], "max_runtime_ms": 30000, "max_tokens": 8000 },
+    "Clarity": { "weight": 0.1, "checks": ["explanation_present"] }
+  },
+  "judge_calibration": {
+    "enabled": true,
+    "known_good_sample_size": 10,
+    "known_bad_sample_size": 10,
+    "recalibration_interval_days": 30
+  }
+}

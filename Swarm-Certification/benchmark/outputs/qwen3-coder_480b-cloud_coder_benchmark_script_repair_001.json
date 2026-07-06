@@ -1,0 +1,13 @@
+{
+  "RuntimeMs": 4707.2955,
+  "Category": "Coder",
+  "TaskId": "coder_benchmark_script_repair_001",
+  "TokenUsage": 62,
+  "Output": "I'd be happy to help fix a broken PowerShell benchmark script! However, I don't see the actual script content in your message. Could you please provide the PowerShell script that needs to be fixed? Once you share the code, I'll identify and correct the syntax and logic errors to make it run properly.",
+  "PromptEval": 43,
+  "TestCommand": "pwsh -File tests/coder/Test-BenchmarkScriptRepair.ps1",
+  "TokensPerSec": 0,
+  "Error": null,
+  "Model": "qwen3-coder:480b-cloud",
+  "Timestamp": "2026-07-04T14:09:03.1155536-04:00"
+}

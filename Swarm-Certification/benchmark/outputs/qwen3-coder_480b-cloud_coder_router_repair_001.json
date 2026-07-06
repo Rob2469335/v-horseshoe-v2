@@ -1,0 +1,13 @@
+{
+  "RuntimeMs": 7078.2049,
+  "Category": "Coder",
+  "TaskId": "coder_router_repair_001",
+  "TokenUsage": 250,
+  "Output": "```python\ndef fix_router_ties(router, models, scores):\n    \"\"\"\n    Fix router that ties same-role models on score.\n    \n    Args:\n        router: The routing function/model\n        models: List of models with roles\n        scores: Corresponding scores for models\n    \n    Returns:\n        Fixed router output with tie-breaking\n    \"\"\"\n    \n    # Group models by role\n    role_groups = {}\n    for model, score in zip(models, scores):\n        role = model.get('role', 'default')\n        if role not in role_groups:\n            role_groups[role] = []\n        role_groups[role].append((model, score))\n    \n    # Break ties within each role group\n    fixed_selections = []\n    for role, model_score_pairs in role_groups.items():\n        # Sort by score (descending), then by model name for tie-breaking\n        sorted_pairs = sorted(model_score_pairs, \n                            key=lambda x: (-x[1], x[0].get('name', '')))\n        # Select top model for this role\n        fixed_selections.append(sorted_pairs[0][0])\n    \n    # Apply original router logic with tie-broken selections\n    return router(fixed_selections)\n```",
+  "PromptEval": 37,
+  "TestCommand": "python -m pytest tests/coder/test_router_repair.py",
+  "TokensPerSec": 0,
+  "Error": null,
+  "Model": "qwen3-coder:480b-cloud",
+  "Timestamp": "2026-07-04T14:06:32.1272378-04:00"
+}

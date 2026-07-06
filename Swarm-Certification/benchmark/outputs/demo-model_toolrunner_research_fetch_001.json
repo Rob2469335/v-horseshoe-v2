@@ -1,0 +1,19 @@
+{
+  "task_id": "toolrunner_research_fetch_001",
+  "category": "ToolRunner",
+  "model": "demo-model",
+  "status": "success",
+  "response": "Used source-backed research with provenance and citation tracking.",
+  "started_at": "2026-07-04T14:41:51.3566692-04:00",
+  "finished_at": "2026-07-04T14:41:51.4064557-04:00",
+  "duration_ms": 50.0,
+  "plan": [],
+  "sources": [
+    "https://example.com/doc"
+  ],
+  "citations": [
+    "[1]"
+  ],
+  "actions_taken": [],
+  "findings": []
+}

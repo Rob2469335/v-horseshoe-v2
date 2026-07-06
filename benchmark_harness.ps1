@@ -18,6 +18,53 @@ New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 $OutputCsv = Join-Path $OutputDir "agent_role_eval_results.csv"
 $WinnerCsv = Join-Path $OutputDir "agent_role_winners.csv"
 
+function New-BenchmarkResultObject {
+    param(
+        [Parameter(Mandatory=$true)][string]$TaskId,
+        [Parameter(Mandatory=$true)][string]$Category,
+        [Parameter(Mandatory=$true)][string]$Model,
+        [Parameter(Mandatory=$true)][string]$Status,
+        [Parameter(Mandatory=$true)][string]$Response,
+        [Parameter(Mandatory=$false)][datetime]$StartedAt = (Get-Date),
+        [Parameter(Mandatory=$false)][datetime]$FinishedAt = (Get-Date),
+        [Parameter(Mandatory=$false)][hashtable]$Extra = @{}
+    )
+
+    $obj = [pscustomobject]@{
+        task_id     = $TaskId
+        category    = $Category
+        model       = $Model
+        status      = $Status
+        response    = $Response
+        started_at  = $StartedAt.ToString("o")
+        finished_at = $FinishedAt.ToString("o")
+        duration_ms = [math]::Round((New-TimeSpan -Start $StartedAt -End $FinishedAt).TotalMilliseconds)
+    }
+
+    foreach ($k in $Extra.Keys) {
+        $obj | Add-Member -MemberType NoteProperty -Name $k -Value $Extra[$k]
+    }
+
+    return $obj
+}
+
+function Save-BenchmarkResultObject {
+    param(
+        [Parameter(Mandatory=$true)]$ResultObject,
+        [Parameter(Mandatory=$true)][string]$OutputDirectory,
+        [Parameter(Mandatory=$true)][string]$FileName
+    )
+
+    if (-not (Test-Path $OutputDirectory)) {
+        New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
+    }
+
+    $path = Join-Path $OutputDirectory $FileName
+    $ResultObject | ConvertTo-Json -Depth 10 | Set-Content $path -Encoding UTF8
+    return $path
+}
+
+
 $teacherSchema = @{
     type = "object"
     properties = @{
@@ -112,15 +159,32 @@ foreach ($model in $Models) {
                 } | ConvertTo-Json -Depth 10 -Compress
 
                 $resp = Invoke-RestMethod -Uri "http://127.0.0.1:11434/api/chat" -Method POST -Body $body -ContentType "application/json" -TimeoutSec 300
-                $raw = $resp.message.content
+                $raw = [string]$resp.message.content
+
                 # Strip thinking tokens
                 $raw = $raw -replace '(?s)<think>.*?</think>', ''
                 $raw = $raw.Trim()
 
-                if ($raw.Length -gt 10) {
+                if (-not [string]::IsNullOrWhiteSpace($raw) -and $raw.Length -gt 10) {
                     $scantron = 1
-                    $jsonValid = 1
                     $rationale = $raw.Substring(0, [Math]::Min(500, $raw.Length))
+                }
+
+                $jsonCandidate = $null
+                if (-not [string]::IsNullOrWhiteSpace($raw)) {
+                    $jsonMatch = [regex]::Match($raw, '(?s)\{.*\}|\[.*\]')
+                    if ($jsonMatch.Success) {
+                        $jsonCandidate = $jsonMatch.Value
+                    }
+                }
+
+                if (-not [string]::IsNullOrWhiteSpace($jsonCandidate)) {
+                    try {
+                        $null = $jsonCandidate | ConvertFrom-Json -ErrorAction Stop
+                        $jsonValid = 1
+                    } catch {
+                        $jsonValid = 0
+                    }
                 }
 
                 if ($rationale.Length -gt 5) {
@@ -129,7 +193,11 @@ foreach ($model in $Models) {
                         $td = $teacherRaw | ConvertFrom-Json -ErrorAction Stop
                         $teacherScore = [int]$td.score
                         $teacherFeedback = [string]$td.feedback
-                    } catch { $teacherFeedback = "parse failed" }
+                    } catch {
+                        $teacherFeedback = "teacher parse failed: $($_.Exception.Message)"
+                    }
+                } else {
+                    $teacherFeedback = "empty rationale"
                 }
 
             } catch {
@@ -149,6 +217,26 @@ foreach ($model in $Models) {
                 Feedback      = $teacherFeedback
             })
 
+
+            $categoryMap = @{
+                "planner"     = "Planner"
+                "researcher"  = "Researcher"
+                "executor"    = "Executor"
+                "reviewer"    = "Reviewer"
+                "tool-runner" = "ToolRunner"
+                "coordinator" = "Coordinator"
+                "coder"       = "Coder"
+                "debugger"    = "Debugger"
+            }
+
+            $category = if ($null -ne $role -and $categoryMap.ContainsKey($role)) { $categoryMap[$role] } else { "Unknown" }
+            $taskId = "{0}_{1}_{2}_{3}" -f $role, ($model -replace '[^A-Za-z0-9_-]', '_'), ($scenario.name -replace '[^A-Za-z0-9_-]', '_'), $current
+            $roleResult = New-BenchmarkResultObject -TaskId $taskId -Category $category -Model $model -Status ($(if ($jsonValid -eq 1) { "success" } else { "failed" })) -Response $raw -StartedAt (Get-Date) -FinishedAt (Get-Date) -Extra @{ scenario = $scenario.name; teacher_score = $teacherScore; scantron_score = $scantron; total_score = ($scantron + $teacherScore) }
+            $safeModel = $model -replace '[^A-Za-z0-9_-]', '_'
+            $safeRole = $role -replace '[^A-Za-z0-9_-]', '_'
+            $safeScenario = $scenario.name -replace '[^A-Za-z0-9_-]', '_'
+            $jsonName = "{0}_{1}_{2}_{3}.json" -f $safeModel, $safeRole, $safeScenario, $current
+            Save-BenchmarkResultObject -ResultObject $roleResult -OutputDirectory $OutputDir -FileName $jsonName | Out-Null
             Write-Host "  ScantronScore=$scantron TeacherScore=$teacherScore Total=$($scantron+$teacherScore)" -ForegroundColor $(if(($scantron+$teacherScore) -ge 4){"Green"}elseif(($scantron+$teacherScore) -ge 2){"Yellow"}else{"Red"})
         }
     }
@@ -184,6 +272,8 @@ $results | Group-Object Model | ForEach-Object {
         Runs     = $_.Count
     }
 } | Sort-Object AvgScore -Descending | Format-Table -AutoSize
+
+
 
 
 

@@ -1,0 +1,13 @@
+{
+  "RuntimeMs": 8714.8864,
+  "Category": "Debugger",
+  "TaskId": "debugging_call_fanout_001",
+  "TokenUsage": 33,
+  "Output": "Understood. I'll ensure that any commands I execute do not fan out into multiple hidden model calls or inflate costs unnecessarily. How can I assist you today?",
+  "PromptEval": 63,
+  "TestCommand": "python -m pytest tests/test_call_fanout_budget.py",
+  "TokensPerSec": 6.06,
+  "Error": null,
+  "Model": "qwen2.5-coder:7b",
+  "Timestamp": "2026-07-04T12:40:14.1509317-04:00"
+}

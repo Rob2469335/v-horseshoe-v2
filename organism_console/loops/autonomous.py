@@ -11,6 +11,9 @@ from rich.prompt import Confirm
 from organism_console.config import PROJECT_ROOT
 from organism_console.api_client import call_api
 from organism_console.ui.live_stream import stream_prompt
+from swarm_os.healing.healing_loop import HealingLoop
+
+_healing_loop = HealingLoop()
 def run_syntax_checks() -> tuple[bool, str]:
     try:
         git_diff = subprocess.run(
@@ -158,6 +161,34 @@ def run_autonomous_goal_loop(goal: str, cmd_ctx):
     state.delegation_chain = [entry_agent]
     state.save()
     console.print(f"👥 [bold]Initial Agent[/bold]: [cyan]{entry_agent}[/cyan]")
+
+    heal_result = _healing_loop.tick()
+    if heal_result.get("status") == "healing_decision":
+        decision = heal_result.get("decision", {})
+        mode = decision.get("mode", "unknown")
+        component = heal_result.get("component", "unknown")
+        console.print(f"[bold yellow]⚕ Self-healing:[/bold yellow] issue detected in [cyan]{component}[/cyan] (mode: {mode})")
+        if mode == "auto":
+            import asyncio
+            from swarm_os.healing.recovery_engine import RecoveryEngine
+            recovery = RecoveryEngine()
+            symptom = heal_result.get("all_signals", [{}])[0]
+            result = asyncio.run(recovery.recover(symptom))
+            if result.get("ok"):
+                console.print(f"[bold green]✓ Auto-recovered:[/bold green] {result.get('action')}")
+            else:
+                console.print(f"[bold red]✗ Recovery attempt failed:[/bold red] {result.get('error', result.get('reason', 'unknown'))}")
+        elif mode == "approval_required":
+            console.print("[dim]Recovery requires approval — continuing goal, but component may be degraded.[/dim]")
+
+    READONLY_PATTERNS = r"\b(list|show|display|read|find|search|check|view|print|what|where|how many)\b"
+    CODE_ACTION_PATTERNS = r"\b(fix|refactor|implement|add|modify|update|create|write|delete|remove|change)\b"
+    is_readonly = bool(re.search(READONLY_PATTERNS, goal, re.IGNORECASE)) and not re.search(CODE_ACTION_PATTERNS, goal, re.IGNORECASE)
+
+    if is_readonly:
+        console.print("[dim]Detected read-only goal — running as a single tool call, skipping verification loop.[/dim]")
+        stream_prompt(cmd_ctx.state, entry_agent, goal, list(state.history))
+        return
     console.print()
     
     plan_first = False
@@ -190,10 +221,17 @@ def run_autonomous_goal_loop(goal: str, cmd_ctx):
                 refinement = console.input("[yellow]Provide feedback/refinements to regenerate the plan: [/yellow]").strip()
                 goal = f"{goal} (Feedback: {refinement})"
     
-    current_prompt = f"Goal: {goal}\\n\\n"
+    current_prompt = f"Goal: {goal}\n\n"
     if plan_first and 'plan_text' in locals() and 'task_text' in locals():
-        current_prompt += f"Implementation Plan:\\n{plan_text}\\n\\nTask Checklist:\\n{task_text}\\n\\n"
-    current_prompt += "Please audit, refactor, and fix the codebase to achieve this goal using your tools. Ensure syntax correctness and that all tests pass."
+        current_prompt += f"Implementation Plan:\n{plan_text}\n\nTask Checklist:\n{task_text}\n\n"
+    
+    current_prompt += (
+        "Please audit, refactor, and fix the codebase to achieve this goal using your tools. Ensure syntax correctness and that all tests pass.\n\n"
+        "*** CRITICAL INSTRUCTION ***\n"
+        "If you are the `coordinator` agent, you MUST NOT refuse this task or output plain text. You MUST immediately use the `delegate` tool to hand this off to the `planner` or `researcher`.\n"
+        "DO NOT say 'The verification process is failing' or 'To proceed manually...'\n"
+        "Just output the JSON `delegate` payload."
+    )
     
     history = list(state.history)
     max_attempts = 5
@@ -248,10 +286,11 @@ def run_autonomous_goal_loop(goal: str, cmd_ctx):
                 
             console.print("[yellow]Feeding back failure logs to agent context for correction...[/yellow]")
             current_prompt = (
-                f"<EPHEMERAL_MESSAGE>\\n"
-                f"The verification checks failed with the following traceback/logs:\\n\\n"
-                f"```\\n{trace_preview}\\n```\\n\\n"
-                f"Please analyze these errors, modify the code using your capabilities, and verify syntax to fix them.\\n"
+                f"<EPHEMERAL_MESSAGE>\n"
+                f"The verification checks failed with the following traceback/logs:\n\n"
+                f"```\n{trace_preview}\n```\n\n"
+                f"Please analyze these errors, modify the code using your capabilities, and verify syntax to fix them.\n"
+                f"CRITICAL: If you are the `coordinator`, you MUST delegate this to the `planner` or `researcher`.\n"
                 f"</EPHEMERAL_MESSAGE>"
             )
 

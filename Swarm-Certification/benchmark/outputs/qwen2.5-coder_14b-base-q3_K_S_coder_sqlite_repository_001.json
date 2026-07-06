@@ -1,0 +1,12 @@
+{
+  "Model": "qwen2.5-coder:14b-base-q3_K_S",
+  "TaskId": "coder_sqlite_repository_001",
+  "TestCommand": "python -m pytest tests/coder/test_sqlite_repo.py",
+  "RuntimeMs": 113429.2476,
+  "Category": "Coder",
+  "TokensPerSec": 2.19,
+  "Output": " Do not return instructions.\r\nSure, here is a simple example of how you can implement a Repository Pattern using Parameterized Queries in SQLite:\r\n```python\r\nimport sqlite3\r\n\r\nclass PersonRepository():\r\n    def __init__(self):\r\n        self.db = 'database.sqlite'\r\n\r\n    # Add person to database.\r\n    def add(self, name):\r\n        conn = sqlite3.connect(self.db)\r\n        cursor = conn.cursor()\r\n        \r\n        query = \"INSERT INTO people (name) VALUES (?)\"\r\n        \r\n        cursor.execute(query, [name])\r\n        \r\n        conn.commit() \r\n    \r\n    # Get all persons from the db\r\n    def get_all(self):\r\n        conn = sqlite3.connect(self.db)\r\n        cursor = conn.cursor()\r\n\r\n        query = \"SELECT name FROM people\"\r\n\r\n        cursor.execute(query)\r\n\r\n        results = cursor.fetchall()\r\n        \r\n        return [x[0] for x in results]\r\n\r\n# Initialize repository class.\r\nrepo = PersonRepository() \r\n      \r\nrepo.add('John Doe')\r\nprint(repo.get_all())\r\n```\r\nThis example creates a database connection, executes two parameterized queries and returns all the names of people stored within it.",
+  "Timestamp": "2026-07-04T11:40:46.5077943-04:00",
+  "Error": null,
+  "TokenUsage": 236
+}

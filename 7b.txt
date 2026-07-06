@@ -1,0 +1,48 @@
+Here's an example of how to reverse a linked list using Python:
+
+```python
+class Node:
+    def __init__(self, data):
+        self.data = data
+        self.next = None
+
+def reverse_linked_list(head):
+    prev_node = None
+    curr_node = head
+    while curr_node is not None:
+        next_node = curr_node.next
+        curr_node.next = prev_node
+        prev_node = curr_node
+        curr_node = next_node
+    return prev_node
+```
+
+The algorithm for reversing a linked list is as follows:
+
+1. Initialize three pointers, `prev_node`, `curr_node`, and `next_node`. Se[2D[K
+Set `prev_node` to None, `curr_node` to the head of the list, and `next_nod[9D[K
+`next_node` to None.
+
+2. Traverse the linked list using a while loop that continues until `curr_n[7D[K
+`curr_node` is None.
+
+3. For each node in the list, set `next_node` to `curr_node.next`. This sav[3D[K
+saves the next node's address before changing the current node's `next` poi[3D[K
+pointer.
+
+4. Set `curr_node.next` to `prev_node`. This reverses the direction of the [K
+link between the current and previous nodes.
+
+5. Move `prev_node` to `curr_node`. This updates `prev_node` to the current[7D[K
+current node for the next iteration of the loop.
+
+6. Move `curr_node` to `next_node`. This moves the pointer to the next node[4D[K
+node in the list.
+
+7. After traversing the entire list, return `prev_node`, which is now the n[1D[K
+new head of the reversed list.
+
+Note that this algorithm modifies the original linked list and reverses it [K
+in place. If you need to keep the original list unchanged, you can create a[1D[K
+a new linked list and insert nodes into it in reverse order instead.
+

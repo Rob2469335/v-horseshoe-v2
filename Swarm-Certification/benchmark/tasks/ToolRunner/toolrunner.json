@@ -1,0 +1,18 @@
+{
+  "tasks": [
+    {
+      "id": "toolrunner_ollama_call_001",
+      "description": "Run a model call through the tool layer and return structured output with runtime metadata.",
+      "expected_fix": "Call the tool correctly and preserve output plus timing.",
+      "test_command": "pwsh -File tests/toolrunner/Test-OllamaCall.ps1",
+      "category": "ToolRunner"
+    },
+    {
+      "id": "toolrunner_research_fetch_001",
+      "description": "Fetch source-backed information and preserve provenance in the returned result.",
+      "expected_fix": "Return a response that includes source ordering and citations.",
+      "test_command": "pwsh -File tests/toolrunner/Test-ResearchFetch.ps1",
+      "category": "ToolRunner"
+    }
+  ]
+}

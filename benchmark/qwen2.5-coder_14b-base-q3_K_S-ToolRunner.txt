@@ -1,0 +1,21 @@
+```json
+{
+  "tool": {
+    "search": { 
+      "query":"Python logging docs"
+     }
+   } 
+}
+```
+
+Please remember, reply only with json.
+[1GΓáÖ [K[1GΓá╣ [K[1GΓá╕ [K[1GΓá╝ [K[1GΓá┤ [K[1GΓáª [K[1GΓáº [K[1GΓáç [K[1GΓáÅ [K[1GΓáï [K[1GΓáÖ [K[1GΓá╣ [K[1GΓá╣ [K[1GΓá╝ [K[1GΓá┤ [K[1GΓáª [K[1GΓáº [K[1GΓáç [K[1GΓáÅ [K[1GΓáÅ [K[1GΓáï [K[1GΓá╣ [K[1GΓá╕ [K[1GΓá╝ [K[1GΓá┤ [K[1GΓáª [K[1GΓáº [K[1GΓáç [K[1GΓáÅ [K[1GΓáï [K[1GΓáÖ [K[1GΓá╣ [K[1GΓá╕ [K[1GΓá╝ [K[1GΓá╝ [K[1GΓáª [K[1GΓáº [K[1GΓáç [K[1G[K[2K[1Gtotal duration:       18.5649002s
+
+load duration:        284.1973ms
+prompt eval count:    24 token(s)
+prompt eval duration: 1.515874s
+prompt eval rate:     15.83 tokens/s
+eval count:           40 token(s)
+eval duration:        14.702423s
+eval rate:            2.72 tokens/s
+

@@ -73,6 +73,7 @@ def _get_routing_mode() -> str:
 
 def _get_litellm_model(agent_id: str, fallback_model: str) -> str:
     default_model, backend = get_model(agent_id)
+    # If the caller provides a fallback_model (e.g. adaptive routing chose the sidecar), use it!
     model = fallback_model if fallback_model else default_model
 
     if model.startswith("router/"):
@@ -234,7 +235,7 @@ async def _complete_for_tool_decision(litellm_model: str, messages: list, fallba
     kwargs = _build_kwargs(litellm_model, extra, fallbacks)
     kwargs["num_retries"] = 0
     kwargs["timeout"] = 600
-    kwargs["format"] = "json"
+    kwargs["num_ctx"] = 32768
     return await litellm.acompletion(**kwargs)
 
 def _get_cache_key(messages: list, agent_id: str) -> str:
@@ -254,7 +255,7 @@ def _get_cached_decision(cache_key: str) -> Optional[dict]:
 def _cache_decision(cache_key: str, decision: dict):
     _decision_cache[cache_key] = (decision, datetime.now())
 
-async def get_tool_decision(model: str, messages: list, agent_id: str) -> Optional[dict]:
+async def get_tool_decision(model: str, messages: list, agent_id: str, allowed_tools: list = None) -> Optional[dict]:
     cache_key = _get_cache_key(messages, agent_id)
     cached = _get_cached_decision(cache_key)
     if cached:
@@ -300,6 +301,7 @@ async def stream_content(model: str, messages: list, agent_id: str) -> AsyncGene
     try:
         kwargs["num_retries"] = 0
         kwargs["timeout"] = 600
+        kwargs["num_ctx"] = 32768
         response = await litellm.acompletion(**kwargs)
         async for chunk in response:
             piece = chunk.choices[0].delta.content or ""

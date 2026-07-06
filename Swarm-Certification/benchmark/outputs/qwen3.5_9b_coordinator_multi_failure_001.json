@@ -1,0 +1,13 @@
+{
+  "RuntimeMs": 0,
+  "Category": "Coordinator",
+  "TaskId": "coordinator_multi_failure_001",
+  "TokenUsage": 0,
+  "Output": "",
+  "PromptEval": 0,
+  "TestCommand": "python -m pytest tests/test_coordinator_multi_failure.py",
+  "TokensPerSec": 0,
+  "Error": "MODEL_CALL_FAILED after 1 retries: The request was canceled due to the configured HttpClient.Timeout of 240 seconds elapsing.",
+  "Model": "qwen3.5:9b",
+  "Timestamp": "2026-07-04T13:02:03.5791133-04:00"
+}

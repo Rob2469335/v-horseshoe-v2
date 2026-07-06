@@ -90,13 +90,13 @@ class Orchestrator:
 
         return "fast"
 
-    def _fetch_installed_models(self) -> list[str]:
+    async def _fetch_installed_models(self) -> list[str]:
         try:
-            import requests
-            response = requests.get("http://127.0.0.1:11434/api/tags", timeout=5)
-            response.raise_for_status()
-            data = response.json()
-            return [m.get("name") for m in data.get("models", []) if m.get("name")]
+            async with httpx.AsyncClient(timeout=5) as client:
+                response = await client.get("http://127.0.0.1:11434/api/tags")
+                response.raise_for_status()
+                data = response.json()
+                return [m.get("name") for m in data.get("models", []) if m.get("name")]
         except Exception:
             return ["qwen3.5:9b", "qwen2.5-coder:7b"]
 
@@ -264,7 +264,7 @@ class Orchestrator:
         start_ms = time.time() * 1000.0
 
         target_role = self._infer_task_role(messages)
-        installed_candidates = self._fetch_installed_models()
+        installed_candidates = await self._fetch_installed_models()
 
         if model and model.strip():
             candidates = [model.strip()]
@@ -475,7 +475,7 @@ class Orchestrator:
         start_ms = time.time() * 1000.0
 
         target_role = self._infer_task_role(messages)
-        installed_candidates = self._fetch_installed_models()
+        installed_candidates = await self._fetch_installed_models()
 
         if model and model.strip():
             candidates = [model.strip()]
@@ -590,7 +590,7 @@ class Orchestrator:
                         yield obs_text, chosen_model, trace_id
                         messages.append({"role": "assistant", "content": accumulated_text})
                         messages.append({"role": "user", "content": f"TOOL OBSERVATION:\n{json.dumps(observation)}\n\nContinue with the next assistant response."})
-                        continue
+                        break
                     # Yield observation back to the stream so the client receives it
                     obs_text = f"\n[Observation: {json.dumps(observation)}]\n"
                     yield obs_text, chosen_model, trace_id

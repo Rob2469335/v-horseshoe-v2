@@ -1,0 +1,11 @@
+{"query":"Python logging docs"}
+
+[1GΓáÖ [K[1GΓáÖ [K[1GΓá╕ [K[1GΓá╝ [K[1GΓá┤ [K[1GΓáª [K[1GΓáº [K[1GΓáç [K[1GΓáÅ [K[1GΓáÅ [K[1GΓáÖ [K[1GΓáÖ [K[1GΓá╕ [K[1GΓá╝ [K[1GΓá┤ [K[1GΓá┤ [K[1GΓáª [K[1GΓáº [K[1GΓáÅ [K[1G[K[2K[1Gtotal duration:       3.3373058s
+load duration:        471.3508ms
+prompt eval count:    34 token(s)
+prompt eval duration: 852.01ms
+prompt eval rate:     39.91 tokens/s
+eval count:           8 token(s)
+eval duration:        1.34841s
+eval rate:            5.93 tokens/s
+

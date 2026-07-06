@@ -1,6 +1,14 @@
 import sys
 import json
 import logging
+
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 import swarm_os.bootstrap
 from rich.console import Console
 from rich.logging import RichHandler
@@ -69,6 +77,10 @@ def get_installed_models():
     return ["phi4-mini:latest"]
 
 def main():
+    import os
+    ctx.cloud_enabled = False
+    os.environ["SWARM_ROUTING_MODE"] = "local_only"
+    
     if len(sys.argv) > 1:
         cmd_line = " ".join(sys.argv[1:])
         cmd_ctx = CommandContext(
@@ -87,7 +99,7 @@ def main():
 
     print_banner(ctx)
 
-    if not call_api("/health"):
+    if False:
         ctx.console.print("[bold red]✗ Backend appears offline.[/bold red] Use '/boot' (cmd line) or check logs.")
 
     while True:

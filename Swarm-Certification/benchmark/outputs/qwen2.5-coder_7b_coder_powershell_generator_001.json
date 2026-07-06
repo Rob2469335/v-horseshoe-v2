@@ -1,0 +1,13 @@
+{
+  "RuntimeMs": 34418.2387,
+  "Category": "Coder",
+  "TaskId": "coder_powershell_generator_001",
+  "TokenUsage": 182,
+  "Output": "```powershell\n# Define the source and destination directories\n$sourceDir = \"C:\\Path\\To\\Source\"\n$backupDir = \"D:\\Backup\"\n\n# Get the current date and time in a format suitable for filenames\n$dateString = Get-Date -Format \"yyyyMMdd_HHmmss\"\n\n# Create the backup directory with timestamped name if it doesn't exist\n$timestampedBackupDir = Join-Path $backupDir \"Backup_$dateString\"\nif (-Not (Test-Path $timestampedBackupDir)) {\n    New-Item -ItemType Directory -Path $timestampedBackupDir | Out-Null\n}\n\n# Copy the contents of the source directory to the timestamped backup directory\nCopy-Item -Path \"$sourceDir\\*\" -Destination $timestampedBackupDir -Recurse\n\nWrite-Output \"Backup completed successfully to $timestampedBackupDir\"\n```",
+  "PromptEval": 62,
+  "TestCommand": "pwsh -File tests/coder/Test-BackupScript.ps1",
+  "TokensPerSec": 5.89,
+  "Error": null,
+  "Model": "qwen2.5-coder:7b",
+  "Timestamp": "2026-07-04T12:31:03.6883442-04:00"
+}

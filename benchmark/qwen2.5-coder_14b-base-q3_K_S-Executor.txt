@@ -1,0 +1,91 @@
+```powershell
+# Create virtual environment
+py -m venv env
+
+# Activate it:
+.\env\Scripts\activate
+
+# Install dependencies (pip should be included in your Python installation)[13D[K
+installation)
+python -m pip install fastapi[all] uvicorn ipython typing_extensions pydant[6D[K
+pydantic maturin starlette requests black yapf isort autoflake flake8 mypy [K
+pylama bandit pytest coverage astroid pylint pep8 pycodestyle
+```
+
+The `.` means that you're using Unix commands. The `\` should be used with [K
+Windows paths
+
+```
+.\env\Scripts\Activate.ps1
+& .\env\Scripts\python.exe -m pip install fastapi[all] uvicorn ipython typi[4D[K
+typing_extensions pydantic maturin starlette requests black yapf isort auto[4D[K
+autoflake flake8 mypy pylama bandit pytest coverage astroid pylint pep8 pyc[3D[K
+pycodestyle
+
+```
+
+The `.\env` part must be an existing directory, but the `\Scripts\Activate.[19D[K
+`\Scripts\Activate.ps1` script does not exist by default. It's probably eas[3D[K
+easier to install [conda](https://docs.continuum.io/anaconda/) which will d[1D[K
+do everything for you automatically:
+
+```
+$ conda create -n env python=3
+Solving environment: done
+
+# All requested packages already installed.
+# packages in environment at C:\Users\me\AppData\Local\Continuum\miniconda3[46D[K
+C:\Users\me\AppData\Local\Continuum\miniconda3:
+#
+# Name                    Version                   Build  Channel
+
+$ source activate env
+
+(env) $
+
+```
+
+Or you could download Anaconda which has lots of additional features:
+
+<https://www.continuum.io/downloads>
+
+Once your virtual environment is activated, install FastAPI with `pip` as b[1D[K
+before.
+
+Alternatively, you can use the [virtualenv](http://virtualenv.readthedocs.o[44D[K
+[virtualenv](http://virtualenv.readthedocs.org/en/latest/) Python package t[1D[K
+to create and manage a separate python interpreter for each project. You co[2D[K
+could then run:
+
+```
+$ pip install fastapi[all] uvicorn ipython typing_extensions pydantic matur[5D[K
+maturin starlette requests black yapf isort autoflake flake8 mypy pylama ba[2D[K
+bandit pytest coverage astroid pylint pep8 pycodestyle
+
+```
+
+Or use conda to manage your virtual environment and packages.
+
+> 
+> Do not explain.
+> 
+> 
+
+You should still read the documentation for each package that you're using.[6D[K
+using. You won't get very far if all you know is how to run programs from P[1D[K
+PowerShell!
+
+* <http://docs.continuum.io/conda/>
+* [virtualenv](https://pypi.python.org/pypi/virtualenv)
+* For more information on installing python packages, see:
+<https://packaging.python.org/en/latest/>
+
+[1GΓáÖ [K[1GΓáÖ [K[1GΓá╕ [K[1GΓá╕ [K[1GΓá╝ [K[1GΓáª [K[1GΓáª [K[1GΓáº [K[1GΓáç [K[1GΓáÅ [K[1GΓáÖ [K[1GΓá╣ [K[1GΓá╣ [K[1GΓá╝ [K[1GΓá╝ [K[1GΓáª [K[1GΓáª [K[1GΓáº [K[1GΓáÅ [K[1GΓáÅ [K[1GΓáï [K[1GΓá╣ [K[1G[K[2K[1Gtotal duration:       3m33.8714369s
+load duration:        207.5729ms
+prompt eval count:    25 token(s)
+prompt eval duration: 1.536043s
+prompt eval rate:     16.28 tokens/s
+eval count:           555 token(s)
+eval duration:        3m31.5869s
+eval rate:            2.62 tokens/s
+

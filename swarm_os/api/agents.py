@@ -151,7 +151,7 @@ async def step_agent_stream(agent_id: str, payload: AgentStepPayload, request: R
         try:
             if runtime is None or runtime.agents is None:
                 yield json.dumps({"content": "Agent service unavailable"}) + "\n"
-                yield json.dumps({"done": True}) + "\n"
+                yield json.dumps({"type": "final", "done": True}) + "\n"
                 return
 
             async for chunk in runtime.agents.step_agent_stream(
@@ -162,11 +162,11 @@ async def step_agent_stream(agent_id: str, payload: AgentStepPayload, request: R
             ):
                 yield json.dumps(chunk) + "\n"
 
-            yield json.dumps({"done": True}) + "\n"
+            yield json.dumps({"type": "final", "done": True}) + "\n"
 
         except Exception as exc:
             yield json.dumps({"error": str(exc)}) + "\n"
-            yield json.dumps({"done": True}) + "\n"
+            yield json.dumps({"type": "final", "done": True}) + "\n"
 
     return StreamingResponse(generate(), media_type="application/x-ndjson")
 

@@ -1,0 +1,12 @@
+{
+  "Model": "qwen2.5-coder:14b-base-q3_K_S",
+  "TaskId": "coder_thread_pool_001",
+  "TestCommand": "python -m pytest tests/coder/test_thread_pool.py",
+  "RuntimeMs": 36633.5378,
+  "Category": "Coder",
+  "TokensPerSec": 2.61,
+  "Output": " Do not include explanations, commentary or whitespace.\r\npackage org.example.threading;\r\nimport java.util.List;\r\nimport java.util.concurrent.*;\r\npublic class ThreadPoolService {\r\n    private final ExecutorService service = Executors.newFixedThreadPool(5);\r\n    public void executeTask(Runnable task) {service.execute(task);}\r\n    public List<Runnable> shutdown() throws InterruptedException {return service.shutdownNow();}\r\n}",
+  "Timestamp": "2026-07-04T11:43:05.8000999-04:00",
+  "Error": null,
+  "TokenUsage": 83
+}

@@ -1,0 +1,9 @@
+{
+  "tasks": [
+    { "id": "debugging_router_tie_score_001", "description": "Router assigns identical fixed scores to same-role models, causing selection to collapse to list order.", "expected_fix": "Add secondary scoring based on model capability so same-role models separate on merit.", "test_command": "python -m pytest tests/test_router_scoring.py::test_same_role_models_differentiate", "category": "Debugger" },
+    { "id": "debugging_path_resolution_001", "description": "Code assumed a fixed filename for a module that actually lived at a different path, causing null resolution.", "expected_fix": "Search recursively for the target symbol rather than assuming a fixed filename; fail loudly if not found.", "test_command": "pwsh -File tests/Test-PathResolution.ps1", "category": "Debugger" },
+    { "id": "debugging_json_parser_reject_001", "description": "Tool-decision parser rejects valid but slightly non-conforming JSON output from the model.", "expected_fix": "Add tolerant parsing before rejecting output as invalid.", "test_command": "python -m pytest tests/test_tool_decision_parser.py", "category": "Debugger" },
+    { "id": "debugging_partial_patch_001", "description": "A patch updated a function signature but not its call site, causing a NameError.", "expected_fix": "Update all call sites consistently; add a compile/import smoke test as a guard.", "test_command": "python -c \"import py_compile; py_compile.compile('router.py', doraise=True)\"", "category": "Debugger" },
+    { "id": "debugging_call_fanout_001", "description": "A single command silently fans out into multiple hidden model calls, inflating cost.", "expected_fix": "Add call-count tracing per command and cap invocations unless explicitly escalated.", "test_command": "python -m pytest tests/test_call_fanout_budget.py", "category": "Debugger" }
+  ]
+}

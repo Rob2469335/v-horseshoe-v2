@@ -14,6 +14,21 @@ async def run(tool_name: str, payload: dict) -> dict:
         elif tool_name == "web_search":
             from swarm_os.lib.mcp.web_search import web_search_handler
             result = await web_search_handler(payload)
+        elif tool_name == "semantic_search":
+            from runtime_v2.services.semantic_search import semantic_search
+            query = payload.get("query", "")
+            limit = int(payload.get("limit", 5))
+            text_result = semantic_search(query, limit)
+            result = {"ok": True, "result": text_result}
+        elif tool_name == "remember":
+            from runtime_v2.services.memory_core import remember_fact
+            fact = payload.get("fact", "")
+            category = payload.get("category", "general")
+            success = remember_fact(fact, category)
+            if success:
+                result = {"ok": True, "result": f"Successfully remembered: {fact}"}
+            else:
+                result = {"ok": False, "error": "Failed to store memory in Qdrant."}
         elif tool_name == "sandbox_repl":
             from swarm_os.capabilities.sandbox_repl import SandboxReplHandler
             import asyncio

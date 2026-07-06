@@ -35,7 +35,7 @@ class EventBus:
         # This part requires an active event loop for the subscribers' queues
         try:
             loop = asyncio.get_event_loop()
-            for queue in self.subscribers:
+            for queue in list(self.subscribers):
                 loop.call_soon_threadsafe(queue.put_nowait, event)
         except RuntimeError:
             # No event loop running in this thread (likely a sync script)

@@ -1,0 +1,13 @@
+{
+  "RuntimeMs": 8337.1848,
+  "Category": "Debugger",
+  "TaskId": "debugging_path_resolution_001",
+  "TokenUsage": 30,
+  "Output": "```json\n{\n  \"solution\": \"Update the code to dynamically determine the path of the module instead of assuming a fixed filename.\"\n}\n```",
+  "PromptEval": 67,
+  "TestCommand": "pwsh -File tests/Test-PathResolution.ps1",
+  "TokensPerSec": 6.05,
+  "Error": null,
+  "Model": "qwen2.5-coder:7b",
+  "Timestamp": "2026-07-04T12:39:37.0831593-04:00"
+}

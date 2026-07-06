@@ -1,0 +1,13 @@
+{
+  "RuntimeMs": 22486.266,
+  "Category": "Coder",
+  "TaskId": "coder_fastapi_endpoint_001",
+  "TokenUsage": 281,
+  "Output": "```python\nfrom fastapi import FastAPI, HTTPException, Depends, Body\nfrom pydantic import BaseModel\n\napp = FastAPI()\n\n# Define Pydantic model for request body\nclass Item(BaseModel):\n    name: str\n    description: Optional[str] = None\n    price: float\n    tax: Optional[float] = None\n\n# Create a dependency to validate input data\ndef validate_data(item: Item = Body(...)):\n    if item.price < 0:\n        raise HTTPException(status_code=422, detail=\"Price must be non-negative\")\n    return item\n\n@app.post(\"/items/\")\nasync def create_item(item: Item = Depends(validate_data)):\n    # This function will only be called if the input data is valid\n    print(f\"Received item: {item}\")\n    return {\"item_id\": 1}\n```\n\nThis solution provides a FastAPI endpoint that accepts a JSON body of type `Item`, which includes fields for `name`, `description`, `price`, and `tax`. It uses a Pydantic model to define the structure of the request body. The `validate_data` function checks if the price is non-negative and raises an HTTP exception with a 422 status code if it's not. If the input data is valid, the item details are printed, and a response with an example item ID is returned.",
+  "PromptEval": 59,
+  "TestCommand": "python -m pytest tests/coder/test_fastapi_endpoint.py",
+  "TokensPerSec": 14.33,
+  "Error": null,
+  "Model": "qwen2.5-coder:3b",
+  "Timestamp": "2026-07-04T12:42:45.5754945-04:00"
+}

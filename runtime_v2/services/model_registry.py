@@ -15,6 +15,18 @@ AGENT_MODELS: dict[str, Tuple[str, str]] = {
     "debugger": ("qwen3.5:9b", "ollama"),
 }
 
+AGENT_SIDECARS: dict[str, Tuple[str, str]] = {
+    "coordinator": ("qwen3:4b-instruct", "ollama"),
+    "planner": ("qwen3:4b-instruct", "ollama"),
+    "researcher": ("qwen3:4b-instruct", "ollama"),
+    "executor": ("qwen3:4b-instruct", "ollama"),
+    "coder": ("qwen3:4b-instruct", "ollama"),
+    "tool-runner": ("qwen3:4b-instruct", "ollama"),
+    "reviewer": ("qwen3:4b-instruct", "ollama"),
+    "debugger": ("qwen3:4b-instruct", "ollama"),
+}
+
+
 CONFIG_FILE = Path(__file__).parent.parent.parent / "config" / "agent_models.json"
 
 def load_overrides():
@@ -45,6 +57,10 @@ def update_model_mapping(new_mapping: dict[str, str]):
 
 def get_model(agent_id: str) -> Tuple[str, str]:
     return AGENT_MODELS.get(agent_id, ("llama3-groq-tool-use:8b", "ollama"))
+
+def get_sidecar(agent_id: str) -> Tuple[str, str]:
+    return AGENT_SIDECARS.get(agent_id, ("qwen3:4b-instruct", "ollama"))
+
 
 PREDICTIVE_TOPOLOGY: dict[str, str] = {
     "coordinator": "planner",

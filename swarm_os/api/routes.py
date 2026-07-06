@@ -17,6 +17,8 @@ from swarm_os.api.api_features import router as api_features_router
 from swarm_os.api.schemas import (
     ToolListResponse,
     CacheStatusResponse,
+    StatusResponse,
+    CacheStatusResponse,
     ToolExecuteRequest,
     ToolExecuteResponse,
     GenerateRequest,
@@ -54,10 +56,10 @@ def get_orchestrator(request: Request) -> Any:
     return orchestrator
 
 # --- Helper Functions ---
-def _safe_health_report(runtime: Any) -> dict[str, Any]:
+async def _safe_health_report(runtime: Any) -> dict[str, Any]:
     try:
         import psutil
-        import requests
+        import httpx
         
         # Check system resources
         mem = psutil.virtual_memory()
@@ -66,15 +68,17 @@ def _safe_health_report(runtime: Any) -> dict[str, Any]:
         # Check dependencies
         ollama_ok = False
         try:
-            r = requests.get("http://127.0.0.1:11434/", timeout=1)
-            ollama_ok = r.status_code == 200
+            async with httpx.AsyncClient(timeout=1.0) as client:
+                r = await client.get("http://127.0.0.1:11434/")
+                ollama_ok = r.status_code == 200
         except Exception:
             pass
             
         qdrant_ok = False
         try:
-            r = requests.get("http://127.0.0.1:6333/", timeout=1)
-            qdrant_ok = r.status_code == 200
+            async with httpx.AsyncClient(timeout=1.0) as client:
+                r = await client.get("http://127.0.0.1:6333/")
+                qdrant_ok = r.status_code == 200
         except Exception:
             pass
 
@@ -141,20 +145,40 @@ def _build_capabilities(installed_models: list[str], runtime: Any = None) -> dic
         "generation": {"available": len(installed_models) > 0, "provider": "ollama", "models": installed_models, "default_model": installed_models[0] if installed_models else None, "coding_models": coding_models, "reasoning_models": reasoning_models},
     }
 
-def _safe_events(runtime: Any) -> list[Any]:
+async def _safe_events(runtime: Any) -> list[Any]:
     try:
         event_store = getattr(runtime, "event_store", None)
         if event_store is None:
             return []
-        return event_store.read_all()
+        import asyncio
+        return await asyncio.to_thread(event_store.read_all)
     except Exception:
         return []
 
 # --- API Endpoints ---
 
+@router.get("/status", response_model=StatusResponse)
+async def status(runtime: Any = Depends(runtime_dep)):
+    ollama_reachable = await _safe_ollama_reachable(runtime)
+    installed_models = await _safe_ollama_models(runtime)
+    events = await _safe_events(runtime)
+    return StatusResponse(
+        ready=getattr(runtime, "orchestrator", None) is not None,
+        events_path=".swarm/patch_log.jsonl",
+        event_count=len(events),
+        ollama_base_url="http://127.0.0.1:11434",
+        environment="development",
+        ollama_reachable=ollama_reachable,
+        vision_configured=True,
+        vision_runtime_available=True,
+        vision_tool_exposed=True,
+        vision_models_configured=installed_models,
+        generation_models_configured=installed_models
+    )
+
 @router.get("/readyz")
 async def readyz(runtime: Any = Depends(runtime_dep)) -> dict[str, Any]:
-    report = _safe_health_report(runtime)
+    report = await _safe_health_report(runtime)
     ollama_reachable = await _safe_ollama_reachable(runtime)
     installed_models = await _safe_ollama_models(runtime)
     checks = {
@@ -167,8 +191,8 @@ async def readyz(runtime: Any = Depends(runtime_dep)) -> dict[str, Any]:
     return {"status": "ready" if ready else "not-ready", "ready": ready, "checks": checks, "health_score": report["health_score"], "overall": report["overall"]}
 
 @router.get("/events")
-def list_events(runtime: Any = Depends(runtime_dep)):
-    all_ev = _safe_events(runtime)
+async def list_events(runtime: Any = Depends(runtime_dep)):
+    all_ev = await _safe_events(runtime)
     return {"count": len(all_ev), "events": all_ev[-50:]}
 
 @router.get("/traces")

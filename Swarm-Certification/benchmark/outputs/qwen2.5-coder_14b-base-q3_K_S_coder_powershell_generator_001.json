@@ -1,0 +1,12 @@
+{
+  "Model": "qwen2.5-coder:14b-base-q3_K_S",
+  "TaskId": "coder_powershell_generator_001",
+  "TestCommand": "pwsh -File tests/coder/Test-BackupScript.ps1",
+  "RuntimeMs": 45206.8364,
+  "Category": "Coder",
+  "TokensPerSec": 2.65,
+  "Output": " Do not include explanations.\r\n\r\n```powershell\r\n$source_dir = \"C:\\path\\to\\directory\"\r\n$current_timestamp = Get-Date -Format \"yyyy-MM-dd_HH-mm-ss\"\r\n\r\nfunction Backup-Documents {\r\n    $backup_name = \"$($current_timestamp)_$(Split-Path $source_dir -Leaf).zip\" # Create a timestamped backup filename\r\n    Compress-Archive -path $($source_dir) -DestinationPath \"$(Get-Location)\\$backup_name\"\r\n}\r\n\r\nBackup-Documents\r\n```",
+  "Timestamp": "2026-07-04T11:32:46.7877520-04:00",
+  "Error": null,
+  "TokenUsage": 107
+}

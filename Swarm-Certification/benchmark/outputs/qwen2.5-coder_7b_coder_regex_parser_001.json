@@ -1,0 +1,13 @@
+{
+  "RuntimeMs": 27254.0814,
+  "Category": "Coder",
+  "TaskId": "coder_regex_parser_001",
+  "TokenUsage": 140,
+  "Output": "```\nimport re\n\ndef parse_log_line(log_line):\n    pattern = r'(\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2},\\d{3}) \\[(.*?)\\] (INFO|WARNING|ERROR) (.*?): (.*)'\n    match = re.match(pattern, log_line)\n    if match:\n        timestamp = match.group(1)\n        level = match.group(3)\n        message = match.group(5)\n        return {\n            'timestamp': timestamp,\n            'level': level,\n            'message': message\n        }\n    else:\n        return None\n```",
+  "PromptEval": 57,
+  "TestCommand": "python -m pytest tests/coder/test_regex_parser.py",
+  "TokensPerSec": 5.86,
+  "Error": null,
+  "Model": "qwen2.5-coder:7b",
+  "Timestamp": "2026-07-04T12:35:50.9109058-04:00"
+}

@@ -1,0 +1,31 @@
+**FastAPI vs Flask Comparison Table**
+
+|  | **FastAPI** | **Flask** |
+| --- | --- | --- |
+| **Development Speed** | Faster development due to automatic generation of[2D[K
+of API documentation and interactive shell. | Slower development without th[2D[K
+these features. |
+| **Performance** | Optimized for high-performance, using ASGI which allows[6D[K
+allows for asynchronous processing. | Not as optimized for performance, use[3D[K
+uses WSGI. |
+| **Support for APIs** | Built with first-class support for modern web fram[4D[K
+frameworks like GraphQL and OpenAPI. | Can be used to build APIs but requir[6D[K
+requires more manual setup. |
+| **Error Handling** | Built-in support for error handling through ASGI's s[1D[K
+spec-compliant error handling mechanism. | Error handling needs to be imple[5D[K
+implemented manually. |
+
+For a local AI server, I recommend using FastAPI due to its fast developmen[10D[K
+development speed and high-performance capabilities. Additionally, its buil[4D[K
+built-in support for APIs and error handling make it ideal for complex appl[4D[K
+applications like AI servers.
+[1GΓáÖ [K[1GΓáÖ [K[1GΓá╣ [K[1GΓá╕ [K[1GΓá╝ [K[1GΓá┤ [K[1GΓáª [K[1GΓáç [K[1GΓáç [K[1GΓáï [K[1GΓáÖ [K[1GΓá╣ [K[1GΓá╣ [K[1GΓá╝ [K[1GΓá╝ [K[1GΓá┤ [K[1G[K[2K[1Gtotal duration:       40.3391924s
+load duration:        428.3475ms
+prompt eval count:    35 token(s)
+prompt eval duration: 855.853ms
+prompt eval rate:     40.89 tokens/s
+eval count:           202 token(s)
+eval duration:        38.70597s
+eval rate:            5.22 tokens/s
+
+

@@ -1,0 +1,18 @@
+{
+  "tasks": [
+    {
+      "id": "researcher_source_priority_001",
+      "description": "Research the best source priority order for technical documentation and explain why official docs should outrank community sources.",
+      "expected_fix": "Cite authoritative documentation first, then community sources only when necessary.",
+      "test_command": "pwsh -File tests/researcher/Test-SourcePriority.ps1",
+      "category": "Researcher"
+    },
+    {
+      "id": "researcher_model_timeout_001",
+      "description": "Find the most relevant guidance on handling long-running model calls and timeout policy in PowerShell automation.",
+      "expected_fix": "Summarize actionable timeout and retry guidance with clear source ranking.",
+      "test_command": "pwsh -File tests/researcher/Test-TimeoutGuidance.ps1",
+      "category": "Researcher"
+    }
+  ]
+}

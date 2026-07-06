@@ -1,0 +1,6 @@
+{
+  "tasks": [
+    { "id": "coordinator_agent_underuse_001", "description": "Swarm uses only 2 of 6 configured agents on a task requiring the full chain.", "expected_fix": "Coordinator must delegate through the full intended agent chain, skipping a stage only if genuinely not applicable.", "test_command": "python -m pytest tests/test_coordinator_full_chain.py", "category": "Coordinator" },
+    { "id": "coordinator_multi_failure_001", "description": "Simultaneous failures arrive from Planner, Reviewer, Debugger, ToolRunner, and Memory at once.", "expected_fix": "Coordinator produces a delegation plan resolving dependencies without dropping any request.", "test_command": "python -m pytest tests/test_coordinator_multi_failure.py", "category": "Coordinator" }
+  ]
+}

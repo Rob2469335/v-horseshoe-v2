@@ -53,6 +53,10 @@ Write-Host "Cleanup complete ✔" -ForegroundColor Green
 
 # STEP 2 - Ollama
 Write-Host "`n[STEP 2] Starting Ollama..." -ForegroundColor Yellow
+$env:OLLAMA_MAX_LOADED_MODELS = "1"
+$env:OLLAMA_VULKAN = "1"
+$env:OLLAMA_CONTEXT_LENGTH = "16384"
+$env:OLLAMA_KEEP_ALIVE = "-1"
 Start-Process "ollama" -ArgumentList "serve" -WindowStyle Hidden
 Start-Sleep -Seconds 5
 Write-Host "Ollama ✔" -ForegroundColor Green

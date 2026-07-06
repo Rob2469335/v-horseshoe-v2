@@ -6,7 +6,7 @@ from ops.health.system_health import run_system_health_checks
 
 router = APIRouter(tags=["health"])
 
-@router.get("/health")
+@router.api_route("/health", methods=["GET", "HEAD"])
 async def health():
     s = get_settings()
     return {

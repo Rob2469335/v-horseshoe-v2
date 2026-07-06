@@ -1,0 +1,13 @@
+{
+  "RuntimeMs": 186727.9894,
+  "Category": "Coder",
+  "TaskId": "coder_benchmark_script_repair_001",
+  "TokenUsage": 480,
+  "Output": " Don't include any additional commentary.\nBenchmark name: Powershell_Script_1\n```powershell\n\n# Create a function to generate random strings of specified length\nFunction Generate-RandomString($length) {\n    $chars = \"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_-+=[]{}|;:',.?/\"\n    return [string]::Join(\"\", $(for ($i=0;$i -lt $length;$i++) {Get-Random -InputObject @(($chars.ToCharArray()) | ForEach-Object {[char]$_.value})}))\n}\n\n# Generate random strings of length 1 to 25\n$randomStrings = @()\nFor ($j=1; $j-le 25; $j++){\n    $randomString += $(Generate-RandomString $j)\n}\nWrite-Host \"Random Strings: $($randomStrings)\"\n\n```\nHere is the corrected script:\n\n```powershell\n# Create a function to generate random strings of specified length\nFunction Generate-RandomString($length) {\n    Add-Type -AssemblyName System.Security\n    \n    [System.Random]::New().NextBytes([Byte[]]$buffer)\n    \n    $chars = \"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_-+=[]{}`|;:'\\\",.?/\"\n    return [string](Get-Random -InputObject ($chars.ToCharArray()) | ForEach-Object {[char]$_}) * $length\n}\n\n# Generate random strings of length 1 to 25\n$randomStrings = @()\nFor ($j=1; $j-le 25; $j++) {\n    $buffer = New-Object byte[] $j\n    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($buffer)\n    \n    $randomString += $(Generate-RandomString -length $j).ToString()\n}\n\nWrite-Host \"Random Strings: $($randomStrings)\"\n```\n\nChanges made:\n\n* Added `Add-Type` to import the System.Security assembly for generating random bytes.\n* Used `[System.Random]::New()` instead of `$buffer = New-Object byte[] $j`\n* Changed the loop variable from `$length` to `$j`.\n* Modified the call to Generate-RandomString by passing in the argument `-length $j`.",
+  "PromptEval": 35,
+  "TestCommand": "pwsh -File tests/coder/Test-BenchmarkScriptRepair.ps1",
+  "TokensPerSec": 2.64,
+  "Error": null,
+  "Model": "qwen2.5-coder:14b-base-q3_K_S",
+  "Timestamp": "2026-07-04T12:11:34.9948805-04:00"
+}

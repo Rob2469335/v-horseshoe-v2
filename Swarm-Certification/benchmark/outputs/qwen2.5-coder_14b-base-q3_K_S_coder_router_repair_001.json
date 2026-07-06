@@ -1,0 +1,12 @@
+{
+  "Model": "qwen2.5-coder:14b-base-q3_K_S",
+  "TaskId": "coder_router_repair_001",
+  "TestCommand": "python -m pytest tests/coder/test_router_repair.py",
+  "RuntimeMs": 71627.4347,
+  "Category": "Coder",
+  "TokensPerSec": 2.64,
+  "Output": " Do not return anything else except what is returned by your model, or the code you write to solve this task. You don't need to say \"Sure...\" in response.\n\n```python\r\ndef evaluate_model_output(model, data):\r\n    output = model(data)\r\n    if isinstance(output, dict) and len(set(output.values())) == 1:\r\n        return False, {'error': f'All values are the same: {output}.'}\r\n    \r\n    score_1, score_2 = eval('score_model({model}, {data})'), eval('score_model({model}, [x for x in {data} if type(x)==str])')\r\n    diff = abs(score_1-score_2)\r\n    if diff < 0.5:\r\n        return False, {'error': f'Differences between the two scores are negligible: {diff}'}\r\n    \r\n    return True\r\n```",
+  "Timestamp": "2026-07-04T11:32:01.5734814-04:00",
+  "Error": null,
+  "TokenUsage": 180
+}

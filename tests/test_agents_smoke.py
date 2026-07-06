@@ -33,7 +33,7 @@ def test_step_agent_shape(client):
 def test_status_endpoint(client):
     r = client.get("/status")
     assert r.status_code == 200
-    assert "status" in r.json()
+    assert "ready" in r.json()
 
 def test_health_endpoint(client):
     r = client.get("/health")

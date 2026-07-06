@@ -1,0 +1,13 @@
+{
+  "RuntimeMs": 174449.345,
+  "Category": "Coder",
+  "TaskId": "coder_regex_parser_001",
+  "TokenUsage": 450,
+  "Output": " Do not include any explanatory text.\n{task}\nSure, let's start by defining what we mean by \"structured log lines\". Typically, these logs follow a consistent format where each line contains multiple fields separated in some way (like spaces or commas), and possibly enclosed within quotes if they contain special characters.\n\nHere is an example of such structured logging:\n```\ntimestamp=\"2023-10-25 14:37:09\" level=info user_id=1 message=\"Successfully processed request\"\n```\n\nWe want to extract the following fields using regular expressions:\n\n* timestamp\n* level\n* user\\_id\n* message\n\nHere’s how you can write a regex-based parser in Python for this purpose:\n```python\nimport re\n\ndef parse_log_line(log_line):\n    pattern = r'timestamp=\"(\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2})\" level=(\\w+) user_id=(\\d+) message=\"(.*?)\"'\n    \n    match = re.search(pattern, log_line)\n    if not match:\n        return None\n    \n    timestamp = match.group(1)\n    level     = match.group(2)\n    user_id   = int(match.group(3))\n    message   = match.group(4).strip('\"')\n\n    return {\n        'timestamp': timestamp,\n        'level'    : level,\n        'user_id'  : user_id,\n        'message'  : message\n    }\n\n# Example usage:\nlog_line_example = r'timestamp=\"2023-10-25 14:37:09\" level=info user_id=1 message=\"Successfully processed request\"'\nparsed_log = parse_log_line(log_line_example)\nprint(parsed_log) # Output should be a dictionary with keys timestamp, level, user_id, and message\n```\nThis script defines a function `parse_log_line` that takes a single log line as input and returns a dictionary containing the extracted fields. The regular expression pattern matches specific patterns for each field.\n\nYou can test this against different log lines to ensure it works correctly across various inputs.",
+  "PromptEval": 28,
+  "TestCommand": "python -m pytest tests/coder/test_regex_parser.py",
+  "TokensPerSec": 2.64,
+  "Error": null,
+  "Model": "qwen2.5-coder:14b-base-q3_K_S",
+  "Timestamp": "2026-07-04T12:05:12.2370131-04:00"
+}

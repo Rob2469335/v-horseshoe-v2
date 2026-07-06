@@ -22,7 +22,7 @@ class SessionState:
         self.history: List[Dict[str, Any]] = []
         self.command_history: List[str] = []
         self.focus_file: Optional[str] = None
-        self.cloud_enabled: bool = True
+        self.cloud_enabled: bool = False
         self.current_topic: str = "Nexus Initialization"
         self.current_summary: str = "Establishing connection to Zenith Swarm OS..."
         self.strategic_intent: str = ""
@@ -74,36 +74,46 @@ class SessionState:
             import logging
             logging.getLogger("zenith_cli").error(f"Failed to load session state: {e}")
 
-    def save(self) -> None:
-        try:
-            self.session_file.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.session_file, "w", encoding="utf-8") as fh:
-                json.dump({
-                    "active_agent": self.active_agent,
-                    "selected_agent": self.active_agent,  # keep for compatibility
-                    "active_model": self.active_model,
-                    "execution_phase": self.execution_phase,
-                    "last_tool_call": self.last_tool_call,
-                    "last_error": self.last_error,
-                    "delegation_chain": self.delegation_chain,
-                    "trace_mode": self.trace_mode,
-                    "mode": self.mode,
-                    "history": self.history,
-                    "command_history": self.command_history,
-                    "focus_file": self.focus_file,
-                    "cloud_enabled": self.cloud_enabled,
-                    "current_topic": self.current_topic,
-                    "current_summary": self.current_summary,
-                    "strategic_intent": self.strategic_intent,
-                    "temp": self.temp,
-                    "total_input_tokens": self.total_input_tokens,
-                    "total_output_tokens": self.total_output_tokens,
-                    "cloud_input_tokens": self.cloud_input_tokens,
-                    "cloud_output_tokens": self.cloud_output_tokens,
-                    "cloud_token_quota": self.cloud_token_quota,
-                    "last_provider": self.last_provider,
-                    "history_pointer": self.history_pointer,
-                }, fh, indent=2, default=str)
-        except Exception as e:
-            import logging
-            logging.getLogger("zenith_cli").error(f"Failed to save session state: {e}")
+    def save(self, sync: bool = False) -> None:
+        def _do_save():
+            try:
+                if len(self.command_history) > 1000:
+                    self.command_history = self.command_history[-1000:]
+                self.session_file.parent.mkdir(parents=True, exist_ok=True)
+                with open(self.session_file, "w", encoding="utf-8") as fh:
+                    json.dump({
+                        "active_agent": self.active_agent,
+                        "selected_agent": self.active_agent,  # keep for compatibility
+                        "active_model": self.active_model,
+                        "execution_phase": self.execution_phase,
+                        "last_tool_call": self.last_tool_call,
+                        "last_error": self.last_error,
+                        "delegation_chain": self.delegation_chain,
+                        "trace_mode": self.trace_mode,
+                        "mode": self.mode,
+                        "history": self.history,
+                        "command_history": self.command_history,
+                        "focus_file": self.focus_file,
+                        "cloud_enabled": self.cloud_enabled,
+                        "current_topic": self.current_topic,
+                        "current_summary": self.current_summary,
+                        "strategic_intent": self.strategic_intent,
+                        "temp": self.temp,
+                        "total_input_tokens": self.total_input_tokens,
+                        "total_output_tokens": self.total_output_tokens,
+                        "cloud_input_tokens": self.cloud_input_tokens,
+                        "cloud_output_tokens": self.cloud_output_tokens,
+                        "cloud_token_quota": self.cloud_token_quota,
+                        "last_provider": self.last_provider,
+                        "history_pointer": self.history_pointer,
+                    }, fh, indent=2, default=str)
+            except Exception as e:
+                import logging
+                logging.getLogger("zenith_cli").error(f"Failed to save session state: {e}")
+        
+        if sync:
+            _do_save()
+        else:
+            import threading
+            t = threading.Thread(target=_do_save, daemon=True)
+            t.start()
