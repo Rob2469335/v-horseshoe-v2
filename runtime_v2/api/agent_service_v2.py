@@ -20,46 +20,9 @@ _DEFAULTS = {
 }
 
 async def _evaluate_task_complexity(prompt: str, agent_id: str) -> str:
-    from runtime_v2.services.model_registry import get_sidecar, get_model
-    import httpx
-    
+    from runtime_v2.services.model_registry import get_model
     heavy_model, _ = get_model(agent_id)
-    sidecar_model, backend = get_sidecar(agent_id)
-    
-    if heavy_model == sidecar_model:
-        return heavy_model
-        
-    eval_msgs = [
-        {"role": "system", "content": "You are a task classifier. Reply with exactly the word 'EASY' if the user's task is simple, routine, or requires no deep code reasoning. Reply with 'HARD' if it is complex, requires writing code, deep analysis, or reading long files."},
-        {"role": "user", "content": f"Task: {prompt[:1000]}"}
-    ]
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                "http://127.0.0.1:11434/api/chat",
-                json={
-                    "model": sidecar_model,
-                    "messages": eval_msgs,
-                    "stream": False,
-                    "options": {
-                        "temperature": 0.0,
-                        "num_predict": 10
-                    }
-                },
-                timeout=60.0  # Strict timeout prevents indefinite hangs
-            )
-            response.raise_for_status()
-            verdict = response.json()["message"]["content"].strip().upper()
-            
-        if "EASY" in verdict:
-            log.info("[%s] Adaptive Router classified task as EASY. Bypassing heavy model -> (%s).", agent_id, sidecar_model)
-            return sidecar_model
-        else:
-            log.info("[%s] Adaptive Router classified task as HARD. Using heavy model -> (%s).", agent_id, heavy_model)
-            return heavy_model
-    except Exception as e:
-        log.warning("[%s] Adaptive Routing failed (%s). Defaulting to heavy model.", agent_id, repr(e))
-        return heavy_model
+    return heavy_model
 
 class AgentServiceV2:
     def __init__(self, orchestrator: Any = None, cache: Any = None, settings: Any = None) -> None:
@@ -159,13 +122,14 @@ class AgentServiceV2:
         researcher_websearch_count = 0
         from runtime_v2.prompts.system_prompts import _AGENT_TOOLS
         allowed_tools = _AGENT_TOOLS.get(agent_id, ["delegate", "final", "filesystem"])
-        from runtime_v2.services.model_registry import get_sidecar
-        sidecar_model_name, _ = get_sidecar(agent_id)
         
         consecutive_errors = 0
+        unauthorized_tool_errors = 0
+        last_decision_hash = None
+        consecutive_duplicates = 0
         for _turn in range(MAX_TURNS):
             print(f"DEBUG: Before get_tool_decision (turn {_turn})", flush=True)
-            decision = await get_tool_decision(sidecar_model_name, messages, agent_id, allowed_tools=allowed_tools)
+            decision = await get_tool_decision(model, messages, agent_id, allowed_tools=allowed_tools)
             print(f"DEBUG: After get_tool_decision (turn {_turn})", flush=True)
 
             if not decision or not isinstance(decision, dict) or "action" not in decision:
@@ -216,29 +180,11 @@ class AgentServiceV2:
                 response_text = str(decision.get("response", "Task complete."))
 
                 if agent_id == "reviewer" and ("FAIL" in response_text.upper() or str(decision.get("verdict", "")).upper() == "FAIL"):
-                    if chain.count("reviewer") >= 2:
+                    if chain.count("reviewer") >= 3:
                         yield {"agent_id": agent_id, "content": response_text, "model": model}
-                        yield {"agent_id": agent_id, "type": "error", "content": "Reviewer failed twice. Aborting delegation loop."}
+                        yield {"agent_id": agent_id, "type": "error", "content": "Reviewer failed too many times. Aborting delegation loop."}
                         return
-                    target = "coder"
-
-                    import re
-                    m = re.search(r"FIXES_NEEDED:(.*)", response_text, re.DOTALL)
-                    fixes = m.group(1).strip() if m else response_text
-
-                    handoff_task = f"The reviewer failed the code. Feedback:\n{fixes}"
-                    yield {"agent_id": agent_id, "content": response_text, "model": model}
-                    yield {"agent_id": agent_id, "type": "agent_handoff", "from": agent_id, "to": target, "task": handoff_task}
-                    async for chunk in self.step_agent_stream(
-                        target, handoff_task, history=messages[1:],
-                        delegation_chain=chain + [target],
-                    ):
-                        chunk.setdefault("delegated_by", agent_id)
-                        yield chunk
-                    if start_time and model:
-                        import time
-                        self.orchestrator.router.record_success(model, (time.time() - start_time) * 1000)
-                    return
+                    # Fall through to yield the final fail verdict to the caller
 
                 yield {"agent_id": agent_id, "content": response_text, "model": model}
                 yield {"agent_id": agent_id, "type": "final", "model": model,
@@ -261,7 +207,7 @@ class AgentServiceV2:
                         messages.append({"role": "user", "content": f"Result: {json.dumps({'error': error_msg})}"})
                         continue
 
-                if target in chain:
+                if target in chain and target not in ["tool-runner", "reviewer", "debugger", "coder"]:
                     error_msg = f"Circular delegation blocked. '{target}' is already active in the chain ({' -> '.join(chain)}). Use 'final' to return results back up the chain."
                     yield {"agent_id": agent_id, "type": "tool_result", "tool": "delegate", "result": {"error": error_msg}}
                     messages.append({"role": "assistant", "content": f'I called delegate with {json.dumps({"target_agent": target, "task": task})}'})
@@ -278,17 +224,25 @@ class AgentServiceV2:
                 yield {"agent_id": agent_id, "type": "agent_handoff",
                        "from": agent_id, "to": target, "task": task}
 
+                child_final_response = f"Task completed by {target}."
+                child_history = [m for m in messages[-6:] if m.get("role") != "system"]
                 async for chunk in self.step_agent_stream(
-                    target, task, history=messages[1:],
+                    target, task, history=child_history,
                     delegation_chain=chain + [target],
                 ):
                     chunk.setdefault("delegated_by", agent_id)
                     yield chunk
+                    if chunk.get("type") == "final":
+                        child_final_response = str(chunk.get("content", f"Task completed by {target}."))
 
                 if start_time and model:
                     import time
                     self.orchestrator.router.record_success(model, (time.time() - start_time) * 1000)
-                return
+                
+                # Subroutine returns control to the parent
+                messages.append({"role": "assistant", "content": json.dumps({"action": "delegate", "target_agent": target, "task": task})})
+                messages.append({"role": "user", "content": f"TOOL RESULT (delegate)\n{target} responded: {child_final_response}\n\nReview this result and decide the next step."})
+                continue
 
             tool_payload = {k: v for k, v in decision.items() if k not in ["action", "response", "thought", "target_agent", "task", "verdict"]}
 

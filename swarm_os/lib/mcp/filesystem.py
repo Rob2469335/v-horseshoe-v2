@@ -17,15 +17,16 @@ async def filesystem_handler(params: Dict[str, Any], root: Path, trace_hook=None
     root = root.resolve()
     
     def resolve_in_sandbox(requested_path_str: str) -> Path:
-        # Strip leading slashes so Path() doesn't treat it as absolute root
-        requested_path_str = requested_path_str.lstrip("\\/")
-        requested_path = Path(requested_path_str or ".")
-        target_path = (root / requested_path).resolve()
         try:
+            req_path = Path(requested_path_str or ".")
+            if req_path.is_absolute():
+                target_path = req_path.resolve()
+            else:
+                target_path = (root / req_path).resolve()
             target_path.relative_to(root)
+            return target_path
         except ValueError as e:
             raise ValueError(f"Path is outside sandbox: {requested_path_str}") from e
-        return target_path
 
     try:
         target_path = resolve_in_sandbox(requested)
@@ -47,7 +48,7 @@ async def filesystem_handler(params: Dict[str, Any], root: Path, trace_hook=None
             target_path.write_text(content, encoding="utf-8")
             if trace_hook:
                 trace_hook("filesystem_write", {"ok": True, "path": str(target_path)})
-            return {"ok": True}
+            return {"ok": True, "path": str(target_path)}
 
         elif operation == "patch":
             if not target_path.exists():
@@ -78,12 +79,20 @@ async def filesystem_handler(params: Dict[str, Any], root: Path, trace_hook=None
             if not target_path.is_dir():
                 return {"ok": False, "error": f"Not a directory: {requested}", "path": str(target_path)}
             
+            recursive = bool(params.get("recursive", False))
             entries = []
-            for item in target_path.iterdir():
-                entries.append({
-                    "name": item.name,
-                    "size": item.stat().st_size if item.is_file() else 0
-                })
+            try:
+                iter_path = target_path.rglob("*") if recursive else target_path.iterdir()
+                for item in iter_path:
+                    if recursive and any(part.startswith('.') or part in ('node_modules', '.venv', '__pycache__') for part in item.relative_to(target_path).parts):
+                        continue
+                    entries.append({
+                        "name": str(item.relative_to(target_path).as_posix()) if recursive else item.name,
+                        "type": "file" if item.is_file() else "dir",
+                        "size": item.stat().st_size if item.is_file() else 0
+                    })
+            except Exception as e:
+                return {"ok": False, "error": f"Error listing directory: {e}", "path": str(target_path)}
             return {"ok": True, "entries": entries}
 
         elif operation == "grep":
@@ -102,8 +111,11 @@ async def filesystem_handler(params: Dict[str, Any], root: Path, trace_hook=None
                                 "line": i,
                                 "text": line
                             })
-                except Exception:
+                except UnicodeDecodeError:
                     pass
+                except Exception as e:
+                    if not recursive:
+                        raise e
 
             if target_path.is_file():
                 search_file(target_path)

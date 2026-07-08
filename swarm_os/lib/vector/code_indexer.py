@@ -23,7 +23,7 @@ QDRANT_URL = "http://127.0.0.1:6333"
 
 INCLUDE_EXTS = {".py", ".ts", ".tsx", ".js", ".jsx", ".md", ".yaml", ".toml"}
 EXCLUDE_DIRS = {"node_modules", "__pycache__", ".git", "dist", "build", ".venv", "_legacy_kernel_backup"}
-CHUNK_LINES = 60
+CHUNK_LINES = 30
 OVERLAP_LINES = 10
 
 

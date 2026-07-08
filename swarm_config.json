@@ -1,1 +1,14 @@
-{"caution_level": "HIGH", "retry_limit": 3}
+{
+  "caution_level": "HIGH", 
+  "retry_limit": 3,
+  "mcp_servers": {
+    "sqlite": {
+      "command": "npx",
+      "args": ["-y", "mcp-server-sqlite-npx", "C:\\Users\\rober\\Projects\\v-horseshoe-v2\\test.db"]
+    },
+    "memory": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"]
+    }
+  }
+}

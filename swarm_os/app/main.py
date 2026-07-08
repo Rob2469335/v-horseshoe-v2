@@ -11,15 +11,18 @@ from dotenv import load_dotenv
 load_dotenv(override=True)
 
 import os
-import ssl
-try:
-    ssl._create_default_https_context = ssl._create_unverified_context
-    ssl.create_default_context = ssl._create_unverified_context # Patch for aiohttp/httpx
-    os.environ["LITELLM_VERIFY_SSL"] = "False"
-    os.environ["CURL_CA_BUNDLE"] = ""
-    os.environ["REQUESTS_CA_BUNDLE"] = ""
-except Exception:
-    pass
+# Enable SSL verification for security
+# Only disable SSL verification if explicitly requested via environment variable
+if os.environ.get("DISABLE_SSL_VERIFICATION", "").lower() in ("1", "true", "yes"):
+    import ssl
+    try:
+        ssl._create_default_https_context = ssl._create_unverified_context
+        ssl.create_default_context = ssl._create_unverified_context
+        os.environ["LITELLM_VERIFY_SSL"] = "False"
+        os.environ["CURL_CA_BUNDLE"] = ""
+        os.environ["REQUESTS_CA_BUNDLE"] = ""
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -76,8 +79,9 @@ async def lifespan(app: FastAPI):
         orchestrator = None
 
     try:
-        from swarm_os.foundation.events.event_store import EventStore
-        event_store = EventStore()
+        from swarm_os.events.store import EventStore
+        from pathlib import Path
+        event_store = EventStore(Path("data/events"))
         log.info("EventStore ready")
     except Exception as exc:
         log.warning(f"EventStore unavailable: {exc}")
@@ -146,6 +150,13 @@ async def lifespan(app: FastAPI):
     # Background indexing removed: it causes a 10-minute Ollama embedding bottleneck on startup.
     # Users should use the explicit `/index` command in the CLI which utilizes the optimized batch indexer.
 
+    try:
+        from runtime_v2.services.tool_executor import get_mcp_manager
+        await get_mcp_manager()
+        log.info("External MCP Tools loaded and initialized")
+    except Exception as exc:
+        log.warning(f"Failed to initialize MCP Tools on startup: {exc}")
+
     log.info("RuntimeGraph mounted on app.state — all routes live")
     yield
     log.info("Swarm OS shutting down")
@@ -170,11 +181,13 @@ def create_app() -> FastAPI:
     from swarm_os.api.agents import router as agents_router
     from swarm_os.upwork.routes import router as upwork_router
     from swarm_os.api.swarm_stream import router as swarm_stream_router
+    from swarm_os.api.admin import router as admin_router
 
     app.include_router(api_router)
     app.include_router(agents_router)
     app.include_router(upwork_router)
     app.include_router(swarm_stream_router)
+    app.include_router(admin_router, prefix="/api")
 
     @app.get("/")
     def read_root():
@@ -188,52 +201,7 @@ def create_app() -> FastAPI:
             "health_score": 100,
         }
 
-    @app.get("/status")
-    async def status_endpoint(request: Request):
-        runtime = getattr(request.app.state, "runtime", None)
-        try:
-            if runtime is not None:
-                event_store = getattr(runtime, "event_store", None)
-                import asyncio
-                all_events = await asyncio.to_thread(event_store.read_all) if event_store else []
-                orchestrator = getattr(runtime, "orchestrator", None)
-                ollama_ok = await orchestrator.ollama.is_reachable() if orchestrator and hasattr(orchestrator, "ollama") else False
-                models = await orchestrator.ollama.list_models() if orchestrator and hasattr(orchestrator, "ollama") else []
-                from runtime_v2.services.fallback_manager import get_fallback_stats
-                return {
-                    "status": "ok" if ollama_ok else "degraded",
-                    "ready": ollama_ok,
-                    "ollama_reachable": ollama_ok,
-                    "event_count": len(all_events),
-                    "installed_model_count": len(models),
-                    "installed_models": models,
-                    "fallback_pool": get_fallback_stats()
-                }
-        except Exception as e:
-            pass
-        
-        # Fallback to direct Ollama query if runtime state fails
-        try:
-            from swarm_os.infra.ollama import OllamaClient
-            client = OllamaClient(base_url="http://127.0.0.1:11434")
-            models = await client.list_models()
-            return {
-                "status": "ok",
-                "ready": True,
-                "ollama_reachable": True,
-                "event_count": 0,
-                "installed_model_count": len(models),
-                "installed_models": models
-            }
-        except Exception:
-            return {
-                "status": "degraded",
-                "ready": False,
-                "ollama_reachable": False,
-                "event_count": 0,
-                "installed_model_count": 0,
-                "installed_models": []
-            }
+
 
     return app
 

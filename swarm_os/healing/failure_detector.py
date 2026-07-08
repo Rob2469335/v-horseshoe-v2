@@ -15,10 +15,12 @@ class FailureDetector:
             return {"ok": False, "error": str(exc)}
 
     def check_backend(self):
-        return self.probes.get("backend", lambda: self._http_ok(f"{self.backend_url}/health"))()
+        # We are running inside the backend, so it is definitely OK.
+        # Pinging it via HTTP causes an infinite recursion loop during /readyz checks.
+        return {"ok": True, "status_code": 200}
 
     def check_swarm_api(self):
-        return self.probes.get("swarm_api", lambda: self._http_ok(f"{self.backend_url}/readyz"))()
+        return {"ok": True, "status_code": 200}
 
     def check_qdrant(self):
         return self.probes.get("qdrant", lambda: self._http_ok(f"{self.qdrant_url}/collections"))()

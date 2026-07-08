@@ -1,7 +1,24 @@
-import pathlib
+import pathlib, re, sys
 
-p = pathlib.Path(r'C:\Users\rober\Projects\v-horseshoe-v2\swarm_os\api\routes.py')
-src = p.read_text(encoding='utf-8')
+POTENTIAL_PATHS = [
+    r'C:\Users\rober\Projects\v-horseshoe-v2\swarm_os\api\routes.py',
+    r'C:\Users\rober\Projects\v-horseshoe-v2\runtime_v2\api\routes.py',
+    r'C:\Users\rober\Projects\v-horseshoe-v2\swarm_os\api\agents.py',
+]
+
+target = None
+for p in POTENTIAL_PATHS:
+    if pathlib.Path(p).exists():
+        target = pathlib.Path(p)
+        break
+
+if target is None:
+    print("ERROR: No routes file found at any known path.")
+    sys.exit(1)
+
+print(f"Patching: {target}")
+src = target.read_text(encoding='utf-8')
+original_src = src
 
 old = '@router.post("/generate", response_model=GenerateResponse)\nasync def generate(payload: GenerateRequest, orch: Orchestrator = Depends(get_orchestrator)):\n    try:\n        result, chosen_model = await orch.generate(model=payload.model, prompt=payload.prompt)\n        return GenerateResponse(content=result, model=chosen_model)\n    except Exception as exc:\n        raise HTTPException(status_code=502, detail=str(exc))'
 
@@ -9,7 +26,12 @@ new = '@router.post("/generate")\nasync def generate(payload: GenerateRequest, r
 
 if old in src:
     src = src.replace(old, new)
-    p.write_text(src, encoding='utf-8')
-    print("OK")
+    print("Generate endpoint patched")
+elif src != original_src:
+    pass
+
+if src != original_src:
+    target.write_text(src, encoding='utf-8')
+    print("Changes written to disk")
 else:
-    print("NOT FOUND")
+    print("No changes needed")

@@ -106,9 +106,7 @@ def stream_prompt(ctx, agent_id, prompt, history):
 
         with Live(console=ctx.console, refresh_per_second=15) as live:
             def safe_print(*args, **kwargs):
-                live.stop()
                 ctx.console.print(*args, **kwargs)
-                live.start()
 
             try:
                 for line in resp.iter_lines():
@@ -116,281 +114,285 @@ def stream_prompt(ctx, agent_id, prompt, history):
                         line = line.decode("utf-8", errors="replace")
                     if not line:
                         continue
+                    if line.startswith("data: "):
+                        line = line[6:]
+                    if line == "[DONE]":
+                        continue
 
-                try:
-                    chunk = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                chunk_type = chunk.get("type")
+                    try:
+                        chunk = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    chunk_type = chunk.get("type")
 
-                if "delegated_by" in chunk and "agent_id" in chunk:
-                    parent = chunk["delegated_by"]
-                    child = chunk["agent_id"]
-                    if not getattr(ctx, "delegation_chain", None):
-                        ctx.delegation_chain = [parent]
-                    if ctx.delegation_chain[-1] != child:
-                        ctx.delegation_chain.append(child)
+                    if "delegated_by" in chunk and "agent_id" in chunk:
+                        parent = chunk["delegated_by"]
+                        child = chunk["agent_id"]
+                        if not getattr(ctx, "delegation_chain", None):
+                            ctx.delegation_chain = [parent]
+                        if ctx.delegation_chain[-1] != child:
+                            ctx.delegation_chain.append(child)
+                            ctx.save()
+
+                    err_msg = chunk.get("error")
+                    if not err_msg and isinstance(chunk.get("result"), dict) and "error" in chunk.get("result", {}):
+                        err_msg = chunk["result"]["error"]
+
+                    if err_msg:
+                        err_agent = chunk.get("agent_id", ctx.active_agent)
+                        err_tool = chunk.get("tool", "unknown")
+                        safe_print(Panel(
+                            f"[bold red]Error in {err_agent} (Tool: {err_tool}):[/bold red]\n{err_msg}",
+                            border_style="red"
+                        ))
+                        continue
+
+                    if chunk_type == "model_plan":
+                        requested_role = chunk.get("requested_role", "unknown")
+                        chain = chunk.get("model_chain", []) or []
+                        ctx.delegation_chain = chain if chain else [agent_id]
                         ctx.save()
 
-                err_msg = chunk.get("error")
-                if not err_msg and isinstance(chunk.get("result"), dict) and "error" in chunk.get("result", {}):
-                    err_msg = chunk["result"]["error"]
+                        if ctx.trace_mode:
+                            panel = render_trace_panel(
+                                "Router Decision & Path Planning",
+                                {"requested_role": requested_role, "delegation_path": " -> ".join(ctx.delegation_chain)},
+                                "cyan"
+                            )
+                            safe_print(panel)
+                        else:
+                            safe_print(render_step_micro_ui("planning", f"Formulating plan for role: {requested_role}"))
+                        continue
 
-                if err_msg:
-                    err_agent = chunk.get("agent_id", ctx.active_agent)
-                    err_tool = chunk.get("tool", "unknown")
-                    safe_print(Panel(
-                        f"[bold red]Error in {err_agent} (Tool: {err_tool}):[/bold red]\n{err_msg}",
-                        border_style="red"
-                    ))
-                    continue
+                    if chunk_type == "model_selected":
+                        model = chunk.get("model", "unknown")
+                        ctx.active_model = model
+                        ctx.save()
 
-                if chunk_type == "model_plan":
-                    requested_role = chunk.get("requested_role", "unknown")
-                    chain = chunk.get("model_chain", []) or []
-                    ctx.delegation_chain = chain if chain else [agent_id]
-                    ctx.save()
+                        if ctx.trace_mode:
+                            panel = render_trace_panel(
+                                "Model Selection",
+                                {
+                                    "model": model,
+                                    "role": chunk.get("requested_role", "unknown"),
+                                    "attempt": chunk.get("attempt", 1),
+                                    "temperature": chunk.get("temperature", 0.7)
+                                },
+                                "green"
+                            )
+                            safe_print(panel)
+                        else:
+                            safe_print(render_step_micro_ui("model_selected", f"selected {model}"))
+                        continue
 
-                    if ctx.trace_mode:
-                        panel = render_trace_panel(
-                            "Router Decision & Path Planning",
-                            {"requested_role": requested_role, "delegation_path": " -> ".join(ctx.delegation_chain)},
-                            "cyan"
+                    if chunk_type == "model_escalation":
+                        from_model = chunk.get("from_model")
+                        reason = chunk.get("reason")
+                        safe_print(
+                            f"[bold yellow]  Fallback:[/bold yellow] [dim]{from_model}[/dim] timed out "
+                            f"[bold yellow]→ Escalating to cloud[/bold yellow] [dim]({reason})[/dim]"
                         )
-                        safe_print(panel)
-                    else:
-                        safe_print(render_step_micro_ui("planning", f"Formulating plan for role: {requested_role}"))
-                    continue
+                        if ctx.trace_mode:
+                            panel = render_trace_panel(
+                                "Model Escalation (Fallback)",
+                                {"from_model": from_model, "escalated_reason": reason, "status": "switching to secondary/cloud"},
+                                "red"
+                            )
+                            safe_print(panel)
+                        continue
 
-                if chunk_type == "model_selected":
-                    model = chunk.get("model", "unknown")
-                    ctx.active_model = model
-                    ctx.save()
+                    if chunk_type == "agent_handoff":
+                        from_a = chunk.get("from", agent_id)
+                        to_a = chunk.get("to", "executor")
+                        task = str(chunk.get("task", ""))[:80]
 
-                    if ctx.trace_mode:
-                        panel = render_trace_panel(
-                            "Model Selection",
-                            {
-                                "model": model,
-                                "role": chunk.get("requested_role", "unknown"),
-                                "attempt": chunk.get("attempt", 1),
-                                "temperature": chunk.get("temperature", 0.7)
-                            },
-                            "green"
-                        )
-                        safe_print(panel)
-                    else:
-                        safe_print(render_step_micro_ui("model_selected", f"selected {model}"))
-                    continue
+                        ctx.delegation_chain.append(to_a)
+                        ctx.save()
 
-                if chunk_type == "model_escalation":
-                    from_model = chunk.get("from_model")
-                    reason = chunk.get("reason")
-                    safe_print(
-                        f"[bold yellow]  Fallback:[/bold yellow] [dim]{from_model}[/dim] timed out "
-                        f"[bold yellow]→ Escalating to cloud[/bold yellow] [dim]({reason})[/dim]"
-                    )
-                    if ctx.trace_mode:
-                        panel = render_trace_panel(
-                            "Model Escalation (Fallback)",
-                            {"from_model": from_model, "escalated_reason": reason, "status": "switching to secondary/cloud"},
-                            "red"
-                        )
-                        safe_print(panel)
-                    continue
+                        handoffs_list.append({"from": from_a, "to": to_a, "task": task})
+                        safe_print(render_step_micro_ui("swarm", f"{from_a} → {to_a}: {task}"))
+                        continue
 
-                if chunk_type == "agent_handoff":
-                    from_a = chunk.get("from", agent_id)
-                    to_a = chunk.get("to", "executor")
-                    task = str(chunk.get("task", ""))[:80]
+                    if chunk_type == "tool_result":
+                        tool = chunk.get("tool")
+                        if ctx.trace_mode:
+                            panel = render_trace_panel(
+                                "Tool Execution Details",
+                                {"tool": tool, "executing_model": chunk.get("model", "unknown")},
+                                "yellow"
+                            )
+                            safe_print(panel)
+                        else:
+                            safe_print(render_step_micro_ui("tool_call", f"executing tool {tool}"))
+                        continue
 
-                    ctx.delegation_chain.append(to_a)
-                    ctx.save()
+                    if "content" in chunk or "thinking" in chunk:
+                        piece = chunk.get("content") or chunk.get("thinking") or ""
+                        model = chunk.get("model") or model
+                        full_content += piece
+                        _char_count += len(piece)
 
-                    handoffs_list.append({"from": from_a, "to": to_a, "task": task})
-                    safe_print(render_step_micro_ui("swarm", f"{from_a} → {to_a}: {task}"))
-                    continue
+                        elapsed = time.time() - start_time
+                        tps = (_char_count / 4) / elapsed if elapsed > 0.5 else 0.0
 
-                if chunk_type == "tool_result":
-                    tool = chunk.get("tool")
-                    if ctx.trace_mode:
-                        panel = render_trace_panel(
-                            "Tool Execution Details",
-                            {"tool": tool, "executing_model": chunk.get("model", "unknown")},
-                            "yellow"
-                        )
-                        safe_print(panel)
-                    else:
-                        safe_print(render_step_micro_ui("tool_call", f"executing tool {tool}"))
-                    continue
+                        if "<plan>" in full_content and "</plan>" not in full_content:
+                            phase = "planning"
+                        elif "[Singularity:" in piece:
+                            phase = "resume"
+                        elif "Observation:" in piece:
+                            phase = "sensing"
+                        elif "[Self-Heal:" in piece:
+                            phase = "repair"
+                        elif "<tool_call" in piece:
+                            phase = "executing"
 
-                if "content" in chunk or "thinking" in chunk:
-                    piece = chunk.get("content", "") or chunk.get("thinking", "")
-                    model = chunk.get("model") or model
-                    full_content += piece
-                    _char_count += len(piece)
+                        tool_calls = RE_TOOL_CALL.findall(full_content)
 
-                    elapsed = time.time() - start_time
-                    tps = (_char_count / 4) / elapsed if elapsed > 0.5 else 0.0
+                        topic_match = RE_TOPIC_UPDATE.search(full_content)
+                        if topic_match:
+                            ctx.current_topic = topic_match.group(1)
+                            ctx.current_summary = topic_match.group(2)
 
-                    if "<plan>" in full_content and "</plan>" not in full_content:
-                        phase = "planning"
-                    elif "[Singularity:" in piece:
-                        phase = "resume"
-                    elif "Observation:" in piece:
-                        phase = "sensing"
-                    elif "[Self-Heal:" in piece:
-                        phase = "repair"
-                    elif "<tool_call" in piece:
-                        phase = "executing"
+                        intent_match = RE_INTENT.search(full_content)
+                        if intent_match:
+                            ctx.strategic_intent = intent_match.group(1).strip()
 
-                    tool_calls = RE_TOOL_CALL.findall(full_content)
+                        elapsed = time.time() - start_time
+                        stats = get_system_stats()
 
-                    topic_match = RE_TOPIC_UPDATE.search(full_content)
-                    if topic_match:
-                        ctx.current_topic = topic_match.group(1)
-                        ctx.current_summary = topic_match.group(2)
+                        display = RE_PLAN_CLEAN.sub("", full_content)
+                        display = RE_INTENT_CLEAN.sub("", display)
+                        display = RE_TOPIC_CLEAN.sub("", display)
+                        display = RE_TOOL_CLEAN.sub("", display)
+                        display = RE_THINK_CLEAN.sub("", display).strip()
 
-                    intent_match = RE_INTENT.search(full_content)
-                    if intent_match:
-                        ctx.strategic_intent = intent_match.group(1).strip()
+                        layout = Table.grid(padding=(0, 0))
+                        layout.add_column()
+                        layout.add_row(Text.from_markup(status_bar(ctx, agent_id, model, phase, stats["ram_pct"], tps) + f" [dim]{elapsed:.1f}s[/dim]"))
 
-                    elapsed = time.time() - start_time
-                    stats = get_system_stats()
+                        if ctx.strategic_intent:
+                            layout.add_row(Text.from_markup(f" [bold blue]intent[/bold blue]: [cyan]{ctx.strategic_intent}[/cyan]"))
 
-                    display = RE_PLAN_CLEAN.sub("", full_content)
-                    display = RE_INTENT_CLEAN.sub("", display)
-                    display = RE_TOPIC_CLEAN.sub("", display)
-                    display = RE_TOOL_CLEAN.sub("", display)
-                    display = RE_THINK_CLEAN.sub("", display).strip()
+                        if ctx.current_topic != "Nexus Initialization":
+                            layout.add_row(Panel(escape(ctx.current_summary), title=f"[bold bright_white]{escape(ctx.current_topic)}[/bold bright_white]", border_style="blue dim"))
 
-                    layout = Table.grid(padding=(0, 0))
-                    layout.add_column()
-                    layout.add_row(Text.from_markup(status_bar(ctx, agent_id, model, phase, stats["ram_pct"], tps) + f" [dim]{elapsed:.1f}s[/dim]"))
+                        plan_match = RE_PLAN_MATCH.search(full_content)
+                        if plan_match:
+                            layout.add_row(Panel(plan_match.group(1).strip(), title="Plan", border_style="yellow dim"))
 
-                    if ctx.strategic_intent:
-                        layout.add_row(Text.from_markup(f" [bold blue]intent[/bold blue]: [cyan]{ctx.strategic_intent}[/cyan]"))
+                        think_match = RE_THINK_MATCH.search(full_content)
+                        if think_match:
+                            think_content = think_match.group(1).strip()
+                            if think_content:
+                                layout.add_row(Panel(think_content, title="Thinking", border_style="dim white"))
 
-                    if ctx.current_topic != "Nexus Initialization":
-                        layout.add_row(Panel(escape(ctx.current_summary), title=f"[bold bright_white]{escape(ctx.current_topic)}[/bold bright_white]", border_style="blue dim"))
+                        if tool_calls:
+                            layout.add_row(Text.from_markup(f"[dim]Tools:[/dim] {' '.join(f'[cyan]⚙ {t}[/cyan]' for t in tool_calls[-3:])}"))
 
-                    plan_match = RE_PLAN_MATCH.search(full_content)
-                    if plan_match:
-                        layout.add_row(Panel(plan_match.group(1).strip(), title="Plan", border_style="yellow dim"))
+                        if display:
+                            display_lines = display.splitlines()
+                            max_display_lines = 20
+                            if len(display_lines) > max_display_lines:
+                                display = "..." + "\\n".join(display_lines[-max_display_lines:])
+                            layout.add_row(Panel(escape(display), border_style="bright_blue dim", padding=(0, 1)))
 
-                    think_match = RE_THINK_MATCH.search(full_content)
-                    if think_match:
-                        think_content = think_match.group(1).strip()
-                        if think_content:
-                            layout.add_row(Panel(think_content, title="Thinking", border_style="dim white"))
+                        if ctx.delegation_chain:
+                            tree_obj = Tree("[bold magenta]🐝 Swarm Handoff Trace[/bold magenta]")
+                            curr_node = tree_obj
+                            for i, agent in enumerate(ctx.delegation_chain):
+                                task_desc = ""
+                                if i > 0:
+                                    from_agent = ctx.delegation_chain[i-1]
+                                    to_agent = ctx.delegation_chain[i]
+                                    for h in handoffs_list:
+                                        if h["from"] == from_agent and h["to"] == to_agent:
+                                            task_desc = f" [dim]({h['task']})[/dim]"
+                                            break
+                                if i == len(ctx.delegation_chain) - 1:
+                                    curr_node = curr_node.add(f"[bold green]▶ {agent}[/bold green] (active){task_desc}")
+                                else:
+                                    curr_node = curr_node.add(f"[cyan]✓ {agent}[/cyan]{task_desc}")
+                            layout.add_row(Panel(tree_obj, border_style="magenta dim", title="[bold magenta]Live Handoff Trace[/bold magenta]"))
 
-                    if tool_calls:
-                        layout.add_row(Text.from_markup(f"[dim]Tools:[/dim] {' '.join(f'[cyan]⚙ {t}[/cyan]' for t in tool_calls[-3:])}"))
+                        live.update(layout)
+                        continue
 
-                    if display:
-                        display_lines = display.splitlines()
-                        max_display_lines = 20
-                        if len(display_lines) > max_display_lines:
-                            display = "..." + "\\n".join(display_lines[-max_display_lines:])
-                        layout.add_row(Panel(display, border_style="bright_blue dim", padding=(0, 1)))
+                    if chunk_type == "final":
+                        live.stop()
+                        final_content = chunk.get("content", "")
+                        ctx.last_provider = chunk.get("provider", "ollama")
 
-                    if ctx.delegation_chain:
-                        tree_obj = Tree("[bold magenta]🐝 Swarm Handoff Trace[/bold magenta]")
-                        curr_node = tree_obj
-                        for i, agent in enumerate(ctx.delegation_chain):
-                            task_desc = ""
-                            if i > 0:
-                                from_agent = ctx.delegation_chain[i-1]
-                                to_agent = ctx.delegation_chain[i]
-                                for h in handoffs_list:
-                                    if h["from"] == from_agent and h["to"] == to_agent:
-                                        task_desc = f" [dim]({h['task']})[/dim]"
-                                        break
-                            if i == len(ctx.delegation_chain) - 1:
-                                curr_node = curr_node.add(f"[bold green]▶ {agent}[/bold green] (active){task_desc}")
-                            else:
-                                curr_node = curr_node.add(f"[cyan]✓ {agent}[/cyan]{task_desc}")
-                        layout.add_row(Panel(tree_obj, border_style="magenta dim", title="[bold magenta]Live Handoff Trace[/bold magenta]"))
+                        if isinstance(final_content, dict):
+                            ctx.console.print(Panel(json.dumps(final_content, indent=2), border_style="green"))
+                        elif final_content:
+                            ctx.console.print(Panel(Markdown(str(final_content)), border_style="green", padding=(1, 2)))
 
-                    live.update(layout)
-                    continue
+                        new_history = list(history)
+                        if prompt:
+                            new_history.append({"role": "user", "content": prompt})
+                        new_history.append({"role": "assistant", "content": final_content or full_content})
+                        ctx.history = new_history
+                        ctx.history_pointer = len(ctx.history) - 1
 
-                if chunk_type == "final":
-                    live.stop()
-                    final_content = chunk.get("content", "")
-                    ctx.last_provider = chunk.get("provider", "ollama")
+                        elapsed_total = time.time() - start_time
+                        update_token_metrics(ctx, prompt, history, final_content or full_content, model)
 
-                    if isinstance(final_content, dict):
-                        ctx.console.print(Panel(json.dumps(final_content, indent=2), border_style="green"))
-                    elif final_content:
-                        ctx.console.print(Panel(Markdown(str(final_content)), border_style="green", padding=(1, 2)))
+                        perf = _AGENT_PERF.setdefault(agent_id, {"total": 0.0, "count": 0, "last": 0.0})
+                        perf["total"] += elapsed_total
+                        perf["count"] += 1
+                        perf["last"] = elapsed_total
 
-                    new_history = list(history)
-                    if prompt:
-                        new_history.append({"role": "user", "content": prompt})
-                    new_history.append({"role": "assistant", "content": final_content or full_content})
-                    ctx.history = new_history
-                    ctx.history_pointer = len(ctx.history) - 1
+                        ctx.last_stream_status = "completed"
+                        ctx.save()
+                        _tokens_counted = True
+                        return new_history
 
-                    elapsed_total = time.time() - start_time
-                    update_token_metrics(ctx, prompt, history, final_content or full_content, model)
+                    if chunk_type == "ask_user":
+                        ctx.last_stream_status = "completed"
+                        question = chunk.get("question", "Input requested:")
+                        options = chunk.get("options", [])
 
-                    perf = _AGENT_PERF.setdefault(agent_id, {"total": 0.0, "count": 0, "last": 0.0})
-                    perf["total"] += elapsed_total
-                    perf["count"] += 1
-                    perf["last"] = elapsed_total
+                        live.stop()
+                        ctx.console.print()
 
-                    ctx.last_stream_status = "completed"
-                    ctx.save()
-                    _tokens_counted = True
-                    return new_history
+                        if "APPROVAL REQUIRED" in question:
+                            ctx.console.print(Panel(
+                                Markdown(question),
+                                title="🛡️  [bold yellow]Security Gate - Action Approval[/bold yellow]",
+                                border_style="yellow",
+                                padding=(1, 2)
+                            ))
+                        else:
+                            ctx.console.print(Panel(
+                                Markdown(question),
+                                title="❓  [bold cyan]Agent Request[/bold cyan]",
+                                border_style="cyan",
+                                padding=(0, 1)
+                            ))
 
-                if chunk_type == "ask_user":
-                    ctx.last_stream_status = "completed"
-                    question = chunk.get("question", "Input requested:")
-                    options = chunk.get("options", [])
+                        if options:
+                            from rich.prompt import Prompt
+                            choices = []
+                            for i, o in enumerate(options):
+                                if isinstance(o, dict):
+                                    choices.append(str(o.get("label", o.get("value", i))))
+                                else:
+                                    choices.append(str(o))
+                            answer = Prompt.ask("[bold cyan]Choose option[/bold cyan]", choices=choices)
+                        else:
+                            answer = ctx.console.input("[bold cyan]Your response:[/bold cyan] ").strip()
 
-                    live.stop()
-                    ctx.console.print()
-
-                    if "APPROVAL REQUIRED" in question:
-                        ctx.console.print(Panel(
-                            Markdown(question),
-                            title="🛡️  [bold yellow]Security Gate - Action Approval[/bold yellow]",
-                            border_style="yellow",
-                            padding=(1, 2)
-                        ))
-                    else:
-                        ctx.console.print(Panel(
-                            Markdown(question),
-                            title="❓  [bold cyan]Agent Request[/bold cyan]",
-                            border_style="cyan",
-                            padding=(0, 1)
-                        ))
-
-                    if options:
-                        from rich.prompt import Prompt
-                        choices = []
-                        for i, o in enumerate(options):
-                            if isinstance(o, dict):
-                                choices.append(str(o.get("label", o.get("value", i))))
-                            else:
-                                choices.append(str(o))
-                        answer = Prompt.ask("[bold cyan]Choose option[/bold cyan]", choices=choices)
-                    else:
-                        answer = ctx.console.input("[bold cyan]Your response:[/bold cyan] ").strip()
-
-                    new_history = list(history)
-                    if prompt:
-                        new_history.append({"role": "user", "content": prompt})
-                    new_history.append({"role": "assistant", "content": full_content})
-                    new_history.append({"role": "user", "content": f"Observation: {json.dumps({'answer': answer})}"})
+                        new_history = list(history)
+                        if prompt:
+                            new_history.append({"role": "user", "content": prompt})
+                        new_history.append({"role": "assistant", "content": full_content})
+                        new_history.append({"role": "user", "content": f"Observation: {json.dumps({'answer': answer})}"})
                     
-                    history = new_history
-                    prompt = ""
-                    agent_id = chunk.get("agent_id", agent_id)
-                    _ask_user_triggered = True
-                    break
+                        history = new_history
+                        prompt = ""
+                        agent_id = chunk.get("agent_id", agent_id)
+                        _ask_user_triggered = True
+                        break
 
             except Exception as e:
                 log.exception("Streaming exception")
@@ -417,15 +419,6 @@ def stream_prompt(ctx, agent_id, prompt, history):
             return history
             
         return history
-        return history
-
-    new_history = list(history)
-    if prompt:
-        new_history.append({"role": "user", "content": prompt})
-    new_history.append({"role": "assistant", "content": full_content})
-    ctx.history = new_history
-    ctx.save()
-    return new_history
 
 def stream_prompt_with_retry(ctx, agent_id, prompt, history, max_retries=3):
     ctx.delegation_chain = [agent_id]

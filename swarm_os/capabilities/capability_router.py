@@ -7,6 +7,7 @@ from swarm_os.capabilities.vscode_automation import VSCodeAutomationHandler
 from swarm_os.capabilities.refactor import RefactorHandler
 from swarm_os.capabilities.models import ModelsHandler
 from swarm_os.capabilities.sandbox_repl import SandboxReplHandler
+from swarm_os.capabilities.lsp_tool import LSPToolHandler
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,7 @@ class CapabilityRouter:
         "refactor": RefactorHandler,
         "models": ModelsHandler,
         "sandbox_repl": SandboxReplHandler,
+        "lsp": LSPToolHandler,
     }
 
     def __init__(self, config: Dict[str, Any] = None):

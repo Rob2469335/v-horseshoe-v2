@@ -1,6 +1,6 @@
 {
   "worker:restart": {
-    "success_count": 56,
+    "success_count": 70,
     "confidence": 1.0,
     "average_duration": 0.0
   }

@@ -41,8 +41,8 @@ def run_syntax_checks() -> tuple[bool, str]:
                             for idx in range(start, end):
                                 prefix = ">>> " if idx + 1 == err_line else "    "
                                 context_lines.append(f"{prefix}{idx+1}: {lines[idx]}")
-                        context_str = "\\n".join(context_lines)
-                        return False, f"File: {f}\\nError: {exc.msg} at line {exc.lineno}\\nCode Context:\\n```python\\n{context_str}\\n```"
+                        context_str = "\n".join(context_lines)
+                        return False, f"File: {f}\nError: {exc.msg} at line {exc.lineno}\nCode Context:\n```python\n{context_str}\n```"
     except Exception as e:
         return False, f"Syntax checks crashed: {e}"
     return True, ""
@@ -83,6 +83,13 @@ def run_test_suite(goal_text: str = "") -> tuple[bool, str]:
     if test_targets:
         cmd.extend(test_targets)
     else:
+        # Check if files were actually modified during this turn
+        try:
+            git_diff = subprocess.run(["git", "diff", "--name-only"], capture_output=True, text=True, cwd=PROJECT_ROOT, timeout=5)
+            if not git_diff.stdout.strip():
+                return False, "No files were modified. The agent did not generate or change any code to fulfill the goal."
+        except Exception:
+            pass
         return True, "No specific tests found for modifications. Skipping test suite."
         
     try:
@@ -94,7 +101,7 @@ def run_test_suite(goal_text: str = "") -> tuple[bool, str]:
             timeout=30
         )
         passed = result.returncode == 0
-        return passed, result.stdout + "\\n" + result.stderr
+        return passed, result.stdout + "\n" + result.stderr
     except subprocess.TimeoutExpired:
         return False, "Test execution timed out after 30 seconds."
     except Exception as e:
@@ -147,7 +154,7 @@ def draft_task_list(plan_text: str, cmd_ctx) -> str:
             return data.get("response", data.get("content", "")).strip()
     except Exception:
         pass
-    return "- [ ] Implement proposed changes\\n- [ ] Verify execution"
+    return "- [ ] Implement proposed changes\n- [ ] Verify execution"
 
 def run_autonomous_goal_loop(goal: str, cmd_ctx):
     console = cmd_ctx.console
@@ -161,25 +168,6 @@ def run_autonomous_goal_loop(goal: str, cmd_ctx):
     state.delegation_chain = [entry_agent]
     state.save()
     console.print(f"👥 [bold]Initial Agent[/bold]: [cyan]{entry_agent}[/cyan]")
-
-    heal_result = _healing_loop.tick()
-    if heal_result.get("status") == "healing_decision":
-        decision = heal_result.get("decision", {})
-        mode = decision.get("mode", "unknown")
-        component = heal_result.get("component", "unknown")
-        console.print(f"[bold yellow]⚕ Self-healing:[/bold yellow] issue detected in [cyan]{component}[/cyan] (mode: {mode})")
-        if mode == "auto":
-            import asyncio
-            from swarm_os.healing.recovery_engine import RecoveryEngine
-            recovery = RecoveryEngine()
-            symptom = heal_result.get("all_signals", [{}])[0]
-            result = asyncio.run(recovery.recover(symptom))
-            if result.get("ok"):
-                console.print(f"[bold green]✓ Auto-recovered:[/bold green] {result.get('action')}")
-            else:
-                console.print(f"[bold red]✗ Recovery attempt failed:[/bold red] {result.get('error', result.get('reason', 'unknown'))}")
-        elif mode == "approval_required":
-            console.print("[dim]Recovery requires approval — continuing goal, but component may be degraded.[/dim]")
 
     READONLY_PATTERNS = r"\b(list|show|display|read|find|search|check|view|print|what|where|how many)\b"
     CODE_ACTION_PATTERNS = r"\b(fix|refactor|implement|add|modify|update|create|write|delete|remove|change)\b"
@@ -225,34 +213,74 @@ def run_autonomous_goal_loop(goal: str, cmd_ctx):
     if plan_first and 'plan_text' in locals() and 'task_text' in locals():
         current_prompt += f"Implementation Plan:\n{plan_text}\n\nTask Checklist:\n{task_text}\n\n"
     
-    current_prompt += (
-        "Please audit, refactor, and fix the codebase to achieve this goal using your tools. Ensure syntax correctness and that all tests pass.\n\n"
-        "*** CRITICAL INSTRUCTION ***\n"
-        "If you are the `coordinator` agent, you MUST NOT refuse this task or output plain text. You MUST immediately use the `delegate` tool to hand this off to the `planner` or `researcher`.\n"
-        "DO NOT say 'The verification process is failing' or 'To proceed manually...'\n"
-        "Just output the JSON `delegate` payload."
-    )
+    if entry_agent == "coordinator":
+        current_prompt += (
+            "*** CRITICAL INSTRUCTION ***\n"
+            "You are the `coordinator` agent. Your ONLY job is to act as a router. You MUST NOT attempt to solve this goal yourself.\n"
+            "You MUST immediately use the `delegate` tool to route this task.\n"
+            "- For simple or well-defined coding tasks, delegate DIRECTLY to the `coder` agent to save time.\n"
+            "- For complex, multi-file architectures requiring deep thought, delegate to the `planner`.\n"
+            "Just output the JSON `delegate` payload and nothing else."
+        )
+    else:
+        current_prompt += (
+            "Please audit, refactor, and fix the codebase to achieve this goal using your tools. Ensure syntax correctness and that all tests pass.\n"
+        )
     
-    history = list(state.history)
+    # Start autonomous goals with a clean slate to prevent repeating previous goal outputs
+    history = []
     max_attempts = 5
     
     for attempt in range(1, max_attempts + 1):
         console.print(Rule(f"Attempt {attempt}/{max_attempts}", style="magenta dim"))
         
+        heal_result = _healing_loop.tick()
+        if heal_result.get("status") == "healing_decision":
+            decision = heal_result.get("decision", {})
+            mode = decision.get("mode", "unknown")
+            component = heal_result.get("component", "unknown")
+            console.print(f"[bold yellow]⚕ Self-healing:[/bold yellow] issue detected in [cyan]{component}[/cyan] (mode: {mode})")
+            if mode == "auto":
+                import asyncio
+                from swarm_os.healing.recovery_engine import RecoveryEngine
+                recovery = RecoveryEngine()
+                symptom = heal_result.get("all_signals", [{}])[0]
+                try:
+                    loop = asyncio.get_running_loop()
+                    result = loop.run_until_complete(recovery.recover(symptom))
+                except RuntimeError:
+                    result = asyncio.run(recovery.recover(symptom))
+                if result.get("ok"):
+                    console.print(f"[bold green]✓ Auto-recovered:[/bold green] {result.get('action')}")
+                else:
+                    console.print(f"[bold red]✗ Auto-recovery failed:[/bold red] {result.get('error')}")
+        
         history = stream_prompt(cmd_ctx.state, entry_agent, current_prompt, history)
         
         if getattr(cmd_ctx.state, "last_stream_status", "") != "completed":
             passed = False
-            logs = "Agent stream interrupted prematurely (e.g., hit max tokens, fell into a repetition loop, or the backend crashed).\\nNo changes were finalized."
+            logs = "Agent stream interrupted prematurely (e.g., hit max tokens, fell into a repetition loop, or the backend crashed).\nNo changes were finalized."
             console.print("[bold red]✗ Agent execution failed (Interrupted).[/bold red]")
         else:
-            console.print("[dim]Running fast syntax checks...[/dim]")
-            syntax_passed, syntax_error_msg = run_syntax_checks()
-            if not syntax_passed:
+            final_msg = ""
+            if history and isinstance(history[-1], dict):
+                final_msg = history[-1].get("content", "")
+            
+            syntax_passed = False
+            
+            if "Unable to determine next action" in final_msg:
                 passed = False
-                logs = f"Syntax Error detected in modified files:\\n\\n{syntax_error_msg}"
-                console.print("[bold red]✗ Fast Syntax Check Failed.[/bold red]")
+                logs = "Final Action:\n" + final_msg + "\nAgent could not determine next action. It likely encountered a critical backend error or model routing failure."
+                console.print("[bold red]✗ Agent execution failed (Routing Fallback).[/bold red]")
             else:
+                console.print("[dim]Running fast syntax checks...[/dim]")
+                syntax_passed, syntax_error_msg = run_syntax_checks()
+                
+            if not syntax_passed and "Unable to determine next action" not in final_msg:
+                passed = False
+                logs = f"Syntax Error detected in modified files:\n\n{syntax_error_msg}"
+                console.print("[bold red]✗ Fast Syntax Check Failed.[/bold red]")
+            elif syntax_passed:
                 console.print("[dim]Running test verification suite...[/dim]")
                 passed, logs = run_test_suite(goal)
         
@@ -269,9 +297,9 @@ def run_autonomous_goal_loop(goal: str, cmd_ctx):
                 if line.startswith("E   ") or "FAIL" in line or "AssertionError" in line or "Syntax Error" in line or "File:" in line or "Error:" in line:
                     failures.append(line)
             
-            trace_preview = "\\n".join(failures[:20])
+            trace_preview = "\n".join(failures[:50])
             if not trace_preview:
-                trace_preview = "\\n".join(logs.splitlines()[-15:])
+                trace_preview = "\n".join(logs.splitlines()[-30:])
                 
             console.print(f"[bold red]✗ Verification Failed on Attempt {attempt}.[/bold red]")
             if attempt == max_attempts:
@@ -286,12 +314,17 @@ def run_autonomous_goal_loop(goal: str, cmd_ctx):
                 
             console.print("[yellow]Feeding back failure logs to agent context for correction...[/yellow]")
             current_prompt = (
+                f"ORIGINAL GOAL: {goal}\n\n"
                 f"<EPHEMERAL_MESSAGE>\n"
                 f"The verification checks failed with the following traceback/logs:\n\n"
                 f"```\n{trace_preview}\n```\n\n"
                 f"Please analyze these errors, modify the code using your capabilities, and verify syntax to fix them.\n"
-                f"CRITICAL: If you are the `coordinator`, you MUST delegate this to the `planner` or `researcher`.\n"
-                f"</EPHEMERAL_MESSAGE>"
             )
-
-
+            
+            if entry_agent == "coordinator":
+                current_prompt += (
+                    f"CRITICAL: If you are the `coordinator`, you MUST delegate this to the `debugger` or `coder`.\n"
+                    f"Just output the JSON `delegate` payload and nothing else."
+                )
+                
+            current_prompt += "</EPHEMERAL_MESSAGE>\n\n"

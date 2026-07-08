@@ -11,7 +11,7 @@ class GenerateRequest(BaseModel):
     prompt: str
 
 class GenerateResponse(BaseModel):
-    response: str
+    content: str
     model: str
 
 class AssignRequest(BaseModel):
@@ -36,6 +36,8 @@ class StatusResponse(BaseModel):
     vision_tool_exposed: bool = False
     vision_models_configured: List[str] = Field(default_factory=list)
     vision_models_installed: List[str] = Field(default_factory=list)
+    installed_model_count: int = 0
+    installed_models: List[str] = Field(default_factory=list)
     primary_vision_model: Optional[str] = None
 
 # --- New Capability Tool Schemas ---

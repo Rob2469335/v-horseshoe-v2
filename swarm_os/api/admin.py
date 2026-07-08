@@ -154,7 +154,7 @@ def run_simulation(
 
 # ── Replay dashboard endpoint ──────────────────────────────────────────────
 @router.get("/replay")
-def admin_replay(request: Request) -> dict:
+async def admin_replay(request: Request) -> dict:
     """Event replay dashboard data."""
     from swarm_os.api.routes import runtime_dep, _safe_events
     runtime = getattr(request.app.state, "runtime", None)
@@ -164,7 +164,7 @@ def admin_replay(request: Request) -> dict:
     last_action = None
     if runtime:
         try:
-            events = _safe_events(runtime)
+            events = await _safe_events(runtime)
         except Exception:
             pass
         try:

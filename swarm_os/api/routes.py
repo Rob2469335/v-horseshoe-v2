@@ -68,7 +68,7 @@ async def _safe_health_report(runtime: Any) -> dict[str, Any]:
         # Check dependencies
         ollama_ok = False
         try:
-            async with httpx.AsyncClient(timeout=1.0) as client:
+            async with httpx.AsyncClient(timeout=1.0, trust_env=False, proxy=None) as client:
                 r = await client.get("http://127.0.0.1:11434/")
                 ollama_ok = r.status_code == 200
         except Exception:
@@ -76,7 +76,7 @@ async def _safe_health_report(runtime: Any) -> dict[str, Any]:
             
         qdrant_ok = False
         try:
-            async with httpx.AsyncClient(timeout=1.0) as client:
+            async with httpx.AsyncClient(timeout=1.0, trust_env=False, proxy=None) as client:
                 r = await client.get("http://127.0.0.1:6333/")
                 qdrant_ok = r.status_code == 200
         except Exception:
@@ -106,7 +106,7 @@ async def _safe_health_report(runtime: Any) -> dict[str, Any]:
 
 async def _safe_ollama_reachable(runtime: Any) -> bool:
     try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
+        async with httpx.AsyncClient(timeout=15.0, trust_env=False, proxy=None) as client:
             r = await client.get("http://127.0.0.1:11434/api/tags")
             return r.status_code == 200
     except Exception:
@@ -114,7 +114,7 @@ async def _safe_ollama_reachable(runtime: Any) -> bool:
 
 async def _safe_ollama_models(runtime: Any) -> list[str]:
     try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
+        async with httpx.AsyncClient(timeout=15.0, trust_env=False, proxy=None) as client:
             r = await client.get("http://127.0.0.1:11434/api/tags")
             data = r.json()
             return sorted({m["name"] for m in data.get("models", []) if m.get("name")})
@@ -151,7 +151,11 @@ async def _safe_events(runtime: Any) -> list[Any]:
         if event_store is None:
             return []
         import asyncio
-        return await asyncio.to_thread(event_store.read_all)
+        if hasattr(event_store, "read_all"):
+            return await asyncio.to_thread(event_store.read_all)
+        elif hasattr(event_store, "list_all"):
+            return await asyncio.to_thread(event_store.list_all)
+        return []
     except Exception:
         return []
 
@@ -173,7 +177,9 @@ async def status(runtime: Any = Depends(runtime_dep)):
         vision_runtime_available=True,
         vision_tool_exposed=True,
         vision_models_configured=installed_models,
-        generation_models_configured=installed_models
+        generation_models_configured=installed_models,
+        installed_model_count=len(installed_models),
+        installed_models=installed_models
     )
 
 @router.get("/readyz")
@@ -220,7 +226,7 @@ async def list_tools(runtime=Depends(runtime_dep)):
 
 @router.get("/tools/cache", response_model=CacheStatusResponse)
 def cache_status(request: Request, runtime=Depends(runtime_dep)):
-    cache = getattr(request.app.state, "cache", None)
+    cache = getattr(runtime, "cache", None)
     if cache is not None and hasattr(cache, "_items"):
         cached_keys = list(cache._items.keys())
         return CacheStatusResponse(cache_size=len(cached_keys), cached_keys=cached_keys)
@@ -244,9 +250,9 @@ async def execute_tool(payload: ToolExecuteRequest, runtime=Depends(runtime_dep)
 
 @router.post("/generate", response_model=GenerateResponse)
 async def generate(payload: GenerateRequest, orch=Depends(get_orchestrator)):
-    _model = (payload.model or "").strip() or "qwen2.5-coder:7b"
+    _model = (payload.model or "").strip() or "danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS"
     
-    litellm_model = _model if "/" in _model else f"ollama/{_model}"
+    litellm_model = f"ollama/{_model}" if not _model.startswith("ollama/") else _model
     import os
     os.environ["OLLAMA_API_BASE"] = "http://127.0.0.1:11434"
     
@@ -255,7 +261,8 @@ async def generate(payload: GenerateRequest, orch=Depends(get_orchestrator)):
         resp = await litellm.acompletion(
             model=litellm_model,
             messages=[{"role": "user", "content": payload.prompt}],
-            temperature=0.7
+            temperature=0.7,
+            timeout=600.0
         )
         content = resp.choices[0].message.content or ""
     except Exception as e:
@@ -263,7 +270,7 @@ async def generate(payload: GenerateRequest, orch=Depends(get_orchestrator)):
         content = f"Error during generation: {e}"
 
     return GenerateResponse(
-        response=content,
+        content=content,
         model=_model,
     )
 
@@ -283,7 +290,7 @@ async def autoassign():
     # 1. Fetch local Ollama models
     local_models = []
     try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
+        async with httpx.AsyncClient(timeout=15.0, trust_env=False, proxy=None) as client:
             resp = await client.get("http://127.0.0.1:11434/api/tags")
             if resp.status_code == 200:
                 for m in resp.json().get("models", []):
@@ -301,9 +308,9 @@ async def autoassign():
     fallbacks = await get_live_fallbacks()
     cloud_models = [f["model"] for f in fallbacks if "ollama" not in f["model"]]
     if not cloud_models:
-        raise HTTPException(status_code=500, detail="No cloud API keys available to perform the reasoning task.")
-    
-    best_cloud_model = cloud_models[0]
+        best_cloud_model = f"ollama/{local_models[-1]}"
+    else:
+        best_cloud_model = cloud_models[0]
     
     # 3. Formulate Prompt
     prompt = f"""You are an elite AI system architect. 
@@ -328,14 +335,17 @@ Rules:
     try:
         custom_client = httpx.AsyncClient(timeout=60.0)
         litellm_fallbacks = [{"model": m} for m in cloud_models[1:]]
-        resp = await litellm.acompletion(
-            model=best_cloud_model,
-            fallbacks=litellm_fallbacks,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.1,
-            response_format={"type": "json_object"},
-            client=custom_client
-        )
+        kwargs = {
+            "model": best_cloud_model,
+            "fallbacks": litellm_fallbacks,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.1,
+            "client": custom_client
+        }
+        if not best_cloud_model.startswith("openrouter/"):
+            kwargs["response_format"] = {"type": "json_object"}
+            
+        resp = await litellm.acompletion(**kwargs)
         content = resp.choices[0].message.content or "{}"
         
         # Clean up possible markdown if provider ignored format
@@ -357,35 +367,97 @@ Rules:
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/timeline", response_model=TimelineResponse)
-def timeline(window_minutes: int = 60):
+async def timeline(window_minutes: int = 60, runtime: Any = Depends(runtime_dep)):
     events_path = Path("data/events/events.jsonl")
-    if not events_path.exists():
-        return TimelineResponse(window_minutes=window_minutes, points=[])
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=window_minutes)
     buckets = defaultdict(lambda: {"event_count": 0, "success_count": 0, "partial_count": 0, "fail_count": 0})
-    with events_path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            try:
-                event = json.loads(line)
-                raw_ts = event.get("occurred_at") or event.get("timestamp") or event.get("ts")
-                if not raw_ts:
+    
+    if events_path.exists():
+        with events_path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    event = json.loads(line)
+                    raw_ts = event.get("occurred_at") or event.get("timestamp") or event.get("ts")
+                    if not raw_ts:
+                        continue
+                    ts = datetime.fromisoformat(str(raw_ts).replace("Z", "+00:00"))
+                    if ts < cutoff:
+                        continue
+                    bucket = ts.replace(second=0, microsecond=0).isoformat(timespec="minutes")
+                    buckets[bucket]["event_count"] += 1
+                    outcome = str(((event.get("learning_outcome") or {}).get("result") or "")).lower()
+                    if outcome == "success":
+                        buckets[bucket]["success_count"] += 1
+                    elif outcome == "partial":
+                        buckets[bucket]["partial_count"] += 1
+                    elif outcome == "fail":
+                        buckets[bucket]["fail_count"] += 1
+                except Exception:
                     continue
-                ts = datetime.fromisoformat(str(raw_ts).replace("Z", "+00:00"))
-                if ts < cutoff:
-                    continue
-                bucket = ts.replace(second=0, microsecond=0).isoformat(timespec="minutes")
-                buckets[bucket]["event_count"] += 1
-                outcome = str(((event.get("learning_outcome") or {}).get("result") or "")).lower()
-                if outcome == "success":
-                    buckets[bucket]["success_count"] += 1
-                elif outcome == "partial":
-                    buckets[bucket]["partial_count"] += 1
-                elif outcome == "fail":
-                    buckets[bucket]["fail_count"] += 1
-            except Exception:
+
+    all_ev = await _safe_events(runtime)
+    for ev in all_ev:
+        try:
+            event = ev.to_dict() if hasattr(ev, "to_dict") else ev
+            raw_ts = event.get("occurred_at") or event.get("timestamp") or event.get("ts")
+            if not raw_ts:
                 continue
+            ts = datetime.fromisoformat(str(raw_ts).replace("Z", "+00:00"))
+            if ts < cutoff:
+                continue
+            bucket = ts.replace(second=0, microsecond=0).isoformat(timespec="minutes")
+            buckets[bucket]["event_count"] += 1
+            outcome = str(((event.get("learning_outcome") or {}).get("result") or "")).lower()
+            if outcome == "success":
+                buckets[bucket]["success_count"] += 1
+            elif outcome == "partial":
+                buckets[bucket]["partial_count"] += 1
+            elif outcome == "fail":
+                buckets[bucket]["fail_count"] += 1
+        except Exception:
+            continue
+
     points = [TimelinePointResponse(bucket=bucket, **values) for bucket, values in sorted(buckets.items())]
     return TimelineResponse(window_minutes=window_minutes, points=points)
+
+@router.get("/memory/search")
+async def memory_search(q: str, limit: int = 8):
+    try:
+        from runtime_v2.services.memory_core import get_embedding, QDRANT_URL, _get_shard_name, _moe_route_shards
+        import requests
+        vector = get_embedding(q)
+        if not vector:
+            return {"results": []}
+            
+        active_shards = _moe_route_shards(q)
+        results = []
+        for shard in active_shards:
+            collection = _get_shard_name(shard)
+            try:
+                resp = requests.post(f"{QDRANT_URL}/collections/{collection}/points/search", json={
+                    "vector": vector,
+                    "limit": limit,
+                    "with_payload": True,
+                    "score_threshold": 0.3
+                }, timeout=5.0)
+                if resp.status_code == 200:
+                    for hit in resp.json().get("result", []):
+                        payload = hit.get("payload", {})
+                        results.append({
+                            "id": str(hit.get("id", "")),
+                            "score": float(hit.get("score", 0.0)),
+                            "text": str(payload.get("fact", payload.get("text", payload.get("content", "")))),
+                            "source": collection,
+                            "timestamp": str(payload.get("timestamp", ""))
+                        })
+            except Exception:
+                pass
+                
+        results.sort(key=lambda x: x["score"], reverse=True)
+        return {"results": results[:limit]}
+    except Exception as e:
+        log.error(f"Memory search failed: {e}")
+        return {"error": str(e), "results": []}
 
 @router.get("/traces/summary")
 def trace_summary(orch: Any = Depends(get_orchestrator), limit: int = 50) -> dict[str, Any]:

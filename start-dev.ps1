@@ -53,17 +53,35 @@ Write-Host "Cleanup complete ✔" -ForegroundColor Green
 
 # STEP 2 - Ollama
 Write-Host "`n[STEP 2] Starting Ollama..." -ForegroundColor Yellow
+# Set env vars at process level so child processes inherit them
 $env:OLLAMA_MAX_LOADED_MODELS = "1"
 $env:OLLAMA_VULKAN = "1"
-$env:OLLAMA_CONTEXT_LENGTH = "16384"
+$env:OLLAMA_IGPU_ENABLE = "1"
+$env:OLLAMA_CONTEXT_LENGTH = "8192"
 $env:OLLAMA_KEEP_ALIVE = "-1"
-Start-Process "ollama" -ArgumentList "serve" -WindowStyle Hidden
+$env:OLLAMA_FLASH_ATTENTION = "true"
+# Start-Process does NOT inherit $env vars. Use Start-Job or direct invocation instead.
+$ollamaJob = Start-Job -ScriptBlock {
+    $env:OLLAMA_MAX_LOADED_MODELS = "1"
+    $env:OLLAMA_VULKAN = "1"
+    $env:OLLAMA_IGPU_ENABLE = "1"
+    $env:OLLAMA_CONTEXT_LENGTH = "8192"
+    $env:OLLAMA_KEEP_ALIVE = "-1"
+    $env:OLLAMA_FLASH_ATTENTION = "true"
+    & ollama serve 2>&1
+}
 Start-Sleep -Seconds 5
 Write-Host "Ollama ✔" -ForegroundColor Green
 
 # STEP 3 - Qdrant (wait until actually ready)
 Write-Host "`n[STEP 3] Starting Qdrant..." -ForegroundColor Yellow
-$qdrantPath = "C:\Users\rober\.continue\v-horseshoe\qdrant-bin\qdrant.exe"
+$qdrantPath = "$root\qdrant-bin\qdrant.exe"
+if (-not (Test-Path $qdrantPath)) {
+    $qdrantPath = "C:\Users\rober\.continue\v-horseshoe\qdrant-bin\qdrant.exe"
+}
+if (-not (Test-Path $qdrantPath)) {
+    $qdrantPath = "qdrant"
+}
 Start-Process $qdrantPath -WindowStyle Hidden
 for ($i = 0; $i -lt 30; $i++) {
     try { Invoke-RestMethod "http://127.0.0.1:6333" | Out-Null; Write-Host "Qdrant ✔" -ForegroundColor Green; break }
@@ -107,14 +125,30 @@ $backendJob = Start-Job -ScriptBlock {
     Write-Host "DEBUG root=$r"
 Write-Host "DEBUG pwd=$(Get-Location)"
 Write-Host "DEBUG PYTHONPATH=$env:PYTHONPATH"
-& "C:\Python314\python.exe" -c "import os,sys,importlib; print('DEBUG cwd=', os.getcwd()); print('DEBUG sys.path[0]=', sys.path[0]); m=importlib.import_module('swarm_os.app.main'); print('DEBUG module=', m.__file__)"
-& "C:\Python314\python.exe" -m uvicorn --app-dir $r swarm_os.app.main:app --host 127.0.0.1 --port 8000 2>&1
+    $pythonPath = if (Test-Path "$r\.venv\Scripts\python.exe") { "$r\.venv\Scripts\python.exe" } else { "python" }
+    & $pythonPath -c "import os,sys,importlib; print('DEBUG cwd=', os.getcwd()); print('DEBUG sys.path[0]=', sys.path[0]); m=importlib.import_module('swarm_os.app.main'); print('DEBUG module=', m.__file__)"
+    & $pythonPath -m uvicorn --app-dir $r swarm_os.app.main:app --host 127.0.0.1 --port 8000 2>&1
 } -ArgumentList $root, $backendEnv
 
 for ($i = 0; $i -lt 20; $i++) {
     try { Invoke-RestMethod "http://127.0.0.1:8000/health" | Out-Null; break } catch { Start-Sleep 1 }
 }
 Write-Host "Backend ✔  http://127.0.0.1:8000" -ForegroundColor Green
+
+# STEP 4.5 - MCP Servers
+Write-Host "`n[STEP 4.5] Starting MCP Servers..." -ForegroundColor Yellow
+for ($i = 0; $i -lt 20; $i++) {
+    try {
+        $tools = Invoke-RestMethod "http://127.0.0.1:8000/tools"
+        if ($tools.count -gt 0) {
+            break
+        }
+        Start-Sleep 1
+    } catch {
+        Start-Sleep 1
+    }
+}
+Write-Host "MCP Servers ✔  Registered $($tools.count) tools" -ForegroundColor Green
 
 # STEP 5 - Frontend (background job)
 Write-Host "`n[STEP 5] Starting Frontend..." -ForegroundColor Yellow
@@ -138,14 +172,15 @@ Write-Host ""
 
 try {
     while ($true) {
+        Receive-Job $ollamaJob   | ForEach-Object { Write-Host "[ollama]   $_" -ForegroundColor DarkGreen }
         Receive-Job $backendJob  | ForEach-Object { Write-Host "[backend]  $_" -ForegroundColor DarkCyan }
         Receive-Job $frontendJob | ForEach-Object { Write-Host "[frontend] $_" -ForegroundColor DarkYellow }
         Start-Sleep -Milliseconds 300
     }
 } finally {
     Write-Host "`nShutting down..." -ForegroundColor Red
-    Stop-Job  $backendJob, $frontendJob -ErrorAction SilentlyContinue
-    Remove-Job $backendJob, $frontendJob -ErrorAction SilentlyContinue
+    Stop-Job  $ollamaJob, $backendJob, $frontendJob -ErrorAction SilentlyContinue
+    Remove-Job $ollamaJob, $backendJob, $frontendJob -ErrorAction SilentlyContinue
     foreach ($svc in @("ollama","qdrant","node","python")) {
         Get-Process -Name $svc -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     }

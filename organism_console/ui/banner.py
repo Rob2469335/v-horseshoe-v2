@@ -33,8 +33,8 @@ def get_system_stats():
 def _refresh_banner_cache():
     global _BANNER_CACHE
     try:
-        agents_resp = requests.get(f"{BACKEND_URL}/agents", timeout=3, verify=settings.ssl_verify)
-        status_resp = requests.get(f"{BACKEND_URL}/status", timeout=3, verify=settings.ssl_verify)
+        agents_resp = requests.get(f"{BACKEND_URL}/agents", timeout=15, verify=settings.ssl_verify)
+        status_resp = requests.get(f"{BACKEND_URL}/status", timeout=15, verify=settings.ssl_verify)
         with _BANNER_LOCK:
             if agents_resp and agents_resp.status_code == 200:
                 _BANNER_CACHE["agents"] = agents_resp.json()
@@ -103,7 +103,6 @@ def get_weather_stats() -> str:
 _STARTUP_CHECKS_DONE = False
 
 def run_startup_checks(ctx):
-    return
     global _STARTUP_CHECKS_DONE
     if _STARTUP_CHECKS_DONE:
         return

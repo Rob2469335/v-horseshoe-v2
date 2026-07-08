@@ -11,6 +11,9 @@ async def playwright_handler(params: Dict[str, Any], trace_hook=None) -> Dict[st
     """
     operation = params.get("operation", "navigate")
     url = params.get("url", "")
+    import os
+    from pathlib import Path
+    root = Path(os.getenv("ZENITH_PROJECT_ROOT", Path(__file__).resolve().parent.parent.parent))
     
     try:
         try:
@@ -55,6 +58,7 @@ async def playwright_handler(params: Dict[str, Any], trace_hook=None) -> Dict[st
                 if trace_hook:
                     trace_hook("playwright_navigate", {"url": url, "title": title})
                     
+                await browser.close()
                 return result
 
             elif operation == "screenshot":
@@ -64,9 +68,12 @@ async def playwright_handler(params: Dict[str, Any], trace_hook=None) -> Dict[st
                 await page.goto(url, wait_until="networkidle", timeout=30000)
                 # In a real tool we might save this to a file, but for MCP we return status
                 # or a base64 string if requested. For now, we simulate the action.
-                screenshot_path = params.get("path", "screenshot.png")
-                await page.screenshot(path=screenshot_path)
+                # Sandbox screenshot path
+                screenshot_name = Path(params.get("path", "screenshot.png")).name
+                screenshot_path = root / screenshot_name
+                await page.screenshot(path=str(screenshot_path))
                 
+                await browser.close()
                 return {
                     "ok": True,
                     "url": page.url,
@@ -81,6 +88,7 @@ async def playwright_handler(params: Dict[str, Any], trace_hook=None) -> Dict[st
                 await page.goto(url, wait_until="networkidle", timeout=30000)
                 text = await page.evaluate("() => document.body.innerText")
                 
+                await browser.close()
                 return {
                     "ok": True,
                     "url": page.url,

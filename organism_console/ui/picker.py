@@ -24,7 +24,7 @@ def push_model_override(agent_id: str, model_name: str, backend: str) -> bool:
         r = requests.post(
             f"{BACKEND_URL}/agents/{agent_id}/model",
             json={"model_name": model_name, "backend": backend},
-            timeout=3,
+            timeout=15,
             verify=settings.ssl_verify
         )
         return r.status_code == 200
@@ -128,20 +128,20 @@ class ModelPickerApp(App):
 
     def fetch_data(self):
         try:
-            r = requests.get(f"{BACKEND_URL}/agents", timeout=3, verify=settings.ssl_verify)
+            r = requests.get(f"{BACKEND_URL}/agents", timeout=15, verify=settings.ssl_verify)
             self.agents = r.json() if r.status_code == 200 else []
         except:
             self.agents = []
 
         try:
-            r = requests.get(f"{BACKEND_URL}/agents/models", timeout=3, verify=settings.ssl_verify)
+            r = requests.get(f"{BACKEND_URL}/agents/models", timeout=15, verify=settings.ssl_verify)
             self.agent_models = r.json() if r.status_code == 200 else {}
         except:
             self.agent_models = {}
 
         local_model_names = []
         try:
-            r = requests.get("http://127.0.0.1:11434/api/tags", timeout=3, verify=settings.ssl_verify)
+            r = requests.get("http://127.0.0.1:11434/api/tags", timeout=15, verify=settings.ssl_verify)
             if r.status_code == 200:
                 local_model_names = [m.get("model") or m.get("name") for m in r.json().get("models", [])]
         except:
@@ -151,7 +151,7 @@ class ModelPickerApp(App):
         try:
             endpoint = self.get_models_endpoint() if self.cloud_enabled else "http://127.0.0.1:11434/api/tags"
             verify_ssl = settings.ssl_verify if self.cloud_enabled else False
-            r = requests.get(endpoint, timeout=3, verify=verify_ssl)
+            r = requests.get(endpoint, timeout=15, verify=verify_ssl)
             if r.status_code == 200:
                 self.models = r.json().get("models", [])
         except:

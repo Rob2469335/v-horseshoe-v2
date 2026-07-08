@@ -18,13 +18,13 @@ class SandboxReplHandler:
         language = str(language).lower().strip()
 
         if language == "python":
-            cmd = [r"C:\Python314\python.exe", "-c", str(code)]
+            cmd = [sys.executable, "-c", str(code)]
             timeout = 30.0
         elif language == "powershell":
             cmd = ["pwsh", "-Command", str(command)]
             timeout = 30.0
         elif language == "pytest":
-            cmd = [r"C:\Python314\python.exe", "-m", "pytest", str(path), "-v", "--tb=short"]
+            cmd = [sys.executable, "-m", "pytest", str(path), "-v", "--tb=short"]
             timeout = 60.0
         else:
             return {
@@ -34,16 +34,20 @@ class SandboxReplHandler:
                 "returncode": 1
             }
 
+        import os
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                cwd=project_root
             )
             try:
                 stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout)
                 return {
-                    "ok": True,
+                    "ok": proc.returncode == 0,
                     "stdout": stdout_bytes.decode("utf-8", errors="replace"),
                     "stderr": stderr_bytes.decode("utf-8", errors="replace"),
                     "returncode": proc.returncode if proc.returncode is not None else 0

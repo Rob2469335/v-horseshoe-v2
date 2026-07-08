@@ -1,34 +1,34 @@
 {
   "coordinator": [
-    "qwen3:8b-q4_K_M",
+    "danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS",
     "ollama"
   ],
   "planner": [
-    "ollama_chat/qwen3:8b-q4_K_M",
+    "danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS",
     "ollama"
   ],
   "researcher": [
-    "ministral-3:8b-instruct-2512-q4_K_M",
+    "danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS",
     "ollama"
   ],
   "executor": [
-    "llama3-groq-tool-use:8b-q4_K_M",
+    "danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS",
     "ollama"
   ],
   "coder": [
-    "qwen2.5-coder:14b-base-q3_K_S",
+    "danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS",
     "ollama"
   ],
   "tool-runner": [
-    "ollama_chat/MFDoom/deepseek-r1-tool-calling:8b-llama-distill-q4_K_M",
+    "danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS",
     "ollama"
   ],
   "reviewer": [
-    "qwen2.5-coder:7b",
+    "danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS",
     "ollama"
   ],
   "debugger": [
-    "qwen3:8b-q4_K_M",
+    "danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS",
     "ollama"
   ]
 }

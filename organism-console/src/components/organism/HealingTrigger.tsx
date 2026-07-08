@@ -13,7 +13,7 @@ export function HealingTrigger({ backendUrl }: Props) {
   }
   async function checkStatus() {
     setRunning(true)
-    try { const res = await fetch(`${backendUrl}/healing/evaluate`); setResult(await res.json()); setLastRun(new Date().toLocaleTimeString()) }
+    try { const res = await fetch(`${backendUrl}/api/admin/healing/evaluate`); setResult(await res.json()); setLastRun(new Date().toLocaleTimeString()) }
     catch(e) { setResult({error:String(e)}) } finally { setRunning(false) }
   }
   const checks = result?.checks ?? {}

@@ -5,25 +5,14 @@ from typing import Tuple
 OLLAMA_URL = "http://127.0.0.1:11434/api/chat"
 
 AGENT_MODELS: dict[str, Tuple[str, str]] = {
-    "coordinator": ("llama3-groq-tool-use:8b", "ollama"),
-    "planner": ("llama3-groq-tool-use:8b", "ollama"),
-    "researcher": ("llama3-groq-tool-use:8b", "ollama"),
-    "executor": ("qwen2.5-coder:7b", "ollama"),
-    "coder": ("qwen2.5-coder:7b", "ollama"),
-    "tool-runner": ("qwen3:8b-q4_K_M", "ollama"),
-    "reviewer": ("llama3-groq-tool-use:8b", "ollama"),
-    "debugger": ("qwen3.5:9b", "ollama"),
-}
-
-AGENT_SIDECARS: dict[str, Tuple[str, str]] = {
-    "coordinator": ("qwen3:4b-instruct", "ollama"),
-    "planner": ("qwen3:4b-instruct", "ollama"),
-    "researcher": ("qwen3:4b-instruct", "ollama"),
-    "executor": ("qwen3:4b-instruct", "ollama"),
-    "coder": ("qwen3:4b-instruct", "ollama"),
-    "tool-runner": ("qwen3:4b-instruct", "ollama"),
-    "reviewer": ("qwen3:4b-instruct", "ollama"),
-    "debugger": ("qwen3:4b-instruct", "ollama"),
+    "coordinator": ("danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS", "ollama"),
+    "planner": ("danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS", "ollama"),
+    "researcher": ("danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS", "ollama"),
+    "executor": ("danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS", "ollama"),
+    "coder": ("danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS", "ollama"),
+    "tool-runner": ("danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS", "ollama"),
+    "reviewer": ("danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS", "ollama"),
+    "debugger": ("danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS", "ollama"),
 }
 
 
@@ -56,10 +45,9 @@ def update_model_mapping(new_mapping: dict[str, str]):
     save_overrides()
 
 def get_model(agent_id: str) -> Tuple[str, str]:
-    return AGENT_MODELS.get(agent_id, ("llama3-groq-tool-use:8b", "ollama"))
+    return AGENT_MODELS.get(agent_id, ("qwen3:8b-q4_K_M", "ollama"))
 
-def get_sidecar(agent_id: str) -> Tuple[str, str]:
-    return AGENT_SIDECARS.get(agent_id, ("qwen3:4b-instruct", "ollama"))
+
 
 
 PREDICTIVE_TOPOLOGY: dict[str, str] = {

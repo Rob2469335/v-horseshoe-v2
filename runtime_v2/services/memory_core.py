@@ -8,22 +8,22 @@ OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
 QDRANT_URL = os.getenv("QDRANT_URL", "http://127.0.0.1:6333")
 COLLECTION_NAME = "agent_episodic_memory_v2"
 EMBEDDING_MODEL = "nomic-embed-text"
-RERANKER_MODEL = "qllama/bge-reranker-v2-m3:latest"
-EMBEDDING_DIM = 4096  # Dimension for qwen3-embedding:8b (or 3584 depending on variant, but let Qdrant auto-infer if possible, or we will fetch it first)
+RERANKER_MODEL = "BAAI/bge-reranker-v2-m3"
+EMBEDDING_DIM = 768  # Dimension for nomic-embed-text
 
 def _get_embedding_dimension() -> int:
     try:
         resp = requests.post(f"{OLLAMA_URL}/api/embeddings", json={
             "model": EMBEDDING_MODEL,
             "prompt": "test",
-            "keep_alive": 0
-        }, timeout=120.0)
+            "keep_alive": "5m"
+        }, timeout=30.0)
         if resp.status_code == 200:
             vec = resp.json().get("embedding", [])
             return len(vec)
     except Exception:
         pass
-    return 4096
+    return 768
 
 def _get_shard_name(category: str) -> str:
     safe_cat = "".join(c if c.isalnum() else "_" for c in category.lower())
@@ -63,8 +63,8 @@ def get_embedding(text: str) -> Optional[List[float]]:
         resp = requests.post(f"{OLLAMA_URL}/api/embeddings", json={
             "model": EMBEDDING_MODEL,
             "prompt": text,
-            "keep_alive": 0
-        }, timeout=120.0)
+            "keep_alive": "5m"
+        }, timeout=30.0)
         if resp.status_code == 200:
             return resp.json().get("embedding")
     except Exception as e:
@@ -144,7 +144,7 @@ def remember_fact(fact: str, category: str = "general") -> bool:
                 }
             }]
         }, timeout=10.0)
-        return resp.status_code == 200
+        return resp.status_code in (200, 201)
     except Exception:
         return False
 

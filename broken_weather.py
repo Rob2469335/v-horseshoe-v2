@@ -1,12 +1,24 @@
 import urllib.request
-# This API endpoint requires a special User-Agent and JSON parsing, 
-# but we are doing it completely wrong and it crashes.
+import json
+
+# This API endpoint requires a special User-Agent and JSON parsing
 def fetch_weather():
     url = "https://api.weather.gov/points/39.7456,-97.0892"
-    # This fails because we are omitting the User-Agent parameter
-    req = urllib.request.Request(url)
-    resp = urllib.request.urlopen(req)
-    return resp.read()
+    # Add required User-Agent header
+    req = urllib.request.Request(
+        url,
+        headers={
+            'User-Agent': 'HorseshoeSwarm/1.0 (https://github.com/your-username/v-horseshoe-v2)',
+            'Accept': 'application/json'
+        }
+    )
+    try:
+        resp = urllib.request.urlopen(req)
+        data = json.loads(resp.read().decode('utf-8'))
+        return data
+    except Exception as e:
+        return f"Error fetching weather data: {e}"
     
 if __name__ == '__main__':
-    print(fetch_weather())
+    result = fetch_weather()
+    print(json.dumps(result, indent=2))

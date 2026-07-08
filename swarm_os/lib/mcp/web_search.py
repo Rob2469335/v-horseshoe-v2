@@ -89,8 +89,11 @@ async def web_search_handler(params: Dict[str, Any], trace_hook=None) -> Dict[st
 
         try:
             from duckduckgo_search import DDGS
-            with DDGS() as ddgs:
-                results = list(ddgs.text(query, max_results=max_results))
+            import asyncio
+            def run_ddg():
+                with DDGS() as ddgs:
+                    return list(ddgs.text(query, max_results=max_results))
+            results = await asyncio.to_thread(run_ddg)
             if results:
                 return {"ok": True, "provider": "duckduckgo", "query": query,
                         "results": [{"title": i.get("title",""), "url": i.get("href",""),
@@ -98,14 +101,8 @@ async def web_search_handler(params: Dict[str, Any], trace_hook=None) -> Dict[st
         except Exception as ddg_err:
             logger.warning(f"DuckDuckGo search failed: {ddg_err}")
 
-        logger.warning("All search providers failed or unconfigured, using simulated results")
-        return {"ok": True, "provider": "simulated", "query": query,
-                "results": [
-                    {"title": f"Result for {query}", "url": f"https://example.com/?q={query}",
-                     "snippet": f"Simulated result for: {query}"},
-                    {"title": f"Documentation: {query}", "url": f"https://docs.example.com/{query}",
-                     "snippet": f"Reference documentation for {query}"},
-                ]}
+        logger.warning("All search providers failed or unconfigured")
+        return {"ok": False, "error": "All configured search providers failed or are unconfigured. Please set an API key or ensure internet connectivity."}
 
     except Exception as e:
         logger.exception("Web search error")

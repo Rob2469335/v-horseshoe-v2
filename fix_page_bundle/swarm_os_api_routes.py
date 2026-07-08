@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from collections import Counter
 from statistics import mean
 from typing import Any
@@ -69,7 +71,8 @@ async def _safe_ollama_reachable(runtime: Any) -> bool:
         if ollama is None:
             return False
         return bool(await ollama.is_reachable())
-    except Exception:
+    except Exception as exc:
+        logging.error(f"Error checking Ollama reachability: {exc}")
         return False
 
 
@@ -81,7 +84,8 @@ async def _safe_ollama_models(runtime: Any) -> list[str]:
             return []
         models = await ollama.list_models()
         return sorted({str(m).strip() for m in models if str(m).strip()})
-    except Exception:
+    except Exception as exc:
+        logging.error(f"Error listing Ollama models: {exc}")
         return []
 
 
@@ -141,13 +145,18 @@ def _build_capabilities(installed_models: list[str]) -> dict[str, Any]:
     }
 
 
+import logging
+
+...
+
 def _safe_events(runtime: Any) -> list[Any]:
     try:
         event_store = getattr(runtime, "event_store", None)
         if event_store is None:
             return []
         return event_store.read_all()
-    except Exception:
+    except Exception as exc:
+        logging.error(f"Error reading events: {exc}")
         return []
 
 

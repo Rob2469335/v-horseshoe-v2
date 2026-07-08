@@ -13,12 +13,12 @@ _SEMAPHORE_LIMIT = max(1, int(os.environ.get("SWARMMODELCONCURRENCY", "2")))
 _THREAD_POOL = ThreadPoolExecutor(max_workers=_SEMAPHORE_LIMIT)
 MODEL_SEMAPHORE = asyncio.Semaphore(_SEMAPHORE_LIMIT)
 
-SWARM_MODEL = os.environ.get("SWARMMODEL", "llama3-groq-tool-use:8b")
-EMBED_MODEL = os.environ.get("EMBEDMODEL", "nomic-embed-text:latest")
-FAST_MODEL = os.environ.get("FASTMODEL", "mistral-nemo:12b")
+SWARM_MODEL = os.environ.get("SWARMMODEL", "danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS")
+EMBED_MODEL = os.environ.get("EMBEDMODEL", "qwen3-embedding:8b")
+FAST_MODEL = os.environ.get("FASTMODEL", "danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS")
 AGENT_MODEL = os.environ.get("SWARMAGENTMODEL", os.environ.get("ROUTEAGENTMODEL", SWARM_MODEL))
-CODE_MODEL = os.environ.get("SWARMCODEMODEL", os.environ.get("ROUTECODEMODEL", "qwen2.5-coder:14b"))
-CHAT_MODEL = os.environ.get("SWARMCHATMODEL", os.environ.get("ROUTECHATMODEL", "qwen2.5-coder:7b"))
+CODE_MODEL = os.environ.get("SWARMCODEMODEL", os.environ.get("ROUTECODEMODEL", "danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS"))
+CHAT_MODEL = os.environ.get("SWARMCHATMODEL", os.environ.get("ROUTECHATMODEL", "danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS"))
 
 def _sync_generate(prompt: str, model: str, num_predict: int = 200, keep_alive: str = "0") -> str:
     try:

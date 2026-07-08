@@ -46,15 +46,9 @@ class Orchestrator:
 
         self.router = Router(
             profiles=[
-                ModelProfile(name="phi4-mini:latest", role="fast", max_tokens=32000),
-                ModelProfile(name="qwen2.5-coder:7b", role="coding", max_tokens=32000),
-                ModelProfile(name="qwen3.5:9b", role="reasoning", max_tokens=32000),
-                
-                ModelProfile(name="qwen2.5-coder:3b", role="coding", max_tokens=32000),
-                ModelProfile(name="qwen2.5-coder:7b", role="coding", max_tokens=32000),
-                ModelProfile(name="qwen2.5-coder:7b", role="coding", max_tokens=32000),
-                ModelProfile(name="qwen2.5-coder:7b-32k", role="coding", max_tokens=32768),
-                ModelProfile(name="qwen2.5-coder:32b", role="coding", max_tokens=32000),
+                ModelProfile(name="danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS", role="fast", max_tokens=32000),
+                ModelProfile(name="danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS", role="coding", max_tokens=32768),
+                ModelProfile(name="danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS", role="reasoning", max_tokens=32000),
                 ModelProfile(name="qwen3-vl:8b", role="vision", preferred_temp=0.2, max_tokens=32768),
                 ModelProfile(name="moondream:latest", role="vision", preferred_temp=0.2, max_tokens=8192),
             ],
@@ -75,9 +69,7 @@ class Orchestrator:
             "syntaxerror", "pytest", "module", "sql", "api", "json",
         ]
         if any(re.search(r"\b" + re.escape(m.strip()) + r"\b", last_content) for m in coding_markers):
-            rv_classes = ["class a", "class b", "class c"]
-            if not any(rv in last_content for rv in rv_classes):
-                return "coding"
+            return "coding"
 
         if any(marker in last_content for marker in ["image", "screenshot", "diagram", "vision", "ocr", "photo"]):
             return "vision"
@@ -98,7 +90,7 @@ class Orchestrator:
                 data = response.json()
                 return [m.get("name") for m in data.get("models", []) if m.get("name")]
         except Exception:
-            return ["qwen3.5:9b", "qwen2.5-coder:7b"]
+            return ["danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS"]
 
     def _parse_tool_call(self, text: str) -> tuple[str, str] | None:
         # Check Pattern A: <tool_call name="tool">params</tool_call>
@@ -124,7 +116,7 @@ class Orchestrator:
                         params = obj.get("params", {})
                         return obj["tool_name"].strip(), json.dumps(params)
                     _cmd_val = obj.get("command", "")
-                    _CLI_ONLY = {"/goal", "/plan", "/debug", "/compress", "/boot", "/exit", "/debate", "/chat", "/agents", "/tokens", "/trace", "/compress", "/boot", "/exit", "/clear", "/model", "/focus"}
+                    _CLI_ONLY = {"/goal", "/plan", "/debug", "/compress", "/boot", "/exit", "/debate", "/chat", "/agents", "/tokens", "/trace", "/clear", "/model", "/focus"}
                     if ("command" in obj and isinstance(_cmd_val, str)
                             and _cmd_val.startswith("/")
                             and not any(_cmd_val.startswith(c) for c in _CLI_ONLY)):
@@ -277,7 +269,7 @@ class Orchestrator:
             allow_fallback=True,
         )
 
-        chosen_model = route_decision.model or "qwen3.5:9b"
+        chosen_model = route_decision.model or "danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS"
 
         self.trace.add(
             trace_id=trace_id,
@@ -298,14 +290,14 @@ class Orchestrator:
 
         # Detect provider for the chosen model
         provider = self._detect_provider(chosen_model)
-        print(f"[Orchestrator] generate() provider={provider} for model={chosen_model}", flush=True)
+        log.info(f"[Orchestrator] generate() provider={provider} for model={chosen_model}")
 
         # If the provider is cloud but no API key is available, fall back to a local model
         if provider in ("openrouter", "nvidia") and not _os.environ.get(
             "OPENROUTER_API_KEY" if provider == "openrouter" else "NVIDIA_API_KEY", ""
         ).strip():
-            print(f"[Orchestrator] No API key for {provider}, falling back to local model", flush=True)
-            chosen_model = "qwen3.5:9b"
+            log.info(f"[Orchestrator] No API key for {provider}, falling back to local model")
+            chosen_model = "danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS"
             provider = "ollama"
 
         max_steps = 5
@@ -318,7 +310,7 @@ class Orchestrator:
                 if self.total_tokens_used >= self.max_tokens_budget:
                     raise ValueError(f"Token budget exceeded: {self.total_tokens_used} used (limit {self.max_tokens_budget})")
 
-                print(f"[Orchestrator] generate() Turn {step + 1}/{max_steps} starting with model={chosen_model} provider={provider}", flush=True)
+                log.info(f"[Orchestrator] generate() Turn {step + 1}/{max_steps} starting with model={chosen_model} provider={provider}")
 
                 # Dispatch to the correct provider
                 if provider in ("openrouter", "nvidia"):
@@ -326,7 +318,7 @@ class Orchestrator:
                 else:
                     result = await self.ollama.generate(model=chosen_model, messages=messages)
 
-                print(f"[Orchestrator] generate() Turn result: {result!r}", flush=True)
+                log.info(f"[Orchestrator] generate() Turn result: {result!r}")
                 
                 # Update tokens used
                 self.total_tokens_used += int(len(result) / 4) + 1
@@ -334,7 +326,7 @@ class Orchestrator:
                 tool_info = self._parse_tool_call(result)
                 if not tool_info:
                     final_result = result
-                    print(f"[Orchestrator] Plain-text response received. Exiting loop.", flush=True)
+                    log.info(f"[Orchestrator] Plain-text response received. Exiting loop.")
                     break
                 if tool_info:
                     tool_name, params_str = tool_info
@@ -343,19 +335,19 @@ class Orchestrator:
 
                     if dedup_key in handled_tool_keys:
                         # This exact tool call was already handled — stop looping
-                        print(f"[Orchestrator] DUPLICATE tool call detected: {tool_name}. Breaking loop.", flush=True)
+                        log.info(f"[Orchestrator] DUPLICATE tool call detected: {tool_name}. Breaking loop.")
                         final_result = f"The command was already handled. {result}"
                         break
 
-                    print(f"[Orchestrator] Intercepted tool call in generate(): {tool_name} with params: {params_str}", flush=True)
+                    log.info(f"[Orchestrator] Intercepted tool call in generate(): {tool_name} with params: {params_str}")
                     try:
                         params = json.loads(params_str)
                     except Exception as e:
                         params = {}
-                        print(f"[Orchestrator] Failed to parse tool params JSON: {e}", flush=True)
+                        log.warning(f"[Orchestrator] Failed to parse tool params JSON: {e}")
                     
                     # Execute tool
-                    print(f"[Orchestrator] Executing tool {tool_name}...", flush=True)
+                    log.info(f"[Orchestrator] Executing tool {tool_name}...")
                     if tool_name == "command":
                         observation = {
                             "ok": True,
@@ -370,7 +362,7 @@ class Orchestrator:
                         }
                     else:
                         observation = await self.mcp.call(tool_name, params)
-                    print(f"[Orchestrator] Tool execution result: {observation}", flush=True)
+                    log.info(f"[Orchestrator] Tool execution result: {observation}")
 
                     # Mark this tool call as handled
                     handled_tool_keys.add(dedup_key)
@@ -378,7 +370,7 @@ class Orchestrator:
                     # Critic evaluation
                     critic_res = self.critic.evaluate_step(observation, expected_kind="tool")
                     if not critic_res.accepted:
-                        print(f"[Orchestrator] Critic rejected tool execution: {critic_res.reason}", flush=True)
+                        log.warning(f"[Orchestrator] Critic rejected tool execution: {critic_res.reason}")
                         messages.append({"role": "assistant", "content": result})
                         messages.append({"role": "user", "content": f"TOOL OBSERVATION:\n{json.dumps(observation)}\n\nThe slash command has already been handled. Continue with the next assistant response directly and do not call the same slash command again unless the user explicitly asks for a rerun."})
                         messages.append({
@@ -390,7 +382,7 @@ class Orchestrator:
                     # For handled slash commands, return immediately instead of continuing
                     # The command shim is a terminal action — no need to re-prompt the model
                     if tool_name == "command":
-                        print(f"[Orchestrator] Slash command handled. Returning immediately.", flush=True)
+                        log.info(f"[Orchestrator] Slash command handled. Returning immediately.")
                         final_result = observation.get("result", result)
                         messages.append({"role": "assistant", "content": result})
                         messages.append({"role": "user", "content": f"TOOL OBSERVATION:\n{json.dumps(observation)}\n\nContinue with the next assistant response."})
@@ -427,7 +419,7 @@ class Orchestrator:
 
     async def stream_generate(self, model: str | None, messages: list[dict] | None = None, prompt: str | None = None):
         log.info("[Orchestrator] Entering stream_generate. model=%s, prompt=%s, messages=%s", model, prompt, messages)
-        print(f"[Orchestrator] Entering stream_generate. model={model}, prompt={prompt}", flush=True)
+        log.info(f"[Orchestrator] Entering stream_generate. model={model}, prompt={prompt}")
         messages = list(messages or [])
         
         # Context Injection
@@ -488,20 +480,20 @@ class Orchestrator:
             allow_fallback=True,
         )
 
-        chosen_model = route_decision.model or "qwen3.5:9b"
+        chosen_model = route_decision.model or "danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS"
 
         log.info("[Orchestrator] Routing decision: %s. Starting Ollama stream...", chosen_model)
         
         # Detect provider for the chosen model
         provider = self._detect_provider(chosen_model)
-        print(f"[Orchestrator] stream_generate() provider={provider} for model={chosen_model}", flush=True)
+        log.info(f"[Orchestrator] stream_generate() provider={provider} for model={chosen_model}")
 
         # If the provider is cloud but no API key is available, fall back to a local model
         if provider in ("openrouter", "nvidia") and not _os.environ.get(
             "OPENROUTER_API_KEY" if provider == "openrouter" else "NVIDIA_API_KEY", ""
         ).strip():
-            print(f"[Orchestrator] No API key for {provider}, falling back to local model", flush=True)
-            chosen_model = "qwen3.5:9b"
+            log.info(f"[Orchestrator] No API key for {provider}, falling back to local model")
+            chosen_model = "danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS"
             provider = "ollama"
 
         max_steps = 5
@@ -513,7 +505,7 @@ class Orchestrator:
                 yield f"\n[Error: Token budget exceeded ({self.total_tokens_used} used)]", chosen_model, trace_id
                 break
 
-            print(f"[Orchestrator] stream_generate() Turn {step + 1}/{max_steps} starting with model={chosen_model} provider={provider}", flush=True)
+            log.info(f"[Orchestrator] stream_generate() Turn {step + 1}/{max_steps} starting with model={chosen_model} provider={provider}")
             accumulated_text = ""
             try:
                 # Dispatch to the correct provider
@@ -536,19 +528,19 @@ class Orchestrator:
                     dedup_key = f"{tool_name}:{params_str}"
 
                     if dedup_key in handled_tool_keys:
-                        print(f"[Orchestrator] DUPLICATE tool call detected in stream: {tool_name}. Breaking loop.", flush=True)
+                        log.info(f"[Orchestrator] DUPLICATE tool call detected in stream: {tool_name}. Breaking loop.")
                         yield f"\n[System: Duplicate tool call detected. Stopping loop.]\n", chosen_model, trace_id
                         break
 
-                    print(f"[Orchestrator] Intercepted tool call in stream_generate(): {tool_name} with params: {params_str}", flush=True)
+                    log.info(f"[Orchestrator] Intercepted tool call in stream_generate(): {tool_name} with params: {params_str}")
                     try:
                         params = json.loads(params_str)
                     except Exception as e:
                         params = {}
-                        print(f"[Orchestrator] Failed to parse tool params JSON: {e}", flush=True)
+                        log.warning(f"[Orchestrator] Failed to parse tool params JSON: {e}")
                     
                     # Execute tool
-                    print(f"[Orchestrator] Executing tool {tool_name}...", flush=True)
+                    log.info(f"[Orchestrator] Executing tool {tool_name}...")
                     if tool_name == "command":
                         observation = {
                             "ok": True,
@@ -563,7 +555,7 @@ class Orchestrator:
                         }
                     else:
                         observation = await self.mcp.call(tool_name, params)
-                    print(f"[Orchestrator] Tool execution result: {observation}", flush=True)
+                    log.info(f"[Orchestrator] Tool execution result: {observation}")
 
                     # Mark this tool call as handled
                     handled_tool_keys.add(dedup_key)
@@ -571,7 +563,7 @@ class Orchestrator:
                     # Critic evaluation
                     critic_res = self.critic.evaluate_step(observation, expected_kind="tool")
                     if not critic_res.accepted:
-                        print(f"[Orchestrator] Critic rejected tool execution: {critic_res.reason}", flush=True)
+                        log.warning(f"[Orchestrator] Critic rejected tool execution: {critic_res.reason}")
                         obs_text = f"\n[Critic Rejection: {critic_res.reason}. Requesting self-correction...]\n"
                         yield obs_text, chosen_model, trace_id
                         
@@ -585,7 +577,7 @@ class Orchestrator:
 
                     # For handled slash commands, break immediately — the shim is terminal
                     if tool_name == "command":
-                        print(f"[Orchestrator] Slash command handled in stream. Continuing.", flush=True)
+                        log.info(f"[Orchestrator] Slash command handled in stream. Continuing.")
                         obs_text = f"\n[Observation: {json.dumps(observation)}]\n"
                         yield obs_text, chosen_model, trace_id
                         messages.append({"role": "assistant", "content": accumulated_text})
@@ -600,7 +592,7 @@ class Orchestrator:
                     messages.append({"role": "user", "content": f"TOOL OBSERVATION:\n{json.dumps(observation)}\n\nContinue with the next assistant response."})
                     continue
                 else:
-                    print(f"[Orchestrator] Final stream result received. Exiting loop.", flush=True)
+                    log.info(f"[Orchestrator] Final stream result received. Exiting loop.")
                     break
             except Exception as exc:
                 log.exception("[Orchestrator] Streaming failed with error")

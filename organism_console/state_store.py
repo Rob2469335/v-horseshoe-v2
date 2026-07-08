@@ -12,7 +12,7 @@ class SessionState:
         
         # Default states
         self.active_agent: str = "coordinator"
-        self.active_model: str = "qwen2.5-coder:7b"
+        self.active_model: str = "danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS"
         self.execution_phase: str = "thinking"
         self.last_tool_call: Optional[Dict[str, Any]] = None
         self.last_error: Optional[str] = None

@@ -11,6 +11,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 from rich.box import SIMPLE
+from rich.markup import escape
 
 from organism_console.renderer import render_dashboard
 
@@ -99,6 +100,9 @@ def route_natural_language_keywords(raw: str) -> tuple[Optional[str], list[str]]
         
     if clean in ("tokens", "token usage", "cost", "how many tokens"):
         return "tokens", []
+
+    if clean in ("agents", "list agents", "show agents", "what agents", "agent list"):
+        return "agents", []
 
     if clean in ("benchmark", "run benchmark", "test models"):
         return "benchmark", []
@@ -302,11 +306,19 @@ def cmd_model(ctx: CommandContext, args: List[str]) -> None:
     ctx.console.print(f"[green]✓ Active model set to[/green] [bold green]{model_name}[/bold green]")
 
 
-@registry.register("agent", "Switch the active agent. Usage: /agent <name>")
+@registry.register("agent", "Switch the active agent. Usage: /agent <name> (or /agent list)")
 def cmd_agent(ctx: CommandContext, args: List[str]) -> None:
     if not args:
+        resp = ctx.call_api("/agents", "GET")
+        agent_list = "?"
+        if resp:
+            try:
+                names = [a.get("id", "?") for a in resp.json()]
+                agent_list = ", ".join(names)
+            except Exception:
+                pass
         ctx.console.print(f"Active agent: [bold cyan]{ctx.state.active_agent}[/bold cyan]")
-        ctx.console.print("To change: `/agent <name>` (coordinator, planner, executor, coder, tool-runner, reviewer)")
+        ctx.console.print(f"Available: {agent_list}")
         return
 
     agent_name = args[0].lower()
@@ -1502,7 +1514,7 @@ def cmd_clear(ctx: CommandContext, args: List[str]) -> None:
     ctx.console.print("[green]✓ Session history cleared. Context reset.[/green]")
 
 
-@registry.register("agents", "List all registered agents and their roles")
+@registry.register("agents", "List all registered agents and their assigned models")
 def cmd_agents(ctx: CommandContext, args: List[str]) -> None:
     resp = ctx.call_api("/agents", "GET")
     if not resp:
@@ -1513,14 +1525,20 @@ def cmd_agents(ctx: CommandContext, args: List[str]) -> None:
         table = Table(box=SIMPLE, header_style="bold cyan")
         table.add_column("Agent ID", style="bold green")
         table.add_column("Role", style="cyan")
+        table.add_column("Model", style="yellow")
         table.add_column("Description", style="white")
+        from runtime_v2.services.model_registry import AGENT_MODELS
         for a in agents:
+            agent_id = a.get("id", "?")
+            assigned_model, _ = AGENT_MODELS.get(agent_id, ("—", ""))
+            active = " ▶" if agent_id == ctx.state.active_agent else ""
             table.add_row(
-                a.get("id", "?"),
+                f"{agent_id}{active}",
                 a.get("role", "?"),
+                assigned_model,
                 a.get("description", "")[:60]
             )
-        ctx.console.print(Panel(table, title="[bold cyan]Registered Agents[/bold cyan]", border_style="cyan"))
+        ctx.console.print(Panel(table, title=f"[bold cyan]Agent Registry ({len(agents)} agents)[/bold cyan]", border_style="cyan"))
     except Exception as e:
         ctx.console.print(f"[bold red]Failed to parse agents:[/bold red] {e}")
 

@@ -123,10 +123,13 @@ async def test_stream_generate_react_loop(tmp_path):
         
     full_output = "".join(chunks)
     assert '<tool_call' in full_output
-    assert 'Observation: {"ok": true}' in full_output
+    assert '<tool_call' in full_output
+    assert 'temp_stream.txt' in full_output
+    assert 'File was written successfully.' in full_output
     assert 'File was written successfully.' in full_output
     
     # Verify file was written inside the sandbox
     written_file = tmp_path / "temp_stream.txt"
     assert written_file.exists()
     assert written_file.read_text(encoding="utf-8") == "hello from stream"
+

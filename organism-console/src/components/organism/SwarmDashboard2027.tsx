@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { MemorySearchPanel } from '../MemorySearchPanel';
 
 type AgentType = {
   id: string;
@@ -492,6 +493,10 @@ export const SwarmDashboard2027 = ({ backendUrl }: { backendUrl: string }) => {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 350px', gap: '24px' }}>
         <AgentConsole backendUrl={backendUrl} latestHandoff={latestHandoff} />
         <RadarChart backendUrl={backendUrl} />
+      </div>
+
+      <div style={{ marginTop: '24px' }}>
+        <MemorySearchPanel />
       </div>
     </div>
   );

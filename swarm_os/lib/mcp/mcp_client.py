@@ -23,9 +23,13 @@ class ExternalMCPClientManager:
         self.config_path = Path(config_path)
         self.sessions: Dict[str, ClientSession] = {}
         self.exit_stack = None
+        self.cached_tools = None
 
     async def start(self) -> List[Dict[str, Any]]:
         """Starts all configured external MCP servers and returns list of exposed tools."""
+        if getattr(self, "cached_tools", None) is not None:
+            return self.cached_tools
+
         if not self.config_path.exists():
             logger.warning(f"MCP config not found at: {self.config_path}")
             return []
@@ -84,11 +88,12 @@ class ExternalMCPClientManager:
                         "server": name,
                         "name": t.name,
                         "description": t.description,
-                        "input_schema": t.input_schema
+                        "input_schema": t.inputSchema
                     })
             except Exception as e:
                 logger.error(f"Failed to initialize MCP server '{name}': {e}")
 
+        self.cached_tools = all_tools
         return all_tools
 
     async def call_tool(self, server_name: str, tool_name: str, arguments: Dict[str, Any]) -> Any:
@@ -104,6 +109,12 @@ class ExternalMCPClientManager:
     async def stop(self):
         """Cleanly close all connections and shutdown subprocesses."""
         if self.exit_stack:
-            await self.exit_stack.aclose()
-            logger.info("Closed all external MCP server connections.")
-            self.sessions.clear()
+            try:
+                await self.exit_stack.aclose()
+                logger.info("Closed all external MCP server connections.")
+            except Exception as e:
+                logger.warning(f"Error while closing MCP connections: {e}")
+            finally:
+                self.sessions.clear()
+                self.exit_stack = None
+                self.cached_tools = None

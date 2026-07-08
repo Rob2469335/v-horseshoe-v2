@@ -4,7 +4,7 @@ interface ReplayData { event_count:number; latest_health_score:number|null; heal
 interface EventsData { count:number; events:{event_id:string;event_type:string;occurred_at:string;source:string;payload:Record<string,unknown>}[] }
 export function ReplayDashboard() {
   const backendUrl=useUiStore(s=>s.backendUrl)
-  const rq=useQuery<ReplayData>({queryKey:["replay",backendUrl],queryFn:async()=>(await fetch(`${backendUrl}/admin/replay`)).json(),refetchInterval:30000})
+  const rq=useQuery<ReplayData>({queryKey:["replay",backendUrl],queryFn:async()=>(await fetch(`${backendUrl}/api/admin/replay`)).json(),refetchInterval:30000})
   const eq=useQuery<EventsData>({queryKey:["events-recent",backendUrl],queryFn:async()=>(await fetch(`${backendUrl}/events?limit=20`)).json(),refetchInterval:15000})
   const replay=rq.data; const events=eq.data?.events??[]
   function ec(t:string){if(t.includes("evolve"))return"#a78bfa";if(t.includes("llm")||t.includes("generate"))return"#7dd3fc";if(t.includes("agent"))return"#86efac";if(t.includes("heal"))return"#f472b6";return"#94a3b8"}

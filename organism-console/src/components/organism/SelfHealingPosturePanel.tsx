@@ -40,6 +40,7 @@ export function SelfHealingPosturePanel({ backendUrl }: Props) {
       setData(json)
     } catch (err: any) {
       setError(err.message || "Could not retrieve self-healing status.")
+      setData(null)
     } finally {
       setLoading(false)
     }
@@ -84,7 +85,7 @@ export function SelfHealingPosturePanel({ backendUrl }: Props) {
   };
 
   const summary = data?.summary || { recent_failures: 0, active_incidents: 0 }
-  const readiness = data?.readiness ?? 100
+  const readiness = data?.readiness ?? (error ? 0 : 100)
   const actions: AuditRecord[] = data?.actions || []
   const pendingRequests: ApprovalRequest[] = (data?.approvals?.requests || []).filter(
     (r: any) => r.status === "pending"

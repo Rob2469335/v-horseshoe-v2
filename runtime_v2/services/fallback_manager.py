@@ -66,6 +66,7 @@ async def _fetch_nvidia_models() -> list[dict]:
     api_key = os.getenv("NVIDIA_API_KEY")
     if not api_key:
         return models
+    os.environ.setdefault("NVIDIA_NIM_API_KEY", api_key)
     try:
         async with httpx.AsyncClient(timeout=5.0, verify=settings.ssl_verify) as client:
             headers = {"Authorization": f"Bearer {api_key}"}
@@ -75,7 +76,7 @@ async def _fetch_nvidia_models() -> list[dict]:
             for m in data:
                 m_id = m.get("id", "")
                 models.append({
-                    "model": f"nvidia/{m_id}",
+                    "model": f"nvidia_nim/{m_id}",
                     "context_length": 8192,
                     "pricing": "API",
                     "provider": "NVIDIA"
@@ -91,7 +92,8 @@ async def _fetch_gemini_models() -> list[dict]:
         return models
     try:
         async with httpx.AsyncClient(timeout=5.0, verify=settings.ssl_verify) as client:
-            resp = await client.get(f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}")
+            headers = {"x-goog-api-key": api_key}
+            resp = await client.get("https://generativelanguage.googleapis.com/v1beta/models", headers=headers)
             resp.raise_for_status()
             data = resp.json().get("models", [])
             for m in data:
@@ -123,7 +125,7 @@ async def _fetch_ollama_models() -> list[dict]:
                         "provider": "Ollama"
                     })
     except Exception:
-        pass
+        log.warning("Failed to fetch Ollama models, is Ollama running?")
     return models
 
 async def refresh_fallbacks_if_needed(mode: str = "auto"):
@@ -157,10 +159,10 @@ async def refresh_fallbacks_if_needed(mode: str = "auto"):
     gemini_models = results[3] if isinstance(results[3], list) else []
     ollama_models = results[4] if isinstance(results[4], list) else []
 
-    groq_models.sort(key=lambda x: "70b" not in x["model"].lower() and "versatile" not in x["model"].lower(), reverse=False)
-    nvidia_models.sort(key=lambda x: "70b" not in x["model"].lower() and "nemotron" not in x["model"].lower(), reverse=False)
-    gemini_models.sort(key=lambda x: "pro" not in x["model"].lower(), reverse=False)
-    openrouter_models.sort(key=lambda x: "70b" not in x["model"].lower(), reverse=False)
+    groq_models.sort(key=lambda x: ("70b" in x["model"].lower(), "versatile" in x["model"].lower()))
+    nvidia_models.sort(key=lambda x: ("70b" in x["model"].lower(), "nemotron" in x["model"].lower()))
+    gemini_models.sort(key=lambda x: ("pro" in x["model"].lower(),))
+    openrouter_models.sort(key=lambda x: ("70b" in x["model"].lower(),))
 
     valid_ollama = []
     for o in ollama_models:
@@ -169,7 +171,7 @@ async def refresh_fallbacks_if_needed(mode: str = "auto"):
             continue
         valid_ollama.append(o)
 
-    valid_ollama.sort(key=lambda x: "tool" not in x["model"].lower() and "coder" not in x["model"].lower(), reverse=False)
+    valid_ollama.sort(key=lambda x: ("tool" in x["model"].lower(), "coder" in x["model"].lower()))
 
     all_fallbacks = []
     all_fallbacks.extend(valid_ollama[:3])
@@ -198,8 +200,9 @@ async def get_live_fallbacks(mode: str = "auto") -> list[dict]:
         return local_models
 
     if mode == "cloud_allowed":
-        return local_models + cloud_models
+        return cloud_models + local_models
 
+    # Auto mode: prioritize local
     return local_models + cloud_models
 
 def get_fallback_stats() -> dict:
