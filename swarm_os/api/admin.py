@@ -5,6 +5,7 @@ import asyncio
 import logging
 from pathlib import Path
 from fastapi import APIRouter, Request, BackgroundTasks, HTTPException
+from swarm_os.app.runtime_access import get_runtime_service
 router = APIRouter(prefix='/admin', tags=['admin'])
 
 
@@ -18,31 +19,23 @@ log = logging.getLogger(__name__)
 
 
 
-def get_runtime(request: Request) -> RuntimeGraph:
-    runtime = getattr(request.app.state, "runtime", None)
-    if runtime is None:
-        raise HTTPException(status_code=503, detail="Runtime not initialised")
-    return runtime
-
-
 def get_snapshot_repo(request: Request) -> FileSnapshotRepository:
-    return get_runtime(request).snapshot_repo
+    return get_runtime_service(request, "snapshot_repo")
 
 
 def get_simulation_service(request: Request) -> SimulationService:
-    return get_runtime(request).simulation_service
+    return get_runtime_service(request, "simulation_service")
 
 
 def latest_snapshot() -> Path | None:
     return FileSnapshotRepository().latest()
 
 
-async def _resume_task(path: str) -> None:
+async def _resume_task(service: SimulationService, path: str) -> None:
     try:
-        service = SimulationService(snapshot_repo=FileSnapshotRepository())
         await service.run(resume_path=path)
-    except Exception as e:
-        log.exception("resume task failed: %s", e)
+    except Exception as exc:
+        log.exception("resume task failed: %s", exc)
 
 
 def _latest_snapshot_payload(request: Request) -> dict:
@@ -129,7 +122,7 @@ def resume_latest(request: Request, background_tasks: BackgroundTasks) -> dict:
     if latest is None:
         raise HTTPException(status_code=404, detail="No snapshots found")
 
-    background_tasks.add_task(_resume_task, str(latest))
+    background_tasks.add_task(_resume_task, get_simulation_service(request), str(latest))
     log.info("queued resume from %s", latest)
 
     return {"queued": True, "resume": str(latest)}
