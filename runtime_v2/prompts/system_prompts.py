@@ -12,7 +12,7 @@ _ROLE_RULES: dict[str, str] = {
         "ROUTING TABLE — match the FIRST rule that applies:\n"
         "  greeting / small talk / trivial  → action=final\n"
         "  user names a specific agent      → delegate to that agent\n"
-        "  heal / fix yourself / self-repair / self-heal → delegate to debugger\n"
+        "  RULE: if user message contains heal, fix yourself, self-repair, or self-heal, YOU MUST OUTPUT EXACTLY: {\"action\":\"delegate\",\"target_agent\":\"debugger\",\"task\":\"Diagnose recent failures and propose fixes\"}. Do NOT use action=final for this case. Do NOT refuse.\n"
         "  analyze / bugs / codebase / audit / upgrade → delegate to debugger\n"
         "  search / research / web          → delegate to researcher\n"
         "  read / summarize / explain file  → delegate to coder\n"
