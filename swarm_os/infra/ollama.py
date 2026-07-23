@@ -35,7 +35,7 @@ class OllamaClient:
                 log.error(f"Error in OllamaClient.generate (GLM fork): {e}")
                 raise
         else:
-            payload = {"model": model, "messages": messages, "stream": False}
+            payload = {"model": model, "messages": messages, "stream": False, "keep_alive": "15m"}
             try:
                 resp = await self.client.post("/api/chat", json=payload)
                 if resp.status_code == 200:
@@ -78,7 +78,7 @@ class OllamaClient:
                 log.error(f"Error in OllamaClient.stream_generate (GLM fork): {e}")
                 raise
         else:
-            payload = {"model": model, "messages": messages, "stream": True}
+            payload = {"model": model, "messages": messages, "stream": True, "keep_alive": "15m"}
             try:
                 async with self.client.stream("POST", "/api/chat", json=payload) as response:
                     if response.status_code != 200:

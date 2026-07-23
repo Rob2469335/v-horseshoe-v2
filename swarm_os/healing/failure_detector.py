@@ -6,10 +6,11 @@ class FailureDetector:
         self.ollama_url = ollama_url or os.getenv("ZENITH_OLLAMA_URL", "http://127.0.0.1:11434")
         self.probes = probes or {}
 
-    def _http_ok(self, url, timeout=2):
-        import requests
+    async def _http_ok(self, url, timeout=2):
+        import httpx
         try:
-            r = requests.get(url, timeout=timeout)
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                r = await client.get(url)
             return {"ok": r.status_code == 200, "status_code": r.status_code}
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
@@ -22,18 +23,26 @@ class FailureDetector:
     def check_swarm_api(self):
         return {"ok": True, "status_code": 200}
 
-    def check_qdrant(self):
-        return self.probes.get("qdrant", lambda: self._http_ok(f"{self.qdrant_url}/collections"))()
+    async def check_qdrant(self):
+        probe = self.probes.get("qdrant")
+        if probe:
+            import inspect
+            return await probe() if inspect.iscoroutinefunction(probe) else probe()
+        return await self._http_ok(f"{self.qdrant_url}/collections")
 
-    def check_ollama(self):
-        return self.probes.get("ollama", lambda: self._http_ok(f"{self.ollama_url}/api/tags"))()
+    async def check_ollama(self):
+        probe = self.probes.get("ollama")
+        if probe:
+            import inspect
+            return await probe() if inspect.iscoroutinefunction(probe) else probe()
+        return await self._http_ok(f"{self.ollama_url}/api/tags")
 
-    def check(self):
+    async def check(self):
         results = {
             "backend": self.check_backend(),
             "swarm_api": self.check_swarm_api(),
-            "qdrant": self.check_qdrant(),
-            "ollama": self.check_ollama(),
+            "qdrant": await self.check_qdrant(),
+            "ollama": await self.check_ollama(),
         }
         signals = []
         for component, result in results.items():

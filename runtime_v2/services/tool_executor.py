@@ -19,16 +19,18 @@ async def run(tool_name: str, payload: dict) -> dict:
     try:
         if tool_name == "filesystem":
             from swarm_os.lib.mcp.filesystem import filesystem_handler
-            import asyncio
+            import asyncio, inspect
             try:
-                result = await asyncio.wait_for(filesystem_handler(payload, _ROOT), timeout=30.0)
+                res_obj = filesystem_handler(payload, _ROOT)
+                result = await asyncio.wait_for(res_obj, timeout=30.0) if inspect.isawaitable(res_obj) else res_obj
             except asyncio.TimeoutError:
                 result = {"ok": False, "error": "Filesystem operation timed out."}
         elif tool_name == "web_search":
             from swarm_os.lib.mcp.web_search import web_search_handler
-            import asyncio
+            import asyncio, inspect
             try:
-                result = await asyncio.wait_for(web_search_handler(payload), timeout=30.0)
+                res_obj = web_search_handler(payload)
+                result = await asyncio.wait_for(res_obj, timeout=30.0) if inspect.isawaitable(res_obj) else res_obj
             except asyncio.TimeoutError:
                 result = {"ok": False, "error": "Web search timed out."}
         elif tool_name == "semantic_search":
@@ -50,23 +52,26 @@ async def run(tool_name: str, payload: dict) -> dict:
                 result = {"ok": False, "error": "Failed to store memory in Qdrant."}
         elif tool_name == "sandbox_repl":
             from swarm_os.capabilities.sandbox_repl import SandboxReplHandler
-            import asyncio
+            import asyncio, inspect
             try:
-                result = await asyncio.wait_for(SandboxReplHandler().execute(payload), timeout=60.0)
+                res_obj = SandboxReplHandler().execute(payload)
+                result = await asyncio.wait_for(res_obj, timeout=60.0) if inspect.isawaitable(res_obj) else res_obj
             except asyncio.TimeoutError:
                 result = {"ok": False, "error": "Execution timed out after 60 seconds."}
         elif tool_name == "vscode_automation":
             from swarm_os.capabilities.vscode_automation import VSCodeAutomationHandler
-            import asyncio
+            import asyncio, inspect
             try:
-                result = await asyncio.wait_for(VSCodeAutomationHandler(str(_ROOT)).execute(payload), timeout=30.0)
+                res_obj = VSCodeAutomationHandler(str(_ROOT)).execute(payload)
+                result = await asyncio.wait_for(res_obj, timeout=30.0) if inspect.isawaitable(res_obj) else res_obj
             except asyncio.TimeoutError:
                 result = {"ok": False, "error": "VSCode automation timed out."}
         elif tool_name == "lsp":
             from swarm_os.capabilities.lsp_tool import LSPToolHandler
-            import asyncio
+            import asyncio, inspect
             try:
-                result = await asyncio.wait_for(LSPToolHandler().execute(payload), timeout=60.0)
+                res_obj = LSPToolHandler().execute(payload)
+                result = await asyncio.wait_for(res_obj, timeout=60.0) if inspect.isawaitable(res_obj) else res_obj
                 # the result dict returned from LSPToolHandler has either {"result": ...} or {"error": ...}
                 if "error" in result:
                     result = {"ok": False, "error": result["error"]}
@@ -81,6 +86,50 @@ async def run(tool_name: str, payload: dict) -> dict:
                 result = await asyncio.wait_for(playwright_handler(payload), timeout=60.0)
             except asyncio.TimeoutError:
                 result = {"ok": False, "error": "Playwright operation timed out."}
+        elif tool_name == "mcp_register":
+            import json
+            from pathlib import Path
+            config_path = _ROOT / "swarm_config.json"
+            server_name = payload.get("server_name")
+            command = payload.get("command")
+            args = payload.get("args", [])
+            
+            if not server_name or not command:
+                result = {"ok": False, "error": "server_name and command are required"}
+            else:
+                try:
+                    config = {}
+                    if config_path.exists():
+                        def read_config():
+                            with open(config_path, "r", encoding="utf-8") as f:
+                                return json.load(f)
+                        config = await asyncio.to_thread(read_config)
+                    
+                    config.setdefault("mcp_servers", {})
+                    config["mcp_servers"][server_name] = {
+                        "command": command,
+                        "args": args
+                    }
+                    
+                    def write_config():
+                        with open(config_path, "w", encoding="utf-8") as f:
+                            json.dump(config, f, indent=2)
+                    await asyncio.to_thread(write_config)
+                    
+                    # Force restart of MCP manager to load new tool
+                    global _mcp_manager
+                    old_manager = _mcp_manager
+                    _mcp_manager = None
+                    if old_manager:
+                        await old_manager.stop()
+                        
+                    # Pre-start it to verify tools
+                    new_mgr = await get_mcp_manager()
+                    new_tools = new_mgr.cached_tools
+                    
+                    result = {"ok": True, "result": f"Registered MCP server '{server_name}'. Now available tools: {[t['name'] for t in new_tools] if new_tools else []}"}
+                except Exception as e:
+                    result = {"ok": False, "error": f"Failed to register MCP server: {e}"}
         elif tool_name == "mcp":
             import asyncio
             manager = await get_mcp_manager()
@@ -114,7 +163,9 @@ async def run(tool_name: str, payload: dict) -> dict:
                 return {k: _truncate(v, limit) for k, v in obj.items()}
             elif isinstance(obj, list):
                 return [_truncate(v, limit) for v in obj]
-            return obj
+            elif isinstance(obj, (int, float, bool, type(None))):
+                return obj
+            return str(obj)
 
         if isinstance(result, dict):
             result = _truncate(result)

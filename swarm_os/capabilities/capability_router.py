@@ -24,6 +24,7 @@ class CapabilityRouter:
         "refactor": RefactorHandler,
         "models": ModelsHandler,
         "sandbox_repl": SandboxReplHandler,
+        "code_exec": SandboxReplHandler,
         "lsp": LSPToolHandler,
     }
 

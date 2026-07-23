@@ -165,7 +165,7 @@ export default function OpsPage() {
               <span style={{ fontSize: "12px", background: "rgba(245, 158, 11, 0.15)", color: "#fbbf24", padding: "2px 8px", borderRadius: "99px", fontWeight: "bold" }}>Est. Duration: {upworkResult.estimate}</span>
             </div>
             <ul style={{ margin: 0, paddingLeft: "20px", color: "var(--text-soft)", display: "grid", gap: "6px" }}>
-              {upworkResult.items.map((item: string, i: number) => (
+              {(upworkResult.items || []).map((item: string, i: number) => (
                 <li key={i} style={{ fontSize: "14px" }}>{item}</li>
               ))}
             </ul>
@@ -187,7 +187,7 @@ export default function OpsPage() {
           <div style={{ marginTop: "16px", padding: "16px", background: "rgba(20, 184, 166, 0.05)", border: "1px solid rgba(20, 184, 166, 0.2)", borderRadius: "14px" }}>
             <strong style={{ color: "#2dd4bf", display: "block", marginBottom: "12px" }}>Pitch Case Study Bullets</strong>
             <ul style={{ margin: 0, paddingLeft: "20px", color: "var(--text-soft)", display: "grid", gap: "6px" }}>
-              {upworkResult.bullets.map((bullet: string, i: number) => (
+              {(upworkResult.bullets || []).map((bullet: string, i: number) => (
                 <li key={i} style={{ fontSize: "14px" }}>{bullet}</li>
               ))}
             </ul>
@@ -199,7 +199,7 @@ export default function OpsPage() {
             <strong style={{ color: "#f87171", display: "block", marginBottom: "8px" }}>Skills Gap Audit</strong>
             <p style={{ margin: "0 0 12px 0", fontSize: "13px", color: "var(--text-soft)" }}>Identified competencies required for this contract:</p>
             <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
-              {upworkResult.missing.map((skill: string, i: number) => (
+              {(upworkResult.missing || []).map((skill: string, i: number) => (
                 <span key={i} style={{ background: "rgba(239, 68, 68, 0.15)", color: "#f87171", border: "1px solid rgba(239, 68, 68, 0.3)", padding: "4px 10px", borderRadius: "99px", fontSize: "12px", fontWeight: "bold" }}>{skill}</span>
               ))}
             </div>
@@ -227,7 +227,7 @@ export default function OpsPage() {
   })
 
   const statusQuery = useQuery({
-    queryKey: ["status", backendUrl],
+    queryKey: ["organism-status", backendUrl],
     queryFn: () => api.getStatus<StatusResponse>(backendUrl),
     retry: 1,
     refetchInterval: 30000
@@ -296,11 +296,11 @@ export default function OpsPage() {
     setConnectionStatus
   ])
 
-  const traceSummary = (traceSummaryQuery.data ?? []) as TraceSummaryResponse
-  const traceItems = ((tracesQuery.data as TracesResponse | undefined)?.items ?? []) as TraceItem[]
+  const traceSummary = traceSummaryQuery.data as TraceSummaryResponse | undefined
+  const traceItems = (tracesQuery.data as TracesResponse | undefined)?.items
 
   useEffect(() => {
-    if (!traceSummary.length) {
+    if (!Array.isArray(traceSummary)) {
       setSelectedTraceId("")
       return
     }
@@ -310,15 +310,17 @@ export default function OpsPage() {
         return current
       }
 
-      return (Array.isArray(traceSummary) ? traceSummary[0]?.trace_id : "") ?? ""
+      return traceSummary[0]?.trace_id ?? ""
     })
   }, [traceSummary])
 
   const selectedSummary = useMemo<TraceSummaryItem | undefined>(() => {
-    return (Array.isArray(traceSummary) ? traceSummary : []).find((item) => item.trace_id === selectedTraceId)
+    if (!Array.isArray(traceSummary)) return undefined
+    return traceSummary.find((item) => item.trace_id === selectedTraceId)
   }, [traceSummary, selectedTraceId])
 
   const selectedTraceEvents = useMemo<TraceItem[]>(() => {
+    if (!Array.isArray(traceItems)) return []
     return traceItems.filter((item) => item.trace_id === selectedTraceId)
   }, [traceItems, selectedTraceId])
 
@@ -327,297 +329,216 @@ export default function OpsPage() {
   }, [selectedAutomationId])
 
   return (
-    <section className="page page--ops">
-      <div className="tutor-hero">
+    <section className="flex flex-col h-full w-full overflow-hidden p-6 text-slate-300">
+      {/* Header / Hero */}
+      <div className="flex justify-between items-center bg-[#04080f]/60 border border-white/5 backdrop-blur-xl p-6 rounded-2xl mb-6 shadow-[0_0_30px_rgba(0,0,0,0.5)]">
         <div>
-          <h1>Automation Tutor</h1>
-          <p>
+          <h1 className="text-2xl font-bold text-white tracking-tight flex items-center gap-3">
+            <span className="w-2 h-2 rounded-full bg-cyan-400 shadow-[0_0_10px_#22d3ee]"></span>
+            Automation Tutor & Ops
+          </h1>
+          <p className="text-sm text-slate-400 mt-2">
             Learn what each automation does, why it matters, and how to use it one step at a time.
           </p>
         </div>
 
-        <div className="tutor-hero__stats">
-          <div className="tutor-stat">
-            <span className="tutor-stat__label">Automations</span>
-            <strong>{automationCatalog.length}</strong>
+        <div className="flex gap-6 bg-slate-900/50 p-4 rounded-xl border border-white/5">
+          <div className="flex flex-col">
+            <span className="text-xs uppercase tracking-widest text-slate-500 font-bold">Automations</span>
+            <strong className="text-xl text-white font-mono">{automationCatalog.length}</strong>
           </div>
-          <div className="tutor-stat">
-            <span className="tutor-stat__label">Starter</span>
-            <strong>{starterAutomations.length}</strong>
+          <div className="w-px bg-white/10" />
+          <div className="flex flex-col">
+            <span className="text-xs uppercase tracking-widest text-slate-500 font-bold">Starter</span>
+            <strong className="text-xl text-white font-mono">{starterAutomations.length}</strong>
           </div>
-          <div className="tutor-stat">
-            <span className="tutor-stat__label">Backend</span>
-            <strong>{healthQuery.data?.status ?? "Loading"}</strong>
+          <div className="w-px bg-white/10" />
+          <div className="flex flex-col">
+            <span className="text-xs uppercase tracking-widest text-slate-500 font-bold">Backend</span>
+            <strong className="text-xl text-cyan-400 font-mono capitalize">{healthQuery.data?.status ?? "Loading"}</strong>
           </div>
         </div>
       </div>
 
-      <div className="tutor-layout">
-        <article className="ops-panel tutor-panel tutor-panel--catalog">
-          <h2>Start here</h2>
-          <p className="tutor-panel__intro">
-            Pick one automation to learn. Start with the Robert tools, then explore senior help, scary situations, and basic computer help.
-          </p>
+      {/* Main Layout Grid */}
+      <div className="flex gap-6 h-full min-h-0 overflow-hidden">
+        
+        {/* Left Column: Catalog */}
+        <article className="w-1/3 flex flex-col overflow-y-auto pr-2 gap-8 custom-scrollbar pb-10">
+          
+          {/* UPWORK AGENT BLOCK */}
+          <div className="flex flex-col gap-3 bg-[#04080f]/40 border border-cyan-500/20 p-5 rounded-2xl shadow-[inset_0_0_20px_rgba(34,211,238,0.05)]">
+            <h3 className="text-sm font-bold text-cyan-400 uppercase tracking-wider">Upwork Agent (Tier System)</h3>
+            <p className="text-xs text-slate-400">
+              Paste a job description or client request below, and choose a bidding strategist action to execute.
+            </p>
 
-          <div className="tutor-group">
-            <h3>Made for Robert</h3>
+            <textarea
+              className="w-full min-h-[120px] p-4 rounded-xl bg-slate-900/60 border border-white/10 text-sm text-slate-200 focus:outline-none focus:border-cyan-500/50 focus:ring-1 focus:ring-cyan-500/50 transition-all resize-y"
+              placeholder="Paste Upwork job posting description here..."
+              value={upworkInput}
+              onChange={(e) => setUpworkInput(e.target.value)}
+            />
 
-{/* UPWORK AGENT BLOCK */}
-<div className="tutor-group" style={{ marginBottom: "28px" }}>
-  <h3>Upwork Agent (Tier System)</h3>
-  <p className="tutor-panel__intro" style={{ marginBottom: "14px" }}>
-    Paste a job description or client request below, and choose a bidding strategist action to execute.
-  </p>
+            <div className="grid grid-cols-2 lg:grid-cols-3 gap-2 mt-2">
+              {[
+                { action: "propose", label: "Propose Letter" },
+                { action: "rate", label: "Bid Heuristics" },
+                { action: "pitch", label: "Case Study Pitch" },
+                { action: "scope", label: "Scope Roadmap" },
+                { action: "invoice", label: "Draft Invoice" },
+                { action: "skills-gap", label: "Skills Audit" }
+              ].map((item) => {
+                const isActive = activeAction === item.action;
+                return (
+                  <button
+                    key={item.action}
+                    type="button"
+                    disabled={upworkLoading}
+                    onClick={() => runUpworkAction(item.action)}
+                    className={`px-3 py-2.5 rounded-lg text-xs font-semibold transition-all ${
+                      isActive 
+                        ? "bg-cyan-500/20 border-cyan-400/50 text-cyan-300 shadow-[0_0_15px_rgba(34,211,238,0.2)] border" 
+                        : "bg-slate-800/40 border-white/5 text-slate-400 hover:bg-slate-800/80 hover:text-slate-200 border"
+                    } ${upworkLoading ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
+                  >
+                    {item.label}
+                  </button>
+                )
+              })}
+            </div>
 
-  <textarea
-    className="agent-textarea"
-    style={{
-      width: "100%",
-      minHeight: "120px",
-      padding: "14px",
-      borderRadius: "14px",
-      fontFamily: "inherit",
-      fontSize: "14px",
-      resize: "vertical",
-      marginBottom: "14px",
-      boxSizing: "border-box"
-    }}
-    placeholder="Paste Upwork job posting description here..."
-    value={upworkInput}
-    onChange={(e) => setUpworkInput(e.target.value)}
-  />
+            {renderUpworkResult()}
+          </div>
 
-  <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "8px" }}>
-    {[
-      { action: "propose", label: "Propose Letter" },
-      { action: "rate", label: "Bid Heuristics" },
-      { action: "pitch", label: "Case Study Pitch" },
-      { action: "scope", label: "Scope Roadmap" },
-      { action: "invoice", label: "Draft Invoice" },
-      { action: "skills-gap", label: "Skills Audit" }
-    ].map((item) => (
-      <button
-        key={item.action}
-        type="button"
-        className="topbar__button"
-        style={{
-          cursor: upworkLoading ? "not-allowed" : "pointer",
-          padding: "10px",
-          textAlign: "center",
-          fontWeight: "600",
-          fontSize: "13px",
-          borderColor: activeAction === item.action ? "var(--page-accent)" : "rgba(255,255,255,0.09)",
-          background: activeAction === item.action ? "var(--page-accent-tint)" : "linear-gradient(180deg, rgba(13,18,29,0.92), rgba(13,18,29,0.82))",
-          color: activeAction === item.action ? "white" : "var(--text-soft)",
-          boxShadow: activeAction === item.action ? "0 0 12px var(--page-accent-glow)" : "none"
-        }}
-        disabled={upworkLoading}
-        onClick={() => runUpworkAction(item.action)}
-      >
-        {item.label}
-      </button>
-    ))}
-  </div>
-
-  {renderUpworkResult()}
-</div>
-
-            <div className="tutor-card-list">
-              {starterAutomations.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  className={`tutor-card${item.id === selectedAutomation?.id ? " tutor-card--active" : ""}`}
-                  onClick={() => setSelectedAutomationId(item.id)}
-                >
-                  <span className="tutor-card__title">{item.title}</span>
-                  <span className="tutor-card__meta">{item.category} · {item.difficulty}</span>
-                  <span className="tutor-card__text">{item.plainEnglish}</span>
-                </button>
-              ))}
+          <div className="flex flex-col gap-4">
+            <h3 className="text-sm font-bold text-white uppercase tracking-wider">Made for Robert</h3>
+            <div className="flex flex-col gap-3">
+              {starterAutomations.map((item) => {
+                const isActive = item.id === selectedAutomation?.id;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => setSelectedAutomationId(item.id)}
+                    className={`p-4 rounded-xl border text-left transition-all flex flex-col gap-1.5 ${
+                      isActive 
+                        ? "bg-cyan-900/20 border-cyan-500/50 shadow-[0_0_15px_rgba(34,211,238,0.1)]" 
+                        : "bg-slate-800/30 border-white/5 hover:bg-slate-800/60 hover:border-white/20"
+                    }`}
+                  >
+                    <span className={`font-bold ${isActive ? "text-cyan-300" : "text-white"}`}>{item.title}</span>
+                    <span className="text-[10px] uppercase tracking-widest text-slate-500 font-bold">{item.category} · {item.difficulty}</span>
+                    <span className="text-xs text-slate-400 line-clamp-2">{item.plainEnglish}</span>
+                  </button>
+                )
+              })}
             </div>
           </div>
 
-          <div className="tutor-group">
-            <h3>Helpful for seniors</h3>
-            <div className="tutor-card-list">
-              {seniorAutomations.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  className={`tutor-card${item.id === selectedAutomation?.id ? " tutor-card--active" : ""}`}
-                  onClick={() => setSelectedAutomationId(item.id)}
-                >
-                  <span className="tutor-card__title">{item.title}</span>
-                  <span className="tutor-card__meta">{item.category} · {item.difficulty}</span>
-                  <span className="tutor-card__text">{item.plainEnglish}</span>
-                </button>
-              ))}
+          <div className="flex flex-col gap-4">
+            <h3 className="text-sm font-bold text-white uppercase tracking-wider">Helpful for Seniors</h3>
+            <div className="flex flex-col gap-3">
+              {seniorAutomations.map((item) => {
+                const isActive = item.id === selectedAutomation?.id;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => setSelectedAutomationId(item.id)}
+                    className={`p-4 rounded-xl border text-left transition-all flex flex-col gap-1.5 ${
+                      isActive ? "bg-cyan-900/20 border-cyan-500/50 shadow-[0_0_15px_rgba(34,211,238,0.1)]" : "bg-slate-800/30 border-white/5 hover:bg-slate-800/60 hover:border-white/20"
+                    }`}
+                  >
+                    <span className={`font-bold ${isActive ? "text-cyan-300" : "text-white"}`}>{item.title}</span>
+                    <span className="text-[10px] uppercase tracking-widest text-slate-500 font-bold">{item.category} · {item.difficulty}</span>
+                    <span className="text-xs text-slate-400 line-clamp-2">{item.plainEnglish}</span>
+                  </button>
+                )
+              })}
             </div>
           </div>
 
-          <div className="tutor-group">
-            <h3>Scary situations</h3>
-            <div className="tutor-card-list">
-              {scaryAutomations.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  className={`tutor-card${item.id === selectedAutomation?.id ? " tutor-card--active" : ""}`}
-                  onClick={() => setSelectedAutomationId(item.id)}
-                >
-                  <span className="tutor-card__title">{item.title}</span>
-                  <span className="tutor-card__meta">{item.category} · {item.difficulty}</span>
-                  <span className="tutor-card__text">{item.plainEnglish}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="tutor-group">
-            <h3>Basic computer help</h3>
-            <div className="tutor-card-list">
-              {basicAutomations.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  className={`tutor-card${item.id === selectedAutomation?.id ? " tutor-card--active" : ""}`}
-                  onClick={() => setSelectedAutomationId(item.id)}
-                >
-                  <span className="tutor-card__title">{item.title}</span>
-                  <span className="tutor-card__meta">{item.category} · {item.difficulty}</span>
-                  <span className="tutor-card__text">{item.plainEnglish}</span>
-                </button>
-              ))}
-            </div>
-          </div>
         </article>
 
-        <article className="ops-panel tutor-panel tutor-panel--lesson">
+        {/* Right Column: Lesson Detail */}
+        <article className="w-2/3 flex flex-col overflow-y-auto bg-[#04080f]/60 border border-white/5 rounded-2xl p-8 backdrop-blur-xl shadow-[0_0_30px_rgba(0,0,0,0.5)] custom-scrollbar">
           {selectedAutomation ? (
-            <>
-              <div className="lesson-header">
-                <div>
-                  <h2>{selectedAutomation.title}</h2>
-                  <p className="lesson-header__text">{selectedAutomation.plainEnglish}</p>
+            <div className="flex flex-col gap-8 pb-10">
+              <div className="flex justify-between items-start border-b border-white/10 pb-6">
+                <div className="flex flex-col gap-2">
+                  <h2 className="text-2xl font-bold text-white">{selectedAutomation.title}</h2>
+                  <p className="text-sm text-cyan-300 font-medium">{selectedAutomation.plainEnglish}</p>
                 </div>
-                <div className="lesson-badges">
-                  <span className="lesson-badge">{selectedAutomation.group}</span>
-                  <span className="lesson-badge">{selectedAutomation.category}</span>
-                  <span className="lesson-badge">{selectedAutomation.difficulty}</span>
-                </div>
-              </div>
-
-              <div className="lesson-section">
-                <h3>What this means</h3>
-                <p>{selectedAutomation.whatItMeans}</p>
-              </div>
-
-              <div className="lesson-section">
-                <h3>Why this matters</h3>
-                <p>{selectedAutomation.whyThisMatters}</p>
-              </div>
-
-              <div className="lesson-section">
-                <h3>Words to know</h3>
-                <div className="lesson-glossary">
-                  {selectedAutomation.wordsToKnow.map((item) => (
-                    <article key={`${selectedAutomation.id}-${item.term}`} className="lesson-glossary__item">
-                      <strong>{item.term}</strong>
-                      <p>{item.meaning}</p>
-                    </article>
-                  ))}
+                <div className="flex gap-2">
+                  <span className="px-3 py-1 bg-slate-800/80 border border-white/10 rounded-full text-[10px] uppercase font-bold text-slate-300">{selectedAutomation.group}</span>
+                  <span className="px-3 py-1 bg-slate-800/80 border border-white/10 rounded-full text-[10px] uppercase font-bold text-slate-300">{selectedAutomation.category}</span>
+                  <span className="px-3 py-1 bg-slate-800/80 border border-white/10 rounded-full text-[10px] uppercase font-bold text-slate-300">{selectedAutomation.difficulty}</span>
                 </div>
               </div>
 
-              <div className="lesson-grid">
-                <div className="lesson-section">
-                  <h3>Before you start</h3>
-                  <ul>
-                    {selectedAutomation.beforeYouStart.map((item) => (
-                      <li key={`${selectedAutomation.id}-before-${item}`}>{item}</li>
-                    ))}
-                  </ul>
-                </div>
+              <div className="flex flex-col gap-2">
+                <h3 className="text-sm font-bold text-white uppercase tracking-widest">What this means</h3>
+                <p className="text-sm text-slate-400 leading-relaxed bg-slate-900/40 p-4 rounded-xl border border-white/5">{selectedAutomation.whatItMeans}</p>
+              </div>
 
-                <div className="lesson-section">
-                  <h3>Inputs</h3>
-                  <ul>
+              <div className="flex flex-col gap-2">
+                <h3 className="text-sm font-bold text-white uppercase tracking-widest">Why this matters</h3>
+                <p className="text-sm text-slate-400 leading-relaxed bg-slate-900/40 p-4 rounded-xl border border-white/5">{selectedAutomation.whyThisMatters}</p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-6">
+                <div className="flex flex-col gap-3 bg-slate-900/40 p-5 rounded-xl border border-white/5">
+                  <h3 className="text-sm font-bold text-cyan-400 uppercase tracking-widest">Inputs</h3>
+                  <ul className="list-disc list-inside text-sm text-slate-400 flex flex-col gap-1">
                     {selectedAutomation.inputs.map((item) => (
                       <li key={`${selectedAutomation.id}-input-${item}`}>{item}</li>
                     ))}
                   </ul>
                 </div>
-              </div>
 
-              <div className="lesson-section">
-                <h3>Steps</h3>
-                <ol>
-                  {selectedAutomation.steps.map((item) => (
-                    <li key={`${selectedAutomation.id}-step-${item}`}>{item}</li>
-                  ))}
-                </ol>
-              </div>
-
-              <div className="lesson-grid">
-                <div className="lesson-section">
-                  <h3>What success looks like</h3>
-                  <ul>
-                    {selectedAutomation.whatSuccessLooksLike.map((item) => (
-                      <li key={`${selectedAutomation.id}-success-${item}`}>{item}</li>
-                    ))}
-                  </ul>
-                </div>
-
-                <div className="lesson-section">
-                  <h3>When to ask for help</h3>
-                  <ul>
-                    {selectedAutomation.whenToAskForHelp.map((item) => (
-                      <li key={`${selectedAutomation.id}-help-${item}`}>{item}</li>
-                    ))}
-                  </ul>
-                </div>
-              </div>
-
-              <div className="lesson-grid">
-                <div className="lesson-section">
-                  <h3>Outputs</h3>
-                  <ul>
+                <div className="flex flex-col gap-3 bg-slate-900/40 p-5 rounded-xl border border-white/5">
+                  <h3 className="text-sm font-bold text-pink-400 uppercase tracking-widest">Outputs</h3>
+                  <ul className="list-disc list-inside text-sm text-slate-400 flex flex-col gap-1">
                     {selectedAutomation.outputs.map((item) => (
                       <li key={`${selectedAutomation.id}-output-${item}`}>{item}</li>
                     ))}
                   </ul>
                 </div>
-
-                <div className="lesson-section">
-                  <h3>Common mistakes</h3>
-                  <ul>
-                    {selectedAutomation.commonMistakes.map((item) => (
-                      <li key={`${selectedAutomation.id}-mistake-${item}`}>{item}</li>
-                    ))}
-                  </ul>
-                </div>
               </div>
 
-              <div className="lesson-section">
-                <h3>Example</h3>
-                <p>{selectedAutomation.example}</p>
+              <div className="flex flex-col gap-4 bg-slate-900/60 p-6 rounded-2xl border border-cyan-500/20 shadow-[inset_0_0_20px_rgba(34,211,238,0.05)]">
+                <h3 className="text-sm font-bold text-cyan-400 uppercase tracking-widest">Execution Steps</h3>
+                <ol className="list-decimal list-inside text-sm text-slate-300 flex flex-col gap-3">
+                  {selectedAutomation.steps.map((item, idx) => (
+                    <li key={`${selectedAutomation.id}-step-${item}`} className="leading-relaxed border-b border-white/5 pb-2 last:border-0">{item}</li>
+                  ))}
+                </ol>
               </div>
-              <AutomationRunner
-                backendUrl={backendUrl}
-                automationId={selectedAutomation.id}
-                automationTitle={selectedAutomation.title}
-                prompt={(selectedAutomation as any).prompt ?? `You are a helpful AI assistant. Complete this task: ${selectedAutomation.plainEnglish}. User input: {input}`}
-                example={selectedAutomation.example}
-                inputs={selectedAutomation.inputs}
-              />
-            </>
+
+              <div className="flex flex-col gap-2">
+                <h3 className="text-sm font-bold text-white uppercase tracking-widest">Example Usage</h3>
+                <p className="text-sm text-slate-400 leading-relaxed bg-slate-900/40 p-4 rounded-xl border border-white/5 font-mono">{selectedAutomation.example}</p>
+              </div>
+              
+              <div className="mt-4 border-t border-white/10 pt-8">
+                <AutomationRunner
+                  backendUrl={backendUrl}
+                  automationId={selectedAutomation.id}
+                  automationTitle={selectedAutomation.title}
+                  prompt={(selectedAutomation as any).prompt ?? `You are a helpful AI assistant. Complete this task: ${selectedAutomation.plainEnglish}. User input: {input}`}
+                  example={selectedAutomation.example}
+                  inputs={selectedAutomation.inputs}
+                />
+              </div>
+            </div>
           ) : (
-            <div className="trace-empty">Select an automation to start learning.</div>
+            <div className="flex h-full items-center justify-center text-slate-500 text-sm tracking-widest uppercase">
+              Select an automation to start learning
+            </div>
           )}
         </article>
       </div>
-
     </section>
   )
 }

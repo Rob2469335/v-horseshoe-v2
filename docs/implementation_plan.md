@@ -1,68 +1,17 @@
-```markdown
 # Goal Description
-
-The objective is to create a Python script named `system_monitor.py` that will check the computer's current CPU and RAM usage, and write this information to a file called `stats.txt`. The script should be verified for correctness by running it in the terminal and checking if the data is saved correctly. Additionally, the code should be reviewed to ensure there are no bugs.
+**Summary:** Upgrade Zenith OS codebase by integrating cutting-edge AI agent framework capabilities including advanced memory systems (e.g., vector + episodic + semantic hybrid), multi-agent routing with dynamic orchestration, and self-healing circuit-breaker patterns identified in 2025-2026 research.
 
 ## Proposed Changes
-
-1. **File Creation:**
-   - Create a new Python file named `system_monitor.py`.
-
-2. **Code Implementation:**
-   - Open `system_monitor.py` in your preferred text editor.
-   - Import necessary modules (`psutil` for system monitoring and `time` for timestamping the data).
-   - Write functions to get CPU and RAM usage.
-   - Format the data with a timestamp.
-   - Write the formatted data to `stats.txt`.
-
-Here is an example of how the script could look:
-
-```python
-import psutil
-import time
-
-def get_cpu_usage():
-    return psutil.cpu_percent(interval=1)
-
-def get_ram_usage():
-    memory = psutil.virtual_memory()
-    return f"{memory.percent}%"
-
-def write_stats_to_file(cpu, ram):
-    with open('stats.txt', 'a') as file:
-        timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-        file.write(f"Timestamp: {timestamp}\n")
-        file.write(f"CPU Usage: {cpu}%\n")
-        file.write(f"RAM Usage: {ram}\n\n")
-
-if __name__ == "__main__":
-    cpu_usage = get_cpu_usage()
-    ram_usage = get_ram_usage()
-    write_stats_to_file(cpu_usage, ram_usage)
-```
+| # | File(s) to Modify | Change Description |
+|---|------------------|-------------------|
+| 1 | `src/agent_memory/` (new directory) | Implement hybrid memory layer: combine vector embeddings (for semantic recall), episodic timeline store, and LRU working memory inspired by LangGraph's memory patterns and AutoGen's conversation history structures. |
+| 2 | `src/orchestration/` or existing agent router | Replace static dispatch with dynamic multi-agent routing using circuit-breaker middleware — agents self-report health metrics; degraded nodes are automatically bypassed via a weighted policy graph (based on recent Arxiv papers on agent reliability). |
+| 3 | `src/core/agent_runtime.py` | Add self-healing loop: detect task failures → trigger retry with modified parameters → escalate to fallback chain after N consecutive failures. Pattern derived from Semantic Kernel's resilience modules and GitHub repo patterns for agentic recovery. |
+| 4 | `tests/test_agent_memory.py` / `tests/test_routing.py` (new) | Add unit tests covering: memory recall accuracy, routing failover under load, self-healing escalation thresholds, and integration tests validating end-to-end agent lifecycle with degraded infrastructure. |
+| 5 | `docs/ARCHITECTURE.md` or existing design doc | Document the updated architecture, including new component interfaces, failure modes, and recovery guarantees. Include diagrams of the memory hybrid layer and routing policy graph. |
 
 ## Verification Plan
-
-1. **Run the Script in Terminal:**
-   - Open a terminal.
-   - Navigate to the directory where `system_monitor.py` is located.
-   - Run the script using the command:
-     ```bash
-     python system_monitor.py
-     ```
-
-2. **Check `stats.txt`:**
-   - Verify that `stats.txt` has been created in the same directory as `system_monitor.py`.
-   - Open `stats.txt` and check if it contains the CPU and RAM usage data along with a timestamp.
-
-3. **Manual Inspection:**
-   - Manually inspect the code for any syntax errors or logical issues.
-   - Ensure that all necessary modules are imported and used correctly.
-   - Confirm that the script is formatted properly and adheres to best practices.
-
-4. **Review by Reviewer Agent:**
-   - Submit the `system_monitor.py` file to the Reviewer agent for a thorough analysis.
-   - The Reviewer will check for any bugs, inefficiencies, or areas for improvement in the code.
-```
-
-This structured markdown Implementation Plan outlines the steps required to achieve the objective, including the proposed changes and verification plan.
+- **Unit Tests:** Run `pytest tests/test_agent_memory.py` — assert recall latency < 50ms, retrieval F1 ≥ 0.85 on benchmark corpus.
+- **Integration Tests:** Execute end-to-end smoke test against a synthetic multi-agent workload; assert task completion rate ≥ 99% and degraded node bypass within 2s of failure detection.
+- **Manual Verification:** Inspect `docs/ARCHITECTURE.md` for updated diagrams and confirm new memory store, routing policy graph, and self-healing flow are clearly documented with usage examples.
+- **Performance Baseline:** Compare pre/post upgrade latency under steady-state load; assert < 5% degradation in p95 response time after integration.

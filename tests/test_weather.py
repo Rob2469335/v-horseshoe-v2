@@ -1,7 +1,14 @@
 import urllib.request
 import json
+from unittest.mock import patch, MagicMock
 
-def test_fetch_weather():
+@patch("urllib.request.urlopen")
+def test_fetch_weather(mock_urlopen):
+    # Setup mock response
+    mock_resp = MagicMock()
+    mock_resp.getcode.return_value = 200
+    mock_urlopen.return_value = mock_resp
+
     url = "https://api.weather.gov/points/39.7456,-97.0892"
     req = urllib.request.Request(
         url,

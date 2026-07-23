@@ -51,20 +51,27 @@ export default function WorkspacePage() {
   const toolsLoading = toolsQuery.isLoading || toolsCacheQuery.isLoading
 
   return (
-    <section className="page">
-      <div className="pageheader">
+    <section className="flex flex-col h-full w-full overflow-hidden p-6 text-slate-300">
+      {/* Header */}
+      <div className="flex justify-between items-center bg-[#04080f]/60 border border-white/5 backdrop-blur-xl p-6 rounded-2xl mb-6 shadow-[0_0_30px_rgba(0,0,0,0.5)] shrink-0">
         <div>
-          <h1>Workspace</h1>
-          <p className="page-subtitle">
+          <h1 className="text-2xl font-bold text-white tracking-tight flex items-center gap-3">
+            <span className="w-2 h-2 rounded-full bg-pink-400 shadow-[0_0_10px_#f472b6]"></span>
+            Workspace Telemetry
+          </h1>
+          <p className="text-sm text-slate-400 mt-2">
             Live workspace context from the local backend, including readiness, events, tools, and cache state.
           </p>
         </div>
       </div>
 
-      <div className="agent-layout">
-        <article className="agent-panel panel-accent-top">
-          <h2>System posture</h2>
-          <pre className="agent-response" style={{ padding: 18, background: "rgba(0,0,0,0.2)" }}>
+      {/* Main Grid */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 overflow-y-auto custom-scrollbar pb-10">
+        
+        {/* System Posture */}
+        <article className="flex flex-col gap-4 bg-[#04080f]/40 border border-pink-500/20 p-6 rounded-2xl shadow-[inset_0_0_20px_rgba(244,114,182,0.05)] backdrop-blur-md">
+          <h2 className="text-sm font-bold text-pink-400 uppercase tracking-widest border-b border-pink-500/20 pb-3">System posture</h2>
+          <pre className="p-4 rounded-xl bg-black/60 border border-white/5 text-xs text-pink-100/80 font-mono overflow-auto custom-scrollbar min-h-[160px]">
             {statusLoading
               ? "Sensing environment..."
               : statusQuery.isError
@@ -87,9 +94,10 @@ export default function WorkspacePage() {
           </pre>
         </article>
 
-        <article className="agent-panel panel-accent-top">
-          <h2>Workspace summary</h2>
-          <div className="metric-list">
+        {/* Workspace Summary */}
+        <article className="flex flex-col gap-4 bg-[#04080f]/40 border border-white/10 p-6 rounded-2xl backdrop-blur-md">
+          <h2 className="text-sm font-bold text-white uppercase tracking-widest border-b border-white/10 pb-3">Workspace summary</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-2">
             {[
               { label: "Backend URL", value: backendUrl },
               {
@@ -106,9 +114,9 @@ export default function WorkspacePage() {
                 accent: true,
               },
             ].map((item) => (
-              <div key={item.label} className="metric-row">
-                <span className="metric-label">{item.label}</span>
-                <span className={item.accent ? "metric-value metric-value--accent" : "metric-value"}>
+              <div key={item.label} className="flex flex-col bg-slate-900/60 p-3 rounded-xl border border-white/5">
+                <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-1">{item.label}</span>
+                <span className={`text-sm font-mono truncate ${item.accent ? "text-pink-400 font-bold" : "text-white"}`}>
                   {item.value}
                 </span>
               </div>
@@ -116,38 +124,37 @@ export default function WorkspacePage() {
           </div>
         </article>
 
-        <article className="agent-panel panel-accent-top">
-          <h2>Capabilities</h2>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12 }}>
-            {toolsQuery.data?.capabilities?.length ? (
+        {/* Capabilities */}
+        <article className="flex flex-col gap-4 bg-[#04080f]/40 border border-white/10 p-6 rounded-2xl backdrop-blur-md">
+          <h2 className="text-sm font-bold text-white uppercase tracking-widest border-b border-white/10 pb-3">Capabilities</h2>
+          <div className="flex flex-wrap gap-2 mt-2">
+            {Array.isArray(toolsQuery.data?.capabilities) && toolsQuery.data.capabilities.length > 0 ? (
               toolsQuery.data.capabilities.map((cap: string) => (
                 <span
                   key={cap}
-                  className="lesson-badge"
-                  style={{ borderColor: "var(--page-accent)", color: "var(--page-accent)" }}
+                  className="px-3 py-1 bg-pink-500/10 border border-pink-500/30 rounded-full text-xs font-bold text-pink-300 tracking-wide"
                 >
                   {cap}
                 </span>
               ))
             ) : (
-              <span style={{ color: "var(--text-muted)" }}>No capabilities detected.</span>
+              <span className="text-slate-500 text-sm">No capabilities detected.</span>
             )}
           </div>
-          <pre
-            className="agent-response"
-            style={{ marginTop: 20, fontSize: 11, height: 160, padding: 16, background: "rgba(0,0,0,0.3)" }}
-          >
+          <pre className="p-4 rounded-xl bg-black/60 border border-white/5 text-[11px] text-slate-400 font-mono overflow-auto custom-scrollbar h-[160px] mt-2">
             {toolsLoading ? "Sensing tools..." : JSON.stringify(toolsQuery.data, null, 2)}
           </pre>
         </article>
 
-        <article className="agent-panel panel-accent-top panel-accent-glow">
-          <h2>Tool Cache</h2>
-          <div style={{ fontSize: 14, color: "var(--text-soft)", marginBottom: 16 }}>
+        {/* Tool Cache */}
+        <article className="flex flex-col gap-4 bg-pink-950/20 border border-pink-500/30 p-6 rounded-2xl shadow-[0_0_30px_rgba(244,114,182,0.1)] backdrop-blur-md relative overflow-hidden">
+          <div className="absolute top-0 right-0 w-32 h-32 bg-pink-500/10 blur-[50px] pointer-events-none" />
+          <h2 className="text-sm font-bold text-pink-400 uppercase tracking-widest border-b border-pink-500/20 pb-3 relative z-10">Tool Cache</h2>
+          <div className="text-sm text-slate-400 relative z-10">
             Currently holding strong{" "}
-            <strong style={{ color: "var(--page-accent)" }}>{toolsCacheQuery.data?.cacheSize ?? 0}</strong> active traces in local memory.
+            <strong className="text-pink-400 font-bold font-mono text-base">{toolsCacheQuery.data?.cacheSize ?? 0}</strong> active traces in local memory.
           </div>
-          <pre className="agent-response" style={{ height: 200, padding: 16, background: "rgba(0,0,0,0.3)" }}>
+          <pre className="p-4 rounded-xl bg-black/60 border border-white/5 text-xs text-pink-100/70 font-mono overflow-auto custom-scrollbar h-[160px] relative z-10">
             {toolsLoading
               ? "Reading cache..."
               : toolsCacheQuery.isError

@@ -1,14 +1,13 @@
-- [ ] Create a new Python file named `system_monitor.py`.
-- [ ] Open `system_monitor.py` in your preferred text editor.
-- [ ] Import necessary modules (`psutil` for system monitoring and `time` for timestamping the data).
-- [ ] Write functions to get CPU and RAM usage.
-- [ ] Format the data with a timestamp.
-- [ ] Write the formatted data to `stats.txt`.
-- [ ] Open terminal and navigate to the directory where `system_monitor.py` is located.
-- [ ] Run the script using the command: python system_monitor.py
-- [ ] Verify that `stats.txt` has been created in the same directory as `system_monitor.py`.
-- [ ] Open `stats.txt` and check if it contains the CPU and RAM usage data along with a timestamp.
-- [ ] Manually inspect the code for any syntax errors or logical issues.
-- [ ] Ensure that all necessary modules are imported and used correctly.
-- [ ] Confirm that the script is formatted properly and adheres to best practices.
-- [ ] Submit the `system_monitor.py` file to the Reviewer agent for a thorough analysis of bugs, inefficiencies, or areas for improvement.
+- [ ] Create `src/agent_memory/` directory structure with submodules for vector embeddings, episodic timeline, and LRU working memory
+- [ ] Implement vector embedding store supporting semantic recall with configurable similarity thresholds (target: latency < 50ms, F1 ≥ 0.85)
+- [ ] Build episodic timeline store to maintain chronological conversation history inspired by AutoGen patterns
+- [ ] Create LRU-cached working memory layer for short-term context retention following LangGraph memory patterns
+- [ ] Design unified hybrid memory interface combining all three sub-stores with consistent API contracts
+- [ ] Develop circuit-breaker middleware for multi-agent routing that monitors agent health metrics and self-reports status
+- [ ] Implement weighted policy graph for dynamic node selection based on recent Arxiv papers' reliability models
+- [ ] Build degraded node bypass logic triggering automatic failover within 2s of failure detection under load conditions
+- [ ] Add self-healing loop in `src/core/agent_runtime.py` to detect task failures and trigger retry with modified parameters
+- [ ] Configure escalation thresholds for N consecutive failures before activating fallback chain (pattern from Semantic Kernel)
+- [ ] Write unit tests for memory recall accuracy, routing failover under load, and self-healing escalation behavior
+- [ ] Create integration test suite validating end-to-end agent lifecycle against synthetic multi-agent workloads with degraded infrastructure
+- [ ] Update `docs/ARCHITECTURE.md` with new component interfaces, failure modes, recovery guarantees, and usage examples

@@ -8,221 +8,99 @@ export default function IntegrationsPage() {
   ] as const
 
   return (
-    <section className="page">
-      <header className="page__header">
-        <div className="page__eyebrow">
-          <span className="page__eyebrow-dot" />
+    <section className="flex flex-col h-full w-full overflow-hidden p-6 text-slate-300">
+      <header className="flex flex-col gap-2 bg-[#04080f]/60 border border-white/5 backdrop-blur-xl p-6 rounded-2xl mb-6 shadow-[0_0_30px_rgba(0,0,0,0.5)] shrink-0">
+        <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-cyan-400">
+          <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 shadow-[0_0_10px_#22d3ee]" />
           Integration surface
         </div>
-        <h1>Integrations</h1>
-        <p>Manage provider connections, API keys, and external system adapters.</p>
+        <h1 className="text-3xl font-black text-white m-0">Integrations</h1>
+        <p className="text-sm text-slate-400 m-0">Manage provider connections, API keys, and external system adapters.</p>
       </header>
 
-      <div
-        className="ops-grid"
-        style={{
-          marginTop: "20px",
-          gap: "16px"
-        }}
-      >
-        {providers.map((p) => (
-          <article
-            key={p.name}
-            className="ops-card panel-surface"
-            style={{
-              position: "relative",
-              overflow: "hidden",
-              background: p.status === "online" ? "var(--page-accent-tint)" : "rgba(20,27,41,0.4)",
-              border: "1px solid rgba(255,255,255,0.08)",
-              boxShadow: p.status === "online"
-                ? "0 16px 40px rgba(0,0,0,0.20)"
-                : "0 12px 32px rgba(0,0,0,0.16)"
-            }}
-          >
-            <div
-              style={{
-                position: "absolute",
-                inset: "0 auto auto 0",
-                width: "100%",
-                height: "1px",
-                background: p.status === "online"
-                  ? "linear-gradient(90deg, var(--page-accent), transparent 72%)"
-                  : "linear-gradient(90deg, rgba(255,255,255,0.12), transparent 72%)",
-                opacity: 0.8,
-                pointerEvents: "none"
-              }}
-            />
+      <div className="flex flex-col gap-6 overflow-y-auto custom-scrollbar pb-10">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          {providers.map((p) => (
+            <article
+              key={p.name}
+              className={`relative overflow-hidden rounded-2xl p-5 border shadow-lg backdrop-blur-md transition-all ${
+                p.status === "online" 
+                  ? "bg-cyan-900/20 border-cyan-500/30 shadow-[0_16px_40px_rgba(0,0,0,0.2)]" 
+                  : "bg-slate-900/40 border-white/5 shadow-[0_12px_32px_rgba(0,0,0,0.16)]"
+              }`}
+            >
+              <div
+                className="absolute top-0 left-0 w-full h-px opacity-80 pointer-events-none"
+                style={{
+                  background: p.status === "online"
+                    ? "linear-gradient(90deg, #22d3ee, transparent 72%)"
+                    : "linear-gradient(90deg, rgba(255,255,255,0.12), transparent 72%)"
+                }}
+              />
 
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", gap: "12px" }}>
-              <div style={{ display: "grid", gap: "10px" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                  <span
-                    style={{
-                      width: "10px",
-                      height: "10px",
-                      borderRadius: "50%",
-                      background: p.status === "online" ? "var(--success)" : "var(--text-muted)",
-                      boxShadow: p.status === "online" ? "0 0 14px rgba(16,185,129,0.45)" : "none",
-                      flexShrink: 0
-                    }}
-                  />
-                  <div style={{ fontSize: "18px", fontWeight: "900", lineHeight: 1.1 }}>{p.name}</div>
+              <div className="flex justify-between items-start gap-3">
+                <div className="flex flex-col gap-2">
+                  <div className="flex items-center gap-2.5">
+                    <span
+                      className={`w-2.5 h-2.5 rounded-full shrink-0 ${
+                        p.status === "online" ? "bg-emerald-400 shadow-[0_0_14px_rgba(52,211,153,0.45)]" : "bg-slate-600"
+                      }`}
+                    />
+                    <div className="text-lg font-black text-white leading-tight">{p.name}</div>
+                  </div>
+
+                  <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full bg-white/5 border border-white/10 text-[10px] font-black uppercase tracking-widest text-slate-400 w-fit">
+                    {p.type} provider
+                  </div>
                 </div>
 
-                <div
-                  style={{
-                    display: "inline-flex",
-                    width: "fit-content",
-                    alignItems: "center",
-                    gap: "8px",
-                    padding: "6px 10px",
-                    borderRadius: "999px",
-                    background: "rgba(255,255,255,0.04)",
-                    border: "1px solid rgba(255,255,255,0.08)",
-                    color: "var(--text-muted)",
-                    fontSize: "11px",
-                    fontWeight: "800",
-                    textTransform: "uppercase",
-                    letterSpacing: "0.08em"
-                  }}
+                <span
+                  className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest border ${
+                    p.status === "online"
+                      ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400"
+                      : "bg-slate-800/50 border-slate-600/50 text-slate-500"
+                  }`}
                 >
-                  {p.type} provider
-                </div>
+                  {p.status}
+                </span>
               </div>
 
-              <span className={`status-badge status-badge--${p.status === "online" ? "success" : "neutral"}`}>
-                {p.status}
-              </span>
-            </div>
-
-            <div
-              style={{
-                marginTop: "16px",
-                paddingTop: "14px",
-                borderTop: "1px solid rgba(255,255,255,0.07)",
-                color: "var(--text-soft)",
-                fontSize: "13px",
-                lineHeight: 1.65
-              }}
-            >
-              {p.status === "online"
-                ? `Connection to ${p.name} is visible to the console and ready for operator review.`
-                : `${p.name} is configured as an available surface but is not currently broadcasting.`}
-            </div>
-          </article>
-        ))}
-      </div>
-
-      <article
-        className="agent-panel panel-surface"
-        style={{
-          marginTop: "20px",
-          overflow: "hidden",
-          position: "relative"
-        }}
-      >
-        <div
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: "10px",
-            padding: "6px 12px",
-            borderRadius: "999px",
-            background: "var(--page-accent-tint)",
-            color: "var(--page-accent)",
-            border: "1px solid rgba(255,255,255,0.08)",
-            fontSize: "11px",
-            fontWeight: "800",
-            letterSpacing: "0.1em",
-            textTransform: "uppercase",
-            marginBottom: "14px"
-          }}
-        >
-          <span
-            style={{
-              width: "8px",
-              height: "8px",
-              borderRadius: "50%",
-              background: "var(--page-accent)",
-              boxShadow: "0 0 14px var(--page-accent-glow)"
-            }}
-          />
-          Adapter staging area
+              <div className="mt-4 pt-3 border-t border-white/10 text-[13px] text-slate-400 leading-relaxed">
+                {p.status === "online"
+                  ? `Connection to ${p.name} is visible to the console and ready for operator review.`
+                  : `${p.name} is configured as an available surface but is not currently broadcasting.`}
+              </div>
+            </article>
+          ))}
         </div>
 
-        <h2>Connected system surface</h2>
-
-        <div
-          style={{
-            padding: "30px",
-            textAlign: "center",
-            border: "1px dashed var(--border-rich)",
-            borderRadius: "18px",
-            marginTop: "16px",
-            background: "linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.015))",
-            boxShadow: "inset 0 1px 0 rgba(255,255,255,0.03)"
-          }}
-        >
-          <div
-            style={{
-              width: "52px",
-              height: "52px",
-              borderRadius: "16px",
-              margin: "0 auto 16px",
-              display: "grid",
-              placeItems: "center",
-              background: "rgba(255,255,255,0.05)",
-              border: "1px solid rgba(255,255,255,0.08)",
-              color: "var(--page-accent)",
-              fontSize: "22px",
-              boxShadow: "0 10px 30px rgba(0,0,0,0.16)"
-            }}
-          >
-            +
+        <article className="relative overflow-hidden rounded-2xl p-6 bg-slate-900/50 border border-white/10 backdrop-blur-md">
+          <div className="inline-flex items-center gap-2.5 px-3 py-1.5 rounded-full bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 text-[11px] font-black uppercase tracking-[0.1em] mb-4">
+            <span className="w-2 h-2 rounded-full bg-cyan-400 shadow-[0_0_14px_rgba(34,211,238,0.6)]" />
+            Adapter staging area
           </div>
 
-          <p
-            style={{
-              color: "var(--text-soft)",
-              fontWeight: "700",
-              margin: 0,
-              lineHeight: 1.7
-            }}
-          >
-            No external adapters are currently broadcasting.
-          </p>
+          <h2 className="text-xl font-bold text-white m-0">Connected system surface</h2>
 
-          <p
-            style={{
-              color: "var(--text-muted)",
-              margin: "10px auto 0",
-              maxWidth: "520px",
-              fontSize: "14px",
-              lineHeight: 1.7
-            }}
-          >
-            Bring a new provider online to expand the organism's action surface and external system reach.
-          </p>
+          <div className="mt-4 p-8 text-center rounded-2xl border border-dashed border-slate-600/50 bg-gradient-to-b from-white/5 to-transparent shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
+            <div className="w-12 h-12 mx-auto mb-4 rounded-xl flex items-center justify-center bg-white/5 border border-white/10 text-cyan-400 text-2xl shadow-[0_10px_30px_rgba(0,0,0,0.16)]">
+              +
+            </div>
 
-          <button
-            style={{
-              marginTop: "18px",
-              padding: "11px 22px",
-              minHeight: "44px",
-              background: "linear-gradient(180deg, rgba(255,255,255,0.10), var(--page-accent))",
-              color: "#061018",
-              border: "1px solid rgba(255,255,255,0.18)",
-              borderRadius: "999px",
-              fontWeight: "900",
-              letterSpacing: "0.06em",
-              cursor: "pointer",
-              boxShadow: "0 8px 24px var(--page-accent-glow)"
-            }}
-          >
-            Add new integration
-          </button>
-        </div>
-      </article>
+            <p className="text-slate-300 font-bold m-0 leading-relaxed">
+              No external adapters are currently broadcasting.
+            </p>
+
+            <p className="text-slate-500 text-sm mt-2 max-w-[520px] mx-auto leading-relaxed">
+              Bring a new provider online to expand the organism's action surface and external system reach.
+            </p>
+
+            <button className="mt-6 px-6 py-2.5 bg-gradient-to-b from-white/10 to-cyan-500 text-black font-black uppercase tracking-widest rounded-full border border-white/20 shadow-[0_8px_24px_rgba(34,211,238,0.3)] hover:shadow-[0_8px_30px_rgba(34,211,238,0.5)] transition-all">
+              Add new integration
+            </button>
+          </div>
+        </article>
+      </div>
     </section>
   )
 }

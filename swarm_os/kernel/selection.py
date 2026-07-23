@@ -184,9 +184,11 @@ def score_response(
     error   = action.get("error")
     finish  = action.get("finish_reason", "")
 
+    total_tokens = float(action.get("total_tokens", 1000.0))
+
     if error or not content:
         return {"quality": 0.0, "speed": 0.0, "completion": 0.0,
-                "cognition_bonus": 0.0, "composite": 0.0}
+                "cognition_bonus": 0.0, "composite": 0.0, "efficiency": 0.0}
 
     quality = (
         max(0.0, min(1.0, human_score))
@@ -195,6 +197,7 @@ def score_response(
     )
 
     speed      = max(0.0, 1.0 - (elapsed / 120.0))
+    efficiency = max(0.0, 1.0 - (total_tokens / 8000.0))
     completion = 0.0
     if content and len(content) > 20: completion += 0.5
     if finish == "stop":              completion += 0.5
@@ -210,6 +213,7 @@ def score_response(
         "completion":      round(completion, 4),
         "cognition_bonus": round(cog_bonus,  4),
         "composite":       round(composite,  4),
+        "efficiency":      round(efficiency, 4),
     }
 
 
@@ -250,7 +254,8 @@ class SelectionEngine:
             # ── Stagnation penalty — nudges stuck incumbents ──────────────────
             composite -= _stagnation_penalty(o.genome)
 
-            o.genome.record_fitness(composite)
+            scores["composite"] = composite
+            o.genome.record_fitness(scores)
             o.fitness += composite
 
             o.memory.write({
@@ -324,4 +329,91 @@ class SelectionEngine:
 
     def top_organisms(self, organisms: List[Organism], n: int = 3) -> List[Organism]:
         return sorted(organisms, key=lambda o: -o.genome.average_fitness)[:n]
+
+    def nsga2_select(self, organisms: List[Organism], k: int) -> List[Organism]:
+        """
+        NSGA-II Selection: Ranks organisms based on Pareto dominance across 
+        Quality, Speed, and Efficiency. Uses crowding distance for diversity.
+        """
+        if not organisms:
+            return []
+        if len(organisms) <= k:
+            return organisms
+
+        # 1. Non-Dominated Sorting
+        fronts = []
+        domination_counts = {o.id: 0 for o in organisms}
+        dominated_sets = {o.id: [] for o in organisms}
+        current_front = []
+
+        def dominates(a: Organism, b: Organism) -> bool:
+            # We want to maximize all three
+            a_q, a_s, a_e = a.genome.average_quality, a.genome.average_speed, a.genome.average_efficiency
+            b_q, b_s, b_e = b.genome.average_quality, b.genome.average_speed, b.genome.average_efficiency
+            
+            better_or_equal = (a_q >= b_q) and (a_s >= b_s) and (a_e >= b_e)
+            strictly_better = (a_q > b_q) or (a_s > b_s) or (a_e > b_e)
+            return better_or_equal and strictly_better
+
+        for p in organisms:
+            for q in organisms:
+                if p.id == q.id:
+                    continue
+                if dominates(p, q):
+                    dominated_sets[p.id].append(q)
+                elif dominates(q, p):
+                    domination_counts[p.id] += 1
+            if domination_counts[p.id] == 0:
+                p.genome.pareto_rank = 1
+                current_front.append(p)
+        
+        fronts.append(current_front)
+        
+        rank = 1
+        while len(current_front) > 0:
+            next_front = []
+            for p in current_front:
+                for q in dominated_sets[p.id]:
+                    domination_counts[q.id] -= 1
+                    if domination_counts[q.id] == 0:
+                        q.genome.pareto_rank = rank + 1
+                        next_front.append(q)
+            rank += 1
+            if len(next_front) > 0:
+                fronts.append(next_front)
+            current_front = next_front
+
+        # 2. Crowding Distance Calculation
+        for front in fronts:
+            if not front: continue
+            for o in front:
+                o.genome.crowding_distance = 0.0
+            
+            for attr in ['average_quality', 'average_speed', 'average_efficiency']:
+                front.sort(key=lambda o: getattr(o.genome, attr))
+                front[0].genome.crowding_distance = float('inf')
+                front[-1].genome.crowding_distance = float('inf')
+                
+                min_val = getattr(front[0].genome, attr)
+                max_val = getattr(front[-1].genome, attr)
+                if max_val == min_val:
+                    continue
+                    
+                for i in range(1, len(front) - 1):
+                    if front[i].genome.crowding_distance != float('inf'):
+                        next_val = getattr(front[i+1].genome, attr)
+                        prev_val = getattr(front[i-1].genome, attr)
+                        front[i].genome.crowding_distance += (next_val - prev_val) / (max_val - min_val)
+
+        # 3. Select best k
+        selected = []
+        for front in fronts:
+            if len(selected) + len(front) <= k:
+                selected.extend(front)
+            else:
+                front.sort(key=lambda o: o.genome.crowding_distance, reverse=True)
+                selected.extend(front[:k - len(selected)])
+                break
+                
+        return selected
 

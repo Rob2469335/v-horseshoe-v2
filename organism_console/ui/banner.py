@@ -11,6 +11,7 @@ from rich.box import SIMPLE
 from organism_console.config import BACKEND_URL, VERSION, START_TIME
 from organism_console.api_client import call_api
 from swarm_os.config.settings import settings
+from organism_console.token_tracker import get_status_segment
 
 _WEATHER_CACHE = "Weather: [dim]Syncing...[/dim]"
 _WEATHER_LAST_FETCH = 0
@@ -178,7 +179,7 @@ def print_banner(ctx):
     o = ctx.total_output_tokens
     
     table = Table.grid(padding=(0, 4))
-    table.add_column(style="bold #555555", justify="right")
+    table.add_column(style="bold #ff00ea", justify="right")
     table.add_column()
 
     banner_data = get_banner_data()
@@ -188,23 +189,23 @@ def print_banner(ctx):
             agent_id = a.get("id", "").upper()
             model = a.get("model_role", "")
             if agent_id.lower() == ctx.active_agent.lower():
-                table.add_row(f"[bold white]{agent_id}[/bold white]", f"[bold #00aaff]{model}[/bold #00aaff] [bold green](ACTIVE)[/bold green]")
+                table.add_row(f"[bold white]{agent_id}[/bold white]", f"[bold #00f0ff]{model}[/bold #00f0ff] [bold #00ffcc](ACTIVE)[/bold #00ffcc]")
             else:
-                table.add_row(f"{agent_id}", f"[#00aaff]{model}[/#00aaff]")
+                table.add_row(f"{agent_id}", f"[#00f0ff]{model}[/#00f0ff]")
     else:
         table.add_row("AGENT", f"[bold #ffffff]{ctx.active_agent.upper()}[/bold #ffffff]")
-        table.add_row("CORE", f"[#00aaff]{ctx.active_model}[/#00aaff]")
+        table.add_row("CORE", f"[#00f0ff]{ctx.active_model}[/#00f0ff]")
     table.add_row("SECURE", f"[{mode_style}]{ctx.mode.upper()}[/{mode_style}]")
     table.add_row("UPLINK", backend_state)
     table.add_row("UPTIME", f"[dim]{uptime_str}[/dim]")
-    table.add_row("TOKENS", f"[dim]IN[/dim] [#ffaa00]{i:,}[/#ffaa00] [dim]OUT[/dim] [#00ffcc]{o:,}[/#00ffcc]")
+    table.add_row("TOKENS", f"[dim]IN[/dim] [#ffaa00]{i:,}[/#ffaa00] [dim]OUT[/dim] [#00f0ff]{o:,}[/#00f0ff]")
 
     fallbacks_data = {}
     status_json = banner_data.get("status") or {}
     if status_json:
         fallbacks_data = status_json.get("fallback_pool", {})
 
-    cloud_status = "[bold green]\\[ON][/bold green]" if ctx.cloud_enabled else "[bold red]\\[OFF][/bold red]"
+    cloud_status = "[bold #00ffcc]\\[ON][/bold #00ffcc]" if ctx.cloud_enabled else "[bold #ff00ea]\\[OFF][/bold #ff00ea]"
     
     c_toks = ctx.cloud_input_tokens + ctx.cloud_output_tokens
     quota = getattr(ctx, "cloud_token_quota", 0)
@@ -212,7 +213,7 @@ def print_banner(ctx):
     q_width = 15
     filled_q = int((q_pct / 100) * q_width)
     q_bar = "■" * filled_q + "□" * (q_width - filled_q)
-    q_color = "#00ffcc" if q_pct < 70 else "#ffaa00" if q_pct < 90 else "bold #ff0033 blink"
+    q_color = "#00f0ff" if q_pct < 70 else "#ffaa00" if q_pct < 90 else "bold #ff00ea blink"
     table.add_row("CLOUD", f"{cloud_status} [dim]QUOTA[/dim] [{q_color}]{q_pct}%[/{q_color}] [dim][{q_bar}] ({c_toks:,}/{quota:,})[/dim]")
     
     if fallbacks_data:
@@ -221,31 +222,35 @@ def print_banner(ctx):
         grq = fallbacks_data.get("groq", 0)
         gem = fallbacks_data.get("gemini", 0)
         nvd = fallbacks_data.get("nvidia", 0)
-        table.add_row("FALLBACKS", f"[bold #00ffcc]{total_f} READY[/bold #00ffcc] [dim](OpenRouter: {orr}, Groq: {grq}, Gemini: {gem}, NVIDIA: {nvd})[/dim]")
+        table.add_row("FALLBACKS", f"[bold #00f0ff]{total_f} READY[/bold #00f0ff] [dim](OpenRouter: {orr}, Groq: {grq}, Gemini: {gem}, NVIDIA: {nvd})[/dim]")
     else:
         table.add_row("FALLBACKS", "[dim]Checking status...[/dim]")
 
-    table.add_row("ACCEL", "[bold #00ffcc]ARC iGPU[/bold #00ffcc] [dim][ACTIVE][/dim]")
+    table.add_row("ACCEL", "[bold #00f0ff]ARC iGPU[/bold #00f0ff] [dim][ACTIVE][/dim]")
     table.add_row("CONTEXT", f"[{ctx_color}]{ctx_pct}%[/{ctx_color}] [dim][{ctx_bar}] ({tokens}/{max_tokens})[/dim]")
-    table.add_row("METRICS", f"[dim]CPU[/dim] [#00ffcc]{stats['cpu']:.0f}%[/#00ffcc] [dim]RAM[/dim] [#ff00ff]{stats['ram_used_gb']:.1f}GB[/#ff00ff] [dim][{ram_bar}][/dim]")
+    table.add_row("METRICS", f"[dim]CPU[/dim] [#00f0ff]{stats['cpu']:.0f}%[/#00f0ff] [dim]RAM[/dim] [#ff00ea]{stats['ram_used_gb']:.1f}GB[/#ff00ea] [dim][{ram_bar}][/dim]")
     table.add_row("WEATHER", get_weather_stats())
+    
+    status_seg = get_status_segment()
+    if status_seg:
+        table.add_row("TRACKER", status_seg)
     
     def style_node(name: str, color: str) -> str:
         if name.lower() == ctx.active_agent.lower():
             return f"[bold black on {color}] {name} [/]"
         return f"[{color}]{name}[/{color}]"
 
-    n_coord = style_node("COORDINATOR", "#ff00ff")
-    n_plan = style_node("PLANNER", "#00aaff")
-    n_rsch = style_node("RESEARCHER", "#5555ff")
-    n_exec = style_node("EXECUTOR", "#aaaa00")
+    n_coord = style_node("COORDINATOR", "#ff00ea")
+    n_plan  = style_node("PLANNER", "#00f0ff")
+    n_rsch  = style_node("RESEARCHER", "#5555ff")
+    n_exec  = style_node("EXECUTOR", "#aaaa00")
     n_coder = style_node("CODER", "#ffaa00")
-    n_tool = style_node("TOOL-RUNNER", "#55ff55")
-    n_review = style_node("REVIEWER", "#00ffcc")
-    n_debug = style_node("DEBUGGER", "#ff3333")
+    n_tool  = style_node("TOOL-RUNNER", "#55ff55")
+    n_review= style_node("REVIEWER", "#00f0ff")
+    n_debug = style_node("DEBUGGER", "#ff00ea")
 
     topology = f"""[dim]
-      [#00ffff]USER[/#00ffff] ──> {n_coord} ──> {n_plan} ──> {n_rsch} ──> {n_exec}
+      [#00f0ff]USER[/#00f0ff] ──> {n_coord} ──> {n_plan} ──> {n_rsch} ──> {n_exec}
                                                             │
                                                             ├──> {n_coder} ──> {n_tool} ──> {n_review}
                                                             │
@@ -253,12 +258,24 @@ def print_banner(ctx):
                      
     table.add_row("TOPOLOGY", topology)
     
+    from rich.box import HEAVY
+    from rich.align import Align
+    from rich.console import Group
+
+    ascii_logo = """[bold #00f0ff]
+███████╗███████╗███╗   ██╗██╗████████╗██╗  ██╗
+╚══███╔╝██╔════╝████╗  ██║██║╚══██╔══╝██║  ██║
+  ███╔╝ █████╗  ██╔██╗ ██║██║   ██║   ███████║
+ ███╔╝  ██╔══╝  ██║╚██╗██║██║   ██║   ██╔══██║
+███████╗███████╗██║ ╚████║██║   ██║   ██║  ██║
+╚══════╝╚══════╝╚═╝  ╚═══╝╚═╝   ╚═╝   ╚═╝  ╚═╝
+[/bold #00f0ff][dim #ff00ea]O P E R A T O R   C O N S O L E   //   v2.0[/dim #ff00ea]
+"""
+
     banner_panel = Panel(
-        table,
-        title="[bold #00ffff]Z E N I T H[/bold #00ffff] [dim]OS // 2027[/dim]",
-        subtitle=f"[dim]v{VERSION}[/dim]",
-        border_style="#0055ff",
-        box=SIMPLE,
+        Group(Align.center(ascii_logo), table),
+        border_style="bold #00f0ff",
+        box=HEAVY,
         expand=False,
         padding=(1, 4)
     )

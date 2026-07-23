@@ -16,6 +16,7 @@ import logging
 import os
 import atexit
 import signal
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Optional
 
@@ -32,12 +33,11 @@ from rich.logging import RichHandler
 
 from organism_console.config import SESSION_FILE, LOG_DIR, VERSION
 from organism_console.state_store import SessionState
-from swarm_os.services.control_plane.bootstrap import build_router
 from organism_console.command_registry import registry, CommandContext
 
 from organism_console.api_client import call_api
 from organism_console.ui.banner import print_banner, get_system_stats, estimate_tokens
-from organism_console.ui.live_stream import stream_prompt_with_retry, stream_prompt
+from organism_console.ui.live_stream import stream_prompt_with_retry
 from organism_console.loops.autonomous import run_autonomous_goal_loop
 from organism_console.loops.debate import run_debate_loop
 
@@ -57,15 +57,6 @@ class CLIContext(SessionState):
     def __init__(self):
         super().__init__(SESSION_FILE)
         self.console = Console(highlight=False)
-        self.router = None
-
-    def get_router(self):
-        if self.router is None:
-            self.router = build_router(include_cloud=self.cloud_enabled)
-        return self.router
-
-    def reset_router(self):
-        self.router = None
 
     @property
     def selected_agent(self):
@@ -87,20 +78,29 @@ class CLIContext(SessionState):
 ctx = CLIContext()
 
 
+_installed_models_cache = None
+
 def get_installed_models():
+    # BUG FIX: Use a global cache that ONLY caches successful backend API responses,
+    # preventing permanent fallback caching when the backend is temporarily offline.
+    global _installed_models_cache
+    if _installed_models_cache is not None:
+        return _installed_models_cache
+
     try:
         resp = call_api("/status")
         if resp:
-            return resp.json().get("installed_models", [])
+            _installed_models_cache = tuple(resp.json().get("installed_models", []))
+            return _installed_models_cache
     except Exception:
         pass
 
     try:
         from runtime_v2.services.model_registry import get_model
         coordinator_model, _ = get_model("coordinator")
-        return [coordinator_model]
+        return (coordinator_model,)
     except Exception:
-        return ["danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS"]
+        return ("qwen-tuned",)
 
 
 def build_command_context(cmd_ctx_console=None, cmd_ctx_state=None) -> CommandContext:
@@ -129,7 +129,11 @@ def print_version():
 
 
 def handle_sigint(sig, frame):
-    ctx.console.print("\n[dim]Use '/exit' to quit properly.[/dim]")
+    # BUG FIX: Raise KeyboardInterrupt so it propagates to the REPL's except block.
+    # Previously this only printed a newline, meaning Ctrl+C during a long LLM stream
+    # would print a blank line but NOT interrupt the blocking stream_prompt() call.
+    ctx.console.print()
+    raise KeyboardInterrupt
 
 
 def setup_readline():
@@ -164,6 +168,9 @@ def setup_readline():
 def main():
     ctx.cloud_enabled = False
     os.environ["SWARM_ROUTING_MODE"] = "local_only"
+    
+    from organism_console.token_tracker import start_background_poll
+    start_background_poll()
 
     # --- CLI arg parsing ---
     args = sys.argv[1:]
@@ -200,7 +207,9 @@ def main():
     if args:
         cmd_line = " ".join(args)
         cmd_ctx = build_command_context()
-        registry.handle_line(cmd_line, cmd_ctx)
+        execute_prompt = registry.handle_line(cmd_line, cmd_ctx)
+        if execute_prompt:
+            stream_prompt_with_retry(ctx, ctx.active_agent, execute_prompt, ctx.history)
         return 0
 
     # --- Interactive REPL ---
@@ -209,9 +218,9 @@ def main():
 
     while True:
         try:
-            agent_tag = f"[bold #00ffff]Z E N I T H[/bold #00ffff]"
-            agent_name = f"[bold #ff00ff]{ctx.active_agent}[/bold #ff00ff]"
-            prompt_str = f"{agent_tag} [dim]::[/dim] {agent_name} [bold #00ffcc]>[/bold #00ffcc] "
+            agent_tag = f"[bold #00f0ff]>> OPERATOR[/bold #00f0ff]"
+            agent_name = f"[bold #ff00ea]{ctx.active_agent.upper()}[/bold #ff00ea]"
+            prompt_str = f"{agent_tag} [dim]@[/dim] {agent_name} [blink]_[/blink] "
             cmd_line = ctx.console.input(prompt_str).strip()
 
             if not cmd_line:
@@ -222,14 +231,17 @@ def main():
             execute_prompt = registry.handle_line(cmd_line, cmd_ctx)
             if execute_prompt:
                 current_context_tokens = estimate_tokens(execute_prompt + json.dumps(ctx.history))
-                if current_context_tokens > 15000:
+                if current_context_tokens > 15000 and len(ctx.history) > 12:
                     ctx.console.print("[dim]Context pressure warning: tokens exceed 15000. Auto-truncating oldest history...[/dim]")
-                    if len(ctx.history) > 10:
-                        truncate_idx = len(ctx.history) - 10
-                        if ctx.history[truncate_idx].get("role") == "user" and "Result:" in str(ctx.history[truncate_idx].get("content")):
-                            truncate_idx -= 1
-                        truncate_idx = max(1, truncate_idx)
-                        ctx.history = ctx.history[:1] + ctx.history[truncate_idx:]
+                    keep = min(10, len(ctx.history) - 2)
+                    truncate_idx = len(ctx.history) - keep
+                    # BUG FIX: Add bounds check before indexing to prevent IndexError
+                    if 0 < truncate_idx < len(ctx.history) and ctx.history[truncate_idx].get("role") == "user" and "Result:" in str(ctx.history[truncate_idx].get("content", "")):
+                        truncate_idx += 1
+                    truncate_idx = max(1, min(truncate_idx, len(ctx.history) - 1))
+                    # BUG FIX: Explicitly preserve ctx.history[0] (system message) using [0:1]
+                    # instead of [:1] which could fail if ctx.history[0] is unintentionally sliced
+                    ctx.history = ctx.history[0:1] + ctx.history[truncate_idx:]
                     registry.handle_line("/compress", cmd_ctx)
 
                 ctx.history = stream_prompt_with_retry(ctx, ctx.active_agent, execute_prompt, ctx.history)

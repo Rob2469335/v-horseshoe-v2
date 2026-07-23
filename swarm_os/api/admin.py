@@ -44,6 +44,17 @@ def _latest_snapshot_payload(request: Request) -> dict:
     snapshots = repo.list()
 
     base = build_status(None, None)
+    
+    population = []
+    if latest:
+        try:
+            import json
+            with open(latest, 'r') as f:
+                data = json.load(f)
+                population = data.get("organisms", [])
+        except Exception as e:
+            log.error(f"Failed to load snapshot {latest}: {e}")
+
     return {
         **base,
         "latest_snapshot": str(latest) if latest else None,
@@ -51,7 +62,7 @@ def _latest_snapshot_payload(request: Request) -> dict:
         "current_run": None,
         "queued": False,
         "running": False,
-        "population": [],
+        "population": population,
     }
 
 
@@ -149,7 +160,7 @@ def run_simulation(
 @router.get("/replay")
 async def admin_replay(request: Request) -> dict:
     """Event replay dashboard data."""
-    from swarm_os.api.routes import runtime_dep, _safe_events
+    from swarm_os.api.dependencies import runtime_dep, _safe_events
     runtime = getattr(request.app.state, "runtime", None)
     events = []
     healing_attempts = 0
@@ -219,7 +230,14 @@ async def evaluate_health(request: Request) -> dict:
         if healing:
             detector = getattr(healing, "detector", None)
             if detector:
-                report = detector.status() if hasattr(detector, "status") else detector.check() if hasattr(detector, "check") else {}
+                import inspect
+                if hasattr(detector, "status"):
+                    report = detector.status()
+                elif hasattr(detector, "check"):
+                    chk = detector.check()
+                    report = await chk if inspect.iscoroutine(chk) else chk
+                else:
+                    report = {}
                 readiness = report.get("recovery_readiness", report.get("health_score", 100))
                 anomalies = report.get("active_anomalies", 0)
         return {
@@ -231,6 +249,8 @@ async def evaluate_health(request: Request) -> dict:
     except Exception as exc:
         return {"recovery_readiness": 0, "active_anomalies": 1, "last_heal_success": False,
                 "checks": {}, "error": str(exc)}
+
+
 
 
 

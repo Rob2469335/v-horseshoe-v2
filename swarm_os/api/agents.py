@@ -56,12 +56,10 @@ def get_agent_service(request: Request) -> Any:
 
 @router.get("/agents")
 def list_agents(request: Request):
-    try:
-        runtime = getattr(request.app.state, "runtime", None)
-        if runtime is not None and hasattr(runtime, "agents") and runtime.agents is not None:
+    runtime = getattr(request.app.state, "runtime", None)
+    if runtime is not None and hasattr(runtime, "agents") and runtime.agents is not None:
+        if hasattr(runtime.agents, "list_agents"):
             return runtime.agents.list_agents()
-    except Exception as exc:
-        logger.error(f"[AGENTS FALLBACK] Error listing agents from service: {exc}")
     
     # Safe fallback response if service fails
     return [
@@ -103,7 +101,7 @@ def list_agents(request: Request):
         {
             "id": "coder",
             "role": "coder",
-            "description": "Code-writing specialist focusing on high-quality modifications. (Fallback Mode)",
+            "description": "Code-writing specialist focusing on high-quality modifications. (Fallback Mode) CRITICAL INSTRUCTION: You MUST use a read tool (e.g. read_file, grep) to understand the target files BEFORE you attempt to modify or create them. Do not hallucinate file contents.",
             "model_role": "fast",
             "config": {}
         }
@@ -130,14 +128,22 @@ def get_agent(agent_id: str, service=Depends(get_agent_service)):
 @router.post("/agents/{agent_id}/step")
 async def step_agent(agent_id: str, payload: AgentStepPayload, service=Depends(get_agent_service)):
     try:
+        import asyncio
         chunks = []
-        async for chunk in service.step_agent_stream(agent_id, payload.prompt, payload.history or []):
-            chunks.append(chunk)
+        # BUG FIX: Add timeout to prevent this endpoint from holding connections open indefinitely.
+        # Long-running agents can block this connection for minutes with no response to the client.
+        # Use the streaming endpoint for real-time feedback; this endpoint is for quick steps only.
+        try:
+            async with asyncio.timeout(120):
+                async for chunk in service.step_agent_stream(agent_id, payload.prompt, payload.history or []):
+                    chunks.append(chunk)
+        except asyncio.TimeoutError:
+            raise HTTPException(status_code=504, detail="Agent step timed out after 120s — use the /stream endpoint for long-running tasks")
         return chunks
+    except HTTPException:
+        raise
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
 
 @router.post("/agents/{agent_id}/step/stream")
 async def step_agent_stream(agent_id: str, payload: AgentStepPayload, request: Request):
@@ -165,7 +171,11 @@ async def step_agent_stream(agent_id: str, payload: AgentStepPayload, request: R
             yield json.dumps({"type": "final", "done": True}) + "\n"
 
         except Exception as exc:
-            yield json.dumps({"error": str(exc)}) + "\n"
+            # BUG FIX: Log the full exception so errors aren't silently swallowed.
+            # Previously the exception was yielded as a string but not logged,
+            # making it impossible to debug production streaming failures.
+            logger.exception("step_agent_stream failed for agent_id=%s", agent_id)
+            yield json.dumps({"type": "error", "error": str(exc)}) + "\n"
             yield json.dumps({"type": "final", "done": True}) + "\n"
 
     return StreamingResponse(generate(), media_type="application/x-ndjson")
@@ -176,8 +186,6 @@ async def call_agent_tool(agent_id: str, tool_name: str, payload: ToolCallPayloa
         return await service.run_tool(agent_id, tool_name, payload.payload)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
 
 @router.delete("/agents/{agent_id}")
 def delete_agent(agent_id: str, service=Depends(get_agent_service)):

@@ -1,8 +1,6 @@
 import sys
 import subprocess
 import re
-import ast
-import requests
 from pathlib import Path
 from rich.panel import Panel
 from rich.rule import Rule
@@ -10,42 +8,10 @@ from rich.prompt import Confirm
 
 from organism_console.config import PROJECT_ROOT
 from organism_console.api_client import call_api
+from organism_console.command_registry import run_syntax_checks
 from organism_console.ui.live_stream import stream_prompt
-from swarm_os.healing.healing_loop import HealingLoop
 
-_healing_loop = HealingLoop()
-def run_syntax_checks() -> tuple[bool, str]:
-    try:
-        git_diff = subprocess.run(
-            ["git", "diff", "--name-only"],
-            capture_output=True,
-            text=True,
-            cwd=PROJECT_ROOT,
-            timeout=5
-        )
-        if git_diff.returncode == 0:
-            modified_files = [line.strip() for line in git_diff.stdout.splitlines() if line.strip()]
-            for f in modified_files:
-                file_path = PROJECT_ROOT / f
-                if file_path.suffix == ".py" and file_path.exists():
-                    try:
-                        content = file_path.read_text(encoding="utf-8", errors="ignore")
-                        ast.parse(content, filename=str(file_path))
-                    except SyntaxError as exc:
-                        lines = content.splitlines()
-                        err_line = exc.lineno
-                        context_lines = []
-                        if err_line:
-                            start = max(0, err_line - 4)
-                            end = min(len(lines), err_line + 3)
-                            for idx in range(start, end):
-                                prefix = ">>> " if idx + 1 == err_line else "    "
-                                context_lines.append(f"{prefix}{idx+1}: {lines[idx]}")
-                        context_str = "\n".join(context_lines)
-                        return False, f"File: {f}\nError: {exc.msg} at line {exc.lineno}\nCode Context:\n```python\n{context_str}\n```"
-    except Exception as e:
-        return False, f"Syntax checks crashed: {e}"
-    return True, ""
+_healing_loop = None
 
 def run_test_suite(goal_text: str = "") -> tuple[bool, str]:
     test_targets = []
@@ -163,7 +129,7 @@ def run_autonomous_goal_loop(goal: str, cmd_ctx):
     console.print()
     console.print(Rule("[bold magenta]🤖 Swarm OS Autonomous Verification Loop[/bold magenta]"))
     console.print(f"🎯 [bold]Goal[/bold]: [cyan]{goal}[/cyan]")
-    entry_agent = "coordinator"
+    entry_agent = getattr(state, "entry_agent", None) or "coordinator"
     state.active_agent = entry_agent
     state.delegation_chain = [entry_agent]
     state.save()
@@ -179,7 +145,7 @@ def run_autonomous_goal_loop(goal: str, cmd_ctx):
         return
     console.print()
     
-    plan_first = False
+    plan_first = len(goal) > 200 and Confirm.ask("[bold cyan]Goal is complex. Would you like to draft an implementation plan first?[/bold cyan]", default=False)
     
     if plan_first:
         docs_dir = PROJECT_ROOT / "docs"
@@ -234,6 +200,10 @@ def run_autonomous_goal_loop(goal: str, cmd_ctx):
     for attempt in range(1, max_attempts + 1):
         console.print(Rule(f"Attempt {attempt}/{max_attempts}", style="magenta dim"))
         
+        global _healing_loop
+        if _healing_loop is None:
+            from swarm_os.healing.healing_loop import HealingLoop as _HL
+            _healing_loop = _HL()
         heal_result = _healing_loop.tick()
         if heal_result.get("status") == "healing_decision":
             decision = heal_result.get("decision", {})
@@ -261,6 +231,7 @@ def run_autonomous_goal_loop(goal: str, cmd_ctx):
             passed = False
             logs = "Agent stream interrupted prematurely (e.g., hit max tokens, fell into a repetition loop, or the backend crashed).\nNo changes were finalized."
             console.print("[bold red]✗ Agent execution failed (Interrupted).[/bold red]")
+            break
         else:
             final_msg = ""
             if history and isinstance(history[-1], dict):
@@ -272,9 +243,10 @@ def run_autonomous_goal_loop(goal: str, cmd_ctx):
                 passed = False
                 logs = "Final Action:\n" + final_msg + "\nAgent could not determine next action. It likely encountered a critical backend error or model routing failure."
                 console.print("[bold red]✗ Agent execution failed (Routing Fallback).[/bold red]")
+                break
             else:
                 console.print("[dim]Running fast syntax checks...[/dim]")
-                syntax_passed, syntax_error_msg = run_syntax_checks()
+                syntax_passed, syntax_error_msg = run_syntax_checks(PROJECT_ROOT)
                 
             if not syntax_passed and "Unable to determine next action" not in final_msg:
                 passed = False
@@ -308,8 +280,11 @@ def run_autonomous_goal_loop(goal: str, cmd_ctx):
                     border_style="red"
                 ))
                 if Confirm.ask("[bold yellow]Do you want to run `git stash` to revert the broken changes and safely exit?[/bold yellow]"):
-                    subprocess.run(["git", "stash"], cwd=PROJECT_ROOT)
-                    console.print("[green]Working directory reverted.[/green]")
+                    res = subprocess.run(["git", "stash"], cwd=PROJECT_ROOT, capture_output=True, text=True)
+                    if res.returncode == 0:
+                        console.print("[green]Working directory reverted via `git stash`.[/green]")
+                    else:
+                        console.print(f"[red]git stash failed: {res.stderr.strip()}[/red]")
                 break
                 
             console.print("[yellow]Feeding back failure logs to agent context for correction...[/yellow]")

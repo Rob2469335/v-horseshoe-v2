@@ -40,11 +40,17 @@ class RuntimeGraph:
     router: Any = None
     snapshot_repo: Any = None
     simulation_service: Any = None
+    _agent_runtime_instance: Any = None  # BUG FIX: cache instance to avoid creating new one per access
 
     @property
     def agent_runtime(self):
-        from swarm_os.agent_runtime import AgentRuntime
-        return AgentRuntime()
+        # BUG FIX: Return the same AgentRuntime instance every call.
+        # Previously this @property called AgentRuntime() on every access,
+        # breaking statefulness (tools list, caches, etc.)
+        if self._agent_runtime_instance is None:
+            from swarm_os.agent_runtime import AgentRuntime
+            self._agent_runtime_instance = AgentRuntime()
+        return self._agent_runtime_instance
 
     # agents.py calls runtime.agents — wire it to agent_service
     @property
@@ -157,9 +163,28 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         log.warning(f"Failed to initialize MCP Tools on startup: {exc}")
 
+    bg_tasks = set()
+    # BUG FIX: Start MemoryBridge background daemons so events are processed into Qdrant memories
+    if orchestrator and hasattr(orchestrator, "bridge"):
+        t1 = asyncio.create_task(orchestrator.bridge.watch_loop(interval_seconds=5.0))
+        t2 = asyncio.create_task(orchestrator.bridge.start_manager_daemon(interval_seconds=300.0))
+        bg_tasks.add(t1)
+        bg_tasks.add(t2)
+        log.info("Started MemoryBridge daemons (watch_loop and start_manager_daemon)")
+
     log.info("RuntimeGraph mounted on app.state — all routes live")
     yield
     log.info("Swarm OS shutting down")
+    
+    # Graceful shutdown of background tasks
+    for task in bg_tasks:
+        task.cancel()
+    
+    if bg_tasks:
+        try:
+            await asyncio.gather(*bg_tasks, return_exceptions=True)
+        except Exception as e:
+            log.warning(f"Error during background task shutdown: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -171,7 +196,15 @@ def create_app() -> FastAPI:
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        # BUG FIX: allow_origins=["*"] + allow_credentials=True is rejected by browsers
+        # (CORS spec prohibits credentialed requests to wildcard origins).
+        # Set explicit allowed origins instead.
+        allow_origins=[
+            "http://localhost:5173",  # Vite dev server
+            "http://127.0.0.1:5173",  # Vite dev server via IP
+            "http://localhost:3000",  # Next.js / CRA
+            "http://localhost:8080",
+        ],
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -187,7 +220,9 @@ def create_app() -> FastAPI:
     app.include_router(agents_router)
     app.include_router(upwork_router)
     app.include_router(swarm_stream_router)
-    app.include_router(admin_router, prefix="/api")
+    # BUG FIX: admin_router was imported and stored but never mounted.
+    # All /admin/* endpoints were silently unreachable.
+    app.include_router(admin_router)
 
     @app.get("/")
     def read_root():

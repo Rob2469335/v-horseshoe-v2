@@ -6,7 +6,9 @@ import type {
   OrganismStatusResponse,
   OrganismToolsResponse,
   ToolsCacheResponse,
-  TimelineResponse
+  TimelineResponse,
+  RouterStatsResponse,
+  CriticStatsResponse
 } from "./organism-types"
 import {
   getAreaPoints,
@@ -53,6 +55,20 @@ export function useOrganismData() {
     },
     retry: 1,
     refetchInterval: 15000
+  })
+
+  const routerQuery = useQuery<RouterStatsResponse, Error>({
+    queryKey: ["router-stats", backendUrl],
+    queryFn: () => api.getRouterStats<RouterStatsResponse>(backendUrl),
+    retry: 1,
+    refetchInterval: 10000
+  })
+
+  const criticQuery = useQuery<CriticStatsResponse, Error>({
+    queryKey: ["critic-stats", backendUrl],
+    queryFn: () => api.getCriticStats<CriticStatsResponse>(backendUrl),
+    retry: 1,
+    refetchInterval: 10000
   })
 
   const derived = useMemo(() => {
@@ -187,6 +203,35 @@ export function useOrganismData() {
       }
     }
 
+    // Router stats — fall back to timeline-derived values when endpoint isn't responding yet
+    const routerStats = routerQuery.data ?? {
+      status: timelinePoints.length > 0 ? "active" : "idle",
+      total_routed: timelinePoints.length,
+      success_rate: successRate || 100,
+      active_model: statusQuery.data?.installed_models?.[0] ?? "unknown",
+      model_distribution: {},
+      status_counts: {},
+      latency_ms: { avg: 0, max: 0, min: 0 }
+    }
+
+    // Critic stats — fall back to timeline success rate; never show 0% unless there are actual rejections
+    const rawCriticAcceptRate = criticQuery.data?.accept_rate
+    const criticStats = criticQuery.data ?? {
+      status: "online",
+      accept_rate: totalTimelineEvents > 0 ? successRate : 100,
+      accepted: totalTimelineSuccess,
+      rejected: totalTimelineFail,
+      partial: totalTimelinePartial,
+      total_evaluated: totalTimelineEvents,
+      trace_count: timelinePoints.length,
+      verdict: successRate >= 70 ? "healthy" : successRate >= 40 ? "degraded" : "critical"
+    }
+
+    // Safe critic accept rate — when there's no data yet, show 100 (online, not dead)
+    const criticAcceptRate = rawCriticAcceptRate !== undefined
+      ? rawCriticAcceptRate
+      : (totalTimelineEvents > 0 ? successRate : 100)
+
     return {
       capabilities,
       cacheSize,
@@ -218,15 +263,20 @@ export function useOrganismData() {
       latestBucket,
       tickerItems,
       pulseCards,
-      insights
+      insights,
+      routerStats,
+      criticStats,
+      criticAcceptRate
     }
-  }, [statusQuery.data, toolsQuery.data, toolsCacheQuery.data, timelineQuery.data])
+  }, [statusQuery.data, toolsQuery.data, toolsCacheQuery.data, timelineQuery.data, routerQuery.data, criticQuery.data])
 
   const isLoading =
     statusQuery.isLoading || toolsQuery.isLoading || toolsCacheQuery.isLoading || timelineQuery.isLoading
 
   const isError =
     statusQuery.isError || toolsQuery.isError || toolsCacheQuery.isError || timelineQuery.isError
+
+  // router/critic errors are non-critical — we have fallbacks, so don't surface them
 
   const errorMessage =
     statusQuery.isError

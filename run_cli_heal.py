@@ -41,7 +41,7 @@ ctx = CommandContext(
     call_api=call_api,
     run_prompt=lambda p: stream_prompt_with_retry(state, state.active_agent, p, state.history),
     get_system_stats=get_system_stats,
-    installed_models=["qwen2.5-coder:7b"]
+    installed_models=["qwen-tuned"]
 )
 goal = "The script tests/test_weather.py is failing with HTTP 403 Forbidden because it is missing a User-Agent header. Please use web_search to research how to add a User-Agent with python urllib.request and then use filesystem to fix the code."
 print(f"\n--- TRIGGERING AUTONOMOUS LOOP ---")

@@ -1,6 +1,370 @@
 {
   "failures": [
     {
+      "incident_id": "inc-cbade7a2",
+      "symptom": {
+        "component": "qdrant",
+        "ok": false,
+        "status": "unhealthy"
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-871ee578",
+          "hypothesis": "unknown",
+          "confidence": 0.3,
+          "explanation": "Insufficient data \u2014 require deeper probes."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.3,
+      "outcome": "OPEN",
+      "service": "qdrant",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1784499708.338695
+    },
+    {
+      "incident_id": "inc-6d894db9",
+      "symptom": {
+        "component": "qdrant",
+        "ok": false,
+        "status": "unhealthy"
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-8769647f",
+          "hypothesis": "unknown",
+          "confidence": 0.3,
+          "explanation": "Insufficient data \u2014 require deeper probes."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.3,
+      "outcome": "OPEN",
+      "service": "qdrant",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1784499207.4404552
+    },
+    {
+      "incident_id": "inc-333aa7a5",
+      "symptom": {
+        "component": "qdrant",
+        "ok": false,
+        "status": "unhealthy"
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-f998d383",
+          "hypothesis": "unknown",
+          "confidence": 0.3,
+          "explanation": "Insufficient data \u2014 require deeper probes."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.3,
+      "outcome": "OPEN",
+      "service": "qdrant",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1784484527.2082355
+    },
+    {
+      "incident_id": "inc-be72f4e7",
+      "symptom": {
+        "component": "qdrant",
+        "ok": false,
+        "status": "unhealthy"
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-884a0d2d",
+          "hypothesis": "unknown",
+          "confidence": 0.3,
+          "explanation": "Insufficient data \u2014 require deeper probes."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.3,
+      "outcome": "OPEN",
+      "service": "qdrant",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1784484000.8997703
+    },
+    {
+      "incident_id": "inc-cda61c94",
+      "symptom": {
+        "component": "qdrant",
+        "ok": false,
+        "status": "unhealthy"
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-3c7d8493",
+          "hypothesis": "unknown",
+          "confidence": 0.3,
+          "explanation": "Insufficient data \u2014 require deeper probes."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.3,
+      "outcome": "OPEN",
+      "service": "qdrant",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1784481817.890489
+    },
+    {
+      "incident_id": "inc-58019718",
+      "symptom": {
+        "component": "qdrant",
+        "ok": false,
+        "status": "unhealthy"
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-ea14fe88",
+          "hypothesis": "unknown",
+          "confidence": 0.3,
+          "explanation": "Insufficient data \u2014 require deeper probes."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.3,
+      "outcome": "OPEN",
+      "service": "qdrant",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1784481675.0527995
+    },
+    {
+      "incident_id": "inc-d288cdc6",
+      "symptom": {
+        "component": "qdrant",
+        "ok": false,
+        "status": "unhealthy"
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-fa9da53c",
+          "hypothesis": "unknown",
+          "confidence": 0.3,
+          "explanation": "Insufficient data \u2014 require deeper probes."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.3,
+      "outcome": "OPEN",
+      "service": "qdrant",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1784479406.0754695
+    },
+    {
+      "incident_id": "inc-68a5be59",
+      "symptom": {
+        "component": "qdrant",
+        "ok": false,
+        "status": "unhealthy"
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-3d1a2994",
+          "hypothesis": "unknown",
+          "confidence": 0.3,
+          "explanation": "Insufficient data \u2014 require deeper probes."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.3,
+      "outcome": "OPEN",
+      "service": "qdrant",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1784479270.7013943
+    },
+    {
+      "incident_id": "inc-2399d40c",
+      "symptom": {
+        "component": "qdrant",
+        "ok": false,
+        "status": "unhealthy"
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-a5f90158",
+          "hypothesis": "unknown",
+          "confidence": 0.3,
+          "explanation": "Insufficient data \u2014 require deeper probes."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.3,
+      "outcome": "OPEN",
+      "service": "qdrant",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1784479038.2071097
+    },
+    {
+      "incident_id": "inc-b0e77382",
+      "symptom": {
+        "component": "qdrant",
+        "ok": false,
+        "status": "unhealthy"
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-0cd77bdc",
+          "hypothesis": "unknown",
+          "confidence": 0.3,
+          "explanation": "Insufficient data \u2014 require deeper probes."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.3,
+      "outcome": "OPEN",
+      "service": "qdrant",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1784156156.2043672
+    },
+    {
+      "incident_id": "inc-d3425da9",
+      "symptom": {
+        "component": "qdrant",
+        "ok": false,
+        "status": "unhealthy"
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-58219ccf",
+          "hypothesis": "unknown",
+          "confidence": 0.3,
+          "explanation": "Insufficient data \u2014 require deeper probes."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.3,
+      "outcome": "OPEN",
+      "service": "qdrant",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1784152460.7291963
+    },
+    {
+      "incident_id": "inc-7f32746e",
+      "symptom": {
+        "component": "qdrant",
+        "ok": false,
+        "status": "unhealthy"
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-766e7870",
+          "hypothesis": "unknown",
+          "confidence": 0.3,
+          "explanation": "Insufficient data \u2014 require deeper probes."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.3,
+      "outcome": "OPEN",
+      "service": "qdrant",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1783957756.4112635
+    },
+    {
+      "incident_id": "inc-9395121b",
+      "symptom": {
+        "component": "qdrant",
+        "ok": false,
+        "status": "unhealthy"
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-146c704e",
+          "hypothesis": "unknown",
+          "confidence": 0.3,
+          "explanation": "Insufficient data \u2014 require deeper probes."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.3,
+      "outcome": "OPEN",
+      "service": "qdrant",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1783957514.363659
+    },
+    {
+      "incident_id": "inc-707fe8b2",
+      "symptom": {
+        "component": "qdrant",
+        "ok": false,
+        "status": "unhealthy"
+      },
+      "root_cause": null,
+      "hypotheses": [
+        {
+          "id": "h-a9e9d2d7",
+          "hypothesis": "unknown",
+          "confidence": 0.3,
+          "explanation": "Insufficient data \u2014 require deeper probes."
+        }
+      ],
+      "repair_attempts": [],
+      "successful_fix": null,
+      "confidence": 0.3,
+      "outcome": "OPEN",
+      "service": "qdrant",
+      "environment": {},
+      "metrics_before": {},
+      "metrics_after": {},
+      "timestamp": 1783956469.5691862
+    },
+    {
       "incident_id": "inc-2de3b4b8",
       "symptom": {
         "component": "qdrant",

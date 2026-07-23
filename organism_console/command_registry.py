@@ -1,6 +1,7 @@
 # organism_console/command_registry.py
 from __future__ import annotations
 
+import json
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 import ast
 import re
@@ -29,6 +30,7 @@ def run_syntax_checks(root: Path) -> tuple[bool, str]:
             for f in modified_files:
                 file_path = root / f
                 if file_path.suffix == ".py" and file_path.exists():
+                    content = ""
                     try:
                         content = file_path.read_text(encoding="utf-8", errors="ignore")
                         ast.parse(content, filename=str(file_path))
@@ -65,15 +67,14 @@ class CommandContext:
         self.state = state
         self.console = console
         self.call_api = call_api
-        self.run_prompt = run_prompt
         self.get_system_stats = get_system_stats
         self.installed_models = installed_models
         self.run_goal_loop = run_goal_loop
         self.run_debate = run_debate
+        self.run_prompt_with_agent: Optional[Callable[[str, str, Any], Any]] = None
 
 
 def route_natural_language_keywords(raw: str) -> tuple[Optional[str], list[str]]:
-    import re
     clean = raw.lower().strip().strip("?!.")
     
     # Simple direct mappings (fast path)
@@ -95,6 +96,24 @@ def route_natural_language_keywords(raw: str) -> tuple[Optional[str], list[str]]
     if clean in ("clear", "reset", "clear history", "reset context", "start over"):
         return "clear", []
         
+    if clean in ("learn", "learn from history", "run learning", "offline learn"):
+        return "learn", []
+        
+    if clean in ("autofix", "auto fix", "fix yourself", "fix bugs", "heal bugs", "fix all", "repair all", "repair everything"):
+        return "autofix", []
+
+    if clean in ("cures", "repair knowledge", "known fixes", "what can you fix"):
+        return "cures", []
+
+    if clean in ("repair stats", "repair statistics", "heal stats", "self heal stats"):
+        return "repair-stats", []
+
+    if clean in ("model", "models", "picker"):
+        return "picker", []
+
+    if clean in ("perf", "performance"):
+        return "perf", []
+
     if clean in ("exit", "quit", "bye", "close", "shutdown"):
         return "exit", []
         
@@ -106,6 +125,24 @@ def route_natural_language_keywords(raw: str) -> tuple[Optional[str], list[str]]
 
     if clean in ("benchmark", "run benchmark", "test models"):
         return "benchmark", []
+
+    if clean in ("run simulation", "simulate", "start simulation"):
+        return "simulation", ["run"]
+        
+    if clean in ("simulation status", "check simulation"):
+        return "simulation", ["status"]
+
+    m_search = re.match(r"^(?:search for|find|search memory for)\s+(.+)$", clean)
+    if m_search:
+        return "search", [m_search.group(1)]
+
+    m_upwork = re.match(r"^(?:analyze upwork job|analyze upwork|upwork)\s+(.+)$", clean)
+    if m_upwork:
+        return "upwork", [m_upwork.group(1)]
+
+    m_chat_search = re.match(r"^(?:ask librarian|chat search)\s+(.+)$", clean)
+    if m_chat_search:
+        return "chat-search", [m_chat_search.group(1)]
 
     # Regex matches
     m_debate = re.match(r"^(?:debate about|discuss|debate|talk about)\s+(.+)$", clean)
@@ -121,17 +158,17 @@ def route_natural_language_keywords(raw: str) -> tuple[Optional[str], list[str]]
     return None, []
 
 def classify_intent_with_llm(raw: str, ctx: CommandContext) -> tuple[Optional[str], list[str]]:
-    import json
-    import re
     
-    # Use the best fast local model that is actually installed
-    model = "qwen2.5-coder:7b"
+    model = "qwen-tuned"
     if ctx.installed_models:
         for m in ctx.installed_models:
+            if "4b" in m.lower() and "qwen" in m.lower():
+                model = m
+                break
             if "llama3-groq" in m.lower() or "deepseek-r1-tool" in m.lower():
                 model = m
                 break
-            if "qwen2.5-coder:7b" in m.lower() or "ministral" in m.lower():
+            if "qwen-tuned" in m.lower() or "ministral" in m.lower():
                 model = m
                 break
         else:
@@ -371,8 +408,8 @@ def cmd_trace(ctx: CommandContext, args: List[str]) -> None:
             ctx.console.print("[yellow]No session history available to export.[/yellow]")
             return
         
-        from datetime import datetime
-        export_dir = Path("swarm_os/logs")
+        from datetime import datetime, timezone
+        export_dir = Path(__file__).parent.parent / "swarm_os" / "logs"
         export_dir.mkdir(parents=True, exist_ok=True)
         filename = export_dir / f"trace_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
         
@@ -385,13 +422,12 @@ def cmd_trace(ctx: CommandContext, args: List[str]) -> None:
                 "\n---\n"
             ]
             for idx, run in enumerate(ctx.state.history):
+                role = run.get('role', 'unknown')
+                content = run.get('content', '')
                 lines.extend([
-                    f"## Run #{idx} ({run.get('agent_id', 'unknown')})",
-                    f"**Timestamp**: {datetime.fromtimestamp(run.get('timestamp', 0)).isoformat() if run.get('timestamp') else 'unknown'}",
-                    "\n### User Prompt",
-                    f"```\n{run.get('prompt', '')}\n```",
-                    "\n### Assistant Response",
-                    f"```\n{run.get('response', '')}\n```",
+                    f"## Run #{idx} ({role})",
+                    "\n### Content",
+                    f"```\n{content}\n```",
                     "\n---\n"
                 ])
                 
@@ -403,9 +439,19 @@ def cmd_trace(ctx: CommandContext, args: List[str]) -> None:
         ctx.console.print("[yellow]Usage: /trace on|off|export[/yellow]")
 
 
-@registry.register("cloud", "Toggle cloud models on or off")
+@registry.register("cloud", "Toggle cloud models on or off. Usage: /cloud [on|off]")
 def cmd_cloud(ctx: CommandContext, args: List[str]) -> None:
-    ctx.state.cloud_enabled = not ctx.state.cloud_enabled
+    if args:
+        arg = args[0].lower()
+        if arg == "on":
+            ctx.state.cloud_enabled = True
+        elif arg == "off":
+            ctx.state.cloud_enabled = False
+        else:
+            ctx.console.print("[yellow]Usage: /cloud [on|off][/yellow]")
+            return
+    else:
+        ctx.state.cloud_enabled = not ctx.state.cloud_enabled
     ctx.state.save()
     status = "[bold green]ON[/bold green]" if ctx.state.cloud_enabled else "[bold red]OFF[/bold red]"
     ctx.console.print(f"☁️  Cloud models are now {status}.")
@@ -443,6 +489,20 @@ def cmd_tokens(ctx: CommandContext, args: List[str]) -> None:
     table.add_row("Total Session", f"{input_tokens + output_tokens:,}", f"${total_cost:.5f}")
     
     ctx.console.print(Panel(table, title="[bold cyan]Token & Cost Tracking[/bold cyan]", border_style="cyan"))
+    
+    from organism_console.token_tracker import get_status_segment
+    tracker_status = get_status_segment()
+    if tracker_status:
+        ctx.console.print(Panel(tracker_status, title="[bold magenta]Live Provider Breakdown[/bold magenta]", border_style="magenta"))
+
+@registry.register("tracker", "Show live token tracker and provider status")
+def cmd_tracker(ctx: CommandContext, args: List[str]) -> None:
+    from organism_console.token_tracker import get_status_segment
+    status = get_status_segment()
+    if status:
+        ctx.console.print(Panel(status, title="[bold cyan]Live Token Tracker[/bold cyan]", border_style="cyan"))
+    else:
+        ctx.console.print("[dim]Tracker not available.[/dim]")
 
 
 @registry.register("diff", "Show Git diff of current changes in workspace")
@@ -481,9 +541,6 @@ def cmd_diff(ctx: CommandContext, args: List[str]) -> None:
         ctx.console.print(f"[bold red]Failed to fetch git diff:[/bold red] {e}")
 
 
-from pathlib import Path
-
-
 @registry.register("history", "Show session history of runs")
 def cmd_history(ctx: CommandContext, args: List[str]) -> None:
     if not ctx.state.history:
@@ -496,9 +553,9 @@ def cmd_history(ctx: CommandContext, args: List[str]) -> None:
     table.add_column("Prompt Preview", style="white")
 
     for idx, run in enumerate(ctx.state.history):
-        content = run.get("prompt", "")
+        content = run.get("content", "")
         preview = (content[:60] + "...") if len(content) > 60 else content
-        table.add_row(f"#{idx}", run.get("agent_id", "unknown"), preview.replace("\n", " "))
+        table.add_row(f"#{idx}", run.get("role", "unknown"), preview.replace("\n", " "))
 
     ctx.console.print(Panel(table, title="[bold cyan]Execution History[/bold cyan]", border_style="cyan"))
 
@@ -516,8 +573,8 @@ def cmd_replay(ctx: CommandContext, args: List[str]) -> Optional[str]:
             return None
         
         run = ctx.state.history[idx]
-        prompt = run.get("prompt", "")
-        agent = run.get("agent_id", ctx.state.active_agent)
+        prompt = run.get("content", "")
+        agent = run.get("role", ctx.state.active_agent)
         
         ctx.state.active_agent = agent
         ctx.state.delegation_chain = [agent]
@@ -584,10 +641,6 @@ def cmd_mode(ctx: CommandContext, args: List[str]) -> None:
 
 @registry.register("tools", "List available agent tools, or dynamically create one. Usage: /tools [create <name>]")
 def cmd_tools(ctx: CommandContext, args: List[str]) -> None:
-    import re
-    from pathlib import Path
-    from rich.markup import escape
-    
     if args and args[0].lower() == "create":
         if len(args) < 2:
             ctx.console.print("[yellow]Usage: /tools create <name>[/yellow]")
@@ -639,19 +692,62 @@ def cmd_tools(ctx: CommandContext, args: List[str]) -> None:
         if not code:
             ctx.console.print("[bold red]Error: Generated code is empty.[/bold red]")
             return
-            
+
+        # --- Guard 1: AST syntax check (catches malformed code before it reaches disk) ---
+        try:
+            import ast as _ast
+            _ast.parse(code)
+        except SyntaxError as _se:
+            ctx.console.print(
+                f"[bold red]Generated code has a syntax error and was rejected: {_se}\n"
+                "Re-run /tools create or edit the description to produce valid Python.[/bold red]"
+            )
+            return
+
+        # --- Guard 2: Static ban-list (blocks accidental dangerous stdlib patterns) ---
+        _BANNED_PATTERNS = [
+            "__import__", "importlib.import_module", "subprocess", "os.system",
+            "os.popen", "eval(", "exec(", "compile(", "socket.", "ctypes",
+        ]
+        _code_check = code.lower()
+        _hits = [b for b in _BANNED_PATTERNS if b in _code_check]
+        if _hits:
+            ctx.console.print(
+                f"[bold red]Generated code uses banned patterns ({', '.join(_hits)}) and was rejected.\n"
+                "If you intentionally need these, write the capability file manually.[/bold red]"
+            )
+            return
+
+        # --- Guard 3: Shape contract — must define async execute() per capability API ---
+        try:
+            _tree = _ast.parse(code)
+            _has_execute = any(
+                isinstance(node, _ast.AsyncFunctionDef) and node.name == "execute"
+                for node in _ast.walk(_tree)
+            )
+            if not _has_execute:
+                ctx.console.print(
+                    "[bold red]Generated code does not define 'async def execute()' "
+                    "and was rejected. The Swarm OS capability contract requires this method.[/bold red]"
+                )
+                return
+        except Exception:
+            pass  # Already passed Guard 1; a walk failure is not a security risk
+
         from rich.prompt import Confirm
         ctx.console.print(Panel(escape(code), title=f"Generated Code for {tool_name}.py", border_style="cyan"))
         
-        if ctx.state.mode == "safe":
-            if not Confirm.ask("Do you want to write and register this capability?"):
-                ctx.console.print("[yellow]Tool creation cancelled by user.[/yellow]")
-                return
-                
-        capabilities_dir = Path(__file__).parent.parent / "swarm_os" / "capabilities"
+        # Confirmation is ALWAYS required before writing generated code to disk (auto-loaded on next scan),
+        # regardless of safe/dev mode -- dev mode skips friction on routine actions, not verification
+        # of never-before-run generated code with full execution privileges.
+        if not Confirm.ask("Do you want to save this capability to the sandbox for review?"):
+            ctx.console.print("[yellow]Tool creation cancelled by user.[/yellow]")
+            return
+        capabilities_dir = Path(__file__).parent.parent / "swarm_os" / "sandbox_tools"
         file_path = capabilities_dir / f"{tool_name}.py"
         try:
             capabilities_dir.mkdir(parents=True, exist_ok=True)
+            ctx.console.print("[yellow]Generated code saved to sandbox_tools/. Please manually verify it before moving it into capabilities/.[/yellow]")
             file_path.write_text(code, encoding="utf-8")
             ctx.console.print(f"[green]✓ Successfully wrote capability to [bold]{file_path}[/bold][/green]")
         except Exception as e:
@@ -672,6 +768,56 @@ def cmd_tools(ctx: CommandContext, args: List[str]) -> None:
         table.add_row(cap)
         
     ctx.console.print(Panel(table, title=f"[bold cyan]Tool Capabilities ({d.get('count', 0)})[/bold cyan]", border_style="cyan"))
+
+
+@registry.register("mcp", "Manage registered MCP tool servers. Usage: /mcp list | /mcp prune <server_name>")
+def cmd_mcp(ctx: CommandContext, args: List[str]) -> None:
+    import json
+    from pathlib import Path
+    from rich.table import Table as RichTable
+
+    config_path = Path(__file__).parent.parent / "swarm_config.json"
+    if not config_path.exists():
+        ctx.console.print("[red]swarm_config.json not found.[/red]")
+        return
+
+    try:
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        ctx.console.print(f"[red]Failed to read swarm_config.json: {e}[/red]")
+        return
+
+    servers = config.get("mcp_servers", {})
+
+    if not args or args[0].lower() == "list":
+        t = RichTable(header_style="bold cyan")
+        t.add_column("Server", style="bold white")
+        t.add_column("Command")
+        t.add_column("Args")
+        if not servers:
+            ctx.console.print("[yellow]No MCP servers registered.[/yellow]")
+            return
+        for name, cfg in servers.items():
+            t.add_row(name, cfg.get("command", ""), " ".join(cfg.get("args", [])))
+        ctx.console.print(Panel(t, title="[bold cyan]Registered MCP Servers[/bold cyan]", border_style="cyan"))
+        return
+
+    if args[0].lower() == "prune" and len(args) >= 2:
+        name = args[1]
+        if name not in servers:
+            ctx.console.print(f"[red]Server '{name}' not found. Use /mcp list to see registered servers.[/red]")
+            return
+        from rich.prompt import Confirm
+        if Confirm.ask(f"[bold yellow]Remove MCP server '{name}' from swarm_config.json?[/bold yellow]"):
+            del config["mcp_servers"][name]
+            try:
+                config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
+                ctx.console.print(f"[green]✓ Removed '{name}'. Restart the backend to take effect.[/green]")
+            except Exception as e:
+                ctx.console.print(f"[red]Failed to write config: {e}[/red]")
+        return
+
+    ctx.console.print("[yellow]Usage: /mcp list | /mcp prune <server_name>[/yellow]")
 
 
 @registry.register("plan", "Show plan details from the last run, or draft structured templates. Usage: /plan [create <objective>]")
@@ -742,13 +888,11 @@ def cmd_plan(ctx: CommandContext, args: List[str]) -> None:
             ctx.console.print(f"[bold red]Error generating plan templates: {e}[/bold red]")
         return
 
-    # Try to find the last assistant plan in history
     plan_found = False
     for run in reversed(ctx.state.history):
-        response = run.get("response", "")
-        if "<plan>" in response and "</plan>" in response:
-            import re
-            m = re.search(r"<plan>(.*?)</plan>", response, re.DOTALL)
+        content = run.get("content", "")
+        if run.get("role") == "assistant" and "<plan>" in content and "</plan>" in content:
+            m = re.search(r"<plan>(.*?)</plan>", content, re.DOTALL)
             if m:
                 ctx.console.print(Panel(m.group(1).strip(), title="Last Model Plan", border_style="yellow"))
                 plan_found = True
@@ -1006,7 +1150,7 @@ def cmd_prompt(ctx: CommandContext, args: List[str]) -> None:
 @registry.register("memory", "Query or inject memory into Qdrant store. Usage: /memory query|inject <value>")
 def cmd_memory(ctx: CommandContext, args: List[str]) -> None:
     import json
-    from datetime import datetime
+    from datetime import datetime, timezone
     if len(args) < 2:
         ctx.console.print("[yellow]Usage: /memory query <term> OR /memory inject <text>[/yellow]")
         return
@@ -1018,7 +1162,7 @@ def cmd_memory(ctx: CommandContext, args: List[str]) -> None:
         ctx.console.print(f"[bold cyan]Searching vector memories for: [green]{text}[/green]...[/bold cyan]")
         try:
             import requests
-            emb_resp = requests.post("http://127.0.0.1:11434/api/embeddings", json={"model": "nomic-embed-text", "prompt": text}, timeout=10.0)
+            emb_resp = requests.post("http://127.0.0.1:11434/api/embeddings", json={"model": "nomic-embed-text", "prompt": text[:7000]}, timeout=10.0)
             if emb_resp.status_code == 200:
                 vector = emb_resp.json().get("embedding", [0.0]*768)
             else:
@@ -1054,7 +1198,7 @@ def cmd_memory(ctx: CommandContext, args: List[str]) -> None:
             import requests
             import uuid
             # Generate embedding
-            emb_resp = requests.post("http://127.0.0.1:11434/api/embeddings", json={"model": "nomic-embed-text", "prompt": text}, timeout=10.0)
+            emb_resp = requests.post("http://127.0.0.1:11434/api/embeddings", json={"model": "nomic-embed-text", "prompt": text[:7000]}, timeout=10.0)
             if emb_resp.status_code == 200:
                 vector = emb_resp.json().get("embedding", [0.0]*768)
             else:
@@ -1067,7 +1211,7 @@ def cmd_memory(ctx: CommandContext, args: List[str]) -> None:
                     "vector": vector,
                     "payload": {
                         "text": text,
-                        "created_at": datetime.now(datetime.UTC).isoformat()
+                        "created_at": datetime.now(timezone.utc).isoformat()
                     }
                 }]
             }, timeout=10.0)
@@ -1080,31 +1224,117 @@ def cmd_memory(ctx: CommandContext, args: List[str]) -> None:
             ctx.console.print(f"[bold red]Failed to inject memory: {e}[/bold red]")
 
 
-@registry.register("heal", "Evaluate and trigger self-heal run. Usage: /heal run [force]")
+@registry.register("heal", "Evaluate and trigger self-heal run. Usage: /heal run [force] | /heal stats | /heal lessons [type]")
 def cmd_heal(ctx: CommandContext, args: List[str]) -> None:
-    if not args or args[0].lower() != "run":
-        ctx.console.print("To run healing cycle: `/heal run` or `/heal run force`")
+    from organism_console.core.self_repair_engine import SelfRepairEngine
+    from organism_console.core.repair_engine import load_cures, load_lessons
+
+    if not args:
+        ctx.console.print("[yellow]Usage: /heal run (force)  |  /heal stats  |  /heal lessons (type)[/yellow]")
         return
 
-    ctx.console.print("[bold magenta]Initiating autonomous self-heal...[/bold magenta]")
+    sub = args[0].lower()
+
+    if sub == "stats":
+        engine = SelfRepairEngine()
+        stats = engine.show_stats()
+        table = Table(show_header=False, box=SIMPLE)
+        table.add_row("T0 (Pattern)", str(stats["t0_hits"]))
+        table.add_row("T1 (Constrained)", str(stats["t1_hits"]))
+        table.add_row("T2 (Deep)", str(stats["t2_hits"]))
+        table.add_row("Failed", str(stats["failures"]))
+        table.add_row("Total Repairs", str(stats["total_repairs"]))
+        table.add_row("Tokens Spent", str(stats["tokens_spent"]))
+        cures_count = sum(len(v) for v in load_cures().values())
+        lessons_count = len(load_lessons())
+        table.add_row("Distilled Cures", str(cures_count))
+        table.add_row("Historical Lessons", str(lessons_count))
+        ctx.console.print(Panel(table, title="[bold magenta]Self-Heal Engine Stats[/bold magenta]", border_style="magenta"))
+        return
+
+    if sub == "lessons":
+        ftype = args[1] if len(args) > 1 else None
+        engine = SelfRepairEngine()
+        lessons = engine.show_lessons(ftype)
+        if not lessons:
+            ctx.console.print("[dim]No lessons recorded yet.[/dim]")
+            return
+        t = Table(box=SIMPLE, header_style="bold cyan")
+        t.add_column("Type", style="bold yellow")
+        t.add_column("Tier", justify="right")
+        t.add_column("Fixed", style="green")
+        t.add_column("Error", style="white")
+        t.add_column("Action", style="cyan")
+        for l in reversed(lessons[-15:]):
+            t.add_row(
+                l.get("failure_type", "?"),
+                str(l.get("tier_used", "?")),
+                "[green]✓[/green]" if l.get("success") else "[red]✗[/red]",
+                l.get("error_text", "")[:50],
+                (l.get("repair_action") or "")[:50],
+            )
+        ctx.console.print(Panel(t, title="[bold magenta]Repair History[/bold magenta]", border_style="magenta"))
+        return
+
+    if sub != "run":
+        ctx.console.print("[yellow]Usage: /heal run (force)  |  /heal stats  |  /heal lessons (type)[/yellow]")
+        return
+
+    ctx.console.print("[bold magenta]Initiating autonomous self-heal with tiered repair...[/bold magenta]")
     resp = ctx.call_api("/healing/evaluate", "POST")
     if not resp:
-        ctx.console.print("[red]✗ Heal endpoint unreachable[/red]")
-        return
+        ctx.console.print("[red]✗ Heal endpoint unreachable, falling back to local diagnostics[/red]")
+    else:
+        d = resp.json()
+        color = "green" if d.get("last_heal_success", True) else "red"
+        anomalies = d.get("active_anomalies", 0)
         
-    d = resp.json()
-    color = "green" if d.get("last_heal_success", True) else "red"
-    anomalies = d.get("active_anomalies", 0)
-    
-    table = Table(show_header=False, box=SIMPLE)
-    table.add_row("Readiness", f"{d.get('recovery_readiness', 0)}%")
-    table.add_row("Active Anomalies", str(anomalies))
-    table.add_row("Last Heal", f"[{color}]Success[/{color}]" if d.get("last_heal_success", True) else "[red]Failed[/red]")
-    
-    ctx.console.print(Panel(table, title="[bold magenta]Healing Cycle Evaluation[/bold magenta]", border_style="magenta"))
-    
-    if anomalies > 0 or "force" in map(str.lower, args):
-        ctx.console.print("[bold cyan]Dispatching Internet Self-Healing Goal Loop...[/bold cyan]")
+        table = Table(show_header=False, box=SIMPLE)
+        table.add_row("Readiness", f"{d.get('recovery_readiness', 0)}%")
+        table.add_row("Active Anomalies", str(anomalies))
+        table.add_row("Last Heal", f"[{color}]Success[/{color}]" if d.get("last_heal_success", True) else "[red]Failed[/red]")
+        
+        ctx.console.print(Panel(table, title="[bold magenta]Healing Cycle Evaluation[/bold magenta]", border_style="magenta"))
+        
+        if anomalies == 0 and "force" not in map(str.lower, args):
+            ctx.console.print("[green]No anomalies detected. Use `/heal run force` to run anyway.[/green]")
+            return
+
+    ctx.console.print("[bold cyan]Running tiered self-repair (T0→T1→T2)...[/bold cyan]")
+    engine = SelfRepairEngine(ctx)
+
+    event_file = Path(__file__).parent.parent / "data" / "events" / "events.jsonl"
+    if event_file.exists():
+        import json as _json
+        failures = []
+        with open(event_file, "r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    data = _json.loads(line)
+                    if data.get("event_type") == "tool_result":
+                        res = data.get("payload", {}).get("result", {})
+                        if not res.get("ok", False):
+                            err = res.get("error", "").strip()
+                            if err and len(err) < 500:
+                                failures.append(err)
+                except Exception:
+                    pass
+
+        if failures:
+            from collections import Counter as _Counter
+            top = _Counter(failures).most_common(5)
+            for err, count in top:
+                ctx.console.print(f"\n[bold]Error ({count}x):[/bold] {err[:100]}")
+                engine.diagnose_and_repair(err)
+
+    stats = engine.show_stats()
+    ctx.console.print(f"\n[bold cyan]Heal Summary:[/bold cyan] T0:[green]{stats['t0_hits']}[/green] T1:[green]{stats['t1_hits']}[/green] T2:[green]{stats['t2_hits']}[/green] Failed:[red]{stats['failures']}[/red]")
+
+    cures = load_cures()
+    ctx.console.print(f"[dim]Knowledge base: {sum(len(v) for v in cures.values())} distilled cures[/dim]")
+
+    if stats['failures'] > 0 and (anomalies > 0 or "force" in map(str.lower, args)):
+        ctx.console.print("\n[bold cyan]Dispatching Internet Self-Healing Goal Loop for unresolved issues...[/bold cyan]")
         if ctx.run_goal_loop:
             goal_payload = (
                 "Analyze the system's active anomalies (or recent failures in logs), "
@@ -1169,9 +1399,8 @@ def cmd_prev(ctx: CommandContext, args: List[str]) -> None:
     
     run = ctx.state.history[ctx.state.history_pointer]
     ctx.console.print(Panel(
-        f"[bold yellow]Agent[/bold yellow]: {run.get('agent_id', 'unknown')}\n"
-        f"[bold yellow]Prompt[/bold yellow]: {escape(run.get('prompt', ''))}\n"
-        f"[bold yellow]Response[/bold yellow]: {escape(run.get('response', '')[:500])}...",
+        f"[bold yellow]Role[/bold yellow]: {run.get('role', 'unknown')}\n"
+        f"[bold yellow]Content[/bold yellow]: {escape(run.get('content', '')[:500])}...",
         title=f"[bold cyan]History Explorer (Run #{ctx.state.history_pointer})[/bold cyan]",
         border_style="cyan"
     ))
@@ -1238,9 +1467,8 @@ def cmd_next(ctx: CommandContext, args: List[str]) -> None:
     
     run = ctx.state.history[ctx.state.history_pointer]
     ctx.console.print(Panel(
-        f"[bold yellow]Agent[/bold yellow]: {run.get('agent_id', 'unknown')}\n"
-        f"[bold yellow]Prompt[/bold yellow]: {escape(run.get('prompt', ''))}\n"
-        f"[bold yellow]Response[/bold yellow]: {escape(run.get('response', '')[:500])}...",
+        f"[bold yellow]Role[/bold yellow]: {run.get('role', 'unknown')}\n"
+        f"[bold yellow]Content[/bold yellow]: {escape(run.get('content', '')[:500])}...",
         title=f"[bold cyan]History Explorer (Run #{ctx.state.history_pointer})[/bold cyan]",
         border_style="cyan"
     ))
@@ -1309,7 +1537,6 @@ def resolve_module_path(module_name: str, level: int, current_file: Path, projec
 
 
 def get_forward_dependencies(file_path: Path, project_root: Path, depth: int = 1, max_depth: int = 3, visited: Optional[Set[Path]] = None) -> List[Tuple[Path, int]]:
-    import ast
     if visited is None:
         visited = set()
     if file_path in visited or depth > max_depth:
@@ -1333,7 +1560,6 @@ def get_forward_dependencies(file_path: Path, project_root: Path, depth: int = 1
 
 
 def get_reverse_dependencies(target_file: Path, project_root: Path) -> List[Path]:
-    import ast
     rev_deps = []
     target_resolved = target_file.resolve()
     target_stem = target_file.stem
@@ -1364,7 +1590,6 @@ def get_reverse_dependencies(target_file: Path, project_root: Path) -> List[Path
 
 @registry.register("impact", "Show static AST import dependency impact of a file. Usage: /impact <file_path>")
 def cmd_impact(ctx: CommandContext, args: List[str]) -> None:
-    import ast
     from rich.tree import Tree
     from rich.markup import escape
     
@@ -1419,8 +1644,6 @@ def cmd_impact(ctx: CommandContext, args: List[str]) -> None:
 
 @registry.register("vote", "Query multiple models on a prompt and show consensus. Usage: /vote <prompt>")
 def cmd_vote(ctx: CommandContext, args: List[str]) -> None:
-    import re
-    import concurrent.futures
     from rich.markup import escape
     
     if not args:
@@ -1436,7 +1659,7 @@ def cmd_vote(ctx: CommandContext, args: List[str]) -> None:
             models = resp.json().get("installed_models", [])
             
     if not models:
-        models = ["qwen2.5-coder:7b", "qwen2.5-coder:7b", "qwen2.5-coder:7b"]
+        models = ["qwen-tuned", "qwen-tuned", "qwen-tuned"]
         
     targets = models[:3]
     while len(targets) < 3:
@@ -1544,7 +1767,7 @@ def cmd_agents(ctx: CommandContext, args: List[str]) -> None:
 
 @registry.register("exit", "Exit the terminal session", aliases=["quit", "bye"])
 def cmd_exit(ctx: CommandContext, args: List[str]) -> None:
-    ctx.state.save()
+    ctx.state.save(sync=True)
     ctx.console.print("[bold blue]Zenith Swarm Control Terminal terminated.[/bold blue]")
     import sys
     sys.exit(0)
@@ -1565,7 +1788,6 @@ def cmd_benchmark(ctx: CommandContext, args: List[str]) -> None:
             return
         models = matching_models
     
-    from rich.table import Table
     import time
     from concurrent.futures import ThreadPoolExecutor
     
@@ -1630,7 +1852,7 @@ def cmd_compress(ctx: CommandContext, args: List[str]) -> None:
         f"CONVERSATION HISTORY:\n{conv_text}"
     )
     
-    fast_model = "qwen2.5-coder:7b"
+    fast_model = "qwen-tuned"
     for m in ctx.installed_models:
         if "3b" in m or "7b" in m:
             fast_model = m
@@ -1708,3 +1930,118 @@ def cmd_cloud_off(ctx: CommandContext, args: List[str]) -> None:
     import os
     os.environ["SWARM_ROUTING_MODE"] = "local_only"
     ctx.console.print("[bold green]Routing mode:[/bold green] local_only")
+
+@registry.register("speak", "Toggle speech feedback")
+def cmd_speak(ctx: CommandContext, args: List[str]) -> None:
+    ctx.state.speech_enabled = not getattr(ctx.state, "speech_enabled", False)
+    ctx.state.save()
+    status = "[bold green]ON[/bold green]" if ctx.state.speech_enabled else "[bold red]OFF[/bold red]"
+    ctx.console.print(f"Speech feedback is now {status}.")
+
+@registry.register("search", "Semantic search in Qdrant memory")
+def cmd_search(ctx: CommandContext, args: List[str]) -> None:
+    if not args:
+        ctx.console.print("[yellow]Usage: /search <query>[/yellow]")
+        return
+    query = " ".join(args)
+    ctx.console.print(f"[cyan]Searching memory for: '{query}'...[/cyan]")
+    resp = ctx.call_api(f"/features/search", "POST", payload={"query": query})
+    if resp and resp.status_code == 200:
+        data = resp.json().get("results", [])
+        if not data:
+            ctx.console.print("[dim]No results found.[/dim]")
+            return
+        from rich.table import Table
+        table = Table(title="[bold cyan]Search Results[/bold cyan]")
+        table.add_column("Score", style="green")
+        table.add_column("Content", style="white")
+        for item in data:
+            table.add_row(f"{item.get('score', 0):.2f}", str(item.get('content', ''))[:150] + "...")
+        ctx.console.print(table)
+    else:
+        ctx.console.print("[bold red]Search failed.[/bold red]")
+
+@registry.register("upwork", "Analyze an Upwork job description or URL")
+def cmd_upwork(ctx: CommandContext, args: List[str]) -> None:
+    if not args:
+        ctx.console.print("[yellow]Usage: /upwork <url_or_description>[/yellow]")
+        return
+    job_text = " ".join(args)
+    ctx.console.print("[cyan]Running Upwork Scout analysis...[/cyan]")
+    resp = ctx.call_api("/features/upwork", "POST", payload={"query": job_text}, stream=True)
+    if resp:
+        from rich.live import Live
+        full_response = ""
+        with Live(console=ctx.console, refresh_per_second=10) as live:
+            for line in resp.iter_lines():
+                if line:
+                    chunk = line.decode('utf-8').replace('data: ', '')
+                    if chunk == "[DONE]":
+                        continue
+                    try:
+                        import json
+                        data = json.loads(chunk)
+                        full_response += data.get("content", "")
+                        from rich.panel import Panel
+                        from rich.markdown import Markdown
+                        live.update(Panel(Markdown(full_response), title="[bold cyan]Upwork Scout[/bold cyan]", border_style="cyan"))
+                    except Exception:
+                        pass
+    else:
+        ctx.console.print("[bold red]Failed to run Upwork Scout.[/bold red]")
+
+@registry.register("chat-search", "Ask the AI Librarian a question with web/doc search")
+def cmd_chat_search(ctx: CommandContext, args: List[str]) -> None:
+    if not args:
+        ctx.console.print("[yellow]Usage: /chat-search <query>[/yellow]")
+        return
+    query = " ".join(args)
+    ctx.console.print(f"[cyan]Asking AI Librarian: '{query}'...[/cyan]")
+    resp = ctx.call_api("/features/chat-search", "POST", payload={"query": query}, stream=True)
+    if resp:
+        from rich.live import Live
+        full_response = ""
+        with Live(console=ctx.console, refresh_per_second=10) as live:
+            for line in resp.iter_lines():
+                if line:
+                    chunk = line.decode('utf-8').replace('data: ', '')
+                    if chunk == "[DONE]":
+                        continue
+                    try:
+                        import json
+                        data = json.loads(chunk)
+                        full_response += data.get("content", "")
+                        from rich.panel import Panel
+                        from rich.markdown import Markdown
+                        live.update(Panel(Markdown(full_response), title="[bold cyan]AI Librarian[/bold cyan]", border_style="cyan"))
+                    except Exception:
+                        pass
+    else:
+        ctx.console.print("[bold red]Chat search failed.[/bold red]")
+
+@registry.register("simulation", "Manage Swarm Simulation")
+def cmd_simulation(ctx: CommandContext, args: List[str]) -> None:
+    if not args:
+        ctx.console.print("[yellow]Usage: /simulation [run|status][/yellow]")
+        return
+    action = args[0].lower()
+    if action == "run":
+        ctx.console.print("[cyan]Triggering simulation run...[/cyan]")
+        resp = ctx.call_api("/api/admin/run", "POST", payload={})
+        if resp and resp.status_code == 200:
+            ctx.console.print("[bold green]Simulation triggered successfully.[/bold green]")
+        else:
+            ctx.console.print("[bold red]Failed to trigger simulation.[/bold red]")
+    elif action == "status":
+        ctx.console.print("[cyan]Fetching simulation status...[/cyan]")
+        resp = ctx.call_api("/api/admin/generation", "GET")
+        if resp and resp.status_code == 200:
+            data = resp.json()
+            ctx.console.print(f"[green]Generation: {data.get('generation')}[/green]")
+            genomes = data.get("top_organisms", [])
+            for g in genomes:
+                ctx.console.print(f" - {g.get('id')} ({g.get('model')}): Fitness {g.get('fitness')}")
+        else:
+            ctx.console.print("[bold red]Failed to fetch status.[/bold red]")
+    else:
+        ctx.console.print("[yellow]Unknown action. Use 'run' or 'status'.[/yellow]")

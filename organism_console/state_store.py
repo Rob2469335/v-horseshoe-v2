@@ -12,7 +12,7 @@ class SessionState:
         
         # Default states
         self.active_agent: str = "coordinator"
-        self.active_model: str = "danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS"
+        self.active_model: str = "qwen-tuned"
         self.execution_phase: str = "thinking"
         self.last_tool_call: Optional[Dict[str, Any]] = None
         self.last_error: Optional[str] = None
@@ -23,6 +23,8 @@ class SessionState:
         self.command_history: List[str] = []
         self.focus_file: Optional[str] = None
         self.cloud_enabled: bool = False
+        self.speech_enabled: bool = False
+        self.entry_agent: Optional[str] = None
         self.current_topic: str = "Nexus Initialization"
         self.current_summary: str = "Establishing connection to Zenith Swarm OS..."
         self.strategic_intent: str = ""
@@ -44,14 +46,13 @@ class SessionState:
             with open(self.session_file, "r", encoding="utf-8") as fh:
                 data = json.load(fh)
                 
-            self.active_agent = data.get("active_agent", self.active_agent)
-            # Support fallback to old selected_agent key
-            self.active_agent = data.get("selected_agent", self.active_agent)
+            self.active_agent = data.get("active_agent") or data.get("selected_agent", self.active_agent)
             
             self.active_model = data.get("active_model", self.active_model)
             self.execution_phase = data.get("execution_phase", self.execution_phase)
             self.last_tool_call = data.get("last_tool_call", self.last_tool_call)
             self.last_error = data.get("last_error", self.last_error)
+            self.entry_agent = data.get("entry_agent", self.entry_agent)
             self.delegation_chain = data.get("delegation_chain", self.delegation_chain)
             self.trace_mode = data.get("trace_mode", self.trace_mode)
             self.mode = data.get("mode", self.mode)
@@ -59,6 +60,7 @@ class SessionState:
             self.command_history = data.get("command_history", self.command_history)
             self.focus_file = data.get("focus_file", self.focus_file)
             self.cloud_enabled = data.get("cloud_enabled", self.cloud_enabled)
+            self.speech_enabled = data.get("speech_enabled", self.speech_enabled)
             self.current_topic = data.get("current_topic", self.current_topic)
             self.current_summary = data.get("current_summary", self.current_summary)
             self.strategic_intent = data.get("strategic_intent", self.strategic_intent)
@@ -75,38 +77,43 @@ class SessionState:
             logging.getLogger("zenith_cli").error(f"Failed to load session state: {e}")
 
     def save(self, sync: bool = False) -> None:
+        def _snapshot_and_serialize() -> str:
+            snap = {k: v for k, v in {
+                "active_agent": self.active_agent,
+                "selected_agent": self.active_agent,
+                "active_model": self.active_model,
+                "execution_phase": self.execution_phase,
+                "last_tool_call": self.last_tool_call,
+                "last_error": self.last_error,
+                "delegation_chain": self.delegation_chain,
+                "trace_mode": self.trace_mode,
+                "mode": self.mode,
+                "history": self.history,
+                "command_history": self.command_history[-1000:] if len(self.command_history) > 1000 else list(self.command_history),
+                "focus_file": self.focus_file,
+                "cloud_enabled": self.cloud_enabled,
+                "speech_enabled": self.speech_enabled,
+                "entry_agent": self.entry_agent,
+                "current_topic": self.current_topic,
+                "current_summary": self.current_summary,
+                "strategic_intent": self.strategic_intent,
+                "temp": self.temp,
+                "total_input_tokens": self.total_input_tokens,
+                "total_output_tokens": self.total_output_tokens,
+                "cloud_input_tokens": self.cloud_input_tokens,
+                "cloud_output_tokens": self.cloud_output_tokens,
+                "cloud_token_quota": self.cloud_token_quota,
+                "last_provider": self.last_provider,
+                "history_pointer": self.history_pointer,
+            }.items()}
+            return json.dumps(snap, indent=2)
+        
         def _do_save():
             try:
-                if len(self.command_history) > 1000:
-                    self.command_history = self.command_history[-1000:]
+                payload = _snapshot_and_serialize()
                 self.session_file.parent.mkdir(parents=True, exist_ok=True)
                 with open(self.session_file, "w", encoding="utf-8") as fh:
-                    json.dump({
-                        "active_agent": self.active_agent,
-                        "selected_agent": self.active_agent,  # keep for compatibility
-                        "active_model": self.active_model,
-                        "execution_phase": self.execution_phase,
-                        "last_tool_call": self.last_tool_call,
-                        "last_error": self.last_error,
-                        "delegation_chain": self.delegation_chain,
-                        "trace_mode": self.trace_mode,
-                        "mode": self.mode,
-                        "history": self.history,
-                        "command_history": self.command_history,
-                        "focus_file": self.focus_file,
-                        "cloud_enabled": self.cloud_enabled,
-                        "current_topic": self.current_topic,
-                        "current_summary": self.current_summary,
-                        "strategic_intent": self.strategic_intent,
-                        "temp": self.temp,
-                        "total_input_tokens": self.total_input_tokens,
-                        "total_output_tokens": self.total_output_tokens,
-                        "cloud_input_tokens": self.cloud_input_tokens,
-                        "cloud_output_tokens": self.cloud_output_tokens,
-                        "cloud_token_quota": self.cloud_token_quota,
-                        "last_provider": self.last_provider,
-                        "history_pointer": self.history_pointer,
-                    }, fh, indent=2, default=str)
+                    fh.write(payload)
             except Exception as e:
                 import logging
                 logging.getLogger("zenith_cli").error(f"Failed to save session state: {e}")

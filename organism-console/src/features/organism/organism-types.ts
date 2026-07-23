@@ -76,3 +76,26 @@ export type KnowledgePanelDisplay = {
   accent: string
 }
 
+export type RouterStatsResponse = {
+  status: string
+  total_routed: number
+  success_rate: number
+  active_model: string
+  model_distribution: Record<string, number>
+  status_counts: Record<string, number>
+  latency_ms: { avg: number; max: number; min: number }
+  error?: string
+}
+
+export type CriticStatsResponse = {
+  status: string
+  accept_rate: number
+  accepted: number
+  rejected: number
+  partial: number
+  total_evaluated: number
+  trace_count: number
+  verdict: string
+  error?: string
+}
+

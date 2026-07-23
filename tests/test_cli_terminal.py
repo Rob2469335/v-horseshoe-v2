@@ -77,7 +77,7 @@ def test_command_registry_parsing(tmp_path: Path):
     
     # 5. History and Replay commands
     state.history = [
-        {"agent_id": "coordinator", "prompt": "explain quantum computing", "response": "quantum computing uses qubits..."}
+        {"role": "coordinator", "content": "explain quantum computing", "response": "quantum computing uses qubits..."}
     ]
     state.save(sync=True)
     
@@ -144,7 +144,7 @@ def test_tokens_diff_and_export_commands(tmp_path: Path):
     state.total_input_tokens = 500
     state.total_output_tokens = 1200
     state.history = [
-        {"agent_id": "coordinator", "prompt": "hello", "response": "world", "timestamp": 123456789.0}
+        {"role": "coordinator", "content": "hello", "response": "world", "timestamp": 123456789.0}
     ]
     state.save(sync=True)
     
@@ -169,7 +169,7 @@ def test_tokens_diff_and_export_commands(tmp_path: Path):
     registry.handle_line("/trace export", ctx)
     
     # Find exported file
-    log_files = list(Path("swarm_os/logs").glob("trace_export_*.md"))
+    log_files = list((Path(__file__).parent.parent / "swarm_os" / "logs").glob("trace_export_*.md"))
     assert len(log_files) >= 1
     # Clean up the created test file
     for f in log_files:
@@ -308,6 +308,7 @@ class TestDummyHandler:
     import rich.prompt
     original_ask = rich.prompt.Prompt.ask
     rich.prompt.Prompt.ask = lambda *a, **k: "A dummy test tool"
+    rich.prompt.Confirm.ask = lambda *a, **k: True
     
     try:
         registry.handle_line("/tools create test_dummy", ctx)
@@ -324,10 +325,14 @@ class TestDummyHandler:
         handler = router.get_handler("test_dummy")
         assert handler.__class__.__name__ == "TestDummyHandler"
         
+    finally:
         # Clean up
         import os
-        os.remove(target_file)
-    finally:
+        if 'target_file' in locals() and target_file.exists():
+            try:
+                os.remove(target_file)
+            except Exception:
+                pass
         rich.prompt.Prompt.ask = original_ask
 
 

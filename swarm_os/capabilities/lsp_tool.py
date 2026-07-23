@@ -98,6 +98,7 @@ class BasicLSPClient:
                 self.process.terminate()
             except:
                 pass
+            await self.process.wait()
 
 
 class LSPToolHandler:

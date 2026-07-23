@@ -5,14 +5,15 @@ from typing import Tuple
 OLLAMA_URL = "http://127.0.0.1:11434/api/chat"
 
 AGENT_MODELS: dict[str, Tuple[str, str]] = {
-    "coordinator": ("danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS", "ollama"),
-    "planner": ("danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS", "ollama"),
-    "researcher": ("danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS", "ollama"),
-    "executor": ("danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS", "ollama"),
-    "coder": ("danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS", "ollama"),
-    "tool-runner": ("danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS", "ollama"),
-    "reviewer": ("danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS", "ollama"),
-    "debugger": ("danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS", "ollama"),
+    # System Agents
+    "coordinator": ("qwen3-4b-tuned", "ollama"),
+    "planner": ("qwen-tuned", "ollama"),
+    "researcher": ("qwen-tuned", "ollama"),
+    "executor": ("qwen3-4b-tuned", "ollama"),
+    "coder": ("qwen-tuned", "ollama"),
+    "tool-runner": ("qwen3-4b-tuned", "ollama"),
+    "reviewer": ("qwen-tuned", "ollama"),  # External 30B reviewer: intentionally stronger than qwen-tuned to catch what the author missed
+    "debugger": ("qwen-tuned", "ollama"),
 }
 
 
@@ -45,7 +46,7 @@ def update_model_mapping(new_mapping: dict[str, str]):
     save_overrides()
 
 def get_model(agent_id: str) -> Tuple[str, str]:
-    return AGENT_MODELS.get(agent_id, ("qwen3:8b-q4_K_M", "ollama"))
+    return AGENT_MODELS.get(agent_id, ("qwen-tuned", "ollama"))
 
 
 

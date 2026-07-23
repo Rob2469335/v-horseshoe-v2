@@ -52,13 +52,17 @@ def init_memory_qdrant(shard: str = "general") -> bool:
                 return True
             return False
             
-        _verified_shards.add(collection)
-        return True
+        if resp.status_code == 200:
+            _verified_shards.add(collection)
+            return True
+        return False
     except Exception as e:
         print(f"Failed to connect to Qdrant memory core for {collection}: {e}")
         return False
 
 def get_embedding(text: str) -> Optional[List[float]]:
+    # Truncate to ~1800 tokens to prevent Ollama batch size limits (2048 tokens max)
+    text = text[:7000]
     try:
         resp = requests.post(f"{OLLAMA_URL}/api/embeddings", json={
             "model": EMBEDDING_MODEL,
@@ -122,8 +126,61 @@ def rerank_memories(query: str, memories: List[Dict[str, Any]]) -> List[Dict[str
     reranked.sort(key=lambda x: x["score"], reverse=True)
     return reranked[:3]  # Keep top 3
 
+import time
+import networkx as nx
+import re
+
+_kg_file = ".data/knowledge_graph.json"
+_kg = None
+
+def _get_kg():
+    global _kg
+    if _kg is None:
+        _kg = nx.DiGraph()
+        if os.path.exists(_kg_file):
+            try:
+                import json
+                with open(_kg_file, "r") as f:
+                    data = json.load(f)
+                    _kg = nx.node_link_graph(data)
+            except Exception as e:
+                print(f"Error loading Knowledge Graph: {e}")
+    return _kg
+
+def _save_kg():
+    if _kg is not None:
+        os.makedirs(os.path.dirname(_kg_file), exist_ok=True)
+        try:
+            import json
+            data = nx.node_link_data(_kg)
+            with open(_kg_file, "w") as f:
+                json.dump(data, f)
+        except Exception as e:
+            print(f"Error saving Knowledge Graph: {e}")
+
+def _extract_relations(fact: str):
+    """Simple heuristic relation extraction for the Knowledge Graph."""
+    # Look for patterns like "X is a Y", "X requires Y", "X depends on Y"
+    fact_lower = fact.lower()
+    relations = []
+    
+    # Very basic regex heuristic for common agentic relations
+    deps = re.findall(r'(\w+)\s+(?:depends on|requires|uses|calls)\s+(\w+)', fact_lower)
+    for subj, obj in deps:
+        relations.append((subj, "depends_on", obj))
+        
+    is_a = re.findall(r'(\w+)\s+(?:is a|is an)\s+(\w+)', fact_lower)
+    for subj, obj in is_a:
+        relations.append((subj, "is_a", obj))
+        
+    has_bug = re.findall(r'(\w+)\s+(?:has a bug|is broken|fails)', fact_lower)
+    for subj in has_bug:
+        relations.append((subj, "status", "broken"))
+        
+    return relations
+
 def remember_fact(fact: str, category: str = "general") -> bool:
-    """Agent tool to store a memory in a specific shard."""
+    """Agent tool to store a memory in a specific shard with temporal filtering and graph linkage."""
     if not init_memory_qdrant(category):
         return False
         
@@ -133,6 +190,9 @@ def remember_fact(fact: str, category: str = "general") -> bool:
         
     collection = _get_shard_name(category)
     point_id = str(uuid.uuid4())
+    current_time = time.time()
+    
+    # 1. Store in Qdrant (Vector DB) with Timestamp
     try:
         resp = requests.put(f"{QDRANT_URL}/collections/{collection}/points", json={
             "points": [{
@@ -140,13 +200,32 @@ def remember_fact(fact: str, category: str = "general") -> bool:
                 "vector": vector,
                 "payload": {
                     "fact": fact,
-                    "category": category
+                    "category": category,
+                    "timestamp": current_time
                 }
             }]
         }, timeout=10.0)
-        return resp.status_code in (200, 201)
+        success = resp.status_code in (200, 201)
     except Exception:
-        return False
+        success = False
+
+    # 2. Extract and Store in Knowledge Graph (Hybrid Stack)
+    if success:
+        kg = _get_kg()
+        relations = _extract_relations(fact)
+        for subj, pred, obj in relations:
+            kg.add_node(subj)
+            kg.add_node(obj)
+            kg.add_edge(subj, obj, relation=pred, timestamp=current_time)
+            
+        # Also just track keywords as basic nodes
+        keywords = [w for w in fact.split() if len(w) > 5]
+        for kw in keywords[:3]:
+            kg.add_node(kw.lower(), timestamp=current_time)
+            
+        _save_kg()
+        
+    return success
 
 def _moe_route_shards(query: str) -> List[str]:
     """ShardMemo: Route query to specific memory shards using MoE keyword gating."""
@@ -166,14 +245,16 @@ def _moe_route_shards(query: str) -> List[str]:
     return list(shards)
 
 def get_relevant_memories(query: str) -> str:
-    """Called before stream_prompt to inject memory context using MoE routing."""
+    """Called before stream_prompt to inject memory context using Hybrid MoE routing (Vector + KG)."""
     vector = get_embedding(query)
     if not vector:
         return ""
         
     active_shards = _moe_route_shards(query)
     all_results = []
+    current_time = time.time()
     
+    # --- 1. Vector DB Retrieval (with Temporal Decay) ---
     for shard in active_shards:
         if not init_memory_qdrant(shard):
             continue
@@ -189,21 +270,136 @@ def get_relevant_memories(query: str) -> str:
             }, timeout=5.0)
             
             if resp.status_code == 200:
-                all_results.extend(resp.json().get("result", []))
+                for hit in resp.json().get("result", []):
+                    payload = hit.get("payload", {})
+                    # Temporal Filtering: decay score by age
+                    # e.g., memory decays by 10% every 24 hours
+                    age_seconds = current_time - payload.get("timestamp", current_time)
+                    age_days = age_seconds / 86400.0
+                    decay_factor = max(0.1, 1.0 - (age_days * 0.1))
+                    
+                    # Store temporally adjusted score
+                    hit["score"] = hit.get("score", 0.0) * decay_factor
+                    all_results.append(hit)
         except Exception:
             pass
 
-    if not all_results:
+    # --- 2. Knowledge Graph Retrieval ---
+    kg_context = []
+    kg = _get_kg()
+    if kg:
+        query_words = [w.lower() for w in query.split() if len(w) > 3]
+        found_nodes = [n for n in kg.nodes() if isinstance(n, str) and any(w in n.lower() for w in query_words)]
+        
+        for node in found_nodes[:3]:
+            # Get 1-hop neighborhood
+            for neighbor in kg.successors(node):
+                edge_data = kg.get_edge_data(node, neighbor)
+                kg_context.append(f"{node} --[{edge_data.get('relation', 'related_to')}]--> {neighbor}")
+
+    if not all_results and not kg_context:
         return ""
         
     # Stage 2: Rerank across all retrieved shards
     best_memories = rerank_memories(query, all_results)
     
-    if not best_memories:
-        return ""
-        
-    output = ["[EPISODIC MEMORY (MoE Shard-Routed)]"]
-    for m in best_memories:
-        output.append(f"- {m['fact']} (Shard: {m['category']})")
+    output = ["[EPISODIC MEMORY (Hybrid Stack)]"]
+    if best_memories:
+        output.append("Semantic Memories:")
+        for m in best_memories:
+            output.append(f"- {m['fact']} (Shard: {m['category']})")
+            
+    if kg_context:
+        output.append("Relational Knowledge Graph:")
+        for rel in set(kg_context):
+            output.append(f"- {rel}")
         
     return "\n".join(output)
+
+
+def dump_all_failures(limit: int = 200) -> str:
+    """Scroll ALL memories from the self_reflection shard without semantic filtering.
+    
+    This is used by the self-healing orchestrator to do full root-cause analysis.
+    Unlike get_relevant_memories() which returns top-3 reranked hits, this returns
+    a complete unfiltered dump of every failure the system has recorded, sorted
+    by timestamp (newest first). The 35B model can then synthesize patterns.
+    """
+    collection = _get_shard_name("self_reflection")
+    
+    # First check the collection exists
+    try:
+        resp = requests.get(f"{QDRANT_URL}/collections/{collection}", timeout=5.0)
+        if resp.status_code != 200:
+            return "[No failure history found — self_reflection shard does not exist yet]"
+        count = resp.json().get("result", {}).get("points_count", 0)
+    except Exception as e:
+        return f"[Failed to connect to Qdrant: {e}]"
+    
+    if count == 0:
+        return "[Self-reflection shard is empty — no failures recorded yet]"
+    
+    # Scroll all points (no vector needed — payload only)
+    all_facts = []
+    offset = None
+    fetched = 0
+    
+    while fetched < limit:
+        body = {"limit": min(100, limit - fetched), "with_payload": True, "with_vector": False}
+        if offset:
+            body["offset"] = offset
+        try:
+            resp = requests.post(f"{QDRANT_URL}/collections/{collection}/points/scroll", json=body, timeout=10.0)
+            if resp.status_code != 200:
+                break
+            data = resp.json().get("result", {})
+            points = data.get("points", [])
+            if not points:
+                break
+            for pt in points:
+                payload = pt.get("payload", {})
+                fact = payload.get("fact", "")
+                ts = payload.get("timestamp", 0)
+                if fact:
+                    all_facts.append((ts, fact))
+            fetched += len(points)
+            offset = data.get("next_page_offset")
+            if not offset:
+                break
+        except Exception as e:
+            break
+    
+    if not all_facts:
+        return "[No failure records retrievable]"
+    
+    # Sort newest first
+    all_facts.sort(key=lambda x: x[0], reverse=True)
+    
+    lines = [f"[FULL FAILURE HISTORY — {len(all_facts)} records from self_reflection shard (newest first)]"]
+    for i, (ts, fact) in enumerate(all_facts, 1):
+        lines.append(f"{i}. {fact}")
+    
+    return "\n".join(lines)
+
+
+def get_failure_digest() -> dict:
+    """Return a structured digest of failure statistics from all memory shards.
+    
+    Returns counts per shard and the most recent failures, for dashboard/reporting.
+    """
+    shards = ["self_reflection", "system_rules", "general", "errors", "code", "architecture"]
+    digest = {"total": 0, "shards": {}}
+    
+    for shard in shards:
+        collection = _get_shard_name(shard)
+        try:
+            resp = requests.get(f"{QDRANT_URL}/collections/{collection}", timeout=3.0)
+            if resp.status_code == 200:
+                count = resp.json().get("result", {}).get("points_count", 0)
+                digest["shards"][shard] = count
+                digest["total"] += count
+        except Exception:
+            digest["shards"][shard] = 0
+    
+    return digest
+

@@ -1,6 +1,9 @@
 import time
+import logging
 from dataclasses import dataclass, asdict, field
 from typing import List, Dict, Any, Optional
+
+log = logging.getLogger(__name__)
 
 from swarm_os.core.event_bus import event_bus
 from swarm_os.core.patch_manager import PatchManager
@@ -79,8 +82,8 @@ class Orchestrator:
             if feature_branch:
                 try:
                     self.patch_manager.rollback(original_branch, feature_branch)
-                except:
-                    pass
+                except Exception as rollback_err:
+                    log.error(f"CRITICAL: Rollback failed, repo in dirty state! Error: {rollback_err}")
             
             res = asdict(patch)
             self._traces.append(res)

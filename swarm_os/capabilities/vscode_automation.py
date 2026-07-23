@@ -126,12 +126,17 @@ class VSCodeAutomationHandler:
                 target = self._resolve_path(args[0])
                 if not target.exists():
                     raise FileNotFoundError(f"Path not found: {args[0]}")
-                import subprocess
-                result = subprocess.run(["python", "-m", "flake8", str(target)], capture_output=True, text=True)
-                if result.returncode == 0:
+                import asyncio
+                proc = await asyncio.create_subprocess_exec(
+                    "python", "-m", "flake8", str(target),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+                stdout_b, stderr_b = await proc.communicate()
+                if proc.returncode == 0:
                     output = "No linting errors found. Code looks good!"
                 else:
-                    output = result.stdout + "\n" + result.stderr
+                    output = stdout_b.decode("utf-8") + "\n" + stderr_b.decode("utf-8")
 
             elif command == "find_symbol":
                 if not args:

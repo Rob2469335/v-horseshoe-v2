@@ -11,15 +11,18 @@ async def event_generator():
     Subscribes to the live EventBus and yields events for SSE.
     """
     subscriber = event_bus.subscribe()
-    while True:
-        try:
-            # Use anext() directly to wait for the next event with a timeout
-            event = await asyncio.wait_for(anext(subscriber), timeout=15.0)
-            yield f"data: {json.dumps(event)}\n\n"
-        except asyncio.TimeoutError:
-            yield f"data: {json.dumps({'type': 'ping'})}\n\n"
-        except StopAsyncIteration:
-            break
+    try:
+        while True:
+            try:
+                # Use anext() directly to wait for the next event with a timeout
+                event = await asyncio.wait_for(anext(subscriber), timeout=15.0)
+                yield f"data: {json.dumps(event, default=str)}\n\n"
+            except asyncio.TimeoutError:
+                yield f"data: {json.dumps({'type': 'ping'})}\n\n"
+            except StopAsyncIteration:
+                break
+    finally:
+        await subscriber.aclose()
 
 @router.get("/swarm/v10/stream")
 async def swarm_v10_stream():

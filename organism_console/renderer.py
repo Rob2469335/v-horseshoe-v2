@@ -134,3 +134,18 @@ def render_dashboard(
         border_style="blue",
         expand=False
     )
+
+def render_tool_execution(tool_name: str, arguments: Dict[str, Any]) -> Panel:
+    """Formats tool execution into a structured table with JSON syntax highlighting."""
+    import json
+    from rich.json import JSON
+    table = Table(show_header=True, header_style="bold #ff00ea", expand=True)
+    table.add_column("Tool Name", style="bold #00f0ff")
+    table.add_column("Arguments")
+    # BUG FIX: Sanitize arguments through json round-trip with default=str before rendering.
+    # JSON.from_data() raises TypeError if arguments contains non-serializable types
+    # like bytes, datetime, Path objects, or custom classes returned by tool calls.
+    safe_args = json.loads(json.dumps(arguments, default=str))
+    table.add_row(tool_name, JSON.from_data(safe_args))
+    return Panel(table, title="[bold #ff00ea]🛠️ OS TOOL EXECUTION[/bold #ff00ea]", border_style="bold #00f0ff")
+

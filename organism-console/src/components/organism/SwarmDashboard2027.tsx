@@ -319,7 +319,7 @@ const MetricsWall = ({ backendUrl }: { backendUrl: string }) => {
         setMetrics(m => ({ ...m, activeModels: data.installed_model_count || 0, eventsProcessed: data.event_count || 0 }));
         updateHistory('activeModels', data.installed_model_count || 0);
         updateHistory('eventsProcessed', data.event_count || 0);
-      } catch (e) {}
+      } catch (e) { console.error("Error fetching status:", e); }
     };
 
     const fetchTools = async () => {
@@ -328,7 +328,7 @@ const MetricsWall = ({ backendUrl }: { backendUrl: string }) => {
         const data = await res.json();
         setMetrics(m => ({ ...m, cacheHits: data.cache_size || 0 }));
         updateHistory('cacheHits', data.cache_size || 0);
-      } catch(e) {}
+      } catch(e) { console.error("Error fetching tools:", e); }
     };
 
     const fetchTimeline = async () => {
@@ -338,7 +338,7 @@ const MetricsWall = ({ backendUrl }: { backendUrl: string }) => {
         const success = data.points?.[data.points.length-1]?.success_count || 0;
         setMetrics(m => ({ ...m, successRate: Math.min(100, success * 10) }));
         updateHistory('successRate', Math.min(100, success * 10));
-      } catch(e) {}
+      } catch(e) { console.error("Error fetching timeline:", e); }
     };
 
     const fetchHealing = async () => {
@@ -348,7 +348,7 @@ const MetricsWall = ({ backendUrl }: { backendUrl: string }) => {
           setMetrics(m => ({ ...m, healingReadiness: 100 }));
           updateHistory('healingReadiness', 100);
         }
-      } catch(e) {}
+      } catch(e) { console.error("Error fetching healing:", e); }
     };
 
     fetchStatus(); fetchTools(); fetchTimeline(); fetchHealing();
@@ -418,7 +418,7 @@ const AgentConsole = ({ backendUrl, latestHandoff }: { backendUrl: string, lates
         const { done } = await reader.read();
         if (done) break;
       }
-    } catch (err) {}
+    } catch (err) { console.error("Error in agent console stream:", err); }
   };
 
   return (
@@ -468,7 +468,7 @@ export const SwarmDashboard2027 = ({ backendUrl }: { backendUrl: string }) => {
         if (data.type === 'agent_handoff' || data.type === 'model_selected' || data.type === 'tool_result' || data.type === 'final') {
           setLatestHandoff(data);
         }
-      } catch (err) {}
+      } catch (err) { console.error("Error parsing SSE message:", err); }
     };
     
     return () => source.close();

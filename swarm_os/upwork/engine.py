@@ -1,12 +1,12 @@
 import json
-import requests
+import httpx
 from datetime import datetime
 from swarm_os.upwork.learning_engine_qdrant import search_similar
 
 OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
 MODEL = "qwen3:14b"
 
-def run_upwork_task(task_type: str, user_input: str):
+async def run_upwork_task(task_type: str, user_input: str):
     """
     Decision engine layer:
     - retrieves memory from Qdrant
@@ -26,7 +26,8 @@ def run_upwork_task(task_type: str, user_input: str):
                 "The freelancer's name is Robert. Keep it conversational, tailored, and high-impact. Do not use placeholders.\n\n"
                 "Return a JSON object with a single key 'content' containing the generated text."
             )
-            r = requests.post(OLLAMA_URL, json={"model": MODEL, "prompt": prompt, "format": "json", "stream": False}, timeout=30.0)
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                r = await client.post(OLLAMA_URL, json={"model": MODEL, "prompt": prompt, "format": "json", "stream": False})
             data = r.json()
             try:
                 response_json = json.loads(data.get("response", "{}"))
@@ -50,7 +51,8 @@ def run_upwork_task(task_type: str, user_input: str):
                 "3. Analysis of the complexity, potential roadblocks, and estimation reasoning.\n\n"
                 "Return a JSON object with keys 'hours', 'bid', and 'analysis'."
             )
-            r = requests.post(OLLAMA_URL, json={"model": MODEL, "prompt": prompt, "format": "json", "stream": False}, timeout=30.0)
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                r = await client.post(OLLAMA_URL, json={"model": MODEL, "prompt": prompt, "format": "json", "stream": False})
             data = r.json()
             try:
                 response_json = json.loads(data.get("response", "{}"))
@@ -75,7 +77,8 @@ def run_upwork_task(task_type: str, user_input: str):
                 "- 'items': a list of strings representing milestones.\n"
                 "- 'estimate': a string representing the duration."
             )
-            r = requests.post(OLLAMA_URL, json={"model": MODEL, "prompt": prompt, "format": "json", "stream": False}, timeout=30.0)
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                r = await client.post(OLLAMA_URL, json={"model": MODEL, "prompt": prompt, "format": "json", "stream": False})
             data = r.json()
             try:
                 response_json = json.loads(data.get("response", "{}"))
@@ -96,7 +99,8 @@ def run_upwork_task(task_type: str, user_input: str):
                 "- 'summary': a text summary listing the deliverables and pricing.\n"
                 "- 'total': the total estimated price in USD (e.g., '$750')."
             )
-            r = requests.post(OLLAMA_URL, json={"model": MODEL, "prompt": prompt, "format": "json", "stream": False}, timeout=30.0)
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                r = await client.post(OLLAMA_URL, json={"model": MODEL, "prompt": prompt, "format": "json", "stream": False})
             data = r.json()
             try:
                 response_json = json.loads(data.get("response", "{}"))
@@ -116,7 +120,8 @@ def run_upwork_task(task_type: str, user_input: str):
                 "Use the structure of: Problem solved, System built, and Result delivered for each bullet point.\n\n"
                 "Return a JSON object with a key 'bullets' containing a list of strings."
             )
-            r = requests.post(OLLAMA_URL, json={"model": MODEL, "prompt": prompt, "format": "json", "stream": False}, timeout=30.0)
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                r = await client.post(OLLAMA_URL, json={"model": MODEL, "prompt": prompt, "format": "json", "stream": False})
             data = r.json()
             try:
                 response_json = json.loads(data.get("response", "{}"))
@@ -135,7 +140,8 @@ def run_upwork_task(task_type: str, user_input: str):
                 "might not possess or might need extra preparation for.\n\n"
                 "Return a JSON object with a key 'missing' containing a list of strings representing these skills."
             )
-            r = requests.post(OLLAMA_URL, json={"model": MODEL, "prompt": prompt, "format": "json", "stream": False}, timeout=30.0)
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                r = await client.post(OLLAMA_URL, json={"model": MODEL, "prompt": prompt, "format": "json", "stream": False})
             data = r.json()
             try:
                 response_json = json.loads(data.get("response", "{}"))

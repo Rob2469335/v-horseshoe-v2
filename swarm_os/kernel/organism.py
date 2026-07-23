@@ -78,20 +78,33 @@ class Organism:
         action = raw_action or {}
         self._action_count += 1
 
+        tools_used = _read_field(action, "tools_used", [])
+        error = _read_field(action, "error")
+
         self.memory.write(
             {
                 "event": "action",
                 "action_count": self._action_count,
                 "task": env_state.get("task", "")[:120],
                 "model": _read_field(action, "model", genome_data.get("model", "")),
-                "tools_used": _read_field(action, "tools_used", []),
+                "tools_used": tools_used,
                 "elapsed": _read_field(action, "elapsed", 0),
                 "total_tokens": _read_field(action, "total_tokens", 0),
                 "content_preview": (_read_field(action, "content", "") or "")[:200],
-                "error": _read_field(action, "error"),
+                "error": error,
                 "avg_fitness": round(self.genome.average_fitness, 4),
             }
         )
+        
+        # Digital Pheromones: Update tool weights based on execution success
+        try:
+            from swarm_os.services.tool_registry import get_tool_registry
+            registry = get_tool_registry()
+            success = not bool(error)
+            for tool in tools_used:
+                registry.update_tool_pheromone(tool, success=success)
+        except Exception as e:
+            log.warning("Pheromone update failed: %s", e)
 
         if isinstance(action, dict):
             return action

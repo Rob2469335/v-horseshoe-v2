@@ -20,25 +20,25 @@ class ModelRouter:
         self.tiers = {
             "fast": ModelTier(
                 name="fast",
-                models=["danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS"],
+                models=["qwen-tuned"],
                 capability="fast",
                 is_cloud=False
             ),
             "balanced": ModelTier(
                 name="balanced", 
-                models=["danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS"],
+                models=["qwen-tuned"],
                 capability="balanced",
                 is_cloud=False
             ),
             "smart": ModelTier(
                 name="smart",
-                models=["danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS"],
+                models=["qwen-tuned"],
                 capability="smart",
                 is_cloud=False
             ),
             "expert": ModelTier(
                 name="expert",
-                models=["danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS"],
+                models=["qwen-tuned"],
                 capability="expert",
                 is_cloud=False
             ),

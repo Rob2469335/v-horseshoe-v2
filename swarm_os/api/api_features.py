@@ -36,19 +36,16 @@ async def semantic_search(req: QueryRequest):
             status_code=503,
             detail="Vector search not yet configured. lib/vector modules are empty stubs."
         )
-    except Exception as e:
-        log.exception("semantic_search failed")
-        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/chat-search")
 async def chat_search_status():
-    return {"status": "stub", "message": "chat_search handler not yet implemented"}
+    return {"status": "available", "message": "chat_search handler is available"}
 
 @router.post("/chat-search")
 async def chat_search_stream(req: QueryRequest, request: Request):
     import json
     from fastapi.responses import StreamingResponse
-    from .routes import get_orchestrator
+    from .dependencies import get_orchestrator
     from ..capabilities.chat_search import ChatSearchHandler
     from ..capabilities.models import ChatSearchRequest
     
@@ -98,7 +95,7 @@ async def upwork_status():
 async def upwork_stream(req: QueryRequest, request: Request):
     import json
     from fastapi.responses import StreamingResponse
-    from .routes import get_orchestrator
+    from .dependencies import get_orchestrator
     from ..capabilities.upwork_analyzer import UpworkAnalyzerHandler
     from ..capabilities.models import UpworkAnalysisRequest
     
@@ -148,6 +145,10 @@ async def upwork_stream(req: QueryRequest, request: Request):
 @router.get("/vscode")
 async def vscode_status():
     return {"status": "stub", "message": "vscode_automation handler not yet implemented"}
+
+@router.post("/vscode")
+async def vscode_stream(req: QueryRequest, request: Request):
+    return {"status": "stub", "message": "POST /vscode not implemented yet"}
 
 # ---------------------------------------------------------------------------
 # Module-level variables (can be monkeypatched by tests)
@@ -416,6 +417,43 @@ def execute_approved_request(request: Request, request_id: str):
                 success=verified
             )
     return res
+
+@router.get("/mutation-approvals")
+def list_pending_mutations():
+    from pathlib import Path
+    import json
+    pending_root = Path(__file__).parent.parent.parent / ".data" / "pending_mutations"
+    if not pending_root.exists():
+        return {"status": "ok", "mutations": []}
+    mutations = []
+    for meta_file in pending_root.glob("*/metadata.json"):
+        try:
+            mutations.append(json.loads(meta_file.read_text(encoding="utf-8")))
+        except Exception:
+            continue
+    return {"status": "ok", "mutations": mutations}
+
+@router.post("/mutation-approvals/{mutation_id}/approve")
+def approve_mutation(mutation_id: str):
+    from pathlib import Path
+    from swarm_os.services.genetic_mutation_loop import approve_pending_mutation
+    pending_root = Path(__file__).parent.parent.parent / ".data" / "pending_mutations"
+    meta_path = pending_root / mutation_id / "metadata.json"
+    if not meta_path.exists():
+        return {"status": "error", "error": f"Mutation {mutation_id} not found"}
+    result = approve_pending_mutation(str(meta_path))
+    return {"status": "ok", "result": result}
+
+@router.post("/mutation-approvals/{mutation_id}/reject")
+def reject_mutation(mutation_id: str):
+    from pathlib import Path
+    import shutil
+    pending_root = Path(__file__).parent.parent.parent / ".data" / "pending_mutations"
+    target_dir = pending_root / mutation_id
+    if not target_dir.exists():
+        return {"status": "error", "error": f"Mutation {mutation_id} not found"}
+    shutil.rmtree(target_dir)
+    return {"status": "ok", "rejected": mutation_id}
 
 @router.get("/healing-policy")
 def get_healing_policy(request: Request):

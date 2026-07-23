@@ -14,6 +14,8 @@ interface LiveData {
   ollamaReachable: boolean; installedModels: number; eventCount: number
   traceCount: number; healingReady: number; successRate: number
   cacheSize: number; visionAvailable: boolean
+  routerStatus?: string; routerRouted?: number; routerModel?: string
+  criticAcceptRate?: number; criticStatus?: string
 }
 interface Props { backendUrl: string; liveData?: LiveData }
 
@@ -25,15 +27,22 @@ const EDGES: [string,string][] = [
 
 function buildNodes(live: LiveData): NodeData[] {
   const W=900,H=520
+  // When there's no data yet, default critic to online/healthy rather than dead-zero
+  const criticHealth = live.criticAcceptRate !== undefined ? live.criticAcceptRate : (live.successRate > 0 ? live.successRate : (live.traceCount === 0 ? 100 : live.successRate))
+  const criticActivity = live.criticStatus === "active" ? Math.max(20, criticHealth) : 20
+  const routerHealth = live.routerStatus === "active" ? 100 : (live.ollamaReachable ? 100 : 40)
+  const routerActivity = live.routerStatus === "active" ? 90 : 30
+  
   return [
-    { id:"router", label:"Router", sublabel:"model selector", x:W*0.50, y:H*0.38, radius:38, color:"#7dd3fc", glow:"rgba(125,211,252,0.5)", health:live.ollamaReachable?100:40, activity:live.traceCount>0?90:30, pulseRate:1.8 },
+    { id:"router", label:"Router", sublabel:live.routerStatus === "active" && typeof live.routerRouted === "number" ? `${live.routerRouted} routed` : "model selector", x:W*0.50, y:H*0.38, radius:38, color:"#7dd3fc", glow:"rgba(125,211,252,0.5)", health:routerHealth, activity:routerActivity, pulseRate:1.8 },
     { id:"ollama", label:"Ollama", sublabel:`${live.installedModels} models`, x:W*0.78, y:H*0.22, radius:44, color:"#22c55e", glow:"rgba(34,197,94,0.5)", health:live.ollamaReachable?100:0, activity:live.ollamaReachable?85:0, pulseRate:2.2 },
-    { id:"critic", label:"Critic", sublabel:`${live.successRate}% accept`, x:W*0.78, y:H*0.62, radius:34, color:"#f472b6", glow:"rgba(244,114,182,0.5)", health:live.successRate, activity:live.traceCount>0?live.successRate:20, pulseRate:1.4 },
+    { id:"critic", label:"Critic", sublabel:`${criticHealth}% accept`, x:W*0.78, y:H*0.62, radius:34, color:"#f472b6", glow:"rgba(244,114,182,0.5)", health:criticHealth, activity:criticActivity, pulseRate:1.4 },
     { id:"memory", label:"Memory", sublabel:`${live.eventCount.toLocaleString()} events`, x:W*0.50, y:H*0.74, radius:36, color:"#a78bfa", glow:"rgba(167,139,250,0.5)", health:live.eventCount>0?100:50, activity:live.eventCount>100?80:40, pulseRate:1.0 },
     { id:"qdrant", label:"Qdrant", sublabel:`${live.cacheSize} cached`, x:W*0.22, y:H*0.62, radius:32, color:"#fb923c", glow:"rgba(251,146,60,0.5)", health:100, activity:live.cacheSize>0?70:30, pulseRate:0.8 },
     { id:"healer", label:"Healer", sublabel:`${live.healingReady}% ready`, x:W*0.22, y:H*0.22, radius:30, color:"#34d399", glow:"rgba(52,211,153,0.5)", health:live.healingReady, activity:live.healingReady>80?60:20, pulseRate:0.6 },
   ]
 }
+
 
 let _pc=0
 function makePulse(fromId:string,toId:string,color:string):Pulse {

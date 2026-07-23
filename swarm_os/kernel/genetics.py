@@ -3,22 +3,24 @@ from __future__ import annotations
 import copy
 import math
 import random
+import json
+import ast
 from dataclasses import asdict, dataclass, field
 from typing import Dict, List, Optional, Protocol
+from litellm import acompletion
 
 MCP_TOOL_REGISTRY: List[str] = [
     "web_search",
     "playwright",
     "filesystem",
     "context7",
-    "context7",
     "code_exec",
 ]
 
 MODEL_TIERS: Dict[str, str] = {
     "triage": "phi4-mini:latest",
-    "fast": "qwen2.5:7b-instruct",
-    "heavy": "qwen3.5:9b",
+    "fast": "qwen-tuned",
+    "heavy": "qwen-tuned",
 }
 
 
@@ -121,8 +123,10 @@ class Genome:
     generation: int = 0
     cognition: CognitivePolicy = field(default_factory=CognitivePolicy)
     tool_genes: Dict[str, float] = field(default_factory=lambda: {t: random.uniform(0.25, 0.75) for t in MCP_TOOL_REGISTRY})
-    lifetime_fitness: float = 0.0
+    lifetime_fitness: Dict[str, float] = field(default_factory=lambda: {"composite": 0.0, "quality": 0.0, "speed": 0.0, "efficiency": 0.0})
     evaluations: int = 0
+    pareto_rank: int = 0
+    crowding_distance: float = 0.0
 
     @property
     def timeout_budget(self) -> float:
@@ -133,12 +137,29 @@ class Genome:
         return sample_model(self.model_tier, smoke=getattr(self, "smoke", False))
 
     @property
+    def dominant_model(self) -> str:
+        dist = model_distribution(self.model_tier, smoke=getattr(self, "smoke", False))
+        return max(dist, key=dist.get)
+
+    @property
     def actual_temperature(self) -> float:
         return round(self.temperature * 1.2, 2)
 
     @property
     def average_fitness(self) -> float:
-        return 0.0 if self.evaluations == 0 else self.lifetime_fitness / self.evaluations
+        return 0.0 if self.evaluations == 0 else self.lifetime_fitness.get("composite", 0.0) / self.evaluations
+
+    @property
+    def average_quality(self) -> float:
+        return 0.0 if self.evaluations == 0 else self.lifetime_fitness.get("quality", 0.0) / self.evaluations
+
+    @property
+    def average_speed(self) -> float:
+        return 0.0 if self.evaluations == 0 else self.lifetime_fitness.get("speed", 0.0) / self.evaluations
+
+    @property
+    def average_efficiency(self) -> float:
+        return 0.0 if self.evaluations == 0 else self.lifetime_fitness.get("efficiency", 0.0) / self.evaluations
 
     def active_tools(self, seed: Optional[int] = None) -> List[str]:
         rng = tool_activation_rng(seed)
@@ -148,16 +169,20 @@ class Genome:
                 active.append(tool)
         return active
 
-    def record_fitness(self, value: float) -> None:
-        self.lifetime_fitness += value
+    def record_fitness(self, scores: dict) -> None:
+        for k, v in scores.items():
+            if k in self.lifetime_fitness:
+                self.lifetime_fitness[k] += v
         self.evaluations += 1
 
     def copy(self, new_parent_id: str) -> "Genome":
         child = copy.deepcopy(self)
         child.parent_id = new_parent_id
         child.generation += 1
-        child.lifetime_fitness = 0.0
+        child.lifetime_fitness = {"composite": 0.0, "quality": 0.0, "speed": 0.0, "efficiency": 0.0}
         child.evaluations = 0
+        child.pareto_rank = 0
+        child.crowding_distance = 0.0
         normalize_affinities(child)
         return child
 
@@ -181,15 +206,20 @@ class Genome:
             "tool_genes": dict(self.tool_genes),
             "cognition": self.cognition.to_dict(),
             "average_fitness": self.average_fitness,
-            "lifetime_fitness": self.lifetime_fitness,
+            "average_quality": self.average_quality,
+            "average_speed": self.average_speed,
+            "average_efficiency": self.average_efficiency,
+            "lifetime_fitness": dict(self.lifetime_fitness),
             "evaluations": self.evaluations,
+            "pareto_rank": self.pareto_rank,
+            "crowding_distance": self.crowding_distance,
         }
 
     @classmethod
     def from_dict(cls, data: dict) -> "Genome":
         payload = dict(data)
         cog_data = payload.pop("cognition", {})
-        for k in ("model", "average_fitness"):
+        for k in ("model", "average_fitness", "average_quality", "average_speed", "average_efficiency"):
             payload.pop(k, None)
         genome = cls(**{k: v for k, v in payload.items() if k in cls.__dataclass_fields__})
         genome.cognition = CognitivePolicy.from_dict(cog_data)
@@ -255,3 +285,95 @@ def normalize_affinities(genome: Genome) -> Genome:
     genome.upwork_affinity /= total
     return genome
 
+async def llm_guided_mutate(genome: Genome, trace_context: str, memory_bridge=None) -> None:
+    """Uses an LLM to surgically mutate the genome based on failure traces."""
+    historical_context = ""
+    if memory_bridge:
+        try:
+            historical_context = await memory_bridge.get_memory_context(trace_context)
+        except Exception:
+            pass
+
+    history_section = f"\n\nHistorical Context of past runs (GraphRAG):\n{historical_context}\nAvoid repeating past mistakes." if historical_context else ""
+
+    prompt = f'''You are a genetic algorithm mutator for an AI agent. 
+The agent failed a task. Review the context and mutate the agent's CognitivePolicy to fix its behavior.
+Failure Context: {trace_context}{history_section}
+
+Current Cognitive Policy:
+{json.dumps(genome.cognition.to_dict(), indent=2)}
+
+Output a JSON object with the updated cognitive parameters (between 0.0 and 1.0). 
+Only include the keys you want to change.
+Example: {{"hallucination_sensitivity": 0.8, "verification_bias": 0.9}}
+Do not include markdown blocks, just raw JSON.
+'''
+    try:
+        res = await acompletion(
+            model=MODEL_TIERS["fast"], 
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7
+        )
+        content = res.choices[0].message.content.strip()
+        if content.startswith("```json"):
+            content = content[7:-3]
+        elif content.startswith("```"):
+            content = content[3:-3]
+        
+        patch = json.loads(content.strip())
+        for k, v in patch.items():
+            if hasattr(genome.cognition, k) and isinstance(v, (int, float)):
+                setattr(genome.cognition, k, clamp(float(v), 0.0, 1.0))
+    except Exception as e:
+        # Fallback to random mutation
+        genome.cognition.mutate(0.1)
+
+
+def ast_slice(source_code: str, target_func: str) -> str:
+    """Extracts a precise semantic slice (Program Dependence Graph) of a target function."""
+    try:
+        tree = ast.parse(source_code)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == target_func:
+                return ast.unparse(node)
+    except Exception:
+        pass
+    # BUG FIX: Return empty string instead of the full source_code.
+    # If we returned source_code, the caller's core_code.replace(sliced_code, mutated_code)
+    # would replace the ENTIRE file with just the mutated function, wiping out the whole engine.
+    return ""
+
+async def ast_crossover(parent_a_code: str, parent_b_code: str, target_func: str) -> str:
+    """Intelligently splices compatible AST nodes from two parent variants."""
+    slice_a = ast_slice(parent_a_code, target_func)
+    slice_b = ast_slice(parent_b_code, target_func)
+    
+    prompt = f'''You are an advanced Genetic Programming AST meta-controller.
+We have two successful variants of the function `{target_func}`.
+Parent A slice:
+```python
+{slice_a}
+```
+Parent B slice:
+```python
+{slice_b}
+```
+Intelligently splice the best sub-trees from both variants (e.g. combine a speed optimization from A with a memory optimization from B). Ensure the resulting AST is syntactically valid. Output only the raw python code.
+'''
+    try:
+        res = await acompletion(
+            model=MODEL_TIERS["fast"], 
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3
+        )
+        content = res.choices[0].message.content.strip()
+        if content.startswith("```python"):
+            content = content[9:-3]
+        elif content.startswith("```"):
+            content = content[3:-3]
+        
+        # Verify it parses correctly
+        ast.parse(content.strip())
+        return content.strip()
+    except Exception:
+        return slice_a # fallback to parent A

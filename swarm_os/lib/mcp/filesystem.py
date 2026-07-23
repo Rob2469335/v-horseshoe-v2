@@ -17,6 +17,12 @@ async def filesystem_handler(params: Dict[str, Any], root: Path, trace_hook=None
     root = root.resolve()
     
     def resolve_in_sandbox(requested_path_str: str) -> Path:
+        # LLMs often assume they are in a linux root directory
+        if requested_path_str in ("/", "\\"):
+            requested_path_str = "."
+        elif (requested_path_str.startswith("/") or requested_path_str.startswith("\\")) and ":" not in requested_path_str:
+            requested_path_str = requested_path_str.lstrip("/\\") or "."
+            
         try:
             req_path = Path(requested_path_str or ".")
             if req_path.is_absolute():
@@ -84,8 +90,22 @@ async def filesystem_handler(params: Dict[str, Any], root: Path, trace_hook=None
             try:
                 iter_path = target_path.rglob("*") if recursive else target_path.iterdir()
                 for item in iter_path:
-                    if recursive and any(part.startswith('.') or part in ('node_modules', '.venv', '__pycache__') for part in item.relative_to(target_path).parts):
+                    # BEGIN NEW FILTERS
+                    # Exclude specific directories
+                    excluded_dirs = {'.venv', '.git', '__pycache__', '.ruff_cache', '.swarm_brain', '.swarm_2027_backup', 'node_modules'}
+                    if recursive and any(part in excluded_dirs for part in item.relative_to(target_path).parts):
                         continue
+
+                    # Exclude specific file extensions
+                    excluded_extensions = {'.gguf', '.wav', '.pkl', '.zip'}
+                    if item.is_file() and item.suffix.lower() in excluded_extensions:
+                        continue
+
+                    # Exclude files larger than 5MB
+                    max_file_size = 5 * 1024 * 1024  # 5MB
+                    if item.is_file() and item.stat().st_size > max_file_size:
+                        continue
+                    # END NEW FILTERS
                     entries.append({
                         "name": str(item.relative_to(target_path).as_posix()) if recursive else item.name,
                         "type": "file" if item.is_file() else "dir",

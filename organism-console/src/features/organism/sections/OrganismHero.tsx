@@ -1,1 +1,0 @@
-// scaffold-owned organism hero

@@ -30,8 +30,8 @@ class EmbeddingService:
             return response.json()["embedding"]
         except Exception as e:
             logger.error(f"Embedding failed: {e}")
-            # Return zero vector as fallback
-            return [0.0] * 768
+            # Raise error to avoid Qdrant mathematical crash on zero-vector
+            raise RuntimeError(f"Embedding failed: {e}")
 
     def embed_batch(self, texts: List[str]) -> List[List[float]]:
         """Generate embeddings for multiple texts."""

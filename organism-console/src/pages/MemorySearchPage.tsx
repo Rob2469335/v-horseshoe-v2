@@ -281,20 +281,7 @@ export default function MemorySearchPage() {
   ]
 
   return (
-    <section
-      className="page"
-      style={{
-        minHeight: "100vh",
-        color: "#ebf3ff",
-        background: `
-          radial-gradient(circle at 10% 0%, rgba(59,130,246,0.22), transparent 28%),
-          radial-gradient(circle at 90% 0%, rgba(168,85,247,0.18), transparent 26%),
-          radial-gradient(circle at 50% 45%, rgba(14,165,233,0.08), transparent 40%),
-          linear-gradient(180deg, #030712 0%, #07111f 44%, #030814 100%)
-        `,
-        padding: "24px 16px 48px"
-      }}
-    >
+    <section className="flex flex-col h-full w-full overflow-hidden p-6 text-slate-300">
       <style>{`
         @keyframes memoryPulse {
           0% { transform: scale(0.96); opacity: 0.45; }
@@ -310,112 +297,52 @@ export default function MemorySearchPage() {
           50% { transform: translateY(-8px); }
           100% { transform: translateY(0px); }
         }
-        @media (prefers-reduced-motion: reduce) {
-          *, *::before, *::after {
-            animation: none !important;
-            transition: none !important;
-          }
-        }
       `}</style>
 
-      <div style={{ maxWidth: 1440, margin: "0 auto", display: "grid", gap: 20 }}>
-        <header
-          style={{
-            position: "relative",
-            overflow: "hidden",
-            borderRadius: 30,
-            padding: "28px 24px",
-            background: "linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.03))",
-            border: "1px solid rgba(255,255,255,0.10)",
-            boxShadow: "0 20px 60px rgba(0,0,0,0.28)"
-          }}
-        >
-          <div
-            style={{
-              position: "absolute",
-              inset: 0,
-              background: "linear-gradient(90deg, transparent, rgba(255,255,255,0.08), transparent)",
-              transform: "translateX(-120%)",
-              animation: "memorySweep 5.8s linear infinite"
-            }}
-          />
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "minmax(0, 1.25fr) minmax(320px, 0.75fr)",
-              gap: 20,
-              alignItems: "center"
-            }}
-          >
+      <div className="flex flex-col gap-6 h-full min-h-0 overflow-y-auto custom-scrollbar pb-10">
+        
+        <header className="relative overflow-hidden rounded-3xl p-8 bg-slate-900/60 border border-white/10 shadow-[0_20px_60px_rgba(0,0,0,0.5)] shrink-0">
+          <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/5 to-transparent -translate-x-[120%] animate-[memorySweep_5.8s_linear_infinite]" />
+          
+          <div className="grid grid-cols-1 lg:grid-cols-[1.25fr_0.75fr] gap-8 items-center relative z-10">
             <div>
-              <div style={{ color: "#7dd3fc", fontSize: 12, fontWeight: 900, letterSpacing: "0.16em", textTransform: "uppercase", marginBottom: 10 }}>
+              <div className="text-cyan-300 text-xs font-black tracking-[0.16em] uppercase mb-3">
                 Memory bridge / semantic recall
               </div>
-              <h1 style={{ margin: 0, fontSize: "clamp(2rem, 4vw, 3.4rem)", lineHeight: 1.02, fontWeight: 950, letterSpacing: "-0.04em", color: "white" }}>
+              <h1 className="text-4xl md:text-5xl font-black tracking-tight text-white m-0">
                 Living memory tutor
               </h1>
-              <p style={{ marginTop: 14, maxWidth: 760, color: "rgba(230,238,255,0.78)", lineHeight: 1.7 }}>
+              <p className="mt-4 max-w-[760px] text-slate-300/80 leading-relaxed">
                 Watch how the organism stores traces, reuses past work, and judges retrieval quality in real time. This page explains what the memory system is doing, whether it is healthy, and where self-heal pressure is building.
               </p>
 
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 20 }}>
+              <div className="flex flex-wrap gap-3 mt-6">
                 {[
                   { label: "Readiness", value: readinessTone.label, accent: readinessTone.accent },
                   { label: "Recall", value: retrievalTone.label, accent: retrievalTone.accent },
                   { label: "Runtime", value: streamTone.label, accent: streamTone.accent },
                   { label: "Environment", value: derived.status.environment ?? "unknown", accent: "#a78bfa" }
                 ].map((item) => (
-                  <div
-                    key={item.label}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 10,
-                      padding: "10px 14px",
-                      borderRadius: 999,
-                      background: "rgba(255,255,255,0.05)",
-                      border: "1px solid rgba(255,255,255,0.08)"
-                    }}
-                  >
-                    <span
-                      style={{
-                        width: 10,
-                        height: 10,
-                        borderRadius: 999,
-                        background: item.accent,
-                        boxShadow: `0 0 18px ${item.accent}`,
-                        animation: "memoryPulse 2.4s ease-in-out infinite"
-                      }}
+                  <div key={item.label} className="flex items-center gap-3 px-4 py-2.5 rounded-full bg-white/5 border border-white/10">
+                    <span 
+                      className="w-2.5 h-2.5 rounded-full" 
+                      style={{ background: item.accent, boxShadow: `0 0 15px ${item.accent}`, animation: "memoryPulse 2.4s ease-in-out infinite" }}
                     />
-                    <span style={{ color: "rgba(255,255,255,0.66)", fontSize: 12, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.12em" }}>
-                      {item.label}
-                    </span>
-                    <span style={{ color: "white", fontWeight: 800 }}>
-                      {item.value}
-                    </span>
+                    <span className="text-white/70 text-xs font-black uppercase tracking-widest">{item.label}</span>
+                    <span className="text-white font-black text-sm">{item.value}</span>
                   </div>
                 ))}
               </div>
             </div>
 
-            <aside
-              style={{
-                borderRadius: 24,
-                padding: 20,
-                background: "rgba(3,8,20,0.56)",
-                border: "1px solid rgba(125,211,252,0.18)",
-                boxShadow: "0 18px 44px rgba(2,8,23,0.26)",
-                backdropFilter: "blur(12px)",
-                animation: "memoryFloat 5s ease-in-out infinite"
-              }}
-            >
-              <div style={{ color: "#7dd3fc", fontSize: 11, fontWeight: 900, textTransform: "uppercase", letterSpacing: "0.16em", marginBottom: 10 }}>
+            <aside className="rounded-3xl p-6 bg-[#030814]/60 border border-cyan-400/20 shadow-[0_18px_44px_rgba(0,0,0,0.5)] backdrop-blur-xl animate-[memoryFloat_5s_ease-in-out_infinite]">
+              <div className="text-cyan-300 text-[11px] font-black uppercase tracking-[0.16em] mb-3">
                 Tutor readout
               </div>
-              <div style={{ color: "white", fontSize: 24, fontWeight: 900, marginBottom: 10 }}>
+              <div className="text-white text-3xl font-black mb-3">
                 {derived.qualityTone}
               </div>
-              <div style={{ color: "rgba(230,238,255,0.76)", lineHeight: 1.7, fontSize: 14 }}>
+              <div className="text-slate-300/80 leading-relaxed text-sm">
                 {derived.successRate >= 80
                   ? "Memory retrieval is performing strongly. The organism is finding and reusing prior traces with high confidence."
                   : derived.successRate >= 60
@@ -426,70 +353,31 @@ export default function MemorySearchPage() {
           </div>
         </header>
 
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
-            gap: 16
-          }}
-        >
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 shrink-0">
           {heroCards.map((card, index) => (
-            <article
-              key={card.label}
-              style={{
-                borderRadius: 24,
-                padding: 20,
-                background: index % 2 === 0 ? "rgba(255,255,255,0.05)" : "rgba(125,211,252,0.06)",
-                border: "1px solid rgba(255,255,255,0.08)",
-                boxShadow: "0 14px 30px rgba(0,0,0,0.18)"
-              }}
-            >
-              <div style={{ color: "#7dd3fc", fontSize: 11, fontWeight: 900, textTransform: "uppercase", letterSpacing: "0.14em", marginBottom: 8 }}>
-                {card.label}
-              </div>
-              <div style={{ color: "white", fontSize: 26, fontWeight: 900, letterSpacing: "-0.03em", marginBottom: 8 }}>
-                {card.value}
-              </div>
-              <div style={{ color: "rgba(232,240,255,0.72)", fontSize: 14, lineHeight: 1.65 }}>
-                {card.detail}
-              </div>
+            <article key={card.label} className={`rounded-3xl p-6 border border-white/10 shadow-lg ${index % 2 === 0 ? "bg-white/5" : "bg-cyan-500/5"}`}>
+              <div className="text-cyan-300 text-[11px] font-black uppercase tracking-[0.14em] mb-2">{card.label}</div>
+              <div className="text-white text-3xl font-black tracking-tight mb-2">{card.value}</div>
+              <div className="text-slate-300/80 text-sm leading-relaxed">{card.detail}</div>
             </article>
           ))}
         </div>
 
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "minmax(0, 1.4fr) minmax(320px, 0.8fr)",
-            gap: 20
-          }}
-        >
-          <article
-            style={{
-              borderRadius: 28,
-              padding: 22,
-              background: "linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02))",
-              border: "1px solid rgba(255,255,255,0.08)",
-              boxShadow: "0 20px 54px rgba(0,0,0,0.22)"
-            }}
-          >
-            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 16 }}>
+        <div className="grid grid-cols-1 lg:grid-cols-[1.4fr_0.8fr] gap-5 shrink-0">
+          <article className="rounded-3xl p-6 bg-white/5 border border-white/10 shadow-xl">
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
               <div>
-                <div style={{ color: "#7dd3fc", fontSize: 11, fontWeight: 900, textTransform: "uppercase", letterSpacing: "0.14em", marginBottom: 8 }}>
-                  Retrieval stream
-                </div>
-                <div style={{ color: "white", fontSize: 24, fontWeight: 900 }}>
-                  Trace kinetics
-                </div>
+                <div className="text-cyan-300 text-[11px] font-black uppercase tracking-[0.14em] mb-2">Retrieval stream</div>
+                <div className="text-white text-2xl font-black">Trace kinetics</div>
               </div>
-              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <div className="flex gap-3 flex-wrap">
                 {[
                   { label: "Events", color: "#7dd3fc" },
                   { label: "Success", color: "#22c55e" },
                   { label: "Fail", color: "#f97316" }
                 ].map((legend) => (
-                  <div key={legend.label} style={{ display: "flex", alignItems: "center", gap: 8, color: "rgba(236,242,255,0.7)", fontSize: 12, fontWeight: 700 }}>
-                    <span style={{ width: 10, height: 10, borderRadius: 999, background: legend.color }} />
+                  <div key={legend.label} className="flex items-center gap-2 text-slate-300/80 text-xs font-bold">
+                    <span className="w-2.5 h-2.5 rounded-full" style={{ background: legend.color }} />
                     {legend.label}
                   </div>
                 ))}
@@ -497,17 +385,8 @@ export default function MemorySearchPage() {
             </div>
 
             {derived.points.length > 0 ? (
-              <div
-                style={{
-                  position: "relative",
-                  overflow: "hidden",
-                  borderRadius: 24,
-                  padding: 14,
-                  background: "rgba(2,6,23,0.48)",
-                  border: "1px solid rgba(255,255,255,0.06)"
-                }}
-              >
-                <svg viewBox={`0 0 ${chart.width} ${chart.height}`} style={{ width: "100%", height: "auto", display: "block" }}>
+              <div className="relative overflow-hidden rounded-2xl p-4 bg-[#020617]/60 border border-white/5">
+                <svg viewBox={`0 0 ${chart.width} ${chart.height}`} className="w-full h-auto block">
                   <defs>
                     <linearGradient id="memoryAreaFill" x1="0" x2="0" y1="0" y2="1">
                       <stop offset="0%" stopColor="rgba(125,211,252,0.34)" />
@@ -518,286 +397,94 @@ export default function MemorySearchPage() {
                   {[0.2, 0.4, 0.6, 0.8].map((step) => {
                     const y = chart.height - chart.padding - (chart.height - chart.padding * 2) * step
                     return (
-                      <line
-                        key={step}
-                        x1={chart.padding}
-                        x2={chart.width - chart.padding}
-                        y1={y}
-                        y2={y}
-                        stroke="rgba(255,255,255,0.08)"
-                        strokeDasharray="4 8"
-                      />
+                      <line key={step} x1={chart.padding} x2={chart.width - chart.padding} y1={y} y2={y} stroke="rgba(255,255,255,0.08)" strokeDasharray="4 8" />
                     )
                   })}
 
-                  {chart.area ? (
-                    <polygon points={chart.area} fill="url(#memoryAreaFill)" />
-                  ) : null}
-
-                  {chart.eventsLine ? (
-                    <polyline points={chart.eventsLine} fill="none" stroke="#7dd3fc" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
-                  ) : null}
-
-                  {chart.successLine ? (
-                    <polyline points={chart.successLine} fill="none" stroke="#22c55e" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
-                  ) : null}
-
-                  {chart.failLine ? (
-                    <polyline points={chart.failLine} fill="none" stroke="#f97316" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
-                  ) : null}
+                  {chart.area && <polygon points={chart.area} fill="url(#memoryAreaFill)" />}
+                  {chart.eventsLine && <polyline points={chart.eventsLine} fill="none" stroke="#7dd3fc" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />}
+                  {chart.successLine && <polyline points={chart.successLine} fill="none" stroke="#22c55e" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />}
+                  {chart.failLine && <polyline points={chart.failLine} fill="none" stroke="#f97316" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />}
                 </svg>
 
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: `repeat(${Math.min(Math.max(derived.points.length, 1), 8)}, minmax(0, 1fr))`,
-                    gap: 10,
-                    marginTop: 12
-                  }}
-                >
+                <div className="grid grid-cols-[repeat(auto-fit,minmax(0,1fr))] gap-2.5 mt-3">
                   {derived.points.slice(-8).map((point) => (
-                    <div
-                      key={point.bucket}
-                      style={{
-                        padding: 10,
-                        borderRadius: 16,
-                        background: "rgba(255,255,255,0.04)",
-                        border: "1px solid rgba(255,255,255,0.05)"
-                      }}
-                    >
-                      <div style={{ color: "rgba(255,255,255,0.58)", fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>
-                        {point.bucket}
-                      </div>
-                      <div style={{ color: "white", fontSize: 16, fontWeight: 800, marginBottom: 4 }}>
-                        {point.event_count} events
-                      </div>
-                      <div style={{ color: "rgba(220,231,255,0.68)", fontSize: 12, lineHeight: 1.5 }}>
-                        {point.success_count} ok · {point.fail_count} fail · {point.partial_count} partial
-                      </div>
+                    <div key={point.bucket} className="p-3 rounded-xl bg-white/5 border border-white/10">
+                      <div className="text-white/60 text-[11px] font-black uppercase tracking-widest mb-1">{point.bucket}</div>
+                      <div className="text-white text-base font-black mb-1">{point.event_count} events</div>
+                      <div className="text-slate-300/70 text-xs leading-relaxed">{point.success_count} ok · {point.fail_count} fail · {point.partial_count} partial</div>
                     </div>
                   ))}
                 </div>
               </div>
             ) : (
-              <div
-                style={{
-                  borderRadius: 24,
-                  padding: "44px 24px",
-                  textAlign: "center",
-                  background: "rgba(255,255,255,0.03)",
-                  border: "1px dashed rgba(125,211,252,0.28)"
-                }}
-              >
-                <div
-                  style={{
-                    width: 16,
-                    height: 16,
-                    margin: "0 auto 16px",
-                    borderRadius: 999,
-                    background: "#7dd3fc",
-                    boxShadow: "0 0 20px rgba(125,211,252,0.6)",
-                    animation: "memoryPulse 2.2s ease-in-out infinite"
-                  }}
-                />
-                <div style={{ color: "white", fontWeight: 900, marginBottom: 8 }}>
-                  No retrieval stream yet
-                </div>
-                <div style={{ color: "rgba(236,242,255,0.68)", maxWidth: 520, margin: "0 auto", lineHeight: 1.7 }}>
+              <div className="rounded-2xl p-10 text-center bg-white/5 border border-dashed border-cyan-400/30">
+                <div className="w-4 h-4 mx-auto mb-4 rounded-full bg-cyan-300 shadow-[0_0_20px_rgba(125,211,252,0.6)] animate-[memoryPulse_2.2s_ease-in-out_infinite]" />
+                <div className="text-white font-black mb-2">No retrieval stream yet</div>
+                <div className="text-slate-300/70 max-w-[520px] mx-auto leading-relaxed">
                   The page is live and waiting for trace buckets. Once memory search activity is reported, this section will show retrieval pressure, recall quality, and failure drift across time.
                 </div>
               </div>
             )}
           </article>
 
-          <aside style={{ display: "grid", gap: 16 }}>
-            <article
-              style={{
-                borderRadius: 24,
-                padding: 20,
-                background: "rgba(34,197,94,0.08)",
-                border: "1px solid rgba(34,197,94,0.18)"
-              }}
-            >
-              <div style={{ color: "#86efac", fontSize: 11, fontWeight: 900, textTransform: "uppercase", letterSpacing: "0.14em", marginBottom: 8 }}>
-                Memory health
-              </div>
-              <div style={{ color: "white", fontSize: 24, fontWeight: 900, marginBottom: 10 }}>
-                {derived.successRate}%
-              </div>
-              <div style={{ color: "rgba(237,255,243,0.82)", lineHeight: 1.7, fontSize: 14 }}>
-                Successful retrieval outcomes across the reported trace stream.
-              </div>
+          <aside className="flex flex-col gap-4">
+            <article className="rounded-3xl p-5 bg-green-500/10 border border-green-500/20">
+              <div className="text-green-300 text-[11px] font-black uppercase tracking-[0.14em] mb-2">Memory health</div>
+              <div className="text-white text-2xl font-black mb-2">{derived.successRate}%</div>
+              <div className="text-green-100/80 text-sm leading-relaxed">Successful retrieval outcomes across the reported trace stream.</div>
             </article>
 
-            <article
-              style={{
-                borderRadius: 24,
-                padding: 20,
-                background: "rgba(168,85,247,0.08)",
-                border: "1px solid rgba(168,85,247,0.18)"
-              }}
-            >
-              <div style={{ color: "#c4b5fd", fontSize: 11, fontWeight: 900, textTransform: "uppercase", letterSpacing: "0.14em", marginBottom: 8 }}>
-                Tool reach
-              </div>
-              <div style={{ color: "white", fontSize: 24, fontWeight: 900, marginBottom: 10 }}>
-                {derived.toolCount}
-              </div>
-              <div style={{ color: "rgba(244,239,255,0.82)", lineHeight: 1.7, fontSize: 14 }}>
-                Active capabilities currently exposed to the organism.
-              </div>
+            <article className="rounded-3xl p-5 bg-purple-500/10 border border-purple-500/20">
+              <div className="text-purple-300 text-[11px] font-black uppercase tracking-[0.14em] mb-2">Tool reach</div>
+              <div className="text-white text-2xl font-black mb-2">{derived.toolCount}</div>
+              <div className="text-purple-100/80 text-sm leading-relaxed">Active capabilities currently exposed to the organism.</div>
             </article>
 
-            <article
-              style={{
-                borderRadius: 24,
-                padding: 20,
-                background: "rgba(249,115,22,0.08)",
-                border: "1px solid rgba(249,115,22,0.18)"
-              }}
-            >
-              <div style={{ color: "#fdba74", fontSize: 11, fontWeight: 900, textTransform: "uppercase", letterSpacing: "0.14em", marginBottom: 8 }}>
-                Failure pressure
-              </div>
-              <div style={{ color: "white", fontSize: 24, fontWeight: 900, marginBottom: 10 }}>
-                {derived.failureRate}%
-              </div>
-              <div style={{ color: "rgba(255,242,233,0.82)", lineHeight: 1.7, fontSize: 14 }}>
-                Buckets that recalled or executed poorly and may need tuning, retries, or self-heal intervention.
-              </div>
+            <article className="rounded-3xl p-5 bg-orange-500/10 border border-orange-500/20">
+              <div className="text-orange-300 text-[11px] font-black uppercase tracking-[0.14em] mb-2">Failure pressure</div>
+              <div className="text-white text-2xl font-black mb-2">{derived.failureRate}%</div>
+              <div className="text-orange-100/80 text-sm leading-relaxed">Buckets that recalled or executed poorly and may need tuning, retries, or self-heal intervention.</div>
             </article>
           </aside>
         </div>
 
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "minmax(0, 1fr) minmax(320px, 0.9fr)",
-            gap: 20
-          }}
-        >
-          <article
-            style={{
-              borderRadius: 28,
-              padding: 22,
-              background: "linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.02))",
-              border: "1px solid rgba(255,255,255,0.08)"
-            }}
-          >
-            <div style={{ color: "#7dd3fc", fontSize: 11, fontWeight: 900, textTransform: "uppercase", letterSpacing: "0.14em", marginBottom: 10 }}>
-              Live memory structure
-            </div>
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-                gap: 14
-              }}
-            >
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_0.9fr] gap-5 shrink-0">
+          <article className="rounded-3xl p-6 bg-white/5 border border-white/10 shadow-xl">
+            <div className="text-cyan-300 text-[11px] font-black uppercase tracking-[0.14em] mb-3">Live memory structure</div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               {[
-                {
-                  label: "Vector cache",
-                  value: formatCompact(derived.cacheSize),
-                  detail: derived.cacheSize > 0
-                    ? `${derived.cachedKeys.length} named cached keys are visible.`
-                    : "No cache entries reported yet."
-                },
-                {
-                  label: "Event memory",
-                  value: formatCompact(derived.eventCount),
-                  detail: "Total events seen by the organism runtime status feed."
-                },
-                {
-                  label: "Capabilities",
-                  value: formatCompact(derived.capabilities.length),
-                  detail: derived.capabilities.length > 0
-                    ? derived.capabilities.slice(0, 4).join(", ")
-                    : "No capability list exposed."
-                },
-                {
-                  label: "Vision path",
-                  value: derived.visionRuntime ? "live" : "pending",
-                  detail: derived.status.primary_vision_model
-                    ? `Primary model: ${derived.status.primary_vision_model}`
-                    : "No primary vision model reported."
-                }
+                { label: "Vector cache", value: formatCompact(derived.cacheSize), detail: derived.cacheSize > 0 ? `${derived.cachedKeys.length} named cached keys are visible.` : "No cache entries reported yet." },
+                { label: "Event memory", value: formatCompact(derived.eventCount), detail: "Total events seen by the organism runtime status feed." },
+                { label: "Capabilities", value: formatCompact(derived.capabilities.length), detail: derived.capabilities.length > 0 ? derived.capabilities.slice(0, 4).join(", ") : "No capability list exposed." },
+                { label: "Vision path", value: derived.visionRuntime ? "live" : "pending", detail: derived.status.primary_vision_model ? `Primary model: ${derived.status.primary_vision_model}` : "No primary vision model reported." }
               ].map((item) => (
-                <div
-                  key={item.label}
-                  style={{
-                    borderRadius: 18,
-                    padding: 18,
-                    background: "rgba(255,255,255,0.035)",
-                    border: "1px solid rgba(255,255,255,0.06)"
-                  }}
-                >
-                  <div style={{ color: "rgba(165,222,255,0.78)", fontSize: 11, fontWeight: 900, textTransform: "uppercase", letterSpacing: "0.14em", marginBottom: 8 }}>
-                    {item.label}
-                  </div>
-                  <div style={{ color: "white", fontSize: 22, fontWeight: 900, marginBottom: 8 }}>
-                    {item.value}
-                  </div>
-                  <div style={{ color: "rgba(226,236,255,0.7)", fontSize: 13, lineHeight: 1.6 }}>
-                    {item.detail}
-                  </div>
+                <div key={item.label} className="rounded-2xl p-5 bg-white/5 border border-white/10">
+                  <div className="text-cyan-100/80 text-[11px] font-black uppercase tracking-[0.14em] mb-2">{item.label}</div>
+                  <div className="text-white text-2xl font-black mb-2">{item.value}</div>
+                  <div className="text-slate-200/70 text-sm leading-relaxed">{item.detail}</div>
                 </div>
               ))}
             </div>
           </article>
 
-          <article
-            style={{
-              borderRadius: 28,
-              padding: 22,
-              background: "rgba(6,11,25,0.65)",
-              border: "1px solid rgba(255,255,255,0.08)"
-            }}
-          >
-            <div style={{ color: "#7dd3fc", fontSize: 11, fontWeight: 900, textTransform: "uppercase", letterSpacing: "0.14em", marginBottom: 12 }}>
-              Tutor guidance
-            </div>
-            <div style={{ display: "grid", gap: 12 }}>
+          <article className="rounded-3xl p-6 bg-[#060b19]/70 border border-white/10 backdrop-blur-md">
+            <div className="text-cyan-300 text-[11px] font-black uppercase tracking-[0.14em] mb-3">Tutor guidance</div>
+            <div className="flex flex-col gap-3">
               {tutorCards.map((card) => (
-                <div
-                  key={card.title}
-                  style={{
-                    borderRadius: 18,
-                    padding: 16,
-                    background: "rgba(255,255,255,0.035)",
-                    border: "1px solid rgba(255,255,255,0.05)"
-                  }}
-                >
-                  <div style={{ color: "white", fontWeight: 800, marginBottom: 8 }}>
-                    {card.title}
-                  </div>
-                  <div style={{ color: "rgba(232,240,255,0.72)", lineHeight: 1.7, fontSize: 14 }}>
-                    {card.body}
-                  </div>
+                <div key={card.title} className="rounded-2xl p-4 bg-white/5 border border-white/10">
+                  <div className="text-white font-black mb-2">{card.title}</div>
+                  <div className="text-slate-300/80 text-sm leading-relaxed">{card.body}</div>
                 </div>
               ))}
             </div>
 
-            {isLoading ? (
-              <div style={{ marginTop: 16, color: "rgba(232,240,255,0.66)", fontSize: 14 }}>
-                Loading live memory telemetry…
-              </div>
-            ) : null}
-
-            {isError ? (
-              <div
-                style={{
-                  marginTop: 16,
-                  borderRadius: 16,
-                  padding: 14,
-                  background: "rgba(127,29,29,0.26)",
-                  border: "1px solid rgba(248,113,113,0.24)",
-                  color: "#fecaca",
-                  lineHeight: 1.6
-                }}
-              >
+            {isLoading && <div className="mt-4 text-slate-300/70 text-sm">Loading live memory telemetry…</div>}
+            {isError && (
+              <div className="mt-4 rounded-xl p-4 bg-red-900/30 border border-red-500/30 text-red-200 leading-relaxed text-sm">
                 Memory telemetry could not be loaded: {errorMessage}
               </div>
-            ) : null}
+            )}
           </article>
         </div>
       </div>

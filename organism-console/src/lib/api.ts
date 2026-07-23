@@ -63,6 +63,10 @@ export const api = {
   getAdminStatus: <T>(baseUrl: string) => fetchJson<T>(baseUrl, appConfig.endpoints.adminStatus),
   getAdminDashboard: <T>(baseUrl: string) => fetchJson<T>(baseUrl, appConfig.endpoints.adminDashboard),
   getAdminGeneration: <T>(baseUrl: string) => fetchJson<T>(baseUrl, appConfig.endpoints.adminGeneration),
+  getRouterStats: <T>(baseUrl: string) => fetchJson<T>(baseUrl, appConfig.endpoints.routerStats),
+  getCriticStats: <T>(baseUrl: string) => fetchJson<T>(baseUrl, appConfig.endpoints.criticStats),
+  getMemories: <T>(baseUrl: string) => fetchJson<T>(baseUrl, appConfig.endpoints.memories),
   sendChat: (baseUrl: string, prompt: string) =>
     postJson<GenerateRequest, ChatResponse>(baseUrl, "/generate", { prompt })
 }
+

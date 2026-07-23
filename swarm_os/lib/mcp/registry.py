@@ -38,11 +38,22 @@ class MCPRegistry:
         if tool == "qdrant_recall":
             return await self._qdrant_recall(params)
             
+        if tool == "terminal_exec":
+            return await self._terminal_exec(params)
+            
+        if tool == "local_rag":
+            return await self._local_rag(params)
+            
+        if tool == "ast_modifier":
+            return await self._ast_modifier(params)
+            
         return {"ok": False, "error": f"Unknown tool: {tool}"}
 
     async def _qdrant_recall(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        import asyncio
         query = str(params.get("query", ""))
-        collection = str(params.get("collection", "swarm_memory"))
+        # Enforce swarm_memory collection to prevent fragmentation and silent failures
+        collection = "swarm_memory"
         top_k = int(params.get("top_k", params.get("limit", 5)))
 
         if not query:
@@ -52,10 +63,15 @@ class MCPRegistry:
             from swarm_os.services.embedding_service import EmbeddingService
             from swarm_os.services.vector_store import VectorStore
 
-            embedding_service = EmbeddingService()
-            vector_store = VectorStore(collection_name=collection)
-            vector = embedding_service.embed(query)
-            results = vector_store.search(query_vector=vector, limit=top_k)
+            # Prevent blocking the async event loop with sync operations during initialization and query
+            def _do_recall():
+                if not getattr(self, '_qdrant', None):
+                    self._embedding = EmbeddingService()
+                    self._qdrant = VectorStore(collection_name=collection)
+                vector = self._embedding.embed(query)
+                return self._qdrant.search(query_vector=vector, limit=top_k)
+
+            results = await asyncio.to_thread(_do_recall)
         except Exception as exc:
             logger.warning("qdrant_recall failed: %s", exc)
             results = []
@@ -68,6 +84,35 @@ class MCPRegistry:
         }
         self.trace_hook("qdrant_recall", result)
         return result
+
+    async def _terminal_exec(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        import asyncio
+        command = params.get("command", "")
+        if not command:
+            return {"ok": False, "error": "command is required"}
+        try:
+            proc = await asyncio.create_subprocess_shell(
+                command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await proc.communicate()
+            return {
+                "ok": True,
+                "stdout": stdout.decode("utf-8", errors="ignore").strip(),
+                "stderr": stderr.decode("utf-8", errors="ignore").strip(),
+                "exit_code": proc.returncode
+            }
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    async def _local_rag(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        # Stub for semantic indexing
+        return {"ok": True, "results": ["Local RAG index stubbed."]}
+
+    async def _ast_modifier(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        # Stub for tree-sitter modifier
+        return {"ok": True, "results": ["AST modifier stubbed."]}
 
     def get_tools_schema(self) -> list[dict]:
         return [
@@ -163,6 +208,70 @@ class MCPRegistry:
                         }
                     },
                     "required": ["scope"]
+                }
+            },
+            {
+                "name": "qdrant_recall",
+                "description": "Recall memories and semantic data from the local Qdrant vector database.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "The search query to match against memories."
+                        },
+                        "top_k": {
+                            "type": "integer",
+                            "description": "Number of results to return (default 5)."
+                        }
+                    },
+                    "required": ["query"]
+                }
+            },
+            {
+                "name": "terminal_exec",
+                "description": "Execute a shell command locally in the sandbox.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "command": {
+                            "type": "string",
+                            "description": "The shell command to run."
+                        }
+                    },
+                    "required": ["command"]
+                }
+            },
+            {
+                "name": "local_rag",
+                "description": "Perform semantic search across local codebase files.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Code search query."
+                        }
+                    },
+                    "required": ["query"]
+                }
+            },
+            {
+                "name": "ast_modifier",
+                "description": "Perform tree-sitter based code surgery.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "file": {
+                            "type": "string",
+                            "description": "Target file path."
+                        },
+                        "operation": {
+                            "type": "string",
+                            "description": "AST operation (e.g., 'replace_function', 'add_import')."
+                        }
+                    },
+                    "required": ["file", "operation"]
                 }
             }
         ]

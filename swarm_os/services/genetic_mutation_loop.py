@@ -27,10 +27,12 @@ EVOLUTION_PROMPT = """You are the Swarm OS Genetic Architect.
 Your goal is to optimize the core engine function `{target_func}` to make it faster and use less memory based on recent performance logs.
 
 Current core code slice (Program Dependence Graph):
+```python
 {core_code_slice}
+```
 
 Task: Write a fully optimized replacement for the `{target_func}` function that improves real-world performance while preserving correctness and passing compile and test validation.
-Output the complete modified python code enclosed in ```python...``` blocks. Do not explain. Just output the code.
+Output ONLY the complete modified python code enclosed in ```python...``` blocks. DO NOT add any markdown formatting other than the ```python``` block. DO NOT use unescaped characters or write incomplete code. Ensure the code is strictly syntactically valid Python. Do not explain. Just output the code.
 """
 
 # Track diversity for Extinction Events.
@@ -56,10 +58,13 @@ async def run_genetic_mutation():
     with open(AGENT_SERVICE_PATH, "r", encoding="utf-8") as f:
         core_code = f.read()
 
-    target_func = "_check_budget_before_action"
+    target_func = "get_agent"
     
     # AST Slicing: Only extract the targeted bottleneck rather than truncating randomly
     sliced_code = ast_slice(core_code, target_func)
+    
+    if not sliced_code:
+        raise ValueError(f"FATAL: Target function '{target_func}' not found in source code. Aborting to prevent file explosion.")
     
     prompt = EVOLUTION_PROMPT.format(target_func=target_func, core_code_slice=sliced_code)
     
@@ -105,11 +110,12 @@ async def run_genetic_mutation():
             )
             mutated_code_full = res.choices[0].message.content
             
-            match = re.search(r"```python(.*?)```", mutated_code_full, re.DOTALL)
+            match = re.search(r"```(?:python)?(.*?)```", mutated_code_full, re.DOTALL)
             if match:
                 mutated_code = match.group(1).strip()
             else:
-                mutated_code = mutated_code_full.strip()
+                # Fallback: remove any remaining backticks to prevent syntax errors
+                mutated_code = mutated_code_full.replace("```python", "").replace("```", "").strip()
                 
             # Splice the mutated function back into the core code
             # rather than overwriting the entire file with a single function
@@ -164,7 +170,7 @@ async def run_genetic_mutation():
                     "outcome": "success",
                     "task_id": "engine_evolution",
                     "mutation_id": mutation_id,
-                    "target_path": str(target_file),
+                    "target_path": str(AGENT_SERVICE_PATH),
                     "pending_file": str(pending_file),
                     "created_at": datetime.now(timezone.utc).isoformat(),
                     "compile_ok": True,

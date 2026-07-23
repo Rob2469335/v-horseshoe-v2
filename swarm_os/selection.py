@@ -114,7 +114,7 @@ _SELF_CRITIQUE_PATTERNS = re.compile(
 )
 
 
-def _cognition_bonus(action: Dict[str, Any], genome) -> float:
+def _cognition_bonus(action: Dict[str, Any], genome: Any) -> float:
     content = action.get("content", "")
     if not content:
         return 0.0
@@ -130,34 +130,31 @@ def _cognition_bonus(action: Dict[str, Any], genome) -> float:
 
 # ── Diversity bonus ────────────────────────────────────────────────────────────
 
-def _diversity_bonus(organism: Organism, population: List[Organism]) -> float:
+def _get_dominant_domain(organism: Organism) -> str:
+    if not getattr(organism, "genome", None):
+        return "general"
+    return max(["coding", "research", "upwork"],
+               key=lambda d: getattr(organism.genome, f"{d}_affinity", 0.33))
+
+def _diversity_bonus(organism: Organism, dom_counts: Dict[str, int], total_population: int) -> float:
     """
     Small fitness bonus for organisms whose dominant domain affinity
     is rare in the current population. Prevents monoculture.
     """
-    def dominant(o: Organism) -> str:
-        return max(["coding", "research", "upwork"],
-                   key=lambda d: getattr(o.genome, f"{d}_affinity"))
-
-    my_dom = dominant(organism)
-    dom_counts = {}
-    for o in population:
-        d = dominant(o)
-        dom_counts[d] = dom_counts.get(d, 0) + 1
-
-    total = len(population)
-    if total == 0:
+    if total_population == 0:
         return 0.0
 
+    my_dom = _get_dominant_domain(organism)
     my_count = dom_counts.get(my_dom, 1)
+    
     # Rarity bonus: 0.0 if dominant (>50%), up to 0.08 if unique
-    rarity = 1.0 - (my_count / total)
+    rarity = 1.0 - (my_count / total_population)
     return round(rarity * 0.08, 4)
 
 
 # ── Stagnation penalty ─────────────────────────────────────────────────────────
 
-def _stagnation_penalty(genome, window: int = 5) -> float:
+def _stagnation_penalty(genome: Any, window: int = 5) -> float:
     """
     Small penalty if average_fitness hasn't improved recently.
     Uses evaluations count as a proxy — if the organism has many evals
@@ -175,7 +172,7 @@ def _stagnation_penalty(genome, window: int = 5) -> float:
 
 def score_response(
     action: Dict[str, Any],
-    genome,
+    genome: Any,
     task_domain: str,
     human_score: Optional[float] = None,
 ) -> Dict[str, float]:
@@ -222,7 +219,17 @@ class SelectionEngine:
         actions: Optional[List[Dict[str, Any]]] = None,
         human_scores: Optional[Dict[str, float]] = None,
     ) -> None:
+        """
+        Evaluate and score a population of organisms based on their actions.
+        """
         task_domain = env.current_task.domain if env.current_task else "general"
+
+        # Precompute dominant counts to avoid O(N^2) scaling
+        dom_counts: Dict[str, int] = {}
+        for o in organisms:
+            d = _get_dominant_domain(o)
+            dom_counts[d] = dom_counts.get(d, 0) + 1
+        total_organisms = len(organisms)
 
         for i, o in enumerate(organisms):
             action = actions[i] if (actions and i < len(actions)) else {}
@@ -242,7 +249,7 @@ class SelectionEngine:
             composite -= env.resource_pressure() * 0.05
 
             # ── Diversity bonus — rewards rare domain specialists ─────────────
-            composite += _diversity_bonus(o, organisms)
+            composite += _diversity_bonus(o, dom_counts, total_organisms)
 
             # ── Stagnation penalty — nudges stuck incumbents ──────────────────
             composite -= _stagnation_penalty(o.genome)
@@ -314,6 +321,7 @@ class SelectionEngine:
         return selected
 
     def cull(self, organisms: List[Organism], max_size: int) -> List[Organism]:
+        """Keep only the top max_size organisms based on fitness."""
         organisms.sort(key=lambda o: (-o.genome.average_fitness, o.id))
         if len(organisms) > max_size:
             log.info("culled %d → kept %d", len(organisms) - max_size, max_size)

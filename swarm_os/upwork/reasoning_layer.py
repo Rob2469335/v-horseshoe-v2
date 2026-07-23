@@ -4,7 +4,7 @@ OLLAMA_URL = "http://localhost:11434/api/generate"
 MODEL = "qwen3:14b"
 
 
-def explain_decision(job_text: str, prediction: dict):
+async def explain_decision(job_text: str, prediction: dict):
 
     prompt = f"""
 You are an Upwork bidding strategist.
@@ -23,10 +23,12 @@ Do 3 things:
 Be concise and practical.
 """
 
-    r = requests.post(OLLAMA_URL, json={
-        "model": MODEL,
-        "prompt": prompt,
-        "stream": False
-    })
+    import httpx
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        r = await client.post(OLLAMA_URL, json={
+            "model": MODEL,
+            "prompt": prompt,
+            "stream": False
+        })
 
     return r.json().get("response", "")

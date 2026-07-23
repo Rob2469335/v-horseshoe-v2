@@ -13,11 +13,13 @@ from rich.markdown import Markdown
 
 from organism_console.api_client import call_api
 from organism_console.ui.banner import get_system_stats, estimate_tokens
-from organism_console.renderer import render_step_micro_ui, render_trace_panel
+from organism_console.renderer import render_step_micro_ui, render_trace_panel, render_tool_execution
+from organism_console.token_tracker import record_chunk
 
 log = logging.getLogger("zenith_cli")
 
 _AGENT_PERF: dict = {}  # {agent_id: {"total": float, "count": int, "last": float}}
+_AGENT_PERF_MAX = 256  # BUG FIX: cap to prevent unbounded memory growth
 
 def update_token_metrics(ctx, prompt, history, output_content, model):
     input_tokens = estimate_tokens(prompt + json.dumps(history))
@@ -67,12 +69,16 @@ def status_bar(ctx, agent, model, phase, ram_pct, tps: float = 0.0):
         f"{tps_str}"
     )
 
-def stream_prompt(ctx, agent_id, prompt, history):
+import asyncio
+from organism_console.api_client import call_api_async_stream
+
+async def _stream_prompt_async(ctx, agent_id, prompt, history):
     while True:
         stats = get_system_stats()
         if stats["ram_pct"] > 90:
             ctx.console.print("[bold red]WARNING:[/bold red] RAM critical, expect slower response.")
 
+        client = None
         payload = {
             "agent_id": agent_id,
             "prompt": prompt,
@@ -80,10 +86,17 @@ def stream_prompt(ctx, agent_id, prompt, history):
             "focus_file": getattr(ctx, "focus_file", None),
             "delegation_chain": getattr(ctx, "delegation_chain", [agent_id]),
         }
-        resp = call_api(f"/agents/{agent_id}/step/stream", "POST", payload, stream=True)
+        try:
+            client, resp = await call_api_async_stream(f"/agents/{agent_id}/step/stream", "POST", payload)
+        except Exception as e:
+            ctx.console.print(f"[bold red]ERROR:[/bold red] API call failed: {e}")
+            return history
 
         if not resp:
             ctx.console.print("[bold red]ERROR:[/bold red] Backend unreachable.")
+            # BUG FIX: Close the client even on early return to avoid leaking HTTP connections
+            if client is not None:
+                await client.aclose()
             return history
 
         full_content = ""
@@ -95,7 +108,7 @@ def stream_prompt(ctx, agent_id, prompt, history):
         _tokens_counted = False
         _char_count = 0
 
-        ctx.console.print(Rule(style="dim blue"))
+        ctx.console.print(Rule(title="[bold #ff00ea]COMM-LINK ESTABLISHED[/bold #ff00ea]", style="bold #00f0ff"))
         if not getattr(ctx, "delegation_chain", None):
             ctx.delegation_chain = [agent_id]
         ctx.last_stream_status = "interrupted"
@@ -106,10 +119,10 @@ def stream_prompt(ctx, agent_id, prompt, history):
 
         with Live(console=ctx.console, refresh_per_second=15) as live:
             def safe_print(*args, **kwargs):
-                ctx.console.print(*args, **kwargs)
+                live.console.print(*args, **kwargs)
 
             try:
-                for line in resp.iter_lines():
+                async for line in resp.aiter_lines():
                     if isinstance(line, bytes):
                         line = line.decode("utf-8", errors="replace")
                     if not line:
@@ -121,6 +134,7 @@ def stream_prompt(ctx, agent_id, prompt, history):
 
                     try:
                         chunk = json.loads(line)
+                        record_chunk(chunk)
                     except json.JSONDecodeError:
                         continue
                     chunk_type = chunk.get("type")
@@ -213,9 +227,21 @@ def stream_prompt(ctx, agent_id, prompt, history):
                         safe_print(render_step_micro_ui("swarm", f"{from_a} → {to_a}: {task}"))
                         continue
 
+                    if chunk_type == "tool_call":
+                        tool_name = chunk.get("tool") or chunk.get("name")
+                        args_dict = chunk.get("arguments", {})
+                        if args_dict:
+                            safe_print(render_tool_execution(tool_name, args_dict))
+                        else:
+                            safe_print(render_step_micro_ui("tool_call", f"executing tool {tool_name}"))
+                        continue
+
                     if chunk_type == "tool_result":
                         tool = chunk.get("tool")
-                        if ctx.trace_mode:
+                        payload = chunk.get("payload") or chunk.get("arguments")
+                        if payload and isinstance(payload, dict):
+                            safe_print(render_tool_execution(tool, payload))
+                        elif ctx.trace_mode:
                             panel = render_trace_panel(
                                 "Tool Execution Details",
                                 {"tool": tool, "executing_model": chunk.get("model", "unknown")},
@@ -226,7 +252,7 @@ def stream_prompt(ctx, agent_id, prompt, history):
                             safe_print(render_step_micro_ui("tool_call", f"executing tool {tool}"))
                         continue
 
-                    if "content" in chunk or "thinking" in chunk:
+                    if ("content" in chunk or "thinking" in chunk or chunk_type == "ping") and chunk_type != "final":
                         piece = chunk.get("content") or chunk.get("thinking") or ""
                         model = chunk.get("model") or model
                         full_content += piece
@@ -293,7 +319,8 @@ def stream_prompt(ctx, agent_id, prompt, history):
                             display_lines = display.splitlines()
                             max_display_lines = 20
                             if len(display_lines) > max_display_lines:
-                                display = "..." + "\\n".join(display_lines[-max_display_lines:])
+                                # BUG FIX: Use real "\n" not escaped "\\n" which renders as literal backslash-n
+                                display = "..." + "\n".join(display_lines[-max_display_lines:])
                             layout.add_row(Panel(escape(display), border_style="bright_blue dim", padding=(0, 1)))
 
                         if ctx.delegation_chain:
@@ -323,9 +350,9 @@ def stream_prompt(ctx, agent_id, prompt, history):
                         ctx.last_provider = chunk.get("provider", "ollama")
 
                         if isinstance(final_content, dict):
-                            ctx.console.print(Panel(json.dumps(final_content, indent=2), border_style="green"))
+                            ctx.console.print(Panel(json.dumps(final_content, indent=2), title="[bold #ff00ea]SWARM OS RESPONSE[/bold #ff00ea]", border_style="bold #00f0ff"))
                         elif final_content:
-                            ctx.console.print(Panel(Markdown(str(final_content)), border_style="green", padding=(1, 2)))
+                            ctx.console.print(Panel(Markdown(str(final_content)), title="[bold #ff00ea]SWARM OS RESPONSE[/bold #ff00ea]", border_style="bold #00f0ff", padding=(1, 2)))
 
                         new_history = list(history)
                         if prompt:
@@ -337,6 +364,9 @@ def stream_prompt(ctx, agent_id, prompt, history):
                         elapsed_total = time.time() - start_time
                         update_token_metrics(ctx, prompt, history, final_content or full_content, model)
 
+                        # BUG FIX: Cap _AGENT_PERF dict to prevent unbounded memory growth
+                        if len(_AGENT_PERF) > _AGENT_PERF_MAX:
+                            _AGENT_PERF.clear()
                         perf = _AGENT_PERF.setdefault(agent_id, {"total": 0.0, "count": 0, "last": 0.0})
                         perf["total"] += elapsed_total
                         perf["count"] += 1
@@ -403,14 +433,18 @@ def stream_prompt(ctx, agent_id, prompt, history):
                     _tokens_counted = True
                 _stream_errored = True
 
+            finally:
+                if client is not None:
+                    await client.aclose()
+
         if _ask_user_triggered:
             continue
             
-        ctx.console.print(Rule(style="dim blue"))
+        ctx.console.print(Rule(title="[bold #ff00ea]COMM-LINK CLOSED[/bold #ff00ea]", style="bold #00f0ff"))
 
         if full_content and full_content.strip():
             ctx.console.print()
-            ctx.console.print(Panel(str(full_content), border_style="green"))
+            ctx.console.print(Panel(str(full_content), title="[bold #ff00ea]SWARM OS RESPONSE[/bold #ff00ea]", border_style="bold #00f0ff", padding=(1, 2)))
 
         if not _tokens_counted:
             update_token_metrics(ctx, prompt, history, full_content, model)
@@ -420,12 +454,33 @@ def stream_prompt(ctx, agent_id, prompt, history):
             
         return history
 
+def stream_prompt(ctx, agent_id, prompt, history):
+    # BUG FIX: asyncio.run() raises RuntimeError if called from an already-running event loop.
+    # This can happen when stream_prompt is invoked from Jupyter, tests, or certain frameworks.
+    # Solution: if a loop is already running, offload to a fresh thread with its own loop.
+    try:
+        loop = asyncio.get_running_loop()
+        # A loop is already running — run in a separate thread to avoid nesting
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(asyncio.run, _stream_prompt_async(ctx, agent_id, prompt, history))
+            return future.result()
+    except RuntimeError:
+        # No running loop — safe to use asyncio.run() directly
+        return asyncio.run(_stream_prompt_async(ctx, agent_id, prompt, history))
+
 def stream_prompt_with_retry(ctx, agent_id, prompt, history, max_retries=3):
     ctx.delegation_chain = [agent_id]
     delays = [2, 5, 10]
     for attempt in range(max_retries):
         result = stream_prompt(ctx, agent_id, prompt, history)
         if len(result) > len(history):
+            if getattr(ctx, "speech_enabled", False):
+                from organism_console.speech import speak_async, play_chime_async
+                last_msg = result[-1].get("content", "") if result else ""
+                if last_msg:
+                    speak_async(last_msg)
+                play_chime_async("success")
             return result
         if attempt < max_retries - 1:
             delay = delays[attempt]
@@ -433,8 +488,12 @@ def stream_prompt_with_retry(ctx, agent_id, prompt, history, max_retries=3):
                 f"[bold yellow]  Retry {attempt+1}/{max_retries - 1}[/bold yellow] "
                 f"[dim]in {delay}s...[/dim]"
             )
-            import sys
-            for _ in range(delay * 10):
-                time.sleep(0.1)
+            # BUG FIX: Use a single time.sleep(delay) instead of a busy-loop of 0.1s sleeps
+            time.sleep(delay)
+                
+    if getattr(ctx, "speech_enabled", False):
+        from organism_console.speech import play_chime_async
+        play_chime_async("error")
+        
     ctx.console.print("[bold red]All retry attempts exhausted.[/bold red]")
     return history

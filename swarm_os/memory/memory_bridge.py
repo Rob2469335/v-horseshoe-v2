@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
+import networkx as nx
 
 from swarm_os.services.embedding_service import EmbeddingService
 from swarm_os.services.vector_store import VectorStore
@@ -23,15 +24,13 @@ logger = logging.getLogger(__name__)
 # MEMORY BRIDGE v12 (FINAL SWARM CORE)
 # ============================================================
 
-COLLECTION = "horseshoe_swarm_memory_final_v12"
-
 CHUNK_SIZE = 12
 SESSION_WINDOW = 40
 DEDUP_WINDOW = 300
 
 OLLAMA = "http://localhost:11434"
-SUM_MODEL = "mistral-nemo"
-EMBED_MODEL = "nomic-embed-text"
+SUM_MODEL = "phi4-mini:latest"
+EMBED_MODEL = "nomic-embed-text:latest"
 VECTOR_SIZE = 768
 
 WATERMARK = Path("logs/.memory_bridge_offset.json")
@@ -73,7 +72,7 @@ class MemoryBridge:
         self.path = Path(event_log_path)
 
         self.vs = vector_store or VectorStore(
-            collection_name=COLLECTION,
+            collection_name="swarm_memory",
             vector_size=VECTOR_SIZE,
             use_memory=False,
         )
@@ -83,15 +82,20 @@ class MemoryBridge:
             model=EMBED_MODEL,
         )
 
-        self.http = httpx.AsyncClient(timeout=60.0)
+        self.http = httpx.AsyncClient(timeout=120.0)
 
         self.offset = self._load_offset()
         self.state = self._load_state()
+
+        self.graph_path = Path("logs/memory_graph.graphml")
+        self.graph = nx.DiGraph()
+        self._load_graph()
 
         self.session = Session(id=str(uuid.uuid4()))
 
         self.lock_embed = asyncio.Lock()
         self.lock_vector = asyncio.Lock()
+        self.graph_lock = asyncio.Lock()
 
         self.recent_hashes: deque[str] = deque(maxlen=DEDUP_WINDOW)
         self.embedding_cache: Dict[str, list] = {}
@@ -134,6 +138,9 @@ class MemoryBridge:
         return flushed
 
     async def watch_loop(self, interval_seconds: float = 5.0, flush_tail: bool = False) -> None:
+        # BUG FIX: Actually launch the memory manager daemon as a background task.
+        # Previously start_manager_daemon was defined but never scheduled, so archival never ran.
+        daemon_task = asyncio.create_task(self.start_manager_daemon())
         try:
             while True:
                 try:
@@ -142,7 +149,30 @@ class MemoryBridge:
                     logger.warning("ingest error: %s", exc)
                 await asyncio.sleep(interval_seconds)
         finally:
+            daemon_task.cancel()
+            try:
+                await daemon_task
+            except asyncio.CancelledError:
+                pass
             await self.close()
+            
+    async def start_manager_daemon(self, interval_seconds: float = 300.0) -> None:
+        """Memory Manager Daemon that actively synthesizes core memory blocks and pages out to Archival Qdrant."""
+        try:
+            while True:
+                try:
+                    # Page out memory
+                    consolidated = await self.consolidate_memories()
+                    if consolidated:
+                        logger.info("Memory Manager Daemon: Successfully synthesized core memory and paged raw logs to Archival Memory (Qdrant).")
+                    
+                    # Update graph clusters
+                    await self.cluster_graph_rag()
+                except Exception as exc:
+                    logger.warning("manager daemon error: %s", exc)
+                await asyncio.sleep(interval_seconds)
+        except asyncio.CancelledError:
+            pass
 
     def _add(self, event: Dict[str, Any]) -> None:
         model = str(event.get("model") or event.get("assigned_to") or "unknown")
@@ -155,6 +185,46 @@ class MemoryBridge:
         self.session.outcomes.append(outcome)
         self.session.types.append(et)
         self.session.tasks.append(task)
+
+        # Graph Ontology Extraction
+        session_node = f"Session_{self.session.id}"
+        agent_node = f"Agent_{model}"
+        task_node = f"Task_{task}" if task else "Task_unknown"
+        tool_node = f"Tool_{et}"
+        outcome_node = f"Outcome_{outcome}" if outcome else "Outcome_unknown"
+        
+        now = time.time()
+        # BUG FIX: Cast timestamp to str for safe GraphML serialization.
+        # NetworkX's GraphML writer can fail or silently corrupt float attributes
+        # on strict parsers. String serialization is universally safe.
+        ts = str(now)
+        async def _mutate_graph():
+            async with self.graph_lock:
+                self.graph.add_node(session_node, type="Session")
+                self.graph.add_node(agent_node, type="Agent")
+                self.graph.add_node(task_node, type="Task")
+                self.graph.add_node(tool_node, type="Tool")
+                self.graph.add_node(outcome_node, type="Outcome")
+
+                self.graph.add_edge(agent_node, session_node, relation="PARTICIPATED_IN")
+                self.graph.add_edge(session_node, task_node, relation="ADDRESSED")
+                self.graph.add_edge(task_node, tool_node, relation="UTILIZED")
+                self.graph.add_edge(task_node, outcome_node, relation="RESULTED_IN")
+
+        asyncio.create_task(_mutate_graph())
+
+        # Epistemic Logic (Theory of Mind)
+        details = str(event.get("details", "")).lower()
+        if "found" in details or "discovered" in details or "learned" in details:
+            fact_node = f"Fact_{hashlib.md5(details.encode()).hexdigest()[:8]}"
+            self.graph.add_node(fact_node, type="Fact", content=details)
+            self.graph.add_edge(agent_node, fact_node, relation="BELIEVES", timestamp=ts)
+
+        delegated_to = event.get("delegated_to")
+        if delegated_to:
+            receiver_node = f"Agent_{delegated_to}"
+            self.graph.add_node(receiver_node, type="Agent")
+            self.graph.add_edge(receiver_node, agent_node, relation="KNOWS", timestamp=ts)
 
         self._update_policy(model, et, outcome)
 
@@ -222,17 +292,24 @@ class MemoryBridge:
     ) -> Dict[str, Any]:
         local = self.routing_signal(model, event_type)
 
-        query = f"event_type:{event_type} model:{model} routing decision"
+        query = f"routing decision"
         results: List[Dict[str, Any]] = []
 
         try:
             vec = await self._embed(query)
             if vec is not None:
+                from qdrant_client.models import Filter, FieldCondition, MatchValue
                 async with self.lock_vector:
                     results = await asyncio.to_thread(
                         self.vs.search,
                         query_vector=vec,
                         limit=top_k,
+                        filter_condition=Filter(
+                            must=[
+                                FieldCondition(key="types", match=MatchValue(value=event_type)),
+                                FieldCondition(key="models", match=MatchValue(value=model))
+                            ]
+                        )
                     )
         except Exception as exc:
             logger.warning("routing hint search error: %s", exc)
@@ -285,6 +362,7 @@ class MemoryBridge:
             "indexed_at": time.time(),
         }
 
+        self._save_graph()
         return await self._store(vec, payload)
 
     async def _store(self, vec: list, payload: dict) -> bool:
@@ -302,11 +380,17 @@ class MemoryBridge:
             return False
 
     async def _embed(self, text: str) -> Optional[list]:
+        # Fast path: no lock needed for read
         if text in self.embedding_cache:
             return self.embedding_cache[text]
 
         try:
             async with self.lock_embed:
+                # BUG FIX: Double-checked locking pattern.
+                # Multiple coroutines could be waiting on this lock for the same text.
+                # Without the inner check, they would all re-embed sequentially and waste time.
+                if text in self.embedding_cache:
+                    return self.embedding_cache[text]
                 vec = await asyncio.to_thread(self.emb.embed, text)
                 self.embedding_cache[text] = vec
                 return vec
@@ -431,6 +515,21 @@ class MemoryBridge:
             encoding="utf-8",
         )
 
+    def _load_graph(self) -> None:
+        try:
+            if self.graph_path.exists():
+                self.graph = nx.read_graphml(self.graph_path)
+        except Exception as exc:
+            logger.warning("Failed to load graph: %s", exc)
+            self.graph = nx.DiGraph()
+
+    def _save_graph(self) -> None:
+        try:
+            self.graph_path.parent.mkdir(parents=True, exist_ok=True)
+            nx.write_graphml(self.graph, self.graph_path)
+        except Exception as exc:
+            logger.warning("Failed to save graph: %s", exc)
+
     async def get_memory_context(self, query: str) -> str:
         """
         Retrieves similar memories and applies keyword boosting (hybrid search).
@@ -482,8 +581,30 @@ class MemoryBridge:
                 summary = payload.get("summary", "")
                 models = payload.get("models", [])
                 outcome = payload.get("dominant_outcome", "unknown")
+                session_id = payload.get("session", "")
+                
                 if summary:
                     context_parts.append(f"- Summary: {summary} (Models: {', '.join(models)}, Outcome: {outcome})")
+                
+                # Hybrid Graph Traversal
+                if session_id:
+                    session_node = f"Session_{session_id}"
+                    if self.graph.has_node(session_node):
+                        edges = nx.edge_bfs(self.graph, session_node, orientation='original')
+                        paths = []
+                        pageranks = nx.get_node_attributes(self.graph, 'pagerank')
+                        for u, v, _ in list(edges)[:15]:
+                            rel = self.graph[u][v].get('relation', 'CONNECTED_TO')
+                            score_u = pageranks.get(u, 0.0)
+                            score_v = pageranks.get(v, 0.0)
+                            if score_u > 0.01 or score_v > 0.01 or "Community" in v or "Community" in u:
+                                paths.append(f"  * {u} -> {rel} -> {v} [Importance: {score_v:.4f}]")
+                            else:
+                                paths.append(f"  * {u} -> {rel} -> {v}")
+                        if paths:
+                            context_parts.append("  [GraphRAG Subgraph Context]:")
+                            # Deduplicate and sort by length/importance (simplified)
+                            context_parts.extend(list(dict.fromkeys(paths))[:10])
             
             return "\n".join(context_parts) + "\n"
         except Exception as e:
@@ -496,14 +617,21 @@ class MemoryBridge:
         and upsert a unified consolidated summary while deleting the old individual entries.
         """
         try:
-            # Retrieve up to 100 entries from Qdrant
-            records, _ = await asyncio.to_thread(
-                self.vs.client.scroll,
-                collection_name=self.vs.collection_name,
-                limit=100,
-                with_payload=True,
-                with_vectors=False
-            )
+            from qdrant_client.models import Filter, FieldCondition, MatchValue
+            # Retrieve up to 100 entries from Qdrant that are not consolidated
+            async with self.lock_vector:
+                records, _ = await asyncio.to_thread(
+                    self.vs.client.scroll,
+                    collection_name=self.vs.collection_name,
+                    limit=100,
+                    with_payload=True,
+                    with_vectors=False,
+                    scroll_filter=Filter(
+                        must_not=[
+                            FieldCondition(key="consolidated", match=MatchValue(value=True))
+                        ]
+                    )
+                )
             if not records or len(records) < 3:
                 return False
 
@@ -559,14 +687,88 @@ class MemoryBridge:
 
                 success = await self._store(vec, payload)
                 if success:
-                    for it in items:
-                        await asyncio.to_thread(self.vs.delete, doc_id=it.id)
+                    from qdrant_client.models import PointIdsList
+                    async with self.lock_vector:
+                        point_ids = [it.id for it in items]
+                        await asyncio.to_thread(
+                            self.vs.client.delete,
+                            collection_name=self.vs.collection_name,
+                            points_selector=PointIdsList(points=point_ids)
+                        )
                     consolidated_any = True
 
             return consolidated_any
         except Exception as exc:
             logger.warning("Memory consolidation failed: %s", exc)
             return False
+
+    async def cluster_graph_rag(self) -> None:
+        """
+        Phase 4: GraphRAG Advanced Extraction.
+        Uses Louvain Community Detection to group related sessions and agents.
+        Calculates PageRank to highlight the most structurally important elements.
+        Generates hierarchical summaries for each community.
+        """
+        try:
+            from networkx.algorithms import community
+            if len(self.graph.nodes) < 5:
+                return
+
+            undirected_graph = self.graph.to_undirected()
+            communities = community.louvain_communities(undirected_graph)
+            
+            pagerank_scores = nx.pagerank(self.graph)
+            nx.set_node_attributes(self.graph, pagerank_scores, 'pagerank')
+
+            for idx, c in enumerate(communities):
+                if len(c) < 3:
+                    continue
+                comm_node = f"Community_Cluster_{idx}"
+                async with self.graph_lock:
+                    if self.graph.has_node(comm_node):
+                        continue
+                        
+                    self.graph.add_node(comm_node, type="Community")
+                    
+                    for node in c:
+                        self.graph.add_edge(node, comm_node, relation="BELONGS_TO")
+
+                important_nodes = sorted([n for n in c], key=lambda x: pagerank_scores.get(x, 0), reverse=True)[:5]
+                prompt = f"Summarize the relationship between these graph nodes which belong to the same community cluster: {', '.join(important_nodes)}"
+                
+                try:
+                    response = await self.http.post(
+                        f"{OLLAMA}/api/generate",
+                        json={
+                            "model": SUM_MODEL,
+                            "prompt": prompt,
+                            "stream": False,
+                            "options": {"temperature": 0},
+                        },
+                    )
+                    response.raise_for_status()
+                    summary = (response.json().get("response") or "").strip()
+                except Exception:
+                    summary = f"Community cluster {idx} containing {len(c)} nodes."
+                
+                nx.set_node_attributes(self.graph, {comm_node: summary}, 'summary')
+                
+                vec = await self._embed(summary)
+                if vec:
+                    payload = {
+                        "summary": summary,
+                        "dominant_outcome": "community_cluster",
+                        "event_count": len(c),
+                        "source": "graphrag_community",
+                        "indexed_at": time.time(),
+                        "cluster_id": idx
+                    }
+                    await self._store(vec, payload)
+            
+            self._save_graph()
+            logger.info(f"GraphRAG: Found {len(communities)} communities and computed PageRank.")
+        except Exception as exc:
+            logger.warning("GraphRAG clustering failed: %s", exc)
 
     async def close(self) -> None:
         self._save_state()

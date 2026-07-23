@@ -45,6 +45,8 @@ class Settings:
     swarm_url: str = _env_str("SWARM_URL", "http://127.0.0.1:11436")
     swarm_timeout: float = float(_env_int("SWARM_TIMEOUT", 30))
     snapshot_dir: str = _env_str("SWARM_SNAPSHOT_DIR", "data/snapshots")
+    snapshot_every: int = _env_int("SWARM_SNAPSHOT_EVERY", 5)
+    generations: int = _env_int("SWARM_GENERATIONS", 20)
     ssl_verify: bool = _env_bool("SWARM_SSL_VERIFY", False)
 
 

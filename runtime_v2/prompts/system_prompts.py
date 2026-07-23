@@ -33,7 +33,7 @@ _ROLE_RULES: dict[str, str] = {
     ),
     "researcher": (
         "You are the RESEARCHER. Gather context only - never modify files.\n"
-        "Use filesystem to read/grep/list. Use web_search for external info.\n"
+        "CRITICAL: For codebase questions, ALWAYS use semantic_search FIRST. NEVER use filesystem list on large/root directories. Use filesystem only to read a SPECIFIC file once semantic_search identifies it. Use web_search for external info.\n"
         "To save a turn, you MUST include 'response': '<your findings>' in the SAME JSON object as your final tool call. This will automatically finalize your task."
     ),
     "executor": (

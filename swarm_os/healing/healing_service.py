@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from .anomaly_tracker import AnomalyTracker
 from .failure_detector import FailureDetector
@@ -13,9 +14,11 @@ class HealingService:
         self.tracker = tracker or AnomalyTracker()
         self.engine = engine or RecoveryEngine()
         self.rollback = rollback or RollbackManager()
+        # BUG FIX: Lock to prevent concurrent run_once() and heal() racing on the same component
+        self._recovery_lock = asyncio.Lock()
 
-    def status(self):
-        report = self.detector.check()
+    async def status(self):
+        report = await self.detector.check()
         checks = report.get("raw", {})
         active = [name for name, result in checks.items() if isinstance(result, dict) and not result.get("ok", False)]
         return {
@@ -32,7 +35,7 @@ class HealingService:
 
     async def run_once(self):
         logger.info("Running routine healing check.")
-        report = self.detector.check()
+        report = await self.detector.check()
         checks = report.get("raw", {})
         failed = [name for name, r in checks.items() if isinstance(r, dict) and not r.get("ok", False)]
         if not failed:
@@ -51,7 +54,8 @@ class HealingService:
             try:
                 logger.warning(f"Failure detected in {name}. Attempting recovery.")
                 anomaly = self.tracker.record(name, 'warning', f'{name} check failed', {})
-                result = await self.engine.recover(anomaly)
+                async with self._recovery_lock:
+                    result = await self.engine.recover(anomaly)
                 healed.append({'service': name, 'ok': result.get('ok', False), 'detail': result.get('message', result.get('error', ''))})
             except Exception as exc:
                 logger.error(f"Recovery failed for {name}: {exc}", exc_info=True)
@@ -69,7 +73,8 @@ class HealingService:
     async def heal(self, source, action="recover", **payload):
         logger.info(f"Initiating manual heal for {source} (Action: {action})")
         anomaly = self.tracker.record(source, "warning", payload.get("reason", "failure detected"), payload)
-        result = await self.engine.recover(anomaly)
+        async with self._recovery_lock:
+            result = await self.engine.recover(anomaly)
 
         success = bool(result.get("ok", False))
         if success:

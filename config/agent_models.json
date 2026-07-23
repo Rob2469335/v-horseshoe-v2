@@ -1,34 +1,34 @@
 {
-  "coordinator": [
-    "danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS",
-    "ollama"
-  ],
-  "planner": [
-    "danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS",
-    "ollama"
-  ],
-  "researcher": [
-    "danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS",
-    "ollama"
-  ],
-  "executor": [
-    "danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS",
+  "debugger": [
+    "qwen-tuned",
     "ollama"
   ],
   "coder": [
-    "danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS",
-    "ollama"
-  ],
-  "tool-runner": [
-    "danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS",
+    "qwen-tuned",
     "ollama"
   ],
   "reviewer": [
-    "danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS",
+    "qwen-tuned",
     "ollama"
   ],
-  "debugger": [
-    "danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS",
+  "planner": [
+    "qwen-tuned",
+    "ollama"
+  ],
+  "researcher": [
+    "qwen-tuned",
+    "ollama"
+  ],
+  "coordinator": [
+    "qwen-tuned",
+    "ollama"
+  ],
+  "tool-runner": [
+    "qwen-tuned",
+    "ollama"
+  ],
+  "executor": [
+    "qwen-tuned",
     "ollama"
   ]
 }

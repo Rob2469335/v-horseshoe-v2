@@ -5,8 +5,9 @@ from typing import Any
 from .models import CriticResult
 
 class Critic:
-    def evaluate_step(self, result: Any, expected_kind: str) -> CriticResult:
+    def evaluate_step(self, result: Any, expected_kind: str, retry_count: int = 0, max_retries: int = 3) -> CriticResult:
         """Evaluates execution outputs against structural contract rules."""
+        can_retry = retry_count < max_retries
         if expected_kind == "tool":
             if isinstance(result, dict):
                 if not result.get("ok", True) or "error" in result:
@@ -14,7 +15,7 @@ class Critic:
                         accepted=False,
                         score=0.1,
                         reason=f"Tool error: {result.get('error', 'unspecified error')}",
-                        retryable=True,
+                        retryable=can_retry,
                     )
                 # If there are entries/matches and they are empty, or surgical errors
                 if "entries" in result and not result["entries"] and result.get("path"):
@@ -22,7 +23,7 @@ class Critic:
                         accepted=False,
                         score=0.3,
                         reason="Directory listing returned no entries.",
-                        retryable=True,
+                        retryable=can_retry,
                     )
             return CriticResult(
                 accepted=True,
@@ -34,7 +35,7 @@ class Critic:
             accepted=True,
             score=0.6,
             reason="non-tool stub-eval",
-            retryable=True,
+            retryable=can_retry,
         )
 
 

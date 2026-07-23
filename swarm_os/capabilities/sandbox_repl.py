@@ -57,6 +57,7 @@ class SandboxReplHandler:
                     proc.kill()
                 except Exception:
                     pass
+                await proc.wait()
                 return {
                     "ok": False,
                     "stdout": "",

@@ -11,11 +11,16 @@ export const appConfig = {
     traceSummary: "/traces/summary?limit=50",
     adminStatus: "/api/admin/status",
     adminDashboard: "/api/admin/dashboard",
-    adminGeneration: "/api/admin/generation"
+    adminGeneration: "/api/admin/generation",
+    routerStats: "/router",
+    criticStats: "/critic",
+    memories: "/memories"
   },
   requestTimeoutMs: 60000,
   sseEnabled: true
 } as const
+
+
 
 
 

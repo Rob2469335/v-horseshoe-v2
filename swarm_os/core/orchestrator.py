@@ -6,10 +6,12 @@ import time
 import json
 import asyncio
 import httpx
+import threading
 
 from ..config.settings import settings as swarm_settings
 from ..core.settings import get_settings
 from ..events.store import EventStore
+from ..events.envelope import EventEnvelope
 from ..infra.ollama import OllamaClient
 from ..services.simulation_service import SimulationService
 from swarm_os.services.control_plane.critic import Critic
@@ -22,6 +24,14 @@ from swarm_os.memory.memory_bridge import MemoryBridge
 from swarm_os.lib.mcp.registry import registry as mcp_registry
 
 log = logging.getLogger(__name__)
+
+global_httpx_client = httpx.AsyncClient(
+    timeout=120.0,
+    limits=httpx.Limits(max_keepalive_connections=50, max_connections=100),
+    verify=swarm_settings.ssl_verify
+)
+_cached_models: list[str] = []
+_models_cache_time: float = 0.0
 
 class Orchestrator:
     """
@@ -38,17 +48,19 @@ class Orchestrator:
         self.critic = Critic()
         self.planner = Planner()
         
-        self.bridge = MemoryBridge()
+        self.bridge = MemoryBridge(event_log_path="data/events/events.jsonl")
         self.simulation = SimulationService(generate_fn=self.generate)
         self.mcp = mcp_registry
+        self._token_lock = asyncio.Lock()
         self.total_tokens_used = 0
         self.max_tokens_budget = 500000
 
         self.router = Router(
             profiles=[
-                ModelProfile(name="danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS", role="fast", max_tokens=32000),
-                ModelProfile(name="danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS", role="coding", max_tokens=32768),
-                ModelProfile(name="danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS", role="reasoning", max_tokens=32000),
+                ModelProfile(name="qwen-tuned", role="fast", max_tokens=32000),
+                ModelProfile(name="qwen-tuned", role="coding", max_tokens=32768),
+                ModelProfile(name="qwen-tuned", role="reasoning", max_tokens=32000),
+                ModelProfile(name="qwen-tuned", role="reviewer", max_tokens=32000),
                 ModelProfile(name="qwen3-vl:8b", role="vision", preferred_temp=0.2, max_tokens=32768),
                 ModelProfile(name="moondream:latest", role="vision", preferred_temp=0.2, max_tokens=8192),
             ],
@@ -83,14 +95,18 @@ class Orchestrator:
         return "fast"
 
     async def _fetch_installed_models(self) -> list[str]:
+        global _cached_models, _models_cache_time
+        if _cached_models and time.time() - _models_cache_time < 60.0:
+            return _cached_models
         try:
-            async with httpx.AsyncClient(timeout=5) as client:
-                response = await client.get("http://127.0.0.1:11434/api/tags")
-                response.raise_for_status()
-                data = response.json()
-                return [m.get("name") for m in data.get("models", []) if m.get("name")]
+            response = await global_httpx_client.get("http://127.0.0.1:11434/api/tags", timeout=5.0)
+            response.raise_for_status()
+            data = response.json()
+            _cached_models = [m.get("name") for m in data.get("models", []) if m.get("name")]
+            _models_cache_time = time.time()
+            return _cached_models
         except Exception:
-            return ["danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS"]
+            return _cached_models or ["qwen-tuned"]
 
     def _parse_tool_call(self, text: str) -> tuple[str, str] | None:
         # Check Pattern A: <tool_call name="tool">params</tool_call>
@@ -107,7 +123,7 @@ class Orchestrator:
         stripped = text.strip()
         if stripped.startswith("{") and stripped.endswith("}"):
             try:
-                obj = json.loads(stripped)
+                obj = json.loads(stripped, strict=False)
                 if isinstance(obj, dict):
                     if "tool" in obj and isinstance(obj["tool"], str):
                         params = obj.get("params", {})
@@ -124,28 +140,50 @@ class Orchestrator:
             except Exception:
                 pass
 
+        # Check Pattern D: embedded JSON (extract JSON from conversational text)
+        match_d = re.search(r'(\{.*?\})', text, re.DOTALL)
+        if match_d:
+            try:
+                json_str = match_d.group(1)
+                print(f"[Orchestrator DEBUG] Found embedded JSON: {repr(json_str)}")
+                obj = json.loads(json_str, strict=False)
+                print(f"[Orchestrator DEBUG] json.loads succeeded: {obj}")
+                if isinstance(obj, dict):
+                    if "tool" in obj and isinstance(obj["tool"], str):
+                        params = obj.get("params", {})
+                        print(f"[Orchestrator DEBUG] matched 'tool' key")
+                        return obj["tool"].strip(), json.dumps(params)
+                    if "tool_name" in obj and isinstance(obj["tool_name"], str):
+                        params = obj.get("params", {})
+                        print(f"[Orchestrator DEBUG] matched 'tool_name' key")
+                        return obj["tool_name"].strip(), json.dumps(params)
+                    # Support implicit 'delegate' call format emitted by some local LLMs
+                    if "target_agent" in obj and "task" in obj:
+                        print(f"[Orchestrator DEBUG] matched 'delegate' format")
+                        return "delegate", json.dumps(obj)
+                    print(f"[Orchestrator DEBUG] dict did not match known tool schemas. Keys: {list(obj.keys())}")
+            except Exception as e:
+                import traceback
+                print(f"[Orchestrator DEBUG] json.loads failed: {e}")
+                traceback.print_exc()
+        else:
+            print(f"[Orchestrator DEBUG] Pattern D regex failed on text: {repr(text)}")
+
+        print(f"[Orchestrator DEBUG] Returning None")
         return None
 
     def _detect_provider(self, model_name: str) -> str:
-        """Detect the intended provider for a given model name.
-        
-        This is purely name-based classification. API key availability
-        is checked separately in generate()/stream_generate() to decide
-        whether to fall back to a local model.
-        """
+        """Detect the intended provider for a given model name."""
         if not model_name:
             return "ollama"
         name_lower = model_name.lower()
         if "glm" in name_lower:
             return "glm"
-        # Models with '/' are cloud models
         if "/" in model_name:
-            # NVIDIA NIM models (nvidia/* and meta/* on NVIDIA)
             if model_name.startswith("nvidia/") or model_name.startswith("meta/"):
                 return "nvidia"
-            # Everything else with '/' is an OpenRouter model
             return "openrouter"
-        if "openrouter" in name_lower or "deepseek" in name_lower:
+        if model_name.startswith("openrouter/"):
             return "openrouter"
         return "ollama"
 
@@ -181,38 +219,37 @@ class Orchestrator:
         }
 
         if not stream:
-            async with httpx.AsyncClient(timeout=120.0, verify=swarm_settings.ssl_verify) as client:
-                resp = await client.post(url, json=payload, headers=headers)
-                resp.raise_for_status()
-                data = resp.json()
-                return data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+            resp = await global_httpx_client.post(url, json=payload, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+            return data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
         else:
             # Return an async generator for streaming
             return self._cloud_stream_generate(url, payload, headers)
 
     async def _cloud_stream_generate(self, url: str, payload: dict, headers: dict):
         """Async generator that streams from a cloud provider."""
-        async with httpx.AsyncClient(timeout=300.0, verify=swarm_settings.ssl_verify) as client:
-            async with client.stream("POST", url, json=payload, headers=headers) as response:
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    if line.startswith("data: "):
-                        line = line[6:].strip()
-                    if not line or line == "[DONE]":
-                        continue
-                    try:
-                        data = json.loads(line)
-                        chunk = data.get("choices", [{}])[0].get("delta", {}).get("content", "")
-                        if chunk:
-                            yield chunk
-                    except Exception:
-                        pass
+        async with global_httpx_client.stream("POST", url, json=payload, headers=headers) as response:
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                if line.startswith("data: "):
+                    line = line[6:].strip()
+                if not line or line == "[DONE]":
+                    continue
+                try:
+                    data = json.loads(line)
+                    chunk = data.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                    if chunk:
+                        yield chunk
+                except Exception:
+                    pass
 
     async def _get_memory_context(self, query: str) -> str:
         return await self.bridge.get_memory_context(query)
 
     async def generate(self, model: str | None, messages: list[dict] | None = None, prompt: str | None = None) -> tuple[str, str]:
-        messages = list(messages or [])
+        import copy
+        messages = copy.deepcopy(messages or [])
         # Context Injection
         if prompt:
             mem_context = await self._get_memory_context(prompt)
@@ -238,9 +275,8 @@ class Orchestrator:
         schemas_str = json.dumps(schemas, indent=2)
         tools_instruction = (
             "\n### Available MCP Tools:\n"
-            "You have access to the following tools. STOP YAPPING AND START ACTING. You MUST use the exact XML tags below to execute a tool. Do not just write out your plan. To call a tool, generate one of the following formats:\n"
-            '<tool_call name="tool_name">{"arg": "val"}</tool_call>\n'
-            '<tool>tool_name</tool> {"arg": "val"}\n\n'
+            "You have access to the following tools. You MUST respond with ONLY a raw JSON object to call a tool.\n"
+            "Format: {\"tool\": \"tool_name\", \"params\": {\"arg\": \"val\"}}\n\n"
             f"Tool Schemas:\n{schemas_str}\n"
         )
         inserted = False
@@ -269,7 +305,7 @@ class Orchestrator:
             allow_fallback=True,
         )
 
-        chosen_model = route_decision.model or "danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS"
+        chosen_model = route_decision.model or "qwen-tuned"
 
         self.trace.add(
             trace_id=trace_id,
@@ -297,7 +333,7 @@ class Orchestrator:
             "OPENROUTER_API_KEY" if provider == "openrouter" else "NVIDIA_API_KEY", ""
         ).strip():
             log.info(f"[Orchestrator] No API key for {provider}, falling back to local model")
-            chosen_model = "danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS"
+            chosen_model = "qwen-tuned"
             provider = "ollama"
 
         max_steps = 5
@@ -321,7 +357,8 @@ class Orchestrator:
                 log.info(f"[Orchestrator] generate() Turn result: {result!r}")
                 
                 # Update tokens used
-                self.total_tokens_used += int(len(result) / 4) + 1
+                async with self._token_lock:
+                    self.total_tokens_used += int(len(result) / 4) + 1
 
                 tool_info = self._parse_tool_call(result)
                 if not tool_info:
@@ -343,8 +380,13 @@ class Orchestrator:
                     try:
                         params = json.loads(params_str)
                     except Exception as e:
-                        params = {}
                         log.warning(f"[Orchestrator] Failed to parse tool params JSON: {e}")
+                        messages.append({"role": "assistant", "content": result})
+                        messages.append({
+                            "role": "user",
+                            "content": f"Critic Feedback: The tool execution failed because the JSON parameters could not be parsed: {e}. Please correct the parameters and call the tool again."
+                        })
+                        continue
                     
                     # Execute tool
                     log.info(f"[Orchestrator] Executing tool {tool_name}...")
@@ -367,12 +409,20 @@ class Orchestrator:
                     # Mark this tool call as handled
                     handled_tool_keys.add(dedup_key)
                     
+                    obs_str = json.dumps(observation)
+                    if len(obs_str) > 2000:
+                        obs_str = obs_str[:2000] + "... [Truncated for context limit]"
+                    
                     # Critic evaluation
                     critic_res = self.critic.evaluate_step(observation, expected_kind="tool")
                     if not critic_res.accepted:
                         log.warning(f"[Orchestrator] Critic rejected tool execution: {critic_res.reason}")
+                        # Cleanup failed thought from active context window
+                        if len(messages) > 1 and messages[-1].get("role") == "user" and "Critic Feedback" in messages[-1].get("content", ""):
+                            messages.pop()
+                            messages.pop()
+                        
                         messages.append({"role": "assistant", "content": result})
-                        messages.append({"role": "user", "content": f"TOOL OBSERVATION:\n{json.dumps(observation)}\n\nThe slash command has already been handled. Continue with the next assistant response directly and do not call the same slash command again unless the user explicitly asks for a rerun."})
                         messages.append({
                             "role": "user",
                             "content": f"Critic Feedback: The tool execution returned an error or was rejected: {critic_res.reason}. Please correct the parameters and call the tool again."
@@ -385,12 +435,12 @@ class Orchestrator:
                         log.info(f"[Orchestrator] Slash command handled. Returning immediately.")
                         final_result = observation.get("result", result)
                         messages.append({"role": "assistant", "content": result})
-                        messages.append({"role": "user", "content": f"TOOL OBSERVATION:\n{json.dumps(observation)}\n\nContinue with the next assistant response."})
+                        messages.append({"role": "user", "content": f"TOOL OBSERVATION:\n{obs_str}\n\nContinue with the next assistant response."})
                         return final_result, model
                     else:
                         # Tool succeeded — append observation and let model continue
                         messages.append({"role": "assistant", "content": result})
-                        messages.append({"role": "user", "content": f"TOOL OBSERVATION:\n{json.dumps(observation)}\n\nContinue with the next step."})
+                        messages.append({"role": "user", "content": f"TOOL OBSERVATION:\n{obs_str}\n\nContinue with the next step."})
                         continue
             except Exception as exc:
                 self.router.record_failure(model=chosen_model, cooldown_seconds=60.0)
@@ -414,13 +464,28 @@ class Orchestrator:
             summary="Generation completed"
         )
 
+        await asyncio.to_thread(
+            self.events.append,
+            EventEnvelope.create(
+                event_type="generation_completed",
+                source="orchestrator",
+                payload={
+                    "model": chosen_model,
+                    "task_id": trace_id,
+                    "elapsed": duration_ms,
+                    "status": "completed",
+                    "content": final_result,
+                }
+            )
+        )
+
         return final_result, chosen_model
 
 
     async def stream_generate(self, model: str | None, messages: list[dict] | None = None, prompt: str | None = None):
         log.info("[Orchestrator] Entering stream_generate. model=%s, prompt=%s, messages=%s", model, prompt, messages)
-        log.info(f"[Orchestrator] Entering stream_generate. model={model}, prompt={prompt}")
-        messages = list(messages or [])
+        import copy
+        messages = copy.deepcopy(messages or [])
         
         # Context Injection
         if prompt:
@@ -449,9 +514,8 @@ class Orchestrator:
         schemas_str = json.dumps(schemas, indent=2)
         tools_instruction = (
             "\n### Available MCP Tools:\n"
-            "You have access to the following tools. STOP YAPPING AND START ACTING. You MUST use the exact XML tags below to execute a tool. Do not just write out your plan. To call a tool, generate one of the following formats:\n"
-            '<tool_call name="tool_name">{"arg": "val"}</tool_call>\n'
-            '<tool>tool_name</tool> {"arg": "val"}\n\n'
+            "You have access to the following tools. You MUST respond with ONLY a raw JSON object to call a tool.\n"
+            "Format: {\"tool\": \"tool_name\", \"params\": {\"arg\": \"val\"}}\n\n"
             f"Tool Schemas:\n{schemas_str}\n"
         )
         inserted = False
@@ -480,7 +544,7 @@ class Orchestrator:
             allow_fallback=True,
         )
 
-        chosen_model = route_decision.model or "danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS"
+        chosen_model = route_decision.model or "qwen-tuned"
 
         log.info("[Orchestrator] Routing decision: %s. Starting Ollama stream...", chosen_model)
         
@@ -493,7 +557,7 @@ class Orchestrator:
             "OPENROUTER_API_KEY" if provider == "openrouter" else "NVIDIA_API_KEY", ""
         ).strip():
             log.info(f"[Orchestrator] No API key for {provider}, falling back to local model")
-            chosen_model = "danielsheep/Qwen3-Coder-30B-A3B-Instruct-1M-Unsloth:UD-IQ3_XXS"
+            chosen_model = "qwen-tuned"
             provider = "ollama"
 
         max_steps = 5
@@ -520,7 +584,8 @@ class Orchestrator:
                         yield chunk, chosen_model, trace_id
                 
                 # Update tokens used
-                self.total_tokens_used += int(len(accumulated_text) / 4) + 1
+                async with self._token_lock:
+                    self.total_tokens_used += int(len(accumulated_text) / 4) + 1
 
                 tool_info = self._parse_tool_call(accumulated_text)
                 if tool_info:
@@ -536,8 +601,16 @@ class Orchestrator:
                     try:
                         params = json.loads(params_str)
                     except Exception as e:
-                        params = {}
                         log.warning(f"[Orchestrator] Failed to parse tool params JSON: {e}")
+                        obs_text = f"\n[Critic Rejection: Invalid JSON parameters: {e}. Requesting self-correction...]\n"
+                        yield obs_text, chosen_model, trace_id
+                        
+                        messages.append({"role": "assistant", "content": accumulated_text})
+                        messages.append({
+                            "role": "user",
+                            "content": f"Critic Feedback: The tool execution failed because the JSON parameters could not be parsed: {e}. Please correct the parameters and call the tool again."
+                        })
+                        continue
                     
                     # Execute tool
                     log.info(f"[Orchestrator] Executing tool {tool_name}...")
@@ -560,6 +633,10 @@ class Orchestrator:
                     # Mark this tool call as handled
                     handled_tool_keys.add(dedup_key)
                     
+                    obs_str = json.dumps(observation)
+                    if len(obs_str) > 2000:
+                        obs_str = obs_str[:2000] + "... [Truncated for context limit]"
+                    
                     # Critic evaluation
                     critic_res = self.critic.evaluate_step(observation, expected_kind="tool")
                     if not critic_res.accepted:
@@ -567,8 +644,11 @@ class Orchestrator:
                         obs_text = f"\n[Critic Rejection: {critic_res.reason}. Requesting self-correction...]\n"
                         yield obs_text, chosen_model, trace_id
                         
+                        if len(messages) > 1 and messages[-1].get("role") == "user" and "Critic Feedback" in messages[-1].get("content", ""):
+                            messages.pop()
+                            messages.pop()
+                        
                         messages.append({"role": "assistant", "content": accumulated_text})
-                        messages.append({"role": "user", "content": f"TOOL OBSERVATION:\n{json.dumps(observation)}\n\nThe slash command has already been handled. Continue with the next assistant response directly and do not call the same slash command again unless the user explicitly asks for a rerun."})
                         messages.append({
                             "role": "user",
                             "content": f"Critic Feedback: The tool execution returned an error or was rejected: {critic_res.reason}. Please correct the parameters and call the tool again."
@@ -578,18 +658,18 @@ class Orchestrator:
                     # For handled slash commands, break immediately — the shim is terminal
                     if tool_name == "command":
                         log.info(f"[Orchestrator] Slash command handled in stream. Continuing.")
-                        obs_text = f"\n[Observation: {json.dumps(observation)}]\n"
+                        obs_text = f"\n[Observation: {obs_str}]\n"
                         yield obs_text, chosen_model, trace_id
                         messages.append({"role": "assistant", "content": accumulated_text})
-                        messages.append({"role": "user", "content": f"TOOL OBSERVATION:\n{json.dumps(observation)}\n\nContinue with the next assistant response."})
+                        messages.append({"role": "user", "content": f"TOOL OBSERVATION:\n{obs_str}\n\nContinue with the next assistant response."})
                         break
                     # Yield observation back to the stream so the client receives it
-                    obs_text = f"\n[Observation: {json.dumps(observation)}]\n"
+                    obs_text = f"\n[Observation: {obs_str}]\n"
                     yield obs_text, chosen_model, trace_id
                     
                     # Inject back into history for non-command tools
                     messages.append({"role": "assistant", "content": accumulated_text})
-                    messages.append({"role": "user", "content": f"TOOL OBSERVATION:\n{json.dumps(observation)}\n\nContinue with the next assistant response."})
+                    messages.append({"role": "user", "content": f"TOOL OBSERVATION:\n{obs_str}\n\nContinue with the next assistant response."})
                     continue
                 else:
                     log.info(f"[Orchestrator] Final stream result received. Exiting loop.")
@@ -611,6 +691,21 @@ class Orchestrator:
             duration_ms=duration_ms,
             model=chosen_model,
             summary="Stream completed"
+        )
+
+        await asyncio.to_thread(
+            self.events.append,
+            EventEnvelope.create(
+                event_type="stream_completed",
+                source="orchestrator",
+                payload={
+                    "model": chosen_model,
+                    "task_id": trace_id,
+                    "elapsed": duration_ms,
+                    "status": "completed",
+                    "content": accumulated_text,
+                }
+            )
         )
 
 

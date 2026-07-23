@@ -15,6 +15,7 @@ _CACHE_TTL = 1800
 _last_fetch_time = 0
 _cached_fallbacks = []
 _cached_stats = {"openrouter": 0, "groq": 0, "gemini": 0, "nvidia": 0, "ollama": 0, "total": 0}
+_refresh_lock = asyncio.Lock()
 
 async def _fetch_openrouter_models() -> list[dict]:
     models = []
@@ -135,7 +136,11 @@ async def refresh_fallbacks_if_needed(mode: str = "auto"):
     if current_time - _last_fetch_time < _CACHE_TTL and _cached_fallbacks:
         return
 
-    log.debug("Refreshing fallback arrays (30-min TTL expired)...")
+    async with _refresh_lock:
+        if time.time() - _last_fetch_time < _CACHE_TTL and _cached_fallbacks:
+            return
+            
+        log.debug("Refreshing fallback arrays (30-min TTL expired)...")
 
     if mode == "local_only":
         results = await asyncio.gather(

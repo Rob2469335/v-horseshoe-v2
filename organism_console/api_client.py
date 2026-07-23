@@ -29,3 +29,25 @@ def call_api(
     except requests.exceptions.RequestException as e:
         log.debug(f"API call failed: {e}")
         return None
+
+import httpx
+
+async def call_api_async_stream(
+    endpoint: str,
+    method: str = "POST",
+    payload: Any = None,
+    timeout: float = 15.0,
+    read_timeout: float = 600.0,
+):
+    url = f"{BACKEND_URL}{endpoint}"
+    timeout_config = httpx.Timeout(timeout, read=read_timeout)
+    client = httpx.AsyncClient(timeout=timeout_config, verify=settings.ssl_verify)
+    try:
+        request = client.build_request(method, url, json=payload)
+        response = await client.send(request, stream=True)
+        return client, response
+    except httpx.RequestError as e:
+        log.debug(f"Async API stream failed: {e}")
+        await client.aclose()
+        return None, None
+

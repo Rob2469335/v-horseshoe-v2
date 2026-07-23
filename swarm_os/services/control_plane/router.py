@@ -24,7 +24,10 @@ class Router:
         if model not in self.states:
             profile = self.profiles.get(model)
             role = profile.role if profile else self.default_role
-            self.states[model] = ModelState(name=model, role=role)
+            if profile:
+                self.states[model] = ModelState(name=model, role=role)
+            else:
+                return ModelState(name=model, role=role)
         return self.states[model]
 
     def is_in_cooldown(self, model: str) -> bool:
@@ -103,8 +106,9 @@ class Router:
         if not pool:
             pool = list(self.profiles.keys())
 
-        strategy = strategy_registry.get_active(context={"role": role, "candidates": list(pool), "allow_fallback": allow_fallback})
-        decision = strategy.select_model(router=self, candidates=list(pool), role=role, allow_fallback=allow_fallback)
+        import asyncio
+        strategy = await asyncio.to_thread(strategy_registry.get_active, context={"role": role, "candidates": list(pool), "allow_fallback": allow_fallback})
+        decision = await asyncio.to_thread(strategy.select_model, router=self, candidates=list(pool), role=role, allow_fallback=allow_fallback)
 
         if decision.model:
             decision.metadata.setdefault("requested_role", role)
@@ -120,7 +124,7 @@ class Router:
         state.last_attempt_at = time.time()
         state.last_success_at = state.last_attempt_at
         state.cooldown_until = 0.0
-        state.failures = max(0, state.failures - 1)
+        state.failures = int(state.failures * 0.5)  # Exponential decay instead of linear -1
 
     def record_failure(self, model: str, cooldown_seconds: float | None = None) -> None:
         state = self.get_state(model)

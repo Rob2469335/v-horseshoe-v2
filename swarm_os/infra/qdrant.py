@@ -8,8 +8,13 @@ class QdrantClient:
     def __init__(self) -> None:
         self.base_url = get_settings().qdrant_url.rstrip('/')
 
-    def health(self) -> bool:
+    async def health(self) -> bool:
         url = f'{self.base_url}/healthz'
-        r = requests.get(url, timeout=30)
-        return r.ok
+        import httpx
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                r = await client.get(url)
+            return r.status_code == 200
+        except Exception:
+            return False
 

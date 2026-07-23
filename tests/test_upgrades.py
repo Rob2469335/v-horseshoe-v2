@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 import pytest
 import json
 import asyncio
@@ -162,6 +162,7 @@ async def test_memory_consolidation():
     
     vs = VectorStore(collection_name="test_consolidation", use_memory=True)
     bridge = MemoryBridge(event_log_path="test_events.jsonl", vector_store=vs)
+    bridge._embed = AsyncMock(return_value=[0.1] * 768)
     
     # Insert multiple individual memory runs
     vec = [0.1] * 768

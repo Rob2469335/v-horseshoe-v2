@@ -40,7 +40,7 @@ def test_optional_routes_if_present_respond():
     paths = get_paths(app)
 
     checks = {
-        "/api/backend-health": ["ollama_reachable", "consecutive_failures", "total_failures"],
+        "/readyz": ["status", "ready", "checks", "health_score"],
         "/api/admin/explorer": ["scenario", "latest_snapshot", "current_run"],
         "/api/admin/generation": ["scenario", "latest_snapshot", "current_run", "population"],
         "/api/admin/run-state": ["scenario", "latest_snapshot", "snapshot_count"],
@@ -48,9 +48,9 @@ def test_optional_routes_if_present_respond():
 
     with TestClient(app) as client:
         for route, keys in checks.items():
-            if route in paths:
-                r = client.get(route)
-                assert r.status_code == 200, route
-                data = r.json()
-                for key in keys:
-                    assert key in data, f"{route} missing {key}"
+            assert route in paths, f"{route} is not registered"
+            r = client.get(route)
+            assert r.status_code == 200, route
+            data = r.json()
+            for key in keys:
+                assert key in data, f"{route} missing {key}"

@@ -21,7 +21,7 @@ class VectorStore:
         self,
         collection_name: str = "swarm_memory",
         vector_size: int = 768,
-        use_memory: bool = True
+        use_memory: bool = False
     ):
         if use_memory:
             # In-memory for development/testing
@@ -46,6 +46,30 @@ class VectorStore:
                     distance=models.Distance.COSINE
                 ),
             )
+            try:
+                self.client.create_payload_index(
+                    collection_name=self.collection_name,
+                    field_name="tasks",
+                    field_schema=models.PayloadSchemaType.KEYWORD,
+                )
+                self.client.create_payload_index(
+                    collection_name=self.collection_name,
+                    field_name="types",
+                    field_schema=models.PayloadSchemaType.KEYWORD,
+                )
+                self.client.create_payload_index(
+                    collection_name=self.collection_name,
+                    field_name="models",
+                    field_schema=models.PayloadSchemaType.KEYWORD,
+                )
+                self.client.create_payload_index(
+                    collection_name=self.collection_name,
+                    field_name="consolidated",
+                    field_schema=models.PayloadSchemaType.BOOL,
+                )
+            except Exception as e:
+                logger.warning("Could not create payload indexes: %s", e)
+                
             logger.info(f"Created collection: {self.collection_name}")
 
     def upsert(

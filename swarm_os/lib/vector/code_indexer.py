@@ -124,7 +124,7 @@ def index_project(root: str | Path) -> int:
             continue
 
         for chunk in _chunk_file(path):
-            uid = int(hashlib.md5(
+            uid = int(hashlib.sha256(
                 f"{chunk['file']}:{chunk['start_line']}".encode()
             ).hexdigest()[:15], 16)
 
