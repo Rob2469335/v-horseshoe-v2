@@ -41,7 +41,7 @@ Output ONLY the complete modified python code enclosed in ```python...``` blocks
 HISTORY_FILE = ROOT_DIR / "logs" / "mutation_history.json"
 CONSECUTIVE_FAILURES_FOR_EXTINCTION = 3
 
-async def run_genetic_mutation():
+async def run_genetic_mutation(target_file_path: str = str(AGENT_SERVICE_PATH), target_func: str = "get_agent"):
     logger.info("Initializing Genetic Evolution Loop...")
 
     # BUG FIX: Load persistent mutation history from disk
@@ -55,10 +55,9 @@ async def run_genetic_mutation():
     # Keep only the last N entries to avoid unbounded file growth
     mutation_history = mutation_history[-50:]
     
-    with open(AGENT_SERVICE_PATH, "r", encoding="utf-8") as f:
+    target_file = Path(target_file_path).resolve()
+    with open(target_file, "r", encoding="utf-8") as f:
         core_code = f.read()
-
-    target_func = "get_agent"
     
     # AST Slicing: Only extract the targeted bottleneck rather than truncating randomly
     sliced_code = ast_slice(core_code, target_func)
@@ -124,7 +123,12 @@ async def run_genetic_mutation():
             logger.info("Mutation generated. Deploying to Danger Room sandbox for testing...")
             
             with DangerRoom(ROOT_DIR) as sandbox:
-                sandbox_file = sandbox.sandbox_dir / "runtime_v2" / "api" / "agent_service_v2.py"
+                try:
+                    rel_path = target_file.relative_to(ROOT_DIR)
+                except ValueError:
+                    rel_path = Path(target_file.name)
+                    
+                sandbox_file = sandbox.sandbox_dir / rel_path
                 # Ensure the path exists in the sandbox
                 sandbox_file.parent.mkdir(parents=True, exist_ok=True)
                 # We write the FULL combined code to the sandbox
@@ -132,7 +136,7 @@ async def run_genetic_mutation():
                     f.write(new_core_code)
                     
                 logger.info("Phase 2: Executing Security Gate scan on mutation...")
-                sandbox.scan_sandbox(specific_files=["runtime_v2/api/agent_service_v2.py"])
+                sandbox.scan_sandbox(specific_files=[str(rel_path).replace("\\", "/")])
                     
                 logger.info("Verifying mutation compiles...")
                 compile_check = await asyncio.create_subprocess_exec(
@@ -170,7 +174,7 @@ async def run_genetic_mutation():
                     "outcome": "success",
                     "task_id": "engine_evolution",
                     "mutation_id": mutation_id,
-                    "target_path": str(AGENT_SERVICE_PATH),
+                    "target_path": str(target_file),
                     "pending_file": str(pending_file),
                     "created_at": datetime.now(timezone.utc).isoformat(),
                     "compile_ok": True,
@@ -216,7 +220,12 @@ async def run_genetic_mutation():
         logger.warning(f"Failed to save mutation history: {e}")
 
 if __name__ == "__main__":
-    asyncio.run(run_genetic_mutation())
+    import argparse
+    parser = argparse.ArgumentParser(description="Genetic Mutation Engine")
+    parser.add_argument("--file", type=str, default=str(AGENT_SERVICE_PATH), help="Target Python file")
+    parser.add_argument("--func", type=str, default="get_agent", help="Target function name")
+    args = parser.parse_args()
+    asyncio.run(run_genetic_mutation(args.file, args.func))
 
 
 def approve_pending_mutation(metadata_path: str) -> dict:
