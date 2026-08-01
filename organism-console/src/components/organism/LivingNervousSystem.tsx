@@ -11,7 +11,7 @@ interface Pulse {
   progress: number; color: string; size: number; speed: number
 }
 interface LiveData {
-  ollamaReachable: boolean; installedModels: number; eventCount: number
+  llamacppReachable: boolean; installedModels: number; eventCount: number
   traceCount: number; healingReady: number; successRate: number
   cacheSize: number; visionAvailable: boolean
   routerStatus?: string; routerRouted?: number; routerModel?: string
@@ -20,8 +20,8 @@ interface LiveData {
 interface Props { backendUrl: string; liveData?: LiveData }
 
 const EDGES: [string,string][] = [
-  ["router","ollama"],["router","critic"],["critic","memory"],
-  ["memory","qdrant"],["healer","router"],["healer","ollama"],
+  ["router","llamacpp"],["router","critic"],["critic","memory"],
+  ["memory","qdrant"],["healer","router"],["healer","llamacpp"],
   ["healer","qdrant"],["router","memory"],
 ]
 
@@ -30,12 +30,12 @@ function buildNodes(live: LiveData): NodeData[] {
   // When there's no data yet, default critic to online/healthy rather than dead-zero
   const criticHealth = live.criticAcceptRate !== undefined ? live.criticAcceptRate : (live.successRate > 0 ? live.successRate : (live.traceCount === 0 ? 100 : live.successRate))
   const criticActivity = live.criticStatus === "active" ? Math.max(20, criticHealth) : 20
-  const routerHealth = live.routerStatus === "active" ? 100 : (live.ollamaReachable ? 100 : 40)
+  const routerHealth = live.routerStatus === "active" ? 100 : (live.llamacppReachable ? 100 : 40)
   const routerActivity = live.routerStatus === "active" ? 90 : 30
   
   return [
     { id:"router", label:"Router", sublabel:live.routerStatus === "active" && typeof live.routerRouted === "number" ? `${live.routerRouted} routed` : "model selector", x:W*0.50, y:H*0.38, radius:38, color:"#7dd3fc", glow:"rgba(125,211,252,0.5)", health:routerHealth, activity:routerActivity, pulseRate:1.8 },
-    { id:"ollama", label:"Ollama", sublabel:`${live.installedModels} models`, x:W*0.78, y:H*0.22, radius:44, color:"#22c55e", glow:"rgba(34,197,94,0.5)", health:live.ollamaReachable?100:0, activity:live.ollamaReachable?85:0, pulseRate:2.2 },
+    { id:"llamacpp", label:"llamacpp", sublabel:`${live.installedModels} models`, x:W*0.78, y:H*0.22, radius:44, color:"#22c55e", glow:"rgba(34,197,94,0.5)", health:live.llamacppReachable?100:0, activity:live.llamacppReachable?85:0, pulseRate:2.2 },
     { id:"critic", label:"Critic", sublabel:`${criticHealth}% accept`, x:W*0.78, y:H*0.62, radius:34, color:"#f472b6", glow:"rgba(244,114,182,0.5)", health:criticHealth, activity:criticActivity, pulseRate:1.4 },
     { id:"memory", label:"Memory", sublabel:`${live.eventCount.toLocaleString()} events`, x:W*0.50, y:H*0.74, radius:36, color:"#a78bfa", glow:"rgba(167,139,250,0.5)", health:live.eventCount>0?100:50, activity:live.eventCount>100?80:40, pulseRate:1.0 },
     { id:"qdrant", label:"Qdrant", sublabel:`${live.cacheSize} cached`, x:W*0.22, y:H*0.62, radius:32, color:"#fb923c", glow:"rgba(251,146,60,0.5)", health:100, activity:live.cacheSize>0?70:30, pulseRate:0.8 },
@@ -59,14 +59,14 @@ export function LivingNervousSystem({ backendUrl, liveData }: Props) {
   const [nodeDetail, setNodeDetail] = useState<string|null>(null)
   const [loading, setLoading] = useState(false)
 
-  const live: LiveData = liveData ?? { ollamaReachable:false, installedModels:0, eventCount:0, traceCount:0, healingReady:100, successRate:0, cacheSize:0, visionAvailable:false }
+  const live: LiveData = liveData ?? { llamacppReachable:false, installedModels:0, eventCount:0, traceCount:0, healingReady:100, successRate:0, cacheSize:0, visionAvailable:false }
   const nodes = buildNodes(live)
   const getNode = useCallback((id:string)=>nodes.find(n=>n.id===id),[nodes])
 
   async function handleNodeClick(node: NodeData) {
     setSelectedNode(node); setLoading(true); setNodeDetail(null)
     const prompts: Record<string,string> = {
-      ollama: `You are the Ollama inference engine. Report your status in 3 bullet points. Models: ${live.installedModels}. Reachable: ${live.ollamaReachable}. Be concise.`,
+      "Llama.cpp": `You are the Llama.cpp inference engine. Report your status in 3 bullet points. Models: ${live.installedModels}. Reachable: ${live.llamacppReachable}. Be concise.`,
       router: `You are the model router. Explain what you do in 2 sentences. You have routed ${live.traceCount} traces with ${live.successRate}% success.`,
       critic: `You are the critic evaluator. Current acceptance rate: ${live.successRate}%. Give a 2 sentence quality assessment.`,
       memory: `You are the memory subsystem. ${live.eventCount} events stored, ${live.cacheSize} cached. Explain in 2 sentences what this memory does.`,
@@ -135,7 +135,7 @@ export function LivingNervousSystem({ backendUrl, liveData }: Props) {
       pulsesRef.current=pulsesRef.current.filter(p=>p.progress<1)
       pulsesRef.current.forEach(p=>{ p.progress+=p.speed; drawPulse(p) })
       spawnRef.current+=dt
-      const rate=live.ollamaReachable?0.8:2.5
+      const rate=live.llamacppReachable?0.8:2.5
       if(spawnRef.current>rate&&pulsesRef.current.length<20) {
         spawnRef.current=0
         const edge=EDGES[Math.floor(Math.random()*EDGES.length)]
@@ -148,7 +148,7 @@ export function LivingNervousSystem({ backendUrl, liveData }: Props) {
 
     animRef.current=requestAnimationFrame(frame)
     return()=>cancelAnimationFrame(animRef.current)
-  },[live.ollamaReachable,live.traceCount,live.successRate,live.eventCount,live.cacheSize,live.healingReady,live.installedModels])
+  },[live.llamacppReachable,live.traceCount,live.successRate,live.eventCount,live.cacheSize,live.healingReady,live.installedModels])
 
   function handleCanvasClick(e:React.MouseEvent<HTMLCanvasElement>) {
     const rect=canvasRef.current!.getBoundingClientRect()

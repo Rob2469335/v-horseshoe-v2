@@ -2,7 +2,7 @@ import { useState } from "react"
 import { useUiStore } from "../state/ui-store"
 import { motion, AnimatePresence } from "framer-motion"
 
-interface MemoryResult { id:string; score:number; text:string; source:string; timestamp:string }
+interface MemoryResult { id:string; score:number; text:string; source:string; sender?:string; timestamp:string }
 
 export function MemorySearchPanel() {
   const backendUrl = useUiStore(s=>s.backendUrl)
@@ -20,7 +20,12 @@ export function MemorySearchPanel() {
       const res = await fetch(`${backendUrl}/memory/search?q=${encodeURIComponent(query)}&limit=8`)
       const data = await res.json()
       if(data.error) setError(data.error)
-      setResults(data.results ?? [])
+      const items = (data.results ?? []).map((r: MemoryResult) => ({
+        ...r,
+        // BUG FIX: backend sends `sender`, UI reads `source`
+        source: r.source ?? r.sender ?? "system"
+      }))
+      setResults(items)
       setSearched(true) 
     }
     catch(e){

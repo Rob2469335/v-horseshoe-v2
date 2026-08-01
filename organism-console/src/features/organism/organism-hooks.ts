@@ -26,21 +26,21 @@ export function useOrganismData() {
     queryKey: ["organism-status", backendUrl],
     queryFn: () => api.getStatus<OrganismStatusResponse>(backendUrl),
     retry: 1,
-    refetchInterval: 30000
+    refetchInterval: 90000
   })
 
   const toolsQuery = useQuery({
     queryKey: ["organism-tools", backendUrl],
     queryFn: () => api.getTools<OrganismToolsResponse>(backendUrl),
     retry: 1,
-    refetchInterval: 60000
+    refetchInterval: 180000
   })
 
   const toolsCacheQuery = useQuery({
     queryKey: ["organism-tools-cache", backendUrl],
     queryFn: () => api.getToolsCache<ToolsCacheResponse>(backendUrl),
     retry: 1,
-    refetchInterval: 60000
+    refetchInterval: 180000
   })
 
   const timelineQuery = useQuery<TimelineResponse, Error>({
@@ -54,21 +54,21 @@ export function useOrganismData() {
       return (await response.json()) as TimelineResponse
     },
     retry: 1,
-    refetchInterval: 15000
+    refetchInterval: 45000
   })
 
   const routerQuery = useQuery<RouterStatsResponse, Error>({
     queryKey: ["router-stats", backendUrl],
     queryFn: () => api.getRouterStats<RouterStatsResponse>(backendUrl),
     retry: 1,
-    refetchInterval: 10000
+    refetchInterval: 30000
   })
 
   const criticQuery = useQuery<CriticStatsResponse, Error>({
     queryKey: ["critic-stats", backendUrl],
     queryFn: () => api.getCriticStats<CriticStatsResponse>(backendUrl),
     retry: 1,
-    refetchInterval: 10000
+    refetchInterval: 30000
   })
 
   const derived = useMemo(() => {
@@ -79,7 +79,7 @@ export function useOrganismData() {
     const timelinePoints = timelineQuery.data?.points ?? []
     const toolCount = toolsQuery.data?.count ?? 0
     const systemReady = statusQuery.data?.ready ?? false
-    const ollamaReady = statusQuery.data?.ollama_reachable ?? false
+    const llamacppReady = statusQuery.data?.llamacpp_reachable ?? false
 
     const totalTimelineEvents = timelinePoints.reduce((sum, point) => sum + point.event_count, 0)
     const totalTimelineSuccess = timelinePoints.reduce((sum, point) => sum + point.success_count, 0)
@@ -121,7 +121,7 @@ export function useOrganismData() {
       `tools ${toolCount}`,
       `cache ${cacheSize}`,
       `vision ${visionRuntimeReady ? "live" : "pending"}`,
-      `ollama ${ollamaReady ? "reachable" : "offline"}`
+      `Llama.cpp ${llamacppReady ? "reachable" : "offline"}`
     ]
 
     const pulseCards = [
@@ -134,10 +134,10 @@ export function useOrganismData() {
           : "Readiness is not fully healthy yet."
       },
       {
-        label: "Ollama",
-        value: getStatusText(ollamaReady, "Reachable", "Offline"),
-        accent: getStatusColor(ollamaReady),
-        detail: ollamaReady
+        label: "llamacpp",
+        value: getStatusText(llamacppReady, "Reachable", "Offline"),
+        accent: getStatusColor(llamacppReady),
+        detail: llamacppReady
           ? "Model runtime is reachable from the console."
           : "Vision and inference paths may degrade."
       },
@@ -240,7 +240,7 @@ export function useOrganismData() {
       timelinePoints,
       toolCount,
       systemReady,
-      ollamaReady,
+      llamacppReady,
       totalTimelineEvents,
       totalTimelineSuccess,
       totalTimelinePartial,

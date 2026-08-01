@@ -7,8 +7,8 @@ export type OrganismStatusResponse = {
   environment: string
   event_count: number
   events_path: string
-  ollama_base_url: string
-  ollama_reachable: boolean
+  llamacpp_base_url: string
+  llamacpp_reachable: boolean
   vision_configured: boolean
   vision_runtime_available: boolean
   vision_tool_exposed: boolean

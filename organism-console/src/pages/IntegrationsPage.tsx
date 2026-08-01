@@ -2,7 +2,7 @@ export default function IntegrationsPage() {
   const providers = [
     { name: "OpenAI", status: "online", type: "LLM" },
     { name: "Anthropic", status: "online", type: "LLM" },
-    { name: "Ollama", status: "online", type: "Local" },
+    { name: "llamacpp", status: "online", type: "Local" },
     { name: "GitHub", status: "offline", type: "Tools" },
     { name: "Slack", status: "offline", type: "Communication" }
   ] as const

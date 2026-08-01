@@ -3,6 +3,7 @@ export type PanelKey =
   | "workspace"
   | "organism"
   | "memory-search"
+  | "memories"
   | "ops"
   | "integrations"
 
@@ -17,7 +18,7 @@ export interface HealthResponse {
   status?: string
   app?: string
   version?: string
-  ollama?: string
+  llamacpp?: string
   environment?: string
 }
 
@@ -25,9 +26,9 @@ export interface StatusResponse {
   ready: boolean
   events_path?: string
   event_count?: number
-  ollama_base_url?: string
+  llamacpp_base_url?: string
   environment?: string
-  ollama_reachable?: boolean
+  llamacpp_reachable?: boolean
 }
 
 export interface ReadyResponse {
@@ -58,7 +59,7 @@ export interface TraceItem {
 
 export interface TracesResponse {
   count: number
-  items: TraceItem[]
+  traces: TraceItem[]
 }
 
 export interface TraceSummaryItem {
@@ -71,7 +72,15 @@ export interface TraceSummaryItem {
   action_count: number
 }
 
-export type TraceSummaryResponse = TraceSummaryItem[]
+// Backend /traces/summary returns a dict: {count, window, status_counts, phase_counts, model_counts, latency_ms}
+export interface TraceSummaryResponse {
+  count: number
+  window?: number
+  status_counts?: Record<string, number>
+  phase_counts?: Record<string, number>
+  model_counts?: Record<string, number>
+  latency_ms?: { avg: number; max: number; min: number }
+}
 
 export interface AdminStatusResponse {
   [key: string]: unknown

@@ -1,0 +1,113 @@
+/* Phase 7 refinement bridge */
+html, body {
+  overscroll-behavior-y: none;
+}
+
+button, input, select, textarea, a {
+  transition:
+    border-color 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    background 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    color 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+pre, code {
+  font-variant-numeric: tabular-nums;
+}
+
+textarea::placeholder,
+input::placeholder {
+  color: var(--text-muted);
+}
+
+/* ------------------------------
+   Phase 7 app polish
+------------------------------ */
+
+::selection {
+  background: rgba(125, 211, 252, 0.22);
+  color: white;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.18) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.16);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(255,255,255,0.24);
+  background-clip: padding-box;
+}
+
+button:active,
+[role="button"]:active,
+a:active {
+  transform: translateY(1px);
+}
+
+img,
+svg,
+canvas {
+  max-width: 100%;
+}
+
+@media (max-width: 640px) {
+  body {
+    overscroll-behavior-y: contain;
+  }
+
+  .page {
+    padding-left: max(12px, env(safe-area-inset-left));
+    padding-right: max(12px, env(safe-area-inset-right));
+  }
+}
+/* ------------------------------
+   Phase 7 polish pass A bridge
+------------------------------ */
+
+html {
+  background: #04080f;
+}
+
+body {
+  background:
+    radial-gradient(circle at top left, rgba(0,209,255,0.07), transparent 24%),
+    radial-gradient(circle at bottom right, rgba(217,70,239,0.06), transparent 24%),
+    #04080f;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--page-accent, #7dd3fc) 34%, transparent);
+  color: #ffffff;
+}
+
+pre,
+code {
+  text-shadow: none;
+}
+
+@media (max-width: 640px) {
+  body {
+    background:
+      radial-gradient(circle at top left, rgba(0,209,255,0.05), transparent 22%),
+      radial-gradient(circle at bottom right, rgba(217,70,239,0.04), transparent 22%),
+      #04080f;
+  }
+}

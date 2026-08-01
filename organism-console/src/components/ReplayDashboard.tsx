@@ -13,7 +13,8 @@ export function ReplayDashboard() {
   const replay = rq.data
   const events = eq.data?.events ?? []
 
-  function ec(t:string){
+  function ec(t:string | undefined | null){
+    if(!t) return "bg-slate-400 text-slate-400"
     if(t.includes("evolve")) return "bg-purple-400 text-purple-400"
     if(t.includes("llm")||t.includes("generate")) return "bg-sky-300 text-sky-300"
     if(t.includes("agent")) return "bg-green-300 text-green-300"

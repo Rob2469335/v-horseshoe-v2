@@ -6,6 +6,7 @@ type AgentType = {
   role: string;
   description: string;
   model_role: string;
+  model?: string;
   config: any;
 };
 
@@ -69,6 +70,11 @@ const injectStyles = () => {
       opacity: 0.3;
       pointer-events: none;
     }
+
+    @keyframes travel {
+      0% { left: 0; opacity: 1; }
+      100% { left: 100%; opacity: 0; }
+    }
   `;
   document.head.appendChild(style);
 };
@@ -87,21 +93,44 @@ const agentOrder = ['coordinator', 'planner', 'researcher', 'executor', 'coder',
 
 const RadarChart = ({ backendUrl }: { backendUrl: string }) => {
   const [scores, setScores] = useState<Record<string, number>>(
-    agentOrder.reduce((acc, curr) => ({ ...acc, [curr]: 50 }), {})
+    agentOrder.reduce((acc, curr) => ({ ...acc, [curr]: 0 }), {})
   );
 
   useEffect(() => {
-    const fetchScores = () => {
-      agentOrder.forEach((id) => {
-        setScores(prev => ({
-          ...prev,
-          [id]: Math.floor(40 + Math.random() * 60)
-        }));
-      });
+    const fetchScores = async () => {
+      try {
+        const [routerRes, agentsRes] = await Promise.all([
+          fetch(`${backendUrl}/router`),
+          fetch(`${backendUrl}/agents`),
+        ]);
+        if (!routerRes.ok || !agentsRes.ok) return;
+        const [routerData, agentsData] = await Promise.all([routerRes.json(), agentsRes.json()]);
+
+        const distribution: Record<string, number> = routerData.model_distribution || {};
+        const agents: AgentType[] = Array.isArray(agentsData) ? agentsData : [];
+
+        const agentModel: Record<string, string> = {};
+        agents.forEach((a) => {
+          const role = a.id || a.role || '';
+          const model = (a.model_role || a.model || '').replace('openrouter/', '').split(':')[0];
+          if (role && model) agentModel[role] = model;
+        });
+
+        const maxCount = Math.max(1, ...Object.values(distribution));
+        setScores(prev => {
+          const next = { ...prev };
+          agentOrder.forEach((id) => {
+            const model = agentModel[id];
+            const count = (model && distribution[model]) || 0;
+            next[id] = Math.round((count / maxCount) * 100);
+          });
+          return next;
+        });
+      } catch (e) { console.error("Error fetching radar scores:", e); }
     };
-    
+
     fetchScores();
-    const interval = setInterval(fetchScores, 3000);
+    const interval = setInterval(fetchScores, 10000);
     return () => clearInterval(interval);
   }, [backendUrl]);
 
@@ -182,12 +211,13 @@ const AgentPipeline = ({ backendUrl, latestHandoff }: { backendUrl: string, late
     const fetchAgents = async () => {
       try {
         const res = await fetch(`${backendUrl}/agents`);
+        if (!res.ok) throw new Error(`Backend responded with ${res.status}`);
         const data = await res.json();
         setAgents(data);
-      } catch (e) {}
+      } catch (e) { console.error("Error fetching agents:", e); }
     };
     fetchAgents();
-    const int = setInterval(fetchAgents, 5000);
+    const int = setInterval(fetchAgents, 30000);
     return () => clearInterval(int);
   }, [backendUrl]);
 
@@ -236,12 +266,6 @@ const AgentPipeline = ({ backendUrl, latestHandoff }: { backendUrl: string, late
           );
         })}
       </div>
-      <style dangerouslySetInnerHTML={{__html: `
-        @keyframes travel {
-          0% { left: 0; opacity: 1; }
-          100% { left: 100%; opacity: 0; }
-        }
-      `}} />
     </div>
   );
 };
@@ -256,14 +280,16 @@ const AnimatedNumber = ({ value }: { value: number }) => {
     
     const duration = 1000;
     const startTime = performance.now();
+    let rafId = 0;
     
     const animate = (time: number) => {
       const progress = Math.min((time - startTime) / duration, 1);
       const ease = progress === 1 ? 1 : 1 - Math.pow(2, -10 * progress);
       setDisplay(Math.floor(start + (end - start) * ease));
-      if (progress < 1) requestAnimationFrame(animate);
+      if (progress < 1) rafId = requestAnimationFrame(animate);
     };
-    requestAnimationFrame(animate);
+    rafId = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(rafId);
   }, [value]);
 
   return <span>{display}</span>;
@@ -315,6 +341,7 @@ const MetricsWall = ({ backendUrl }: { backendUrl: string }) => {
     const fetchStatus = async () => {
       try {
         const res = await fetch(`${backendUrl}/status`);
+        if (!res.ok) throw new Error(`Backend responded with ${res.status}`);
         const data = await res.json();
         setMetrics(m => ({ ...m, activeModels: data.installed_model_count || 0, eventsProcessed: data.event_count || 0 }));
         updateHistory('activeModels', data.installed_model_count || 0);
@@ -325,6 +352,7 @@ const MetricsWall = ({ backendUrl }: { backendUrl: string }) => {
     const fetchTools = async () => {
       try {
         const res = await fetch(`${backendUrl}/tools/cache`);
+        if (!res.ok) throw new Error(`Backend responded with ${res.status}`);
         const data = await res.json();
         setMetrics(m => ({ ...m, cacheHits: data.cache_size || 0 }));
         updateHistory('cacheHits', data.cache_size || 0);
@@ -334,6 +362,7 @@ const MetricsWall = ({ backendUrl }: { backendUrl: string }) => {
     const fetchTimeline = async () => {
       try {
         const res = await fetch(`${backendUrl}/timeline`);
+        if (!res.ok) throw new Error(`Backend responded with ${res.status}`);
         const data = await res.json();
         const success = data.points?.[data.points.length-1]?.success_count || 0;
         setMetrics(m => ({ ...m, successRate: Math.min(100, success * 10) }));
@@ -353,9 +382,9 @@ const MetricsWall = ({ backendUrl }: { backendUrl: string }) => {
 
     fetchStatus(); fetchTools(); fetchTimeline(); fetchHealing();
     
-    const int5 = setInterval(fetchStatus, 5000);
-    const int10 = setInterval(fetchTools, 10000);
-    const int15 = setInterval(fetchTimeline, 15000);
+    const int5 = setInterval(fetchStatus, 30000);
+    const int10 = setInterval(fetchTools, 30000);
+    const int15 = setInterval(fetchTimeline, 30000);
     const int30 = setInterval(fetchHealing, 30000);
 
     return () => { clearInterval(int5); clearInterval(int10); clearInterval(int15); clearInterval(int30); };
@@ -414,9 +443,29 @@ const AgentConsole = ({ backendUrl, latestHandoff }: { backendUrl: string, lates
       });
       if (!res.body) return;
       const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
       while (true) {
-        const { done } = await reader.read();
+        const { done, value } = await reader.read();
         if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          let chunk: any;
+          try { chunk = JSON.parse(trimmed); }
+          catch { continue; }
+          const content = chunk.content ?? chunk.output ?? chunk.text;
+          const type = chunk.type ?? 'agent';
+          if (content) {
+            const ts = new Date().toISOString().substring(11, 19);
+            const agent = chunk.agent_id || chunk.agent || chunk.model || 'coordinator';
+            const color = type === 'tool_result' ? '#fef08a' : type === 'error' ? '#f87171' : type === 'final' ? '#4ade80' : '#22d3ee';
+            setLogs(prev => [...prev.slice(-99), { id: `${Date.now()}-${Math.random()}`, text: `[${ts}] [${agent}] [${type}] ${content}`, color }]);
+          }
+        }
       }
     } catch (err) { console.error("Error in agent console stream:", err); }
   };
@@ -465,8 +514,15 @@ export const SwarmDashboard2027 = ({ backendUrl }: { backendUrl: string }) => {
     source.onmessage = (e) => {
       try {
         const data = JSON.parse(e.data);
-        if (data.type === 'agent_handoff' || data.type === 'model_selected' || data.type === 'tool_result' || data.type === 'final') {
-          setLatestHandoff(data);
+        // Stream emits {event, id, timestamp, payload}; the old handler looked for
+        // data.type/data.agent_id which the v10 event bus never sends.
+        const event = data.event ?? data.type;
+        const payload = data.payload ?? {};
+        const handoff = payload.agent_handoff
+          ? { to: payload.agent_handoff.to, from: payload.agent_handoff.from, task: payload.agent_handoff.task }
+          : { to: payload.to, from: payload.from, task: payload.task, agent_id: payload.agent_id };
+        if (event === 'agent_handoff' || event === 'model_selected' || event === 'tool_result' || event === 'final' || (handoff && (handoff.to || handoff.agent_id))) {
+          setLatestHandoff({ ...data, ...handoff });
         }
       } catch (err) { console.error("Error parsing SSE message:", err); }
     };

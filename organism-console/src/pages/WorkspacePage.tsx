@@ -4,8 +4,8 @@ import type { ReadyResponse, StatusResponse, ToolsResponse } from "../lib/types"
 import { useUiStore } from "../state/ui-store"
 
 type ToolsCacheResponse = {
-  cacheSize?: number
-  cachedKeys?: string[]
+  cache_size?: number
+  cached_keys?: string[]
 }
 
 function formatBoolean(value: boolean | undefined) {
@@ -85,8 +85,8 @@ export default function WorkspacePage() {
                         environment: statusQuery.data?.environment ?? null,
                         eventsPath: statusQuery.data?.events_path ?? null,
                         eventCount: statusQuery.data?.event_count ?? 0,
-                        ollamaBaseUrl: statusQuery.data?.ollama_base_url ?? null,
-                        ollamaReachable: statusQuery.data?.ollama_reachable ?? false,
+                        llamacppBaseUrl: statusQuery.data?.llamacpp_base_url ?? null,
+                        llamacppReachable: statusQuery.data?.llamacpp_reachable ?? false,
                       },
                       null,
                       2,
@@ -109,8 +109,8 @@ export default function WorkspacePage() {
               { label: "Events path", value: statusQuery.data?.events_path ?? "Unknown" },
               { label: "Event count", value: String(statusQuery.data?.event_count ?? 0) },
               {
-                label: "Ollama reachable",
-                value: formatBoolean(statusQuery.data?.ollama_reachable),
+                label: "Llama.cpp reachable",
+                value: formatBoolean(statusQuery.data?.llamacpp_reachable),
                 accent: true,
               },
             ].map((item) => (
@@ -152,14 +152,14 @@ export default function WorkspacePage() {
           <h2 className="text-sm font-bold text-pink-400 uppercase tracking-widest border-b border-pink-500/20 pb-3 relative z-10">Tool Cache</h2>
           <div className="text-sm text-slate-400 relative z-10">
             Currently holding strong{" "}
-            <strong className="text-pink-400 font-bold font-mono text-base">{toolsCacheQuery.data?.cacheSize ?? 0}</strong> active traces in local memory.
+            <strong className="text-pink-400 font-bold font-mono text-base">{toolsCacheQuery.data?.cache_size ?? 0}</strong> active traces in local memory.
           </div>
           <pre className="p-4 rounded-xl bg-black/60 border border-white/5 text-xs text-pink-100/70 font-mono overflow-auto custom-scrollbar h-[160px] relative z-10">
             {toolsLoading
               ? "Reading cache..."
               : toolsCacheQuery.isError
                 ? getErrorMessage(toolsCacheQuery.error)
-                : JSON.stringify(toolsCacheQuery.data?.cachedKeys ?? [], null, 2)}
+                : JSON.stringify(toolsCacheQuery.data?.cached_keys ?? [], null, 2)}
           </pre>
         </article>
       </div>

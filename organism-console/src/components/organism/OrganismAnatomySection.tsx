@@ -23,7 +23,7 @@ type OrganismAnatomySectionProps = {
   capabilities: string[]
   backendUrl: string
   eventsPath: string | undefined
-  ollamaReachable: boolean | undefined
+  llamacppReachable: boolean | undefined
   environment: string | undefined
   primaryVisionModel: string | null | undefined
   statusReady: boolean | undefined
@@ -48,7 +48,7 @@ export function OrganismAnatomySection({
   capabilities,
   backendUrl,
   eventsPath,
-  ollamaReachable,
+  llamacppReachable,
   environment,
   primaryVisionModel,
   statusReady,
@@ -129,7 +129,7 @@ export function OrganismAnatomySection({
             title="Resilience + stability"
             value={systemReady ? "Healthy" : "Recovering"}
             summary="Detects anomalies and triggers autonomous recovery paths."
-            detail={`Ready: ${formatBoolean(statusReady)}. Ollama: ${formatBoolean(ollamaReachable)}. Env: ${environment ?? "---"}.`}
+            detail={`Ready: ${formatBoolean(statusReady)}. Llama.cpp: ${formatBoolean(llamacppReachable)}. Env: ${environment ?? "---"}.`}
             nextStep="Prioritize stability before increasing autonomy."
           />
 
@@ -259,7 +259,7 @@ export function OrganismAnatomySection({
             { label: "Memory Cache", value: cachedKeys.length > 0 ? `${cachedKeys.length} items` : "Empty", accent: "#86efac" },
             { label: "Failure Pressure", value: `${failureRate}%`, accent: failureRate > 25 ? "#fb7185" : "#fbbf24" },
             { label: "Capabilities", value: capabilities.length > 0 ? capabilities.join(", ") : "Manual only", accent: "#7dd3fc" },
-            { label: "Model Runtime", value: ollamaReachable ? "Reachable" : "Offline", accent: ollamaReachable ? "#4ade80" : "#fb7185" }
+            { label: "Model Runtime", value: llamacppReachable ? "Reachable" : "Offline", accent: llamacppReachable ? "#4ade80" : "#fb7185" }
           ].map((item) => (
             <div
               key={item.label}

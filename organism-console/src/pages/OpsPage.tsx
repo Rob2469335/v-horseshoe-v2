@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useState, type ReactNode } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { api } from "../lib/api"
 import {
@@ -8,55 +8,72 @@ import {
   seniorAutomations,
   starterAutomations
 } from "../lib/automation-catalog"
-import type {
-  AdminDashboardResponse,
-  AdminGenerationResponse,
-  AdminStatusResponse,
-  HealthResponse,
-  ReadyResponse,
-  StatusResponse,
-  ToolsResponse,
-  TraceItem,
-  TraceSummaryItem,
-  TraceSummaryResponse,
-  TracesResponse
-} from "../lib/types"
+import type { HealthResponse } from "../lib/types"
 import { useUiStore } from "../state/ui-store"
 import { AutomationRunner } from "../components/organism/AutomationRunner"
-import { appConfig } from "../lib/config"
 
-function formatJson(value: unknown) {
-  return JSON.stringify(value, null, 2)
-}
-
-function formatTimestamp(timestampMs?: number) {
-  if (!timestampMs) return "—"
-  return new Date(timestampMs).toLocaleString()
-}
-
-function formatDuration(durationMs?: number) {
-  if (!durationMs) return "0 ms"
-  if (durationMs < 1000) return `${durationMs.toFixed(1)} ms`
-  return `${(durationMs / 1000).toFixed(2)} s`
-}
-
-function DisclosurePanel({
+function AutomationGroup({
   title,
-  children,
-  defaultOpen = false
+  items,
+  selectedId,
+  onSelect
 }: {
   title: string
-  children: React.ReactNode
-  defaultOpen?: boolean
+  items: typeof starterAutomations
+  selectedId: string
+  onSelect: (id: string) => void
 }) {
   return (
-    <details className="ops-panel disclosure-panel" open={defaultOpen}>
-      <summary className="disclosure-panel__summary">
-        <span>{title}</span>
-        <span className="disclosure-panel__hint">{defaultOpen ? "Open by default" : "Click to expand"}</span>
-      </summary>
-      <div className="disclosure-panel__content">{children}</div>
-    </details>
+    <div className="flex flex-col gap-4">
+      <h3 className="text-sm font-bold text-white uppercase tracking-wider">{title}</h3>
+      <div className="flex flex-col gap-3">
+        {items.map((item) => {
+          const isActive = item.id === selectedId;
+          return (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => onSelect(item.id)}
+              className={`p-4 rounded-xl border text-left transition-all flex flex-col gap-1.5 ${
+                isActive
+                  ? "bg-cyan-900/20 border-cyan-500/50 shadow-[0_0_15px_rgba(34,211,238,0.1)]"
+                  : "bg-slate-800/30 border-white/5 hover:bg-slate-800/60 hover:border-white/20"
+              }`}
+            >
+              <span className={`font-bold ${isActive ? "text-cyan-300" : "text-white"}`}>{item.title}</span>
+              <span className="text-[10px] uppercase tracking-widest text-slate-500 font-bold">{item.category} · {item.difficulty}</span>
+              <span className="text-xs text-slate-400 line-clamp-2">{item.plainEnglish}</span>
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function LessonSection({
+  title,
+  accent = "text-white",
+  children
+}: {
+  title: string
+  accent?: string
+  children: ReactNode
+}) {
+  return (
+    <div className="flex flex-col gap-2">
+      <h3 className={`text-sm font-bold uppercase tracking-widest ${accent}`}>{title}</h3>
+      {children}
+    </div>
+  )
+}
+
+function LessonCard({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="flex flex-col gap-3 bg-slate-900/40 p-5 rounded-xl border border-white/5">
+      <h3 className="text-sm font-bold text-white uppercase tracking-widest">{title}</h3>
+      {children}
+    </div>
   )
 }
 
@@ -64,7 +81,6 @@ export default function OpsPage() {
   const backendUrl = useUiStore((state) => state.backendUrl)
   const setConnectionStatus = useUiStore((state) => state.setConnectionStatus)
 
-  const [selectedTraceId, setSelectedTraceId] = useState<string>("")
   const [selectedAutomationId, setSelectedAutomationId] = useState<string>(starterAutomations[0]?.id ?? "")
 
   const [upworkInput, setUpworkInput] = useState<string>("")
@@ -123,8 +139,8 @@ export default function OpsPage() {
           <div style={{ marginTop: "16px", padding: "16px", background: "rgba(20, 27, 41, 0.4)", border: "1px solid rgba(255, 255, 255, 0.08)", borderRadius: "14px" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
               <strong style={{ color: "var(--page-accent)" }}>Generated Cover Letter Proposal</strong>
-              <button 
-                className="topbar__button" 
+              <button
+                className="topbar__button"
                 style={{ padding: "6px 12px", fontSize: "12px", border: "1px solid var(--page-accent)", background: "var(--page-accent-tint)", color: "#fff", minHeight: "auto", height: "auto" }}
                 onClick={() => {
                   navigator.clipboard.writeText(upworkResult.content)
@@ -219,62 +235,6 @@ export default function OpsPage() {
     refetchInterval: 30000
   })
 
-  const readyQuery = useQuery({
-    queryKey: ["readyz", backendUrl],
-    queryFn: () => api.getReady<ReadyResponse>(backendUrl),
-    retry: 1,
-    refetchInterval: 30000
-  })
-
-  const statusQuery = useQuery({
-    queryKey: ["organism-status", backendUrl],
-    queryFn: () => api.getStatus<StatusResponse>(backendUrl),
-    retry: 1,
-    refetchInterval: 30000
-  })
-
-  const toolsQuery = useQuery({
-    queryKey: ["tools", backendUrl],
-    queryFn: () => api.getTools<ToolsResponse>(backendUrl),
-    retry: 1,
-    refetchInterval: 60000
-  })
-
-  const tracesQuery = useQuery({
-    queryKey: ["traces", backendUrl],
-    queryFn: () => api.getTraces(backendUrl),
-    retry: 1,
-    refetchInterval: 15000
-  })
-
-  const traceSummaryQuery = useQuery({
-    queryKey: ["trace-summary", backendUrl],
-    queryFn: () => api.getTraceSummary(backendUrl),
-    retry: 1,
-    refetchInterval: 15000
-  })
-
-  const adminStatusQuery = useQuery({
-    queryKey: ["admin-status", backendUrl],
-    queryFn: () => api.getAdminStatus<AdminStatusResponse>(backendUrl),
-    retry: 1,
-    refetchInterval: 60000
-  })
-
-  const adminDashboardQuery = useQuery({
-    queryKey: ["admin-dashboard", backendUrl],
-    queryFn: () => api.getAdminDashboard<AdminDashboardResponse>(backendUrl),
-    retry: 1,
-    refetchInterval: 60000
-  })
-
-  const adminGenerationQuery = useQuery({
-    queryKey: ["admin-generation", backendUrl],
-    queryFn: () => api.getAdminGeneration<AdminGenerationResponse>(backendUrl),
-    retry: 1,
-    refetchInterval: 60000
-  })
-
   useEffect(() => {
     if (healthQuery.isSuccess) {
       setConnectionStatus("online")
@@ -295,34 +255,6 @@ export default function OpsPage() {
     healthQuery.isLoading,
     setConnectionStatus
   ])
-
-  const traceSummary = traceSummaryQuery.data as TraceSummaryResponse | undefined
-  const traceItems = (tracesQuery.data as TracesResponse | undefined)?.items
-
-  useEffect(() => {
-    if (!Array.isArray(traceSummary)) {
-      setSelectedTraceId("")
-      return
-    }
-
-    setSelectedTraceId((current) => {
-      if (current && traceSummary.some((item) => item.trace_id === current)) {
-        return current
-      }
-
-      return traceSummary[0]?.trace_id ?? ""
-    })
-  }, [traceSummary])
-
-  const selectedSummary = useMemo<TraceSummaryItem | undefined>(() => {
-    if (!Array.isArray(traceSummary)) return undefined
-    return traceSummary.find((item) => item.trace_id === selectedTraceId)
-  }, [traceSummary, selectedTraceId])
-
-  const selectedTraceEvents = useMemo<TraceItem[]>(() => {
-    if (!Array.isArray(traceItems)) return []
-    return traceItems.filter((item) => item.trace_id === selectedTraceId)
-  }, [traceItems, selectedTraceId])
 
   const selectedAutomation = useMemo(() => {
     return automationCatalog.find((item) => item.id === selectedAutomationId) ?? starterAutomations[0]
@@ -362,10 +294,10 @@ export default function OpsPage() {
 
       {/* Main Layout Grid */}
       <div className="flex gap-6 h-full min-h-0 overflow-hidden">
-        
+
         {/* Left Column: Catalog */}
         <article className="w-1/3 flex flex-col overflow-y-auto pr-2 gap-8 custom-scrollbar pb-10">
-          
+
           {/* UPWORK AGENT BLOCK */}
           <div className="flex flex-col gap-3 bg-[#04080f]/40 border border-cyan-500/20 p-5 rounded-2xl shadow-[inset_0_0_20px_rgba(34,211,238,0.05)]">
             <h3 className="text-sm font-bold text-cyan-400 uppercase tracking-wider">Upwork Agent (Tier System)</h3>
@@ -397,8 +329,8 @@ export default function OpsPage() {
                     disabled={upworkLoading}
                     onClick={() => runUpworkAction(item.action)}
                     className={`px-3 py-2.5 rounded-lg text-xs font-semibold transition-all ${
-                      isActive 
-                        ? "bg-cyan-500/20 border-cyan-400/50 text-cyan-300 shadow-[0_0_15px_rgba(34,211,238,0.2)] border" 
+                      isActive
+                        ? "bg-cyan-500/20 border-cyan-400/50 text-cyan-300 shadow-[0_0_15px_rgba(34,211,238,0.2)] border"
                         : "bg-slate-800/40 border-white/5 text-slate-400 hover:bg-slate-800/80 hover:text-slate-200 border"
                     } ${upworkLoading ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
                   >
@@ -411,53 +343,33 @@ export default function OpsPage() {
             {renderUpworkResult()}
           </div>
 
-          <div className="flex flex-col gap-4">
-            <h3 className="text-sm font-bold text-white uppercase tracking-wider">Made for Robert</h3>
-            <div className="flex flex-col gap-3">
-              {starterAutomations.map((item) => {
-                const isActive = item.id === selectedAutomation?.id;
-                return (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => setSelectedAutomationId(item.id)}
-                    className={`p-4 rounded-xl border text-left transition-all flex flex-col gap-1.5 ${
-                      isActive 
-                        ? "bg-cyan-900/20 border-cyan-500/50 shadow-[0_0_15px_rgba(34,211,238,0.1)]" 
-                        : "bg-slate-800/30 border-white/5 hover:bg-slate-800/60 hover:border-white/20"
-                    }`}
-                  >
-                    <span className={`font-bold ${isActive ? "text-cyan-300" : "text-white"}`}>{item.title}</span>
-                    <span className="text-[10px] uppercase tracking-widest text-slate-500 font-bold">{item.category} · {item.difficulty}</span>
-                    <span className="text-xs text-slate-400 line-clamp-2">{item.plainEnglish}</span>
-                  </button>
-                )
-              })}
-            </div>
-          </div>
+          <AutomationGroup
+            title="Made for Robert"
+            items={starterAutomations}
+            selectedId={selectedAutomation?.id ?? ""}
+            onSelect={setSelectedAutomationId}
+          />
 
-          <div className="flex flex-col gap-4">
-            <h3 className="text-sm font-bold text-white uppercase tracking-wider">Helpful for Seniors</h3>
-            <div className="flex flex-col gap-3">
-              {seniorAutomations.map((item) => {
-                const isActive = item.id === selectedAutomation?.id;
-                return (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => setSelectedAutomationId(item.id)}
-                    className={`p-4 rounded-xl border text-left transition-all flex flex-col gap-1.5 ${
-                      isActive ? "bg-cyan-900/20 border-cyan-500/50 shadow-[0_0_15px_rgba(34,211,238,0.1)]" : "bg-slate-800/30 border-white/5 hover:bg-slate-800/60 hover:border-white/20"
-                    }`}
-                  >
-                    <span className={`font-bold ${isActive ? "text-cyan-300" : "text-white"}`}>{item.title}</span>
-                    <span className="text-[10px] uppercase tracking-widest text-slate-500 font-bold">{item.category} · {item.difficulty}</span>
-                    <span className="text-xs text-slate-400 line-clamp-2">{item.plainEnglish}</span>
-                  </button>
-                )
-              })}
-            </div>
-          </div>
+          <AutomationGroup
+            title="Helpful for Seniors"
+            items={seniorAutomations}
+            selectedId={selectedAutomation?.id ?? ""}
+            onSelect={setSelectedAutomationId}
+          />
+
+          <AutomationGroup
+            title="Scary situations"
+            items={scaryAutomations}
+            selectedId={selectedAutomation?.id ?? ""}
+            onSelect={setSelectedAutomationId}
+          />
+
+          <AutomationGroup
+            title="Basic computer help"
+            items={basicAutomations}
+            selectedId={selectedAutomation?.id ?? ""}
+            onSelect={setSelectedAutomationId}
+          />
 
         </article>
 
@@ -477,50 +389,92 @@ export default function OpsPage() {
                 </div>
               </div>
 
-              <div className="flex flex-col gap-2">
-                <h3 className="text-sm font-bold text-white uppercase tracking-widest">What this means</h3>
+              <LessonSection title="What this means">
                 <p className="text-sm text-slate-400 leading-relaxed bg-slate-900/40 p-4 rounded-xl border border-white/5">{selectedAutomation.whatItMeans}</p>
-              </div>
+              </LessonSection>
 
-              <div className="flex flex-col gap-2">
-                <h3 className="text-sm font-bold text-white uppercase tracking-widest">Why this matters</h3>
+              <LessonSection title="Why this matters">
                 <p className="text-sm text-slate-400 leading-relaxed bg-slate-900/40 p-4 rounded-xl border border-white/5">{selectedAutomation.whyThisMatters}</p>
-              </div>
+              </LessonSection>
+
+              <LessonSection title="Words to know">
+                <div className="flex flex-col gap-3">
+                  {selectedAutomation.wordsToKnow.map((item) => (
+                    <div key={`${selectedAutomation.id}-${item.term}`} className="bg-slate-900/40 p-4 rounded-xl border border-white/5 flex flex-col gap-1">
+                      <span className="text-sm font-bold text-cyan-300">{item.term}</span>
+                      <span className="text-sm text-slate-400">{item.meaning}</span>
+                    </div>
+                  ))}
+                </div>
+              </LessonSection>
 
               <div className="grid grid-cols-2 gap-6">
-                <div className="flex flex-col gap-3 bg-slate-900/40 p-5 rounded-xl border border-white/5">
-                  <h3 className="text-sm font-bold text-cyan-400 uppercase tracking-widest">Inputs</h3>
+                <LessonCard title="Before you start">
+                  <ul className="list-disc list-inside text-sm text-slate-400 flex flex-col gap-1">
+                    {selectedAutomation.beforeYouStart.map((item) => (
+                      <li key={`${selectedAutomation.id}-before-${item}`}>{item}</li>
+                    ))}
+                  </ul>
+                </LessonCard>
+
+                <LessonCard title="Inputs">
                   <ul className="list-disc list-inside text-sm text-slate-400 flex flex-col gap-1">
                     {selectedAutomation.inputs.map((item) => (
                       <li key={`${selectedAutomation.id}-input-${item}`}>{item}</li>
                     ))}
                   </ul>
-                </div>
-
-                <div className="flex flex-col gap-3 bg-slate-900/40 p-5 rounded-xl border border-white/5">
-                  <h3 className="text-sm font-bold text-pink-400 uppercase tracking-widest">Outputs</h3>
-                  <ul className="list-disc list-inside text-sm text-slate-400 flex flex-col gap-1">
-                    {selectedAutomation.outputs.map((item) => (
-                      <li key={`${selectedAutomation.id}-output-${item}`}>{item}</li>
-                    ))}
-                  </ul>
-                </div>
+                </LessonCard>
               </div>
 
               <div className="flex flex-col gap-4 bg-slate-900/60 p-6 rounded-2xl border border-cyan-500/20 shadow-[inset_0_0_20px_rgba(34,211,238,0.05)]">
                 <h3 className="text-sm font-bold text-cyan-400 uppercase tracking-widest">Execution Steps</h3>
                 <ol className="list-decimal list-inside text-sm text-slate-300 flex flex-col gap-3">
-                  {selectedAutomation.steps.map((item, idx) => (
+                  {selectedAutomation.steps.map((item) => (
                     <li key={`${selectedAutomation.id}-step-${item}`} className="leading-relaxed border-b border-white/5 pb-2 last:border-0">{item}</li>
                   ))}
                 </ol>
               </div>
 
-              <div className="flex flex-col gap-2">
-                <h3 className="text-sm font-bold text-white uppercase tracking-widest">Example Usage</h3>
-                <p className="text-sm text-slate-400 leading-relaxed bg-slate-900/40 p-4 rounded-xl border border-white/5 font-mono">{selectedAutomation.example}</p>
+              <div className="grid grid-cols-2 gap-6">
+                <LessonCard title="What success looks like">
+                  <ul className="list-disc list-inside text-sm text-slate-400 flex flex-col gap-1">
+                    {selectedAutomation.whatSuccessLooksLike.map((item) => (
+                      <li key={`${selectedAutomation.id}-success-${item}`}>{item}</li>
+                    ))}
+                  </ul>
+                </LessonCard>
+
+                <LessonCard title="When to ask for help">
+                  <ul className="list-disc list-inside text-sm text-slate-400 flex flex-col gap-1">
+                    {selectedAutomation.whenToAskForHelp.map((item) => (
+                      <li key={`${selectedAutomation.id}-help-${item}`}>{item}</li>
+                    ))}
+                  </ul>
+                </LessonCard>
               </div>
-              
+
+              <div className="grid grid-cols-2 gap-6">
+                <LessonCard title="Outputs">
+                  <ul className="list-disc list-inside text-sm text-slate-400 flex flex-col gap-1">
+                    {selectedAutomation.outputs.map((item) => (
+                      <li key={`${selectedAutomation.id}-output-${item}`}>{item}</li>
+                    ))}
+                  </ul>
+                </LessonCard>
+
+                <LessonCard title="Common mistakes">
+                  <ul className="list-disc list-inside text-sm text-slate-400 flex flex-col gap-1">
+                    {selectedAutomation.commonMistakes.map((item) => (
+                      <li key={`${selectedAutomation.id}-mistake-${item}`}>{item}</li>
+                    ))}
+                  </ul>
+                </LessonCard>
+              </div>
+
+              <LessonSection title="Example Usage">
+                <p className="text-sm text-slate-400 leading-relaxed bg-slate-900/40 p-4 rounded-xl border border-white/5 font-mono">{selectedAutomation.example}</p>
+              </LessonSection>
+
               <div className="mt-4 border-t border-white/10 pt-8">
                 <AutomationRunner
                   backendUrl={backendUrl}
@@ -542,10 +496,3 @@ export default function OpsPage() {
     </section>
   )
 }
-
-
-
-
-
-
-

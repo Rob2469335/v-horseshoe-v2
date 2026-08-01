@@ -9,7 +9,7 @@ interface NarratorEvent {
 
 interface Props {
   backendUrl: string
-  ollamaReachable: boolean
+  llamacppReachable: boolean
   successRate: number
   eventCount: number
   healingReady: number
@@ -18,7 +18,7 @@ interface Props {
 
 let _eid = 0
 
-export function OrganismNarrator({ backendUrl, ollamaReachable, successRate, eventCount, healingReady, traceCount }: Props) {
+export function OrganismNarrator({ backendUrl, llamacppReachable, successRate, eventCount, healingReady, traceCount }: Props) {
   const [feed, setFeed] = useState<NarratorEvent[]>([])
   const [heartbeat, setHeartbeat] = useState(0)
 
@@ -32,9 +32,9 @@ export function OrganismNarrator({ backendUrl, ollamaReachable, successRate, eve
   }, [])
 
   useEffect(() => {
-    if (ollamaReachable) push("✅ Ollama brain connected. Inference engine is live.", "#22c55e")
-    else push("⚠️ Ollama brain offline. Generation will fail until reconnected.", "#f87171")
-  }, [ollamaReachable])
+    if (llamacppReachable) push("✅ Llama.cpp brain connected. Inference engine is live.", "#22c55e")
+    else push("⚠️ Llama.cpp brain offline. Generation will fail until reconnected.", "#f87171")
+  }, [llamacppReachable])
 
   useEffect(() => {
     if (traceCount > 0) push(`📡 ${traceCount} trace events detected in this session.`, "#7dd3fc")
@@ -72,7 +72,7 @@ export function OrganismNarrator({ backendUrl, ollamaReachable, successRate, eve
             "💓 Organism heartbeat nominal. All subsystems stable.",
             `🧬 Memory holding ${eventCount.toLocaleString()} events. Learning loop active.`,
             "🔄 Router on standby. Ready to route next generation request.",
-            `⚡ ${ollamaReachable ? "Ollama reachable" : "Ollama offline"}. Inference path ${ollamaReachable ? "clear" : "blocked"}.`,
+            `⚡ ${llamacppReachable ? "Llama.cpp reachable" : "Llama.cpp offline"}. Inference path ${llamacppReachable ? "clear" : "blocked"}.`,
             "🛡️ Healer watching for anomalies. No intervention needed.",
           ]
           push(heartbeats[Math.floor(Math.random() * heartbeats.length)], "#7dd3fc")
@@ -85,7 +85,7 @@ export function OrganismNarrator({ backendUrl, ollamaReachable, successRate, eve
     const t = setInterval(beat, 12000)
     beat()
     return () => clearInterval(t)
-  }, [backendUrl, ollamaReachable, eventCount])
+  }, [backendUrl, llamacppReachable, eventCount])
 
   return (
     <div style={{

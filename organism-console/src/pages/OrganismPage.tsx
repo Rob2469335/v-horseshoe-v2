@@ -181,7 +181,7 @@ export default function OrganismPage() {
             <LivingNervousSystem
               backendUrl={backendUrl}
               liveData={{
-                ollamaReachable: statusQuery.data?.ollama_reachable ?? false,
+                llamacppReachable: statusQuery.data?.llamacpp_reachable ?? false,
                 installedModels: statusQuery.data?.installed_model_count ?? 0,
                 eventCount: statusQuery.data?.event_count ?? 0,
                 traceCount: timelinePoints.length,
@@ -200,7 +200,7 @@ export default function OrganismPage() {
 
           <OrganismNarrator
             backendUrl={backendUrl}
-            ollamaReachable={statusQuery.data?.ollama_reachable ?? false}
+            llamacppReachable={statusQuery.data?.llamacpp_reachable ?? false}
             successRate={successRate}
             eventCount={statusQuery.data?.event_count ?? 0}
             healingReady={100}
@@ -208,12 +208,12 @@ export default function OrganismPage() {
           />
 
           <div className="grid grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-3 mb-6">
-            <SubsystemInteractiveCard id="ollama" label="Ollama" color="#22c55e" health={statusQuery.data?.ollama_reachable ? 100 : 0} activity={statusQuery.data?.ollama_reachable ? 85 : 0} sublabel={`${statusQuery.data?.installed_model_count ?? 0} models`} backendUrl={backendUrl} prompt="You are Ollama. Report your current status in 3 bullet points. Be direct and technical." />
+            <SubsystemInteractiveCard id="llamacpp" label="llamacpp" color="#22c55e" health={statusQuery.data?.llamacpp_reachable ? 100 : 0} activity={statusQuery.data?.llamacpp_reachable ? 85 : 0} sublabel={`${statusQuery.data?.installed_model_count ?? 0} models`} backendUrl={backendUrl} prompt="You are Llama.cpp. Report your current status in 3 bullet points. Be direct and technical." />
             <SubsystemInteractiveCard id="router" label="Router" color="#7dd3fc" health={routerStats.success_rate} activity={routerStats.status === "active" ? 90 : 30} sublabel={routerStats.status === "active" ? `${routerStats.total_routed} routed · ${routerStats.active_model}` : "idle — awaiting traces"} backendUrl={backendUrl} prompt={`You are the model router. Status: ${routerStats.status}. You have routed ${routerStats.total_routed} traces with ${routerStats.success_rate}% success. Active model: ${routerStats.active_model}. Explain what you are doing right now in 2 sentences.`} />
             <SubsystemInteractiveCard id="critic" label="Critic" color="#f472b6" health={criticAcceptRate} activity={criticStats.total_evaluated > 0 ? criticAcceptRate : 20} sublabel={`${criticAcceptRate}% accept · ${criticStats.verdict}`} backendUrl={backendUrl} prompt={`You are the AI critic evaluator. Status: ${criticStats.status}. Acceptance rate: ${criticAcceptRate}%. You have evaluated ${criticStats.total_evaluated} outputs (${criticStats.accepted} accepted, ${criticStats.rejected} rejected). Verdict: ${criticStats.verdict}. Give a 2-sentence quality assessment.`} />
             <SubsystemInteractiveCard id="memory" label="Memory" color="#a78bfa" health={statusQuery.data?.event_count ?? 0 > 0 ? 100 : 50} activity={80} sublabel={`${(statusQuery.data?.event_count ?? 0).toLocaleString()} events`} backendUrl={backendUrl} prompt={`You are the memory subsystem. You have stored ${statusQuery.data?.event_count ?? 0} events. Explain what you store and why it matters in 2 sentences.`} />
             <SubsystemInteractiveCard id="qdrant" label="Qdrant" color="#fb923c" health={100} activity={cacheSize > 0 ? 70 : 30} sublabel={`${cacheSize} cached`} backendUrl={backendUrl} prompt={`You are the Qdrant vector database. You have ${cacheSize} cached vectors. Explain semantic search in 2 sentences.`} />
-            <SubsystemInteractiveCard id="healer" label="Healer" color="#34d399" health={100} activity={60} sublabel="100% ready" backendUrl={backendUrl} prompt="You are the self-healing subsystem. All 4 checks (orchestrator, qdrant, ollama, api) are passing. Report your current status and what you are watching for." />
+            <SubsystemInteractiveCard id="healer" label="Healer" color="#34d399" health={100} activity={60} sublabel="100% ready" backendUrl={backendUrl} prompt="You are the self-healing subsystem. All 4 checks (orchestrator, qdrant, llamacpp, api) are passing. Report your current status and what you are watching for." />
           </div>
 
           <div className="grid grid-cols-[auto_1fr] gap-3 items-start mb-6">
@@ -261,7 +261,7 @@ export default function OrganismPage() {
             capabilities={capabilities}
             backendUrl={backendUrl}
             eventsPath={statusQuery.data?.events_path}
-            ollamaReachable={statusQuery.data?.ollama_reachable}
+            llamacppReachable={statusQuery.data?.llamacpp_reachable}
             environment={statusQuery.data?.environment}
             primaryVisionModel={statusQuery.data?.primary_vision_model}
             statusReady={statusQuery.data?.ready}

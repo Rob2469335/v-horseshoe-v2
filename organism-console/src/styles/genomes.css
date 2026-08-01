@@ -1,0 +1,163 @@
+/* Genomes Dashboard Styling */
+.genomes-container {
+  padding: 2rem;
+  max-width: 1400px;
+  margin: 0 auto;
+  color: var(--fg);
+}
+
+.genomes-header {
+  margin-bottom: 2rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.genomes-title {
+  font-size: 2.5rem;
+  font-weight: 700;
+  background: linear-gradient(135deg, var(--accent), #00ffff);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.genomes-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 1.5rem;
+}
+
+.genome-card {
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 1.5rem;
+  transition: all 0.3s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.genome-card:hover {
+  transform: translateY(-4px);
+  border-color: var(--accent);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+}
+
+.genome-card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; width: 100%; height: 3px;
+  background: linear-gradient(90deg, var(--accent), #00ffff);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.genome-card:hover::before {
+  opacity: 1;
+}
+
+.genome-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 1rem;
+  margin-bottom: 1rem;
+}
+
+.genome-model {
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.genome-fitness {
+  background: rgba(0, 255, 136, 0.1);
+  color: #00ff88;
+  padding: 0.2rem 0.6rem;
+  border-radius: 99px;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.trait-section {
+  margin-bottom: 1rem;
+}
+
+.trait-title {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  letter-spacing: 0.05em;
+  margin-bottom: 0.5rem;
+}
+
+.trait-row {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 0.5rem;
+}
+
+.trait-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.85rem;
+  margin-bottom: 0.25rem;
+}
+
+.trait-bar-bg {
+  width: 100%;
+  height: 4px;
+  background: var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.trait-bar-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 4px;
+}
+
+.tool-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.tool-tag {
+  font-size: 0.75rem;
+  padding: 0.2rem 0.5rem;
+  background: rgba(0, 255, 255, 0.1);
+  color: #00ffff;
+  border: 1px solid rgba(0, 255, 255, 0.2);
+  border-radius: 99px;
+}
+
+@keyframes heartbeat-pulse {
+  0% { transform: scale(1); box-shadow: 0 0 10px rgba(0, 255, 136, 0); }
+  14% { transform: scale(1.02); box-shadow: 0 0 20px rgba(0, 255, 136, 0.4); }
+  28% { transform: scale(1); box-shadow: 0 0 10px rgba(0, 255, 136, 0); }
+  42% { transform: scale(1.02); box-shadow: 0 0 20px rgba(0, 255, 136, 0.4); }
+  70% { transform: scale(1); box-shadow: 0 0 10px rgba(0, 255, 136, 0); }
+}
+
+.live-heartbeat {
+  animation: heartbeat-pulse 2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+.genome-card.live-heartbeat:hover {
+  animation-play-state: paused;
+}
+
+@keyframes icon-pulse {
+  0% { transform: scale(1); filter: drop-shadow(0 0 2px rgba(0, 255, 136, 0.4)); }
+  15% { transform: scale(1.25); filter: drop-shadow(0 0 12px rgba(0, 255, 136, 0.9)); }
+  30% { transform: scale(1); filter: drop-shadow(0 0 2px rgba(0, 255, 136, 0.4)); }
+  45% { transform: scale(1.25); filter: drop-shadow(0 0 12px rgba(0, 255, 136, 0.9)); }
+  100% { transform: scale(1); filter: drop-shadow(0 0 2px rgba(0, 255, 136, 0.4)); }
+}
+
+.heartbeat-icon {
+  color: #00ff88;
+  animation: icon-pulse 1.8s ease-in-out infinite;
+}

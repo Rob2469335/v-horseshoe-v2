@@ -7,7 +7,7 @@ type StatusShape = {
   ready?: boolean
   event_count?: number
   environment?: string
-  ollama_reachable?: boolean
+  llamacpp_reachable?: boolean
   primary_vision_model?: string | null
   vision_runtime_available?: boolean
   vision_configured?: boolean
@@ -100,8 +100,13 @@ export default function MemorySearchPage() {
   const tracesQuery = useQuery({
     queryKey: ["memory-traces", backendUrl],
     queryFn: async () => {
-      const traces = await api.getTraces(backendUrl)
-      return traces as unknown as TracesShape
+      // BUG FIX: This page needs timeline buckets (success/fail over time), but it
+      // was hitting /traces (raw trace events). Point it at /timeline instead.
+      const res = await fetch(`${backendUrl}/timeline?window_minutes=20000`, {
+        headers: { Accept: "application/json" }
+      })
+      const data = await res.json()
+      return data as unknown as TracesShape
     },
     retry: 1,
     refetchInterval: 15000
@@ -167,7 +172,7 @@ export default function MemorySearchPage() {
         : "steady"
 
     const systemReady = status.ready ?? false
-    const ollamaReachable = status.ollama_reachable ?? false
+    const llamacppReachable = status.llamacpp_reachable ?? false
     const visionRuntime = status.vision_runtime_available ?? false
 
     const qualityTone =
@@ -202,7 +207,7 @@ export default function MemorySearchPage() {
       partialRate,
       retrievalTrend,
       systemReady,
-      ollamaReachable,
+      llamacppReachable,
       visionRuntime,
       qualityTone,
       memoryTone,
@@ -231,7 +236,7 @@ export default function MemorySearchPage() {
 
   const readinessTone = getStatusTone(derived.systemReady)
   const retrievalTone = getStatusTone(derived.successRate >= 60)
-  const streamTone = getStatusTone(derived.ollamaReachable)
+  const streamTone = getStatusTone(derived.llamacppReachable)
 
   const heroCards = [
     {
@@ -255,8 +260,8 @@ export default function MemorySearchPage() {
     },
     {
       label: "Semantic runtime",
-      value: derived.ollamaReachable ? "reachable" : "offline",
-      detail: derived.ollamaReachable
+      value: derived.llamacppReachable ? "reachable" : "offline",
+      detail: derived.llamacppReachable
         ? "Inference path is reachable from the console."
         : "Semantic retrieval explanations may degrade while the runtime is offline."
     }
