@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
+from .schemas import CreateApprovalRequest, ApprovalDecisionRequest
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/features", tags=["features"])
@@ -314,9 +315,9 @@ def get_healing_overview(request: Request):
     }
 
 @router.post("/healing-approvals")
-def create_approval_request(request: Request, component: str, action: str, reason: str):
+def create_approval_request(request: Request, payload: CreateApprovalRequest):
     appr = get_approvals_service(request)
-    req = appr.create_request(component=component, action=action, reason=reason)
+    req = appr.create_request(component=payload.component, action=payload.action, reason=payload.reason)
     return {
         "status": "ok",
         "request": req
@@ -331,9 +332,9 @@ def list_approval_requests(request: Request):
     }
 
 @router.post("/healing-approvals/{request_id}/approve")
-def approve_request(request: Request, request_id: str, body: dict = None):
+def approve_request(request: Request, request_id: str, body: ApprovalDecisionRequest = None):
     appr = get_approvals_service(request)
-    note = (body or {}).get("note", "approved")
+    note = (body.note if body else None) or "approved"
     req = appr.decide(request_id=request_id, approved=True, note=note)
     return {
         "status": "ok",
@@ -341,9 +342,9 @@ def approve_request(request: Request, request_id: str, body: dict = None):
     }
 
 @router.post("/healing-approvals/{request_id}/reject")
-def reject_request(request: Request, request_id: str, body: dict = None):
+def reject_request(request: Request, request_id: str, body: ApprovalDecisionRequest = None):
     appr = get_approvals_service(request)
-    note = (body or {}).get("note", "rejected")
+    note = (body.note if body else None) or "rejected"
     req = appr.decide(request_id=request_id, approved=False, note=note)
     return {
         "status": "ok",
@@ -420,40 +421,28 @@ def execute_approved_request(request: Request, request_id: str):
 
 @router.get("/mutation-approvals")
 def list_pending_mutations():
-    from pathlib import Path
-    import json
-    pending_root = Path(__file__).parent.parent.parent / ".data" / "pending_mutations"
-    if not pending_root.exists():
-        return {"status": "ok", "mutations": []}
-    mutations = []
-    for meta_file in pending_root.glob("*/metadata.json"):
-        try:
-            mutations.append(json.loads(meta_file.read_text(encoding="utf-8")))
-        except Exception:
-            continue
+    from swarm_os.repositories.mutation_repo import MutationRepository
+    repo = MutationRepository()
+    mutations = repo.list_pending()
     return {"status": "ok", "mutations": mutations}
 
 @router.post("/mutation-approvals/{mutation_id}/approve")
 def approve_mutation(mutation_id: str):
-    from pathlib import Path
-    from swarm_os.services.genetic_mutation_loop import approve_pending_mutation
-    pending_root = Path(__file__).parent.parent.parent / ".data" / "pending_mutations"
-    meta_path = pending_root / mutation_id / "metadata.json"
-    if not meta_path.exists():
-        return {"status": "error", "error": f"Mutation {mutation_id} not found"}
-    result = approve_pending_mutation(str(meta_path))
-    return {"status": "ok", "result": result}
+    from swarm_os.repositories.mutation_repo import MutationRepository
+    repo = MutationRepository()
+    try:
+        result = repo.approve(mutation_id)
+        return {"status": "ok", "result": result}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
 
 @router.post("/mutation-approvals/{mutation_id}/reject")
 def reject_mutation(mutation_id: str):
-    from pathlib import Path
-    import shutil
-    pending_root = Path(__file__).parent.parent.parent / ".data" / "pending_mutations"
-    target_dir = pending_root / mutation_id
-    if not target_dir.exists():
-        return {"status": "error", "error": f"Mutation {mutation_id} not found"}
-    shutil.rmtree(target_dir)
-    return {"status": "ok", "rejected": mutation_id}
+    from swarm_os.repositories.mutation_repo import MutationRepository
+    repo = MutationRepository()
+    if repo.reject(mutation_id):
+        return {"status": "ok", "rejected": mutation_id}
+    return {"status": "error", "error": f"Mutation {mutation_id} not found"}
 
 @router.get("/healing-policy")
 def get_healing_policy(request: Request):
@@ -543,3 +532,128 @@ def get_healing_incidents(request: Request):
     svc = get_incident_summary_service(request)
     res = svc.build_summary()
     return res
+
+
+class DebateRequest(BaseModel):
+    goal: str
+
+
+@router.post("/debate")
+async def swarm_debate(req: DebateRequest, request: Request):
+    """Stream a Planner→Reviewer→Coordinator debate for a development goal.
+
+    SSE stream with phases: status → proposal → critique → synthesis → done.
+    Each phase content is generated by the corresponding agent via AgentServiceV2.
+    """
+    import asyncio, json
+    from fastapi.responses import StreamingResponse
+
+    async def event_stream():
+        async def emit(phase: str, message: str, content: str = ""):
+            yield f"data: {json.dumps({'phase': phase, 'message': message, 'content': content})}\n\n"
+
+        agent_svc = getattr(request.app.state, "agent_service", None)
+        if agent_svc is None:
+            yield f"data: {json.dumps({'phase': 'error', 'message': 'Agent service unavailable', 'content': ''})}\n\n"
+            return
+
+        async def run_agent(agent_id: str, task: str) -> str:
+            out = []
+            try:
+                async for chunk in agent_svc.step_agent_stream(agent_id, task):
+                    if chunk.get("type") == "final":
+                        out.append(str(chunk.get("content", "")))
+            except Exception as exc:
+                out.append(f"[{agent_id} error: {exc}]")
+            return " ".join(out) if out else f"[{agent_id} produced no output]"
+
+        yield "data: " + json.dumps({"phase": "status", "message": f"Planner drafting proposal for: {req.goal}", "content": ""}) + "\n\n"
+        proposal = await run_agent("planner", f"Draft a detailed implementation proposal for: {req.goal}")
+        for part in proposal.split(" "):
+            yield f"data: {json.dumps({'phase': 'proposal', 'message': 'streaming', 'content': part + ' '})}\n\n"
+            await asyncio.sleep(0.01)
+
+        yield "data: " + json.dumps({"phase": "status", "message": "Reviewer critiquing the proposal...", "content": ""}) + "\n\n"
+        critique = await run_agent("reviewer", f"Critique the following proposal strictly, identifying risks and weaknesses:\n\n{proposal}")
+        for part in critique.split(" "):
+            yield f"data: {json.dumps({'phase': 'critique', 'message': 'streaming', 'content': part + ' '})}\n\n"
+            await asyncio.sleep(0.01)
+
+        yield "data: " + json.dumps({"phase": "status", "message": "Coordinator synthesizing final decision...", "content": ""}) + "\n\n"
+        synthesis = await run_agent("coordinator", f"Synthesize the proposal and critique into a final recommended approach:\n\nPROPOSAL:\n{proposal}\n\nCRITIQUE:\n{critique}")
+        for part in synthesis.split(" "):
+            yield f"data: {json.dumps({'phase': 'synthesis', 'message': 'streaming', 'content': part + ' '})}\n\n"
+            await asyncio.sleep(0.01)
+
+        yield "data: " + json.dumps({"phase": "done", "message": "Debate complete.", "content": ""}) + "\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "Connection": "keep-alive"})
+
+
+class OmniDevRequest(BaseModel):
+    task: str
+    organismId: str = "default"
+
+
+@router.post("/omnidev/run")
+async def omnidev_run(req: OmniDevRequest, request: Request):
+    """Run an OmniDev task through the coordinator agent (delegates to the swarm).
+
+    Returns the coordinator's final response after the agent loop completes.
+    """
+    from ..core.settings import get_settings
+    import json
+
+    agent_svc = getattr(request.app.state, "agent_service", None)
+    if agent_svc is None:
+        raise HTTPException(status_code=503, detail="Agent service unavailable")
+
+    final_content = ""
+    try:
+        async for chunk in agent_svc.step_agent_stream("coordinator", req.task):
+            if chunk.get("type") == "final":
+                final_content = str(chunk.get("content", ""))
+        if not final_content:
+            final_content = "OmniDev completed the task without producing a final response."
+        return {"result": final_content}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"OmniDev task failed: {exc}")
+
+
+class RvFinderRequest(BaseModel):
+    budget: int = 30000
+    rv_type: str = "all"
+    max_results: int = 40
+    deep_dive: int = 5
+    use_ppl: bool = True
+    use_web: bool = True
+    location: str = ""
+    radius_miles: int = 0
+
+
+@router.post("/rv-finder/search")
+async def rv_finder_search(req: RvFinderRequest):
+    """Find and analyze used RVs under a budget across PPL + web sources.
+
+    Discovers real listings, fetches detail pages, builds a per-listing deal
+    analysis (fair-value range, condition scan, Deal Score, verdict, negotiation
+    tip), ranks them, and runs an optional LLM deep-dive on the top candidates.
+    """
+    from ..services.rv_finder import find_best_rv_deals
+
+    try:
+        result = await find_best_rv_deals(
+            budget=req.budget,
+            rv_type=req.rv_type,
+            max_results=req.max_results,
+            deep_dive=req.deep_dive,
+            use_ppl=req.use_ppl,
+            use_web=req.use_web,
+            location=req.location,
+            radius_miles=req.radius_miles,
+        )
+        return result
+    except Exception as exc:
+        log.exception("RV finder search failed")
+        raise HTTPException(status_code=500, detail=f"RV finder search failed: {exc}")

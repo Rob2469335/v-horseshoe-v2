@@ -404,23 +404,20 @@ export const automationCatalog: AutomationCatalogItem[] = [
     category: "money",
     difficulty: "beginner",
     isStarter: true,
-    plainEnglish: "Searches for used Class B and Class C motorhomes under $30,000 within 50 miles of your home, compares features, and helps decide which one is the best buy.",
-    whenToUse: "Use this when you are looking for a pre-owned Class B or Class C motorhome to live in full-time and want to find the best quality unit while staying under your $30,000 budget cap and close to home.",
-    inputs: ["Desired RV type (Class B/C)", "Budget cap ($30,000)", "Home location + radius (50 mi)"],
-    outputs: ["Matched used RV list", "Distance from home", "Feature and condition comparison", "Buy/Skip advice"],
-    example: "Find Class B and Class C motorhomes under $30,000 within 50 miles of Roosevelt, NY and compare their features and condition.",
-    whyItHelps: "Saves time, avoids bad RV deals, and helps focus on units with the best mix of price, features, condition, and distance from home.",
+    plainEnglish: "Searches for used RVs under $30,000, compares features, and helps decide which one is the best buy.",
+    whenToUse: "Use this when you are looking for a pre-owned RV and want to find the best quality unit while staying under your $30,000 budget cap.",
+    inputs: ["Desired RV type", "Budget cap ($30,000)", "Comparison features"],
+    outputs: ["Matched used RV list", "Feature and condition comparison", "Buy/Skip advice"],
+    example: "Find used Class C motorhomes under $30,000 and compare their features and condition.",
+    whyItHelps: "Saves time, avoids bad RV deals, and helps focus on units with the best mix of price, features, and condition.",
     commonMistakes: [
       "Judging a unit only by age instead of maintenance",
       "Ignoring signs of water damage",
-      "Assuming good tire tread means the tires are safe",
-      "Traveling hundreds of miles for a rig you could not fully inspect"
+      "Assuming good tire tread means the tires are safe"
     ],
-    whatItMeans: "This automation finds used Class B and Class C motorhomes for sale that fit your budget and are within a set distance of your home. It compares features like mileage and floorplans, but most importantly, it helps you evaluate the condition. Remember: A well-maintained older RV can be a better buy than a newer neglected one.",
-    whyThisMatters: "Water damage is the biggest red flag in any used RV. This tool helps you focus on finding a solid, leak-free unit nearby so you can inspect it in person and avoid expensive repairs.",
+    whatItMeans: "This automation finds used RVs for sale that fit your budget. It compares features like mileage and floorplans, but most importantly, it helps you evaluate the condition. Remember: A well-maintained older RV can be a better buy than a newer neglected one.",
+    whyThisMatters: "Water damage is the biggest red flag in any used RV. This tool helps you focus on finding a solid, leak-free unit so you don't end up with expensive repairs.",
     wordsToKnow: [
-      { term: "Class B", meaning: "A camper van built on a van chassis — small, easy to drive, great gas mileage." },
-      { term: "Class C", meaning: "A motorhome with a van-like cab and a coach body behind it — roomier than a B." },
       { term: "water damage", meaning: "Rot or mold caused by leaks—the #1 thing to avoid in a used RV." },
       { term: "tire age", meaning: "Tires should be replaced every 5-7 years regardless of how much tread is left." },
       { term: "independent inspection", meaning: "Hiring a professional to check the RV before you commit to buying it." }
@@ -428,12 +425,10 @@ export const automationCatalog: AutomationCatalogItem[] = [
     beforeYouStart: [
       "Confirm your budget cap is strictly $30,000.",
       "List the must-have features you want to compare.",
-      "Be ready to ask sellers for full maintenance records.",
-      "Plan to see any shortlisted rig in person before committing."
+      "Be ready to ask sellers for full maintenance records."
     ],
     steps: [
-      "Search for used Class B and Class C motorhomes that fit your $30,000 budget.",
-      "Check the distance from home on each match.",
+      "Search for used units that fit your $30,000 budget.",
       "Compare the features, mileage, and floorplans of each match.",
       "Inspect descriptions and photos for signs of leaks in the roof, floor, slide-outs, windows, and seams.",
       "Verify the age of the tires, not just the tread depth.",
@@ -441,8 +436,8 @@ export const automationCatalog: AutomationCatalogItem[] = [
       "Always prefer an independent RV inspection before making a final purchase."
     ],
     whatSuccessLooksLike: [
-      "You find a Class B or Class C under $30,000 that has been well-maintained.",
-      "You can drive to see it in person and have the advice needed to decide which one is the best buy."
+      "You find an RV under $30,000 that has been well-maintained.",
+      "You have the advice needed to decide which one is the best buy."
     ],
     whenToAskForHelp: [
       "If you see any soft spots in the floor or ceiling.",

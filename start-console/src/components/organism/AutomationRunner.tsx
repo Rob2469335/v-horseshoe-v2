@@ -118,9 +118,10 @@ export function AutomationRunner({ backendUrl, automationId, automationTitle, pr
 
       {/* Input */}
       <textarea
+        aria-label="Automation input"
         value={userInput}
         onChange={e => setUserInput(e.target.value)}
-        onKeyDown={e => { if (e.key === "Enter" && e.ctrlKey) run() }}
+        onKeyDown={e => { if (e.key === "Enter" && e.ctrlKey && !running) run() }}
         placeholder={example}
         rows={3}
         style={{
