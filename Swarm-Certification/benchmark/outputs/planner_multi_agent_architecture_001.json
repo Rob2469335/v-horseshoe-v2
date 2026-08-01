@@ -1,6 +1,0 @@
-{
-  "task_id": "planner_multi_agent_architecture_001",
-  "status": "success",
-  "response": "The coordinator delegates planning to planner, research to researcher, execution to executor, implementation to coder, review to reviewer, bug triage to debugger, and tool calls to tool runner.",
-  "plan": ["Define roles", "Define handoffs", "Define failure handling"]
-}

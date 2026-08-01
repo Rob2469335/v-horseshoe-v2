@@ -1,7 +1,0 @@
-{
-  "task_id": "toolrunner_research_fetch_001",
-  "status": "success",
-  "response": "Used source-backed research with provenance and citation tracking.",
-  "sources": ["https://example.com/doc"],
-  "citations": ["[1]"]
-}

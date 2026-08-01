@@ -1,7 +1,0 @@
-{
-  "task_id": "researcher_source_priority_001",
-  "status": "success",
-  "response": "Use official documentation first, then authoritative vendor references, then community material for supplemental detail.",
-  "sources": ["https://example.com/official-doc"],
-  "citations": ["[1]"]
-}
