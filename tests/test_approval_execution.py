@@ -63,7 +63,7 @@ def test_execute_endpoint_runs_approved_request():
 
     create_response = client.post(
         "/features/healing-approvals",
-        params={"component": "system", "action": "restart_component", "reason": "manual review required"},
+        json={"component": "system", "action": "restart_component", "reason": "manual review required"},
     )
     request_id = create_response.json()["request"]["request_id"]
 

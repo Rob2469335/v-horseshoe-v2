@@ -19,18 +19,18 @@ def test_strategy_registry_returns_default():
 async def test_route_model_stamps_strategy():
     router = Router(
         profiles=[
-            ModelProfile(name="qwen2.5:3b-instruct", role="fast", max_tokens=32000),
+            ModelProfile(name="qwen3.5-9b", role="fast", max_tokens=32000),
         ],
         default_role="reasoning",
     )
     decision = await router.route_model(
-        candidates=["qwen2.5:3b-instruct"],
+        candidates=["qwen3.5-9b"],
         role="fast",
         allow_fallback=True,
     )
     assert isinstance(decision, RouteDecision)
     assert decision.strategy == "default"
-    assert decision.model == "qwen2.5:3b-instruct"
+    assert decision.model == "qwen3.5-9b"
     assert decision.fallback is False
 
 
@@ -53,9 +53,9 @@ async def test_orchestrator_trace_preserves_strategy(monkeypatch):
     
     async def mock_generate(*args, **kwargs):
         return "mocked response"
-    monkeypatch.setattr(orchestrator.ollama, "generate", mock_generate)
+    monkeypatch.setattr(orchestrator.llm, "generate", mock_generate)
 
-    await orchestrator.generate(model="qwen2.5:3b-instruct", prompt="hello")
+    await orchestrator.generate(model="qwen3.5-9b", prompt="hello")
     traces = orchestrator.get_recent_traces(limit=10)
     router_events = [event for event in traces if event.get("phase") == "router"]
     assert router_events

@@ -101,7 +101,7 @@ def test_full_system_hardmode_end_to_end(tmp_path: Path):
     # 1. Policy-gated healing creates approval instead of executing immediately.
     gated = client.post(
         "/features/healing-approvals",
-        params={
+        json={
             "component": "system",
             "action": "restart_component",
             "reason": "manual review required for risky remediation",

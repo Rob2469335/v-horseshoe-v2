@@ -52,7 +52,7 @@ def test_command_registry_parsing(tmp_path: Path):
         call_api=mock_call_api,
         run_prompt=mock_run_prompt,
         get_system_stats=mock_get_system_stats,
-        installed_models=["qwen2.5:7b"]
+        installed_models=["qwen3.5-9b"]
     )
     
     # 1. Non-command prompt passes straight through
@@ -313,9 +313,14 @@ class TestDummyHandler:
     try:
         registry.handle_line("/tools create test_dummy", ctx)
         
-        # Verify the file is created
+        # Verify the file is created in sandbox_tools
+        sandbox_file = Path(__file__).parent.parent / "swarm_os" / "sandbox_tools" / "test_dummy.py"
+        assert sandbox_file.exists()
+        
+        # Move to capabilities for testing router
         target_file = Path(__file__).parent.parent / "swarm_os" / "capabilities" / "test_dummy.py"
-        assert target_file.exists()
+        import shutil
+        shutil.move(sandbox_file, target_file)
         
         # Verify capability router dynamically loads it
         from swarm_os.capabilities.capability_router import CapabilityRouter
@@ -331,6 +336,11 @@ class TestDummyHandler:
         if 'target_file' in locals() and target_file.exists():
             try:
                 os.remove(target_file)
+            except Exception:
+                pass
+        if 'sandbox_file' in locals() and sandbox_file.exists():
+            try:
+                os.remove(sandbox_file)
             except Exception:
                 pass
         rich.prompt.Prompt.ask = original_ask
@@ -465,7 +475,7 @@ def test_natural_language_intent_routing(tmp_path, monkeypatch):
         class MockResp:
             def json(self):
                 if endpoint == "/readyz":
-                    return {"ready": True, "status": "ok", "health_score": 100, "checks": {"ollama_reachable": True}}
+                    return {"ready": True, "status": "ok", "health_score": 100, "checks": {"llamacpp_reachable": True, "ollama_reachable": True}}
                 if endpoint == "/generate":
                     return {"response": '{"command": "/status", "confidence": 0.95}'}
                 return {}
@@ -480,7 +490,7 @@ def test_natural_language_intent_routing(tmp_path, monkeypatch):
         call_api=mock_call_api,
         run_prompt=lambda *a: None,
         get_system_stats=lambda: {"cpu": 10.0, "ram_pct": 50.0, "ram_color": "green", "ram_used_gb": 8.0, "ram_total_gb": 16.0},
-        installed_models=["qwen2.5:7b"]
+        installed_models=["qwen3.5-9b"]
     )
     
     import subprocess

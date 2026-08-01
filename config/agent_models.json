@@ -1,34 +1,42 @@
 {
-  "debugger": [
-    "qwen-tuned",
-    "ollama"
-  ],
-  "coder": [
-    "qwen-tuned",
-    "ollama"
-  ],
-  "reviewer": [
-    "qwen-tuned",
-    "ollama"
+  "coordinator": [
+    "qwen3.5-9b",
+    "llama"
   ],
   "planner": [
-    "qwen-tuned",
-    "ollama"
-  ],
-  "researcher": [
-    "qwen-tuned",
-    "ollama"
-  ],
-  "coordinator": [
-    "qwen-tuned",
-    "ollama"
-  ],
-  "tool-runner": [
-    "qwen-tuned",
-    "ollama"
+    "qwen3.5-9b",
+    "llama"
   ],
   "executor": [
-    "qwen-tuned",
-    "ollama"
+    "qwen3.5-9b",
+    "llama"
+  ],
+  "tool-runner": [
+    "qwen3.5-9b",
+    "llama"
+  ],
+  "reviewer": [
+    "qwen3.5-9b",
+    "llama"
+  ],
+  "researcher": [
+    "qwen3.5-9b",
+    "llama"
+  ],
+  "coder": [
+    "qwen3.5-9b",
+    "llama"
+  ],
+  "debugger": [
+    "qwen3.5-9b",
+    "llama"
+  ],
+  "tool-maker": [
+    "qwen3.5-9b",
+    "llama"
+  ],
+  "code_analyzer": [
+    "qwen3.5-9b",
+    "llama"
   ]
 }

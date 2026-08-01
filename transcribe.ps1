@@ -61,9 +61,9 @@ if ($matchedCommand) {
     Invoke-Expression $matchedCommand
 }
 else {
-    Write-Host "`nNo command matched. Polishing with Ollama..." -ForegroundColor Cyan
+    Write-Host "`nNo command matched. Using transcript directly..." -ForegroundColor Cyan
     $polishTime = Measure-Command {
-        $script:polished = ollama run llama3 "Rewrite the following transcript into clean, technically accurate text. Output ONLY the corrected text with no preamble, no explanation, and no list of changes: $transcript"
+        $script:polished = $transcript.Trim()
     }
     Write-Host "Polished in $([math]::Round($polishTime.TotalSeconds,2))s" -ForegroundColor DarkGray
     Write-Host "`n--- Polished Output ---`n" -ForegroundColor Green

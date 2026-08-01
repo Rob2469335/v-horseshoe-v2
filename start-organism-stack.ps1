@@ -5,9 +5,15 @@ $FrontendRoot = Join-Path $RepoRoot "organism-console"
 $LogDir = Join-Path $RepoRoot "run-logs"
 
 $env:QDRANT_URL = "http://127.0.0.1:6333"
-$env:OLLAMA_HOST = "http://127.0.0.1:11434"
+$env:LLM_API_BASE = "http://127.0.0.1:8080"
 
-$qdrantExe = "C:\Users\rober\.continue\v-horseshoe\qdrant-bin\qdrant.exe"
+$qdrantExe = "C:\Users\rober\Documents\v-horseshoe-sync\qdrant-bin\qdrant.exe"
+if (-not (Test-Path $qdrantExe)) {
+    $qdrantExe = "C:\Users\rober\.continue\v-horseshoe\qdrant-bin\qdrant.exe"
+}
+if (-not (Test-Path $qdrantExe)) {
+    $qdrantExe = Join-Path $RepoRoot "qdrant-bin\qdrant.exe"
+}
 
 $qdrantOut = Join-Path $LogDir "qdrant.out.log"
 $qdrantErr = Join-Path $LogDir "qdrant.err.log"

@@ -15,14 +15,18 @@ def test_healing_loop_detects_and_repairs_qdrant():
         ]
     })
     
-    # 2. First tick should trigger healing
+    # 2. First tick warns (escalation: warn once, heal on repeat)
     result = loop.tick()
-    
+    assert result["status"] == "transient_warning"
+    assert loop.state.consecutive_failures == 1
+
+    # 3. Second tick (same failure) escalates to healing_decision
+    result = loop.tick()
     assert result["status"] == "healing_decision"
     assert result["decision"]["mode"] == "approval_required"
     assert loop.state.last_action == "approval_required"
     
-    # 3. Subsequent tick should be throttled (cooldown)
+    # 4. Subsequent tick should be throttled (cooldown)
     result2 = loop.tick()
     assert result2["status"] == "throttled"
     assert "cooldown_remaining" in result2

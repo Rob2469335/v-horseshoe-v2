@@ -16,19 +16,19 @@ async def test_get_memory_context():
         {
             "payload": {
                 "summary": "Ran search task successfully",
-                "models": ["qwen2.5:7b-instruct"],
+                "models": ["qwen3.5-9b"],
                 "dominant_outcome": "success"
             }
         },
         {
             "payload": {
                 "summary": "File editing failed",
-                "models": ["qwen2.5:3b-instruct"],
+                "models": ["qwen3.5-9b"],
                 "dominant_outcome": "failure"
             }
         }
     ]
-    orchestrator.bridge.vs.search = MagicMock(return_value=mock_hits)
+    orchestrator.bridge.vs.search = AsyncMock(return_value=mock_hits)
     
     context = await orchestrator._get_memory_context("test query")
     assert "Relevant historical context" in context
@@ -48,16 +48,16 @@ async def test_generate_react_loop(tmp_path):
         tool_call_text = '<tool_call name="filesystem">{"operation": "write", "path": "temp_react.txt", "content": "hello from loop"}</tool_call>'
         final_response = "I have successfully written to temp_react.txt."
         
-        orchestrator.ollama.generate = AsyncMock()
-        orchestrator.ollama.generate.side_effect = [tool_call_text, final_response]
+        orchestrator.llm.generate = AsyncMock()
+        orchestrator.llm.generate.side_effect = [tool_call_text, final_response]
         
         result, model = await orchestrator.generate(
-            model="qwen2.5:7b-instruct",
+            model="qwen3.5-9b",
             prompt="Write hello to temp_react.txt"
         )
         
         assert result == final_response
-        assert model == "qwen2.5:7b-instruct"
+        assert model == "qwen3.5-9b"
         
         # Verify file was written inside the sandbox
         written_file = tmp_path / "temp_react.txt"
@@ -65,7 +65,7 @@ async def test_generate_react_loop(tmp_path):
         assert written_file.read_text(encoding="utf-8") == "hello from loop"
         
         # Verify two calls were made to LLM
-        assert orchestrator.ollama.generate.call_count == 2
+        assert orchestrator.llm.generate.call_count == 2
     finally:
         orchestrator.mcp.root = old_root
 
@@ -81,11 +81,11 @@ async def test_generate_react_loop_alternative_format(tmp_path):
         tool_call_text = '<tool>filesystem</tool> {"operation": "write", "path": "temp_react_alt.txt", "content": "hello alt"}'
         final_response = "I have written to temp_react_alt.txt."
         
-        orchestrator.ollama.generate = AsyncMock()
-        orchestrator.ollama.generate.side_effect = [tool_call_text, final_response]
+        orchestrator.llm.generate = AsyncMock()
+        orchestrator.llm.generate.side_effect = [tool_call_text, final_response]
         
         result, model = await orchestrator.generate(
-            model="qwen2.5:7b-instruct",
+            model="qwen3.5-9b",
             prompt="Write hello alt to temp_react_alt.txt"
         )
         
@@ -106,7 +106,7 @@ async def test_stream_generate_react_loop(tmp_path):
     try:
         orchestrator._get_memory_context = AsyncMock(return_value="")
         
-        # Mock OllamaClient.stream_generate with two generators
+        # Mock LlamaClient.stream_generate with two generators
         async def mock_stream_1(*args, **kwargs):
             yield '<tool_call name="filesystem">'
             yield '{"operation": "write", '
@@ -117,15 +117,15 @@ async def test_stream_generate_react_loop(tmp_path):
         async def mock_stream_2(*args, **kwargs):
             yield 'File was written successfully.'
             
-        orchestrator.ollama.stream_generate = MagicMock()
-        orchestrator.ollama.stream_generate.side_effect = [
+        orchestrator.llm.stream_generate = MagicMock()
+        orchestrator.llm.stream_generate.side_effect = [
             mock_stream_1(),
             mock_stream_2()
         ]
         
         chunks = []
         async for chunk, model, trace_id in orchestrator.stream_generate(
-            model="qwen2.5:7b-instruct",
+            model="qwen3.5-9b",
             prompt="Write hello stream"
         ):
             chunks.append(chunk)

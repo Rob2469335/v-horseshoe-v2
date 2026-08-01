@@ -4,12 +4,12 @@ Horseshoe Swarm v2 is a modular swarm orchestration platform for local AI workfl
 
 ## Overview
 
-The orchestrator coordinates planning, routing, critique, trace collection, model selection, and task execution over a local Ollama-backed model inventory.
+The orchestrator coordinates planning, routing, critique, trace collection, model selection, and task execution over a LiteLLM-backed model inventory (OpenRouter, Groq, and local llama.cpp endpoints).
 
 ## Quick start
 
-1. Make sure Ollama is running locally.
-2. Confirm the required models exist in `ollama list`.
+1. Make sure your local llama.cpp / LiteLLM server is running.
+2. Confirm your environment API keys (`OPENROUTER_API_KEY`, `GROQ_API_KEY`) or local models are configured in `litellm-config.yaml`.
 3. Run your orchestrator smoke checks.
 
 ## Smoke tests

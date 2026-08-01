@@ -12,7 +12,7 @@ from swarm_os.core.orchestrator import Orchestrator
 @pytest.fixture
 def orch():
     """Build an Orchestrator with mocked-out dependencies."""
-    with patch("swarm_os.core.orchestrator.OllamaClient") as MockOllama, \
+    with patch("swarm_os.core.orchestrator.LlamaClient") as MockLlama, \
          patch("swarm_os.core.orchestrator.MemoryBridge") as MockBridge, \
          patch("swarm_os.core.orchestrator.mcp_registry") as MockMCP, \
          patch("swarm_os.core.orchestrator.EventStore"), \
@@ -20,7 +20,8 @@ def orch():
         MockBridge.return_value.get_memory_context = AsyncMock(return_value="")
         MockMCP.get_tools_schema.return_value = []
         o = Orchestrator()
-        o.ollama = MockOllama.return_value
+        o.llm = MockLlama.return_value
+        o.ollama = o.llm
         return o
 
 
@@ -36,8 +37,8 @@ async def test_slash_command_not_repeated(orch):
 
     slash_json = '{"command":"/goal fix the routes","confidence":0.8}'
 
-    # Mock: ollama.generate returns the same slash-command JSON every time
-    orch.ollama.generate = AsyncMock(return_value=slash_json)
+    # Mock: llm.generate returns the same slash-command JSON every time
+    orch.llm.generate = AsyncMock(return_value=slash_json)
 
     # Mock critic to accept
     orch.critic.evaluate_step = MagicMock(
@@ -45,13 +46,13 @@ async def test_slash_command_not_repeated(orch):
     )
 
     result, model = await orch.generate(
-        model="qwen2.5:3b-instruct",
+        model="qwen3.5-9b",
         prompt="fix the routes",
     )
 
     # The model was called at most ONCE (slash command breaks immediately after handled)
-    assert orch.ollama.generate.call_count == 1, (
-        f"Expected 1 call (break after slash command handled), got {orch.ollama.generate.call_count}"
+    assert orch.llm.generate.call_count == 1, (
+        f"Expected 1 call (break after slash command handled), got {orch.llm.generate.call_count}"
     )
     assert result == slash_json
 
@@ -63,20 +64,20 @@ async def test_duplicate_tool_call_breaks_loop(orch):
 
     tool_xml = '<tool_call name="search">{"query":"hello"}</tool_call>'
 
-    orch.ollama.generate = AsyncMock(return_value=tool_xml)
+    orch.llm.generate = AsyncMock(return_value=tool_xml)
     orch.critic.evaluate_step = MagicMock(
         return_value=MagicMock(accepted=True, reason="ok")
     )
     orch.mcp.call = AsyncMock(return_value={"ok": True, "data": "result"})
 
     result, model = await orch.generate(
-        model="qwen2.5:3b-instruct",
+        model="qwen3.5-9b",
         prompt="search for hello",
     )
 
     # First call: tool executed. Second call: duplicate detected → break.
-    assert orch.ollama.generate.call_count == 2, (
-        f"Expected 2 calls (first executes, second detects dup), got {orch.ollama.generate.call_count}"
+    assert orch.llm.generate.call_count == 2, (
+        f"Expected 2 calls (first executes, second detects dup), got {orch.llm.generate.call_count}"
     )
 
 
@@ -85,35 +86,35 @@ async def test_duplicate_tool_call_breaks_loop(orch):
 # ─────────────────────────────────────────────────────────
 
 def test_detect_provider_openrouter_free(orch):
-    assert orch._detect_provider("openrouter/free") in ("openrouter", "ollama")
+    assert orch._detect_provider("openrouter/free") in ("openrouter", "llama")
     # If OPENROUTER_API_KEY is set, it should be openrouter
 
 
 def test_detect_provider_nvidia(orch):
-    assert orch._detect_provider("nvidia/llama-3.1-nemotron-nano-8b-v1") in ("nvidia", "ollama")
+    assert orch._detect_provider("nvidia/llama-3.1-nemotron-nano-8b-v1") in ("nvidia", "llama")
 
 
 def test_detect_provider_local_model(orch):
-    assert orch._detect_provider("qwen2.5:7b-instruct") == "ollama"
+    assert orch._detect_provider("qwen3.5-9b") == "llama"
 
 
 def test_detect_provider_meta_model(orch):
-    assert orch._detect_provider("meta/llama-3.3-70b-instruct") in ("nvidia", "ollama")
+    assert orch._detect_provider("meta/llama-3.3-70b-instruct") == "openrouter"
 
 
 def test_detect_provider_deepseek(orch):
-    assert orch._detect_provider("deepseek/deepseek-v4-flash") in ("openrouter", "ollama")
+    assert orch._detect_provider("deepseek/deepseek-v4-flash") in ("openrouter", "llama")
 
 
 @pytest.mark.asyncio
-async def test_openrouter_free_not_sent_to_ollama(orch, monkeypatch):
-    """openrouter/free must NOT be sent to OllamaClient.generate."""
+async def test_openrouter_free_not_sent_to_llm(orch, monkeypatch):
+    """openrouter/free must NOT be sent to LlamaClient.generate."""
 
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test-key-12345")
 
-    # _cloud_generate should be called instead of ollama.generate
+    # _cloud_generate should be called instead of llm.generate
     orch._cloud_generate = AsyncMock(return_value="Cloud response OK")
-    orch.ollama.generate = AsyncMock(side_effect=AssertionError("Ollama should not be called for openrouter/free"))
+    orch.llm.generate = AsyncMock(side_effect=AssertionError("LLM should not be called for openrouter/free"))
 
     result, model = await orch.generate(
         model="openrouter/free",
@@ -122,7 +123,7 @@ async def test_openrouter_free_not_sent_to_ollama(orch, monkeypatch):
 
     assert result == "Cloud response OK"
     orch._cloud_generate.assert_called_once()
-    orch.ollama.generate.assert_not_called()
+    orch.llm.generate.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -132,7 +133,7 @@ async def test_generate_fallback_when_no_api_key(orch, monkeypatch):
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
 
-    orch.ollama.generate = AsyncMock(return_value="Local fallback response")
+    orch.llm.generate = AsyncMock(return_value="Local fallback response")
 
     result, model = await orch.generate(
         model="openrouter/free",
@@ -140,9 +141,9 @@ async def test_generate_fallback_when_no_api_key(orch, monkeypatch):
     )
 
     assert result == "Local fallback response"
-    orch.ollama.generate.assert_called_once()
+    orch.llm.generate.assert_called_once()
     # Model should have been changed to local fallback
-    call_args = orch.ollama.generate.call_args
+    call_args = orch.llm.generate.call_args
     call_model = call_args.kwargs.get("model") or (call_args.args[0] if call_args.args else "")
     assert call_model != "openrouter/free", f"Expected local fallback, got {call_model}"
 

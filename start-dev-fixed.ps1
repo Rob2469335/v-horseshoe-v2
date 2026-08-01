@@ -25,30 +25,6 @@ if (Test-Path $dotenvPath) {
     }
 }
 
-# Explicit API key fallback defaults (from ZENITH Swarm OS - API Keys)
-if (-not $env:LLAMA_BASE_URL)       { $env:LLAMA_BASE_URL       = "http://localhost:8080" }
-if (-not $env:OLLAMA_BASE_URL)      { $env:OLLAMA_BASE_URL      = "http://localhost:8080" }
-if (-not $env:QDRANT_LOCAL)         { $env:QDRANT_LOCAL         = "true" }
-
-if (-not $env:TAVILY_API_KEY)       { $env:TAVILY_API_KEY       = "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" }
-if (-not $env:SERPER_API_KEY)       { $env:SERPER_API_KEY       = "5751e133a650826ed6f103b2c5a6486a276cdca4" }
-if (-not $env:EXA_API_KEY)          { $env:EXA_API_KEY          = "bf1234c7-df6c-4974-aa94-20fd21880de0" }
-if (-not $env:SERPAPI_KEY)          { $env:SERPAPI_KEY          = "03307437e7a3ae398613914cf687200db5d66b58ebe863fd136f19d3db325afd" }
-if (-not $env:TINYFISH_API_KEY)     { $env:TINYFISH_API_KEY     = "sk-tinyfish-kaspa7FeVMLfRHcsD6HkIAjl-nXj3OVo" }
-
-if (-not $env:GEMINI_API_KEY)       { $env:GEMINI_API_KEY       = "AQ.Ab8RN6JIZuDjNviEEhROdpzwkpDWKGIbnrBTjqC7wTtcD-stLw" }
-if (-not $env:BRAVE_API_KEY)        { $env:BRAVE_API_KEY        = "BSAwBqBtiiEbP8GvFvNPF66dc_eslQa" }
-if (-not $env:GROQ_API_KEY)         { $env:GROQ_API_KEY         = "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" }
-if (-not $env:OPENROUTER_API_KEY)   { $env:OPENROUTER_API_KEY   = "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" }
-if (-not $env:NVIDIA_API_KEY)       { $env:NVIDIA_API_KEY       = "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" }
-if (-not $env:API_KEY)              { $env:API_KEY              = "pk-prov-7MFTHz2RyPZnabRoRwGF3V2vzq6xCzR3rwf35fkS3KMK" }
-if (-not $env:OPENAI_API_KEY)       { $env:OPENAI_API_KEY       = "sk-XmqUiHu0HlnSravUHSj32BGyzqpKeMlmMNeOQPk5FHmg3cazfwGvCroLKa1XSVlx" }
-if (-not $env:OPENAI_API_BASE)      { $env:OPENAI_API_BASE      = "https://api.opencode.go/v1" }
-
-if (-not $env:VH2_QDRANT_ENABLED)   { $env:VH2_QDRANT_ENABLED   = "true" }
-if (-not $env:VH2_RERANKER_ENABLED) { $env:VH2_RERANKER_ENABLED = "true" }
-if (-not $env:ZENITH_WEATHER_CITY)  { $env:ZENITH_WEATHER_CITY  = "New York" }
-
 # Normalize key names used by different parts of the app
 if (-not $env:NVIDIA_API_KEY -and $env:NVIDIAAPIKEY) { $env:NVIDIA_API_KEY = $env:NVIDIAAPIKEY }
 if (-not $env:NVIDIAAPIKEY -and $env:NVIDIA_API_KEY) { $env:NVIDIAAPIKEY = $env:NVIDIA_API_KEY }
@@ -66,8 +42,6 @@ Write-Host "Exa key present:          $([bool]$env:EXA_API_KEY)" -ForegroundColo
 Write-Host "Serper key present:       $([bool]$env:SERPER_API_KEY)" -ForegroundColor Gray
 Write-Host "SerpApi key present:      $([bool]$env:SERPAPI_KEY)" -ForegroundColor Gray
 Write-Host "TinyFish key present:     $([bool]$env:TINYFISH_API_KEY)" -ForegroundColor Gray
-Write-Host "OpenAI/OpenCode key:      $([bool]$env:OPENAI_API_KEY)" -ForegroundColor Gray
-Write-Host "OpenCode Base URL:        $([bool]$env:OPENAI_API_BASE)" -ForegroundColor Gray
 
 # STEP 1 - Cleanup
 Write-Host "`n[STEP 1] Cleaning up..." -ForegroundColor Yellow
@@ -82,7 +56,7 @@ Write-Host "`n[STEP 2] Starting llama.cpp Microservices (Ports 8080-8083)..." -F
 
 # To switch to the 35B model, uncomment the line below and comment out the 9B line.
 # $llamaGenJob = Start-Job -ScriptBlock { param($r); Set-Location $r; & .\bin\llama.exe serve -m ".\models\qwen-tuned-latest.gguf" -c 32768 -ctk q8_0 -ctv q8_0 -t 4 -b 256 -ub 512 --port 8080 2>&1 } -ArgumentList $root
-$llamaGenJob = Start-Job -ScriptBlock { param($r); Set-Location $r; & .\bin\llama.exe serve -m ".\models\Qwen3.5-9B-Q4_K_M.gguf" --alias "qwen3.5-9b" -c 16384 -ctk q8_0 -ctv q8_0 -fa on -t 2 -b 2048 -ub 512 --timeout 120 --api-key "llama" --cors-origins "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000" --port 8080 2>&1 } -ArgumentList $root
+$llamaGenJob = Start-Job -ScriptBlock { param($r); Set-Location $r; & .\bin\llama.exe serve -m ".\models\Qwen3.5-9B-Q4_K_M.gguf" --alias "qwen3.5-9b" -c 16384 -ctk q8_0 -ctv q8_0 -fa on -t 2 -tb 4 -b 2048 -ub 512 -np 1 --timeout 300 --api-key "llama" --cors-origins "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000" --port 8080 2>&1 } -ArgumentList $root
 $llamaEmbJob = Start-Job -ScriptBlock { param($r); Set-Location $r; & .\bin\llama.exe serve -m ".\models\nomic-embed-text-v1.5.Q8_0.gguf" --embedding --api-key "llama" --cors-origins "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000" --port 8081 -t 2 2>&1 } -ArgumentList $root
 $llamaRerankJob = Start-Job -ScriptBlock { param($r); Set-Location $r; & .\bin\llama.exe serve -m ".\models\qllama-bge-reranker-v2-m3-latest.gguf" --reranking --api-key "llama" --cors-origins "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000" --port 8082 -t 2 2>&1 } -ArgumentList $root
 $llamaVisJob = Start-Job -ScriptBlock { param($r); Set-Location $r; & .\bin\llama.exe serve -m ".\models\moondream-latest.gguf" --override-kv "tokenizer.ggml.pre=str:default" --chat-template "vicuna" --mmproj-auto --api-key "llama" --cors-origins "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000" --port 8083 -t 2 2>&1 } -ArgumentList $root

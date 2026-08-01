@@ -47,7 +47,7 @@ def test_approval_endpoints_support_create_list_and_decide():
 
     create_response = client.post(
         "/features/healing-approvals",
-        params={"component": "system", "action": "restart_component", "reason": "manual review required"},
+        json={"component": "system", "action": "restart_component", "reason": "manual review required"},
     )
     assert create_response.status_code == 200
     request_id = create_response.json()["request"]["request_id"]

@@ -1,3 +1,17 @@
+import os
+import ssl
+try:
+    ssl._create_default_https_context = ssl._create_unverified_context
+    ssl.create_default_context = ssl._create_unverified_context
+except AttributeError:
+    pass
+try:
+    import truststore
+    truststore.inject_into_ssl()
+except ImportError:
+    pass
+
+import swarm_os.bootstrap
 from fastapi.testclient import TestClient
 import pytest
 
@@ -10,17 +24,19 @@ def client():
         yield test_client
 
 from unittest.mock import patch
-from qdrant_client import QdrantClient
+from qdrant_client import AsyncQdrantClient
 
 @pytest.fixture(autouse=True)
 def global_qdrant_mock():
-    # Intercept any QdrantClient instantiation and force it to be an in-memory client.
+    # Intercept any AsyncQdrantClient instantiation and force it to be an in-memory client.
     # This prevents the test suite from requiring a live local Qdrant server.
     def mock_init(*args, **kwargs):
-        return QdrantClient(":memory:")
+        return AsyncQdrantClient(":memory:")
 
-    with patch("swarm_os.services.vector_store.QdrantClient", side_effect=mock_init):
-        yield
+    with patch("swarm_os.services.vector_store.AsyncQdrantClient", side_effect=mock_init):
+        with patch("swarm_os.services.reflection_loop.AsyncQdrantClient", side_effect=mock_init, create=True):
+            with patch("swarm_os.services.tool_registry.AsyncQdrantClient", side_effect=mock_init, create=True):
+                yield
 
 @pytest.fixture(autouse=True)
 def global_subprocess_mock():

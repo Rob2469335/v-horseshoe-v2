@@ -6,8 +6,8 @@ project:
   name: "v-horseshoe-v2"
 
 llm:
-  provider: "ollama"
-  model: "qwen2.5-coder:7b"
+  provider: "litellm"
+  model: "qwen-tuned"
   temperature: 0.7
 
 runtime:

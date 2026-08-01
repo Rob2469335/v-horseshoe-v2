@@ -67,10 +67,10 @@ async def test_web_search_handler_serper(monkeypatch):
 @pytest.mark.anyio
 async def test_qdrant_recall_handler():
     # Mock EmbeddingService and VectorStore
-    mock_emb = MagicMock()
+    mock_emb = AsyncMock()
     mock_emb.embed.return_value = [0.1] * 768
     
-    mock_store = MagicMock()
+    mock_store = AsyncMock()
     mock_store.search.return_value = [
         {"id": "doc1", "score": 0.95, "payload": {"text": "Codebase snippet content"}}
     ]

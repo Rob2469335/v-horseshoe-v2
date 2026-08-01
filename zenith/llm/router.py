@@ -16,60 +16,60 @@ class ModelTier:
 
 class ModelRouter:
     def __init__(self):
-        # Local model tiers (your Ollama install)
+        # Local model tiers (your llama.cpp install)
         self.tiers = {
             "fast": ModelTier(
                 name="fast",
-                models=["qwen-tuned"],
+                models=["qwen3.5-9b"],
                 capability="fast",
                 is_cloud=False
             ),
             "balanced": ModelTier(
                 name="balanced", 
-                models=["qwen-tuned"],
+                models=["qwen3.5-9b"],
                 capability="balanced",
                 is_cloud=False
             ),
             "smart": ModelTier(
                 name="smart",
-                models=["qwen-tuned"],
+                models=["qwen3.5-9b"],
                 capability="smart",
                 is_cloud=False
             ),
             "expert": ModelTier(
                 name="expert",
-                models=["qwen-tuned"],
+                models=["qwen3.5-9b"],
                 capability="expert",
                 is_cloud=False
             ),
             "vision": ModelTier(
                 name="vision",
-                models=["qwen3-vl:8b", "moondream:latest"],
+                models=["moondream:latest", "moondream:latest"],
                 capability="vision",
                 is_cloud=False
             ),
-            # Cloud models (Ollama Cloud - free tier with limits)
+            # Cloud models (Remote LiteLLM - free tier with limits)
             "cloud_fast": ModelTier(
                 name="cloud_fast",
-                models=["ollama-cloud/llama3.1:8b", "ollama-cloud/mistral:7b"],
+                models=["remote-litellm/llama3.1:8b", "remote-litellm/mistral:7b"],
                 capability="fast",
                 is_cloud=True
             ),
             "cloud_balanced": ModelTier(
                 name="cloud_balanced",
-                models=["ollama-cloud/llama3.1:70b", "ollama-cloud/qwen2.5-coder:7b"],
+                models=["remote-litellm/llama3.1:70b", "remote-litellm/qwen2.5-coder:7b"],
                 capability="balanced",
                 is_cloud=True
             ),
             "cloud_smart": ModelTier(
                 name="cloud_smart",
-                models=["ollama-cloud/llama3.1:405b", "ollama-cloud/qwen2.5-coder:32b"],
+                models=["remote-litellm/llama3.1:405b", "remote-litellm/qwen2.5-coder:32b"],
                 capability="smart",
                 is_cloud=True
             ),
             "cloud_expert": ModelTier(
                 name="cloud_expert",
-                models=["ollama-cloud/gpt-4o", "ollama-cloud/claud-3.5"],
+                models=["remote-litellm/gpt-4o", "remote-litellm/claud-3.5"],
                 capability="expert",
                 is_cloud=True
             )
@@ -92,8 +92,8 @@ class ModelRouter:
         
         # Cloud configuration
         self.cloud_config = {
-            "enabled": True,  # Auto-detect from Ollama auth
-            "provider": "ollama-cloud",
+            "enabled": True,  # Auto-detect from cloud auth
+            "provider": "litellm-cloud",
             "free_tier_limits": {
                 "requests_per_day": 100,
                 "tokens_per_day": 100000
@@ -107,7 +107,7 @@ class ModelRouter:
         }
         
         # Embedding model
-        self.embedding_model = "qwen3-embedding:8b"
+        self.embedding_model = "nomic-embed-text-v1.5"
         
         # Fallback chains
         self.fallbacks = {
@@ -148,7 +148,7 @@ class ModelRouter:
         return "default"
     
     def is_cloud_available(self) -> bool:
-        """Check if Ollama cloud is available (signed in + under limits)"""
+        """Check if LiteLLM cloud is available (signed in + under limits)"""
         if not self.cloud_config["enabled"]:
             return False
         
@@ -159,8 +159,8 @@ class ModelRouter:
         if self.cloud_usage["tokens_today"] >= self.cloud_config["free_tier_limits"]["tokens_per_day"]:
             return False
         
-        # Check if user is signed in (Ollama auth file exists)
-        auth_file = os.path.expanduser("~/.ollama/auth.json")
+        # Check if user is signed in (LiteLLM auth file exists)
+        auth_file = os.path.expanduser("~/.litellm/auth.json")
         return os.path.exists(auth_file)
     
     def requires_cloud(self, task: str, complexity_estimate: float = 0.5) -> bool:

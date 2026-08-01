@@ -62,15 +62,15 @@ async def test_bandit_strategy_selection():
 @pytest.mark.asyncio
 async def test_token_budget_exceeded():
     orchestrator = Orchestrator()
-    orchestrator.total_tokens_used = 1000
-    orchestrator.max_tokens_budget = 500
+    orchestrator.token_manager._total_used = 1000
+    orchestrator.token_manager._budget = 500
     
     with pytest.raises(ValueError, match="Token budget exceeded"):
-        await orchestrator.generate(model="qwen2.5:7b-instruct", prompt="Hello")
+        await orchestrator.generate(model="qwen3.5-9b", prompt="Hello")
         
     # Stream generate should yield an error chunk
     chunks = []
-    async for chunk, _, _ in orchestrator.stream_generate(model="qwen2.5:7b-instruct", prompt="Hello"):
+    async for chunk, _, _ in orchestrator.stream_generate(model="qwen3.5-9b", prompt="Hello"):
         chunks.append(chunk)
     full_output = "".join(chunks)
     assert "Token budget exceeded" in full_output
@@ -79,13 +79,14 @@ async def test_token_budget_exceeded():
 async def test_dynamic_tool_schema_injection():
     orchestrator = Orchestrator()
     orchestrator._get_memory_context = AsyncMock(return_value="")
-    orchestrator.ollama.generate = AsyncMock(return_value="Final Answer")
+    orchestrator.llm.generate = AsyncMock(return_value="Final Answer")
     
     messages = [{"role": "user", "content": "Query"}]
-    await orchestrator.generate(model="qwen2.5:7b-instruct", messages=messages)
+    await orchestrator.generate(model="qwen3.5-9b", messages=messages)
     
     # Check that schemas were injected into the message content
-    injected_content = messages[0]["content"]
+    call_args = orchestrator.llm.generate.call_args.kwargs
+    injected_content = call_args["messages"][0]["content"]
     assert "Available MCP Tools" in injected_content
     assert "filesystem" in injected_content
     assert "playwright" in injected_content
@@ -101,19 +102,19 @@ async def test_critic_reflection_loop(tmp_path):
     tool_call_invalid = '<tool_call name="filesystem">{"operation": "read", "path": "does_not_exist.txt"}</tool_call>'
     final_response = "I see the file does not exist, so I am reporting back."
     
-    orchestrator.ollama.generate = AsyncMock(side_effect=[
+    orchestrator.llm.generate = AsyncMock(side_effect=[
         tool_call_invalid,
         final_response,
         AssertionError("generate() called a 3rd time -- loop did not break on plain-text response"),
     ])
     
     messages = [{"role": "user", "content": "Read non_existent file"}]
-    result, _ = await orchestrator.generate(model="qwen2.5:7b-instruct", messages=messages)
+    result, _ = await orchestrator.generate(model="qwen3.5-9b", messages=messages)
     
     assert result == final_response
     # Assert that a critic corrective prompt was added to the history in the second call
-    assert orchestrator.ollama.generate.call_count == 2
-    second_call_messages = orchestrator.ollama.generate.call_args_list[1][1]["messages"]
+    assert orchestrator.llm.generate.call_count == 2
+    second_call_messages = orchestrator.llm.generate.call_args_list[1][1]["messages"]
     critic_feedbacks = [m for m in second_call_messages if "Critic Feedback" in m.get("content", "")]
     assert critic_feedbacks
     assert "Tool error" in critic_feedbacks[0]["content"]
@@ -130,7 +131,7 @@ async def test_memory_context_keyword_boosting():
             "score": 0.5,
             "payload": {
                 "summary": "Ran upwork crawler task",
-                "models": ["qwen2.5:7b-instruct"],
+                "models": ["qwen3.5-9b"],
                 "dominant_outcome": "success"
             }
         },
@@ -138,12 +139,12 @@ async def test_memory_context_keyword_boosting():
             "score": 0.6,
             "payload": {
                 "summary": "File editing failure",
-                "models": ["qwen2.5:3b-instruct"],
+                "models": ["qwen3.5-9b"],
                 "dominant_outcome": "failure"
             }
         }
     ]
-    orchestrator.bridge.vs.search = MagicMock(return_value=mock_hits)
+    orchestrator.bridge.vs.search = AsyncMock(return_value=mock_hits)
     
     # Query contains "upwork" -> should boost the upwork hit score
     context = await orchestrator._get_memory_context("upwork task runs")
@@ -161,12 +162,13 @@ async def test_memory_consolidation():
     from swarm_os.services.vector_store import VectorStore
     
     vs = VectorStore(collection_name="test_consolidation", use_memory=True)
+    await vs._wait_init()
     bridge = MemoryBridge(event_log_path="test_events.jsonl", vector_store=vs)
     bridge._embed = AsyncMock(return_value=[0.1] * 768)
     
     # Insert multiple individual memory runs
     vec = [0.1] * 768
-    vs.client.upsert(
+    await vs.client.upsert(
         collection_name="test_consolidation",
         points=[
             qdrant_models.PointStruct(id=1, vector=vec, payload={"summary": "task a", "dominant_outcome": "success", "event_count": 5}),
@@ -180,7 +182,7 @@ async def test_memory_consolidation():
     bridge.http.post = AsyncMock()
     mock_resp = MagicMock()
     mock_resp.status_code = 200
-    mock_resp.json = MagicMock(return_value={"response": "Unified task runs successfully completed."})
+    mock_resp.json = MagicMock(return_value={"choices": [{"message": {"content": "Unified task runs successfully completed."}}]})
     bridge.http.post.return_value = mock_resp
     
     # Run consolidation
@@ -188,7 +190,7 @@ async def test_memory_consolidation():
     assert consolidated is True
     
     # Check that individual success runs (task a, task b) were deleted and replaced by a consolidated summary
-    info, _ = vs.client.scroll(collection_name="test_consolidation")
+    info, _ = await vs.client.scroll(collection_name="test_consolidation")
     assert len(info) == 2 # 1 failure run (not consolidated because count < 2) + 1 new consolidated run
     
     # Verify consolidated payload contains combined fields

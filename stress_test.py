@@ -3,7 +3,7 @@ from swarm_os.services.control_plane import StateManager
 import random
 
 def run_stress_test():
-    brain = UpgradedSwarmBrainV10Ultimate(genome={'model': 'qwen2.5:7b'})
+    brain = UpgradedSwarmBrainV10Ultimate(genome={'model': 'qwen3.5-9b'})
     state = StateManager()
     tasks = ['Audit kernel security', 'Optimize database indexing', 'Refactor network socket', 'Clean temporary cache', 'Generate system health report'] * 2
     
