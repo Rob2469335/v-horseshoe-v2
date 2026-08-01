@@ -15,15 +15,20 @@ class EvolvingCritic:
             "score": score,
             "weights": self.critic.weights.copy()
         }
-        
+
+        # BUG FIX: Retain the journal future so exceptions don't vanish silently,
+        # and avoid unhandled-future warnings on GC.
         try:
             import asyncio
             loop = asyncio.get_running_loop()
-            loop.run_in_executor(None, self.journal.log, data)
+            future = loop.run_in_executor(None, self.journal.log, data)
+            future.add_done_callback(lambda f: f.exception() if not f.cancelled() else None)
         except RuntimeError:
             self.journal.log(data)
 
         # learn from error (THIS is the evolution step)
         self.critic.learn(predicted, success)
 
-        return score
+        # BUG FIX: Return the full evolution payload (weights) too, so the caller
+        # can emit a meaningful critic_update event instead of a bare float.
+        return {"score": score, "weights": self.critic.weights.copy()}

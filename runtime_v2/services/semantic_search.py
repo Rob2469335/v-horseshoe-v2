@@ -1,12 +1,13 @@
 import requests
 from typing import List, Dict, Any
-from .indexer import get_embedding, QDRANT_URL, COLLECTION_NAME
+from .indexer import get_embeddings, QDRANT_URL, COLLECTION_NAME
 
 def semantic_search(query: str, limit: int = 5) -> str:
     """Searches the codebase index and returns a formatted string of relevant snippets."""
-    vector = get_embedding(query)
+    vectors = get_embeddings([query])
+    vector = vectors[0] if vectors else None
     if not vector:
-        return "Error: Could not generate embedding for query. Is Ollama running?"
+        raise RuntimeError("Error: Could not generate embedding for query. Is the llama.cpp embedding service running?")
         
     try:
         resp = requests.post(f"{QDRANT_URL}/collections/{COLLECTION_NAME}/points/search", json={
@@ -16,7 +17,7 @@ def semantic_search(query: str, limit: int = 5) -> str:
         }, timeout=10.0)
         
         if resp.status_code != 200:
-            return f"Error: Qdrant search failed with status {resp.status_code}."
+            raise RuntimeError(f"Error: Qdrant search failed with status {resp.status_code}.")
             
         results = resp.json().get("result", [])
         if not results:
@@ -36,5 +37,5 @@ def semantic_search(query: str, limit: int = 5) -> str:
             output.append(f"Code:\n```python\n{code}\n```\n")
             
         return "\n".join(output)
-    except Exception as e:
-        return f"Error performing semantic search: {e}"
+    except requests.RequestException as e:
+        raise RuntimeError(f"Network error performing semantic search: {e}")

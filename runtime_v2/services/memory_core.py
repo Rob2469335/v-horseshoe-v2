@@ -4,7 +4,8 @@ import uuid
 import requests
 from typing import List, Dict, Any, Optional
 
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
+EMBED_URL = os.getenv("EMBED_URL", os.getenv("LLAMA_URL", os.getenv("OLLAMA_URL", "http://127.0.0.1:8081/v1")))
+OLLAMA_URL = EMBED_URL  # Backward compatibility alias
 QDRANT_URL = os.getenv("QDRANT_URL", "http://127.0.0.1:6333")
 COLLECTION_NAME = "agent_episodic_memory_v2"
 EMBEDDING_MODEL = "nomic-embed-text"
@@ -13,13 +14,11 @@ EMBEDDING_DIM = 768  # Dimension for nomic-embed-text
 
 def _get_embedding_dimension() -> int:
     try:
-        resp = requests.post(f"{OLLAMA_URL}/api/embeddings", json={
-            "model": EMBEDDING_MODEL,
-            "prompt": "test",
-            "keep_alive": "5m"
+        resp = requests.post(f"{EMBED_URL}/embeddings", headers={"Authorization": "Bearer llama"}, json={
+            "input": "test"
         }, timeout=30.0)
         if resp.status_code == 200:
-            vec = resp.json().get("embedding", [])
+            vec = resp.json().get("data", [{}])[0].get("embedding", [])
             return len(vec)
     except Exception:
         pass
@@ -61,102 +60,111 @@ def init_memory_qdrant(shard: str = "general") -> bool:
         return False
 
 def get_embedding(text: str) -> Optional[List[float]]:
-    # Truncate to ~1800 tokens to prevent Ollama batch size limits (2048 tokens max)
+    # Truncate to ~1800 tokens to prevent embedding server batch size limits
     text = text[:7000]
     try:
-        resp = requests.post(f"{OLLAMA_URL}/api/embeddings", json={
-            "model": EMBEDDING_MODEL,
-            "prompt": text,
-            "keep_alive": "5m"
+        resp = requests.post(f"{EMBED_URL}/embeddings", headers={"Authorization": "Bearer llama"}, json={
+            "input": text
         }, timeout=30.0)
         if resp.status_code == 200:
-            return resp.json().get("embedding")
+            data = resp.json().get("data", [])
+            return data[0].get("embedding") if data else None
     except Exception as e:
         print(f"Error getting embedding: {e}")
     return None
 
-_reranker = None
-
-def get_reranker():
-    global _reranker
-    if _reranker is None:
-        try:
-            from sentence_transformers import CrossEncoder
-            import logging
-            logging.getLogger("sentence_transformers").setLevel(logging.ERROR)
-            # Load the actual HuggingFace PyTorch model natively
-            print("Loading BAAI/bge-reranker-v2-m3 into PyTorch...")
-            _reranker = CrossEncoder('BAAI/bge-reranker-v2-m3')
-        except Exception as e:
-            print(f"Failed to load CrossEncoder: {e}")
-            _reranker = False
-    return _reranker if _reranker is not False else None
+RERANK_URL = "http://127.0.0.1:8082"
+RERANK_MODEL = "qllama-bge-reranker-v2-m3-latest.gguf"
 
 def rerank_memories(query: str, memories: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Stage 2: Cross-Encoder Reranking"""
+    """Stage 2: Cross-Encoder Reranking via llama.cpp"""
     if not memories:
         return []
-    
-    reranker = get_reranker()
-    
+        
     reranked = []
+    texts = [mem.get("payload", {}).get("fact", "") for mem in memories]
     
-    if reranker:
-        # High-Precision Cross-Encoder Scoring
-        pairs = [[query, mem.get("payload", {}).get("fact", "")] for mem in memories]
-        scores = reranker.predict(pairs)
-        for i, mem in enumerate(memories):
-            payload = mem.get("payload", {})
-            reranked.append({
-                "score": float(scores[i]),
-                "fact": payload.get("fact", ""),
-                "category": payload.get("category", "general")
-            })
-    else:
-        # Fallback to Stage 1 Dense Retrieval scores if PyTorch fails
-        for mem in memories:
-            payload = mem.get("payload", {})
-            reranked.append({
-                "score": mem.get("score", 0.0),
-                "fact": payload.get("fact", ""),
-                "category": payload.get("category", "general")
-            })
+    try:
+        resp = requests.post(
+            f"{RERANK_URL}/v1/rerank",
+            headers={"Authorization": "Bearer llama"},
+            json={
+                "model": RERANK_MODEL,
+                "query": query,
+                "documents": texts,
+                "top_n": 3
+            },
+            timeout=30.0
+        )
+        if resp.status_code == 200:
+            results = resp.json().get("results", [])
+            for res in results:
+                idx = res.get("index")
+                if idx is not None and idx < len(memories):
+                    mem = memories[idx]
+                    payload = mem.get("payload", {})
+                    reranked.append({
+                        "score": float(res.get("relevance_score", 0.0)),
+                        "id": mem.get("id", ""),
+                        "fact": payload.get("fact", ""),
+                        "category": payload.get("category", "general")
+                    })
+            return reranked
+    except Exception as e:
+        print(f"Failed to call llama-server reranker on port 8082: {e}")
+        
+    # Fallback to Stage 1 Dense Retrieval scores if API fails
+    for mem in memories:
+        payload = mem.get("payload", {})
+        reranked.append({
+            "score": mem.get("score", 0.0),
+            "id": mem.get("id", ""),
+            "fact": payload.get("fact", ""),
+            "category": payload.get("category", "general")
+        })
         
     # Sort by score descending
     reranked.sort(key=lambda x: x["score"], reverse=True)
     return reranked[:3]  # Keep top 3
 
 import time
+import threading
 import networkx as nx
 import re
 
 _kg_file = ".data/knowledge_graph.json"
 _kg = None
+# BUG FIX: KG is module-global and mutated/written from multiple threads via
+# asyncio.to_thread(remember_fact, ...). Guard all read-modify-write with a lock
+# to prevent corrupted/concurrent knowledge_graph.json writes.
+_kg_lock = threading.Lock()
 
 def _get_kg():
     global _kg
-    if _kg is None:
-        _kg = nx.DiGraph()
-        if os.path.exists(_kg_file):
-            try:
-                import json
-                with open(_kg_file, "r") as f:
-                    data = json.load(f)
-                    _kg = nx.node_link_graph(data)
-            except Exception as e:
-                print(f"Error loading Knowledge Graph: {e}")
-    return _kg
+    with _kg_lock:
+        if _kg is None:
+            _kg = nx.DiGraph()
+            if os.path.exists(_kg_file):
+                try:
+                    import json
+                    with open(_kg_file, "r") as f:
+                        data = json.load(f)
+                        _kg = nx.node_link_graph(data)
+                except Exception as e:
+                    print(f"Error loading Knowledge Graph: {e}")
+        return _kg
 
 def _save_kg():
-    if _kg is not None:
-        os.makedirs(os.path.dirname(_kg_file), exist_ok=True)
-        try:
-            import json
-            data = nx.node_link_data(_kg)
-            with open(_kg_file, "w") as f:
-                json.dump(data, f)
-        except Exception as e:
-            print(f"Error saving Knowledge Graph: {e}")
+    with _kg_lock:
+        if _kg is not None:
+            os.makedirs(os.path.dirname(_kg_file), exist_ok=True)
+            try:
+                import json
+                data = nx.node_link_data(_kg)
+                with open(_kg_file, "w") as f:
+                    json.dump(data, f)
+            except Exception as e:
+                print(f"Error saving Knowledge Graph: {e}")
 
 def _extract_relations(fact: str):
     """Simple heuristic relation extraction for the Knowledge Graph."""
@@ -201,7 +209,9 @@ def remember_fact(fact: str, category: str = "general") -> bool:
                 "payload": {
                     "fact": fact,
                     "category": category,
-                    "timestamp": current_time
+                    "timestamp": current_time,
+                    "valid_from": current_time,
+                    "valid_until": None
                 }
             }]
         }, timeout=10.0)
@@ -213,16 +223,17 @@ def remember_fact(fact: str, category: str = "general") -> bool:
     if success:
         kg = _get_kg()
         relations = _extract_relations(fact)
-        for subj, pred, obj in relations:
-            kg.add_node(subj)
-            kg.add_node(obj)
-            kg.add_edge(subj, obj, relation=pred, timestamp=current_time)
-            
-        # Also just track keywords as basic nodes
-        keywords = [w for w in fact.split() if len(w) > 5]
-        for kw in keywords[:3]:
-            kg.add_node(kw.lower(), timestamp=current_time)
-            
+        with _kg_lock:
+            for subj, pred, obj in relations:
+                kg.add_node(subj)
+                kg.add_node(obj)
+                kg.add_edge(subj, obj, relation=pred, timestamp=current_time)
+
+            # Also just track keywords as basic nodes
+            keywords = [w for w in fact.split() if len(w) > 5]
+            for kw in keywords[:3]:
+                kg.add_node(kw.lower(), timestamp=current_time)
+
         _save_kg()
         
     return success
@@ -239,9 +250,10 @@ def _moe_route_shards(query: str) -> List[str]:
         shards.add("system_rules")
     if any(k in q for k in ["past", "before", "trace", "reflection", "solution", "history"]):
         shards.add("self_reflection")
-    
-    if not shards:
-        shards.add("general")
+
+    # BUG FIX: Always include `general` as a base shard — most memories are stored
+    # with category="general" but were unreachable when any keyword shard matched.
+    shards.add("general")
     return list(shards)
 
 def get_relevant_memories(query: str) -> str:
@@ -261,12 +273,21 @@ def get_relevant_memories(query: str) -> str:
             
         collection = _get_shard_name(shard)
         try:
-            # Stage 1: Dense Retrieval on specific shard
+            # Stage 1: Dense Retrieval on specific shard (Temporal Filter)
             resp = requests.post(f"{QDRANT_URL}/collections/{collection}/points/search", json={
                 "vector": vector,
                 "limit": 10,
                 "with_payload": True,
-                "score_threshold": 0.5
+                "score_threshold": 0.5,
+                "filter": {
+                    "must": [
+                        {
+                            "is_empty": {
+                                "key": "valid_until"
+                            }
+                        }
+                    ]
+                }
             }, timeout=5.0)
             
             if resp.status_code == 200:
@@ -305,9 +326,11 @@ def get_relevant_memories(query: str) -> str:
     
     output = ["[EPISODIC MEMORY (Hybrid Stack)]"]
     if best_memories:
-        output.append("Semantic Memories:")
+        output.append("Semantic Memories (Temporal Valid):")
         for m in best_memories:
-            output.append(f"- {m['fact']} (Shard: {m['category']})")
+            point_id = m.get("id", "")
+            id_str = f" [ID: {point_id}]" if point_id else ""
+            output.append(f"-{id_str} {m['fact']} (Shard: {m['category']})")
             
     if kg_context:
         output.append("Relational Knowledge Graph:")
@@ -323,7 +346,7 @@ def dump_all_failures(limit: int = 200) -> str:
     This is used by the self-healing orchestrator to do full root-cause analysis.
     Unlike get_relevant_memories() which returns top-3 reranked hits, this returns
     a complete unfiltered dump of every failure the system has recorded, sorted
-    by timestamp (newest first). The 35B model can then synthesize patterns.
+    by timestamp (newest first). The 9B model can then synthesize patterns.
     """
     collection = _get_shard_name("self_reflection")
     
@@ -402,4 +425,23 @@ def get_failure_digest() -> dict:
             digest["shards"][shard] = 0
     
     return digest
+
+
+def deprecate_memory(point_id: str, category: str = "general") -> bool:
+    """Agent tool to mark a memory as deprecated (fact staleness), keeping it for causality but removing it from active search."""
+    collection = _get_shard_name(category)
+    current_time = time.time()
+    
+    # We update the payload by setting valid_until
+    try:
+        # Use Qdrant's Set Payload API to merge the payload directly
+        update_resp = requests.post(f"{QDRANT_URL}/collections/{collection}/points/payload", json={
+            "payload": {"valid_until": current_time},
+            "points": [point_id]
+        }, timeout=10.0)
+        return update_resp.status_code in (200, 201)
+    except Exception as e:
+        print(f"Failed to deprecate memory: {e}")
+    return False
+
 

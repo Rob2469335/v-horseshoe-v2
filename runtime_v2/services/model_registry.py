@@ -2,18 +2,20 @@ import json
 from pathlib import Path
 from typing import Tuple
 
-OLLAMA_URL = "http://127.0.0.1:11434/api/chat"
+LLAMA_URL = "http://127.0.0.1:8080/v1/chat/completions"
 
 AGENT_MODELS: dict[str, Tuple[str, str]] = {
-    # System Agents
-    "coordinator": ("qwen3-4b-tuned", "ollama"),
-    "planner": ("qwen-tuned", "ollama"),
-    "researcher": ("qwen-tuned", "ollama"),
-    "executor": ("qwen3-4b-tuned", "ollama"),
-    "coder": ("qwen-tuned", "ollama"),
-    "tool-runner": ("qwen3-4b-tuned", "ollama"),
-    "reviewer": ("qwen-tuned", "ollama"),  # External 30B reviewer: intentionally stronger than qwen-tuned to catch what the author missed
-    "debugger": ("qwen-tuned", "ollama"),
+    # All agents use Qwen3.5-9B (Q4_K_M) on port 8080.
+    "coordinator":   ("qwen3.5-9b", "llama"),
+    "planner":       ("qwen3.5-9b", "llama"),
+    "executor":      ("qwen3.5-9b", "llama"),
+    "tool-runner":   ("qwen3.5-9b", "llama"),
+    "reviewer":      ("qwen3.5-9b", "llama"),
+    "researcher":    ("qwen3.5-9b", "llama"),
+    "coder":         ("qwen3.5-9b", "llama"),
+    "debugger":      ("qwen3.5-9b", "llama"),
+    "tool-maker":    ("qwen3.5-9b", "llama"),
+    "code_analyzer": ("qwen3.5-9b", "llama"),
 }
 
 
@@ -38,15 +40,15 @@ def save_overrides():
 def update_model_mapping(new_mapping: dict[str, str]):
     """Update AGENT_MODELS dynamically and persist to disk.
     new_mapping is expected to be {agent_id: model_name}.
-    We assume backend is 'ollama' for all auto-assigned local models.
+    We assume backend is 'llama' for all auto-assigned local models.
     """
     for agent_id, model_name in new_mapping.items():
         if agent_id in AGENT_MODELS:
-            AGENT_MODELS[agent_id] = (model_name, "ollama")
+            AGENT_MODELS[agent_id] = (model_name, "llama")
     save_overrides()
 
 def get_model(agent_id: str) -> Tuple[str, str]:
-    return AGENT_MODELS.get(agent_id, ("qwen-tuned", "ollama"))
+    return AGENT_MODELS.get(agent_id, ("qwen3.5-9b", "llama"))
 
 
 
@@ -60,6 +62,8 @@ PREDICTIVE_TOPOLOGY: dict[str, str] = {
     "tool-runner": "reviewer",
     "reviewer": "debugger",
     "debugger": "tool-runner",
+    "tool-maker": "tool-runner",
+    "code_analyzer": "planner",
 }
 
 def get_predicted_next_model(current_agent_id: str) -> str:
@@ -67,6 +71,24 @@ def get_predicted_next_model(current_agent_id: str) -> str:
     if not next_agent:
         return ""
     model, backend = get_model(next_agent)
-    return model if backend == "ollama" else ""
+    return model if backend in ("llama", "ollama") else ""
+
+EXPERT_GATING_POLICY: dict[str, dict[str, int | str]] = {
+    # High-precision tasks: full Top-2 MoE expert activation for complex synthesis
+    "coordinator":   {"policy": "top2_precision", "active_experts": 2},
+    "planner":       {"policy": "top2_precision", "active_experts": 2},
+    "coder":         {"policy": "top2_precision", "active_experts": 2},
+    "debugger":      {"policy": "top2_precision", "active_experts": 2},
+    # Background/parsing tasks: Top-1 expert activation / fast decoding to halve memory bandwidth
+    "researcher":    {"policy": "top1_fast", "active_experts": 1},
+    "tool-runner":   {"policy": "top1_fast", "active_experts": 1},
+    "tool-maker":    {"policy": "top1_fast", "active_experts": 1},
+    "code_analyzer": {"policy": "top1_fast", "active_experts": 1},
+    "executor":      {"policy": "top1_fast", "active_experts": 1},
+    "reviewer":      {"policy": "cloud_reasoning", "active_experts": 2},
+}
+
+def get_routing_policy(agent_id: str) -> dict[str, int | str]:
+    return EXPERT_GATING_POLICY.get(agent_id, {"policy": "top2_precision", "active_experts": 2})
 
 

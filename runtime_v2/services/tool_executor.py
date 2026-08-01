@@ -15,22 +15,33 @@ async def get_mcp_manager():
         await _mcp_manager.start()
     return _mcp_manager
 
+_filesystem_read_cache = {}
+
 async def run(tool_name: str, payload: dict) -> dict:
     try:
         if tool_name == "filesystem":
-            from swarm_os.lib.mcp.filesystem import filesystem_handler
-            import asyncio, inspect
-            try:
-                res_obj = filesystem_handler(payload, _ROOT)
-                result = await asyncio.wait_for(res_obj, timeout=30.0) if inspect.isawaitable(res_obj) else res_obj
-            except asyncio.TimeoutError:
-                result = {"ok": False, "error": "Filesystem operation timed out."}
+            operation = payload.get("operation")
+            path = payload.get("path")
+            cache_key = f"{operation}:{path}"
+            
+            if operation == "read" and cache_key in _filesystem_read_cache:
+                result = {"ok": True, "result": _filesystem_read_cache[cache_key]}
+            else:
+                from swarm_os.lib.mcp.filesystem import filesystem_handler
+                import asyncio, inspect
+                try:
+                    res_obj = filesystem_handler(payload, _ROOT)
+                    result = await asyncio.wait_for(res_obj, timeout=180.0) if inspect.isawaitable(res_obj) else res_obj
+                    if operation == "read" and result.get("ok"):
+                        _filesystem_read_cache[cache_key] = result.get("result")
+                except asyncio.TimeoutError:
+                    result = {"ok": False, "error": "Filesystem operation timed out."}
         elif tool_name == "web_search":
             from swarm_os.lib.mcp.web_search import web_search_handler
             import asyncio, inspect
             try:
                 res_obj = web_search_handler(payload)
-                result = await asyncio.wait_for(res_obj, timeout=30.0) if inspect.isawaitable(res_obj) else res_obj
+                result = await asyncio.wait_for(res_obj, timeout=180.0) if inspect.isawaitable(res_obj) else res_obj
             except asyncio.TimeoutError:
                 result = {"ok": False, "error": "Web search timed out."}
         elif tool_name == "semantic_search":
@@ -50,20 +61,30 @@ async def run(tool_name: str, payload: dict) -> dict:
                 result = {"ok": True, "result": f"Successfully remembered: {fact}"}
             else:
                 result = {"ok": False, "error": "Failed to store memory in Qdrant."}
+        elif tool_name == "deprecate_memory":
+            from runtime_v2.services.memory_core import deprecate_memory
+            point_id = payload.get("point_id", "")
+            category = payload.get("category", "general")
+            import asyncio
+            success = await asyncio.to_thread(deprecate_memory, point_id, category)
+            if success:
+                result = {"ok": True, "result": f"Successfully deprecated memory ID: {point_id}"}
+            else:
+                result = {"ok": False, "error": "Failed to deprecate memory in Qdrant."}
         elif tool_name == "sandbox_repl":
             from swarm_os.capabilities.sandbox_repl import SandboxReplHandler
             import asyncio, inspect
             try:
                 res_obj = SandboxReplHandler().execute(payload)
-                result = await asyncio.wait_for(res_obj, timeout=60.0) if inspect.isawaitable(res_obj) else res_obj
+                result = await asyncio.wait_for(res_obj, timeout=180.0) if inspect.isawaitable(res_obj) else res_obj
             except asyncio.TimeoutError:
-                result = {"ok": False, "error": "Execution timed out after 60 seconds."}
+                result = {"ok": False, "error": "Execution timed out after 180 seconds."}
         elif tool_name == "vscode_automation":
             from swarm_os.capabilities.vscode_automation import VSCodeAutomationHandler
             import asyncio, inspect
             try:
                 res_obj = VSCodeAutomationHandler(str(_ROOT)).execute(payload)
-                result = await asyncio.wait_for(res_obj, timeout=30.0) if inspect.isawaitable(res_obj) else res_obj
+                result = await asyncio.wait_for(res_obj, timeout=180.0) if inspect.isawaitable(res_obj) else res_obj
             except asyncio.TimeoutError:
                 result = {"ok": False, "error": "VSCode automation timed out."}
         elif tool_name == "lsp":
@@ -71,7 +92,7 @@ async def run(tool_name: str, payload: dict) -> dict:
             import asyncio, inspect
             try:
                 res_obj = LSPToolHandler().execute(payload)
-                result = await asyncio.wait_for(res_obj, timeout=60.0) if inspect.isawaitable(res_obj) else res_obj
+                result = await asyncio.wait_for(res_obj, timeout=180.0) if inspect.isawaitable(res_obj) else res_obj
                 # the result dict returned from LSPToolHandler has either {"result": ...} or {"error": ...}
                 if "error" in result:
                     result = {"ok": False, "error": result["error"]}
@@ -83,7 +104,7 @@ async def run(tool_name: str, payload: dict) -> dict:
             from swarm_os.lib.mcp.playwright import playwright_handler
             import asyncio
             try:
-                result = await asyncio.wait_for(playwright_handler(payload), timeout=60.0)
+                result = await asyncio.wait_for(playwright_handler(payload), timeout=180.0)
             except asyncio.TimeoutError:
                 result = {"ok": False, "error": "Playwright operation timed out."}
         elif tool_name == "mcp_register":
@@ -140,7 +161,7 @@ async def run(tool_name: str, payload: dict) -> dict:
                 if not server_name or not mcp_tool:
                     result = {"ok": False, "error": "MCP action requires 'server' and 'tool' arguments."}
                 else:
-                    call_res = await asyncio.wait_for(manager.call_tool(server_name, mcp_tool, arguments), timeout=60.0)
+                    call_res = await asyncio.wait_for(manager.call_tool(server_name, mcp_tool, arguments), timeout=180.0)
                     if hasattr(call_res, "content"):
                         text_output = "\n".join([c.text for c in call_res.content if hasattr(c, "text")])
                         result = {"ok": True, "result": text_output}

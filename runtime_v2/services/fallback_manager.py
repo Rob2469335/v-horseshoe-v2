@@ -2,6 +2,7 @@ import time
 import logging
 import asyncio
 import os
+import threading
 import httpx
 from swarm_os.config.settings import settings
 
@@ -14,27 +15,121 @@ log = logging.getLogger(__name__)
 _CACHE_TTL = 1800
 _last_fetch_time = 0
 _cached_fallbacks = []
-_cached_stats = {"openrouter": 0, "groq": 0, "gemini": 0, "nvidia": 0, "ollama": 0, "total": 0}
+_cached_stats = {"openrouter": 0, "groq": 0, "gemini": 0, "nvidia": 0, "llama": 0, "ollama": 0, "total": 0}
 _refresh_lock = asyncio.Lock()
+
+# UPGRADE: pooled httpx client reused across all provider probes instead of a
+# fresh AsyncClient per call (fresh clients defeat keep-alive + TLS reuse).
+_http_client: httpx.AsyncClient | None = None
+
+
+def get_http_client() -> httpx.AsyncClient:
+    global _http_client
+    if _http_client is None or _http_client.is_closed:
+        _http_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=5.0, read=30.0, write=30.0, pool=10.0),
+            limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
+            verify=settings.ssl_verify,
+        )
+    return _http_client
+
+# Outcome-driven cooldowns (upgrade: skip a failing model BEFORE the call, not after).
+# model_name -> {"failures": int, "until": float, "last_error": str}
+_cooldowns: dict[str, dict] = {}
+_cooldown_lock = asyncio.Lock()
+_cooldown_sync_lock = threading.Lock()
+_COOLDOWN_BASE_S = 30.0
+_MAX_COOLDOWN_S = 600.0
+
+
+def record_model_failure(model: str, error: str = "") -> None:
+    """Called when a model/providers generation fails (tool decision error, JSON repair,
+    circuit-breaker trip). Marks the model down for an escalating cooldown window."""
+    key = (model or "").split(":", 1)[-1]
+    if not key:
+        return
+    now = time.time()
+    with _cooldowns_lock_sync():
+        entry = _cooldowns.setdefault(key, {"failures": 0, "until": 0.0, "last_error": ""})
+        entry["failures"] += 1
+        backoff = min(_MAX_COOLDOWN_S, _COOLDOWN_BASE_S * (2 ** (entry["failures"] - 1)))
+        entry["until"] = now + backoff
+        entry["last_error"] = str(error)[:200]
+        log.warning("Model %s marked down for %.0fs (failure #%d): %s", key, backoff, entry["failures"], str(error)[:80])
+
+
+def record_model_success(model: str) -> None:
+    """Called on a clean generation — clears any cooldown so the model can be used again."""
+    key = (model or "").split(":", 1)[-1]
+    if not key:
+        return
+    with _cooldowns_lock_sync():
+        _cooldowns.pop(key, None)
+
+
+def _cooldowns_lock_sync():
+    return _cooldown_sync_lock
+
+
+def _is_cooldown_active(key: str) -> bool:
+    now = time.time()
+    with _cooldowns_lock_sync():
+        entry = _cooldowns.get(key)
+        if not entry:
+            return False
+        if now >= entry["until"]:
+            _cooldowns.pop(key, None)
+            return False
+        return True
 
 async def _fetch_openrouter_models() -> list[dict]:
     models = []
     try:
-        async with httpx.AsyncClient(timeout=5.0, verify=settings.ssl_verify) as client:
-            resp = await client.get("https://openrouter.ai/api/v1/models")
-            resp.raise_for_status()
-            data = resp.json().get("data", [])
-            for m in data:
-                pricing = m.get("pricing", {})
-                if pricing.get("prompt") == "0" and pricing.get("completion") == "0":
-                    models.append({
-                        "model": f"openrouter/{m['id']}",
-                        "context_length": m.get("context_length", 8192),
-                        "pricing": "Free",
-                        "provider": "OpenRouter"
-                    })
+        client = get_http_client()
+        resp = await client.get("https://openrouter.ai/api/v1/models")
+        resp.raise_for_status()
+        data = resp.json().get("data", [])
+        for m in data:
+            pricing = m.get("pricing", {})
+            m_id = m.get("id", "")
+            if any(forbidden in m_id.lower() for forbidden in ("claude", "anthropic", "sonnet", "opus", "gpt-4")):
+                continue
+            if (pricing.get("prompt") == "0" and pricing.get("completion") == "0") or ":free" in m_id.lower() or "deepseek" in m_id.lower():
+                models.append({
+                    "model": f"openrouter/{m['id']}",
+                    "context_length": m.get("context_length", 65536),
+                    "pricing": "Free",
+                    "provider": "OpenRouter"
+                })
     except Exception as e:
         log.warning(f"Failed to fetch OpenRouter models: {e}")
+    if not models:
+        models = [
+            {
+                "model": "openrouter/deepseek/deepseek-r1:free",
+                "context_length": 65536,
+                "pricing": "Free",
+                "provider": "OpenRouter",
+            },
+            {
+                "model": "openrouter/deepseek/deepseek-chat:free",
+                "context_length": 65536,
+                "pricing": "Free",
+                "provider": "OpenRouter",
+            },
+            {
+                "model": "openrouter/meta-llama/llama-3.3-70b-instruct:free",
+                "context_length": 65536,
+                "pricing": "Free",
+                "provider": "OpenRouter",
+            },
+            {
+                "model": "openrouter/qwen/qwen-2.5-coder-32b-instruct:free",
+                "context_length": 65536,
+                "pricing": "Free",
+                "provider": "OpenRouter",
+            },
+        ]
     return models
 
 async def _fetch_groq_models() -> list[dict]:
@@ -43,21 +138,21 @@ async def _fetch_groq_models() -> list[dict]:
     if not api_key:
         return models
     try:
-        async with httpx.AsyncClient(timeout=5.0, verify=settings.ssl_verify) as client:
-            headers = {"Authorization": f"Bearer {api_key}"}
-            resp = await client.get("https://api.groq.com/openai/v1/models", headers=headers)
-            resp.raise_for_status()
-            data = resp.json().get("data", [])
-            for m in data:
-                m_id = m.get("id", "")
-                if "canopylabs" in m_id or "whisper" in m_id:
-                    continue
-                models.append({
-                    "model": f"groq/{m_id}",
-                    "context_length": 8192,
-                    "pricing": "API",
-                    "provider": "Groq"
-                })
+        client = get_http_client()
+        headers = {"Authorization": f"Bearer {api_key}"}
+        resp = await client.get("https://api.groq.com/openai/v1/models", headers=headers)
+        resp.raise_for_status()
+        data = resp.json().get("data", [])
+        for m in data:
+            m_id = m.get("id", "")
+            if "canopylabs" in m_id or "whisper" in m_id:
+                continue
+            models.append({
+                "model": f"groq/{m_id}",
+                "context_length": 8192,
+                "pricing": "API",
+                "provider": "Groq"
+            })
     except Exception as e:
         log.warning(f"Failed to fetch Groq models: {e}")
     return models
@@ -69,19 +164,19 @@ async def _fetch_nvidia_models() -> list[dict]:
         return models
     os.environ.setdefault("NVIDIA_NIM_API_KEY", api_key)
     try:
-        async with httpx.AsyncClient(timeout=5.0, verify=settings.ssl_verify) as client:
-            headers = {"Authorization": f"Bearer {api_key}"}
-            resp = await client.get("https://integrate.api.nvidia.com/v1/models", headers=headers)
-            resp.raise_for_status()
-            data = resp.json().get("data", [])
-            for m in data:
-                m_id = m.get("id", "")
-                models.append({
-                    "model": f"nvidia_nim/{m_id}",
-                    "context_length": 8192,
-                    "pricing": "API",
-                    "provider": "NVIDIA"
-                })
+        client = get_http_client()
+        headers = {"Authorization": f"Bearer {api_key}"}
+        resp = await client.get("https://integrate.api.nvidia.com/v1/models", headers=headers)
+        resp.raise_for_status()
+        data = resp.json().get("data", [])
+        for m in data:
+            m_id = m.get("id", "")
+            models.append({
+                "model": f"nvidia_nim/{m_id}",
+                "context_length": 8192,
+                "pricing": "API",
+                "provider": "NVIDIA"
+            })
     except Exception as e:
         log.warning(f"Failed to fetch NVIDIA models: {e}")
     return models
@@ -92,41 +187,41 @@ async def _fetch_gemini_models() -> list[dict]:
     if not api_key:
         return models
     try:
-        async with httpx.AsyncClient(timeout=5.0, verify=settings.ssl_verify) as client:
-            headers = {"x-goog-api-key": api_key}
-            resp = await client.get("https://generativelanguage.googleapis.com/v1beta/models", headers=headers)
-            resp.raise_for_status()
-            data = resp.json().get("models", [])
-            for m in data:
-                name = m.get("name", "")
-                supported_methods = m.get("supportedGenerationMethods", [])
-                if "generateContent" in supported_methods:
-                    models.append({
-                        "model": f"gemini/{name.replace('models/', '')}",
-                        "context_length": 1048576,
-                        "pricing": "API",
-                        "provider": "Google"
-                    })
+        client = get_http_client()
+        headers = {"x-goog-api-key": api_key}
+        resp = await client.get("https://generativelanguage.googleapis.com/v1beta/models", headers=headers)
+        resp.raise_for_status()
+        data = resp.json().get("models", [])
+        for m in data:
+            name = m.get("name", "")
+            supported_methods = m.get("supportedGenerationMethods", [])
+            if "generateContent" in supported_methods:
+                models.append({
+                    "model": f"gemini/{name.replace('models/', '')}",
+                    "context_length": 1048576,
+                    "pricing": "API",
+                    "provider": "Google"
+                })
     except Exception as e:
         log.warning(f"Failed to fetch Gemini models: {e}")
     return models
 
-async def _fetch_ollama_models() -> list[dict]:
+async def _fetch_llama_models() -> list[dict]:
     models = []
     try:
-        async with httpx.AsyncClient(timeout=2.0) as client:
-            resp = await client.get("http://127.0.0.1:11434/api/tags")
-            if resp.status_code == 200:
-                data = resp.json().get("models", [])
-                for m in data:
-                    models.append({
-                        "model": f"ollama/{m['name']}",
-                        "context_length": 8192,
-                        "pricing": "Local",
-                        "provider": "Ollama"
-                    })
+        client = get_http_client()
+        resp = await client.get("http://127.0.0.1:8080/v1/models", headers={"Authorization": "Bearer llama"})
+        if resp.status_code == 200:
+            data = resp.json().get("data", [])
+            for m in data:
+                models.append({
+                    "model": f"openai/{m['id']}",
+                    "context_length": 32768,
+                    "pricing": "Local",
+                    "provider": "llama.cpp"
+                })
     except Exception:
-        log.warning("Failed to fetch Ollama models, is Ollama running?")
+        log.warning("Failed to fetch llama.cpp models, is llama-server running?")
     return models
 
 async def refresh_fallbacks_if_needed(mode: str = "auto"):
@@ -144,7 +239,7 @@ async def refresh_fallbacks_if_needed(mode: str = "auto"):
 
     if mode == "local_only":
         results = await asyncio.gather(
-            _fetch_ollama_models(),
+            _fetch_llama_models(),
             return_exceptions=True
         )
         results = [[], [], [], [], results[0]]
@@ -154,7 +249,7 @@ async def refresh_fallbacks_if_needed(mode: str = "auto"):
             _fetch_groq_models(),
             _fetch_nvidia_models(),
             _fetch_gemini_models(),
-            _fetch_ollama_models(),
+            _fetch_llama_models(),
             return_exceptions=True
         )
 
@@ -162,35 +257,35 @@ async def refresh_fallbacks_if_needed(mode: str = "auto"):
     groq_models = results[1] if isinstance(results[1], list) else []
     nvidia_models = results[2] if isinstance(results[2], list) else []
     gemini_models = results[3] if isinstance(results[3], list) else []
-    ollama_models = results[4] if isinstance(results[4], list) else []
+    llama_models = results[4] if isinstance(results[4], list) else []
 
     groq_models.sort(key=lambda x: ("70b" in x["model"].lower(), "versatile" in x["model"].lower()))
     nvidia_models.sort(key=lambda x: ("70b" in x["model"].lower(), "nemotron" in x["model"].lower()))
     gemini_models.sort(key=lambda x: ("pro" in x["model"].lower(),))
     openrouter_models.sort(key=lambda x: ("70b" in x["model"].lower(),))
 
-    valid_ollama = []
-    for o in ollama_models:
-        name = o["model"].lower()
-        if "/" in o["model"] or "embed" in name or "rerank" in name or "vl" in name or "moondream" in name:
+    valid_llama = []
+    for o in llama_models:
+        name = o["model"].lower().split("/", 1)[-1]
+        if "embed" in name or "rerank" in name or "vl" in name or "moondream" in name:
             continue
-        valid_ollama.append(o)
+        valid_llama.append(o)
 
-    valid_ollama.sort(key=lambda x: ("tool" in x["model"].lower(), "coder" in x["model"].lower()))
+    valid_llama.sort(key=lambda x: ("tool" in x["model"].lower(), "coder" in x["model"].lower()))
 
     all_fallbacks = []
-    all_fallbacks.extend(valid_ollama[:3])
+    all_fallbacks.extend(valid_llama[:3])
     all_fallbacks.extend(groq_models[:2])
     all_fallbacks.extend(nvidia_models[:2])
     all_fallbacks.extend(gemini_models[:2])
-    all_fallbacks.extend(openrouter_models[:2])
+    all_fallbacks.extend(openrouter_models[:5])
     _cached_fallbacks = all_fallbacks
     _cached_stats = {
         "openrouter": len(openrouter_models),
         "groq": len(groq_models),
         "gemini": len(gemini_models),
         "nvidia": len(nvidia_models),
-        "ollama": len(valid_ollama),
+        "llama.cpp": len(valid_llama),
         "total": len(all_fallbacks),
     }
     _last_fetch_time = current_time
@@ -198,8 +293,16 @@ async def refresh_fallbacks_if_needed(mode: str = "auto"):
 async def get_live_fallbacks(mode: str = "auto") -> list[dict]:
     await refresh_fallbacks_if_needed(mode)
 
-    local_models = [f for f in _cached_fallbacks if str(f.get("model", "")).startswith("ollama/")]
-    cloud_models = [f for f in _cached_fallbacks if not str(f.get("model", "")).startswith("ollama/")]
+    # BUG/UPGRADE: skip models currently in a cooldown window (recorded via
+    # record_model_failure on JSON-parse errors, timeouts, or breaker trips).
+    def _not_cooled(f: dict) -> bool:
+        key = str(f.get("model", "")).split(":", 1)[-1]
+        return not _is_cooldown_active(key)
+
+    cached = [f for f in _cached_fallbacks if _not_cooled(f)]
+
+    local_models = [f for f in cached if str(f.get("model", "")).startswith("openai/")]
+    cloud_models = [f for f in cached if not str(f.get("model", "")).startswith("openai/")]
 
     if mode == "local_only":
         return local_models
