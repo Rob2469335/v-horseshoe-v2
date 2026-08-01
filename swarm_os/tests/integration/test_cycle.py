@@ -44,11 +44,11 @@ MOCK_RESP = {
 
 
 async def _run_steps(kernel, n=1):
-    with mock.patch("swarm_os.kernel.brain.httpx.Client") as mc:
+    with mock.patch("swarm_os.services.llm_client.httpx.Client") as mc:
         mc.return_value.__enter__.return_value.post.return_value.json.return_value = MOCK_RESP
         mc.return_value.__enter__.return_value.post.return_value.raise_for_status = mock.MagicMock()
         for _ in range(n):
-            await kernel.step()
+            await kernel.step_async()
 
 
 @pytest.mark.anyio
@@ -56,7 +56,7 @@ async def test_step_runs_without_crash():
     random.seed(42)
     env = Environment()
     organisms = [_make_org(f"org_{i}") for i in range(4)]
-    kernel = SwarmKernel(organisms, env, snapshot_every=999)
+    kernel = SwarmKernel(organisms, env)
 
     await _run_steps(kernel, 1)
 
@@ -69,7 +69,7 @@ async def test_population_stays_bounded():
     random.seed(7)
     env = Environment()
     organisms = [_make_org(f"org_{i}") for i in range(6)]
-    kernel = SwarmKernel(organisms, env, snapshot_every=999)
+    kernel = SwarmKernel(organisms, env)
 
     try:
         from swarm_os.config.settings import settings

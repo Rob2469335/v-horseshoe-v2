@@ -3,14 +3,27 @@ import httpx
 from datetime import datetime
 from swarm_os.upwork.learning_engine_qdrant import search_similar
 
-OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
-MODEL = "qwen3:14b"
+LLAMA_URL = "http://127.0.0.1:8080/v1/chat/completions"
+MODEL = "qwen3.5-9b"
+
+# UPGRADE: pooled client reused across all 6 request paths (avoids a fresh
+# TLS/DNS handshake + connection per proposal/estimate/scope/invoice request).
+_client: httpx.AsyncClient | None = None
+
+def _get_client() -> httpx.AsyncClient:
+    global _client
+    if _client is None or _client.is_closed:
+        _client = httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=5.0, read=120.0, write=60.0, pool=10.0),
+            headers={"Authorization": "Bearer llama"},
+        )
+    return _client
 
 async def run_upwork_task(task_type: str, user_input: str):
     """
     Decision engine layer:
     - retrieves memory from Qdrant
-    - queries local Ollama LLM with structured prompts
+    - queries local Llama LLM with structured prompts
     - returns structured output matching front-end expectations
     """
     memory = search_similar([0.0]*768, limit=5)  # placeholder embedding hook
@@ -26,14 +39,13 @@ async def run_upwork_task(task_type: str, user_input: str):
                 "The freelancer's name is Robert. Keep it conversational, tailored, and high-impact. Do not use placeholders.\n\n"
                 "Return a JSON object with a single key 'content' containing the generated text."
             )
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                r = await client.post(OLLAMA_URL, json={"model": MODEL, "prompt": prompt, "format": "json", "stream": False})
+            r = await _get_client().post(LLAMA_URL, json={"model": MODEL, "messages": [{"role": "user", "content": prompt}], "response_format": {"type": "json_object"}})
             data = r.json()
             try:
-                response_json = json.loads(data.get("response", "{}"))
+                response_json = json.loads(data.get("choices", [{}])[0].get("message", {}).get("content", "{}"))
             except Exception:
                 response_json = {}
-            content = response_json.get("content", data.get("response", ""))
+            content = response_json.get("content", data.get("choices", [{}])[0].get("message", {}).get("content", ""))
             return {
                 "type": "proposal",
                 "content": content,
@@ -51,11 +63,10 @@ async def run_upwork_task(task_type: str, user_input: str):
                 "3. Analysis of the complexity, potential roadblocks, and estimation reasoning.\n\n"
                 "Return a JSON object with keys 'hours', 'bid', and 'analysis'."
             )
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                r = await client.post(OLLAMA_URL, json={"model": MODEL, "prompt": prompt, "format": "json", "stream": False})
+            r = await _get_client().post(LLAMA_URL, json={"model": MODEL, "messages": [{"role": "user", "content": prompt}], "response_format": {"type": "json_object"}})
             data = r.json()
             try:
-                response_json = json.loads(data.get("response", "{}"))
+                response_json = json.loads(data.get("choices", [{}])[0].get("message", {}).get("content", "{}"))
             except Exception:
                 response_json = {}
             return {
@@ -77,11 +88,10 @@ async def run_upwork_task(task_type: str, user_input: str):
                 "- 'items': a list of strings representing milestones.\n"
                 "- 'estimate': a string representing the duration."
             )
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                r = await client.post(OLLAMA_URL, json={"model": MODEL, "prompt": prompt, "format": "json", "stream": False})
+            r = await _get_client().post(LLAMA_URL, json={"model": MODEL, "messages": [{"role": "user", "content": prompt}], "response_format": {"type": "json_object"}})
             data = r.json()
             try:
-                response_json = json.loads(data.get("response", "{}"))
+                response_json = json.loads(data.get("choices", [{}])[0].get("message", {}).get("content", "{}"))
             except Exception:
                 response_json = {}
             return {
@@ -99,11 +109,10 @@ async def run_upwork_task(task_type: str, user_input: str):
                 "- 'summary': a text summary listing the deliverables and pricing.\n"
                 "- 'total': the total estimated price in USD (e.g., '$750')."
             )
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                r = await client.post(OLLAMA_URL, json={"model": MODEL, "prompt": prompt, "format": "json", "stream": False})
+            r = await _get_client().post(LLAMA_URL, json={"model": MODEL, "messages": [{"role": "user", "content": prompt}], "response_format": {"type": "json_object"}})
             data = r.json()
             try:
-                response_json = json.loads(data.get("response", "{}"))
+                response_json = json.loads(data.get("choices", [{}])[0].get("message", {}).get("content", "{}"))
             except Exception:
                 response_json = {}
             return {
@@ -120,11 +129,10 @@ async def run_upwork_task(task_type: str, user_input: str):
                 "Use the structure of: Problem solved, System built, and Result delivered for each bullet point.\n\n"
                 "Return a JSON object with a key 'bullets' containing a list of strings."
             )
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                r = await client.post(OLLAMA_URL, json={"model": MODEL, "prompt": prompt, "format": "json", "stream": False})
+            r = await _get_client().post(LLAMA_URL, json={"model": MODEL, "messages": [{"role": "user", "content": prompt}], "response_format": {"type": "json_object"}})
             data = r.json()
             try:
-                response_json = json.loads(data.get("response", "{}"))
+                response_json = json.loads(data.get("choices", [{}])[0].get("message", {}).get("content", "{}"))
             except Exception:
                 response_json = {}
             return {
@@ -140,11 +148,10 @@ async def run_upwork_task(task_type: str, user_input: str):
                 "might not possess or might need extra preparation for.\n\n"
                 "Return a JSON object with a key 'missing' containing a list of strings representing these skills."
             )
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                r = await client.post(OLLAMA_URL, json={"model": MODEL, "prompt": prompt, "format": "json", "stream": False})
+            r = await _get_client().post(LLAMA_URL, json={"model": MODEL, "messages": [{"role": "user", "content": prompt}], "response_format": {"type": "json_object"}})
             data = r.json()
             try:
-                response_json = json.loads(data.get("response", "{}"))
+                response_json = json.loads(data.get("choices", [{}])[0].get("message", {}).get("content", "{}"))
             except Exception:
                 response_json = {}
             return {
@@ -153,7 +160,7 @@ async def run_upwork_task(task_type: str, user_input: str):
             }
 
     except Exception as exc:
-        return {"error": f"Ollama query failed: {exc}"}
+        return {"error": f"Local LLM query failed: {exc}"}
 
     return {"error": "unknown task"}
 

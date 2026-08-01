@@ -1,7 +1,19 @@
-import requests
+import httpx
 
-OLLAMA_URL = "http://localhost:11434/api/generate"
-MODEL = "qwen3:14b"
+LLAMA_URL = "http://127.0.0.1:8080/v1/chat/completions"
+MODEL = "qwen3.5-9b"
+
+# UPGRADE: pooled client (avoids fresh TLS/connection per call)
+_client: httpx.AsyncClient | None = None
+
+def _get_client() -> httpx.AsyncClient:
+    global _client
+    if _client is None or _client.is_closed:
+        _client = httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=5.0, read=120.0, write=60.0, pool=10.0),
+            headers={"Authorization": "Bearer llama"},
+        )
+    return _client
 
 
 async def explain_decision(job_text: str, prediction: dict):
@@ -23,12 +35,9 @@ Do 3 things:
 Be concise and practical.
 """
 
-    import httpx
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        r = await client.post(OLLAMA_URL, json={
-            "model": MODEL,
-            "prompt": prompt,
-            "stream": False
-        })
+    r = await _get_client().post(LLAMA_URL, json={
+        "model": MODEL,
+        "messages": [{"role": "user", "content": prompt}]
+    })
 
-    return r.json().get("response", "")
+    return r.json().get("choices", [{}])[0].get("message", {}).get("content", "")

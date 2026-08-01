@@ -11,12 +11,13 @@ class Governor:
     on an action: auto, sandbox, approval_required, or reject.
     """
 
-    def __init__(self, diagnostician: Optional[Diagnostician] = None, policy_engine: Optional[object] = None, learner: Optional[Learner] = None, strategy_stats: Optional[dict] = None):
+    def __init__(self, diagnostician: Optional[Diagnostician] = None, policy_engine: Optional[object] = None, learner: Optional[Learner] = None, strategy_stats: Optional[dict] = None, strategy_registry: Optional[object] = None):
         self.diagnostician = diagnostician or Diagnostician(memory=(learner.learning if learner else None))
         self.policy_engine = policy_engine
         self.learner = learner or Learner()
         # strategy stats map: id -> config (approval_required_threshold etc.)
         self.strategy_stats = strategy_stats or {}
+        self._strategy_registry = strategy_registry
 
     def decide(self, symptom: Dict[str, Any]) -> Dict[str, Any]:
         incident_id = gen_id("inc")
@@ -47,8 +48,42 @@ class Governor:
         # confidence thresholds, may be overridden per strategy
         approval_threshold = 0.5
         auto_threshold = 0.85
-        # allow strategy stats to influence thresholds (not implemented in depth)
-        if top_conf >= auto_threshold:
+
+        # strategy_stats (written by finalize()): proven win-rates influence autonomy.
+        # Repeatedly successful strategies earn trust (lower the bar to auto-execute);
+        # failing ones demand oversight (raise it). Only consult meaningful samples.
+        strat_win_rate = None
+        try:
+            comp = symptom.get("component")
+            if comp:
+                if self._strategy_registry is None:
+                    from .strategy_registry import StrategyRegistry
+                    self._strategy_registry = StrategyRegistry()
+                all_stats = self._strategy_registry.list_all()
+                entries = {k: v for k, v in all_stats.items() if k.startswith(f"{comp}:")}
+                if entries:
+                    total_succ = sum(e.get("success_count", 0) for e in entries.values())
+                    total_fail = sum(e.get("failure_count", 0) for e in entries.values())
+                    total = total_succ + total_fail
+                    if total >= 5:
+                        strat_win_rate = total_succ / total
+        except Exception:
+            strat_win_rate = None
+        decision["strategy_win_rate"] = strat_win_rate
+        forced_approval = False
+        if strat_win_rate is not None:
+            if strat_win_rate >= 0.8:
+                auto_threshold = 0.6
+                approval_threshold = 0.3
+            elif strat_win_rate < 0.4:
+                # A strategy that historically fails must not auto-execute even
+                # under a confident diagnosis — demand human oversight.
+                forced_approval = True
+
+        if forced_approval:
+            decision["mode"] = "approval_required"
+            decision["mode_reason"] = f"low strategy win-rate ({strat_win_rate:.0%}) for component — human oversight required"
+        elif top_conf >= auto_threshold:
             decision["mode"] = "auto_execute"
         elif top_conf < approval_threshold:
             decision["mode"] = "approval_required"

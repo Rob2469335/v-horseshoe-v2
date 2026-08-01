@@ -25,7 +25,7 @@ def _safe_attr(obj, name: str, default):
 
 def _safe_model(genome) -> str:
     value = getattr(genome, "model", None)
-    return value if isinstance(value, str) and value.strip() else "qwen2.5:7b-instruct"
+    return value if isinstance(value, str) and value.strip() else "qwen3.5-9b"
 
 def _safe_temperature(genome) -> float:
     return float(getattr(genome, "actual_temperature", 0.2))
@@ -221,143 +221,6 @@ def _call_generate_fn_brain(
         "system_prompt_len": len(system_prompt),
     }
 
-def _parse_sse_stream(
-    body_text: str,
-    requested_model: Optional[str],
-    genome: Any,
-    active_tools: List[str],
-    elapsed: float,
-    top_k: int,
-    system_prompt_len: int,
-) -> Dict[str, Any]:
-    content_parts = []
-    finish_reason = ""
-    total_tokens = 0
-    prompt_tokens = 0
-
-    for raw_line in body_text.splitlines():
-        line = raw_line.strip()
-        if not line.startswith("data:"):
-            continue
-        chunk = line[5:].strip()
-        if not chunk or chunk == "[DONE]":
-            continue
-        try:
-            evt = json.loads(chunk)
-        except Exception:
-            continue
-
-        choices = evt.get("choices", [])
-        if not choices:
-            continue
-
-        choice0 = choices[0]
-        delta = choice0.get("delta", {})
-        piece = delta.get("content", "")
-        if piece:
-            content_parts.append(piece)
-
-        if choice0.get("finish_reason"):
-            finish_reason = choice0.get("finish_reason") or ""
-
-        usage = evt.get("usage", {})
-        total_tokens = usage.get("total_tokens", total_tokens)
-        prompt_tokens = usage.get("prompt_tokens", prompt_tokens)
-
-    return {
-        "content": "".join(content_parts),
-        "model": requested_model or _safe_model(genome),
-        "tools_used": active_tools,
-        "elapsed": elapsed,
-        "total_tokens": total_tokens,
-        "prompt_tokens": prompt_tokens,
-        "finish_reason": finish_reason,
-        "tool_calls": [],
-        "cost": total_tokens / 1000.0 if total_tokens else 0.0,
-        "retrieval_top_k": top_k,
-        "system_prompt_len": system_prompt_len,
-    }
-
-def _call_http_brain(
-    genome: Any,
-    org_id: str,
-    requested_model: Optional[str],
-    payload: Dict[str, Any],
-    top_k: int,
-    active_tools: List[str],
-    system_prompt_len: int,
-    t0: float,
-) -> Dict[str, Any]:
-    timeout = httpx.Timeout(max(30.0, float(_safe_attr(genome, "timeout_budget", 300.0))), connect=10.0)
-    attempts = 3
-    resp = None
-    elapsed = 0.0
-    status = 0
-    content_type = ""
-    body_text = ""
-
-    with httpx.Client(timeout=timeout) as client:
-        for attempt in range(1, attempts + 1):
-            resp = client.post(SWARM_URL, json=payload)
-            elapsed = time.perf_counter() - t0
-            status = resp.status_code
-            content_type = resp.headers.get("content-type", "")
-            body_text = resp.text or ""
-
-            if status != 429:
-                break
-
-            if attempt < attempts:
-                delay = min(2.0, 0.35 * (2 ** (attempt - 1))) + random.uniform(0.0, 0.15)
-                log.warning("brain rate limited org=%s model=%s attempt=%d/%d", org_id, requested_model, attempt, attempts)
-                time.sleep(delay)
-
-    if status >= 400:
-        log.error("brain http error org=%s status=%s", org_id, status)
-        return {
-            "error": f"http_{status}", "cost": 5.0, "elapsed": elapsed, "content": "",
-            "model": requested_model or _safe_model(genome), "tools_used": active_tools,
-            "finish_reason": f"http_{status}", "response_preview": body_text[:1000],
-        }
-
-    if not body_text.strip():
-        return {
-            "error": "empty_response", "cost": 5.0, "elapsed": elapsed, "content": "",
-            "model": requested_model or _safe_model(genome), "tools_used": active_tools,
-            "finish_reason": "empty_response",
-        }
-
-    if "text/event-stream" in content_type.lower():
-        return _parse_sse_stream(body_text, requested_model, genome, active_tools, elapsed, top_k, system_prompt_len)
-
-    try:
-        data = resp.json()
-    except Exception:
-        return {
-            "error": "invalid_json", "cost": 5.0, "elapsed": elapsed, "content": "",
-            "model": requested_model or _safe_model(genome), "tools_used": active_tools,
-            "finish_reason": "invalid_json", "response_preview": body_text[:1000],
-        }
-
-    choice = data.get("choices", [{}])[0]
-    message = choice.get("message", {})
-    usage = data.get("usage", {})
-    total_tokens = usage.get("total_tokens", 0)
-
-    return {
-        "content": message.get("content", ""),
-        "model": requested_model or _safe_model(genome),
-        "tools_used": active_tools,
-        "elapsed": elapsed,
-        "total_tokens": total_tokens,
-        "prompt_tokens": usage.get("prompt_tokens", 0),
-        "finish_reason": choice.get("finish_reason", ""),
-        "tool_calls": message.get("tool_calls", []),
-        "cost": total_tokens / 1000.0,
-        "retrieval_top_k": top_k,
-        "system_prompt_len": system_prompt_len,
-    }
-
 def make_swarm_brain(genome: Any, task_domain: str = "general", generate_fn: Optional[Callable] = None) -> Callable:
     def brain(context: Dict[str, Any]) -> Dict[str, Any]:
         org_id  = context.get("id", "unknown")
@@ -373,7 +236,8 @@ def make_swarm_brain(genome: Any, task_domain: str = "general", generate_fn: Opt
         
         try:
             from swarm_os.services.reflection_loop import get_reflection_service
-            warning = get_reflection_service().check_for_past_mistakes(task)
+            import asyncio
+            warning = asyncio.run(get_reflection_service().check_for_past_mistakes(task))
             if warning:
                 system_prompt += f"\n\n[CRITICAL AVOIDANCE MEMORY]\n{warning}"
         except Exception as e:
@@ -393,7 +257,18 @@ def make_swarm_brain(genome: Any, task_domain: str = "general", generate_fn: Opt
         try:
             if generate_fn is not None:
                 return _call_generate_fn_brain(genome, requested_model, system_prompt, user_message, top_k, active_tools, generate_fn, t0)
-            return _call_http_brain(genome, org_id, requested_model, payload, top_k, active_tools, len(system_prompt), t0)
+            from swarm_os.services.llm_client import SwarmBrainClient
+            client = SwarmBrainClient(swarm_url=SWARM_URL)
+            return client.generate(
+                org_id=org_id,
+                requested_model=requested_model,
+                default_model=_safe_model(genome),
+                payload=payload,
+                top_k=top_k,
+                active_tools=active_tools,
+                system_prompt_len=len(system_prompt),
+                timeout_budget=float(_safe_attr(genome, "timeout_budget", 300.0)),
+            )
         except httpx.TimeoutException:
             return {
                 "error": "timeout", "cost": 5.0, "elapsed": _safe_attr(genome, "timeout_budget", 300.0), "content": "",

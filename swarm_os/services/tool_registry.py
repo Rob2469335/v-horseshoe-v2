@@ -2,7 +2,6 @@ import logging
 import hashlib
 import uuid
 from typing import Dict, List, Any
-from qdrant_client import QdrantClient
 from qdrant_client.models import PointStruct, VectorParams, Distance
 from swarm_os.services.embedding_service import EmbeddingService
 
@@ -191,33 +190,49 @@ TOOL_SCHEMAS: Dict[str, dict] = {
     },
 }
 
+import asyncio
+from qdrant_client import AsyncQdrantClient
+
 class SemanticToolRegistry:
     def __init__(self, qdrant_url: str = "http://127.0.0.1:6333", collection_name: str = "agent_tools_registry"):
-        self.client = QdrantClient(url=qdrant_url)
+        self.client = AsyncQdrantClient(url=qdrant_url)
         self.collection = collection_name
         self.embedder = EmbeddingService()
-        self._init_registry()
+        try:
+            loop = asyncio.get_running_loop()
+            self._init_task = loop.create_task(self._init_registry())
+        except RuntimeError:
+            self._init_task = None
+        self._ensured = False
 
-    def _init_registry(self):
+    async def _wait_init(self):
+        if self._init_task:
+            await self._init_task
+        elif not self._ensured:
+            await self._init_registry()
+            self._ensured = True
+
+    async def _init_registry(self):
         self.initialized = False
         try:
-            collections = self.client.get_collections().collections
+            collections_response = await self.client.get_collections()
+            collections = collections_response.collections
             if not any(c.name == self.collection for c in collections):
-                self.client.create_collection(
+                await self.client.create_collection(
                     collection_name=self.collection,
                     vectors_config=VectorParams(size=768, distance=Distance.COSINE)
                 )
-                self._populate_tools()
+                await self._populate_tools()
             self.initialized = True
         except Exception as e:
             log.error("Failed to initialize SemanticToolRegistry: %s", e)
 
-    def _populate_tools(self):
+    async def _populate_tools(self):
         points = []
         for i, (tool_name, schema) in enumerate(TOOL_SCHEMAS.items()):
             description = schema.get("function", {}).get("description", "")
             text_to_embed = f"tool: {tool_name} desc: {description}"
-            vector = self.embedder.embed(text_to_embed)
+            vector = await self.embedder.embed(text_to_embed)
             point_id = str(uuid.UUID(hex=hashlib.sha256(tool_name.encode()).hexdigest()[:32]))
             points.append(
                 PointStruct(
@@ -227,20 +242,20 @@ class SemanticToolRegistry:
                 )
             )
         if points:
-            self.client.upsert(collection_name=self.collection, points=points, wait=True)
+            await self.client.upsert(collection_name=self.collection, points=points, wait=True)
             log.info("Populated SemanticToolRegistry with %d tools.", len(points))
 
-    def discover_tools(self, task_intent: str, top_k: int = 3) -> Dict[str, dict]:
-        if not getattr(self, 'initialized', False):
-            self._init_registry()
-            
+    async def discover_tools(self, task_intent: str, top_k: int = 3) -> Dict[str, dict]:
+        await self._wait_init()
         try:
-            vector = self.embedder.embed(task_intent)
-            results = self.client.search(
+            vector = await self.embedder.embed(task_intent)
+            # qdrant-client >=1.18: AsyncQdrantClient has no .search(); use query_points.
+            response = await self.client.query_points(
                 collection_name=self.collection,
-                query_vector=vector,
-                limit=top_k * 2
+                query=vector,
+                limit=top_k * 2,
             )
+            results = getattr(response, "points", response)
             
             # Rerank combining semantic similarity score and pheromone multiplier
             reranked = sorted(
@@ -262,10 +277,11 @@ class SemanticToolRegistry:
             log.warning("SemanticToolRegistry search failed: %s. Returning default tools.", e)
             return {k: v for i, (k, v) in enumerate(TOOL_SCHEMAS.items()) if i < top_k}
             
-    def update_tool_pheromone(self, tool_name: str, success: bool, alpha: float = 0.15, decay: float = 0.05):
+    async def update_tool_pheromone(self, tool_name: str, success: bool, alpha: float = 0.15, decay: float = 0.05):
+        await self._wait_init()
         try:
             point_id = str(uuid.UUID(hex=hashlib.sha256(tool_name.encode()).hexdigest()[:32]))
-            records = self.client.retrieve(
+            records = await self.client.retrieve(
                 collection_name=self.collection,
                 ids=[point_id]
             )
@@ -280,7 +296,7 @@ class SemanticToolRegistry:
             else:
                 new_weight = max(0.1, current_weight - decay)
                 
-            self.client.set_payload(
+            await self.client.set_payload(
                 collection_name=self.collection,
                 payload={"pheromone_level": new_weight},
                 points=[record.id],

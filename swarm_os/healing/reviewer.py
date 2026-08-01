@@ -22,7 +22,8 @@ class Reviewer:
             if after_probe_callable:
                 after = after_probe_callable()
             elif self.detector:
-                after = self.detector.check()
+                from .failure_detector import run_coro_sync
+                after = run_coro_sync(self.detector.check())
             else:
                 after = {}
         except Exception as exc:

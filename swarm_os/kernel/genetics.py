@@ -19,8 +19,8 @@ MCP_TOOL_REGISTRY: List[str] = [
 
 MODEL_TIERS: Dict[str, str] = {
     "triage": "phi4-mini:latest",
-    "fast": "qwen-tuned",
-    "heavy": "qwen-tuned",
+    "fast": "qwen3.5-9b",
+    "heavy": "qwen3.5-9b",
 }
 
 

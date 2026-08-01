@@ -27,7 +27,7 @@ def _make_org(org_id: str, fitness: float = 0.0) -> Organism:
         def write(self, *a, **kw): pass
         def recent(self, n=20): return []
     org.memory = _NullMemory()
-    g.record_fitness(fitness)
+    g.record_fitness({"composite": fitness, "quality": fitness, "speed": fitness, "efficiency": fitness})
     return org
 
 

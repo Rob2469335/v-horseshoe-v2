@@ -23,8 +23,9 @@ class MemoryBank:
     """Per-organism persistent JSONL diary."""
 
     def __init__(self, org_id: str):
+        from collections import deque
         self.org_id = org_id
-        self.events: list = []
+        self.events = deque(maxlen=1000)
 
     def write(self, event: Dict[str, Any]) -> None:
         record = {"ts": time.time(), "org": self.org_id, **event}
@@ -35,7 +36,7 @@ class MemoryBank:
         log.debug("memory write org=%s event=%s", self.org_id, event.get("event", "?"))
 
     def recent(self, n: int = 20) -> list:
-        return self.events[-n:]
+        return list(self.events)[-n:]
 
     def last_content(self) -> str:
         for e in reversed(self.events):

@@ -6,7 +6,7 @@ class FallbackRouter:
 
     def route(self, candidates=None, role=None):
         if not candidates:
-            return "qwen2.5:7b-instruct"
+            return "qwen3.5-9b"
 
         # Prefer smallest safe model
         for c in candidates:

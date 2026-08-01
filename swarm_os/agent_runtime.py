@@ -81,13 +81,10 @@ class AgentRuntime:
             return {"status": "success" if "Success" in result_msg else "error", "message": result_msg}
 
         if capability_name not in self._active_tools:
-            if capability_name in self.tool_executor.get_capabilities():
-                self._active_tools.add(capability_name)
-            else:
-                raise RuntimeError(
-                    f"Tool '{capability_name}' is disabled. "
-                    f"Active tools: {list(self._active_tools)}"
-                )
+            raise RuntimeError(
+                f"Tool '{capability_name}' is disabled. "
+                f"Active tools: {list(self._active_tools)}"
+            )
 
         # Audit Correction: cache_key must be passed through to tool executor loop explicitly!
         return await self.tool_executor.execute_tool(capability_name, payload, cache_key=cache_key)

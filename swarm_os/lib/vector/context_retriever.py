@@ -11,8 +11,8 @@ logger = logging.getLogger(__name__)
 
 COLLECTION = "codebase"
 EMBED_MODEL = "nomic-embed-text:latest"
-EMBED_DIM = 768
-OLLAMA_URL = "http://127.0.0.1:11434"
+EMBED_URL = "http://127.0.0.1:8081/v1"
+OLLAMA_URL = EMBED_URL  # Backward compatibility alias
 QDRANT_URL = "http://127.0.0.1:6333"
 MAX_CONTEXT_CHUNKS = 5
 MAX_CONTEXT_CHARS = 6000
@@ -21,12 +21,13 @@ MAX_CONTEXT_CHARS = 6000
 def _embed(text: str) -> list[float]:
     try:
         r = httpx.post(
-            f"{OLLAMA_URL}/api/embeddings",
-            json={"model": EMBED_MODEL, "prompt": text},
+            f"{EMBED_URL}/embeddings",
+            headers={"Authorization": "Bearer llama"},
+            json={"input": text},
             timeout=60.0,
         )
         r.raise_for_status()
-        return r.json()["embedding"]
+        return r.json()["data"][0]["embedding"]
     except Exception as exc:
         logger.warning(f"Embed failed: {exc}")
         return [0.0] * EMBED_DIM

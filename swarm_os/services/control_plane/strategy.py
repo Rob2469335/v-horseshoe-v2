@@ -102,9 +102,27 @@ class DefaultStrategy(RoutingStrategy):
             if "writing" in caps and desired_role == "writer":
                 score += 10.0
 
-            priority = float(profile.metadata.get("priority", 0.0)) if isinstance(profile.metadata, dict) else 0.0
-            score += priority
-            meta.update({"capabilities": sorted(caps), "priority": priority})
+            if isinstance(profile.metadata, dict):
+                priority = float(profile.metadata.get("priority", 0.0))
+                score += priority
+                
+                # Apply Thermal Benchmark Speed Bonuses
+                tg128 = float(profile.metadata.get("tg128", 0.0))
+                pp512 = float(profile.metadata.get("pp512", 0.0))
+                if tg128 > 0:
+                    speed_bonus = tg128 * 2.0
+                    score += speed_bonus
+                    reasons.append(f"speed_bonus_tg{tg128:.1f}")
+                    meta["tg128_bonus"] = speed_bonus
+                if pp512 > 0:
+                    pp_bonus = pp512 * 0.1
+                    score += pp_bonus
+                    reasons.append(f"speed_bonus_pp{pp512:.0f}")
+                    meta["pp512_bonus"] = pp_bonus
+                    
+                meta.update({"capabilities": sorted(caps), "priority": priority})
+            else:
+                meta.update({"capabilities": sorted(caps), "priority": 0.0})
 
         failure_penalty = min(60.0, float(state.failures * 6))
         score -= failure_penalty

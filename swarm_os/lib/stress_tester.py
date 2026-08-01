@@ -1,6 +1,6 @@
 import subprocess
 
-def run_stress_test(agent_strategy: dict) -> bool:
+def run_stress_test(_agent_strategy: dict) -> bool:
     """
     Simulates a change in environment to verify strategy robustness.
     Returns True if the strategy passes the stress test.

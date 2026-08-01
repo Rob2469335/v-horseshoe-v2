@@ -254,7 +254,7 @@ class SelectionEngine:
             # ── Stagnation penalty — nudges stuck incumbents ──────────────────
             composite -= _stagnation_penalty(o.genome)
 
-            o.genome.record_fitness(composite)
+            o.genome.record_fitness({"composite": composite, "quality": 0.0, "speed": 0.0, "efficiency": 0.0})
             o.fitness += composite
 
             o.memory.write({

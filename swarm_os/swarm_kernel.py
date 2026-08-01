@@ -24,7 +24,7 @@ from .snapshot import save_snapshot
 
 log = logging.getLogger(__name__)
 
-_CONCURRENCY     = 1
+_CONCURRENCY     = 10
 _MAX_LOG_ENTRIES = 200
 
 

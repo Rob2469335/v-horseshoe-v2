@@ -5,7 +5,8 @@ from swarm_os.app.main import create_app
 @pytest.fixture
 def client():
     app = create_app()
-    return TestClient(app)
+    with TestClient(app) as c:
+        yield c
 
 def test_list_tools(client):
     response = client.get("/tools")

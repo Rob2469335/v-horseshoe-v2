@@ -28,9 +28,9 @@ class StatusResponse(BaseModel):
     ready: bool
     events_path: str
     event_count: int
-    ollama_base_url: str
+    llamacpp_base_url: str
     environment: str
-    ollama_reachable: bool
+    llamacpp_reachable: bool
     vision_configured: bool = False
     vision_runtime_available: bool = False
     vision_tool_exposed: bool = False
@@ -96,3 +96,10 @@ class TimelineResponse(BaseModel):
 class AutoAssignResponse(BaseModel):
     mapping: Dict[str, str]
 
+class CreateApprovalRequest(BaseModel):
+    component: str
+    action: str
+    reason: str
+
+class ApprovalDecisionRequest(BaseModel):
+    note: Optional[str] = None

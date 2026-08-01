@@ -4,7 +4,6 @@ import os
 from pathlib import Path
 from typing import Dict, Any, List
 from swarm_os.capabilities.models import VSCodeAutomationRequest, VSCodeAutomationResponse
-from swarm_os.lib.safety import validate_path
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +106,17 @@ class VSCodeAutomationHandler:
                         entries.append(f"{item.name}{size_str}")
                     output = "\n".join(entries)
 
+            elif command == "list_files":
+                search_path = args[0] if args else ""
+                target_dir = self._resolve_path(search_path)
+                found_files = []
+                if target_dir.is_dir():
+                    for p in target_dir.rglob("*"):
+                        if p.is_file() and not any(part.startswith('.') or part in ('node_modules', '.venv') for part in p.parts):
+                            rel_file = str(p.relative_to(Path(self.workspace_root).resolve())).replace("\\", "/")
+                            found_files.append(rel_file)
+                output = "\n".join(found_files)
+
             elif command == "find":
                 search_path = args[0] if args else ""
                 glob_pattern = args[1] if len(args) > 1 else "*"
@@ -200,11 +210,12 @@ class VSCodeAutomationHandler:
             }
 
         except Exception as e:
+            status = "rejected" if "Security Error" in str(e) else "failed"
             return {
                 "ok": False,
                 "output": "",
                 "error": str(e),
-                "status": "failed",
+                "status": status,
                 "command": command,
                 "stdout": "",
                 "stderr": str(e),

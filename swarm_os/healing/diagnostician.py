@@ -6,11 +6,13 @@ import asyncio
 
 
 class Diagnostician:
-    """Simple diagnositician skeleton: given a symptom and history, return ranked hypotheses.
+    """Diagnoses symptoms into ranked hypotheses.
 
-    This is intentionally lightweight and designed to be extended. It returns a list of
-    hypotheses each with a confidence score between 0..1. Optionally integrates with a
-    Qdrant-backed semantic search to find similar past incidents and boost confidences.
+    Each hypothesis carries a `fix_class`:
+      - "prompt_sensitivity" (PS): fixed by instruction/rule changes → sandbox repair script
+      - "model_variability" (MV): the model itself can't do it → escalate to cloud/human
+    This mirrors the PS/MV classification used by 2025 self-healing agent research,
+    letting the Governor route to the right recovery path instead of guessing.
     """
 
     def __init__(self, memory=None, qdrant_search_callable: Optional[callable] = None):
@@ -35,17 +37,48 @@ class Diagnostician:
             except Exception:
                 return []
 
+    def _classify_fix(self, text: str) -> str:
+        """Classify failure as prompt_sensitivity vs model_variability.
+
+        PS indicators: explicit rule violations, format errors, missing fields,
+        JSON/markdown issues, "should not", "forbidden", spec drift → fixable by
+        prompt/rule changes.
+        MV indicators: hallucination, reasoning failure, "i cannot", repeated
+        wrong answers with correct instructions, inherent model limitation →
+        retry/reflection is wasted, escalate instead.
+        """
+        ps_terms = [
+            "json", "format", "invalid", "malformed", "forbidden", "unauthorized",
+            "not allowed", "missing field", "syntax error", "parse", "schema",
+            "expected", "must be", "should not", "violation", "rule", "constraint",
+        ]
+        mv_terms = [
+            "hallucin", "cannot", "unable to", "don't know", "doesn't know",
+            "i don't know", "reasoning", "confus", "wrong answer", "misunderstanding",
+            "nonsense", "not capable", "out of scope",
+        ]
+        if any(t in text for t in mv_terms):
+            return "model_variability"
+        if any(t in text for t in ps_terms):
+            return "prompt_sensitivity"
+        return "prompt_sensitivity"  # default: cheaper to try a rule/script fix first
+
     def diagnose(self, symptom: Dict[str, Any]) -> List[Dict[str, Any]]:
         # Basic heuristics: if symptom mentions 'timeout' prefer network issues, if 'OOM' prefer memory
         text = str(symptom.get("detail") or symptom.get("message") or symptom).lower()
+        fix_class = self._classify_fix(text)
         hypotheses: List[Dict[str, Any]] = []
 
         if "timeout" in text or "timed out" in text:
-            hypotheses.append({"id": gen_id("h"), "hypothesis": "network_timeout", "confidence": 0.6, "explanation": "Requests timed out — network or upstream may be slow."})
+            hypotheses.append({"id": gen_id("h"), "hypothesis": "network_timeout", "confidence": 0.6, "explanation": "Requests timed out — network or upstream may be slow.", "fix_class": fix_class})
         if "out of memory" in text or "oom" in text:
-            hypotheses.append({"id": gen_id("h"), "hypothesis": "memory_pressure", "confidence": 0.75, "explanation": "Process likely ran out of memory."})
+            hypotheses.append({"id": gen_id("h"), "hypothesis": "memory_pressure", "confidence": 0.75, "explanation": "Process likely ran out of memory.", "fix_class": fix_class})
         if "connection refused" in text or "refused" in text:
-            hypotheses.append({"id": gen_id("h"), "hypothesis": "service_unreachable", "confidence": 0.7, "explanation": "A downstream service refused the connection."})
+            hypotheses.append({"id": gen_id("h"), "hypothesis": "service_unreachable", "confidence": 0.7, "explanation": "A downstream service refused the connection.", "fix_class": fix_class})
+        if "json" in text or "parse" in text or "format" in text:
+            hypotheses.append({"id": gen_id("h"), "hypothesis": "format_violation", "confidence": 0.8, "explanation": "Output violated expected format — fixable via prompt/rule tightening.", "fix_class": "prompt_sensitivity"})
+        if "delegate" in text or "circular" in text or "chain" in text:
+            hypotheses.append({"id": gen_id("h"), "hypothesis": "delegation_loop", "confidence": 0.7, "explanation": "Agent tried to re-delegate to an already-visited agent.", "fix_class": "prompt_sensitivity"})
 
         # Qdrant similarity lookup: if configured, search for similar incidents and boost matching hypothesis confidences
         try:
@@ -76,7 +109,7 @@ class Diagnostician:
 
         # fallback generic hypothesis
         if not hypotheses:
-            hypotheses.append({"id": gen_id("h"), "hypothesis": "unknown", "confidence": 0.3, "explanation": "Insufficient data — require deeper probes."})
+            hypotheses.append({"id": gen_id("h"), "hypothesis": "unknown", "confidence": 0.3, "explanation": "Insufficient data — require deeper probes.", "fix_class": fix_class})
 
         # sort by confidence desc
         hypotheses.sort(key=lambda x: x.get("confidence", 0), reverse=True)

@@ -38,75 +38,50 @@ router.include_router(admin.router, prefix="/api", tags=["admin"])
 router.include_router(api_features_router)
 
 from swarm_os.api.dependencies import runtime_dep, get_orchestrator, _safe_events
+from swarm_os.services.system_service import SystemService
+from swarm_os.services.chat_service import ChatService
 
 
 
 # --- Helper Functions ---
-async def _safe_health_report(runtime: Any) -> dict[str, Any]:
-    try:
-        import psutil
-        import httpx
-        
-        # Check system resources
-        mem = psutil.virtual_memory()
-        disk = psutil.disk_usage("/")
-        
-        # Check dependencies
-        ollama_ok = False
-        try:
-            async with httpx.AsyncClient(timeout=1.0, trust_env=False, proxy=None) as client:
-                r = await client.get("http://127.0.0.1:11434/")
-                ollama_ok = r.status_code == 200
-        except Exception:
-            pass
-            
-        qdrant_ok = False
-        try:
-            async with httpx.AsyncClient(timeout=1.0, trust_env=False, proxy=None) as client:
-                r = await client.get("http://127.0.0.1:6333/")
-                qdrant_ok = r.status_code == 200
-        except Exception:
-            pass
-
-        healing = getattr(runtime, "healing", None)
-        report = await healing.status() if hasattr(healing, "status") else {}
-        
-        health_score = report.get("health_score", report.get("recovery_readiness", 100))
-        if not ollama_ok or not qdrant_ok or mem.percent > 95:
-            # BUG FIX: Clamp to 0 — health_score can't go negative
-            health_score = max(0, health_score - 20)
-            
-        return {
-            "status": "ok" if health_score >= 80 else "degraded",
-            "health_score": health_score,
-            "overall": report.get("overall", "active" if report.get("active_anomalies", 0) > 0 else "healthy"),
-            "system": {
-                "memory_percent": mem.percent,
-                "disk_percent": disk.percent,
-                "ollama_connected": ollama_ok,
-                "qdrant_connected": qdrant_ok
-            }
-        }
-    except Exception as exc:
-        log.exception("Health check failed")
-        return {"status": "error", "health_score": 0, "overall": f"health check failed: {exc}"}
-
-async def _safe_ollama_reachable(runtime: Any) -> bool:
-    try:
-        async with httpx.AsyncClient(timeout=15.0, trust_env=False, proxy=None) as client:
-            r = await client.get("http://127.0.0.1:11434/api/tags")
-            return r.status_code == 200
-    except Exception:
-        return False
-
 async def _safe_ollama_models(runtime: Any) -> list[str]:
-    try:
-        async with httpx.AsyncClient(timeout=15.0, trust_env=False, proxy=None) as client:
-            r = await client.get("http://127.0.0.1:11434/api/tags")
-            data = r.json()
-            return sorted({m["name"] for m in data.get("models", []) if m.get("name")})
-    except Exception:
-        return []
+    models = set()
+    import httpx
+    import asyncio
+    from pathlib import Path
+    
+    async def fetch_port(port: int):
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(f"http://127.0.0.1:{port}/v1/models", headers={"Authorization": "Bearer llama"}, timeout=1.0)
+                if resp.status_code == 200:
+                    for m in resp.json().get("data", []):
+                        mid = m.get("id")
+                        if not mid:
+                            continue
+                        # Normalize Windows file-path model ids like ".\models\foo.gguf" to "foo"
+                        if ".gguf" in mid or "\\" in mid or "/" in mid:
+                            mid = mid.replace("\\", "/").split("/")[-1].replace(".gguf", "")
+                        models.add(mid)
+        except Exception:
+            pass
+            
+    # Check all llama.cpp ports — ONLY report models actually being served
+    await asyncio.gather(
+        fetch_port(8080), # Generation
+        fetch_port(8081), # Embeddings
+        fetch_port(8082), # Reranker
+        fetch_port(8083), # Vision
+        return_exceptions=True,
+    )
+    
+    # Sort deterministically; prefer the generation model first
+    ordered = sorted(models)
+    if any("qwen3.5" in m.lower() for m in ordered):
+        ordered = [m for m in ordered if "qwen3.5" in m.lower()] + [m for m in ordered if "qwen3.5" not in m.lower()]
+    return ordered
+    
+    return sorted(list(models))
 
 def _build_capabilities(installed_models: list[str], runtime: Any = None) -> dict[str, Any]:
     vision_models = [m for m in installed_models if any(marker in m.lower() for marker in ["vl", "vision", "moondream", "llava"])]
@@ -128,64 +103,58 @@ def _build_capabilities(installed_models: list[str], runtime: Any = None) -> dic
 
     return {
         "tools": {"available": True, "count": len(tool_names), "names": tool_names, "source": "runtime-dynamic"},
-        "vision": {"available": len(vision_models) > 0, "models": vision_models, "primary_model": vision_models[0] if vision_models else None, "provider": "ollama"},
-        "generation": {"available": len(installed_models) > 0, "provider": "ollama", "models": installed_models, "default_model": installed_models[0] if installed_models else None, "coding_models": coding_models, "reasoning_models": reasoning_models},
+        "vision": {"available": len(vision_models) > 0, "models": vision_models, "primary_model": vision_models[0] if vision_models else None, "provider": "llamacpp"},
+        "generation": {"available": len(installed_models) > 0, "provider": "llamacpp", "models": installed_models, "default_model": installed_models[0] if installed_models else None, "coding_models": coding_models, "reasoning_models": reasoning_models},
     }
-
-
-
-# --- API Endpoints ---
 
 @router.get("/status", response_model=StatusResponse)
 async def status(runtime: Any = Depends(runtime_dep)):
-    ollama_reachable = await _safe_ollama_reachable(runtime)
+    ollama_reachable = await SystemService.check_ollama_reachable()
     installed_models = await _safe_ollama_models(runtime)
     events = await _safe_events(runtime)
     
     total_qdrant_points = 0
-    qdrant_client = None
     try:
-        from qdrant_client import AsyncQdrantClient
-        qdrant_client = AsyncQdrantClient(url="http://127.0.0.1:6333")
-        collections = (await qdrant_client.get_collections()).collections
+        from swarm_os.services.vector_store import VectorStore
+        vs = VectorStore()
+        collections = (await vs.client.get_collections()).collections
         for c in collections:
             if c.name in ["codebase", "codebase_index"]:
                 continue
-            count = (await qdrant_client.count(c.name)).count
+            count = (await vs.client.count(c.name)).count
             total_qdrant_points += count
     except Exception:
         pass
-    finally:
-        if qdrant_client is not None:
-            try:
-                await qdrant_client.close()
-            except Exception:
-                pass
+
+    # BUG FIX: primary_vision_model must be the ACTUAL vision model (moondream),
+    # not the first installed/generation model (qwen3.5-9b).
+    vision_models = [m for m in installed_models if any(marker in m.lower() for marker in ["vl", "vision", "moondream", "llava"])]
 
     return StatusResponse(
         ready=getattr(runtime, "orchestrator", None) is not None,
         events_path=".swarm/patch_log.jsonl",
         event_count=len(events) + total_qdrant_points,
-        ollama_base_url="http://127.0.0.1:11434",
+        llamacpp_base_url="http://127.0.0.1:8080", # Updated to llama.cpp primary
         environment="development",
-        ollama_reachable=ollama_reachable,
+        llamacpp_reachable=ollama_reachable,
         vision_configured=True,
         vision_runtime_available=True,
         vision_tool_exposed=True,
-        vision_models_configured=installed_models,
-        generation_models_configured=installed_models,
+        vision_models_configured=vision_models or installed_models,
+        vision_models_installed=vision_models or installed_models,
         installed_model_count=len(installed_models),
-        installed_models=installed_models
+        installed_models=installed_models,
+        primary_vision_model=vision_models[0] if vision_models else (installed_models[0] if installed_models else None),
     )
 
 @router.get("/readyz")
 async def readyz(runtime: Any = Depends(runtime_dep)) -> dict[str, Any]:
-    report = await _safe_health_report(runtime)
-    ollama_reachable = await _safe_ollama_reachable(runtime)
+    report = await SystemService.get_health_report(runtime)
+    ollama_reachable = await SystemService.check_ollama_reachable()
     installed_models = await _safe_ollama_models(runtime)
     checks = {
         "runtime_started": getattr(runtime, "orchestrator", None) is not None,
-        "ollama_reachable": ollama_reachable,
+        "llamacpp_reachable": ollama_reachable,
         "models_loaded": len(installed_models) > 0,
         "health_score_ok": report["health_score"] >= 60,
     }
@@ -232,14 +201,11 @@ async def cache_status(request: Request, runtime=Depends(runtime_dep)):
         total_qdrant_points += len(cached_keys) # Add local cache to total just in case
         
     try:
-        from qdrant_client import AsyncQdrantClient
-        # BUG FIX: Use AsyncQdrantClient to avoid blocking the event loop.
-        # Synchronous QdrantClient.get_collections()/count() in an async route
-        # blocks the entire FastAPI event loop.
-        qdrant_client = AsyncQdrantClient(url="http://127.0.0.1:6333")
-        collections = (await qdrant_client.get_collections()).collections
+        from swarm_os.services.vector_store import VectorStore
+        vs = VectorStore()
+        collections = (await vs.client.get_collections()).collections
         for c in collections:
-            count = (await qdrant_client.count(c.name)).count
+            count = (await vs.client.count(c.name)).count
             total_qdrant_points += count
             cached_keys.append(f"qdrant_{c.name}_{count}")
     except Exception as e:
@@ -250,36 +216,64 @@ async def cache_status(request: Request, runtime=Depends(runtime_dep)):
 @router.post("/tools/execute", response_model=ToolExecuteResponse)
 async def execute_tool(payload: ToolExecuteRequest, runtime=Depends(runtime_dep)):
     if hasattr(runtime, "agent_runtime") and runtime.agent_runtime is not None:
-        result = await runtime.agent_runtime.call_tool(payload.capability, payload.payload, cache_key=payload.cache_key)
-        return ToolExecuteResponse(status="success", capability=payload.capability, data=result)
+        try:
+            result = await runtime.agent_runtime.call_tool(payload.capability, payload.payload, cache_key=payload.cache_key)
+            if hasattr(result, "model_dump"):
+                result = result.model_dump()
+            elif hasattr(result, "dict"):
+                result = result.dict()
+            return ToolExecuteResponse(status="success", capability=payload.capability, data=result)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=f"Capability '{payload.capability}' not found: {exc}")
+        except Exception as exc:
+            log.exception("Tool execution failed in agent_runtime.call_tool")
+            raise HTTPException(status_code=500, detail=str(exc))
     
     if hasattr(runtime, "call_tool") and runtime.call_tool is not None:
-        result = await runtime.call_tool(payload.capability, payload.payload)
-        return ToolExecuteResponse(status="success", capability=payload.capability, data=result)
+        try:
+            result = await runtime.call_tool(payload.capability, payload.payload)
+            if hasattr(result, "model_dump"):
+                result = result.model_dump()
+            elif hasattr(result, "dict"):
+                result = result.dict()
+            return ToolExecuteResponse(status="success", capability=payload.capability, data=result)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=f"Capability '{payload.capability}' not found: {exc}")
+        except Exception as exc:
+            log.exception("Tool execution failed in runtime.call_tool")
+            raise HTTPException(status_code=500, detail=str(exc))
         
     raise HTTPException(status_code=501, detail="tool execution not implemented in this runtime")
 
 @router.post("/generate", response_model=GenerateResponse)
 async def generate(payload: GenerateRequest, orch=Depends(get_orchestrator)):
-    _model = (payload.model or "").strip() or "qwen-tuned"
+    _model = (payload.model or "").strip() or "qwen3.5-9b"
     
-    litellm_model = f"ollama/{_model}" if not _model.startswith("ollama/") else _model
-    import os
-    os.environ["OLLAMA_API_BASE"] = "http://127.0.0.1:11434"
+    # Check if the model requests a cloud provider, otherwise default to local llama.cpp
+    is_local = "/" not in _model or _model.startswith("openai/")
+    litellm_model = f"openai/{_model}" if is_local and not _model.startswith("openai/") else _model
     
+    kwargs = {
+        "model": litellm_model,
+        "messages": [{"role": "user", "content": payload.prompt}],
+        "temperature": 0.7,
+        "timeout": 120.0,
+        "num_ctx": 16384,
+        "num_retries": 5,
+        "stop": ["<|im_end|>", "<|endoftext|>", "</s>"],
+    }
+    
+    if is_local:
+        kwargs["api_base"] = "http://127.0.0.1:8080/v1"
+        kwargs["api_key"] = "llama"
+        
     try:
         import litellm
-        resp = await litellm.acompletion(
-            model=litellm_model,
-            messages=[{"role": "user", "content": payload.prompt}],
-            temperature=0.7,
-            timeout=1200.0,
-            num_ctx=16384,
-        )
+        resp = await litellm.acompletion(**kwargs)
         content = resp.choices[0].message.content or ""
     except Exception as e:
-        log.error(f"Generation failed: {e}")
-        content = f"Error during generation: {e}"
+        log.exception("Generation failed")
+        raise HTTPException(status_code=502, detail=f"LLM generation failed: {e}")
 
     return GenerateResponse(
         content=content,
@@ -294,91 +288,49 @@ def assign(payload: AssignRequest, orch=Depends(get_orchestrator)):
 
 @router.post("/models/autoassign", response_model=AutoAssignResponse)
 async def autoassign():
-    from runtime_v2.services.fallback_manager import get_live_fallbacks
-    from runtime_v2.services.model_registry import update_model_mapping
-    import httpx
-    import litellm
-    import json
-    # 1. Fetch local Ollama models
-    local_models = []
     try:
-        async with httpx.AsyncClient(timeout=15.0, trust_env=False, proxy=None) as client:
-            resp = await client.get("http://127.0.0.1:11434/api/tags")
-            if resp.status_code == 200:
-                for m in resp.json().get("models", []):
-                    name = m["name"].lower()
-                    if "embed" in name or "rerank" in name or "vl" in name or "moondream" in name:
-                        continue
-                    local_models.append(m["name"])
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Failed to fetch local models: {e}")
-        
-    if not local_models:
-        raise HTTPException(status_code=400, detail="No suitable local chat models found.")
-        
-    # 2. Get best cloud model
-    fallbacks = await get_live_fallbacks()
-    cloud_models = [f["model"] for f in fallbacks if "ollama" not in f["model"]]
-    if not cloud_models:
-        best_cloud_model = f"ollama/{local_models[-1]}"
-    else:
-        best_cloud_model = cloud_models[0]
-    
-    # 3. Formulate Prompt
-    prompt = f"""You are an elite AI system architect. 
-The user has the following local AI models running in Ollama: {local_models}
-They have a multi-agent system with exactly 8 roles:
-- coordinator: High-level routing and synthesis.
-- planner: Deep reasoning and system design.
-- researcher: Information gathering and summarization.
-- executor: Following exact step-by-step instructions.
-- coder: Writing complex code.
-- tool-runner: Executing API/OS tools (needs strong tool calling).
-- reviewer: Pedantic code reviewing and bug finding.
-- debugger: Deep logic and error trace analysis.
-
-Based on public benchmark knowledge of these local models (parameter sizes, domain strengths), assign the best model to each of the 8 roles.
-Rules:
-1. ONLY use the models from the provided local list.
-2. You can assign the same model to multiple roles if it's the best fit.
-3. Return ONLY a raw JSON object mapping the exact role name to the exact model name. No markdown blocks, no formatting. Example: {{"coder": "qwen2.5-coder:7b"}}"""
-
-    # 4. Get LLM response
-    try:
-        litellm_fallbacks = [{"model": m} for m in cloud_models[1:]]
-        kwargs = {
-            "model": best_cloud_model,
-            "fallbacks": litellm_fallbacks,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.1,
-        }
-        if not best_cloud_model.startswith("openrouter/"):
-            kwargs["response_format"] = {"type": "json_object"}
-            
-        async with httpx.AsyncClient(timeout=60.0) as custom_client:
-            if not best_cloud_model.startswith("ollama/"):
-                kwargs["client"] = custom_client
-            resp = await litellm.acompletion(**kwargs)
-            
-        content = resp.choices[0].message.content or "{}"
-        
-        # Clean up possible markdown if provider ignored format
-        content = content.replace("```json", "").replace("```", "").strip()
-        mapping = json.loads(content)
-        
-        # 5. Verify and apply
-        valid_roles = ["coordinator", "planner", "researcher", "executor", "coder", "tool-runner", "reviewer", "debugger"]
-        final_mapping = {}
-        for r in valid_roles:
-            if r in mapping and mapping[r] in local_models:
-                final_mapping[r] = mapping[r]
-                
-        update_model_mapping(final_mapping)
-        return AutoAssignResponse(mapping=final_mapping)
-        
+        mapping = await ChatService.autoassign()
+        return AutoAssignResponse(mapping=mapping)
     except Exception as e:
         log.error(f"AutoAssign failed: {e}")
         raise HTTPException(status_code=502, detail=str(e))
+
+
+def _classify_event_outcome(event: dict) -> str:
+    """Classify an event's outcome for dashboard success/fail/partial stats.
+
+    Outcomes live in several places depending on who wrote the event
+    (agent_service_v2 envelopes, orchestrator envelopes, legacy flat events):
+      - learning_outcome.result
+      - payload.status / payload.outcome / payload.result
+      - top-level status / outcome / success
+      - event_type itself (generation_completed/stream_completed = success,
+        generation_failed/AGENT_ERROR/record_failure = fail)
+    """
+    pl = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    raw = (
+        ((event.get("learning_outcome") or {}).get("result"))
+        or pl.get("status") or event.get("status")
+        or pl.get("outcome") or event.get("outcome")
+        or pl.get("result") or event.get("result")
+        or ""
+    )
+    o = str(raw).lower()
+    if o in ("success", "completed", "ok", "healthy", "succeeded"):
+        return "success"
+    if o in ("partial", "in_progress", "pending"):
+        return "partial"
+    if o in ("fail", "failure", "failed", "error", "unhealthy", "blocked", "aborted"):
+        return "fail"
+    # Fall back to event_type semantics for envelope events with no explicit status
+    et = str(event.get("event_type") or "").lower()
+    if "fail" in et or "error" in et:
+        return "fail"
+    if et in ("generation_completed", "stream_completed", "agent_action", "tool_result", "task_completed"):
+        return "success"
+    if "partial" in et or "pending" in et:
+        return "partial"
+    return "unknown"
 
 @router.get("/timeline", response_model=TimelineResponse)
 async def timeline(window_minutes: int = 60, runtime: Any = Depends(runtime_dep)):
@@ -387,15 +339,18 @@ async def timeline(window_minutes: int = 60, runtime: Any = Depends(runtime_dep)
     buckets = defaultdict(lambda: {"event_count": 0, "success_count": 0, "partial_count": 0, "fail_count": 0})
     
     if events_path.exists():
-        # BUG FIX: Read file in a thread to avoid blocking the async event loop.
-        # For large event logs, synchronous file I/O in an async route stalls all other requests.
+        # BUG FIX: Read file in a thread using EventLogRepository to avoid blocking the async event loop.
         import asyncio
-        raw_lines = await asyncio.to_thread(events_path.read_text, encoding="utf-8")
-        for line in raw_lines.splitlines():
+        from swarm_os.repositories.event_log_repo import EventLogRepository
+        repo = EventLogRepository(event_log_path=events_path)
+        try:
+            events, _ = await asyncio.to_thread(repo.read_events, 0)
+        except Exception as exc:
+            log.warning(f"Failed to read events for timeline: {exc}")
+            events = []
+        
+        for event in events:
             try:
-                if not line.strip():
-                    continue
-                event = json.loads(line)
                 raw_ts = event.get("occurred_at") or event.get("timestamp") or event.get("ts")
                 if not raw_ts:
                     continue
@@ -404,7 +359,7 @@ async def timeline(window_minutes: int = 60, runtime: Any = Depends(runtime_dep)
                     continue
                 bucket = ts.replace(second=0, microsecond=0).isoformat(timespec="minutes")
                 buckets[bucket]["event_count"] += 1
-                outcome = str(((event.get("learning_outcome") or {}).get("result") or "")).lower()
+                outcome = _classify_event_outcome(event)
                 if outcome == "success":
                     buckets[bucket]["success_count"] += 1
                 elif outcome == "partial":
@@ -426,7 +381,7 @@ async def timeline(window_minutes: int = 60, runtime: Any = Depends(runtime_dep)
                 continue
             bucket = ts.replace(second=0, microsecond=0).isoformat(timespec="minutes")
             buckets[bucket]["event_count"] += 1
-            outcome = str(((event.get("learning_outcome") or {}).get("result") or "")).lower()
+            outcome = _classify_event_outcome(event)
             if outcome == "success":
                 buckets[bucket]["success_count"] += 1
             elif outcome == "partial":
@@ -442,7 +397,8 @@ async def timeline(window_minutes: int = 60, runtime: Any = Depends(runtime_dep)
 @router.get("/memory/search")
 async def memory_search(q: str, limit: int = 8):
     try:
-        from runtime_v2.services.memory_core import get_embedding, QDRANT_URL, _get_shard_name, _moe_route_shards
+        from runtime_v2.services.memory_core import get_embedding, _get_shard_name, _moe_route_shards
+        from swarm_os.services.vector_store import VectorStore
         # BUG FIX: Wrap synchronous get_embedding() in asyncio.to_thread to avoid
         # blocking the event loop during local model inference.
         import asyncio as _asyncio
@@ -452,38 +408,29 @@ async def memory_search(q: str, limit: int = 8):
             
         active_shards = _moe_route_shards(q)
         results = []
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            for shard in active_shards:
-                collection = _get_shard_name(shard)
-                try:
-                    resp = await client.post(f"{QDRANT_URL}/collections/{collection}/points/search", json={
-                        "vector": vector,
-                        "limit": limit,
-                        "with_payload": True,
-                        "score_threshold": 0.3
+        for shard in active_shards:
+            collection = _get_shard_name(shard)
+            try:
+                vs = VectorStore(collection_name=collection)
+                hits = await vs.search(query_vector=vector, limit=limit)
+                for hit in hits:
+                    results.append({
+                        "id": hit.get("id", ""),
+                        "score": hit.get("score", 0.0),
+                        "text": hit.get("text", ""),
+                        "sender": hit.get("sender", "system"),
+                        "timestamp": hit.get("timestamp", "")
                     })
-                    if resp.status_code == 200:
-                        for hit in resp.json().get("result", []):
-                            payload = hit.get("payload", {})
-                            results.append({
-                                "id": str(hit.get("id", "")),
-                                "score": float(hit.get("score", 0.0)),
-                                "text": str(payload.get("fact", payload.get("text", payload.get("content", "")))),
-                                "source": collection,
-                                "timestamp": str(payload.get("timestamp", ""))
-                            })
-                except httpx.RequestError as e:
-                    log.error(f"Memory search connection failed: {e}")
-                    raise HTTPException(status_code=503, detail="Database connection failed")
-                except Exception:
-                    pass
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).error(f"Error querying shard {collection}: {e}")
                 
         results.sort(key=lambda x: x["score"], reverse=True)
         return {"results": results[:limit]}
     except HTTPException:
         raise
     except Exception as e:
-        log.error(f"Memory search failed: {e}")
+        log.exception("Memory search failed")
         # BUG FIX: Raise HTTPException with 500 instead of returning {"error": ...} with 200 OK.
         # Clients cannot distinguish success from failure when status code is always 200.
         raise HTTPException(status_code=500, detail=str(e))
@@ -578,13 +525,16 @@ async def get_router_stats(orch: Any = Depends(get_orchestrator), runtime: Any =
         for ev in events:
             try:
                 event = ev.to_dict() if hasattr(ev, "to_dict") else ev
-                model = event.get("model") or "unknown"
-                outcome = str(((event.get("learning_outcome") or {}).get("result")) or "").lower()
+                pl = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+                model = event.get("model") or pl.get("model") or "unknown"
+                outcome = _classify_event_outcome(event)
                 model_counts[str(model)] += 1
                 if outcome == "success":
                     status_counts["success"] += 1
                 elif outcome == "fail":
                     status_counts["fail"] += 1
+                else:
+                    status_counts["unknown"] += 1
                 total += 1
             except Exception:
                 continue
@@ -705,11 +655,10 @@ async def get_critic_stats(orch: Any = Depends(get_orchestrator), runtime: Any =
 async def get_memories():
     """Retrieve all learned memories from Qdrant, omitting the codebase chunks."""
     memories_by_category = {}
-    qdrant_client = None
     try:
-        from qdrant_client import AsyncQdrantClient
-        qdrant_client = AsyncQdrantClient(url="http://127.0.0.1:6333")
-        collections = (await qdrant_client.get_collections()).collections
+        from swarm_os.services.vector_store import VectorStore
+        vs = VectorStore()
+        collections = (await vs.client.get_collections()).collections
         
         for c in collections:
             name = c.name
@@ -717,7 +666,7 @@ async def get_memories():
                 continue
             
             # Fetch points with payload
-            response = await qdrant_client.scroll(
+            response = await vs.client.scroll(
                 collection_name=name,
                 limit=10000,
                 with_payload=True,
@@ -726,16 +675,15 @@ async def get_memories():
             
             points = response[0] if isinstance(response, tuple) else []
             if points:
-                memories_by_category[name] = [p.payload for p in points if p.payload]
+                payloads = [p.payload for p in points if p.payload]
+                # Sort descending by timestamp (newest first).
+                # Use a default of 0 for payloads without a timestamp to keep them at the bottom.
+                payloads.sort(key=lambda x: float(x.get("timestamp", 0)), reverse=True)
+                memories_by_category[name] = payloads
                 
         return {"status": "success", "data": memories_by_category}
     except Exception as exc:
         log.exception("Failed to fetch memories")
         raise HTTPException(status_code=500, detail=str(exc))
-    finally:
-        if qdrant_client is not None:
-            try:
-                await qdrant_client.close()
-            except Exception:
-                pass
+
 

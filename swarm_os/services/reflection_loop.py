@@ -1,0 +1,314 @@
+import os
+import json
+import logging
+import asyncio
+import time
+import uuid
+import re
+from pathlib import Path
+from litellm import acompletion
+from qdrant_client import AsyncQdrantClient
+from qdrant_client.models import PointStruct, VectorParams, Distance
+from swarm_os.services.embedding_service import EmbeddingService
+
+logger = logging.getLogger("ReflectionLoop")
+
+ROOT_DIR = Path(__file__).parent.parent.parent.resolve()
+DIARY_PATH = ROOT_DIR / "swarm_os" / "logs" / "organism_diary.jsonl"
+LOCAL_MODEL = "qwen3.5-9b"  # Local llama.cpp alias
+# Sanctioned free cloud model (DeepSeek V4 flash). Local qwen3.5-9b burns all
+# max_tokens on reasoning_content for the long distiller prompt, producing empty
+# content at ~5 tok/s; DeepSeek chat emits the structured reflection directly.
+CLOUD_MODEL = "openrouter/deepseek/deepseek-chat"
+DISTILLER_MAX_TOKENS_CLOUD = 600
+DISTILLER_MAX_TOKENS_LOCAL = 2048
+
+def _record_rule_to_agents_md(component: str, correction: str, confidence: float):
+    """SOTA 2026: Auto-document high-confidence ASPO reflection rules into AGENTS.md."""
+    if confidence < 0.85 or not correction:
+        return
+    try:
+        agents_file = ROOT_DIR / "AGENTS.md"
+        if not agents_file.exists():
+            return
+        content = agents_file.read_text(encoding="utf-8")
+        clean_rule = correction.strip()
+        if len(clean_rule) > 150:
+            clean_rule = clean_rule[:147] + "..."
+        if clean_rule in content:
+            return
+        new_entry = f"- **Rule ({component})**: {clean_rule}\n"
+        marker = "## Self-Healing & Self-Learning Fixes\n"
+        if marker in content:
+            content = content.replace(marker, marker + "\n" + new_entry, 1)
+            agents_file.write_text(content, encoding="utf-8")
+            logger.info("Recorded high-confidence ASPO rule to AGENTS.md for component '%s'", component)
+    except Exception as e:
+        logger.warning("Could not record ASPO rule to AGENTS.md: %s", e)
+
+# Structured reflection template (per Reflexion best practices). Free-form rules
+# are worthless; rules must reference the concrete failure and a do-not-repeat.
+DISTILLER_PROMPT = """You are the ASPO Rule Distiller. Convert agent failures into reusable correction rules.
+
+Task Context: {task_description}
+Component: {component}
+Agent Output/Action: {content_preview}
+Failure Reason: {error_message}
+
+Produce a structured reflection with EXACTLY this format:
+<reflection>
+<failure_summary>
+[1-2 sentences: what the agent did and what failed]
+</failure_summary>
+<root_cause>
+[1 sentence: the actual root cause]
+</root_cause>
+<next_attempt_rules>
+[2-3 concrete, actionable rules referencing specific tools/constraints]
+</next_attempt_rules>
+<do_not_repeat>
+[1 sentence: the exact mistake to never repeat]
+</do_not_repeat>
+</reflection>"""
+
+
+class ReflectionService:
+    def __init__(self, qdrant_url: str = "http://127.0.0.1:6333", collection_name: str = "ReflexionMemory"):
+        self.client = AsyncQdrantClient(url=qdrant_url)
+        self.collection = collection_name
+        self.embedder = EmbeddingService()
+        try:
+            loop = asyncio.get_running_loop()
+            self._init_task = loop.create_task(self._init_collection())
+        except RuntimeError:
+            self._init_task = None
+        self._ensured = False
+
+    async def _wait_init(self):
+        if self._init_task:
+            await self._init_task
+        elif not self._ensured:
+            await self._init_collection()
+            self._ensured = True
+
+    async def _init_collection(self):
+        try:
+            collections_response = await self.client.get_collections()
+            collections = collections_response.collections
+            if not any(c.name == self.collection for c in collections):
+                await self.client.create_collection(
+                    collection_name=self.collection,
+                    vectors_config=VectorParams(size=768, distance=Distance.COSINE)
+                )
+        except Exception as e:
+            logger.error("Failed to init ReflexionMemory: %s", e)
+
+    async def check_for_past_mistakes(self, task_context: str, threshold: float = 0.75) -> str:
+        """Ranked retrieval with recency+confidence decay (top-k, not single hit).
+        score = similarity · decay(age) · confidence; returns the single best rule."""
+        await self._wait_init()
+        try:
+            embedding = await self.embedder.embed(task_context)
+            # qdrant-client >=1.18: AsyncQdrantClient has no .search(); use query_points.
+            response = await self.client.query_points(
+                collection_name=self.collection,
+                query=embedding,
+                limit=5,
+                score_threshold=threshold,
+            )
+            results = getattr(response, "points", response)
+            if results:
+                now = time.time()
+                best = None
+                best_score = 0.0
+                for r in results:
+                    payload = r.payload or {}
+                    sim = r.score or 0.0
+                    age = now - float(payload.get("timestamp", now))
+                    decay = max(0.3, 1.0 - (age / (30 * 86400)))  # halve after ~30 days
+                    confidence = float(payload.get("confidence", 0.5))
+                    ranked = sim * decay * confidence
+                    if ranked > best_score:
+                        best_score = ranked
+                        best = payload
+                if best:
+                    correction = best.get("correction", "")
+                    do_not = best.get("do_not_repeat", "")
+                    hint = f"WARNING: A similar approach previously failed. Advice: {correction}"
+                    if do_not:
+                        hint += f" Do NOT repeat: {do_not}"
+                    return hint
+        except Exception as e:
+            logger.warning("Failed to check ReflexionMemory: %s", e)
+        return ""
+
+    async def store_reflexion(self, task: str, action: str, failure_reason: str, correction: str,
+                              component: str = "unknown", confidence: float = 0.7):
+        await self._wait_init()
+        try:
+            embedding = await self.embedder.embed(task)
+            await self.client.upsert(
+                collection_name=self.collection,
+                points=[
+                    PointStruct(
+                        id=str(uuid.uuid4()),
+                        vector=embedding,
+                        payload={
+                            "task": task,
+                            "action": action,
+                            "failure_reason": failure_reason,
+                            "correction": correction,
+                            "component": component,
+                            "timestamp": time.time(),
+                            "confidence": confidence,
+                        }
+                    )
+                ],
+                wait=True
+            )
+            _record_rule_to_agents_md(component, correction, confidence)
+        except Exception as e:
+            logger.error("Failed to store reflexion: %s", e)
+
+_service = None
+def get_reflection_service() -> ReflectionService:
+    global _service
+    if _service is None:
+        _service = ReflectionService()
+    return _service
+
+def get_latest_failure(filepath: Path) -> dict | None:
+    chunk_size = 4096
+    with open(filepath, 'rb') as f:
+        f.seek(0, os.SEEK_END)
+        file_size = f.tell()
+        position = file_size
+        buffer = b''
+        
+        while position > 0:
+            read_size = min(chunk_size, position)
+            position -= read_size
+            f.seek(position)
+            chunk = f.read(read_size)
+            buffer = chunk + buffer
+            
+            lines = buffer.split(b'\n')
+            if position > 0:
+                buffer = lines.pop(0)
+            
+            for line in reversed(lines):
+                if not line.strip():
+                    continue
+                try:
+                    entry = json.loads(line.decode('utf-8'))
+                    err = entry.get("error")
+                    if err is not None and err != "" and str(err).lower() != "null":
+                        return entry
+                except Exception:
+                    pass
+    return None
+
+async def _distill(distiller_content: str) -> str:
+    """Run the distiller LLM call. Cloud DeepSeek V4 flash first (fast, no
+    thinking tokens), local qwen3.5-9b fallback (needs /no_think system lead +
+    roomy token budget so reasoning + content both fit at ~5 tok/s)."""
+    attempts = []
+    if os.environ.get("OPENROUTER_API_KEY"):
+        attempts.append({
+            "model": CLOUD_MODEL,
+            "messages": [{"role": "user", "content": distiller_content}],
+            "max_tokens": DISTILLER_MAX_TOKENS_CLOUD,
+            "timeout": 90.0,
+        })
+    attempts.append({
+        "model": LOCAL_MODEL,
+        "messages": [
+            {"role": "system", "content": "/no_think\n\n"},
+            {"role": "user", "content": distiller_content},
+        ],
+        "api_base": "http://127.0.0.1:8080/v1",
+        "api_key": "llama",
+        "custom_llm_provider": "openai",
+        "max_tokens": DISTILLER_MAX_TOKENS_LOCAL,
+        "timeout": 900.0,
+    })
+
+    last_exc = None
+    for cfg in attempts:
+        try:
+            res = await asyncio.wait_for(acompletion(**cfg), timeout=cfg["timeout"])
+            content = res.choices[0].message.content or ""
+            if content.strip():
+                return content
+            logger.warning("Distiller returned empty content from %s", cfg["model"])
+        except Exception as e:
+            last_exc = e
+            logger.warning("Distiller via %s failed: %s", cfg["model"], e)
+    if last_exc:
+        raise last_exc
+    return ""
+
+
+async def run_reflection():
+    try:
+        latest_failure = await asyncio.to_thread(get_latest_failure, DIARY_PATH)
+    except FileNotFoundError:
+        logger.info("No organism diary found. Skipping reflection.")
+        return
+    
+    if not latest_failure:
+        logger.info("No failures detected in diary.")
+        return
+        
+    task_desc = latest_failure.get("task", "Unknown Task")
+    content = latest_failure.get("content_preview", "")
+    error_msg = latest_failure.get("error")
+    component = str(latest_failure.get("component") or latest_failure.get("agent") or "unknown")
+
+    logger.info(f"Distilling failure: {error_msg}")
+    
+    distiller_content = DISTILLER_PROMPT.format(task_description=task_desc, component=component, content_preview=content, error_message=error_msg)
+    
+    try:
+        rule_full = await _distill(distiller_content)
+
+        # Parse structured reflection; fall back to extracting any rule text.
+        def _field(tag: str) -> str:
+            m = re.search(rf"<{tag}>(.*?)</{tag}>", rule_full, re.DOTALL)
+            return m.group(1).strip() if m else ""
+
+        failure_summary = _field("failure_summary")
+        root_cause = _field("root_cause")
+        next_rules = _field("next_attempt_rules")
+        do_not = _field("do_not_repeat")
+
+        # Compose the stored correction from the structured fields.
+        parts = []
+        if failure_summary:
+            parts.append(f"Failure: {failure_summary}")
+        if root_cause:
+            parts.append(f"Root cause: {root_cause}")
+        if next_rules:
+            parts.append(f"Next-attempt rules: {next_rules}")
+        if do_not:
+            parts.append(f"Do NOT repeat: {do_not}")
+        correction = " | ".join(parts) if parts else None
+
+        if not correction:
+            legacy = re.search(r"<new_rule>(.*?)</new_rule>", rule_full, re.DOTALL)
+            correction = legacy.group(1).strip() if legacy else (rule_full or "").strip()[:500]
+        if not correction:
+            logger.warning("No rule generated by distiller.")
+            return
+
+        logger.info(f"Distilled new rule: {correction}")
+
+        svc = get_reflection_service()
+        await svc.store_reflexion(task_desc, content, error_msg, correction, component=component)
+        logger.info("Successfully saved reflexion rule to Qdrant ReflexionMemory.")
+        
+    except Exception as e:
+        logger.error(f"Distiller phase failed: {e}")
+
+if __name__ == "__main__":
+    asyncio.run(run_reflection())

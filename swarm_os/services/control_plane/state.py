@@ -9,7 +9,7 @@ class StateManager:
         # outcome is now a dictionary full of awesome details!
         data = self._load()
         data['history'].append(outcome)
-        with open(self.state_file, 'w') as f:
+        with open(self.state_file, 'w', encoding='utf-8') as f:
             json.dump(data, f)
         print(f'💾 Detailed State Recorded: {outcome.get("task", "Unknown")} | Reward: {outcome.get("reward", 0):.4f}')
 
@@ -30,7 +30,7 @@ class StateManager:
     def _load(self):
         if not os.path.exists(self.state_file): return {'history': []}
         try:
-            with open(self.state_file, 'r') as f:
+            with open(self.state_file, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except json.JSONDecodeError:
             return {'history': []}

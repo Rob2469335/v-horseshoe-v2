@@ -16,6 +16,10 @@ class HealingService:
         self.rollback = rollback or RollbackManager()
         # BUG FIX: Lock to prevent concurrent run_once() and heal() racing on the same component
         self._recovery_lock = asyncio.Lock()
+        # BUG FIX: Track real heal outcomes instead of fabricating metrics
+        self._heals_total = 0
+        self._heals_success = 0
+        self._last_heal_success = None
 
     async def status(self):
         report = await self.detector.check()
@@ -25,13 +29,20 @@ class HealingService:
             "recovery_readiness": 100 if not active else max(0, 100 - (25 * len(active))),
             "active_anomalies": len(self.tracker.list()),
             "rollback_paths": 1 if self.rollback.latest_snapshot() is not None else 0,
-            "last_heal_success": True,
-            "heals_today": 0,
+            "last_heal_success": self._last_heal_success,
+            "heals_today": self._heals_success,
+            "heals_total": self._heals_total,
             "checks": checks,
             "health_score": report.get("health_score", 100),
             "signals": report.get("signals", []),
             "anomalies": self.tracker.list(),
         }
+
+    def _record_heal(self, success: bool):
+        self._heals_total += 1
+        if success:
+            self._heals_success += 1
+        self._last_heal_success = success
 
     async def run_once(self):
         logger.info("Running routine healing check.")
@@ -56,9 +67,12 @@ class HealingService:
                 anomaly = self.tracker.record(name, 'warning', f'{name} check failed', {})
                 async with self._recovery_lock:
                     result = await self.engine.recover(anomaly)
-                healed.append({'service': name, 'ok': result.get('ok', False), 'detail': result.get('message', result.get('error', ''))})
+                ok = result.get('ok', False)
+                self._record_heal(ok)
+                healed.append({'service': name, 'ok': ok, 'detail': result.get('message', result.get('error', ''))})
             except Exception as exc:
                 logger.error(f"Recovery failed for {name}: {exc}", exc_info=True)
+                self._record_heal(False)
                 healed.append({'service': name, 'ok': False, 'detail': str(exc)})
 
         return {
@@ -77,6 +91,7 @@ class HealingService:
             result = await self.engine.recover(anomaly)
 
         success = bool(result.get("ok", False))
+        self._record_heal(success)
         if success:
             logger.info(f"Successfully healed {source}.")
         else:

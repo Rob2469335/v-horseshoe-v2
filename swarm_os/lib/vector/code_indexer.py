@@ -17,8 +17,8 @@ logger = logging.getLogger(__name__)
 
 COLLECTION = "codebase"
 EMBED_MODEL = "nomic-embed-text:latest"
-EMBED_DIM = 768
-OLLAMA_URL = "http://127.0.0.1:11434"
+EMBED_URL = "http://127.0.0.1:8081/v1"
+OLLAMA_URL = EMBED_URL  # Backward compatibility alias
 QDRANT_URL = "http://127.0.0.1:6333"
 
 INCLUDE_EXTS = {".py", ".ts", ".tsx", ".js", ".jsx", ".md", ".yaml", ".toml"}
@@ -27,10 +27,40 @@ CHUNK_LINES = 30
 OVERLAP_LINES = 10
 
 
+def read_text_auto(file_path: Path) -> str:
+    """Reads a file's text, automatically detecting UTF-16 (LE/BE BOM or null-byte heuristic) and UTF-8."""
+    try:
+        raw = file_path.read_bytes()
+    except Exception:
+        return ""
+    if not raw:
+        return ""
+    if raw.startswith(b'\xff\xfe') or raw.startswith(b'\xfe\xff'):
+        try:
+            return raw.decode("utf-16", errors="replace").replace('\u0000', '')
+        except Exception:
+            pass
+    if raw.startswith(b'\xef\xbb\xbf'):
+        try:
+            return raw.decode("utf-8-sig", errors="replace").replace('\u0000', '')
+        except Exception:
+            pass
+    sample = raw[:1000]
+    if sample.count(b'\x00') > len(sample) * 0.15:
+        try:
+            return raw.decode("utf-16-le", errors="replace").replace('\u0000', '')
+        except Exception:
+            try:
+                return raw.decode("utf-16-be", errors="replace").replace('\u0000', '')
+            except Exception:
+                pass
+    return raw.decode("utf-8", errors="replace").replace('\u0000', '')
+
+
 def _chunk_file(path: Path) -> list[dict]:
     """Split a file into overlapping line chunks with metadata."""
     try:
-        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+        lines = read_text_auto(path).splitlines()
     except Exception as e:
         logger.error(f"Failed to read file {path}: {e}", exc_info=True)
         return []
@@ -55,18 +85,19 @@ def _chunk_file(path: Path) -> list[dict]:
 
 
 def _embed(text: str) -> list[float]:
-    """Generate embedding for text using Ollama API."""
+    """Generate embedding for text using embedding service API."""
     try:
         r = httpx.post(
-            f"{OLLAMA_URL}/api/embeddings",
-            json={"model": EMBED_MODEL, "prompt": text},
+            f"{EMBED_URL}/embeddings",
+            headers={"Authorization": "Bearer llama"},
+            json={"input": text},
             timeout=300.0,
         )
         r.raise_for_status()
         response_data = r.json()
-        if "embedding" not in response_data:
-            raise ValueError("Invalid response: 'embedding' key missing")
-        return response_data["embedding"]
+        if "data" not in response_data:
+            raise ValueError("Invalid response: 'data' key missing")
+        return response_data["data"][0].get("embedding", [0.0]*EMBED_DIM)
     except httpx.RequestError as e:
         logger.error(f"Network error during embedding: {e}", exc_info=True)
         return [0.0] * EMBED_DIM

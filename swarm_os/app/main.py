@@ -1,16 +1,28 @@
 from __future__ import annotations
 
+try:
+    import truststore
+    truststore.inject_into_ssl()
+except ImportError:
+    pass
+import swarm_os.bootstrap
+
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 
 from dotenv import load_dotenv
 load_dotenv(override=True)
 
 import os
+# Set default HTTP timeout in environment if not already set
+# read=None is critical for SSE streaming — LLM responses can take 30-120s
+os.environ.setdefault("HTTPX_DEFAULT_TIMEOUT", "300.0")
+
 # Enable SSL verification for security
 # Only disable SSL verification if explicitly requested via environment variable
 if os.environ.get("DISABLE_SSL_VERIFICATION", "").lower() in ("1", "true", "yes"):
@@ -23,6 +35,8 @@ if os.environ.get("DISABLE_SSL_VERIFICATION", "").lower() in ("1", "true", "yes"
         os.environ["REQUESTS_CA_BUNDLE"] = ""
     except Exception:
         pass
+else:
+    os.environ.setdefault("LITELLM_VERIFY_SSL", "True")
 
 
 # ---------------------------------------------------------------------------
@@ -106,6 +120,7 @@ async def lifespan(app: FastAPI):
         agent_service = AgentServiceV2(
             orchestrator=orchestrator,
             settings=settings,
+            event_store=event_store,
         )
         log.info("AgentServiceV2 ready")
     except Exception as exc:
@@ -172,6 +187,23 @@ async def lifespan(app: FastAPI):
         bg_tasks.add(t2)
         log.info("Started MemoryBridge daemons (watch_loop and start_manager_daemon)")
 
+    try:
+        from swarm_os.services.reflection_loop import run_reflection
+
+        async def _reflection_daemon(interval_seconds: float = 600.0):
+            while True:
+                try:
+                    await run_reflection()
+                except Exception as exc:
+                    log.warning(f"Reflection daemon iteration failed: {exc}")
+                await asyncio.sleep(interval_seconds)
+
+        t3 = asyncio.create_task(_reflection_daemon())
+        bg_tasks.add(t3)
+        log.info("Started Reflection daemon (ASPO rule distillation, 10-min interval)")
+    except Exception as exc:
+        log.warning(f"Reflection daemon unavailable: {exc}")
+
     log.info("RuntimeGraph mounted on app.state — all routes live")
     yield
     log.info("Swarm OS shutting down")
@@ -186,6 +218,31 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             log.warning(f"Error during background task shutdown: {e}")
 
+    # Close shared httpx clients to release connection pools
+    try:
+        from swarm_os.core.orchestrator import close_global_client as close_orchestrator_client
+        await close_orchestrator_client()
+    except Exception as exc:
+        log.warning(f"Error closing orchestrator httpx client: {exc}")
+
+    try:
+        from swarm_os.services.llm_client import close_global_client as close_llm_client
+        await close_llm_client()
+    except Exception as exc:
+        log.warning(f"Error closing llm_client httpx client: {exc}")
+
+    if orchestrator:
+        if getattr(orchestrator, "llm", None) is not None:
+            try:
+                await orchestrator.llm.aclose()
+            except Exception as exc:
+                log.warning(f"Error closing LlamaClient: {exc}")
+        if getattr(orchestrator, "bridge", None) is not None:
+            try:
+                await orchestrator.bridge.close()
+            except Exception as exc:
+                log.warning(f"Error closing MemoryBridge: {exc}")
+
 
 # ---------------------------------------------------------------------------
 # App
@@ -193,6 +250,8 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Swarm OS", lifespan=lifespan)
+
+    app.add_middleware(GZipMiddleware, minimum_size=1000)
 
     app.add_middleware(
         CORSMiddleware,

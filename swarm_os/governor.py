@@ -1,4 +1,4 @@
-def review_proposal(proposed_logic: str) -> bool:
+def review_proposal(_proposed_logic: str) -> bool:
     """
     Acts as the final human-sanctioned gatekeeper for swarm self-evolution.
     """

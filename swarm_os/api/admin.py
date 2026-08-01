@@ -43,17 +43,26 @@ def _latest_snapshot_payload(request: Request) -> dict:
     latest = repo.latest()
     snapshots = repo.list()
 
-    base = build_status(None, None)
-    
     population = []
+    generation = None
     if latest:
         try:
             import json
-            with open(latest, 'r') as f:
+            with open(latest, 'r', encoding='utf-8') as f:
                 data = json.load(f)
                 population = data.get("organisms", [])
+                # BUG FIX: derive generation from the snapshot metadata so the
+                # dashboard doesn't permanently show "Generation 0".
+                if "generation" in data:
+                    generation = data["generation"]
+                elif "current_generation" in data:
+                    generation = data["current_generation"]
+                elif isinstance(generation, str):
+                    generation = int(generation)
         except Exception as e:
             log.error(f"Failed to load snapshot {latest}: {e}")
+
+    base = build_status(generation, None)
 
     return {
         **base,
@@ -110,6 +119,7 @@ def get_generation(request: Request) -> dict:
     payload = _latest_snapshot_payload(request)
     return {
         "scenario": payload.get("scenario"),
+        "generation": payload.get("generation"),
         "latest_snapshot": payload["latest_snapshot"],
         "current_run": payload["current_run"],
         "population": payload["population"],
@@ -176,7 +186,8 @@ async def admin_replay(request: Request) -> dict:
             if healing:
                 detector = getattr(healing, "detector", None)
                 if detector:
-                    report = detector.status() if hasattr(detector, "status") else {}
+                    # BUG FIX: FailureDetector has no .status() — use check_sync() instead
+                    report = detector.check_sync() if hasattr(detector, "check_sync") else (detector.status() if hasattr(detector, "status") else {})
                     latest_health_score = report.get("health_score", report.get("recovery_readiness"))
                     healing_attempts = report.get("healing_attempts", 0)
                     last_action = report.get("last_action")
@@ -204,7 +215,7 @@ async def run_heal_cycle(request: Request) -> dict:
             return {"recovery_readiness": 0, "active_anomalies": 0, "last_heal_success": False,
                     "checks": {}, "error": "healing service not available"}
         result = await healing.run_once()
-        checks = result.get("checks", {"orchestrator": {"ok": True}, "qdrant": {"ok": True}, "ollama": {"ok": True}, "api": {"ok": True}})
+        checks = result.get("checks", {"orchestrator": {"ok": True}, "qdrant": {"ok": True}, "llamacpp": {"ok": True}, "api": {"ok": True}})
         return {
             "recovery_readiness": result.get("recovery_readiness", result.get("health_score", 100)),
             "active_anomalies": result.get("active_anomalies", 0),
@@ -224,7 +235,7 @@ async def evaluate_health(request: Request) -> dict:
         raise HTTPException(status_code=503, detail="Runtime not initialised")
     try:
         healing = getattr(runtime, "healing", None)
-        checks = {"orchestrator": {"ok": True}, "qdrant": {"ok": True}, "ollama": {"ok": True}, "api": {"ok": True}}
+        checks = {"orchestrator": {"ok": True}, "qdrant": {"ok": True}, "llamacpp": {"ok": True}, "api": {"ok": True}}
         readiness = 100
         anomalies = 0
         if healing:
@@ -234,8 +245,8 @@ async def evaluate_health(request: Request) -> dict:
                 if hasattr(detector, "status"):
                     report = detector.status()
                 elif hasattr(detector, "check"):
-                    chk = detector.check()
-                    report = await chk if inspect.iscoroutine(chk) else chk
+                    from swarm_os.healing.failure_detector import run_coro_sync
+                    report = run_coro_sync(detector.check())
                 else:
                     report = {}
                 readiness = report.get("recovery_readiness", report.get("health_score", 100))

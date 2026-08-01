@@ -99,10 +99,11 @@ class Organism:
         # Digital Pheromones: Update tool weights based on execution success
         try:
             from swarm_os.services.tool_registry import get_tool_registry
+            import asyncio
             registry = get_tool_registry()
             success = not bool(error)
             for tool in tools_used:
-                registry.update_tool_pheromone(tool, success=success)
+                asyncio.run(registry.update_tool_pheromone(tool, success=success))
         except Exception as e:
             log.warning("Pheromone update failed: %s", e)
 

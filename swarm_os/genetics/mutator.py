@@ -6,7 +6,7 @@ def normalize(affinities: dict) -> dict:
         return {k: 1.0/len(affinities) for k in affinities}
     return {k: v / total for k, v in affinities.items()}
 
-def get_mutation_rate(cycle_count: int, fitness_trend: float) -> float:
+def get_mutation_rate(_cycle_count: int, fitness_trend: float) -> float:
     base_rate = 0.05
     return 0.25 if fitness_trend < 0.2 else base_rate
 

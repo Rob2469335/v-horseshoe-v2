@@ -26,8 +26,8 @@ async def test_router_successfully_dispatches_vscode_automation():
     router = CapabilityRouter()
     req = VSCodeAutomationRequest(command="list_files")
     response = await router.execute("vscode_automation", req)
-    assert response.status == "executed"
-    assert "models.py" in response.stdout
+    assert response["status"] == "executed"
+    assert "models.py" in response["stdout"]
 
 def test_router_list_capabilities():
     router = CapabilityRouter()

@@ -9,7 +9,7 @@ def log_stats():
     """Continuously logs CPU and RAM usage to stats.txt."""
     print(f"Monitoring system metrics. Logging to {STATS_FILE}...")
     
-    with open(STATS_FILE, "a") as f:
+    with open(STATS_FILE, "a", encoding='utf-8') as f:
         f.write(f"--- System Monitor Started at {datetime.now().isoformat()} ---\n")
     
     try:
@@ -19,7 +19,7 @@ def log_stats():
             
             log_line = f"[{datetime.now().isoformat()}] CPU: {cpu}% | RAM: {ram.percent}% ({ram.used / (1024**3):.2f}GB / {ram.total / (1024**3):.2f}GB)\n"
             
-            with open(STATS_FILE, "a") as f:
+            with open(STATS_FILE, "a", encoding='utf-8') as f:
                 f.write(log_line)
                 
             time.sleep(4.0)  # Sleep for 4 seconds, plus the 1 second interval = 5 seconds

@@ -47,12 +47,16 @@ async def playwright_handler(params: Dict[str, Any], trace_hook=None) -> Dict[st
                 title = await page.title()
                 content = await page.content()
                 
+                import markdownify
+                md_content = markdownify.markdownify(content, heading_style="ATX").strip()
+                
                 result = {
                     "ok": True,
                     "url": page.url,
                     "title": title,
-                    "content_summary": content[:1000] + "..." if len(content) > 1000 else content,
-                    "full_content_length": len(content)
+                    "content_summary": md_content[:2000] + "..." if len(md_content) > 2000 else md_content,
+                    "full_content_length": len(md_content),
+                    "full_content": md_content
                 }
                 
                 if trace_hook:
@@ -86,7 +90,9 @@ async def playwright_handler(params: Dict[str, Any], trace_hook=None) -> Dict[st
                     return {"ok": False, "error": "URL is required for extract_text operation"}
                 
                 await page.goto(url, wait_until="networkidle", timeout=30000)
-                text = await page.evaluate("() => document.body.innerText")
+                html = await page.content()
+                import markdownify
+                text = markdownify.markdownify(html, heading_style="ATX").strip()
                 
                 await browser.close()
                 return {

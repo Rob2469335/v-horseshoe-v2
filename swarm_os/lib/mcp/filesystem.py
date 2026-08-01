@@ -10,8 +10,28 @@ async def filesystem_handler(params: Dict[str, Any], root: Path, trace_hook=None
     """
     Handles filesystem operations within a sandboxed root.
     """
-    operation = params.get("operation", "read")
-    requested = str(params.get("path", ""))
+    op_raw = str(params.get("operation", "read")).lower().strip()
+    if op_raw in ("read", "read_file", "read_all", "read_files", "read_multiple", "view", "view_file", "cat", "get", "get_file"):
+        operation = "read"
+    elif op_raw in ("write", "write_file", "create", "create_file", "save", "put"):
+        operation = "write"
+    elif op_raw in ("patch", "edit", "update", "modify", "replace", "replace_file_content", "edit_file"):
+        operation = "patch"
+    elif op_raw in ("list", "list_files", "list_dir", "ls", "dir", "directory", "list_directory", "scandir", "scan_dir", "walk"):
+        operation = "list"
+    elif op_raw in ("search", "grep", "find", "grep_search", "search_files"):
+        operation = "search"
+    else:
+        operation = op_raw
+
+    path_param = params.get("path", params.get("paths", ""))
+    if isinstance(path_param, list):
+        if len(path_param) == 1:
+            requested = str(path_param[0])
+        else:
+            requested = path_param
+    else:
+        requested = str(path_param)
     
     # Resolve and force to be absolute paths
     root = root.resolve()
@@ -35,18 +55,75 @@ async def filesystem_handler(params: Dict[str, Any], root: Path, trace_hook=None
             raise ValueError(f"Path is outside sandbox: {requested_path_str}") from e
 
     try:
-        target_path = resolve_in_sandbox(requested)
+        target_path = resolve_in_sandbox(requested[0] if isinstance(requested, list) else requested)
 
         if operation == "read":
-            if not target_path.exists():
-                return {"ok": False, "error": f"File not found: {requested}", "path": str(target_path)}
-            if not target_path.is_file():
-                return {"ok": False, "error": f"Not a file: {requested}", "path": str(target_path)}
+            def _read_file_capped(file_path: Path, max_chars: int = 50000) -> str:
+                try:
+                    raw_bytes = file_path.read_bytes()
+                    text = raw_bytes.decode("utf-8", errors="replace")
+                    if len(text) > max_chars:
+                        text = text[:max_chars] + f"\n... [TRUNCATED to {max_chars} chars] ..."
+                    return text
+                except Exception as ex:
+                    return f"(ERROR reading {file_path}: {ex})"
 
-            content = target_path.read_text(encoding="utf-8", errors="replace")
+            def _read_path_entry(p_str: str, max_chars: int = 50000) -> tuple[list[str], list[str]]:
+                try:
+                    t_path = resolve_in_sandbox(p_str)
+                    if t_path.exists() and t_path.is_file():
+                        return ([f"=== FILE: {p_str} ===\n{_read_file_capped(t_path, max_chars)}"], [str(t_path)])
+                    elif t_path.exists() and t_path.is_dir():
+                        res_c = []
+                        paths_r = []
+                        count = 0
+                        for fp in sorted(t_path.rglob("*")):
+                            if count >= 15:
+                                res_c.append(f"=== DIRECTORY {p_str} TRUNCATED AT 15 FILES ===")
+                                break
+                            if fp.is_file() and not any(x in fp.parts for x in (".venv", ".git", "__pycache__", "node_modules", ".ruff_cache")) and fp.suffix.lower() not in (".gguf", ".wav", ".pkl", ".zip", ".pyc", ".png", ".jpg", ".ico"):
+                                res_c.append(f"=== FILE: {fp.relative_to(root).as_posix()} ===\n{_read_file_capped(fp, 25000)}")
+                                paths_r.append(str(fp))
+                                count += 1
+                        return (res_c, paths_r)
+                    else:
+                        return ([f"=== FILE: {p_str} (NOT FOUND) ==="], [])
+                except Exception as ex:
+                    return ([f"=== FILE: {p_str} (ERROR: {ex}) ==="], [])
+
+            if isinstance(requested, list):
+                results_content = []
+                paths_read = []
+                for p in requested:
+                    c_list, p_list = _read_path_entry(str(p))
+                    results_content.extend(c_list)
+                    paths_read.extend(p_list)
+                combined = "\n\n".join(results_content)
+                if trace_hook:
+                    trace_hook("filesystem_read", {"ok": True, "paths": paths_read})
+                return {"ok": True, "content": combined, "paths": paths_read}
+
+            if not target_path.exists():
+                # Fallback: if bare filename was passed, search for it across the project root
+                req_str = str(requested)
+                if "/" not in req_str and "\\" not in req_str:
+                    matches = [fp for fp in root.rglob(req_str) if fp.is_file() and not any(part in (".venv", ".git", "__pycache__", "node_modules") for part in fp.parts)]
+                    if matches:
+                        target_path = matches[0]
+                if not target_path.exists():
+                    return {"ok": False, "error": f"File not found: {requested}", "path": str(target_path)}
+
+            if target_path.is_dir():
+                c_list, p_list = _read_path_entry(str(requested))
+                combined = "\n\n".join(c_list)
+                if trace_hook:
+                    trace_hook("filesystem_read", {"ok": True, "paths": p_list})
+                return {"ok": True, "content": combined, "paths": p_list}
+
+            content = _read_file_capped(target_path, 50000)
             if trace_hook:
                 trace_hook("filesystem_read", {"ok": True, "path": str(target_path)})
-            return {"ok": True, "content": content}
+            return {"ok": True, "content": content, "path": str(target_path)}
         
         elif operation == "write":
             content = str(params.get("content", ""))
@@ -106,11 +183,10 @@ async def filesystem_handler(params: Dict[str, Any], root: Path, trace_hook=None
                     if item.is_file() and item.stat().st_size > max_file_size:
                         continue
                     # END NEW FILTERS
-                    entries.append({
-                        "name": str(item.relative_to(target_path).as_posix()) if recursive else item.name,
-                        "type": "file" if item.is_file() else "dir",
-                        "size": item.stat().st_size if item.is_file() else 0
-                    })
+                    name = str(item.relative_to(root).as_posix())
+                    if item.is_dir():
+                        name += "/"
+                    entries.append(name)
             except Exception as e:
                 return {"ok": False, "error": f"Error listing directory: {e}", "path": str(target_path)}
             return {"ok": True, "entries": entries}
@@ -150,6 +226,21 @@ async def filesystem_handler(params: Dict[str, Any], root: Path, trace_hook=None
                             search_file(p)
             
             return {"ok": True, "matches": matches}
+
+        elif operation in ("scan_dir", "scandir", "list_dir", "walk"):
+            # Alias: agents sometimes hallucinate this name; treat as list
+            operation = "list"
+            if not target_path.exists():
+                return {"ok": False, "error": f"Directory not found: {requested}", "path": str(target_path)}
+            if not target_path.is_dir():
+                return {"ok": False, "error": f"Not a directory: {requested}", "path": str(target_path)}
+            entries = []
+            for p in target_path.iterdir():
+                try:
+                    entries.append({"name": p.name, "type": "dir" if p.is_dir() else "file", "size": p.stat().st_size if p.is_file() else 0})
+                except Exception:
+                    continue
+            return {"ok": True, "entries": entries, "note": "scan_dir aliased to list"}
 
         return {"ok": False, "error": f"Unknown operation: {operation}"}
 

@@ -63,15 +63,12 @@ class MCPRegistry:
             from swarm_os.services.embedding_service import EmbeddingService
             from swarm_os.services.vector_store import VectorStore
 
-            # Prevent blocking the async event loop with sync operations during initialization and query
-            def _do_recall():
-                if not getattr(self, '_qdrant', None):
-                    self._embedding = EmbeddingService()
-                    self._qdrant = VectorStore(collection_name=collection)
-                vector = self._embedding.embed(query)
-                return self._qdrant.search(query_vector=vector, limit=top_k)
+            if not getattr(self, '_qdrant', None):
+                self._embedding = EmbeddingService()
+                self._qdrant = VectorStore(collection_name=collection)
+            vector = await self._embedding.embed(query)
+            results = await self._qdrant.search(query_vector=vector, limit=top_k)
 
-            results = await asyncio.to_thread(_do_recall)
         except Exception as exc:
             logger.warning("qdrant_recall failed: %s", exc)
             results = []
@@ -118,18 +115,18 @@ class MCPRegistry:
         return [
             {
                 "name": "filesystem",
-                "description": "Read, write, list, patch, or grep files in the local sandboxed workspace.",
+                "description": "Read (or read_all/read_file), write, list, patch, or grep files in the local sandboxed workspace.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "operation": {
                             "type": "string",
-                            "enum": ["read", "write", "patch", "list", "grep"],
-                            "description": "The filesystem operation to perform."
+                            "enum": ["read", "read_file", "read_all", "write", "patch", "list", "grep"],
+                            "description": "The filesystem operation to perform ('read', 'read_file', or 'read_all' read file contents)."
                         },
                         "path": {
                             "type": "string",
-                            "description": "Relative path to file or directory within the workspace sandbox."
+                            "description": "Relative path to file or directory from project root within the workspace sandbox (e.g. 'runtime_v2/analyze_codebase.py')."
                         },
                         "content": {
                             "type": "string",

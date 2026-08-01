@@ -101,8 +101,36 @@ def list_agents(request: Request):
         {
             "id": "coder",
             "role": "coder",
-            "description": "Code-writing specialist focusing on high-quality modifications. (Fallback Mode) CRITICAL INSTRUCTION: You MUST use a read tool (e.g. read_file, grep) to understand the target files BEFORE you attempt to modify or create them. Do not hallucinate file contents.",
+            "description": "Code-writing specialist focusing on high-quality modifications. (Fallback Mode)",
             "model_role": "fast",
+            "config": {}
+        },
+        {
+            "id": "researcher",
+            "role": "researcher",
+            "description": "Gathers context via web and codebase search. (Fallback Mode)",
+            "model_role": "fast",
+            "config": {}
+        },
+        {
+            "id": "debugger",
+            "role": "debugger",
+            "description": "Diagnoses failures and routes fixes. (Fallback Mode)",
+            "model_role": "coding",
+            "config": {}
+        },
+        {
+            "id": "tool-maker",
+            "role": "tool-maker",
+            "description": "Creates custom MCP servers in Python. (Fallback Mode)",
+            "model_role": "coding",
+            "config": {}
+        },
+        {
+            "id": "code_analyzer",
+            "role": "code_analyzer",
+            "description": "Systematically finds bugs and proposes improvements. (Fallback Mode)",
+            "model_role": "reasoning",
             "config": {}
         }
     ]
@@ -134,11 +162,11 @@ async def step_agent(agent_id: str, payload: AgentStepPayload, service=Depends(g
         # Long-running agents can block this connection for minutes with no response to the client.
         # Use the streaming endpoint for real-time feedback; this endpoint is for quick steps only.
         try:
-            async with asyncio.timeout(120):
+            async with asyncio.timeout(300):
                 async for chunk in service.step_agent_stream(agent_id, payload.prompt, payload.history or []):
                     chunks.append(chunk)
         except asyncio.TimeoutError:
-            raise HTTPException(status_code=504, detail="Agent step timed out after 120s — use the /stream endpoint for long-running tasks")
+            raise HTTPException(status_code=504, detail="Agent step timed out after 300s — use the /stream endpoint for long-running tasks")
         return chunks
     except HTTPException:
         raise

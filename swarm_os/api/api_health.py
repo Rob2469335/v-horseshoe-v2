@@ -14,7 +14,7 @@ async def health():
         "status":      "ok",
         "app":         s.app_name,
         "version":     "2.0.0",
-        "ollama":      s.ollama_base_url,
+        "llamacpp":      s.llamacpp_base_url,
         "environment": s.environment,
     }
 

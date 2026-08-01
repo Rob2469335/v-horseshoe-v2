@@ -13,8 +13,8 @@ class ModelsHandler:
         return {
             "status": "success",
             "supported_roles": ["fast", "reasoning", "coding", "vision", "embedding", "reranker"],
-            "primary_vision_models": ["qwen3-vl:8b", "moondream:latest"],
-            "default_fast_model": "qwen2.5:7b-instruct"
+            "primary_vision_models": ["moondream:latest", "moondream:latest"],
+            "default_fast_model": "qwen3.5-9b"
         }
 
 class ChatSearchRequest(BaseModel):

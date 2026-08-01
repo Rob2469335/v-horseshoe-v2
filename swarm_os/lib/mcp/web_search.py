@@ -5,6 +5,20 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+# UPGRADE: pooled client (avoids fresh TLS/connection per provider) + SSL verify
+# enabled (was verify=False on every call — a security issue).
+_client: httpx.AsyncClient | None = None
+
+
+def _get_client() -> httpx.AsyncClient:
+    global _client
+    if _client is None or _client.is_closed:
+        _client = httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=5.0, read=20.0, write=20.0, pool=10.0),
+        )
+    return _client
+
+
 async def web_search_handler(params: Dict[str, Any], trace_hook=None) -> Dict[str, Any]:
     query = params.get("query", "")
     max_results = int(params.get("max_results", 5))
@@ -28,11 +42,12 @@ async def web_search_handler(params: Dict[str, Any], trace_hook=None) -> Dict[st
     exa_key     = "" if exa_key.startswith("your_")     else exa_key
     serpapi_key = "" if serpapi_key.startswith("your_") else serpapi_key
 
+    client = _get_client()
+
     try:
         if tavily_key:
-            async with httpx.AsyncClient(timeout=20.0) as c:
-                r = await c.post("https://api.tavily.com/search",
-                    json={"api_key": tavily_key, "query": query, "max_results": max_results})
+            r = await client.post("https://api.tavily.com/search",
+                json={"api_key": tavily_key, "query": query, "max_results": max_results})
             if r.status_code < 400:
                 items = r.json().get("results", [])[:max_results]
                 return {"ok": True, "provider": "tavily", "query": query,
@@ -41,10 +56,9 @@ async def web_search_handler(params: Dict[str, Any], trace_hook=None) -> Dict[st
             logger.warning("Tavily %s, trying next", r.status_code)
 
         if serper_key:
-            async with httpx.AsyncClient(timeout=20.0) as c:
-                r = await c.post("https://google.serper.dev/search",
-                    headers={"X-API-KEY": serper_key, "Content-Type": "application/json"},
-                    json={"q": query, "num": max_results})
+            r = await client.post("https://google.serper.dev/search",
+                headers={"X-API-KEY": serper_key, "Content-Type": "application/json"},
+                json={"q": query, "num": max_results})
             if r.status_code < 400:
                 items = r.json().get("organic", [])[:max_results]
                 return {"ok": True, "provider": "serper", "query": query,
@@ -53,10 +67,9 @@ async def web_search_handler(params: Dict[str, Any], trace_hook=None) -> Dict[st
             logger.warning("Serper %s, trying next", r.status_code)
 
         if brave_key:
-            async with httpx.AsyncClient(timeout=20.0) as c:
-                r = await c.get("https://api.search.brave.com/res/v1/web/search",
-                    headers={"Accept": "application/json", "X-Subscription-Token": brave_key},
-                    params={"q": query, "count": max_results})
+            r = await client.get("https://api.search.brave.com/res/v1/web/search",
+                headers={"Accept": "application/json", "X-Subscription-Token": brave_key},
+                params={"q": query, "count": max_results})
             if r.status_code < 400:
                 items = r.json().get("web", {}).get("results", [])[:max_results]
                 return {"ok": True, "provider": "brave", "query": query,
@@ -65,10 +78,9 @@ async def web_search_handler(params: Dict[str, Any], trace_hook=None) -> Dict[st
             logger.warning("Brave %s, trying next", r.status_code)
 
         if exa_key:
-            async with httpx.AsyncClient(timeout=20.0) as c:
-                r = await c.post("https://api.exa.ai/search",
-                    headers={"x-api-key": exa_key, "Content-Type": "application/json"},
-                    json={"query": query, "numResults": max_results})
+            r = await client.post("https://api.exa.ai/search",
+                headers={"x-api-key": exa_key, "Content-Type": "application/json"},
+                json={"query": query, "numResults": max_results})
             if r.status_code < 400:
                 items = r.json().get("results", [])[:max_results]
                 return {"ok": True, "provider": "exa", "query": query,
@@ -77,9 +89,8 @@ async def web_search_handler(params: Dict[str, Any], trace_hook=None) -> Dict[st
             logger.warning("Exa %s, trying next", r.status_code)
 
         if serpapi_key:
-            async with httpx.AsyncClient(timeout=20.0) as c:
-                r = await c.get("https://serpapi.com/search",
-                    params={"q": query, "api_key": serpapi_key, "num": max_results, "engine": "google"})
+            r = await client.get("https://serpapi.com/search",
+                params={"q": query, "api_key": serpapi_key, "num": max_results, "engine": "google"})
             if r.status_code < 400:
                 items = r.json().get("organic_results", [])[:max_results]
                 return {"ok": True, "provider": "serpapi", "query": query,

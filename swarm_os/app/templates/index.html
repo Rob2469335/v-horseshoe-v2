@@ -1207,8 +1207,8 @@ Output will appear here…
           <input class="input-field" id="cfg-swarm" value="http://localhost:11436">
         </div>
         <div class="evo-param">
-          <div class="evo-param-label">Ollama URL</div>
-          <input class="input-field" id="cfg-ollama" value="http://localhost:11434">
+          <div class="evo-param-label">llama.cpp URL</div>
+          <input class="input-field" id="cfg-llamacpp" value="http://localhost:8080">
         </div>
         <div class="input-row" style="margin-top:16px">
           <div class="btn primary" onclick="saveSettings()">Save Settings</div>
@@ -1320,7 +1320,7 @@ async function loadStatus() {
     setStatLine('status-lines',
       `<div><span style="color:var(--text3)">HEALTH  </span> <span style="color:var(--green)">● Online</span></div>` +
       `<div><span style="color:var(--text3)">ENV     </span> <span style="color:var(--text)">${s.environment||'dev'}</span></div>` +
-      `<div><span style="color:var(--text3)">OLLAMA  </span> <span style="${s.ollama_reachable?'color:var(--green)':'color:var(--red)'}">● ${s.ollama_reachable?'Reachable':'Offline'}</span></div>` +
+      `<div><span style="color:var(--text3)">LLAMA.CPP </span> <span style="${(s.llamacpp_reachable || s.ollama_reachable)?'color:var(--green)':'color:var(--red)'}">● ${(s.llamacpp_reachable || s.ollama_reachable)?'Reachable':'Offline'}</span></div>` +
       `<div><span style="color:var(--text3)">EVENTS  </span> <span style="color:var(--text)">${s.event_count}</span></div>` +
       `<div><span style="color:var(--text3)">API     </span> <span style="color:var(--text)">${API}</span></div>`
     );
@@ -1755,7 +1755,7 @@ async function loadSysInfo() {
     document.getElementById('sys-info').innerHTML =
       `<div><span style="color:var(--text3)">APP      </span> ${s.app||'v-Horseshoe v2'}</div>` +
       `<div><span style="color:var(--text3)">ENV      </span> ${s.environment||'dev'}</div>` +
-      `<div><span style="color:var(--text3)">OLLAMA   </span> ${s.ollama_base_url||'—'}</div>` +
+      `<div><span style="color:var(--text3)">LLAMACPP </span> ${s.llamacpp_base_url||'-'}</div>` +
       `<div><span style="color:var(--text3)">EVENTS   </span> ${s.event_count||0}</div>` +
       `<div><span style="color:var(--text3)">EVENTS_PATH </span> ${s.events_path||'—'}</div>`;
   } catch(e) {

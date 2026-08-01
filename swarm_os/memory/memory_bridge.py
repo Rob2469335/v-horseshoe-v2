@@ -8,57 +8,24 @@ import math
 import time
 import uuid
 from collections import deque
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
-import networkx as nx
 
 from swarm_os.services.embedding_service import EmbeddingService
 from swarm_os.services.vector_store import VectorStore
+from swarm_os.repositories.event_log_repo import EventLogRepository
+from swarm_os.repositories.graph_repo import GraphRepository
+from swarm_os.services.memory_daemon import MemoryDaemon
+from swarm_os.memory._memory_bridge_base import (
+    CHUNK_SIZE, SESSION_WINDOW, DEDUP_WINDOW,
+    LLAMA_GEN, LLAMA_EMB, SUM_MODEL, EMBED_MODEL, VECTOR_SIZE,
+    DECAY, FLUSH_TRIGGERS, EVENT_TYPE_KEYS,
+    Session, Bias,
+)
 
 logger = logging.getLogger(__name__)
-
-# ============================================================
-# MEMORY BRIDGE v12 (FINAL SWARM CORE)
-# ============================================================
-
-CHUNK_SIZE = 12
-SESSION_WINDOW = 40
-DEDUP_WINDOW = 300
-
-OLLAMA = "http://localhost:11434"
-SUM_MODEL = "phi4-mini:latest"
-EMBED_MODEL = "nomic-embed-text:latest"
-VECTOR_SIZE = 768
-
-WATERMARK = Path("logs/.memory_bridge_offset.json")
-STATE = Path("logs/.memory_bridge_state.json")
-
-DECAY = 180.0
-
-FLUSH_TRIGGERS = {"TASK_COMPLETE", "record_failure", "AGENT_ERROR"}
-EVENT_TYPE_KEYS = ("event_type", "type", "action", "kind")
-
-
-@dataclass
-class Session:
-    id: str
-    events: List[Dict[str, Any]] = field(default_factory=list)
-    models: List[str] = field(default_factory=list)
-    outcomes: List[str] = field(default_factory=list)
-    types: List[str] = field(default_factory=list)
-    tasks: List[str] = field(default_factory=list)
-
-
-@dataclass
-class Bias:
-    model: str
-    event_type: str
-    failure_rate: float
-    confidence: float
-    weight: float
 
 
 class MemoryBridge:
@@ -69,7 +36,14 @@ class MemoryBridge:
         vector_store: Optional[VectorStore] = None,
         embedding_svc: Optional[EmbeddingService] = None,
     ) -> None:
-        self.path = Path(event_log_path)
+        self.event_repo = EventLogRepository(
+            event_log_path=event_log_path,
+            watermark_path="logs/.memory_bridge_offset.json",
+            state_path="logs/.memory_bridge_state.json"
+        )
+        self.graph_repo = GraphRepository(
+            graph_path="logs/memory_graph.graphml"
+        )
 
         self.vs = vector_store or VectorStore(
             collection_name="swarm_memory",
@@ -78,38 +52,47 @@ class MemoryBridge:
         )
 
         self.emb = embedding_svc or EmbeddingService(
-            base_url=OLLAMA,
+            base_url=LLAMA_EMB,
             model=EMBED_MODEL,
         )
 
-        self.http = httpx.AsyncClient(timeout=120.0)
+        self.http = httpx.AsyncClient(timeout=120.0, headers={"Authorization": "Bearer llama"})
 
-        self.offset = self._load_offset()
-        self.state = self._load_state()
-
-        self.graph_path = Path("logs/memory_graph.graphml")
-        self.graph = nx.DiGraph()
-        self._load_graph()
+        self.offset = self.event_repo.load_offset()
+        self.state = self.event_repo.load_state()
 
         self.session = Session(id=str(uuid.uuid4()))
 
         self.lock_embed = asyncio.Lock()
         self.lock_vector = asyncio.Lock()
-        self.graph_lock = asyncio.Lock()
 
         self.recent_hashes: deque[str] = deque(maxlen=DEDUP_WINDOW)
-        self.embedding_cache: Dict[str, list] = {}
+        # UPGRADE: track background graph tasks so they aren't GC'd mid-flight and
+        # surface exceptions instead of silently vanishing (silent memory data loss).
+        self._bg_tasks: set[asyncio.Task] = set()
+        from collections import OrderedDict
+        class LRUCache(OrderedDict):
+            def __init__(self, maxsize=1000, *args, **kwds):
+                self.maxsize = maxsize
+                super().__init__(*args, **kwds)
+            def __setitem__(self, key, value):
+                super().__setitem__(key, value)
+                if len(self) > self.maxsize:
+                    oldest = next(iter(self))
+                    del self[oldest]
+                    
+        self.embedding_cache: Dict[str, list] = LRUCache(maxsize=1000)
 
         self.policy: Dict[str, Dict[str, float]] = self.state
 
     async def ingest(self, flush_tail: bool = False) -> int:
-        events, new_offset = self._read()
+        events, new_offset = await asyncio.to_thread(self.event_repo.read_events, self.offset)
 
         if not events:
             if flush_tail and self.session.events:
                 ok = await self._flush()
                 self._reset()
-                self._save_state()
+                await asyncio.to_thread(self.event_repo.save_state, self.state)
                 return 1 if ok else 0
             return 0
 
@@ -132,15 +115,15 @@ class MemoryBridge:
             self._reset()
 
         self.offset = new_offset
-        self._save_offset()
-        self._save_state()
+        await asyncio.to_thread(self.event_repo.save_offset, self.offset)
+        await asyncio.to_thread(self.event_repo.save_state, self.state)
 
         return flushed
 
     async def watch_loop(self, interval_seconds: float = 5.0, flush_tail: bool = False) -> None:
-        # BUG FIX: Actually launch the memory manager daemon as a background task.
-        # Previously start_manager_daemon was defined but never scheduled, so archival never ran.
-        daemon_task = asyncio.create_task(self.start_manager_daemon())
+        # BUG FIX: Removed internal start_manager_daemon() spawn here — main.py already
+        # starts the consolidation daemon explicitly. Two daemons caused duplicate
+        # consolidated points and double LLM summarization cost.
         try:
             while True:
                 try:
@@ -149,36 +132,22 @@ class MemoryBridge:
                     logger.warning("ingest error: %s", exc)
                 await asyncio.sleep(interval_seconds)
         finally:
-            daemon_task.cancel()
-            try:
-                await daemon_task
-            except asyncio.CancelledError:
-                pass
             await self.close()
             
     async def start_manager_daemon(self, interval_seconds: float = 300.0) -> None:
-        """Memory Manager Daemon that actively synthesizes core memory blocks and pages out to Archival Qdrant."""
-        try:
-            while True:
-                try:
-                    # Page out memory
-                    consolidated = await self.consolidate_memories()
-                    if consolidated:
-                        logger.info("Memory Manager Daemon: Successfully synthesized core memory and paged raw logs to Archival Memory (Qdrant).")
-                    
-                    # Update graph clusters
-                    await self.cluster_graph_rag()
-                except Exception as exc:
-                    logger.warning("manager daemon error: %s", exc)
-                await asyncio.sleep(interval_seconds)
-        except asyncio.CancelledError:
-            pass
-
+        daemon = MemoryDaemon(self, interval_seconds)
+        await daemon.start()
+            
     def _add(self, event: Dict[str, Any]) -> None:
-        model = str(event.get("model") or event.get("assigned_to") or "unknown")
-        outcome = str(event.get("outcome") or event.get("status") or "")
+        # BUG FIX: Events written by agent_service_v2 use EventEnvelope, which nests
+        # model/task_id/outcome/status inside `payload`. Reading top-level keys only
+        # produced model="unknown", outcome="" and task="" for every event, so Qdrant
+        # entries carried no usable metadata and the swarm memory stayed empty.
+        pl = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        model = str(event.get("model") or pl.get("model") or event.get("assigned_to") or pl.get("assigned_to") or "unknown")
+        outcome = str(event.get("outcome") or pl.get("outcome") or event.get("status") or pl.get("status") or "")
         et = self._extract_event_type(event)
-        task = str(event.get("task_id") or event.get("goal_id") or "")
+        task = str(event.get("task_id") or pl.get("task_id") or event.get("goal_id") or pl.get("goal_id") or "")
 
         self.session.events.append(event)
         self.session.models.append(model)
@@ -194,39 +163,43 @@ class MemoryBridge:
         outcome_node = f"Outcome_{outcome}" if outcome else "Outcome_unknown"
         
         now = time.time()
-        # BUG FIX: Cast timestamp to str for safe GraphML serialization.
-        # NetworkX's GraphML writer can fail or silently corrupt float attributes
-        # on strict parsers. String serialization is universally safe.
         ts = str(now)
-        async def _mutate_graph():
-            async with self.graph_lock:
-                self.graph.add_node(session_node, type="Session")
-                self.graph.add_node(agent_node, type="Agent")
-                self.graph.add_node(task_node, type="Task")
-                self.graph.add_node(tool_node, type="Tool")
-                self.graph.add_node(outcome_node, type="Outcome")
-
-                self.graph.add_edge(agent_node, session_node, relation="PARTICIPATED_IN")
-                self.graph.add_edge(session_node, task_node, relation="ADDRESSED")
-                self.graph.add_edge(task_node, tool_node, relation="UTILIZED")
-                self.graph.add_edge(task_node, outcome_node, relation="RESULTED_IN")
-
-        asyncio.create_task(_mutate_graph())
+        
+        self._spawn(self.graph_repo.add_session_data(
+            session_node, agent_node, task_node, tool_node, outcome_node
+        ))
 
         # Epistemic Logic (Theory of Mind)
         details = str(event.get("details", "")).lower()
         if "found" in details or "discovered" in details or "learned" in details:
             fact_node = f"Fact_{hashlib.md5(details.encode()).hexdigest()[:8]}"
-            self.graph.add_node(fact_node, type="Fact", content=details)
-            self.graph.add_edge(agent_node, fact_node, relation="BELIEVES", timestamp=ts)
+            self._spawn(self.graph_repo.add_fact(
+                fact_node, agent_node, details, ts
+            ))
 
         delegated_to = event.get("delegated_to")
         if delegated_to:
             receiver_node = f"Agent_{delegated_to}"
-            self.graph.add_node(receiver_node, type="Agent")
-            self.graph.add_edge(receiver_node, agent_node, relation="KNOWS", timestamp=ts)
+            self._spawn(self.graph_repo.add_delegation(
+                receiver_node, agent_node, ts
+            ))
 
         self._update_policy(model, et, outcome)
+
+    def _spawn(self, coro) -> asyncio.Task | None:
+        """Spawn a background task with a strong reference + error observer.
+
+        Without the strong reference, `asyncio.create_task` tasks can be
+        garbage-collected mid-await and their exceptions silently swallowed —
+        which shows up as 'memories silently not persisting'."""
+        try:
+            task = asyncio.create_task(coro)
+        except RuntimeError:
+            return None
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
+        task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+        return task
 
     def _update_policy(self, model: str, et: str, outcome: str) -> None:
         key = f"{model}:{et}"
@@ -300,8 +273,7 @@ class MemoryBridge:
             if vec is not None:
                 from qdrant_client.models import Filter, FieldCondition, MatchValue
                 async with self.lock_vector:
-                    results = await asyncio.to_thread(
-                        self.vs.search,
+                    results = await self.vs.search(
                         query_vector=vec,
                         limit=top_k,
                         filter_condition=Filter(
@@ -339,37 +311,85 @@ class MemoryBridge:
         if not self.session.events:
             return False
 
-        summary = await self._summarize()
-        if not summary:
-            return False
-
-        vec = await self._embed(summary)
-        if vec is None:
-            return False
-
         failure_rate = self._failure_rate()
+        stored = 0
 
-        payload = {
-            "session": self.session.id,
-            "summary": summary,
-            "models": list(dict.fromkeys(self.session.models)),
-            "types": list(dict.fromkeys(self.session.types)),
-            "tasks": list(dict.fromkeys(self.session.tasks)),
-            "event_count": len(self.session.events),
-            "failure_rate": round(failure_rate, 3),
-            "dominant_outcome": "failure" if failure_rate > 0.5 else "success",
-            "source": "memory_bridge_v12",
-            "indexed_at": time.time(),
-        }
+        # BUG/SCALE FIX: store EACH event as its own vector memory point (no LLM
+        # round-trip per event). Previously the whole session was collapsed into ONE
+        # summary point behind a serial _summarize() LLM call — so ~12 events became
+        # 1 point and throughput was LLM-bound. Now every event is individually
+        # embedded and searchable, letting the store grow toward tens of thousands.
+        for event in self.session.events:
+            try:
+                text = self._event_text(event)
+                if not text:
+                    continue
+                vec = await self._embed(text)
+                if vec is None:
+                    continue
+                pl = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+                payload = {
+                    "session": self.session.id,
+                    "text": text,
+                    "event_type": self._extract_event_type(event),
+                    "model": str(event.get("model") or pl.get("model") or self.session.models[-1] if self.session.models else "unknown"),
+                    "task_id": str(event.get("task_id") or pl.get("task_id") or ""),
+                    "outcome": str(event.get("outcome") or pl.get("outcome") or event.get("status") or pl.get("status") or ""),
+                    "failure_rate": round(failure_rate, 3),
+                    "dominant_outcome": "failure" if failure_rate > 0.5 else "success",
+                    "source": "memory_bridge_v12",
+                    "indexed_at": time.time(),
+                }
+                if await self._store(vec, payload):
+                    stored += 1
+            except Exception as exc:
+                logger.warning("event store error: %s", exc)
 
-        self._save_graph()
-        return await self._store(vec, payload)
+        # Keep the session-level summary point too (high-level context + policy stats)
+        summary = await self._summarize()
+        if summary:
+            vec = await self._embed(summary)
+            if vec:
+                await self._store(vec, {
+                    "session": self.session.id,
+                    "summary": summary,
+                    "models": list(dict.fromkeys(self.session.models)),
+                    "types": list(dict.fromkeys(self.session.types)),
+                    "tasks": list(dict.fromkeys(self.session.tasks)),
+                    "event_count": len(self.session.events),
+                    "failure_rate": round(failure_rate, 3),
+                    "dominant_outcome": "failure" if failure_rate > 0.5 else "success",
+                    "source": "memory_bridge_v12_summary",
+                    "indexed_at": time.time(),
+                })
+
+        await self.graph_repo.save()
+        return stored > 0
+
+    def _event_text(self, event: Dict[str, Any]) -> str:
+        """Derive a searchable text string from an event for embedding."""
+        pl = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        et = self._extract_event_type(event)
+        # Prefer meaningful payload content; fall back to action/result summaries.
+        content = pl.get("content") or pl.get("result") or pl.get("summary") or ""
+        if isinstance(content, (dict, list)):
+            content = json.dumps(content, ensure_ascii=False)[:500]
+        parts = [et]
+        if content:
+            parts.append(str(content)[:500])
+        action = pl.get("action") or event.get("action")
+        if action:
+            parts.append(f"action={action}")
+        outcome = pl.get("outcome") or pl.get("status") or event.get("outcome") or event.get("status")
+        if outcome:
+            parts.append(f"outcome={outcome}")
+        text = " | ".join(p for p in parts if p)
+        return text[:600]
 
     async def _store(self, vec: list, payload: dict) -> bool:
         try:
             async with self.lock_vector:
-                await asyncio.to_thread(
-                    self.vs.upsert,
+                await self.vs.upsert(
                     doc_id=str(uuid.uuid4()),
                     vector=vec,
                     payload=payload,
@@ -380,18 +400,14 @@ class MemoryBridge:
             return False
 
     async def _embed(self, text: str) -> Optional[list]:
-        # Fast path: no lock needed for read
         if text in self.embedding_cache:
             return self.embedding_cache[text]
 
         try:
             async with self.lock_embed:
-                # BUG FIX: Double-checked locking pattern.
-                # Multiple coroutines could be waiting on this lock for the same text.
-                # Without the inner check, they would all re-embed sequentially and waste time.
                 if text in self.embedding_cache:
                     return self.embedding_cache[text]
-                vec = await asyncio.to_thread(self.emb.embed, text)
+                vec = await self.emb.embed(text)
                 self.embedding_cache[text] = vec
                 return vec
         except Exception as exc:
@@ -402,16 +418,16 @@ class MemoryBridge:
         try:
             snippet = json.dumps(self.session.events[-CHUNK_SIZE:], ensure_ascii=False)
             response = await self.http.post(
-                f"{OLLAMA}/api/generate",
+                f"{LLAMA_GEN}/v1/chat/completions",
                 json={
                     "model": SUM_MODEL,
-                    "prompt": f"Summarize in one sentence:\n{snippet}",
+                    "messages": [{"role": "user", "content": f"Summarize in one sentence:\n{snippet}"}],
                     "stream": False,
-                    "options": {"temperature": 0},
+                    "temperature": 0.0,
                 },
             )
             response.raise_for_status()
-            return (response.json().get("response") or "").strip()
+            return (response.json()["choices"][0]["message"]["content"] or "").strip()
         except Exception as exc:
             logger.warning("summarization error: %s", exc)
             types = list(dict.fromkeys(self.session.types))[:3]
@@ -462,73 +478,8 @@ class MemoryBridge:
                 return str(event[k])
         return "UNKNOWN"
 
-    def _read(self) -> Tuple[List[Dict[str, Any]], int]:
-        if not self.path.exists():
-            return [], self.offset
-
-        events: List[Dict[str, Any]] = []
-        count = 0
-
-        with self.path.open("r", encoding="utf-8") as f:
-            for i, line in enumerate(f):
-                count = i + 1
-                if i < self.offset:
-                    continue
-                try:
-                    events.append(json.loads(line))
-                except Exception:
-                    continue
-
-        if self.offset > count:
-            self.offset = 0
-            return self._read()
-
-        return events, count
-
     def _reset(self) -> None:
         self.session = Session(id=str(uuid.uuid4()))
-
-    def _load_offset(self) -> int:
-        try:
-            return json.loads(WATERMARK.read_text(encoding="utf-8")).get("offset", 0)
-        except Exception:
-            return 0
-
-    def _save_offset(self) -> None:
-        WATERMARK.parent.mkdir(parents=True, exist_ok=True)
-        WATERMARK.write_text(
-            json.dumps({"offset": self.offset}, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-
-    def _load_state(self) -> Dict[str, Any]:
-        try:
-            data = json.loads(STATE.read_text(encoding="utf-8"))
-            return data if isinstance(data, dict) else {}
-        except Exception:
-            return {}
-
-    def _save_state(self) -> None:
-        STATE.parent.mkdir(parents=True, exist_ok=True)
-        STATE.write_text(
-            json.dumps(self.state, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-
-    def _load_graph(self) -> None:
-        try:
-            if self.graph_path.exists():
-                self.graph = nx.read_graphml(self.graph_path)
-        except Exception as exc:
-            logger.warning("Failed to load graph: %s", exc)
-            self.graph = nx.DiGraph()
-
-    def _save_graph(self) -> None:
-        try:
-            self.graph_path.parent.mkdir(parents=True, exist_ok=True)
-            nx.write_graphml(self.graph, self.graph_path)
-        except Exception as exc:
-            logger.warning("Failed to save graph: %s", exc)
 
     async def get_memory_context(self, query: str) -> str:
         """
@@ -540,8 +491,7 @@ class MemoryBridge:
                 return ""
 
             async with self.lock_vector:
-                results = await asyncio.to_thread(
-                    self.vs.search,
+                results = await self.vs.search(
                     query_vector=vec,
                     limit=5,
                 )
@@ -556,14 +506,12 @@ class MemoryBridge:
                 payload = hit.get("payload", {}) or {}
                 summary = payload.get("summary", "")
                 
-                # Check for exact matches of key task words
                 boost = 0.0
                 summary_words = set(summary.lower().split())
                 matching_words = query_words & summary_words
                 if matching_words:
                     boost += len(matching_words) * 0.05
                 
-                # Boost if query mentions a specific outcome or model
                 outcome = payload.get("dominant_outcome", "").lower()
                 if outcome and outcome in query.lower():
                     boost += 0.1
@@ -571,7 +519,6 @@ class MemoryBridge:
                 score = hit.get("score", 0.0) + boost
                 boosted_results.append((score, hit))
 
-            # Re-sort by boosted score and limit to top 3
             boosted_results.sort(key=lambda x: x[0], reverse=True)
             top_hits = [item[1] for item in boosted_results[:3]]
 
@@ -586,25 +533,18 @@ class MemoryBridge:
                 if summary:
                     context_parts.append(f"- Summary: {summary} (Models: {', '.join(models)}, Outcome: {outcome})")
                 
-                # Hybrid Graph Traversal
                 if session_id:
                     session_node = f"Session_{session_id}"
-                    if self.graph.has_node(session_node):
-                        edges = nx.edge_bfs(self.graph, session_node, orientation='original')
-                        paths = []
-                        pageranks = nx.get_node_attributes(self.graph, 'pagerank')
-                        for u, v, _ in list(edges)[:15]:
-                            rel = self.graph[u][v].get('relation', 'CONNECTED_TO')
-                            score_u = pageranks.get(u, 0.0)
-                            score_v = pageranks.get(v, 0.0)
-                            if score_u > 0.01 or score_v > 0.01 or "Community" in v or "Community" in u:
-                                paths.append(f"  * {u} -> {rel} -> {v} [Importance: {score_v:.4f}]")
-                            else:
-                                paths.append(f"  * {u} -> {rel} -> {v}")
-                        if paths:
-                            context_parts.append("  [GraphRAG Subgraph Context]:")
-                            # Deduplicate and sort by length/importance (simplified)
-                            context_parts.extend(list(dict.fromkeys(paths))[:10])
+                    paths = await asyncio.to_thread(self.graph_repo.get_session_paths, session_node, limit=15)
+                    paths_str = []
+                    for u, v, rel, score_u, score_v in paths:
+                        if score_u > 0.01 or score_v > 0.01 or "Community" in v or "Community" in u:
+                            paths_str.append(f"  * {u} -> {rel} -> {v} [Importance: {score_v:.4f}]")
+                        else:
+                            paths_str.append(f"  * {u} -> {rel} -> {v}")
+                    if paths_str:
+                        context_parts.append("  [GraphRAG Subgraph Context]:")
+                        context_parts.extend(list(dict.fromkeys(paths_str))[:10])
             
             return "\n".join(context_parts) + "\n"
         except Exception as e:
@@ -618,10 +558,8 @@ class MemoryBridge:
         """
         try:
             from qdrant_client.models import Filter, FieldCondition, MatchValue
-            # Retrieve up to 100 entries from Qdrant that are not consolidated
             async with self.lock_vector:
-                records, _ = await asyncio.to_thread(
-                    self.vs.client.scroll,
+                records, _ = await self.vs.client.scroll(
                     collection_name=self.vs.collection_name,
                     limit=100,
                     with_payload=True,
@@ -635,7 +573,6 @@ class MemoryBridge:
             if not records or len(records) < 3:
                 return False
 
-            # Group them by dominant_outcome
             groups: dict[str, list[Any]] = {}
             for r in records:
                 payload = r.payload or {}
@@ -656,16 +593,16 @@ class MemoryBridge:
                 
                 try:
                     response = await self.http.post(
-                        f"{OLLAMA}/api/generate",
+                        f"{LLAMA_GEN}/v1/chat/completions",
                         json={
                             "model": SUM_MODEL,
-                            "prompt": prompt,
+                            "messages": [{"role": "user", "content": prompt}],
                             "stream": False,
-                            "options": {"temperature": 0},
+                            "temperature": 0.0,
                         },
                     )
                     response.raise_for_status()
-                    new_summary = (response.json().get("response") or "").strip()
+                    new_summary = (response.json()["choices"][0]["message"]["content"] or "").strip()
                 except Exception:
                     new_summary = f"Consolidated summary for {len(items)} runs with outcome {outcome}: " + ", ".join(summaries[:3])
 
@@ -690,8 +627,7 @@ class MemoryBridge:
                     from qdrant_client.models import PointIdsList
                     async with self.lock_vector:
                         point_ids = [it.id for it in items]
-                        await asyncio.to_thread(
-                            self.vs.client.delete,
+                        await self.vs.client.delete(
                             collection_name=self.vs.collection_name,
                             points_selector=PointIdsList(points=point_ids)
                         )
@@ -710,48 +646,38 @@ class MemoryBridge:
         Generates hierarchical summaries for each community.
         """
         try:
-            from networkx.algorithms import community
-            if len(self.graph.nodes) < 5:
+            if self.graph_repo.get_node_count() < 5:
                 return
 
-            undirected_graph = self.graph.to_undirected()
-            communities = community.louvain_communities(undirected_graph)
-            
-            pagerank_scores = nx.pagerank(self.graph)
-            nx.set_node_attributes(self.graph, pagerank_scores, 'pagerank')
+            communities = await asyncio.to_thread(self.graph_repo.get_communities)
+            pagerank_scores = await asyncio.to_thread(self.graph_repo.compute_pageranks)
 
             for idx, c in enumerate(communities):
                 if len(c) < 3:
                     continue
                 comm_node = f"Community_Cluster_{idx}"
-                async with self.graph_lock:
-                    if self.graph.has_node(comm_node):
-                        continue
-                        
-                    self.graph.add_node(comm_node, type="Community")
-                    
-                    for node in c:
-                        self.graph.add_edge(node, comm_node, relation="BELONGS_TO")
+                
+                await self.graph_repo.ensure_community_node(comm_node, c)
 
                 important_nodes = sorted([n for n in c], key=lambda x: pagerank_scores.get(x, 0), reverse=True)[:5]
                 prompt = f"Summarize the relationship between these graph nodes which belong to the same community cluster: {', '.join(important_nodes)}"
                 
                 try:
                     response = await self.http.post(
-                        f"{OLLAMA}/api/generate",
+                        f"{LLAMA_GEN}/v1/chat/completions",
                         json={
                             "model": SUM_MODEL,
-                            "prompt": prompt,
+                            "messages": [{"role": "user", "content": prompt}],
                             "stream": False,
-                            "options": {"temperature": 0},
+                            "temperature": 0.0,
                         },
                     )
                     response.raise_for_status()
-                    summary = (response.json().get("response") or "").strip()
+                    summary = (response.json()["choices"][0]["message"]["content"] or "").strip()
                 except Exception:
                     summary = f"Community cluster {idx} containing {len(c)} nodes."
                 
-                nx.set_node_attributes(self.graph, {comm_node: summary}, 'summary')
+                await self.graph_repo.set_community_summary(comm_node, summary)
                 
                 vec = await self._embed(summary)
                 if vec:
@@ -765,12 +691,16 @@ class MemoryBridge:
                     }
                     await self._store(vec, payload)
             
-            self._save_graph()
+            await self.graph_repo.save()
             logger.info(f"GraphRAG: Found {len(communities)} communities and computed PageRank.")
         except Exception as exc:
             logger.warning("GraphRAG clustering failed: %s", exc)
 
     async def close(self) -> None:
-        self._save_state()
+        await asyncio.to_thread(self.event_repo.save_state, self.state)
         await self.http.aclose()
-
+        if self.emb is not None:
+            try:
+                await self.emb.aclose()
+            except Exception as exc:
+                logger.warning("Error closing embedding client: %s", exc)

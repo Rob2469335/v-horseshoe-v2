@@ -16,12 +16,13 @@ from swarm_os.memory.memory_bridge import MemoryBridge
 from swarm_os.kernel.genetics import ast_slice
 
 logger = logging.getLogger("GeneticEvolution")
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+if logging.getLogger().handlers == []:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 ROOT_DIR = Path(__file__).parent.parent.parent.resolve()
 PENDING_MUTATION_DIR = ROOT_DIR / ".data" / "pending_mutations"
 AGENT_SERVICE_PATH = ROOT_DIR / "runtime_v2" / "api" / "agent_service_v2.py"
-MODEL = "qwen-tuned"
+MODEL = "qwen3.5-9b"
 
 EVOLUTION_PROMPT = """You are the Swarm OS Genetic Architect. 
 Your goal is to optimize the core engine function `{target_func}` to make it faster and use less memory based on recent performance logs.
@@ -89,6 +90,8 @@ async def run_genetic_mutation(target_file_path: str = str(AGENT_SERVICE_PATH), 
         logger.warning(f"Failed to query MemoryBridge: {e}")
         historical_context = ""
         temperature = 0.7
+    finally:
+        await memory_bridge.close()
     
     if historical_context:
         prompt += f"\n\nHistorical Context of past runs (GraphRAG):\n{historical_context}\nAvoid repeating past mistakes."
@@ -103,8 +106,9 @@ async def run_genetic_mutation(target_file_path: str = str(AGENT_SERVICE_PATH), 
             res = await acompletion(
                 model=MODEL,
                 messages=messages,
-                api_base="http://localhost:11434",
-                custom_llm_provider="ollama",
+                api_base="http://127.0.0.1:8080/v1",
+                api_key="llama",
+                custom_llm_provider="openai",
                 temperature=temperature
             )
             mutated_code_full = res.choices[0].message.content
@@ -122,7 +126,7 @@ async def run_genetic_mutation(target_file_path: str = str(AGENT_SERVICE_PATH), 
                 
             logger.info("Mutation generated. Deploying to Danger Room sandbox for testing...")
             
-            with DangerRoom(ROOT_DIR) as sandbox:
+            async with DangerRoom(ROOT_DIR) as sandbox:
                 try:
                     rel_path = target_file.relative_to(ROOT_DIR)
                 except ValueError:
@@ -136,7 +140,7 @@ async def run_genetic_mutation(target_file_path: str = str(AGENT_SERVICE_PATH), 
                     f.write(new_core_code)
                     
                 logger.info("Phase 2: Executing Security Gate scan on mutation...")
-                sandbox.scan_sandbox(specific_files=[str(rel_path).replace("\\", "/")])
+                await sandbox.scan_sandbox(specific_files=[str(rel_path).replace("\\", "/")])
                     
                 logger.info("Verifying mutation compiles...")
                 compile_check = await asyncio.create_subprocess_exec(
@@ -233,40 +237,9 @@ def approve_pending_mutation(metadata_path: str) -> dict:
     Promote a staged mutation into the real target file.
     metadata_path should point to a metadata.json file under .data/pending_mutations/<id>/
     """
-    import json
-    import shutil
     from pathlib import Path
-
-    meta_path = Path(metadata_path)
-    if not meta_path.exists():
-        raise FileNotFoundError(f"Metadata file not found: {meta_path}")
-
-    metadata = json.loads(meta_path.read_text(encoding="utf-8"))
-
-    pending_file = Path(metadata["pending_file"])
-    target_path = Path(metadata["target_path"])
-
-    if not pending_file.exists():
-        raise FileNotFoundError(f"Pending mutation file not found: {pending_file}")
-
-    target_path.parent.mkdir(parents=True, exist_ok=True)
-
-    backup_path = None
-    if target_path.exists():
-        backup_path = target_path.with_suffix(target_path.suffix + ".bak")
-        shutil.copy2(target_path, backup_path)
-
-    shutil.copy2(pending_file, target_path)
-
-    metadata["approved"] = True
-    metadata["approved_at"] = datetime.now(timezone.utc).isoformat()
-    if backup_path is not None:
-        metadata["backup_path"] = str(backup_path)
-    meta_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
-
-    return {
-        "status": "approved",
-        "target_path": str(target_path),
-        "pending_file": str(pending_file),
-        "metadata_path": str(meta_path),
-    }
+    from swarm_os.repositories.mutation_repo import MutationRepository
+    
+    mutation_id = Path(metadata_path).parent.name
+    repo = MutationRepository()
+    return repo.approve(mutation_id)

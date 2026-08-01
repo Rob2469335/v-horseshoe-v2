@@ -14,8 +14,9 @@ async def event_generator():
     try:
         while True:
             try:
-                # Use anext() directly to wait for the next event with a timeout
-                event = await asyncio.wait_for(anext(subscriber), timeout=15.0)
+                # UPGRADE: asyncio.timeout() — composable context manager
+                async with asyncio.timeout(15.0):
+                    event = await anext(subscriber)
                 yield f"data: {json.dumps(event, default=str)}\n\n"
             except asyncio.TimeoutError:
                 yield f"data: {json.dumps({'type': 'ping'})}\n\n"
