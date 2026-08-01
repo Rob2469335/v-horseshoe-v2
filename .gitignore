@@ -140,6 +140,8 @@ swarm_os.egg-info/
 /download_q3s.py
 /fetch_crypto_prices.py
 /fetch_commit.py
+/benchmark_harness.ps1
+/example_data.csv
 
 # One-off dev artifacts and local data
 /nul

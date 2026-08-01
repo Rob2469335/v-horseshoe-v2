@@ -35,14 +35,14 @@ model_list:
       api_key: os.environ/GROQ_API_KEY
 
 fallbacks:
-  # Cloud → local Ollama fallbacks when rate-limited or failing
-  - { coordinator-reasoning: ["ollama/llama3-groq-tool-use:8b", "ollama/MFDoom/deepseek-r1-tool-calling:8b"] }
-  - { planner-reasoning:     ["ollama/llama3-groq-tool-use:8b", "ollama/MFDoom/deepseek-r1-tool-calling:8b"] }
-  - { reviewer-reasoning:    ["ollama/llama3-groq-tool-use:8b"] }
-  - { debugger-reasoning:    ["ollama/gemma4:e4b"] }
+  # Cloud → local llama.cpp fallbacks when rate-limited or failing
+  - { coordinator-reasoning: ["openai/qwen-tuned"] }
+  - { planner-reasoning:     ["openai/qwen-tuned"] }
+  - { reviewer-reasoning:    ["openai/qwen-tuned"] }
+  - { debugger-reasoning:    ["openai/qwen-tuned"] }
 
-  - { executor-fast:         ["ollama/qwen3:8b-q4_K_M", "ollama/qwen2.5-coder:7b"] }
-  - { coder-fast:            ["ollama/qwen3:8b-q4_K_M", "ollama/qwen2.5-coder:7b"] }
-  - { tool-runner-tools:     ["ollama/llama3-groq-tool-use:8b", "ollama/qwen3:8b-q4_K_M"] }
+  - { executor-fast:         ["openai/qwen-tuned"] }
+  - { coder-fast:            ["openai/qwen-tuned"] }
+  - { tool-runner-tools:     ["openai/qwen-tuned"] }
 
 
