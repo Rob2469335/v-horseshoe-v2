@@ -26,7 +26,9 @@ def run_test_suite(goal_text: str = "") -> tuple[bool, str]:
                 capture_output=True,
                 text=True,
                 cwd=PROJECT_ROOT,
-                timeout=5
+                timeout=5,
+                encoding="utf-8",
+                errors="replace"
             )
             if git_diff.returncode == 0:
                 modified_files = [line.strip() for line in git_diff.stdout.splitlines() if line.strip()]
@@ -51,7 +53,7 @@ def run_test_suite(goal_text: str = "") -> tuple[bool, str]:
     else:
         # Check if files were actually modified during this turn
         try:
-            git_diff = subprocess.run(["git", "diff", "--name-only"], capture_output=True, text=True, cwd=PROJECT_ROOT, timeout=5)
+            git_diff = subprocess.run(["git", "diff", "--name-only"], capture_output=True, text=True, cwd=PROJECT_ROOT, timeout=5, encoding="utf-8", errors="replace")
             if not git_diff.stdout.strip():
                 return False, "No files were modified. The agent did not generate or change any code to fulfill the goal."
         except Exception:
@@ -64,12 +66,14 @@ def run_test_suite(goal_text: str = "") -> tuple[bool, str]:
             capture_output=True,
             text=True,
             cwd=PROJECT_ROOT,
-            timeout=30
+            timeout=120,
+            encoding="utf-8",
+            errors="replace"
         )
         passed = result.returncode == 0
         return passed, result.stdout + "\n" + result.stderr
     except subprocess.TimeoutExpired:
-        return False, "Test execution timed out after 30 seconds."
+        return False, "Test execution timed out after 120 seconds."
     except Exception as e:
         return False, f"Failed to execute tests: {e}"
 
@@ -135,9 +139,26 @@ def run_autonomous_goal_loop(goal: str, cmd_ctx):
     state.save()
     console.print(f"👥 [bold]Initial Agent[/bold]: [cyan]{entry_agent}[/cyan]")
 
-    READONLY_PATTERNS = r"\b(list|show|display|read|find|search|check|view|print|what|where|how many)\b"
-    CODE_ACTION_PATTERNS = r"\b(fix|refactor|implement|add|modify|update|create|write|delete|remove|change)\b"
-    is_readonly = bool(re.search(READONLY_PATTERNS, goal, re.IGNORECASE)) and not re.search(CODE_ACTION_PATTERNS, goal, re.IGNORECASE)
+    READ_ONLY_KEYWORDS = [
+        "analyze", "analyse", "audit", "scan", "search", "inspect", "review",
+        "list", "read", "show", "display",
+        "print", "what is", "where is", "how many", "explain", "summarize", "describe",
+        "browse", "look up", "look for", "find", "check"
+    ]
+    WRITE_KEYWORDS = [
+        "fix", "implement", "add", "change", "refactor", "write", "modify", "update",
+        "create", "delete", "remove", "patch", "edit", "generate", "produce",
+        "construct", "make", "alter", "adjust"
+    ]
+    MULTI_STEP_KEYWORDS = [
+        "analyze", "analyse", "inspect", "search", "compare", "upgrade", "review", "audit", "scan"
+    ]
+
+    goal_lower = goal.lower()
+    has_read_only = any(re.search(r"\b" + re.escape(kw) + r"\b", goal_lower) for kw in READ_ONLY_KEYWORDS)
+    has_write = any(re.search(r"\b" + re.escape(kw) + r"\b", goal_lower) for kw in WRITE_KEYWORDS)
+    is_multi_step = any(re.search(r"\b" + re.escape(kw) + r"\b", goal_lower) for kw in MULTI_STEP_KEYWORDS)
+    is_readonly = has_read_only and not has_write and not is_multi_step
 
     if is_readonly:
         console.print("[dim]Detected read-only goal — running as a single tool call, skipping verification loop.[/dim]")
@@ -196,6 +217,7 @@ def run_autonomous_goal_loop(goal: str, cmd_ctx):
     # Start autonomous goals with a clean slate to prevent repeating previous goal outputs
     history = []
     max_attempts = 5
+    baseline_passed = False
     
     for attempt in range(1, max_attempts + 1):
         console.print(Rule(f"Attempt {attempt}/{max_attempts}", style="magenta dim"))
@@ -210,22 +232,37 @@ def run_autonomous_goal_loop(goal: str, cmd_ctx):
             mode = decision.get("mode", "unknown")
             component = heal_result.get("component", "unknown")
             console.print(f"[bold yellow]⚕ Self-healing:[/bold yellow] issue detected in [cyan]{component}[/cyan] (mode: {mode})")
-            if mode == "auto":
+            reasoning = decision.get("reasoning", "")
+            if mode in ("auto_execute", "sandbox_first"):
                 import asyncio
                 from swarm_os.healing.recovery_engine import RecoveryEngine
                 recovery = RecoveryEngine()
-                symptom = heal_result.get("all_signals", [{}])[0]
-                try:
-                    loop = asyncio.get_running_loop()
-                    result = loop.run_until_complete(recovery.recover(symptom))
-                except RuntimeError:
-                    result = asyncio.run(recovery.recover(symptom))
-                if result.get("ok"):
+                symptom = heal_result.get("all_signals", [{}])[0] or {"component": component}
+                from swarm_os.healing.failure_detector import run_coro_sync
+                result = run_coro_sync(recovery.recover(symptom))
+                if result and result.get("ok"):
                     console.print(f"[bold green]✓ Auto-recovered:[/bold green] {result.get('action')}")
                 else:
-                    console.print(f"[bold red]✗ Auto-recovery failed:[/bold red] {result.get('error')}")
+                    console.print(f"[bold red]✗ Auto-recovery failed:[/bold red] {(result or {}).get('error', 'no recovery result')}")
+                try:
+                    _healing_loop.finalize(decision, result)
+                except Exception:
+                    pass
+            elif mode == "approval_required":
+                console.print(Panel(f"[bold yellow]🔧 Approval Required:[/bold yellow] [{component}]\n[dim]{reasoning}[/dim]", border_style="yellow"))
+                cmd_ctx.state.last_error = f"Healing approval required on {component}"
+                cmd_ctx.state.save()
+            elif mode == "reject":
+                console.print(Panel(f"[bold red]⛔ Rejected by Governor:[/bold red] [{component}] - [dim]{reasoning}[/dim]", border_style="red"))
+                cmd_ctx.state.last_error = f"Healing rejected for {component}"
+                cmd_ctx.state.save()
+                
+        agent_id = getattr(state, "active_agent", "coordinator")
+        console.print(f"  🤖 Running agent: [bold cyan]{agent_id}[/bold cyan]")
+        history = stream_prompt(cmd_ctx.state, agent_id, current_prompt, history)
         
-        history = stream_prompt(cmd_ctx.state, entry_agent, current_prompt, history)
+        passed = False
+        logs = ""
         
         if getattr(cmd_ctx.state, "last_stream_status", "") != "completed":
             passed = False
@@ -253,8 +290,23 @@ def run_autonomous_goal_loop(goal: str, cmd_ctx):
                 logs = f"Syntax Error detected in modified files:\n\n{syntax_error_msg}"
                 console.print("[bold red]✗ Fast Syntax Check Failed.[/bold red]")
             elif syntax_passed:
-                console.print("[dim]Running test verification suite...[/dim]")
-                passed, logs = run_test_suite(goal)
+                # Check if any files were actually modified during this attempt
+                try:
+                    git_status = subprocess.run(
+                        ["git", "status", "--porcelain"],
+                        capture_output=True, text=True, cwd=PROJECT_ROOT, timeout=5,
+                        encoding="utf-8", errors="replace"
+                    )
+                    if not git_status.stdout.strip():
+                        passed = True
+                        logs = "No files were modified during this attempt (read-only operations only). Skipping test suite."
+                        console.print("[dim]No file changes detected — skipping test verification.[/dim]")
+                    else:
+                        console.print("[dim]Running test verification suite...[/dim]")
+                        passed, logs = run_test_suite(goal)
+                except Exception:
+                    console.print("[dim]Running test verification suite...[/dim]")
+                    passed, logs = run_test_suite(goal)
         
         if passed:
             console.print()
@@ -264,6 +316,14 @@ def run_autonomous_goal_loop(goal: str, cmd_ctx):
             ))
             break
         else:
+            if baseline_passed and not passed:
+                console.print(Panel(
+                    "[bold red]✗ <RATCHET_GUARDRAIL_TRIGGERED> Agent patch regressed passing baseline tests! Automatically reverting via `git stash`...[/bold red]",
+                    border_style="red"
+                ))
+                res = subprocess.run(["git", "stash"], cwd=PROJECT_ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace")
+                if res.returncode == 0:
+                    console.print("[green]✓ Diverging patch automatically reverted.[/green]")
             failures = []
             for line in logs.splitlines():
                 if line.startswith("E   ") or "FAIL" in line or "AssertionError" in line or "Syntax Error" in line or "File:" in line or "Error:" in line:
@@ -279,12 +339,24 @@ def run_autonomous_goal_loop(goal: str, cmd_ctx):
                     f"[bold red]✗ FAILURE: Max attempts ({max_attempts}) reached. Tests/Checks are still failing.[/bold red]",
                     border_style="red"
                 ))
-                if Confirm.ask("[bold yellow]Do you want to run `git stash` to revert the broken changes and safely exit?[/bold yellow]"):
-                    res = subprocess.run(["git", "stash"], cwd=PROJECT_ROOT, capture_output=True, text=True)
-                    if res.returncode == 0:
-                        console.print("[green]Working directory reverted via `git stash`.[/green]")
-                    else:
-                        console.print(f"[red]git stash failed: {res.stderr.strip()}[/red]")
+                if sys.stdin.isatty():
+                    try:
+                        git_status = subprocess.run(
+                            ["git", "status", "--porcelain"],
+                            capture_output=True, text=True, cwd=PROJECT_ROOT, timeout=5,
+                            encoding="utf-8", errors="replace"
+                        )
+                        has_changes = bool(git_status.stdout.strip())
+                    except Exception:
+                        has_changes = False
+                    if has_changes and Confirm.ask("[bold yellow]Do you want to run `git stash` to revert the broken changes and safely exit?[/bold yellow]"):
+                        res = subprocess.run(["git", "stash"], cwd=PROJECT_ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace")
+                        if res.returncode == 0:
+                            console.print("[green]Working directory reverted via `git stash`.[/green]")
+                        else:
+                            console.print(f"[red]git stash failed: {res.stderr.strip()}[/red]")
+                    elif not has_changes:
+                        console.print("[dim]No file changes detected — nothing to stash. Working directory is clean.[/dim]")
                 break
                 
             console.print("[yellow]Feeding back failure logs to agent context for correction...[/yellow]")

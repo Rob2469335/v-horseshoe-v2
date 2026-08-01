@@ -1,8 +1,8 @@
-﻿# organism_console/token_tracker.py
+# organism_console/token_tracker.py
 """
 Real-time token + spend + model availability tracker.
-Tracks 4 provider buckets: ollama-local, ollama-cloud, openrouter, nvidia
-Polls every 30s: Ollama /api/ps for loaded models, OpenRouter /auth/key for spend.
+Tracks 4 provider buckets: llama-local, llama-cloud, openrouter, nvidia
+Polls every 30s: Local LLM /v1/models for loaded models, OpenRouter /auth/key for spend.
 """
 import os
 import time
@@ -64,10 +64,10 @@ def _classify_provider(model: str, chunk_provider: str | None = None) -> str:
 # ── Ollama poller ─────────────────────────────────────────────────────────────
 def _poll_ollama():
     try:
-        r = requests.get("http://127.0.0.1:11434/api/ps", timeout=5)
+        r = requests.get("http://127.0.0.1:8080/v1/models", headers={"Authorization": "Bearer llama"}, timeout=5)
         if r.status_code == 200:
-            models = r.json().get("models", [])
-            names = [m.get("name", "") for m in models if m.get("name")]
+            models = r.json().get("data", [])
+            names = [m.get("id", "") for m in models if m.get("id")]
             with _lock:
                 _state["ollama_loaded"] = names
                 _state["ollama_poll_ok"] = True
@@ -191,16 +191,16 @@ def get_status_segment() -> str:
     else:
         lines.append("[bold blue]tok[/bold blue]:[dim]no traffic yet[/dim]")
 
-    # ── Row 3: Ollama loaded models ───────────────────────────────────────────
+    # ── Row 3: Llama.cpp loaded models ───────────────────────────────────────────
     if s["ollama_poll_ok"]:
         loaded = s["ollama_loaded"]
         if loaded:
             loaded_str = "  ".join(f"[cyan]{m}[/cyan]" for m in loaded)
-            lines.append(f"[bold blue]ollama[/bold blue]: {loaded_str}")
+            lines.append(f"[bold blue]llamacpp[/bold blue]: {loaded_str}")
         else:
-            lines.append("[bold blue]ollama[/bold blue]:[dim]no models loaded[/dim]")
+            lines.append("[bold blue]llamacpp[/bold blue]:[dim]no models loaded[/dim]")
     else:
-        lines.append("[bold blue]ollama[/bold blue]:[dim]unreachable[/dim]")
+        lines.append("[bold blue]llamacpp[/bold blue]:[dim]unreachable[/dim]")
 
     # ── Row 4: OpenRouter spend ───────────────────────────────────────────────
     if s["or_poll_ok"]:

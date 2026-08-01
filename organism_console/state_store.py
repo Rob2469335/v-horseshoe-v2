@@ -12,7 +12,7 @@ class SessionState:
         
         # Default states
         self.active_agent: str = "coordinator"
-        self.active_model: str = "qwen-tuned"
+        self.active_model: str = "qwen3.5-9b"
         self.execution_phase: str = "thinking"
         self.last_tool_call: Optional[Dict[str, Any]] = None
         self.last_error: Optional[str] = None
@@ -35,7 +35,9 @@ class SessionState:
         self.cloud_output_tokens: int = 0
         self.cloud_token_quota: int = 100000
         self.history_pointer: int = -1
-        self.last_provider: str = "ollama"
+        self.last_provider: str = "llama.cpp"
+        self.scheduled_tasks: List[Dict[str, Any]] = []
+        self.checkpoints: Dict[str, Dict[str, Any]] = {}
 
         self.load()
 
@@ -72,6 +74,8 @@ class SessionState:
             self.cloud_token_quota = data.get("cloud_token_quota", self.cloud_token_quota)
             self.history_pointer = data.get("history_pointer", self.history_pointer)
             self.last_provider = data.get("last_provider", self.last_provider)
+            self.scheduled_tasks = data.get("scheduled_tasks", self.scheduled_tasks)
+            self.checkpoints = data.get("checkpoints", self.checkpoints)
         except Exception as e:
             import logging
             logging.getLogger("zenith_cli").error(f"Failed to load session state: {e}")
@@ -105,6 +109,8 @@ class SessionState:
                 "cloud_token_quota": self.cloud_token_quota,
                 "last_provider": self.last_provider,
                 "history_pointer": self.history_pointer,
+                "scheduled_tasks": self.scheduled_tasks,
+                "checkpoints": self.checkpoints,
             }.items()}
             return json.dumps(snap, indent=2)
         
@@ -124,3 +130,37 @@ class SessionState:
             import threading
             t = threading.Thread(target=_do_save, daemon=True)
             t.start()
+
+    def create_checkpoint(self, name: str) -> bool:
+        try:
+            import copy, time
+            self.checkpoints[name] = {
+                "history": copy.deepcopy(self.history),
+                "history_pointer": self.history_pointer,
+                "scheduled_tasks": copy.deepcopy(self.scheduled_tasks),
+                "active_agent": self.active_agent,
+                "active_model": self.active_model,
+                "timestamp": time.time()
+            }
+            self.save(sync=True)
+            return True
+        except Exception:
+            return False
+
+    def rollback_checkpoint(self, name: str) -> bool:
+        if name not in self.checkpoints:
+            return False
+        try:
+            import copy
+            cp = self.checkpoints[name]
+            self.history = copy.deepcopy(cp.get("history", []))
+            self.history_pointer = cp.get("history_pointer", -1)
+            self.scheduled_tasks = copy.deepcopy(cp.get("scheduled_tasks", []))
+            if "active_agent" in cp:
+                self.active_agent = cp["active_agent"]
+            if "active_model" in cp:
+                self.active_model = cp["active_model"]
+            self.save(sync=True)
+            return True
+        except Exception:
+            return False

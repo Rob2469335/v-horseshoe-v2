@@ -248,13 +248,17 @@ def print_banner(ctx):
     n_tool  = style_node("TOOL-RUNNER", "#55ff55")
     n_review= style_node("REVIEWER", "#00f0ff")
     n_debug = style_node("DEBUGGER", "#ff00ea")
+    n_maker = style_node("TOOL-MAKER", "#00f0ff")
+    n_analyzer = style_node("CODE-ANALYZER", "#5555ff")
 
     topology = f"""[dim]
       [#00f0ff]USER[/#00f0ff] ──> {n_coord} ──> {n_plan} ──> {n_rsch} ──> {n_exec}
                                                             │
                                                             ├──> {n_coder} ──> {n_tool} ──> {n_review}
                                                             │
-                                                            └──> {n_debug}[/dim]"""
+                                                            ├──> {n_debug} ──> {n_analyzer}
+                                                            │
+                                                            └──> {n_maker}[/dim]"""
                      
     table.add_row("TOPOLOGY", topology)
     

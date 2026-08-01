@@ -28,14 +28,15 @@ def push_model_override(agent_id: str, model_name: str, backend: str) -> bool:
             verify=settings.ssl_verify
         )
         return r.status_code == 200
-    except:
+    except Exception:
         return False
 
 def parse_backend(model: str) -> tuple[str, str]:
     if model.startswith("openrouter/"): return "openrouter", model[11:]
     if model.startswith("groq/"): return "groq", model[5:]
-    if model.startswith("ollama/"): return "ollama", model[7:]
-    return "ollama", model
+    if model.startswith("llama/"): return "llama", model[6:]
+    if model.startswith("ollama/"): return "llama", model[7:]
+    return "llama", model
 
 class ModelPickerApp(App):
     CSS = """
@@ -91,7 +92,7 @@ class ModelPickerApp(App):
         if FAVORITES_FILE.exists():
             try:
                 return set(json.loads(FAVORITES_FILE.read_text()))
-            except:
+            except Exception:
                 pass
         return set()
 
@@ -130,44 +131,44 @@ class ModelPickerApp(App):
         try:
             r = requests.get(f"{BACKEND_URL}/agents", timeout=15, verify=settings.ssl_verify)
             self.agents = r.json() if r.status_code == 200 else []
-        except:
+        except Exception:
             self.agents = []
 
         try:
             r = requests.get(f"{BACKEND_URL}/agents/models", timeout=15, verify=settings.ssl_verify)
             self.agent_models = r.json() if r.status_code == 200 else {}
-        except:
+        except Exception:
             self.agent_models = {}
 
         local_model_names = []
         try:
-            r = requests.get("http://127.0.0.1:11434/api/tags", timeout=15, verify=settings.ssl_verify)
+            r = requests.get("http://127.0.0.1:8080/v1/models", headers={"Authorization": "Bearer llama"}, timeout=15, verify=settings.ssl_verify)
             if r.status_code == 200:
-                local_model_names = [m.get("model") or m.get("name") for m in r.json().get("models", [])]
-        except:
+                local_model_names = [m.get("id") or m.get("model") or m.get("name") for m in r.json().get("data", [])]
+        except Exception:
             local_model_names = []
 
         self.models = []
         try:
-            endpoint = self.get_models_endpoint() if self.cloud_enabled else "http://127.0.0.1:11434/api/tags"
+            endpoint = self.get_models_endpoint() if self.cloud_enabled else "http://127.0.0.1:8080/v1/models"
             verify_ssl = settings.ssl_verify if self.cloud_enabled else False
-            r = requests.get(endpoint, timeout=15, verify=verify_ssl)
+            r = requests.get(endpoint, headers={"Authorization": "Bearer llama"} if not self.cloud_enabled else None, timeout=15, verify=verify_ssl)
             if r.status_code == 200:
-                self.models = r.json().get("models", [])
-        except:
+                self.models = r.json().get("data", []) if not self.cloud_enabled else r.json().get("models", [])
+        except Exception:
             self.models = []
 
         if not self.cloud_enabled:
             self.models = [
                 {
-                    "model": m.get("model") or m.get("name"),
-                    "name": m.get("name") or m.get("model"),
-                    "context_length": ((m.get("details") or {}).get("context_length")),
+                    "model": m.get("id") or m.get("model") or m.get("name"),
+                    "name": m.get("id") or m.get("name") or m.get("model"),
+                    "context_length": ((m.get("details") or {}).get("context_length", 8192)),
                     "pricing": "Local",
-                    "provider": "Ollama"
+                    "provider": "llama.cpp"
                 }
                 for m in self.models
-                if not any(x in str((m.get("model") or m.get("name") or "")).lower() for x in ("embed","rerank","vl","moondream"))
+                if not any(x in str((m.get("id") or m.get("model") or m.get("name") or "")).lower() for x in ("embed","rerank","vl","moondream"))
             ]
 
     def update_routing_status(self) -> None:

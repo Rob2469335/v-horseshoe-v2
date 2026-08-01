@@ -110,7 +110,7 @@ def append_event(action: str, file: str, reason: str, outcome: str):
         "executed": outcome == "success",
     }
     REMEDIATION_LOG.parent.mkdir(exist_ok=True)
-    with open(REMEDIATION_LOG, "a") as f:
+    with open(REMEDIATION_LOG, "a", encoding='utf-8') as f:
         f.write(json.dumps(entry) + "\n")
     print(f"[record] event appended → {REMEDIATION_LOG}")
     refresh()

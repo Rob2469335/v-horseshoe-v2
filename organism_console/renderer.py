@@ -87,7 +87,7 @@ def render_dashboard(
     # 1. System Health column (Left)
     health_table = Table(show_header=False, box=SIMPLE)
     health_table.add_row("Backend Server", "[green]ONLINE[/green]" if backend_ok else "[red]OFFLINE[/red]")
-    health_table.add_row("Ollama API", "[green]ONLINE[/green]" if ollama_ok else "[red]OFFLINE[/red]")
+    health_table.add_row("Local LLM API", "[green]ONLINE[/green]" if ollama_ok else "[red]OFFLINE[/red]")
     health_table.add_row("CPU Load", f"{system_stats['cpu']:.1f}%")
     health_table.add_row(
         "RAM Usage",

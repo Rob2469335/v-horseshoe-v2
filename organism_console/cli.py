@@ -19,13 +19,22 @@ import signal
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Optional
+from dotenv import load_dotenv
+
+load_dotenv(override=True)
 
 if sys.platform == "win32":
     try:
-        sys.stdout.reconfigure(encoding="utf-8")
-        sys.stderr.reconfigure(encoding="utf-8")
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
+
+try:
+    import truststore
+    truststore.inject_into_ssl()
+except ImportError:
+    pass
 
 import swarm_os.bootstrap
 from rich.console import Console
@@ -100,7 +109,7 @@ def get_installed_models():
         coordinator_model, _ = get_model("coordinator")
         return (coordinator_model,)
     except Exception:
-        return ("qwen-tuned",)
+        return ("qwen3.5-9b",)
 
 
 def build_command_context(cmd_ctx_console=None, cmd_ctx_state=None) -> CommandContext:
@@ -128,7 +137,20 @@ def print_version():
     ctx.console.print(f"[dim]Python {sys.version.split()[0]} on {sys.platform}[/dim]")
 
 
-def handle_sigint(sig, frame):
+def print_help():
+    ctx.console.print(f"[bold cyan]ZENITH CLI[/bold cyan] [dim]v{VERSION}[/dim]")
+    ctx.console.print("[bold]Usage:[/bold] python -m organism_console [OPTIONS] [COMMAND / SLASH_COMMAND]")
+    ctx.console.print("\n[bold cyan]Command-Line Flags:[/bold cyan]")
+    ctx.console.print("  [green]--agent <name>[/green]   Override initial active agent")
+    ctx.console.print("  [green]--model <name>[/green]   Override initial active model")
+    ctx.console.print("  [green]--version, -v[/green]    Show version information")
+    ctx.console.print("  [green]--help, -h[/green]       Show help message and available slash commands\n")
+    ctx.console.print("[bold cyan]Available Slash Commands:[/bold cyan]")
+    cmd_ctx = build_command_context()
+    registry.handle_line("/help", cmd_ctx)
+
+
+def handle_sigint(sig, _frame):
     # BUG FIX: Raise KeyboardInterrupt so it propagates to the REPL's except block.
     # Previously this only printed a newline, meaning Ctrl+C during a long LLM stream
     # would print a blank line but NOT interrupt the blocking stream_prompt() call.
@@ -177,6 +199,9 @@ def main():
     if "--version" in args or "-v" in args:
         print_version()
         return 0
+    if "--help" in args or "-h" in args:
+        print_help()
+        return 0
 
     # Parse --agent and --model flags
     agent_override = None
@@ -216,11 +241,27 @@ def main():
     has_readline = setup_readline()
     print_banner(ctx)
 
+    # Auto-start the background healing watchmen so both infrastructure health
+    # AND code-level repair are self-healed even when no /goal loop is running.
+    from organism_console.core.healing_watchman import HealingWatchman
+    _healing_watchman = HealingWatchman(interval_seconds=60.0, console=ctx.console)
+    _healing_watchman.start()
+    atexit.register(_healing_watchman.stop)
+
+    try:
+        from organism_console.core.self_repair_engine import SelfRepairEngine
+        from organism_console.core.repair_engine import RepairWatchman
+        _repair_watchman = RepairWatchman(SelfRepairEngine(build_command_context()), interval_seconds=30)
+        _repair_watchman.start(start_at_end=True)
+        atexit.register(_repair_watchman.stop)
+        ctx.console.print("[dim]⚕ Auto-repair watchman active (tailing events.jsonl for code failures)[/dim]")
+    except Exception as exc:
+        log.warning(f"Auto-repair watchman failed to start: {exc}")
+
     while True:
         try:
-            agent_tag = f"[bold #00f0ff]>> OPERATOR[/bold #00f0ff]"
-            agent_name = f"[bold #ff00ea]{ctx.active_agent.upper()}[/bold #ff00ea]"
-            prompt_str = f"{agent_tag} [dim]@[/dim] {agent_name} [blink]_[/blink] "
+            active = f"[bold magenta]{ctx.active_agent.upper()}[/bold magenta]"
+            prompt_str = f"{active}[bold bright_black] >>> [/bold bright_black]"
             cmd_line = ctx.console.input(prompt_str).strip()
 
             if not cmd_line:

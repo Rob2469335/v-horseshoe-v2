@@ -43,7 +43,7 @@ def load_report(report_path: Path) -> dict:
 def log_action(action: dict):
     REMEDIATION_LOG.parent.mkdir(exist_ok=True)
     entry = {"timestamp": datetime.now(timezone.utc).isoformat(), **action}
-    with open(REMEDIATION_LOG, "a") as f:
+    with open(REMEDIATION_LOG, "a", encoding='utf-8') as f:
         f.write(json.dumps(entry) + "\n")
 
 

@@ -24,7 +24,7 @@ def call_api(
             return requests.get(url, timeout=(timeout, read_timeout), verify=settings.ssl_verify)
 
         if stream:
-            return requests.post(url, json=payload, timeout=(timeout, read_timeout), stream=True, verify=settings.ssl_verify)
+            return requests.post(url, json=payload, timeout=(timeout, None), stream=True, verify=settings.ssl_verify)
         return requests.post(url, json=payload, timeout=(timeout, read_timeout), verify=settings.ssl_verify)
     except requests.exceptions.RequestException as e:
         log.debug(f"API call failed: {e}")
@@ -40,7 +40,7 @@ async def call_api_async_stream(
     read_timeout: float = 600.0,
 ):
     url = f"{BACKEND_URL}{endpoint}"
-    timeout_config = httpx.Timeout(timeout, read=read_timeout)
+    timeout_config = httpx.Timeout(timeout, read=None)
     client = httpx.AsyncClient(timeout=timeout_config, verify=settings.ssl_verify)
     try:
         request = client.build_request(method, url, json=payload)

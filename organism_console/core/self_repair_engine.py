@@ -46,6 +46,8 @@ class SelfRepairEngine:
             self._report(result)
 
         self._maybe_distill_lesson(result)
+        if not result.get("fixed"):
+            self._maybe_retire_cure(result)
         return result
 
     def _report(self, result: Dict[str, Any]):
@@ -102,10 +104,39 @@ class SelfRepairEngine:
         cures[failure_type] = sorted(cures[failure_type], key=lambda x: -x.get("count", 0))[:50]
         save_cures(cures)
 
+    def _maybe_retire_cure(self, result: Dict[str, Any]):
+        """Reflexion-catalog rule: lessons are retired, not silently kept forever.
+        When a matching cure fails, decay its confidence; below threshold it is
+        removed so stale knowledge stops poisoning future retrievals."""
+        error_text = str(result.get("error", "")).lower()
+        failure_type = result.get("failure_type", "unknown")
+        cures = load_cures()
+        entries = cures.get(failure_type)
+        if not entries:
+            return
+        survivors = []
+        retired = []
+        for cure in entries:
+            keywords = cure.get("keywords", [])
+            if keywords and any(kw in error_text for kw in keywords):
+                cure["failure_count"] = cure.get("failure_count", 0) + 1
+                total = cure.get("success_count", 1) + cure["failure_count"]
+                cure["confidence"] = cure.get("success_count", 1) / max(total, 1)
+                if cure["confidence"] < 0.25:
+                    retired.append(str(cure.get("action", ""))[:80])
+                    continue
+            survivors.append(cure)
+        if not retired:
+            return
+        cures[failure_type] = survivors
+        save_cures(cures)
+        log.info("Retired %d low-confidence cure(s) for %s: %s", len(retired), failure_type, retired)
+
     def record_feedback(self, action_text: str, success: bool):
         cures = load_cures()
         updated = False
         for ftype, entries in cures.items():
+            survivors = []
             for cure in entries:
                 if cure.get("action") == action_text:
                     cure["success_count"] = cure.get("success_count", 1) + (1 if success else 0)
@@ -113,6 +144,9 @@ class SelfRepairEngine:
                     total = cure["success_count"] + cure["failure_count"]
                     cure["confidence"] = cure["success_count"] / max(total, 1)
                     updated = True
+                if cure.get("confidence", 0.5) >= 0.25:
+                    survivors.append(cure)
+            cures[ftype] = survivors
         if updated:
             save_cures(cures)
             return True

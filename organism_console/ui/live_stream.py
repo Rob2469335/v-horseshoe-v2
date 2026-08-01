@@ -18,8 +18,8 @@ from organism_console.token_tracker import record_chunk
 
 log = logging.getLogger("zenith_cli")
 
-_AGENT_PERF: dict = {}  # {agent_id: {"total": float, "count": int, "last": float}}
-_AGENT_PERF_MAX = 256  # BUG FIX: cap to prevent unbounded memory growth
+_AGENT_PERF: dict = {}
+_AGENT_PERF_MAX = 256
 
 def update_token_metrics(ctx, prompt, history, output_content, model):
     input_tokens = estimate_tokens(prompt + json.dumps(history))
@@ -28,7 +28,7 @@ def update_token_metrics(ctx, prompt, history, output_content, model):
     ctx.total_output_tokens += output_tokens
     model_name = (model or "unknown").lower()
     is_cloud = "cloud" in model_name or "groq" in model_name or "openrouter" in model_name
-    if is_cloud or getattr(ctx, "last_provider", "ollama") != "ollama":
+    if is_cloud or getattr(ctx, "last_provider", "llama.cpp") not in ("llama.cpp", "local"):
         ctx.cloud_input_tokens += input_tokens
         ctx.cloud_output_tokens += output_tokens
 
@@ -43,30 +43,21 @@ RE_THINK_CLEAN = re.compile(r"<think>.*?(?:</think>|$)", re.DOTALL)
 RE_PLAN_MATCH = re.compile(r"<plan>(.*?)</plan>", re.DOTALL)
 RE_THINK_MATCH = re.compile(r"<think>(.*?)(?:</think>|$)", re.DOTALL)
 
-def status_bar(ctx, agent, model, phase, ram_pct, tps: float = 0.0):
+def status_footer(ctx, agent, model, phase, ram_pct, tps: float = 0.0):
     stats = get_system_stats()
     phase_colors = {
-        "thinking": "white",
-        "planning": "yellow",
-        "sensing": "cyan",
-        "repair": "red",
-        "swarm": "magenta",
-        "resume": "blue",
-        "ocular": "bright_cyan",
-        "executing": "bright_green",
+        "thinking": "white", "planning": "yellow", "sensing": "cyan",
+        "repair": "red", "swarm": "magenta", "resume": "blue",
+        "ocular": "bright_cyan", "executing": "bright_green",
     }
     pc = phase_colors.get(phase, "white")
-    tps_str = f" | tps:[bright_green]{tps:.1f}[/bright_green]" if tps > 0 else ""
-    topic_str = str(ctx.current_topic)
-    if len(topic_str) > 15:
-        topic_str = topic_str[:12] + "..."
-    agent_str = agent[:10]
+    tps_str = f" tps:{tps:.1f}" if tps > 0 else ""
     return (
-        f"T:[bright_white]{escape(topic_str)}[/bright_white] | "
-        f"A:[cyan]{agent_str}[/cyan] | "
-        f"P:[{pc}]{phase}[/{pc}] | "
-        f"RAM:[{stats['ram_color']}]{ram_pct:.0f}%[/{stats['ram_color']}]"
-        f"{tps_str}"
+        f"[bright_black]φ[/bright_black] "
+        f"[{pc}]{agent[:8]}[/{pc}]"
+        f"[bright_black]@{model[:12]}[/bright_black]"
+        f"[bold {stats['ram_color']}]{ram_pct:.0f}%[/bold {stats['ram_color']}]"
+        f"[bright_green]{tps_str}[/bright_green]"
     )
 
 import asyncio
@@ -94,7 +85,6 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
 
         if not resp:
             ctx.console.print("[bold red]ERROR:[/bold red] Backend unreachable.")
-            # BUG FIX: Close the client even on early return to avoid leaking HTTP connections
             if client is not None:
                 await client.aclose()
             return history
@@ -108,7 +98,7 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
         _tokens_counted = False
         _char_count = 0
 
-        ctx.console.print(Rule(title="[bold #ff00ea]COMM-LINK ESTABLISHED[/bold #ff00ea]", style="bold #00f0ff"))
+        ctx.console.print(Rule(title="", style="dim"))
         if not getattr(ctx, "delegation_chain", None):
             ctx.delegation_chain = [agent_id]
         ctx.last_stream_status = "interrupted"
@@ -149,6 +139,8 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                             ctx.save()
 
                     err_msg = chunk.get("error")
+                    if not err_msg and chunk_type == "error":
+                        err_msg = chunk.get("content") or "Unknown error"
                     if not err_msg and isinstance(chunk.get("result"), dict) and "error" in chunk.get("result", {}):
                         err_msg = chunk["result"]["error"]
 
@@ -166,7 +158,6 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                         chain = chunk.get("model_chain", []) or []
                         ctx.delegation_chain = chain if chain else [agent_id]
                         ctx.save()
-
                         if ctx.trace_mode:
                             panel = render_trace_panel(
                                 "Router Decision & Path Planning",
@@ -182,16 +173,11 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                         model = chunk.get("model", "unknown")
                         ctx.active_model = model
                         ctx.save()
-
                         if ctx.trace_mode:
                             panel = render_trace_panel(
                                 "Model Selection",
-                                {
-                                    "model": model,
-                                    "role": chunk.get("requested_role", "unknown"),
-                                    "attempt": chunk.get("attempt", 1),
-                                    "temperature": chunk.get("temperature", 0.7)
-                                },
+                                {"model": model, "role": chunk.get("requested_role", "unknown"),
+                                 "attempt": chunk.get("attempt", 1), "temperature": chunk.get("temperature", 0.7)},
                                 "green"
                             )
                             safe_print(panel)
@@ -202,54 +188,39 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                     if chunk_type == "model_escalation":
                         from_model = chunk.get("from_model")
                         reason = chunk.get("reason")
-                        safe_print(
-                            f"[bold yellow]  Fallback:[/bold yellow] [dim]{from_model}[/dim] timed out "
-                            f"[bold yellow]→ Escalating to cloud[/bold yellow] [dim]({reason})[/dim]"
-                        )
-                        if ctx.trace_mode:
-                            panel = render_trace_panel(
-                                "Model Escalation (Fallback)",
-                                {"from_model": from_model, "escalated_reason": reason, "status": "switching to secondary/cloud"},
-                                "red"
-                            )
-                            safe_print(panel)
+                        safe_print(f"[bold yellow]  Fallback:[/bold yellow] [dim]{from_model}[/dim] timed out "
+                                   f"[bold yellow]→ Escalating to cloud[/bold yellow] [dim]({reason})[/dim]")
                         continue
 
                     if chunk_type == "agent_handoff":
                         from_a = chunk.get("from", agent_id)
                         to_a = chunk.get("to", "executor")
                         task = str(chunk.get("task", ""))[:80]
-
                         ctx.delegation_chain.append(to_a)
                         ctx.save()
-
                         handoffs_list.append({"from": from_a, "to": to_a, "task": task})
-                        safe_print(render_step_micro_ui("swarm", f"{from_a} → {to_a}: {task}"))
+                        safe_print(f"  [bold magenta]→[/bold magenta] [cyan]{from_a}[/cyan] [dim]handing off to[/dim] [bold]{to_a}[/bold] [dim]{task}[/dim]")
                         continue
 
-                    if chunk_type == "tool_call":
+                    if chunk_type in ("tool_call", "tool_start"):
                         tool_name = chunk.get("tool") or chunk.get("name")
                         args_dict = chunk.get("arguments", {})
                         if args_dict:
-                            safe_print(render_tool_execution(tool_name, args_dict))
+                            safe_print(f"  [bold cyan]⚡[/bold cyan] [white]{tool_name}[/white]({json.dumps(args_dict, default=str)[:120]})")
                         else:
-                            safe_print(render_step_micro_ui("tool_call", f"executing tool {tool_name}"))
+                            safe_print(f"  [bold cyan]⚡[/bold cyan] [white]{tool_name}[/white]")
+                        continue
+
+                    if chunk_type == "critic_update":
                         continue
 
                     if chunk_type == "tool_result":
                         tool = chunk.get("tool")
-                        payload = chunk.get("payload") or chunk.get("arguments")
-                        if payload and isinstance(payload, dict):
-                            safe_print(render_tool_execution(tool, payload))
-                        elif ctx.trace_mode:
-                            panel = render_trace_panel(
-                                "Tool Execution Details",
-                                {"tool": tool, "executing_model": chunk.get("model", "unknown")},
-                                "yellow"
-                            )
-                            safe_print(panel)
-                        else:
-                            safe_print(render_step_micro_ui("tool_call", f"executing tool {tool}"))
+                        result = chunk.get("result", {})
+                        ok = result.get("ok", False) if isinstance(result, dict) else True
+                        icon = "[green]✓[/green]" if ok else "[red]✗[/red]"
+                        result_str = str(result.get("result", result))[:100] if isinstance(result, dict) else str(result)[:100]
+                        safe_print(f"  {icon} [bold]{tool}[/bold] [dim]{escape(result_str)}[/dim]")
                         continue
 
                     if ("content" in chunk or "thinking" in chunk or chunk_type == "ping") and chunk_type != "final":
@@ -273,12 +244,10 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                             phase = "executing"
 
                         tool_calls = RE_TOOL_CALL.findall(full_content)
-
                         topic_match = RE_TOPIC_UPDATE.search(full_content)
                         if topic_match:
                             ctx.current_topic = topic_match.group(1)
                             ctx.current_summary = topic_match.group(2)
-
                         intent_match = RE_INTENT.search(full_content)
                         if intent_match:
                             ctx.strategic_intent = intent_match.group(1).strip()
@@ -294,52 +263,12 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
 
                         layout = Table.grid(padding=(0, 0))
                         layout.add_column()
-                        layout.add_row(Text.from_markup(status_bar(ctx, agent_id, model, phase, stats["ram_pct"], tps) + f" [dim]{elapsed:.1f}s[/dim]"))
 
-                        if ctx.strategic_intent:
-                            layout.add_row(Text.from_markup(f" [bold blue]intent[/bold blue]: [cyan]{ctx.strategic_intent}[/cyan]"))
-
-                        if ctx.current_topic != "Nexus Initialization":
-                            layout.add_row(Panel(escape(ctx.current_summary), title=f"[bold bright_white]{escape(ctx.current_topic)}[/bold bright_white]", border_style="blue dim"))
-
-                        plan_match = RE_PLAN_MATCH.search(full_content)
-                        if plan_match:
-                            layout.add_row(Panel(plan_match.group(1).strip(), title="Plan", border_style="yellow dim"))
-
-                        think_match = RE_THINK_MATCH.search(full_content)
-                        if think_match:
-                            think_content = think_match.group(1).strip()
-                            if think_content:
-                                layout.add_row(Panel(think_content, title="Thinking", border_style="dim white"))
-
-                        if tool_calls:
-                            layout.add_row(Text.from_markup(f"[dim]Tools:[/dim] {' '.join(f'[cyan]⚙ {t}[/cyan]' for t in tool_calls[-3:])}"))
+                        footer = status_footer(ctx, agent_id, model, phase, stats["ram_pct"], tps)
+                        layout.add_row(Text.from_markup(footer))
 
                         if display:
-                            display_lines = display.splitlines()
-                            max_display_lines = 20
-                            if len(display_lines) > max_display_lines:
-                                # BUG FIX: Use real "\n" not escaped "\\n" which renders as literal backslash-n
-                                display = "..." + "\n".join(display_lines[-max_display_lines:])
-                            layout.add_row(Panel(escape(display), border_style="bright_blue dim", padding=(0, 1)))
-
-                        if ctx.delegation_chain:
-                            tree_obj = Tree("[bold magenta]🐝 Swarm Handoff Trace[/bold magenta]")
-                            curr_node = tree_obj
-                            for i, agent in enumerate(ctx.delegation_chain):
-                                task_desc = ""
-                                if i > 0:
-                                    from_agent = ctx.delegation_chain[i-1]
-                                    to_agent = ctx.delegation_chain[i]
-                                    for h in handoffs_list:
-                                        if h["from"] == from_agent and h["to"] == to_agent:
-                                            task_desc = f" [dim]({h['task']})[/dim]"
-                                            break
-                                if i == len(ctx.delegation_chain) - 1:
-                                    curr_node = curr_node.add(f"[bold green]▶ {agent}[/bold green] (active){task_desc}")
-                                else:
-                                    curr_node = curr_node.add(f"[cyan]✓ {agent}[/cyan]{task_desc}")
-                            layout.add_row(Panel(tree_obj, border_style="magenta dim", title="[bold magenta]Live Handoff Trace[/bold magenta]"))
+                            layout.add_row(Panel(Markdown(display), border_style="dim", padding=(0, 1)))
 
                         live.update(layout)
                         continue
@@ -347,12 +276,12 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                     if chunk_type == "final":
                         live.stop()
                         final_content = chunk.get("content", "")
-                        ctx.last_provider = chunk.get("provider", "ollama")
+                        ctx.last_provider = chunk.get("provider", "llama.cpp")
 
                         if isinstance(final_content, dict):
-                            ctx.console.print(Panel(json.dumps(final_content, indent=2), title="[bold #ff00ea]SWARM OS RESPONSE[/bold #ff00ea]", border_style="bold #00f0ff"))
+                            ctx.console.print(Panel(json.dumps(final_content, indent=2), title="[bold]Response[/bold]", border_style="bold #00f0ff"))
                         elif final_content:
-                            ctx.console.print(Panel(Markdown(str(final_content)), title="[bold #ff00ea]SWARM OS RESPONSE[/bold #ff00ea]", border_style="bold #00f0ff", padding=(1, 2)))
+                            ctx.console.print(Panel(Markdown(str(final_content)), title="", border_style="green", padding=(1, 2)))
 
                         new_history = list(history)
                         if prompt:
@@ -364,7 +293,6 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                         elapsed_total = time.time() - start_time
                         update_token_metrics(ctx, prompt, history, final_content or full_content, model)
 
-                        # BUG FIX: Cap _AGENT_PERF dict to prevent unbounded memory growth
                         if len(_AGENT_PERF) > _AGENT_PERF_MAX:
                             _AGENT_PERF.clear()
                         perf = _AGENT_PERF.setdefault(agent_id, {"total": 0.0, "count": 0, "last": 0.0})
@@ -386,19 +314,9 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                         ctx.console.print()
 
                         if "APPROVAL REQUIRED" in question:
-                            ctx.console.print(Panel(
-                                Markdown(question),
-                                title="🛡️  [bold yellow]Security Gate - Action Approval[/bold yellow]",
-                                border_style="yellow",
-                                padding=(1, 2)
-                            ))
+                            ctx.console.print(Panel(Markdown(question), title="🛡️ [bold yellow]Approval Required[/bold yellow]", border_style="yellow", padding=(1, 2)))
                         else:
-                            ctx.console.print(Panel(
-                                Markdown(question),
-                                title="❓  [bold cyan]Agent Request[/bold cyan]",
-                                border_style="cyan",
-                                padding=(0, 1)
-                            ))
+                            ctx.console.print(Panel(Markdown(question), title="❓ [bold cyan]Question[/bold cyan]", border_style="cyan", padding=(0, 1)))
 
                         if options:
                             from rich.prompt import Prompt
@@ -417,7 +335,7 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                             new_history.append({"role": "user", "content": prompt})
                         new_history.append({"role": "assistant", "content": full_content})
                         new_history.append({"role": "user", "content": f"Observation: {json.dumps({'answer': answer})}"})
-                    
+
                         history = new_history
                         prompt = ""
                         agent_id = chunk.get("agent_id", agent_id)
@@ -439,19 +357,17 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
 
         if _ask_user_triggered:
             continue
-            
-        ctx.console.print(Rule(title="[bold #ff00ea]COMM-LINK CLOSED[/bold #ff00ea]", style="bold #00f0ff"))
 
         if full_content and full_content.strip():
             ctx.console.print()
-            ctx.console.print(Panel(str(full_content), title="[bold #ff00ea]SWARM OS RESPONSE[/bold #ff00ea]", border_style="bold #00f0ff", padding=(1, 2)))
+            ctx.console.print(Panel(Markdown(str(full_content)), title="", border_style="green", padding=(1, 2)))
 
         if not _tokens_counted:
             update_token_metrics(ctx, prompt, history, full_content, model)
 
         if _stream_errored:
             return history
-            
+
         return history
 
 def stream_prompt(ctx, agent_id, prompt, history):
