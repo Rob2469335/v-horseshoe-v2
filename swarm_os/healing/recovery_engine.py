@@ -311,11 +311,18 @@ def alert_only(anomaly):
 
 class RecoveryEngine:
     def __init__(self, actions=None):
+        # Merge infra actions with whole-computer system recovery actions.
+        try:
+            from .system_recovery import SYSTEM_RECOVERY_ACTIONS
+            system_actions = dict(SYSTEM_RECOVERY_ACTIONS)
+        except Exception:
+            system_actions = {}
         self.actions = actions or {
             "llamacpp": restart_llamacpp,
             "backend": restart_backend,
             "swarm_api": restart_backend,
             "qdrant": llm_guided_recovery,
+            **system_actions,
         }
 
     async def recover(self, anomaly):

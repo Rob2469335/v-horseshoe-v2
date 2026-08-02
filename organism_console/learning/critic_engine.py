@@ -19,7 +19,7 @@ class CriticEngine:
             updated = datetime.fromisoformat(skill.updated_at)
             days = (datetime.utcnow() - updated).days
             return self.decay ** days
-        except:
+        except (ValueError, TypeError):
             return 1.0
 
     def evolve(self):

@@ -82,7 +82,42 @@ Write-Host "`n[STEP 2] Starting llama.cpp Microservices (Ports 8080-8083)..." -F
 
 # To switch to the 35B model, uncomment the line below and comment out the 9B line.
 # $llamaGenJob = Start-Job -ScriptBlock { param($r); Set-Location $r; & .\bin\llama.exe serve -m ".\models\qwen-tuned-latest.gguf" -c 32768 -ctk q8_0 -ctv q8_0 -t 4 -b 256 -ub 512 --port 8080 2>&1 } -ArgumentList $root
-$llamaGenJob = Start-Job -ScriptBlock { param($r); Set-Location $r; & .\bin\llama.exe serve -m ".\models\Qwen3.5-9B-Q4_K_M.gguf" --alias "qwen3.5-9b" -c 16384 -ctk q8_0 -ctv q8_0 -fa on -t 2 -b 2048 -ub 512 --timeout 120 --api-key "llama" --cors-origins "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000" --port 8080 2>&1 } -ArgumentList $root
+# Speculative decoding (off by default): enable with $env:SWARM_SPEC_DECODE = "1".
+# $env:SWARM_SPEC_TYPE selects the implementation (default "ngram-simple"):
+#   - "ngram-simple"            : pattern-matching drafts, no extra model (measured ~2x)
+#   - "draft-mtp,ngram-simple"  : Qwen3.5 built-in MTP head + ngram. REQUIRES an MTP
+#     GGUF (e.g. unsloth Qwen3.5-4B-MTP / -9B-MTP; the plain Qwen3.5-9B/4B GGUFs have
+#     NO MTP head). UD-Q4_K_XL 4B measured 66% acceptance, ~2.0x on the iGPU.
+#   - "draft-simple,ngram-simple" + $env:SWARM_DRAFT_MODEL : in-process 0.8B draft
+#     (Qwen3.5-0.8B shares the family vocab; verified identical tokenization).
+$specArgs = @()
+if ($env:SWARM_SPEC_DECODE -eq "1") {
+    $specType = if ($env:SWARM_SPEC_TYPE) { $env:SWARM_SPEC_TYPE } else { "ngram-simple" }
+    $specArgs = @("--spec-type", $specType)
+    if ($specType -like "*ngram-simple*") { $specArgs += @("--spec-ngram-simple-size-n", "4", "--spec-ngram-simple-size-m", "16", "--spec-ngram-simple-min-hits", "1") }
+    if ($specType -like "*draft-mtp*")     { $specArgs += @("--spec-draft-n-max", "3") }
+    if ($env:SWARM_DRAFT_MODEL)            { $specArgs += @("--model-draft", $env:SWARM_DRAFT_MODEL) }
+}
+
+# Local generation model override (off by default): set $env:SWARM_LOCAL_MODEL:
+#   - "qwen3.5-4b"     : plain 4B Q4_K_M on the iGPU (-ngl 99), ~6.4 t/s
+#   - "qwen3.5-4b-mtp" : unsloth MTP 4B (UD-Q4_K_XL) for --spec-type draft-mtp;
+#                        measured ~13 t/s (~2x) with draft-mtp+ngram on this iGPU
+# The qwen3.5-9b alias is kept so the runtime is unchanged.
+$genModel = ".\models\Qwen3.5-9B-Q4_K_M.gguf"
+$genAlias = "qwen3.5-9b"
+$genNgl = "0"
+if ($env:SWARM_LOCAL_MODEL -eq "qwen3.5-4b") {
+    $genModel = "C:\Users\rober\models\Qwen3.5-4B-Q4_K_M.gguf"
+    $genAlias = "qwen3.5-4b,qwen3.5-9b"
+    $genNgl = "99"
+}
+if ($env:SWARM_LOCAL_MODEL -eq "qwen3.5-4b-mtp") {
+    $genModel = "C:\Users\rober\models\Qwen3.5-4B-UD-Q4_K_XL.gguf"
+    $genAlias = "qwen3.5-4b,qwen3.5-9b"
+    $genNgl = "99"
+}
+$llamaGenJob = Start-Job -ScriptBlock { param($r, $spec, $m, $a, $ngl); Set-Location $r; & .\bin\llama.exe serve -m $m --alias $a -c 16384 -ctk q8_0 -ctv q8_0 -fa on -t 2 -tb 4 -b 2048 -ub 512 -np 1 --timeout 300 --cache-reuse 256 --api-key "llama" --cors-origins "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000" -ngl $ngl --port 8080 @spec 2>&1 } -ArgumentList $root, $specArgs, $genModel, $genAlias, $genNgl
 $llamaEmbJob = Start-Job -ScriptBlock { param($r); Set-Location $r; & .\bin\llama.exe serve -m ".\models\nomic-embed-text-v1.5.Q8_0.gguf" --embedding --api-key "llama" --cors-origins "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000" --port 8081 -t 2 2>&1 } -ArgumentList $root
 $llamaRerankJob = Start-Job -ScriptBlock { param($r); Set-Location $r; & .\bin\llama.exe serve -m ".\models\qllama-bge-reranker-v2-m3-latest.gguf" --reranking --api-key "llama" --cors-origins "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000" --port 8082 -t 2 2>&1 } -ArgumentList $root
 $llamaVisJob = Start-Job -ScriptBlock { param($r); Set-Location $r; & .\bin\llama.exe serve -m ".\models\moondream-latest.gguf" --override-kv "tokenizer.ggml.pre=str:default" --chat-template "vicuna" --mmproj-auto --api-key "llama" --cors-origins "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000" --port 8083 -t 2 2>&1 } -ArgumentList $root

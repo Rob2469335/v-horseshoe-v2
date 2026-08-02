@@ -1,4 +1,5 @@
 import time
+import random
 import logging
 import asyncio
 import os
@@ -42,20 +43,60 @@ _COOLDOWN_BASE_S = 30.0
 _MAX_COOLDOWN_S = 600.0
 
 
-def record_model_failure(model: str, error: str = "") -> None:
+# Permanent (non-retryable) failure markers — a model/provider that hits one of
+# these will never recover by retrying the same request, so we jump straight to
+# the max cooldown instead of burning the retry budget (retry research: only
+# retry transient failures — timeouts/429/5xx; never 400/401/402/403/404).
+_PERMANENT_ERROR_MARKERS = (
+    "402", "payment", "insufficient credits", "no credits", "billing",
+    "requires more credits", "401", "403", "404", "invalid api key",
+    "auth", "forbidden", "not found",
+)
+
+
+def is_permanent_error(error: str) -> bool:
+    """True if the error string indicates a failure that retrying cannot fix
+    (billing/auth/forbidden/missing resource). Callers should fail fast to
+    fallback rather than re-issue the identical doomed request."""
+    err = str(error or "").lower()
+    return any(marker in err for marker in _PERMANENT_ERROR_MARKERS)
+
+
+def record_model_failure(model: str, error: str = "", permanent: bool | None = None) -> None:
     """Called when a model/providers generation fails (tool decision error, JSON repair,
-    circuit-breaker trip). Marks the model down for an escalating cooldown window."""
+    circuit-breaker trip). Marks the model down for an escalating cooldown window.
+    Backoff uses exponential growth + jitter so synchronized failures (thundering
+    herd) don't all retry on the same schedule (self-healing best practice)."""
     key = (model or "").split(":", 1)[-1]
     if not key:
         return
     now = time.time()
+    if permanent is None:
+        permanent = is_permanent_error(error)
     with _cooldowns_lock_sync():
         entry = _cooldowns.setdefault(key, {"failures": 0, "until": 0.0, "last_error": ""})
         entry["failures"] += 1
-        backoff = min(_MAX_COOLDOWN_S, _COOLDOWN_BASE_S * (2 ** (entry["failures"] - 1)))
-        entry["until"] = now + backoff
+        if permanent:
+            # Payment/auth failures won't clear on their own — pin at max cooldown
+            # so the provider is skipped until it is explicitly cleared by success.
+            backoff = _MAX_COOLDOWN_S
+            entry["until"] = now + backoff
+        else:
+            backoff = min(_MAX_COOLDOWN_S, _COOLDOWN_BASE_S * (2 ** (entry["failures"] - 1)))
+            backoff *= random.uniform(0.75, 1.25)  # ±25% jitter
+            entry["until"] = now + backoff
         entry["last_error"] = str(error)[:200]
-        log.warning("Model %s marked down for %.0fs (failure #%d): %s", key, backoff, entry["failures"], str(error)[:80])
+        log.warning(
+            "Model %s marked down for %.0fs (failure #%d%s): %s",
+            key, backoff, entry["failures"], " permanent" if permanent else "", str(error)[:80],
+        )
+
+
+def is_model_cooled_down(model: str) -> bool:
+    """Public check — used by the router so routing decisions skip a provider that
+    is already in a cooldown window (prevents re-selecting a known-failing model)."""
+    key = (model or "").split(":", 1)[-1]
+    return _is_cooldown_active(key)
 
 
 def record_model_success(model: str) -> None:

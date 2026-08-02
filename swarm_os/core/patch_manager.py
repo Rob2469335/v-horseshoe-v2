@@ -34,7 +34,7 @@ class PatchManager:
         # Force delete if exists to ensure clean start
         try:
             self._run(["git", "branch", "-D", branch_name])
-        except:
+        except Exception:
             pass
         self._run(["git", "checkout", "-b", branch_name])
         return branch_name
@@ -70,5 +70,5 @@ class PatchManager:
         self._run(["git", "checkout", base_branch])
         try:
             self._run(["git", "branch", "-D", feature_branch])
-        except:
+        except Exception:
             pass

@@ -182,7 +182,11 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                             )
                             safe_print(panel)
                         else:
-                            safe_print(render_step_micro_ui("model_selected", f"selected {model}"))
+                            resolved = chunk.get("resolved_model")
+                            if resolved and resolved != model:
+                                safe_print(render_step_micro_ui("model_selected", f"selected {model} → [cyan]{resolved}[/cyan]"))
+                            else:
+                                safe_print(render_step_micro_ui("model_selected", f"selected {model}"))
                         continue
 
                     if chunk_type == "model_escalation":

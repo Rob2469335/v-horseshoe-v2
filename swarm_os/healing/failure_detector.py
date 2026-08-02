@@ -81,6 +81,13 @@ class FailureDetector:
             "context_utilization": self.check_context_utilization(),
             "retry_rate": self.check_retry_rate(),
         }
+        # Whole-computer probes (disk/RAM/runaway/temp/event-log). These are
+        # read-only and fast; run them synchronously in this call.
+        try:
+            from .system_probes import run_system_probes
+            results.update(run_system_probes())
+        except Exception as exc:
+            results["system_probes"] = {"ok": True, "detail": {"issue": "system_probes", "available": False, "error": str(exc)}}
         signals = []
         for component, result in results.items():
             if not result.get("ok", False):

@@ -80,6 +80,23 @@ class Diagnostician:
         if "delegate" in text or "circular" in text or "chain" in text:
             hypotheses.append({"id": gen_id("h"), "hypothesis": "delegation_loop", "confidence": 0.7, "explanation": "Agent tried to re-delegate to an already-visited agent.", "fix_class": "prompt_sensitivity"})
 
+        # Whole-computer signals: probe detail carries the issue name, so the
+        # diagnose text is e.g. "{'issue': 'memory_pressure', ...}". Give the
+        # safe issues (memory pressure, temp growth) high confidence so they
+        # auto-run; destructive ones are still forced to approval by the governor.
+        if "memory_pressure" in text or "ram_percent" in text:
+            hypotheses.append({"id": gen_id("h"), "hypothesis": "memory_pressure", "confidence": 0.9, "explanation": "System RAM utilization is high — empty working sets of non-critical processes.", "fix_class": "prompt_sensitivity"})
+        if "disk_space" in text or "free_gb" in text:
+            hypotheses.append({"id": gen_id("h"), "hypothesis": "disk_space", "confidence": 0.9, "explanation": "A drive is near-full — clean stale temp files.", "fix_class": "prompt_sensitivity"})
+        if "runaway_process" in text or "cpu_percent" in text:
+            hypotheses.append({"id": gen_id("h"), "hypothesis": "runaway_process", "confidence": 0.9, "explanation": "A process is pegged at high CPU/RAM — terminate it after safety checks.", "fix_class": "prompt_sensitivity"})
+        if "temp_growth" in text or "temp_gb" in text:
+            hypotheses.append({"id": gen_id("h"), "hypothesis": "temp_growth", "confidence": 0.9, "explanation": "OS temp folder is ballooning — remove stale files.", "fix_class": "prompt_sensitivity"})
+        if "event_log_storm" in text or "errors" in text:
+            hypotheses.append({"id": gen_id("h"), "hypothesis": "event_log_storm", "confidence": 0.7, "explanation": "Recent error storm in the Windows Event Log — investigate, no auto-remedy.", "fix_class": "model_variability"})
+        if "stopped_service" in text or "service_name" in text:
+            hypotheses.append({"id": gen_id("h"), "hypothesis": "stopped_service", "confidence": 0.9, "explanation": "A critical Windows service stopped — restart it.", "fix_class": "prompt_sensitivity"})
+
         # Qdrant similarity lookup: if configured, search for similar incidents and boost matching hypothesis confidences
         try:
             q_results = self._call_qdrant(text, top_k=5)

@@ -204,6 +204,22 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         log.warning(f"Reflection daemon unavailable: {exc}")
 
+    try:
+        from swarm_os.healing.system_probes import run_system_probes
+
+        async def _probe_warmup():
+            try:
+                await asyncio.to_thread(run_system_probes)
+                log.info("Command-center probe cache warmed")
+            except Exception as exc:
+                log.warning(f"Probe warmup failed: {exc}")
+
+        t4 = asyncio.create_task(_probe_warmup())
+        bg_tasks.add(t4)
+        log.info("Started system-probe warmup")
+    except Exception as exc:
+        log.warning(f"Probe warmup unavailable: {exc}")
+
     log.info("RuntimeGraph mounted on app.state — all routes live")
     yield
     log.info("Swarm OS shutting down")
@@ -274,11 +290,13 @@ def create_app() -> FastAPI:
     from swarm_os.upwork.routes import router as upwork_router
     from swarm_os.api.swarm_stream import router as swarm_stream_router
     from swarm_os.api.admin import router as admin_router
+    from swarm_os.api.control import router as control_router
 
     app.include_router(api_router)
     app.include_router(agents_router)
     app.include_router(upwork_router)
     app.include_router(swarm_stream_router)
+    app.include_router(control_router)
     # BUG FIX: admin_router was imported and stored but never mounted.
     # All /admin/* endpoints were silently unreachable.
     app.include_router(admin_router)

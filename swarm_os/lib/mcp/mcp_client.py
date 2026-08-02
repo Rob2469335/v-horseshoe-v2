@@ -84,11 +84,13 @@ class ExternalMCPClientManager:
                 
                 self.sessions[name] = session
                 for t in tools_response.tools:
+                    # MCP SDK renamed inputSchema -> input_schema; accept both.
+                    schema = getattr(t, "input_schema", None) or getattr(t, "inputSchema", None) or {}
                     all_tools.append({
                         "server": name,
                         "name": t.name,
-                        "description": t.description,
-                        "input_schema": t.inputSchema
+                        "description": t.description or t.name,
+                        "input_schema": schema,
                     })
             except Exception as e:
                 logger.error(f"Failed to initialize MCP server '{name}': {e}")

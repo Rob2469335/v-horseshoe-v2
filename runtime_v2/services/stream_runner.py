@@ -44,6 +44,42 @@ litellm.suppress_debug_info = True
 log = logging.getLogger(__name__)
 
 
+async def _store_decision_reflexion(agent_id: str, action: str, failure_reason: str,
+                                    correction: str, do_not_repeat: str,
+                                    confidence: float = 0.75):
+    """Persist a tool-decision failure (empty response / malformed JSON / timeout)
+    BOTH as episodic memory AND as a structured ReflexionMemory rule so that
+    check_for_past_mistakes() can inject a [PAST-MISTAKE WARNING] into a future
+    decision (was: episodic remember_fact only, so decision-level lessons never
+    reached the warning path)."""
+    try:
+        from runtime_v2.services.memory_core import remember_fact
+        fire_and_forget(asyncio.to_thread(
+            remember_fact,
+            f"REFLEXION: Agent '{agent_id}' {action}: {failure_reason}",
+            category="self_reflection",
+        ))
+    except Exception:
+        pass
+    try:
+        from swarm_os.services.reflection_loop import get_reflection_service
+        task_hint = (
+            f"agent:{agent_id} analyzing auditing codebase tool decision {action} "
+            f"failed {str(failure_reason)[:120]}"
+        )
+        await get_reflection_service().store_reflexion(
+            task=task_hint,
+            action=f"decision:{action}",
+            failure_reason=str(failure_reason)[:300],
+            correction=correction,
+            do_not_repeat=do_not_repeat,
+            component=agent_id,
+            confidence=confidence,
+        )
+    except Exception as exc:
+        log.debug("[%s] decision reflexion store skipped: %s", agent_id, exc)
+
+
 async def get_tool_decision(
     model: str, messages: list, agent_id: str, allowed_tools: list = None
 ) -> Optional[dict]:
@@ -52,6 +88,19 @@ async def get_tool_decision(
     # cached = _get_cached_decision(cache_key)
     # if cached:
     #     return cached
+
+    # OPT-IN semantic decision cache (env SWARM_SEMANTIC_CACHE=1). Exact hash
+    # first, then Qdrant cosine search above a threshold. Never raises/blocks —
+    # a miss or error just falls through to the real LLM decision below.
+    try:
+        from runtime_v2.services._semantic_decision_cache import (
+            get_semantic_cached_decision,
+        )
+        cached = await get_semantic_cached_decision(messages, agent_id)
+        if cached is not None:
+            return cached
+    except Exception as cache_err:  # noqa: BLE001
+        log.debug("[%s] semantic decision cache lookup skipped: %s", agent_id, cache_err)
 
     litellm_model = get_litellm_model(agent_id, model)
     routing_mode = get_routing_mode()
@@ -157,11 +206,13 @@ async def get_tool_decision(
                     f"system_prompts.py and that its prompt instructs it to output a JSON object."
                 )
                 log.warning("[%s] Empty response (attempt %d/%d) — storing reflexion: %s", agent_id, empty_retry + 1, MAX_EMPTY_RETRIES + 1, critique)
-                try:
-                    from runtime_v2.services.memory_core import remember_fact
-                    fire_and_forget(asyncio.to_thread(remember_fact, critique, category="self_reflection"))
-                except Exception:
-                    pass
+                await _store_decision_reflexion(
+                    agent_id, "empty response",
+                    f"returned an EMPTY response on attempt {empty_retry + 1}",
+                    "Ensure the agent's system prompt instructs it to output a valid JSON "
+                    "object; the model may have emitted an immediate EOS token.",
+                    f"Do NOT return an empty response for agent '{agent_id}'.",
+                )
 
                 if empty_retry < MAX_EMPTY_RETRIES:
                     past_lessons = ""
@@ -194,12 +245,13 @@ async def get_tool_decision(
                 result = extract_json(normalize_model_json(content))
             except Exception as parse_exc:
                 log.warning("[%s] JSON parse failed: %s — routing through retry (attempt %d)", agent_id, str(parse_exc)[:80], empty_retry + 1)
-                critique = f"REFLEXION: Agent '{agent_id}' produced malformed JSON on attempt {empty_retry+1}: {str(parse_exc)[:150]}. Model may have had context overflow — the prompt was too long and the JSON was truncated before the 'action' field."
-                try:
-                    from runtime_v2.services.memory_core import remember_fact
-                    fire_and_forget(asyncio.to_thread(remember_fact, critique, category="self_reflection"))
-                except Exception:
-                    pass
+                await _store_decision_reflexion(
+                    agent_id, "malformed JSON",
+                    f"produced malformed JSON on attempt {empty_retry + 1}: {str(parse_exc)[:150]}",
+                    "Truncated JSON usually means context overflow — keep the prompt short "
+                    "enough that the closing JSON brace survives; re-emit ONLY a valid JSON object.",
+                    f"Do NOT emit truncated/malformed JSON for agent '{agent_id}'.",
+                )
                 if empty_retry < MAX_EMPTY_RETRIES:
                     base_messages = base_messages + [{"role": "user", "content": f"SYSTEM RECOVERY: Your JSON was malformed or truncated. Output ONLY a valid JSON object. Allowed actions: {', '.join(allowed)}. Example: {{\"action\":\"filesystem\",\"operation\":\"list\",\"path\":\".\"}}"}]
                     continue
@@ -226,8 +278,20 @@ async def get_tool_decision(
 
             log.debug("[%s] Tool decision: %s", agent_id, result.get("action"))
             try:
+                from runtime_v2.services._semantic_decision_cache import (
+                    cache_tool_decision,
+                )
+                await cache_tool_decision(messages, agent_id, result)
+            except Exception as cache_err:  # noqa: BLE001
+                log.debug("[%s] decision cache write skipped: %s", agent_id, cache_err)
+            try:
                 from runtime_v2.services.fallback_manager import record_model_success
                 record_model_success(litellm_model)
+            except Exception:
+                pass
+            try:
+                from runtime_v2.services.online_routing import record_analysis_outcome
+                record_analysis_outcome(agent_id, True)
             except Exception:
                 pass
             return result
@@ -236,30 +300,77 @@ async def get_tool_decision(
             is_timeout = isinstance(exc, asyncio.TimeoutError)
             # UPGRADE: feed outcome-driven cooldown so a failing local/cloud model is
             # skipped on the NEXT call instead of being retried blindly.
+            # Permanent failures (402 billing, 401/403 auth) pin at max cooldown and
+            # fail fast — retrying a "you need credits" error is guaranteed waste.
+            from runtime_v2.services.fallback_manager import (
+                record_model_failure,
+                is_permanent_error,
+            )
             try:
-                from runtime_v2.services.fallback_manager import record_model_failure
                 record_model_failure(litellm_model, str(exc)[:200])
             except Exception:
                 pass
+            if is_permanent_error(str(exc)):
+                log.warning("[%s] Permanent LLM error (%s) — switching to local fallback, no cloud retry.", agent_id, str(exc)[:100])
+                await _store_decision_reflexion(
+                    agent_id, "LLM error",
+                    f"permanent provider error (billing/auth): {str(exc)[:150]}",
+                    "The provider rejected the request permanently — switch to local or another provider.",
+                    f"Do NOT keep calling a provider that rejects requests with billing/auth errors for '{agent_id}'.",
+                )
+                # If the failing model was a cloud model, re-issue the SAME decision
+                # against the local llama.cpp model instead of ending the turn —
+                # a billing 402 should degrade to local, not halt the agent.
+                if litellm_model and not litellm_model.startswith("openai/"):
+                    try:
+                        import runtime_v2.services._llm_client as _llm_client_mod
+                        litellm_model = _llm_client_mod.get_litellm_model(agent_id, fallback_model="qwen3.5-9b")
+                        log.warning("[%s] Retrying decision on local model %s after cloud permanent error", agent_id, litellm_model)
+                        continue
+                    except Exception as local_exc:
+                        log.warning("[%s] Local fallback failed: %s", agent_id, str(local_exc)[:80])
+                return {"action": "final", "response": f"[SYSTEM: {agent_id} could not reach a working model ({str(exc)[:120]}). Falling back to the default action.]"}
             if empty_retry < MAX_EMPTY_RETRIES and not is_timeout:
                 log.warning("[%s] Tool decision transient error (attempt %d/%d): %s — retrying...", agent_id, empty_retry + 1, MAX_EMPTY_RETRIES + 1, str(exc)[:100])
                 base_messages = base_messages + [{"role": "user", "content": f"SYSTEM: Previous LLM call failed ({str(exc)[:60]}). Retry with a valid JSON tool decision."}]
+                continue
+            if empty_retry < MAX_EMPTY_RETRIES and is_timeout:
+                # Single-slot server (-np 1): a timeout usually means our request was
+                # queued behind a busy stream, not that the model is dead. The slot
+                # frees as soon as the blocking generation finishes, so retry once the
+                # cooldown clears instead of giving up at the worst moment.
+                await asyncio.sleep(5.0)
+                log.warning("[%s] Tool decision timeout (attempt %d/%d) — slot was busy, retrying...", agent_id, empty_retry + 1, MAX_EMPTY_RETRIES + 1)
                 continue
             import traceback
             if not is_timeout:
                 traceback.print_exc()
             log.warning("[%s] Tool decision failed after %d retries (timeout=%s): %s (will use default)", agent_id, empty_retry + 1, is_timeout, str(exc)[:100])
             try:
-                from runtime_v2.services.memory_core import remember_fact
                 if is_timeout:
-                    failure_memory = (
-                        f"REFLEXION: Agent '{agent_id}' timed out ({_STEP_TIMEOUT}s) after {MAX_EMPTY_RETRIES + 1} attempts. "
-                        f"Likely cause: RAM pressure causing OS-level swapping (tps dropped to ~0.1). "
-                        f"Solution: free system memory or reduce concurrent model loads."
+                    failure_reason = (
+                        f"tool decision timed out ({_STEP_TIMEOUT}s) even after {MAX_EMPTY_RETRIES + 1} attempts. "
+                        f"Likely cause: the single-slot llama.cpp server was still busy with a long stream, or sustained "
+                        f"memory pressure/swap on the host."
                     )
+                    correction = (
+                        "The single-slot server was likely busy — retry the goal when the slot is "
+                        "idle, reduce concurrent agents, or free system memory."
+                    )
+                    do_not = "Do NOT run many concurrent agents that queue behind one single slot."
                 else:
-                    failure_memory = f"REFLEXION: Agent '{agent_id}' tool decision failed after {MAX_EMPTY_RETRIES + 1} attempts: {str(exc)[:200]}."
-                fire_and_forget(asyncio.to_thread(remember_fact, failure_memory, category="self_reflection"))
+                    failure_reason = f"tool decision failed after {MAX_EMPTY_RETRIES + 1} attempts: {str(exc)[:200]}"
+                    correction = "Check the LLM provider / model availability and retry."
+                    do_not = f"Do NOT repeatedly call the same failing model for '{agent_id}'."
+                await _store_decision_reflexion(
+                    agent_id, "timeout" if is_timeout else "LLM error",
+                    failure_reason, correction, do_not,
+                )
             except Exception as mem_exc:
                 log.warning("[%s] Failed to store reflexion memory: %s", agent_id, str(mem_exc)[:200])
+            try:
+                from runtime_v2.services.online_routing import record_analysis_outcome
+                record_analysis_outcome(agent_id, False)
+            except Exception:
+                pass
             return {"action": "final", "response": f"Unable to determine next action after {MAX_EMPTY_RETRIES + 1} attempts. Last error: {repr(exc)}"}

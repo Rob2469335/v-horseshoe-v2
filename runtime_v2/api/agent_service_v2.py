@@ -9,6 +9,10 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 
 log = logging.getLogger(__name__)
 
+# Bounded dedup cache for reflexion lessons (agent, action, error) -> last store
+# time. Prevents identical repeated failures from spamming ReflexionMemory.
+_failure_lessons_seen: dict = {}
+
 
 @dataclass
 class _CallState:
@@ -23,6 +27,13 @@ class _CallState:
     tool_payload: dict = field(default_factory=dict)
     tool_result: Any = None
     tool_result_str: str = ""
+    # Todo tracking (multi-step task state, like a human agent's checklist)
+    todos: list = field(default_factory=list)
+    todo_id: int = 0
+    # Verify-after-change: set after a successful patch/write on a code file;
+    # a `final` while pending_verify is rejected once so the agent tests first.
+    pending_verify: bool = False
+    _verify_final_rejected: bool = False
 
 from runtime_v2.api._agent_config import (
     MAX_TURNS, MAX_DEPTH, ANALYSIS_AGENTS,
@@ -90,6 +101,114 @@ class AgentServiceV2:
         except Exception:
             pass
 
+    async def _remember_failure(self, agent_id: str, action: str, tool_payload: dict,
+                                error: str, category: str = "self_reflection"):
+        """Persist a tool-execution failure BOTH as episodic memory AND as a
+        structured ReflexionMemory rule so check_for_past_mistakes() can steer a
+        future run with a [PAST-MISTAKE WARNING] (was: only episodic memory, so
+        the lesson never reached the decision loop)."""
+        try:
+            await self._remember(
+                f"Agent {agent_id} called {action} which failed with {error}. Strategy needs adjustment.",
+                category=category)
+        except Exception:
+            pass
+        try:
+            # Dedup guard: skip if this exact agent+action+error was already
+            # recorded within the last 5 minutes — repeated identical failures
+            # would otherwise spam the reflexion store with duplicate points.
+            key = (agent_id, action, str(error)[:200])
+            now = time.time()
+            if key in _failure_lessons_seen:
+                if now - _failure_lessons_seen[key] < 300:
+                    return
+            _failure_lessons_seen[key] = now
+
+            from swarm_os.services.reflection_loop import get_reflection_service
+            correction, do_not = self._failure_lesson(action, tool_payload, error)
+            # Task text is embedded and later matched against
+            # `agent:{agent_id} {user_message}` queries — lead with the agent +
+            # a generalizable "analyzing/auditing the codebase" trigger so the
+            # lesson surfaces on future codebase-analysis runs, then the concrete
+            # error for precision.
+            task_hint = (
+                f"agent:{agent_id} analyzing auditing codebase {action} failed "
+                f"{str(error)[:120]} — check filesystem paths before reading"
+            )
+            await get_reflection_service().store_reflexion(
+                task=task_hint,
+                action=action,
+                failure_reason=str(error)[:300],
+                correction=correction,
+                do_not_repeat=do_not,
+                component=agent_id,
+                confidence=0.75,
+            )
+        except Exception as exc:
+            log.debug("[%s] reflexion store skipped: %s", agent_id, exc)
+
+    @staticmethod
+    def _failure_lesson(action: str, payload: dict, error: str) -> tuple[str, str]:
+        """Build a targeted, agent-actionable correction + do-not-repeat for a
+        failed tool call (grounded, not an LLM guess)."""
+        if action == "filesystem" and "File not found" in error:
+            path = payload.get("path", "")
+            parent = "/".join(str(path).split("/")[:-1]) if path else ""
+            return (
+                f"Path '{path}' does not exist. Use filesystem list on '{parent or '.'}' "
+                "first to discover real file paths before reading — the module map in "
+                "AGENTS.md and the directory listing are the ground truth.",
+                f"Do NOT guess file paths; always list the parent directory first (path '{path}' does not exist).",
+            )
+        if action == "web_search" and ("timed out" in error.lower() or "timeout" in error.lower()):
+            return (
+                "Web search timed out. Retry with a shorter, more specific query or "
+                "proceed with what is known from the codebase.",
+                "Do NOT spam repeated web_search calls with the same query.",
+            )
+        return (
+            f"Tool '{action}' failed ({str(error)[:200]}). Check the tool contract in "
+            "_TOOL_DEFINITIONS and verify parameters before retrying.",
+            f"Do NOT repeat the exact same failed '{action}' call.",
+        )
+
+    # -----------------------------------------------------------------------
+    # Todo tracking (multi-step task checklist)
+    # -----------------------------------------------------------------------
+    def _handle_todo(self, decision: dict, agent_id: str, state: _CallState) -> dict:
+        """Add/complete/list todos. Returned dict becomes the tool_result the LLM
+        sees next turn, so it can keep a working checklist across turns."""
+        op = str(decision.get("operation", "list")).lower()
+        items = decision.get("items") or []
+        if isinstance(items, str):
+            items = [items]
+
+        if op == "add":
+            for it in items:
+                state.todo_id += 1
+                state.todos.append({"id": state.todo_id, "text": str(it), "done": False})
+            return {"ok": True, "result": f"Added {len(items)} todo(s). Current todos: {self._todos_preview(state)}"}
+        if op == "done":
+            target = decision.get("item_id") or decision.get("item")
+            found = False
+            for t in state.todos:
+                if (target is not None and str(t["id"]) == str(target)) or str(target) in t["text"]:
+                    t["done"] = True
+                    found = True
+                    break
+            if not found:
+                return {"ok": False, "error": f"Todo '{target}' not found. Current todos: {self._todos_preview(state)}"}
+            return {"ok": True, "result": f"Completed: {self._todos_preview(state)}"}
+        return {"ok": True, "result": self._todos_preview(state)}
+
+    @staticmethod
+    def _todos_preview(state: _CallState) -> str:
+        if not state.todos:
+            return "(empty)"
+        return "; ".join(
+            ("[x] " if t["done"] else "[ ] ") + f"{t['id']}. {t['text']}" for t in state.todos
+        )
+
     # -----------------------------------------------------------------------
     # Decision fetching: fast-route, warmup, or LLM call
     # -----------------------------------------------------------------------
@@ -109,14 +228,13 @@ class AgentServiceV2:
     async def _call_llm(self, model: str, messages: list, agent_id: str, allowed_tools: list) -> Optional[dict]:
         from runtime_v2.services.stream_runner import get_tool_decision
         try:
-            # UPGRADE: asyncio.timeout() — composable context manager
-            async with asyncio.timeout(120.0):
+            # UPGRADE: asyncio.timeout() — composable context manager.
+            # 300s must be >= _STEP_TIMEOUT (180s) so the step-level budget in
+            # stream_runner is the binding constraint, not this outer wrapper.
+            async with asyncio.timeout(300.0):
                 return await get_tool_decision(model, messages, agent_id, allowed_tools=allowed_tools)
         except asyncio.TimeoutError:
-            log.warning("[%s] LLM timeout >120s", agent_id)
-            raise
-        except Exception as exc:
-            log.warning("[%s] LLM error: %s", agent_id, exc)
+            log.warning("[%s] LLM timeout >300s", agent_id)
             raise
         except Exception as exc:
             log.warning("[%s] LLM error: %s", agent_id, exc)
@@ -152,6 +270,19 @@ class AgentServiceV2:
     async def _handle_final(self, decision: dict, agent_id: str, model: str, provider: str,
                             messages: list, start_time: float, prompt: str,
                             _fetched_content: bool, state: _CallState):
+        # Verify-after-change: reject a final call once when a code file was edited
+        # but never tested, forcing the agent to run sandbox_repl before reporting done.
+        if state.pending_verify and not state._verify_final_rejected:
+            state._verify_final_rejected = True
+            state.handler_status = "CONTINUE"
+            log.warning("[%s] Rejected final: pending code verification.", agent_id)
+            messages.append({"role": "user", "content": (
+                "SYSTEM: You edited a code file but have not verified it runs. "
+                "Use action=sandbox_repl (language=pytest or language=python) to test the "
+                "change before calling action=final. Do NOT report success without a test run."
+            )})
+            return
+
         # Reject premature final from analysis agents with no content fetched
         if agent_id in ANALYSIS_AGENTS and not _fetched_content:
             state.premature_finals += 1
@@ -285,7 +416,7 @@ class AgentServiceV2:
 
         if not state.tool_success:
             consecutive_errors += 1
-            await self._remember(f"Agent {agent_id} called {action} which failed with {result.get('error', 'unknown error')}. Strategy needs adjustment.", category="self_reflection")
+            await self._remember_failure(agent_id, action, tool_payload, result.get('error', 'unknown error'))
         else:
             # BUG FIX: Decay rather than hard-reset so a failure→success→failure
             # oscillation still reaches the breaker. Previously a success zeroed the
@@ -296,6 +427,18 @@ class AgentServiceV2:
                     _fetched_content = True
                 if action in ("semantic_search", "web_search", "lsp"):
                     _fetched_content = True
+
+            # Verify-after-change: editing a code file must be followed by a test
+            # run before the agent may finalize (mirrors running tests/lint before
+            # declaring done).
+            if action == "filesystem" and tool_payload.get("operation") in ("write", "patch"):
+                path = str(tool_payload.get("path", ""))
+                if path.endswith((".py", ".js", ".ts", ".tsx", ".jsx", ".go", ".rs")):
+                    state.pending_verify = True
+                    state._verify_final_rejected = False
+            if action == "sandbox_repl" and state.tool_success:
+                state.pending_verify = False
+                state._verify_final_rejected = False
 
         _result_str = json.dumps(result, ensure_ascii=False)
         if len(_result_str) > MAX_RESULT_CHARS:
@@ -358,7 +501,14 @@ class AgentServiceV2:
         if prompt:
             messages.append({"role": "user", "content": prompt})
 
+        resolved_model = None
+        try:
+            from runtime_v2.services._llm_client import get_litellm_model
+            resolved_model = get_litellm_model(agent_id, model)
+        except Exception:
+            pass
         yield {"agent_id": agent_id, "type": "model_selected", "model": model, "provider": provider,
+               "resolved_model": resolved_model,
                "requested_role": self._agents.get(agent_id, {}).get("model_role", "fast"),
                "attempt": 1, "temperature": 0.1}
 
@@ -380,6 +530,17 @@ class AgentServiceV2:
             if len(non_sys_msgs) > MAX_HISTORY_TURNS * 2:
                 non_sys_msgs = non_sys_msgs[-(MAX_HISTORY_TURNS * 2):]
             trimmed_messages = sys_msgs + non_sys_msgs
+
+            # Inject the working todo list every turn so the agent's checklist is
+            # always in context (survives message compaction).
+            if state.todos:
+                todos_block = (
+                    f"\n\n[CURRENT TODO LIST]\n{self._todos_preview(state)}\n"
+                    "Keep working through these items. Use action=todo with operation=done "
+                    "when you finish one. Only call action=final when all items are done "
+                    "or the task is genuinely complete."
+                )
+                trimmed_messages = trimmed_messages + [{"role": "user", "content": todos_block}]
 
             # --- Get decision (fast-route, warmup, or LLM) ---
             try:
@@ -463,6 +624,15 @@ class AgentServiceV2:
                 yield {"agent_id": agent_id, "type": "ask_user", "model": model, "provider": provider, "question": question}
                 self._record_success(model, start_time)
                 return
+
+            if action == "todo":
+                # Pure in-memory checklist: no tool_executor round-trip.
+                result = self._handle_todo(decision, agent_id, state)
+                yield {"agent_id": agent_id, "content": f"[todo] {json.dumps(result, ensure_ascii=False)}", "model": model}
+                yield {"agent_id": agent_id, "type": "tool_result", "tool": "todo", "result": result}
+                messages.append({"role": "assistant", "content": json.dumps({"action": "todo", "operation": decision.get("operation", "list")})})
+                messages.append({"role": "user", "content": f"TOOL RESULT (todo):\n{json.dumps(result, ensure_ascii=False)}\n\nContinue."})
+                continue
 
             if action not in allowed_tools:
                 unauthorized_tool_errors += 1

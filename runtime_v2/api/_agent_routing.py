@@ -83,7 +83,16 @@ def fast_route_coordinator(user_prompt: str) -> dict | None:
 
 _AGENT_WARMUP: dict[str, list[dict]] = {
     "code_analyzer": [
-        {"action": "filesystem", "operation": "list", "path": "runtime_v2"}
+        # Deterministic grounding, mirroring a human (or opencode) workflow:
+        # 1) Read AGENTS.md first — it maps the whole codebase.
+        # 2) Discover real paths with glob — never guess.
+        # 3) Read the key entry points so the LLM always has real content before
+        #    it starts deciding (it otherwise hallucinates paths like
+        #    runtime_v2/core/agent_service_v2.py and burns all 8 turns).
+        {"action": "filesystem", "operation": "read", "path": "AGENTS.md"},
+        {"action": "filesystem", "operation": "glob", "path": "runtime_v2", "pattern": "**/*.py"},
+        {"action": "filesystem", "operation": "read", "path": "runtime_v2/api/agent_service_v2.py"},
+        {"action": "filesystem", "operation": "read", "path": "runtime_v2/services/stream_runner.py"},
     ],
 }
 

@@ -24,9 +24,45 @@ class Governor:
         hypotheses = self.diagnostician.diagnose(symptom)
         top_conf = hypotheses[0].get("confidence", 0.0) if hypotheses else 0.0
 
-        # policy check for actions to be considered
-        # naive default: compute a risk score (1 - confidence) and compare to thresholds
-        # if low confidence -> require approval; if high -> auto
+        # Whole-computer self-healing safety gate: signals flagged destructive
+        # (kill process / clean temp / restart service) ALWAYS require human
+        # approval, no matter how confident the diagnosis. Safe system issues
+        # (memory pressure, event-log storms) may still auto-run.
+        try:
+            detail = symptom.get("detail") or {}
+            if isinstance(detail, dict) and detail.get("destructive"):
+                decision = {
+                    "incident_id": incident_id,
+                    "hypotheses": hypotheses,
+                    "mode": "approval_required",
+                    "mode_reason": (
+                        f"destructive system action for component "
+                        f"'{symptom.get('component')}' requires human approval — "
+                        "safe ops auto-heal, destructive ops are gated."
+                    ),
+                }
+                fr = FailureRecord(
+                    incident_id=incident_id,
+                    symptom=symptom,
+                    root_cause=None,
+                    hypotheses=hypotheses,
+                    repair_attempts=[],
+                    successful_fix=None,
+                    confidence=top_conf,
+                    outcome="OPEN",
+                    service=symptom.get("component"),
+                    environment=symptom.get("environment", {}),
+                    metrics_before=symptom.get("metrics_before", {}),
+                    metrics_after={},
+                )
+                try:
+                    self.learner.persist_failure(fr)
+                except Exception:
+                    pass
+                return decision
+        except Exception:
+            pass
+
         decision = {"incident_id": incident_id, "hypotheses": hypotheses}
 
         # consult policy engine if available to see if particular action types are gated

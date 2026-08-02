@@ -8,7 +8,7 @@ import re
 from pathlib import Path
 from litellm import acompletion
 from qdrant_client import AsyncQdrantClient
-from qdrant_client.models import PointStruct, VectorParams, Distance
+from qdrant_client.models import PointStruct, VectorParams, Distance, Filter, FieldCondition, MatchValue
 from swarm_os.services.embedding_service import EmbeddingService
 
 logger = logging.getLogger("ReflectionLoop")
@@ -72,6 +72,41 @@ Produce a structured reflection with EXACTLY this format:
 </reflection>"""
 
 
+# Shared-scope reflection rules (cross-agent lessons). Only confident, generic,
+# non-agent-specific failures may be shared; everything else stays agent-siloed.
+# Retrieval of shared rules is env-gated (SWARM_SHARED_REFLEXION=1, off by default).
+SHARED_SCOPE_MIN_CONFIDENCE = 0.7
+SHARED_SCOPE_GENERIC_MARKERS = (
+    "file not found",
+    "permission denied",
+    "no such file",
+    "unknown operation",
+    "timeout",
+    "timed out",
+    "slot was busy",
+    "malformed json",
+    "malformed",
+    "truncated",
+    "parse",
+)
+
+
+def _auto_scope(confidence: float, failure_reason: str) -> str:
+    """Conservative scope assignment for stored reflexion rules.
+
+    Only rules that are (a) confident enough (>= SHARED_SCOPE_MIN_CONFIDENCE)
+    and (b) whose failure reason matches an explicit allowlist of generic,
+    cross-agent failure categories qualify for scope='shared'. Everything else
+    stays 'agent' so agent-specific lessons never leak across agents.
+    """
+    if confidence < SHARED_SCOPE_MIN_CONFIDENCE:
+        return "agent"
+    reason = (failure_reason or "").lower()
+    if not any(marker in reason for marker in SHARED_SCOPE_GENERIC_MARKERS):
+        return "agent"
+    return "shared"
+
+
 class ReflectionService:
     def __init__(self, qdrant_url: str = "http://127.0.0.1:6333", collection_name: str = "ReflexionMemory"):
         self.client = AsyncQdrantClient(url=qdrant_url)
@@ -103,9 +138,15 @@ class ReflectionService:
         except Exception as e:
             logger.error("Failed to init ReflexionMemory: %s", e)
 
-    async def check_for_past_mistakes(self, task_context: str, threshold: float = 0.75) -> str:
+    async def check_for_past_mistakes(self, task_context: str, threshold: float = 0.75, max_chars: int = 700) -> str:
         """Ranked retrieval with recency+confidence decay (top-k, not single hit).
-        score = similarity · decay(age) · confidence; returns the single best rule."""
+        score = similarity · decay(age) · confidence; returns the single best rule.
+
+        When SWARM_SHARED_REFLEXION=1 (off by default), an extra top-k query
+        filtered to scope='shared' is merged in, so generic lessons any agent
+        produced are surfaced regardless of their component — de-duplicated
+        against the agent's own results and ranked by the same decay formula.
+        """
         await self._wait_init()
         try:
             embedding = await self.embedder.embed(task_context)
@@ -116,7 +157,26 @@ class ReflectionService:
                 limit=5,
                 score_threshold=threshold,
             )
-            results = getattr(response, "points", response)
+            results = list(getattr(response, "points", response))
+            if os.environ.get("SWARM_SHARED_REFLEXION") == "1":
+                shared_response = await self.client.query_points(
+                    collection_name=self.collection,
+                    query=embedding,
+                    limit=5,
+                    score_threshold=threshold,
+                    query_filter=Filter(must=[FieldCondition(key="scope", match=MatchValue(value="shared"))]),
+                )
+                shared_results = list(getattr(shared_response, "points", shared_response))
+                seen_ids = set()
+                merged = []
+                for r in results + shared_results:
+                    rid = getattr(r, "id", None)
+                    if rid is not None and rid in seen_ids:
+                        continue
+                    if rid is not None:
+                        seen_ids.add(rid)
+                    merged.append(r)
+                results = merged
             if results:
                 now = time.time()
                 best = None
@@ -137,15 +197,22 @@ class ReflectionService:
                     hint = f"WARNING: A similar approach previously failed. Advice: {correction}"
                     if do_not:
                         hint += f" Do NOT repeat: {do_not}"
-                    return hint
+                    # Cap lesson length so injected warnings never eat the context
+                    # budget (2026: keep reflection lessons at ~10-20% of context).
+                    return hint[:max_chars]
         except Exception as e:
             logger.warning("Failed to check ReflexionMemory: %s", e)
         return ""
 
     async def store_reflexion(self, task: str, action: str, failure_reason: str, correction: str,
-                              component: str = "unknown", confidence: float = 0.7):
+                              component: str = "unknown", confidence: float = 0.7,
+                              do_not_repeat: str = "", scope: str | None = None):
+        """Persist a reflexion rule. scope defaults to 'agent' and is auto-assigned
+        via _auto_scope() when not given (confident + generic failure => 'shared')."""
         await self._wait_init()
         try:
+            if scope is None:
+                scope = _auto_scope(confidence, failure_reason)
             embedding = await self.embedder.embed(task)
             await self.client.upsert(
                 collection_name=self.collection,
@@ -158,7 +225,9 @@ class ReflectionService:
                             "action": action,
                             "failure_reason": failure_reason,
                             "correction": correction,
+                            "do_not_repeat": do_not_repeat,
                             "component": component,
+                            "scope": scope,
                             "timestamp": time.time(),
                             "confidence": confidence,
                         }

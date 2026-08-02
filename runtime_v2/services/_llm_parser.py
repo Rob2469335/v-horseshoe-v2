@@ -18,6 +18,7 @@ def fire_and_forget(coro):
 
 TOOL_CALL_SCHEMA = {
     "type": "object",
+    "additionalProperties": False,
     "properties": {
         "thought": {"type": "string"},
         "action": {"type": "string", "enum": [

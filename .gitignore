@@ -161,6 +161,7 @@ swarm_os.egg-info/
 /bench-*.csv
 /bench-*.txt
 /bench-*.err
+/qwen35-*-autotune.csv
 /llama-bench-results.*
 /test.db
 /trends.json

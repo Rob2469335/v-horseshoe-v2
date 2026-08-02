@@ -244,6 +244,7 @@ Dependency pairing: React 19 ↔ `@react-three/fiber` ^9.5 / `@react-three/drei`
 - **Thinking mode**: Disabled via `/no_think` prepended to all system prompts in `_llm_prompts.py`
 - **Server**: `bin\llama.exe serve -m "models\Qwen3.5-9B-Q4_K_M.gguf" --alias "qwen3.5-9b" -c 16384 -fa on -ctk q8_0 -ctv q8_0 -t 2 -tb 4 -b 2048 -ub 512 -np 1 --timeout 300 --port 8080`
 - **Fallback**: `reviewer` agent still uses `openrouter` backend (`deepseek/deepseek-r1:free`)
+- **Analysis agents prefer cloud**: `code_analyzer`, `researcher`, `reviewer` route to **DeepSeek V4 Flash** (`openrouter/deepseek/deepseek-chat`) for all tool decisions + content streaming whenever `OPENROUTER_API_KEY` is present and cloud is enabled (see `runtime_v2/services/_llm_client.py` `_ANALYSIS_CLOUD_AGENTS` / `_analysis_cloud_enabled()`). Override model via `ANALYSIS_CLOUD_MODEL`; force local via `SWARM_ANALYSIS_CLOUD=off` or `/local` (routing mode `local_only`). Rationale: a 9B local model at ~6 t/s makes codebase audits and web-research synthesis take tens of seconds per decision; the cloud model resolves that while local chat stays on qwen3.5-9b.
 
 ---
 
@@ -263,11 +264,32 @@ Dependency pairing: React 19 ↔ `@react-three/fiber` ^9.5 / `@react-three/drei`
 
 ## Bug Fixes (Codebase Analysis)
 
+### CRITICAL — `healing_watchman.py` NameError (`heal_result` not defined) from corrupt indentation
+`organism_console/core/healing_watchman.py`: The recovery block (imports + the `symptom`/`run_coro_sync`/`finalize` body) had been accidentally de-indented to module scope, so `heal_result = ...` was referenced at import time before `_tick()` ever ran — the CLI crashed on startup with `NameError: name 'heal_result' is not defined`. Restored the imports to the top of the file and re-indented the block back inside `_tick()`.
+
+### HIGH — grep/search filesystem op always returned "Unknown operation"
+`swarm_os/lib/mcp/filesystem.py`: the alias normalizer maps `grep`/`search`/`find`/`grep_search`/`search_files` → `"search"`, but the dispatch handler only has an `elif operation == "grep":` branch. Every agent grep/search call fell through to `{"ok": False, "error": "Unknown operation: search"}` — silently breaking grep for every agent (and starving the `_record_fs_exploration` exploit-guard that keys on `grep`/`search`). Fixed by normalizing these aliases → `"grep"` so the handler (and `tool_executor` exploration tracking) match.
+
+### MEDIUM — Copy-paste literal `` `n `` instead of `\n` in generated tool text
+`organism_console/tools/tool_registry.py` `call_generate_api`: two f-strings embedded a literal backtick-`n` (`Goal: {goal}`nUsing memories: ...`), producing a visible `` `n `` in output. Replaced with real `\n` newlines.
+
+### MEDIUM — Latent `AttributeError` in dead `learning/critic_engine.py`
+`organism_console/learning/critic_engine.py` calls `self.repo.embed(...)` but `SkillRepository` (`skills/skill_repository.py`) defines no `embed` method. This class is dead code (only a stale `run_memory_evolution.ps1` references it; the active CriticEngine is `organism_console/review/critic_engine.py`) so it was left as-is rather than wiring a live path, but fixed its bare `except:`.
+
+### MEDIUM — Bare `except:` swallowing KeyboardInterrupt/SystemExit
+Converted `except:` → `except Exception:` (or specific types) in `swarm_os/core/patch_manager.py` (2×), `swarm_os/core/ci_engine.py`, `swarm_os/capabilities/lsp_tool.py`, `zenith/memory/graph_memory.py` (→ `OSError, SyntaxError`), `organism_console/learning/critic_engine.py` (→ `ValueError, TypeError`).
+
+### MEDIUM — Thread-safety race in `get_mcp_manager()` singleton
+`runtime_v2/services/tool_executor.py`: concurrent first calls could both spawn `ExternalMCPClientManager`. Guarded with an `asyncio.Lock`. (Added `import asyncio`.)
+
 ### CRITICAL — CPU P-core Single-Slot Optimization (`-np 1 -t 2 -tb 4`) & Gated Delta Net Fix
 `start-dev.ps1`, `start-dev-fixed.ps1`, `start_llama.bat`: Default `n_slots = 4` (`-np 4`) with `-t 2` caused severe thread starvation on 2-core P-core CPUs, cutting generation speed in half (`3.04 tok/s` vs 6.01 tok/s baseline). Furthermore, `-ngl 99` caused Vulkan to disable fused Gated Delta Net ops (`fused Gated Delta Net (chunked) not supported, set to disabled`). Fixed by explicitly setting `-np 1 -t 2 -tb 4 -ngl 0` (`n_slots = 1` for zero thread starvation, 2 P-core generation threads, 4 SMT prefill threads, native CPU Gated Delta Net kernels). Achieves full `5.08–6.01 tok/s` generation and `80–107 tok/s` prompt prefill.
 
 ### HIGH — Orchestrator & LLM Client Timeout Bumps for Concurrent Reranking Bursts
 `runtime_v2/services/stream_runner.py`, `runtime_v2/services/_llm_client.py`, `runtime_v2/api/agent_service_v2.py`: When agents like `code_analyzer` launch, semantic memory search triggers up to 47 concurrent reranking tasks on port 8082, temporarily saturating DDR5 memory bandwidth. Previous `90s`/`120s` timeouts caused premature aborts (`timeout=True`). Raised `_STEP_TIMEOUT` to `180.0s` (`stream_runner.py`) and litellm/call timeouts to `300.0s` (`_llm_client.py`, `agent_service_v2.py`).
+
+### HIGH — Tool-decision timeouts now retry (single-slot queueing isn't a dead model)
+`runtime_v2/services/stream_runner.py`: With `-np 1`, a decision timeout almost always means the request was queued behind a busy stream, not that the model is down. The retry branch previously excluded timeouts (`and not is_timeout`), so a 3-minute generation on the lone slot made `code_analyzer` give up after 1 attempt (`Tool decision failed after 1 retries (timeout=True)`). Timeouts now sleep 5s (letting the blocking generation finish) and re-enter the retry budget (3 attempts max). The outer `asyncio.timeout(300.0)` in `agent_service_v2.py` still bounds the loop, so it fail-fasts if the slot stays saturated. Also fixed the timeout reflexion memory, which wrongly blamed "RAM pressure / OS-level swapping" — it now records the real cause (busy single slot or sustained memory pressure).
 
 ### HIGH — 250-token cap caused truncated tool-decision JSON
 `runtime_v2/services/_llm_client.py`: `local_max_tokens` was 250 — tool-decision JSON (thought + action + params) truncated mid-JSON, triggering retry loops. Raised to 4096, matching cloud path.
@@ -299,6 +321,10 @@ Dependency pairing: React 19 ↔ `@react-three/fiber` ^9.5 / `@react-three/drei`
 ---
 
 ## Self-Healing & Self-Learning Fixes
+
+- **Rule (a)**: advice
+
+- **Rule (code_analyzer)**: ask for clarification
 
 - **Rule (test)**: Always verify collection names before search.
 - **Reflection distiller**: `reflection_loop.py` `_distill()` now calls the sanctioned cloud **DeepSeek V4 flash** (`openrouter/deepseek/deepseek-chat`, `max_tokens=600`, 90s timeout) first, with local `qwen3.5-9b` fallback (`/no_think` system lead + `max_tokens=2048`, 900s timeout). Local qwen3.5-9b burns all `max_tokens` on `reasoning_content` for the long distiller prompt (empty `content`, finish=length at ~5 tok/s); DeepSeek emits the structured `<reflection>` directly. Verified live: distill → Qdrant `ReflexionMemory` store → `check_for_past_mistakes` retrieval → `[PAST-MISTAKE WARNING]` injection.
@@ -348,6 +374,34 @@ Dependency pairing: React 19 ↔ `@react-three/fiber` ^9.5 / `@react-three/drei`
 - `offline_learner.py`: Added missing litellm config so rule extraction actually calls the LLM.
 - `memory_core.py`: KG read-modify-write guarded with `threading.Lock`. MoE shard routing always includes `general` shard.
 - `evolving_critic.py`: Journal future retained; `score()` returns `{score, weights}` instead of bare float.
+
+### Closed reflexion-learning loop (tool + decision failures → [PAST-MISTAKE WARNING])
+Research-grounded (Reflexion NeurIPS'23 episodic verbal feedback; AgentHER arxiv 2603.21357 hindsight relabeling; Self-Healing Framework arxiv 2605.06737 failure taxonomy; ReMe ACL'26 dynamic procedural memory). Gap found: tool failures only went to episodic `remember_fact`, but the decision loop's `[PAST-MISTAKE WARNING]` reads only `ReflexionMemory` — so lessons never steered future runs.
+- `runtime_v2/api/agent_service_v2.py`: new `_remember_failure()` + `_failure_lesson()` static helper. Failed tool calls (`_handle_tool`, line ~287) now persist BOTH episodic memory AND a structured `store_reflexion` rule (correction + `do_not_repeat`, confidence 0.75, component=agent_id). `_failure_lesson` emits grounded, non-LLM corrections for `filesystem`/File-not-found ("list the parent dir first"), `web_search`/timeout, and generic contract checks. Task text is embedded as `agent:{agent_id} analyzing auditing codebase {action} failed {error}` so it matches future `agent:{agent_id} {user_message}` queries. Dedup: identical (agent, action, error) suppressed for 5 min via `_failure_lessons_seen`.
+- `runtime_v2/services/stream_runner.py`: new `_store_decision_reflexion()` helper; the three decision-failure sites (empty response, malformed JSON, timeout/final error) now write ReflexionMemory too, not just episodic `remember_fact`.
+- `swarm_os/services/reflection_loop.py`: `store_reflexion()` gained a `do_not_repeat` payload field (retrieval already read it).
+- Tests: `tests/test_failure_lessons.py` (4 tests — lesson content, generic fallback, reflexion store, dedup).
+
+### opencode-parity behaviors (agents navigate/verify like a human maintainer)
+Goal: the analysis/coder agents should behave like a senior engineer (or opencode) — never guess paths, always read before writing, keep a working checklist, and verify after editing. `tests/test_opencode_parity.py` (9 tests) covers all of it.
+- **Project map injection** (`runtime_v2/services/project_map.py`, new): reads `AGENTS.md` and distills the Architecture Overview + Module Map tables (runtime_v2/swarm_os sections sorted first) into a ~6KB `[PROJECT MAP]` block, injected into the system prompt for `code_analyzer`, `researcher`, `coder`, `debugger`, `reviewer` (not the tiny coordinator). Agents always know the real module layout instead of hallucinating paths. Parsing is failure-tolerant (empty string on error).
+- **Deterministic discovery — `glob` op** (`swarm_os/lib/mcp/filesystem.py`): new `operation=glob` (`path` + `pattern` like `**/*.py`), fnmatch over recursive walk with banned-dir/ext/size filters, capped at 200 matches, returns root-relative paths. Agents find real files via glob/list instead of guessing. Grep already existed.
+- **Read-before-write guard** (`runtime_v2/services/tool_executor.py`): explored-path tracking (`_explored_paths`). Successful `list`/`read`/`grep`/`glob` mark paths (or their parents) as explored; a `patch` on an existing file that was never seen is blocked with a corrective error ("call read/list first"). New-file `write` stays allowed.
+- **Todo tracking** (`runtime_v2/api/agent_service_v2.py`): new `action=todo` (`operation: add|done|list`, `items`, `item_id`) maintained in `_CallState` and re-injected into the decision context every turn (survives message compaction), so the agent keeps a visible working checklist instead of a flat 8-turn loop.
+- **Verify-after-change** (`agent_service_v2.py`): after a successful `write`/`patch` on a code file (`*.py/.js/.ts/.tsx/.jsx/.go/.rs`), `state.pending_verify` is set and `action=final` is rejected once ("run sandbox_repl first") until a `sandbox_repl` succeeds. No more premature SUCCESS on un-tested edits.
+- **Warmup rewrite** (`runtime_v2/api/_agent_routing.py`): `code_analyzer` now deterministically 1) reads `AGENTS.md`, 2) globs `runtime_v2/**/*.py`, 3-4) reads the two key files — grounding before the LLM ever decides.
+
+### MCP tooling (open-code parity: docs + deep web read)
+- **Context7 MCP added** (`swarm_config.json`): `npx @upstash/context7-mcp` — up-to-date library docs (`resolve-library-id`, `query-docs`) for `researcher`/`coder`/`debugger`/`reviewer`/`code_analyzer` via `action=mcp`. Verified: 16 total tools across `sqlite`(5) + `memory`(8) + `context7`(2) load cleanly through `ExternalMCPClientManager`.
+- **Fixed `mcp_client.py` for MCP SDK 2.0**: the SDK renamed `Tool.inputSchema` → `Tool.input_schema` (2026-07-28 spec), breaking every external MCP tool with `'Tool' object has no attribute 'inputSchema'`. Now `getattr(t, "input_schema", None) or getattr(t, "inputSchema", None)`.
+- **`web_fetch` native tool** (`swarm_os/lib/mcp/web_search.py::web_fetch_handler` + `tool_executor.py`): deep-read a single URL (strip HTML/JS/CSS → readable text, `max_chars` cap, browser UA) — the swarm analogue of an opencode WebFetch, which search snippets don't provide. Added to `researcher` + `code_analyzer` tool lists.
+- **Not installed**: `@cyanheads/git-mcp-server` (dumps JSON logs to stdout, corrupts stdio MCP) and official Python `mcp-server-git`/`mcp-server-fetch` (use removed `Server.list_tools` API, incompatible with installed MCP SDK 2.0.0). Git is already covered by CLI commands + `sandbox_repl`; deep fetch now native. Revisit only if MCP SDK is downgraded.
+
+### Whole-computer command center (read-only system analysis)
+- **`system` tool** (`runtime_v2/services/system_intel.py`, new; wired in `tool_executor.py`; `action=system` definition + tool list in `system_prompts.py`): the swarm's whole-machine analysis capability — READ-ONLY, no destructive ops. Sub-actions: `system_inventory` (hostname/OS/CPU/RAM/swap/disks/network interfaces via psutil), `process_list` (sort=cpu|memory|name|pid, top=N), `service_list` (Windows services), `net_connections` (TCP/UDP sockets + owning process), `disk_analyzer` (path, max_depth, top — largest dirs/files via pathlib walk, banned dirs), `installed_apps` (registry Uninstall hives, both 64/32-bit), `startup_items` (Run/RunOnce keys), `registry_query` (read-only, restricted to SOFTWARE), `event_log_query` (Windows Event Log tail via pywin32, optional level filter). Runs through `asyncio.to_thread` (blocking psutil/winreg). Coordinator routes "analyze computer/system/hardware/processes" → `code_analyzer`; the tool is offered to `code_analyzer`, `researcher`, `debugger` (not coordinator). 9 tests in `tests/test_system_intel.py`.
+
+### Screen control (computer-use tier, human-control gated)
+- **`screen` tool** (`swarm_os/lib/mcp/screen.py`, new; wired in `tool_executor.py`; `action=screen` definition in `system_prompts.py`): the Anthropic Computer Use loop native on Windows via win32 APIs (no pyautogui/mss deps). Sub-actions: `screenshot` (saves PNG to `logs/screenshots/`, returns path + dims + foreground window), `foreground_window`, `list_windows`, `cursor_position` (read-only — always allowed), and `mouse_move`/`left_click`/`right_click`/`double_click`/`scroll`/`type`/`key` (input — GATED). **Human-control mode is the DEFAULT**: input actions are blocked with a "propose first, wait for approval" result until `SWARM_SCREEN_AUTONOMOUS=1` or `set_screen_autonomous(True)`. Action cap (default 200, `SWARM_SCREEN_MAX_ACTIONS`) stops runaway loops; `reset_screen_action_count()` clears. Unicode typing via `SendInput`/`KEYEVENTF_UNICODE`; keys support combos (`ctrl+s`, `alt+tab`). 10 tests in `tests/test_screen_control.py`.
 
 ### Memory daemon
 - `memory_bridge.py`: Removed duplicate consolidation daemon (watch_loop no longer spawns its own). Only main.py's explicit `start_manager_daemon` runs.
@@ -526,3 +580,61 @@ Removed all stale model references (`qwen2.5:7b-instruct`, `qwen2.5:3b-instruct`
 - Regenerated `routeTree.gen.ts` (`npm run generate-routes`) to register `/memories` + `/api/chat`.
 
 Verification: `organism-console` tsc clean, `start-console` tsc clean + `npm run build` succeeds, full `pytest` suite 240 passed / 2 skipped.
+
+---
+
+## 2026 SOTA Upgrades (implemented + roadmap)
+
+Applied from the 2025-26 online research pass on semantic caching, prompt-reuse, online routing, and reflection budgets. Each implemented item is **off by default** (env-gated) so nothing changes until enabled.
+
+### IMPLEMENTED — Semantic decision cache (hybrid exact→Qdrant) for the tool-decision loop
+`runtime_v2/services/_semantic_decision_cache.py` (new): on `get_tool_decision()` — (1) exact SHA-256 of the last user message hit-tests an in-process LRU (zero false positives), (2) on miss, embeds the query (nomic :8081) and searches a `decision_cache` collection, returning the stored decision only above `SWARM_SEMANTIC_CACHE_THRESHOLD` (default `0.85`), (3) writes results back so near-duplicate decisions short-circuit.
+- **Off by default**: enable with `SWARM_SEMANTIC_CACHE=1`. Rationale: the earlier pure-exact in-dict cache was deliberately disabled, so the semantic layer is opt-in + never raises/blocks (failures degrade to a miss).
+- Metrics via `decision_cache_stats()` (`hits`/`semantic_hits`/`misses`/`errors`/`lookups`).
+- Wired into `runtime_v2/services/stream_runner.py` `get_tool_decision()` (lookup at top, write-back on success).
+
+### IMPLEMENTED — Online win-rate routing for analysis agents (consistency-aware cloud)
+`runtime_v2/services/online_routing.py` (new) + `runtime_v2/services/_llm_client.py`: analysis agents (`code_analyzer`/`reviewer`/`researcher`) were hard-pushed to cloud whenever a key existed. Now the cloud hop is **win-rate gated**: per-agent success/failure persisted to `_agent_winrates.json`; the cloud hop only stays while win-rate ≥ `SWARM_WINRATE_FLOOR` (0.5) with ≥ `SWARM_WINRATE_MIN_SAMPLES` (5) samples. Low win-rate decays analysis back to local qwen3.5-9b. Closed-loop via `record_analysis_outcome(agent_id, ok)` called in `stream_runner` (success + the final failure path).
+- **Off by default**: `SWARM_WINRATE_ROUTING=1` to enable. Defaults to the legacy behavior when disabled.
+
+### IMPLEMENTED — llama.cpp KV prompt-prefix reuse (`--cache-reuse 256`)
+`start_llama.bat`, `start-dev.ps1`, `start-dev-fixed.ps1`: added `--cache-reuse 256` to the generation server (`:8080`) so the stable system prompt + tool schema (`[PROJECT MAP]`, `[RELEVANT MEMORIES]`, tool schema) is KV-reused across the repeated `get_tool_decision()` calls — cutting prefill TTFT on the single-slot backend.
+
+### IMPLEMENTED — Reflection lesson token-budget cap (defense-in-depth)
+`swarm_os/services/reflection_loop.py` `check_for_past_mistakes(..., max_chars=700)`: the injected `[PAST-MISTAKE WARNING]` hint is now hard-capped so distilled lessons never eat the decision-context budget (lesson budget ≈ 10-20% of context per 2026 guidance). Retrieval already used recency+confidence decay and top-k ranking.
+
+### DEFERRED — further research items (documented, not yet built)
+- **Reasoning-aware memory reranker**: swap the generic BGE reranker (`:8082`) for Qwen3-Reranker/MemReranker line to get calibrated relevance scores usable as thresholds. `runtime_v2/services/memory_core.py` `rerank_memories()`.
+- **Selective/failure-class-gated reflection**: trigger deep LLM distillation only for diagnosable failure classes (already tagged via `fix_class` in `diagnostician.py`) — reflection measurably regresses already-good paths. Gate in `reflection_loop.py` `_distill()`.
+- **MCP batch/parallel dispatch**: dependency-aware `asyncio.gather` over independent tools + merged `batch_execute` (BatchIt pattern) in `stream_runner.py`/`tool_executor.py`. Tool schemas are already cached in-process via `ExternalMCPClientManager.cached_tools` (now thread-safe).
+- **Durable checkpointed turns**: Pydantic AI v2 "capability" decomposition + step-level checkpoints so an interrupted multi-delegation `step_agent_stream` resumes at the last completed step instead of replaying from the top.
+
+---
+
+## Speculative Decoding & Local-Model Tuning (2026-08)
+
+Research-backed (llama.cpp `docs/speculative.md`; ggml-org/llama.cpp#15307 OpenVINO backend; PR #20700 Qwen3.5 MTP; unsloth MTP docs; ggml-org/llama.cpp#10594/#10664 draft-on-quant regressions). Bottom line: **MTP is the winning speed lever on this hardware; the Intel NPU is real now but not worth it for a 4B target.**
+
+### IMPLEMENTED - MTP speculative decoding (Qwen3.5 built-in heads), ~2.0x on the 4B
+- Qwen3.5 ships MTP (`nextn`) heads ("MTP: trained with multi-steps"). The plain `models/Qwen3.5-9B-Q4_K_M.gguf` and `C:\Users\rober\models\Qwen3.5-4B-Q4_K_M.gguf` GGUFs contain NO MTP tensors (GGUF scan: 426-427 tensors, no `nextn`); the unsloth MTP GGUFs do (`blk.{N}.nextn.{eh_proj,enorm,hnorm,shared_head_norm}`).
+- New files: `C:\Users\rober\models\Qwen3.5-4B-UD-Q4_K_XL.gguf` (2.79 GiB, 441 tensors, MTP) and `C:\Users\rober\models\Qwen3.5-0.8B.Q4_K_M.gguf` (0.50 GiB, 335 tensors, MTP). Both share the Qwen3.5 family vocab - verified 16/16 identical token IDs across 0.8B/4B/9B via `llama-tokenize`.
+- Measured (prod flags `-t 2 -tb 4 -ngl 99`, isolated): 4B-MTP + `--spec-type draft-mtp,ngram-simple --spec-draft-n-max 3` -> **12.98 t/s vs 6.36 plain 4B (~2.04x)**, `draft_n_accepted: 62/94 = 66%`.
+- This llama.cpp build (c0bc8591e) already ships `draft-mtp` (MTP merged upstream 2026-05-16).
+- Caveat: Qwen3.5 is DeltaNet-hybrid; PR #20700 notes recurrent-state checkpoint/restore ("two-phase decode") can mute MTP gains - so ngram stays as the fallback and the two are stacked (`draft-mtp,ngram-simple`).
+
+### IMPLEMENTED - Start-script wiring (`start_llama.bat`, `start-dev.ps1`, `start-dev-fixed.ps1`)
+- `SWARM_SPEC_DECODE=1` master gate. `SWARM_SPEC_TYPE` selects the implementation (default `ngram-simple`, prior behavior unchanged):
+  - `draft-mtp,ngram-simple` -> adds `--spec-draft-n-max 3`
+  - `draft-simple,...` + `SWARM_DRAFT_MODEL=<path>` -> in-process draft model (0.8B verified same vocab)
+- `SWARM_LOCAL_MODEL=qwen3.5-4b-mtp` -> serves the MTP 4B (`-ngl 99`, alias `qwen3.5-4b,qwen3.5-9b` kept so the runtime is unchanged).
+- The earlier 4B-as-draft finding (~1.1x, ineffective) stands; the MTP head supersedes it. Note: the npm/React frontend has NO effect on generation speed - it is a thin client; speed comes entirely from llama.cpp.
+
+### RESEARCHED - Intel NPU (Core Ultra 5 135U / Meteor Lake, Intel AI Boost, device `VEN_8086&DEV_7D1D`)
+- OpenVINO is now an official llama.cpp backend (ggml-org/llama.cpp#15307, upstream 2026-03) - GGUF on Intel CPU/iGPU/NPU via `GGML_OPENVINO_DEVICE`, validated on Core Ultra Series 1/2.
+- NOT adopted: requires a separate `-DGGML_OPENVINO=ON` build + oneAPI + NPU driver >= v2565; NPU is constrained (`-np 1`, "keep context small" ~1024, Q4_0-primary, no caching); cross-backend in-process draft is unproven. MTP delivered the speedup with zero extra toolchain. Revisit only for the 9B+ as a whole-model NPU target.
+
+### IMPLEMENTED - Grammar-constrained local tool decisions (`SWARM_GRAMMAR_DECODE=1`)
+- `runtime_v2/services/_grammar_schema.py` (new): GBNF grammar generated from `TOOL_CALL_SCHEMA` (`_llm_parser.py`); injected into local qwen3.5 calls in `_llm_client.py` only when the gate is on. Cloud/DeepSeek requests NEVER receive `response_format` (contract kept). Sync-guarded by `tests/test_grammar_decode.py::test_schema_remains_synced`.
+
+### IMPLEMENTED - Shared reflexion memory (`SWARM_SHARED_REFLEXION=1`)
+- `swarm_os/services/reflection_loop.py`: `store_reflexion()` gained a `scope` payload field (default `"agent"`); `_auto_scope()` upgrades a rule to `"shared"` when confidence >= 0.7 AND the failure is on a generic allowlist (file-not-found/permission-denied/timeout/slot-busy/malformed/truncated/parse). `check_for_past_mistakes()` merges cross-agent `scope=shared` hits into `[PAST-MISTAKE WARNING]` injection only when enabled. 8 tests in `tests/test_shared_reflexion.py`.

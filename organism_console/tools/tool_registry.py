@@ -111,14 +111,14 @@ def call_generate_api(args: dict[str, Any]) -> dict[str, Any]:
         joined = " | ".join(summaries) if summaries else "No summary available"
         top = memory["matches"][0]
         return {
-            "text": f"Goal: {goal}`nUsing memories: {joined}",
+            "text": f"Goal: {goal}\nUsing memories: {joined}",
             "used_memory": True,
             "memory_score": top.get("score"),
             "memory_count": len(memory.get("matches", [])),
         }
 
     return {
-        "text": f"Goal: {goal}`nNo relevant memory found.",
+        "text": f"Goal: {goal}\nNo relevant memory found.",
         "used_memory": False,
         "memory_count": 0,
     }

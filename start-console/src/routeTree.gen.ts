@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AboutRouteImport } from './routes/about'
+import { Route as CommandRouteImport } from './routes/command'
 import { Route as IntegrationsRouteImport } from './routes/integrations'
 import { Route as MemoriesRouteImport } from './routes/memories'
 import { Route as MemorySearchRouteImport } from './routes/memory-search'
@@ -27,6 +28,11 @@ const IndexRoute = IndexRouteImport.update({
 const AboutRoute = AboutRouteImport.update({
   id: '/about',
   path: '/about',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CommandRoute = CommandRouteImport.update({
+  id: '/command',
+  path: '/command',
   getParentRoute: () => rootRouteImport,
 } as any)
 const IntegrationsRoute = IntegrationsRouteImport.update({
@@ -68,6 +74,7 @@ const ApiChatRoute = ApiChatRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/about': typeof AboutRoute
+  '/command': typeof CommandRoute
   '/integrations': typeof IntegrationsRoute
   '/memories': typeof MemoriesRoute
   '/memory-search': typeof MemorySearchRoute
@@ -79,6 +86,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/about': typeof AboutRoute
+  '/command': typeof CommandRoute
   '/integrations': typeof IntegrationsRoute
   '/memories': typeof MemoriesRoute
   '/memory-search': typeof MemorySearchRoute
@@ -91,6 +99,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/about': typeof AboutRoute
+  '/command': typeof CommandRoute
   '/integrations': typeof IntegrationsRoute
   '/memories': typeof MemoriesRoute
   '/memory-search': typeof MemorySearchRoute
@@ -104,6 +113,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/about'
+    | '/command'
     | '/integrations'
     | '/memories'
     | '/memory-search'
@@ -115,6 +125,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/about'
+    | '/command'
     | '/integrations'
     | '/memories'
     | '/memory-search'
@@ -126,6 +137,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/about'
+    | '/command'
     | '/integrations'
     | '/memories'
     | '/memory-search'
@@ -138,6 +150,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AboutRoute: typeof AboutRoute
+  CommandRoute: typeof CommandRoute
   IntegrationsRoute: typeof IntegrationsRoute
   MemoriesRoute: typeof MemoriesRoute
   MemorySearchRoute: typeof MemorySearchRoute
@@ -161,6 +174,13 @@ declare module '@tanstack/react-router' {
       path: '/about'
       fullPath: '/about'
       preLoaderRoute: typeof AboutRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/command': {
+      id: '/command'
+      path: '/command'
+      fullPath: '/command'
+      preLoaderRoute: typeof CommandRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/integrations': {
@@ -218,6 +238,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AboutRoute: AboutRoute,
+  CommandRoute: CommandRoute,
   IntegrationsRoute: IntegrationsRoute,
   MemoriesRoute: MemoriesRoute,
   MemorySearchRoute: MemorySearchRoute,

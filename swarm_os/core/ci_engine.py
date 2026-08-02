@@ -56,5 +56,5 @@ class CIEngine:
                 text=True
             )
             return {"status": "ok" if res.returncode == 0 else "warn", "output": res.stdout[:500]}
-        except:
+        except Exception:
             return {"status": "skipped"}

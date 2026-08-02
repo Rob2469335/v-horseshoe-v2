@@ -5,6 +5,9 @@ Key design:
   - Crystal-clear JSON examples so small models don't hallucinate formats
   - Strict role boundaries to prevent delegation loops
 """
+import logging
+
+log = logging.getLogger(__name__)
 
 _ROLE_RULES: dict[str, str] = {
     "coordinator": (
@@ -24,6 +27,7 @@ _ROLE_RULES: dict[str, str] = {
         "  make a tool / create mcp tool      delegate to tool-maker\n"
         "  run a tool / execute command       delegate to tool-runner\n"
         "  analyze / bugs / codebase / audit / upgrade / improvements   delegate to code_analyzer\n"
+        "  analyze computer / system / hardware / processes / disk / apps   delegate to code_analyzer\n"
         "  search / research / web            delegate to researcher\n"
         "  read / summarize / explain file    delegate to coder\n"
         "  write / fix / create code          delegate to coder\n"
@@ -95,24 +99,56 @@ _ROLE_RULES: dict[str, str] = {
         "CRITICAL RULE: NEVER ask the user for clarification. NEVER use action=final to ask a question.\n"
         "You have filesystem access — start reading files immediately without asking anything.\n\n"
         "PROTOCOL (follow in order):\n"
-        "  STEP 1 — List the project: {\"action\":\"filesystem\",\"operation\":\"list\",\"path\":\"runtime_v2\"}\n"
-        "  STEP 2 — Read 4-6 key files found in Step 1 (e.g. agent_service_v2.py, stream_runner.py, system_prompts.py)\n"
-        "  STEP 3 — Use web_search to research best practices for the technologies you find\n"
-        "  STEP 4 — Use action=final with a detailed bug report and improvement recommendations\n\n"
+        "  STEP 1 — Read the PROJECT MAP below to learn the real module layout.\n"
+        "  STEP 2 — Discover paths with filesystem operation=glob (pattern like **/*.py) instead of guessing paths. Never assume a file exists.\n"
+        "  STEP 3 — Read 4-6 key files found in Step 2 (e.g. agent_service_v2.py, stream_runner.py, system_prompts.py)\n"
+        "  STEP 4 — Use web_search to research best practices for the technologies you find\n"
+        "  STEP 5 — Use action=final with a detailed bug report and improvement recommendations\n\n"
+        "WHOLE-COMPUTER ANALYSIS (when asked about the machine, not the repo):\n"
+        "  - Use the `system` tool: system_inventory (hardware/OS/RAM/disk/network), process_list (running processes, sort=cpu|memory), net_connections (open ports), disk_analyzer (path, largest dirs/files), installed_apps, startup_items, event_log_query (log, max_events).\n"
+        "  - It is READ-ONLY — never attempt to kill processes, uninstall apps, or edit the registry.\n\n"
         "RULES:\n"
         "  - NEVER call filesystem or semantic_search with the same arguments twice\n"
+        "  - Never invent a path from memory — ALWAYS confirm with glob/list first. The PROJECT MAP shows real locations.\n"
         "  - Focus on: runtime_v2/, swarm_os/ — do NOT list root 'core/' (it does not exist)\n"
         "  - After 5-8 files, STOP and write your report\n"
         "  - Do NOT use action=delegate. Complete the analysis yourself\n\n"
         "EXAMPLE first action:\n"
-        "{\"thought\":\"Starting with runtime_v2 directory listing\",\"action\":\"filesystem\",\"operation\":\"list\",\"path\":\"runtime_v2\"}"
+        "{\"thought\":\"Reading project map, then discovering real paths with glob\",\"action\":\"filesystem\",\"operation\":\"glob\",\"path\":\"runtime_v2\",\"pattern\":\"**/*.py\"}"
     ),
 }
+
+_AGENTS_MD_CONTEXT_CACHE: dict[str, str] = {}
+
+
+def _project_map_context(agent_id: str) -> str:
+    """Compact AGENTS.md architecture/module-map context, injected so agents can
+    navigate the real layout instead of hallucinating paths. Analysis and coding
+    agents get it; the tiny coordinator/router agents skip it to save tokens."""
+    if agent_id not in ("code_analyzer", "researcher", "coder", "debugger", "reviewer"):
+        return ""
+    cached = _AGENTS_MD_CONTEXT_CACHE.get(agent_id)
+    if cached is not None:
+        return cached
+    try:
+        from runtime_v2.services.project_map import build_project_map
+        block = build_project_map()
+        if not block:
+            return ""
+        ctx = f"\n\n[PROJECT MAP — real file layout from AGENTS.md]\n{block}"
+        _AGENTS_MD_CONTEXT_CACHE[agent_id] = ctx
+        return ctx
+    except Exception as exc:
+        log.warning("Failed to inject project map for %s: %s", agent_id, exc)
+        return ""
 
 _TOOL_DEFINITIONS = {
     "delegate": "- action=delegate  → target_agent, task",
     "web_search": "- action=web_search  → query",
-    "filesystem": "- action=filesystem  → operation (read|read_all|write|patch|list|grep), path (string or list); optional: content, old, new",
+    "web_fetch": "- action=web_fetch  → url (optionally max_chars). Fetches and reads the full text of a specific URL — use after web_search to deep-read a result.",
+    "system": "- action=system  → action (system_inventory|process_list|service_list|net_connections|disk_analyzer|installed_apps|startup_items|registry_query|event_log_query), plus per-action args. Read-only host analysis: hardware/OS/disk/network inventory, running processes/services, open ports, installed apps, startup items, Event Log. NEVER use this to modify the machine.",
+    "screen": "- action=screen  → action (screenshot|foreground_window|list_windows|cursor_position|mouse_move|left_click|right_click|double_click|scroll|type|key). See the screen; input actions are BLOCKED until human-control mode is lifted (SWARM_SCREEN_AUTONOMOUS=1). Propose the click/type you would do and wait for approval. Screenshot returns a PNG path you can reference.",
+    "filesystem": "- action=filesystem  → operation (read|read_all|write|patch|list|grep|glob), path (string or list); optional: content, old, new, pattern. For glob: pattern like '**/*.py'",
     "sandbox_repl": "- action=sandbox_repl  → language (python|powershell|pytest), code",
     "vscode_automation": "- action=vscode_automation  → command, args",
     "semantic_search": "- action=semantic_search  → query",
@@ -122,20 +158,21 @@ _TOOL_DEFINITIONS = {
     "remember": "- action=remember  → fact, category",
     "deprecate_memory": "- action=deprecate_memory  → point_id, category",
     "ask_user": "- action=ask_user  → question",
+    "todo": "- action=todo  → operation (add|done|list), items (list of strings), item_id (optional)",
     "final": "- action=final  → response",
 }
 
 _AGENT_TOOLS = {
     "coordinator": ["delegate", "ask_user", "remember", "deprecate_memory", "final"],
     "planner": ["delegate", "ask_user", "filesystem", "semantic_search", "web_search", "remember", "deprecate_memory", "final"],
-    "researcher": ["filesystem", "semantic_search", "web_search", "sandbox_repl", "lsp", "mcp", "remember", "deprecate_memory", "final"],
+    "researcher": ["filesystem", "semantic_search", "web_search", "web_fetch", "system", "screen", "sandbox_repl", "lsp", "mcp", "todo", "remember", "deprecate_memory", "final"],
     "executor": ["delegate", "sandbox_repl", "final"],
-    "coder": ["filesystem", "semantic_search", "sandbox_repl", "lsp", "mcp", "remember", "deprecate_memory", "final"],
+    "coder": ["filesystem", "semantic_search", "sandbox_repl", "lsp", "mcp", "todo", "remember", "deprecate_memory", "final"],
     "tool-runner": ["sandbox_repl", "filesystem", "mcp", "final"],
-    "reviewer": ["filesystem", "semantic_search", "sandbox_repl", "lsp", "mcp", "remember", "deprecate_memory", "final"],
-    "debugger": ["filesystem", "sandbox_repl", "semantic_search", "web_search", "lsp", "mcp", "remember", "deprecate_memory", "final"],
+    "reviewer": ["filesystem", "semantic_search", "sandbox_repl", "lsp", "mcp", "todo", "remember", "deprecate_memory", "final"],
+    "debugger": ["filesystem", "sandbox_repl", "semantic_search", "web_search", "system", "screen", "lsp", "mcp", "todo", "remember", "deprecate_memory", "final"],
     "tool-maker": ["filesystem", "sandbox_repl", "mcp_register", "final"],
-    "code_analyzer": ["filesystem", "web_search", "semantic_search", "sandbox_repl", "final"],
+    "code_analyzer": ["filesystem", "web_search", "web_fetch", "system", "screen", "semantic_search", "sandbox_repl", "todo", "final"],
 }
 
 _BASE = (
@@ -161,4 +198,4 @@ def build(agent_id: str) -> str:
     rules = _ROLE_RULES.get(agent_id, "Complete the task using available actions.")
     allowed_tools = _AGENT_TOOLS.get(agent_id, ["final", "filesystem"])
     tools_str = "\n".join([_TOOL_DEFINITIONS[t] for t in allowed_tools if t in _TOOL_DEFINITIONS])
-    return _BASE.format(agent_id=agent_id, role_rules=rules, tools=tools_str)
+    return _BASE.format(agent_id=agent_id, role_rules=rules, tools=tools_str) + _project_map_context(agent_id)

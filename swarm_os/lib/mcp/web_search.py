@@ -118,3 +118,60 @@ async def web_search_handler(params: Dict[str, Any], trace_hook=None) -> Dict[st
     except Exception as e:
         logger.exception("Web search error")
         return {"ok": False, "error": str(e)}
+
+
+async def web_fetch_handler(params: Dict[str, Any], trace_hook=None) -> Dict[str, Any]:
+    """Fetch a single URL and return its readable text content (deep web reading —
+    the analogue of an opencode WebFetch, which search snippets do not provide)."""
+    import re as _re
+
+    url = str(params.get("url", "")).strip()
+    if not url:
+        return {"ok": False, "error": "url is required"}
+    if not url.lower().startswith(("http://", "https://")):
+        url = "https://" + url
+
+    max_chars = int(params.get("max_chars", 20000))
+    client = _get_client()
+
+    try:
+        r = await client.get(
+            url,
+            follow_redirects=True,
+            headers={
+                "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                               "AppleWebKit/537.36 (KHTML, like Gecko) "
+                               "Chrome/124.0 Safari/537.36"),
+                "Accept": "text/html,application/xhtml+xml,application/json,*/*;q=0.8",
+            },
+        )
+        if r.status_code >= 400:
+            return {"ok": False, "error": f"HTTP {r.status_code} fetching {url}"}
+
+        content_type = r.headers.get("content-type", "")
+        text = r.text
+
+        # Plain text / JSON passthrough; HTML stripped to readable text.
+        if "html" in content_type.lower():
+            text = _re.sub(r"(?is)<script.*?</script>", " ", text)
+            text = _re.sub(r"(?is)<style.*?</style>", " ", text)
+            text = _re.sub(r"(?is)<[^>]+>", " ", text)
+            text = _re.sub(r"\s+", " ", text).strip()
+
+        if len(text) > max_chars:
+            text = text[:max_chars] + "\n...[FETCH TRUNCATED]..."
+
+        if trace_hook:
+            trace_hook("web_fetch", {"ok": True, "url": url, "chars": len(text)})
+        return {"ok": True, "url": url, "title": _extract_title(r.text, content_type), "content": text}
+    except Exception as e:
+        logger.warning("Web fetch failed for %s: %s", url, e)
+        return {"ok": False, "error": str(e)}
+
+
+def _extract_title(html: str, content_type: str) -> str:
+    import re as _re
+    if "html" not in content_type.lower():
+        return ""
+    m = _re.search(r"(?is)<title[^>]*>(.*?)</title>", html)
+    return _re.sub(r"\s+", " ", m.group(1)).strip() if m else ""

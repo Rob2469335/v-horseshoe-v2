@@ -34,7 +34,7 @@ class GraphMemory:
         try:
             with open(path, "r", encoding="utf-8") as f:
                 tree = ast.parse(f.read())
-        except:
+        except (OSError, SyntaxError):
             return
         
         for node in ast.walk(tree):

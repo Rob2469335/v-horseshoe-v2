@@ -20,7 +20,9 @@ async def filesystem_handler(params: Dict[str, Any], root: Path, trace_hook=None
     elif op_raw in ("list", "list_files", "list_dir", "ls", "dir", "directory", "list_directory", "scandir", "scan_dir", "walk"):
         operation = "list"
     elif op_raw in ("search", "grep", "find", "grep_search", "search_files"):
-        operation = "search"
+        operation = "grep"
+    elif op_raw in ("glob", "wildcard", "match", "pattern"):
+        operation = "glob"
     else:
         operation = op_raw
 
@@ -226,6 +228,41 @@ async def filesystem_handler(params: Dict[str, Any], root: Path, trace_hook=None
                             search_file(p)
             
             return {"ok": True, "matches": matches}
+
+        elif operation == "glob":
+            pattern = str(params.get("pattern", "**/*")).replace("\\", "/").lstrip("/")
+            recursive = bool(params.get("recursive", True))
+            matches = []
+            excluded_dirs = {'.venv', '.git', '__pycache__', '.ruff_cache', '.swarm_brain', '.swarm_2027_backup', 'node_modules', 'models', 'data', 'logs', '.venv'}
+            excluded_extensions = {'.gguf', '.wav', '.pkl', '.zip', '.pyc', '.png', '.jpg', '.ico'}
+            try:
+                base = target_path if target_path.is_dir() else target_path.parent
+                import fnmatch
+                if recursive:
+                    iterator = base.rglob("*")
+                else:
+                    iterator = base.glob("*")
+                for p in iterator:
+                    if p.is_dir():
+                        continue
+                    if any(part in excluded_dirs for part in p.parts):
+                        continue
+                    if p.suffix.lower() in excluded_extensions:
+                        continue
+                    try:
+                        if p.stat().st_size > 5 * 1024 * 1024:
+                            continue
+                    except Exception:
+                        continue
+                    rel = p.relative_to(base).as_posix()
+                    if fnmatch.fnmatch(rel, pattern) or fnmatch.fnmatch(rel, pattern.lstrip("./")):
+                        matches.append(str(p.relative_to(root).as_posix()))
+            except Exception as e:
+                return {"ok": False, "error": f"Error in glob: {e}", "path": str(target_path)}
+            matches.sort()
+            if len(matches) > 200:
+                matches = matches[:200]
+            return {"ok": True, "matches": matches, "count": len(matches), "base": str(base.relative_to(root).as_posix())}
 
         elif operation in ("scan_dir", "scandir", "list_dir", "walk"):
             # Alias: agents sometimes hallucinate this name; treat as list

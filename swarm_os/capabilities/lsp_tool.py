@@ -96,7 +96,7 @@ class BasicLSPClient:
         if self.process:
             try:
                 self.process.terminate()
-            except:
+            except Exception:
                 pass
             await self.process.wait()
 

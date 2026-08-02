@@ -425,11 +425,12 @@ class MemoryBridge:
                     "stream": False,
                     "temperature": 0.0,
                 },
+                timeout=300.0,
             )
             response.raise_for_status()
             return (response.json()["choices"][0]["message"]["content"] or "").strip()
         except Exception as exc:
-            logger.warning("summarization error: %s", exc)
+            logger.warning("summarization error: %r", exc)
             types = list(dict.fromkeys(self.session.types))[:3]
             models = list(dict.fromkeys(m for m in self.session.models if m))[:2]
             return f"Agent performed {', '.join(types) or 'unknown'} using {', '.join(models) or 'unknown model'}."
