@@ -627,6 +627,7 @@ Research-backed (llama.cpp `docs/speculative.md`; ggml-org/llama.cpp#15307 OpenV
   - `draft-mtp,ngram-simple` -> adds `--spec-draft-n-max 3`
   - `draft-simple,...` + `SWARM_DRAFT_MODEL=<path>` -> in-process draft model (0.8B verified same vocab)
 - `SWARM_LOCAL_MODEL=qwen3.5-4b-mtp` -> serves the MTP 4B (`-ngl 99`, alias `qwen3.5-4b,qwen3.5-9b` kept so the runtime is unchanged).
+- **Default model is now the MTP 4B** (`SWARM_LOCAL_MODEL` unset). The plain 9B is a manual fallback (`SWARM_LOCAL_MODEL=qwen3.5-9b`, `-ngl 0`) for cloud-offline quality; the 9B is redundant on this machine because heavy reasoning already routes to cloud DeepSeek V4 Flash and local chat runs faster on the 4B-MTP. The downloaded 9B-MTP GGUF (`Qwen3.5-9B-UD-Q4_K_XL.gguf`) was discarded - MTP on the CPU-bound 9B measured only +21% / 50% acceptance (contended A/B), a dud vs the 4B's 2.04x.
 - The earlier 4B-as-draft finding (~1.1x, ineffective) stands; the MTP head supersedes it. Note: the npm/React frontend has NO effect on generation speed - it is a thin client; speed comes entirely from llama.cpp.
 
 ### RESEARCHED - Intel NPU (Core Ultra 5 135U / Meteor Lake, Intel AI Boost, device `VEN_8086&DEV_7D1D`)

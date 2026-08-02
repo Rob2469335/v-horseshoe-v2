@@ -73,14 +73,23 @@ if ($env:SWARM_SPEC_DECODE -eq "1") {
     if ($env:SWARM_DRAFT_MODEL)            { $specArgs += @("--model-draft", $env:SWARM_DRAFT_MODEL) }
 }
 
-# Local generation model override (off by default): set $env:SWARM_LOCAL_MODEL:
-#   - "qwen3.5-4b"     : plain 4B Q4_K_M on the iGPU (-ngl 99), ~6.4 t/s
-#   - "qwen3.5-4b-mtp" : unsloth MTP 4B (UD-Q4_K_XL) for --spec-type draft-mtp;
-#                        measured ~13 t/s (~2x) with draft-mtp+ngram on this iGPU
-# The qwen3.5-9b alias is kept so the runtime is unchanged.
-$genModel = ".\models\Qwen3.5-9B-Q4_K_M.gguf"
-$genAlias = "qwen3.5-9b"
-$genNgl = "0"
+# Local generation model (DEFAULT): the unsloth MTP 4B (UD-Q4_K_XL) on the iGPU
+# (-ngl 99) - ~13 t/s with SWARM_SPEC_DECODE=1 + SWARM_SPEC_TYPE=draft-mtp,ngram-simple,
+# or ~6.4 t/s plain. The qwen3.5-4b,qwen3.5-9b alias keeps the runtime unchanged.
+# Override with $env:SWARM_LOCAL_MODEL:
+#   - "qwen3.5-9b"     : plain 9B Q4_K_M, CPU-native (-ngl 0), ~5.5-6.0 t/s - quality
+#                        fallback for cloud-offline periods (9B MTP is a dud: +21%,
+#                        50% acceptance - see AGENTS.md)
+#   - "qwen3.5-4b"     : plain 4B Q4_K_M on the iGPU (backward compat)
+#   - "qwen3.5-4b-mtp" : MTP 4B (same as default; backward compat)
+$genModel = "C:\Users\rober\models\Qwen3.5-4B-UD-Q4_K_XL.gguf"
+$genAlias = "qwen3.5-4b,qwen3.5-9b"
+$genNgl = "99"
+if ($env:SWARM_LOCAL_MODEL -eq "qwen3.5-9b") {
+    $genModel = ".\models\Qwen3.5-9B-Q4_K_M.gguf"
+    $genAlias = "qwen3.5-9b"
+    $genNgl = "0"
+}
 if ($env:SWARM_LOCAL_MODEL -eq "qwen3.5-4b") {
     $genModel = "C:\Users\rober\models\Qwen3.5-4B-Q4_K_M.gguf"
     $genAlias = "qwen3.5-4b,qwen3.5-9b"
