@@ -82,25 +82,39 @@ Write-Host "`n[STEP 2] Starting llama.cpp Microservices (Ports 8080-8083)..." -F
 
 # To switch to the 35B model, uncomment the line below and comment out the 9B line.
 # $llamaGenJob = Start-Job -ScriptBlock { param($r); Set-Location $r; & .\bin\llama.exe serve -m ".\models\qwen-tuned-latest.gguf" -c 32768 -ctk q8_0 -ctv q8_0 -t 4 -b 256 -ub 512 --port 8080 2>&1 } -ArgumentList $root
-# Speculative decoding (off by default): enable with $env:SWARM_SPEC_DECODE = "1".
-# $env:SWARM_SPEC_TYPE selects the implementation (default "ngram-simple"):
-#   - "ngram-simple"            : pattern-matching drafts, no extra model (measured ~2x)
+# Runtime speed gates (default ON): grammar-constrained local tool decisions
+# (valid JSON first try, fewer retries) + semantic decision cache (near-duplicate
+# decisions short-circuit the LLM). Both never block on errors. Set env to "0" to
+# disable.
+if (-not $env:SWARM_GRAMMAR_DECODE) { $env:SWARM_GRAMMAR_DECODE = "1" }
+if (-not $env:SWARM_SEMANTIC_CACHE)  { $env:SWARM_SEMANTIC_CACHE = "1" }
+
+# Speculative decoding (default ON - ngram-mod is free, no extra model): disable
+# with $env:SWARM_SPEC_DECODE = "0". NOTE: draft-model spec-decode is structurally
+# broken on UMA iGPUs (two models serialize on one Vulkan queue, llama.cpp#23126),
+# so ngram-mod is the correct choice here - the 0.8B draft is a 2.4x regression.
+# $env:SWARM_SPEC_TYPE selects the implementation (default "ngram-mod"):
+#   - "ngram-mod"               : modified-ngram drafts, no extra model. Measured
+#     21.4 t/s on the tool-decision workload (~3.6x plain, best of all types - see
+#     AGENTS.md). Uses a stable system prompt/tool schema to draft long continuations.
+#   - "ngram-simple"            : pattern-matching drafts, no extra model (fallback)
 #   - "draft-mtp,ngram-simple"  : Qwen3.5 built-in MTP head + ngram. REQUIRES an MTP
 #     GGUF (e.g. unsloth Qwen3.5-4B-MTP / -9B-MTP; the plain Qwen3.5-9B/4B GGUFs have
 #     NO MTP head). UD-Q4_K_XL 4B measured 66% acceptance, ~2.0x on the iGPU.
 #   - "draft-simple,ngram-simple" + $env:SWARM_DRAFT_MODEL : in-process 0.8B draft
 #     (Qwen3.5-0.8B shares the family vocab; verified identical tokenization).
 $specArgs = @()
-if ($env:SWARM_SPEC_DECODE -eq "1") {
-    $specType = if ($env:SWARM_SPEC_TYPE) { $env:SWARM_SPEC_TYPE } else { "ngram-simple" }
+if ($env:SWARM_SPEC_DECODE -ne "0") {
+    $specType = if ($env:SWARM_SPEC_TYPE) { $env:SWARM_SPEC_TYPE } else { "ngram-mod" }
     $specArgs = @("--spec-type", $specType)
+    if ($specType -like "*ngram-mod*")    { $specArgs += @("--spec-ngram-mod-n-match", "24", "--spec-ngram-mod-n-min", "48", "--spec-ngram-mod-n-max", "64") }
     if ($specType -like "*ngram-simple*") { $specArgs += @("--spec-ngram-simple-size-n", "4", "--spec-ngram-simple-size-m", "16", "--spec-ngram-simple-min-hits", "1") }
     if ($specType -like "*draft-mtp*")     { $specArgs += @("--spec-draft-n-max", "3") }
     if ($env:SWARM_DRAFT_MODEL)            { $specArgs += @("--model-draft", $env:SWARM_DRAFT_MODEL) }
 }
 
 # Local generation model (DEFAULT): the unsloth MTP 4B (UD-Q4_K_XL) on the iGPU
-# (-ngl 99) - ~13 t/s with SWARM_SPEC_DECODE=1 + SWARM_SPEC_TYPE=draft-mtp,ngram-simple,
+# (-ngl 99) - ~21 t/s (tool-decision) with SWARM_SPEC_DECODE=1 (ngram-mod default),
 # or ~6.4 t/s plain. The qwen3.5-4b,qwen3.5-9b alias keeps the runtime unchanged.
 # Override with $env:SWARM_LOCAL_MODEL:
 #   - "qwen3.5-9b"     : plain 9B Q4_K_M, CPU-native (-ngl 0), ~5.5-6.0 t/s - quality
@@ -126,7 +140,7 @@ if ($env:SWARM_LOCAL_MODEL -eq "qwen3.5-4b-mtp") {
     $genAlias = "qwen3.5-4b,qwen3.5-9b"
     $genNgl = "99"
 }
-$llamaGenJob = Start-Job -ScriptBlock { param($r, $spec, $m, $a, $ngl); Set-Location $r; & .\bin\llama.exe serve -m $m --alias $a -c 16384 -ctk q8_0 -ctv q8_0 -fa on -t 2 -tb 4 -b 2048 -ub 512 -np 1 --timeout 300 --cache-reuse 256 --api-key "llama" --cors-origins "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000" -ngl $ngl --port 8080 @spec 2>&1 } -ArgumentList $root, $specArgs, $genModel, $genAlias, $genNgl
+$llamaGenJob = Start-Job -ScriptBlock { param($r, $spec, $m, $a, $ngl); Set-Location $r; & .\bin\llama.exe serve -m $m --alias $a -c 16384 -ctk q8_0 -ctv q8_0 -fa on -t 2 -tb 4 -b 2048 -ub 512 -np 1 --timeout 300 --cache-reuse 1024 --api-key "llama" --cors-origins "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000" -ngl $ngl --port 8080 @spec 2>&1 } -ArgumentList $root, $specArgs, $genModel, $genAlias, $genNgl
 $llamaEmbJob = Start-Job -ScriptBlock { param($r); Set-Location $r; & .\bin\llama.exe serve -m ".\models\nomic-embed-text-v1.5.Q8_0.gguf" --embedding --api-key "llama" --cors-origins "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000" --port 8081 -t 2 2>&1 } -ArgumentList $root
 $llamaRerankJob = Start-Job -ScriptBlock { param($r); Set-Location $r; & .\bin\llama.exe serve -m ".\models\qllama-bge-reranker-v2-m3-latest.gguf" --reranking --api-key "llama" --cors-origins "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000" --port 8082 -t 2 2>&1 } -ArgumentList $root
 $llamaVisJob = Start-Job -ScriptBlock { param($r); Set-Location $r; & .\bin\llama.exe serve -m ".\models\moondream-latest.gguf" --override-kv "tokenizer.ggml.pre=str:default" --chat-template "vicuna" --mmproj-auto --api-key "llama" --cors-origins "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000" --port 8083 -t 2 2>&1 } -ArgumentList $root

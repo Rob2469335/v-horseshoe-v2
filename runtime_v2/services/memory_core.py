@@ -76,6 +76,14 @@ def get_embedding(text: str) -> Optional[List[float]]:
 RERANK_URL = "http://127.0.0.1:8082"
 RERANK_MODEL = "qllama-bge-reranker-v2-m3-latest.gguf"
 
+# Bound concurrent rerank HTTP calls. When analysis agents launch, semantic
+# memory search can fire dozens of rerank requests at once; the BGE reranker is
+# memory-bandwidth bound on the iGPU and the burst saturated DDR5 (caused the
+# old 90/120s timeouts). Cap to a few at a time - the reranker batches documents
+# per request, so throughput is preserved while bandwidth pressure drops.
+_RERANK_SEM = __import__("threading").BoundedSemaphore(2)
+
+
 def rerank_memories(query: str, memories: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Stage 2: Cross-Encoder Reranking via llama.cpp"""
     if not memories:
@@ -85,17 +93,18 @@ def rerank_memories(query: str, memories: List[Dict[str, Any]]) -> List[Dict[str
     texts = [mem.get("payload", {}).get("fact", "") for mem in memories]
     
     try:
-        resp = requests.post(
-            f"{RERANK_URL}/v1/rerank",
-            headers={"Authorization": "Bearer llama"},
-            json={
-                "model": RERANK_MODEL,
-                "query": query,
-                "documents": texts,
-                "top_n": 3
-            },
-            timeout=30.0
-        )
+        with _RERANK_SEM:
+            resp = requests.post(
+                f"{RERANK_URL}/v1/rerank",
+                headers={"Authorization": "Bearer llama"},
+                json={
+                    "model": RERANK_MODEL,
+                    "query": query,
+                    "documents": texts,
+                    "top_n": 3
+                },
+                timeout=30.0
+            )
         if resp.status_code == 200:
             results = resp.json().get("results", [])
             for res in results:

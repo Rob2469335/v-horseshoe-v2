@@ -603,6 +603,9 @@ Applied from the 2025-26 online research pass on semantic caching, prompt-reuse,
 ### IMPLEMENTED — Reflection lesson token-budget cap (defense-in-depth)
 `swarm_os/services/reflection_loop.py` `check_for_past_mistakes(..., max_chars=700)`: the injected `[PAST-MISTAKE WARNING]` hint is now hard-capped so distilled lessons never eat the decision-context budget (lesson budget ≈ 10-20% of context per 2026 guidance). Retrieval already used recency+confidence decay and top-k ranking.
 
+### BUG — Distiller burned ~300s on the single llama slot after OpenRouter 402 (credit exhaustion)
+`swarm_os/services/reflection_loop.py` `_distill()`: when OpenRouter returned a 402 (out of credits — a non-transient error), the distiller fell through to the local qwen3.5-9b fallback, which generated 2048 tokens at ~6.7 t/s (~300s) on the single llama slot and returned empty content anyway (qwen spends all tokens on `reasoning_content`). For 5 of every 10 minutes the generation slot was occupied by this no-op burn, blocking every LLM-dependent endpoint. Now detects 402/"credits" in the exception message and **skips the local fallback** so the slot stays free for real work.
+
 ### DEFERRED — further research items (documented, not yet built)
 - **Reasoning-aware memory reranker**: swap the generic BGE reranker (`:8082`) for Qwen3-Reranker/MemReranker line to get calibrated relevance scores usable as thresholds. `runtime_v2/services/memory_core.py` `rerank_memories()`.
 - **Selective/failure-class-gated reflection**: trigger deep LLM distillation only for diagnosable failure classes (already tagged via `fix_class` in `diagnostician.py`) — reflection measurably regresses already-good paths. Gate in `reflection_loop.py` `_distill()`.
@@ -613,7 +616,7 @@ Applied from the 2025-26 online research pass on semantic caching, prompt-reuse,
 
 ## Speculative Decoding & Local-Model Tuning (2026-08)
 
-Research-backed (llama.cpp `docs/speculative.md`; ggml-org/llama.cpp#15307 OpenVINO backend; PR #20700 Qwen3.5 MTP; unsloth MTP docs; ggml-org/llama.cpp#10594/#10664 draft-on-quant regressions). Bottom line: **MTP is the winning speed lever on this hardware; the Intel NPU is real now but not worth it for a 4B target.**
+Research-backed (llama.cpp `docs/speculative.md`; ggml-org/llama.cpp#15307 OpenVINO backend; PR #20700 Qwen3.5 MTP; unsloth MTP docs; ggml-org/llama.cpp#10594/#10664 draft-on-quant regressions). Bottom line: **`ngram-mod` is the winning speed lever on this hardware (21.4 t/s dec, free); MTP is second (~12 t/s, prefill-taxed); the 0.8B draft is a regression; the Intel NPU is real now but not worth it for a 4B target.**
 
 ### IMPLEMENTED - MTP speculative decoding (Qwen3.5 built-in heads), ~2.0x on the 4B
 - Qwen3.5 ships MTP (`nextn`) heads ("MTP: trained with multi-steps"). The plain `models/Qwen3.5-9B-Q4_K_M.gguf` and `C:\Users\rober\models\Qwen3.5-4B-Q4_K_M.gguf` GGUFs contain NO MTP tensors (GGUF scan: 426-427 tensors, no `nextn`); the unsloth MTP GGUFs do (`blk.{N}.nextn.{eh_proj,enorm,hnorm,shared_head_norm}`).
@@ -623,12 +626,30 @@ Research-backed (llama.cpp `docs/speculative.md`; ggml-org/llama.cpp#15307 OpenV
 - Caveat: Qwen3.5 is DeltaNet-hybrid; PR #20700 notes recurrent-state checkpoint/restore ("two-phase decode") can mute MTP gains - so ngram stays as the fallback and the two are stacked (`draft-mtp,ngram-simple`).
 
 ### IMPLEMENTED - Start-script wiring (`start_llama.bat`, `start-dev.ps1`, `start-dev-fixed.ps1`)
-- `SWARM_SPEC_DECODE=1` master gate. `SWARM_SPEC_TYPE` selects the implementation (default `ngram-simple`, prior behavior unchanged):
+- `SWARM_SPEC_DECODE=1` master gate (**default ON now**; `0` to disable). `SWARM_SPEC_TYPE` selects the implementation (default `ngram-mod`):
+  - `ngram-mod` (DEFAULT) -> adds `--spec-ngram-mod-n-match 24 --spec-ngram-mod-n-min 48 --spec-ngram-mod-n-max 64`
+  - `ngram-simple` -> fallback (`--spec-ngram-simple-size-n 4 --spec-ngram-simple-size-m 16 --spec-ngram-simple-min-hits 1`)
   - `draft-mtp,ngram-simple` -> adds `--spec-draft-n-max 3`
   - `draft-simple,...` + `SWARM_DRAFT_MODEL=<path>` -> in-process draft model (0.8B verified same vocab)
+- **Default ON runtime speed gates** (set in the start scripts; `0` to disable):
+  - `SWARM_GRAMMAR_DECODE=1` — GBNF grammar constrains local tool decisions (valid JSON first try, fewer retries).
+  - `SWARM_SEMANTIC_CACHE=1` — near-duplicate tool decisions short-circuit the LLM via the decision cache.
+- `--cache-reuse 1024` (was 256) on the generation server — wider prompt-prefix KV reuse for the repeated decision system prompt.
 - `SWARM_LOCAL_MODEL=qwen3.5-4b-mtp` -> serves the MTP 4B (`-ngl 99`, alias `qwen3.5-4b,qwen3.5-9b` kept so the runtime is unchanged).
 - **Default model is now the MTP 4B** (`SWARM_LOCAL_MODEL` unset). The plain 9B is a manual fallback (`SWARM_LOCAL_MODEL=qwen3.5-9b`, `-ngl 0`) for cloud-offline quality; the 9B is redundant on this machine because heavy reasoning already routes to cloud DeepSeek V4 Flash and local chat runs faster on the 4B-MTP. The downloaded 9B-MTP GGUF (`Qwen3.5-9B-UD-Q4_K_XL.gguf`) was discarded - MTP on the CPU-bound 9B measured only +21% / 50% acceptance (contended A/B), a dud vs the 4B's 2.04x.
 - The earlier 4B-as-draft finding (~1.1x, ineffective) stands; the MTP head supersedes it. Note: the npm/React frontend has NO effect on generation speed - it is a thin client; speed comes entirely from llama.cpp.
+- **Rerank burst bounded**: `runtime_v2/services/memory_core.py` caps concurrent `/v1/rerank` calls with a `threading.BoundedSemaphore(2)` - analysis-agent launch fired dozens of concurrent rerank requests that saturated DDR5 (the root cause of the old 90/120s timeouts).
+
+### A/B benchmark (2026-08, prod flags `-t 2 -tb 4 -ngl 99`, tool-decision workload) - ngram-mod wins
+Head-to-head across all spec types on the 4B (gen = long paragraph, dec = tool-decision with large prefill + short JSON output, RUNS=2):
+| Config | Dec t/s | Gen t/s | Prefill t/s | TTFB | Verdict |
+|--------|---------|---------|-------------|------|---------|
+| plain (no spec) | 5.98 | 5.93 | 23.7 | 2.72s | baseline |
+| `draft-mtp` | 12.07 | 9.18 | 16.5 | 3.86s | ~2x but MTP prefill-tax (~0.70x) |
+| **`ngram-mod`** | **21.38** | 8.99 | **36.4** | 3.31s | **best; free (no extra model)** |
+- `draft-simple` + **0.8B draft = 2.48 t/s dec - a 2.4x REGRESSION** (draft model too slow despite 79% acceptance). The 0.8B earns no slot in the stack. The 0.8B MTP build (`Qwen3.5-0.8B.Q4_K_M.gguf`, 335 tensors) is kept only as a tokenizer/vocab reference; the redundant plain 0.8B (`Qwen3.5-0.8B-Q4_K_M.gguf`, 320 tensors, no nextn) was deleted.
+- Chaining `draft-simple,draft-mtp` fails to boot: `GGML_ASSERT n_embd == llama_model_n_embd(ctx_tgt)` - the 0.8B draft's hidden width mismatches the MTP nextn width, so a cross-model MTP chain is architecturally impossible here.
+- Rationale: `ngram-mod` matches long n-grams from the stable system prompt + tool schema, so the decision loop drafts ~56-token continuations at 88% acceptance with no prefill tax (36.4 t/s = best prefill of any config). MTP's 2.0x remains valid but its prefill penalty costs more on the short-output decision workload.
 
 ### RESEARCHED - Intel NPU (Core Ultra 5 135U / Meteor Lake, Intel AI Boost, device `VEN_8086&DEV_7D1D`)
 - OpenVINO is now an official llama.cpp backend (ggml-org/llama.cpp#15307, upstream 2026-03) - GGUF on Intel CPU/iGPU/NPU via `GGML_OPENVINO_DEVICE`, validated on Core Ultra Series 1/2.

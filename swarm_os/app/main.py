@@ -247,6 +247,12 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         log.warning(f"Error closing llm_client httpx client: {exc}")
 
+    try:
+        from swarm_os.capabilities.lsp_tool import close_all as close_lsp_clients
+        await close_lsp_clients()
+    except Exception as exc:
+        log.warning(f"Error closing LSP clients: {exc}")
+
     if orchestrator:
         if getattr(orchestrator, "llm", None) is not None:
             try:

@@ -312,7 +312,15 @@ async def _distill(distiller_content: str) -> str:
             logger.warning("Distiller returned empty content from %s", cfg["model"])
         except Exception as e:
             last_exc = e
+            msg = str(e)
             logger.warning("Distiller via %s failed: %s", cfg["model"], e)
+            # 402 = OpenRouter credit exhaustion (non-transient). The local qwen
+            # fallback would burn ~300s (2048 tokens) on the single llama slot and
+            # return empty content anyway (qwen spends all tokens on reasoning).
+            # Skip it so the generation slot stays free for real work.
+            if "402" in msg or "credits" in msg.lower():
+                logger.warning("Distiller: credit exhaustion detected, skipping local fallback")
+                break
     if last_exc:
         raise last_exc
     return ""

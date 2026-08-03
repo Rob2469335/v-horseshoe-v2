@@ -1,4 +1,5 @@
 export type PanelKey =
+  | "command"
   | "agent"
   | "workspace"
   | "organism"
