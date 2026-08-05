@@ -1,0 +1,46 @@
+|  | **FastAPI** | **Flask**
+--- | --- | ---
+Development | Requires more time to set up than Flask. | Very easy setup.
+Performance | Generally faster due to async/await support | Limited asynchr[7D[K
+asynchronous support
+Type annotations | Supports type hinting, which makes debugging easier and [K
+code cleaner.| No native support for type hints
+Dependent services | Built-in ORM support | Third-party libraries needed
+Caching | Native caching supported through Redis | Must install a third-par[9D[K
+third-party library
+
+Based on the given information:
+
+|  | **FastAPI** | **Flask**
+--- | --- | ---
+Development | Requires more time to set up than Flask. | Very easy setup.
+Performance | Generally faster due to async/await support | Limited asynchr[7D[K
+asynchronous support
+Type annotations | Supports type hinting, which makes debugging easier and [K
+code cleaner.| No native support for type hints
+Dependent services | Built-in ORM support | Third-party libraries needed
+Caching | Native caching supported through Redis | Must install a third-par[9D[K
+third-party library
+
+Given these factors, I would recommend **Flask** for a local AI server due [K
+to its ease of setup. However, if you prioritize performance and want to ta[2D[K
+take advantage of async/await support in Python 3.x+, then FastAPI might be[2D[K
+be the better choice.
+
+For more detailed comparisons:
+
+* Flask is easier to set up and has lower overhead.
+* If your project requires type annotations or built-in ORM support, consid[6D[K
+consider FastAPI.
+* For caching functionality, both frameworks can use Redis but with slightl[7D[K
+slightly different approaches.
+
+[1GΓáï [K[1GΓá╣ [K[1GΓá╣ [K[1GΓá╝ [K[1GΓá╝ [K[1GΓá┤ [K[1GΓáº [K[1GΓáº [K[1GΓáç [K[1GΓáÅ [K[1GΓáï [K[1GΓáÖ [K[1GΓá╣ [K[1GΓá╝ [K[1GΓá╝ [K[1GΓá┤ [K[1GΓáª [K[1GΓáº [K[1GΓáç [K[1GΓáï [K[1GΓáÖ [K[1GΓá╣ [K[1GΓá╕ [K[1GΓá╝ [K[1GΓá╝ [K[1GΓá┤ [K[1GΓáª [K[1GΓáº [K[1GΓáÅ [K[1GΓáÅ [K[1GΓáÖ [K[1G[K[2K[1Gtotal duration:       2m1.342046s
+load duration:        215.8614ms
+prompt eval count:    25 token(s)
+prompt eval duration: 1.53241s
+prompt eval rate:     16.31 tokens/s
+eval count:           313 token(s)
+eval duration:        1m58.214665s
+eval rate:            2.65 tokens/s
+

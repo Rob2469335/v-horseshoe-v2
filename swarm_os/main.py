@@ -1,3 +1,3 @@
-from swarm_os.app.main import create_app
+from swarm_os.app.main import app
 
-app = create_app()
+__all__ = ["app"]

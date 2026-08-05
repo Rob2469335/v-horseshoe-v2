@@ -1,36 +1,29 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable
-
-from .models import PolicyDecision
-
+from .models import StepBudget
 
 class PolicyEngine:
-    def __init__(
-        self,
-        *,
-        allowed_tools: Iterable[str] | None = None,
-        approval_tools: Iterable[str] | None = None,
-        max_steps: int = 12,
-    ) -> None:
-        self.allowed_tools = set(allowed_tools or [])
-        self.approval_tools = set(approval_tools or [])
+    def __init__(self, max_steps: int = 12) -> None:
+        if max_steps < 1:
+            raise ValueError("max_steps must be >= 1")
         self.max_steps = max_steps
+        self.steps_used = 0
 
-    def check_tool(self, tool_name: str) -> PolicyDecision:
-        if self.allowed_tools and tool_name not in self.allowed_tools:
-            return PolicyDecision(False, f"tool_not_allowed:{tool_name}")
-        if tool_name in self.approval_tools:
-            return PolicyDecision(True, f"approval_required:{tool_name}", requires_approval=True)
-        return PolicyDecision(True, "allowed")
+    def check_step_budget(self, steps: int = 1) -> StepBudget:
+        if steps < 1:
+            return StepBudget(allowed=False, reason="invalid_step_request")
+        if self.steps_used + steps > self.max_steps:
+            return StepBudget(allowed=False, reason="step_budget_exceeded")
+        self.steps_used += steps
+        return StepBudget(allowed=True, reason="ok")
 
-    def check_step_budget(self, step_count: int) -> PolicyDecision:
-        if step_count > self.max_steps:
-            return PolicyDecision(False, "step_budget_exceeded")
-        return PolicyDecision(True, "within_budget")
+    def modify_budget(self, new_max_steps: int) -> None:
+        if new_max_steps < 1:
+            raise ValueError("new_max_steps must be >= 1")
+        if new_max_steps < self.steps_used:
+            raise ValueError("new_max_steps cannot be lower than steps_used")
+        self.max_steps = new_max_steps
 
-    def check_action(self, action: str, metadata: Dict[str, Any] | None = None) -> PolicyDecision:
-        metadata = metadata or {}
-        if metadata.get("irreversible", False):
-            return PolicyDecision(True, "approval_required:irreversible_action", requires_approval=True)
-        return PolicyDecision(True, f"allowed:{action}")
+    def reset(self) -> None:
+        self.steps_used = 0
+

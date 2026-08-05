@@ -15,7 +15,9 @@ class ChatSearchHandler:
         self.store = EventStore(events_root)
         logger.info("Initialized operational ChatSearchHandler with EventStore at %s", self.store.path)
 
-    async def execute(self, payload: ChatSearchRequest) -> ChatSearchResponse:
+    async def execute(self, payload: ChatSearchRequest | dict) -> ChatSearchResponse:
+        if isinstance(payload, dict):
+            payload = ChatSearchRequest(**payload)
         query_lower = payload.query.lower().strip()
         if not query_lower:
             return ChatSearchResponse(status="success", query=payload.query, results=[])
@@ -72,3 +74,4 @@ class ChatSearchHandler:
             results=truncated_results,
             message=f"Found {len(truncated_results)} matches out of {len(events)} stored events."
         )
+

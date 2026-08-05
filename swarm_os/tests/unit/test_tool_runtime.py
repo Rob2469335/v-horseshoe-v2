@@ -1,6 +1,6 @@
 import pytest
 from swarm_os.tool_runtime import CapabilityToolExecutor
-from swarm_os.capabilities.models import ChatSearchRequest, UpworkAnalysisRequest, VSCodeAutomationRequest
+from swarm_os.capabilities.models import ChatSearchRequest
 
 pytestmark = pytest.mark.anyio
 
@@ -32,3 +32,4 @@ async def test_tool_executor_clears_cache():
     assert executor.cache_size() == 1
     executor.clear_cache()
     assert executor.cache_size() == 0
+

@@ -17,7 +17,11 @@ async def test_resume_flow_advances_generation():
     kernel.generation = snapshot["generation"]
 
     before = kernel.generation
-    await kernel.step()
+    await kernel.step_async()
 
     assert kernel.generation == before + 1
-    assert len(kernel.organisms) == len(organisms)
+    # Real evolution bred children/elites on top of the resumed population.
+    assert len(kernel.organisms) >= len(organisms)
+    orig_ids = {o.id for o in organisms}
+    assert orig_ids.issubset({o.id for o in kernel.organisms})
+

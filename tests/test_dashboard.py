@@ -13,3 +13,4 @@ def test_dashboard():
     assert "snapshot_count" in data
     assert "snapshot_count" in data
     assert "latest_snapshot" in data
+

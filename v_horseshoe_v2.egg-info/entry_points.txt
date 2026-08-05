@@ -1,0 +1,2 @@
+[console_scripts]
+organism = organism_console.cli:main

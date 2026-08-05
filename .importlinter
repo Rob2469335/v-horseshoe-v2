@@ -1,0 +1,66 @@
+[importlinter]
+root_package = swarm_os
+
+[importlinter:contract:services_must_not_import_api]
+name = Services must not import API
+type = forbidden
+source_modules =
+    swarm_os.services
+forbidden_modules =
+    swarm_os.api
+
+[importlinter:contract:services_must_not_import_app_api]
+name = Services must not import app.api
+type = forbidden
+source_modules =
+    swarm_os.services
+forbidden_modules =
+    swarm_os.app.api
+
+[importlinter:contract:services_must_not_import_tests]
+name = Services must not import tests
+type = forbidden
+source_modules =
+    swarm_os.services
+forbidden_modules =
+    swarm_os.tests
+
+[importlinter:contract:domain_must_not_import_api]
+name = Domain must not import API
+type = forbidden
+source_modules =
+    swarm_os.domain
+forbidden_modules =
+    swarm_os.api
+
+[importlinter:contract:domain_must_not_import_app_api]
+name = Domain must not import app.api
+type = forbidden
+source_modules =
+    swarm_os.domain
+forbidden_modules =
+    swarm_os.app.api
+
+[importlinter:contract:domain_must_not_import_services]
+name = Domain must not import services
+type = forbidden
+source_modules =
+    swarm_os.domain
+forbidden_modules =
+    swarm_os.services
+
+[importlinter:contract:domain_must_not_import_tests]
+name = Domain must not import tests
+type = forbidden
+source_modules =
+    swarm_os.domain
+forbidden_modules =
+    swarm_os.tests
+
+[importlinter:contract:repositories_must_not_import_tests]
+name = Repositories must not import tests
+type = forbidden
+source_modules =
+    swarm_os.repositories
+forbidden_modules =
+    swarm_os.tests

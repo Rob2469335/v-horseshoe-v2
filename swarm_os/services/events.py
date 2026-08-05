@@ -30,3 +30,4 @@ def list_events(events_dir: Path) -> List[EventRecord]:
         kind, payload = line.split("`t", 1)
         out.append(EventRecord(path=str(target), kind=kind, payload=payload))
     return out
+

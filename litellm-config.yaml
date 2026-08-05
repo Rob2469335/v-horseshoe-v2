@@ -1,0 +1,48 @@
+litellm_settings:
+  num_retries: 2
+  timeout: 20
+  drop_params: true
+
+model_list:
+  # Cloud-first reasoning roles
+  - model_name: coordinator-reasoning
+    litellm_params:
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: planner-reasoning
+    litellm_params:
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: reviewer-reasoning
+    litellm_params:
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: debugger-reasoning
+    litellm_params:
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  # Cloud-first fast/tool roles
+  - model_name: executor-fast
+    litellm_params:
+      api_key: os.environ/GROQ_API_KEY
+
+  - model_name: coder-fast
+    litellm_params:
+      api_key: os.environ/GROQ_API_KEY
+
+  - model_name: tool-runner-tools
+    litellm_params:
+      api_key: os.environ/GROQ_API_KEY
+
+fallbacks:
+  # Cloud → local llama.cpp fallbacks when rate-limited or failing
+  - { coordinator-reasoning: ["openai/qwen-tuned"] }
+  - { planner-reasoning:     ["openai/qwen-tuned"] }
+  - { reviewer-reasoning:    ["openai/qwen-tuned"] }
+  - { debugger-reasoning:    ["openai/qwen-tuned"] }
+
+  - { executor-fast:         ["openai/qwen-tuned"] }
+  - { coder-fast:            ["openai/qwen-tuned"] }
+  - { tool-runner-tools:     ["openai/qwen-tuned"] }
+
+

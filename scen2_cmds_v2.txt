@@ -1,0 +1,3 @@
+workspace
+Use the filesystem tool to add a concise class-level docstring to AgentService in swarm_os/services/agent_service.py.
+exit

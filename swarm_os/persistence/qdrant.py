@@ -9,7 +9,7 @@ from typing import Any
 
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import (
-    Distance, VectorParams, PointStruct, Filter
+    Distance, VectorParams, PointStruct
 )
 import httpx
 
@@ -53,15 +53,28 @@ async def init_collections() -> None:
             log.debug(f"Collection exists: {name}")
 
 
+_embed_client: httpx.AsyncClient | None = None
+
+
+def _get_embed_client() -> httpx.AsyncClient:
+    global _embed_client
+    if _embed_client is None:
+        _embed_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(30.0),
+            limits=httpx.Limits(max_keepalive_connections=5, max_connections=20),
+        )
+    return _embed_client
+
+
 async def _embed(text: str) -> list[float]:
     """Get embedding from Ollama nomic-embed-text."""
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(
-            f"{OLLAMA_BASE_URL}/api/embed",
-            json={"model": EMBED_MODEL, "input": text},
-        )
-        resp.raise_for_status()
-        return resp.json()["embeddings"][0]
+    client = _get_embed_client()
+    resp = await client.post(
+        f"{OLLAMA_BASE_URL}/api/embed",
+        json={"model": EMBED_MODEL, "input": text},
+    )
+    resp.raise_for_status()
+    return resp.json()["embeddings"][0]
 
 
 async def upsert(collection_key: str, doc_id: str, text: str, payload: dict[str, Any]) -> None:
@@ -80,10 +93,28 @@ async def search(collection_key: str, query: str, top_k: int = 20) -> list[dict]
     name = COLLECTIONS.get(collection_key, collection_key)
     vector = await _embed(query)
     client = get_client()
-    results = await client.search(
-        collection_name=name,
-        query_vector=vector,
-        limit=top_k,
-        with_payload=True,
-    )
+    try:
+        if hasattr(client, "search"):
+            results = await client.search(
+                collection_name=name,
+                query_vector=vector,
+                limit=top_k,
+                with_payload=True,
+            )
+        else:
+            response = await client.query_points(
+                collection_name=name,
+                query=vector,
+                limit=top_k,
+                with_payload=True,
+            )
+            results = getattr(response, "points", response)
+    except Exception as exc:
+        log.warning(
+            "Qdrant search failed once for collection=%s error=%s: %s",
+            name,
+            exc.__class__.__name__,
+            exc,
+        )
+        return []
     return [{"score": r.score, "payload": r.payload} for r in results]

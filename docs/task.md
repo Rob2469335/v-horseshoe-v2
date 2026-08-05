@@ -1,0 +1,13 @@
+- [ ] Create `src/agent_memory/` directory structure with submodules for vector embeddings, episodic timeline, and LRU working memory
+- [ ] Implement vector embedding store supporting semantic recall with configurable similarity thresholds (target: latency < 50ms, F1 ≥ 0.85)
+- [ ] Build episodic timeline store to maintain chronological conversation history inspired by AutoGen patterns
+- [ ] Create LRU-cached working memory layer for short-term context retention following LangGraph memory patterns
+- [ ] Design unified hybrid memory interface combining all three sub-stores with consistent API contracts
+- [ ] Develop circuit-breaker middleware for multi-agent routing that monitors agent health metrics and self-reports status
+- [ ] Implement weighted policy graph for dynamic node selection based on recent Arxiv papers' reliability models
+- [ ] Build degraded node bypass logic triggering automatic failover within 2s of failure detection under load conditions
+- [ ] Add self-healing loop in `src/core/agent_runtime.py` to detect task failures and trigger retry with modified parameters
+- [ ] Configure escalation thresholds for N consecutive failures before activating fallback chain (pattern from Semantic Kernel)
+- [ ] Write unit tests for memory recall accuracy, routing failover under load, and self-healing escalation behavior
+- [ ] Create integration test suite validating end-to-end agent lifecycle against synthetic multi-agent workloads with degraded infrastructure
+- [ ] Update `docs/ARCHITECTURE.md` with new component interfaces, failure modes, recovery guarantees, and usage examples

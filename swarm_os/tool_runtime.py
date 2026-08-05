@@ -91,3 +91,4 @@ class CapabilityToolExecutor:
 
     def cache_size(self) -> int:
         return len(self._tool_cache)
+

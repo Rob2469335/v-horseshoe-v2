@@ -12,3 +12,4 @@ def test_admin_status():
     assert "generation" in data
     assert "snapshot_count" in data
 
+

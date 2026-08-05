@@ -1,0 +1,20 @@
+```python
+from threading import Lock
+
+class ThreadSafeQueue:
+    def __init__(self):
+        self.queue = []
+        self.lock = Lock()
+
+    def enqueue(self, item):
+        with self.lock:
+            self.queue.append(item)
+
+    def dequeue(self):
+        with self.lock:
+            if not self.queue:
+                return None
+            return self.queue.pop(0)
+```
+
+[1GΓáÖ [K[1GΓá╣ [K[1GΓá╕ [K[1GΓá╕ [K[1GΓá┤ [K[1GΓáª [K[1GΓáº [K[1GΓáç [K[1GΓáÅ [K[1GΓáï [K[1GΓáÖ [K[1GΓá╣ [K[1G[K[2K[1G

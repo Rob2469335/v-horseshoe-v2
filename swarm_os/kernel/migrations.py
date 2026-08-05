@@ -33,3 +33,4 @@ def migrate_snapshot(data: dict) -> dict:
         data["snapshot_version"] = 3
 
     return data
+

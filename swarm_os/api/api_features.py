@@ -27,15 +27,8 @@ async def semantic_search(req: QueryRequest):
     """
     try:
         from ..lib.vector.qdrant_store import search
+        from ..lib.vector.reranker import rerank
         from ..core.settings import get_settings
-
-        rerank = None
-        try:
-            from ..lib.vector.reranker import rerank
-        except Exception:
-            # Reranker is an empty/stub module in some deploys — degrade to
-            # raw candidates rather than failing the whole endpoint.
-            rerank = None
 
         s = get_settings()
         top_k_qdrant = getattr(s, "qdrant_retrieve_top_k", 20)
@@ -43,7 +36,7 @@ async def semantic_search(req: QueryRequest):
 
         candidates = await search(req.collection, req.query, top_k=top_k_qdrant)
         if candidates:
-            if reranker_on and rerank is not None:
+            if reranker_on:
                 results = await rerank(req.query, candidates, top_k=req.top_k)
             else:
                 results = candidates[:req.top_k]
@@ -70,7 +63,6 @@ async def _keyword_fallback(req: QueryRequest) -> list:
     is down, so this yields real memory content without any embedding call. If the
     requested collection is empty, falls back to swarm_memory (the general memory
     store) so a degraded search still returns content instead of an empty miss."""
-    import asyncio
     import re
     from qdrant_client import AsyncQdrantClient
     from ..core.settings import get_settings
@@ -114,11 +106,6 @@ async def _keyword_fallback(req: QueryRequest) -> list:
     except Exception:
         # Do not return early — fallback to local-file search below on any collection-level error
         pass
-    finally:
-        try:
-            await client.close()
-        except Exception:
-            pass
     # If Qdrant collections exist but contain no matching payloads, fall back
     # to scanning repository markdown files (AGENTS.md, README.md, docs/*.md)
     # so degraded search still returns useful context in test/dev environments

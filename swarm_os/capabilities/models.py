@@ -1,7 +1,24 @@
 from pydantic import BaseModel, Field
-from typing import List, Dict, Optional
+from typing import Any, List, Dict, Optional
+
+class ModelsHandler:
+    """
+    Handler for querying and managing model metadata.
+    """
+    def __init__(self, config: Optional[Dict[str, Any]] = None):
+        self.config = config or {}
+
+    async def execute(self, payload: Any) -> Dict[str, Any]:
+        # In a real implementation, this might query the Orchestrator or Ollama
+        return {
+            "status": "success",
+            "supported_roles": ["fast", "reasoning", "coding", "vision", "embedding", "reranker"],
+            "primary_vision_models": ["moondream:latest", "moondream:latest"],
+            "default_fast_model": "qwen3.5-4b"
+        }
 
 class ChatSearchRequest(BaseModel):
+
     query: str = Field(..., description="The semantic or keyword query to run against chat histories.")
     max_results: int = Field(5, ge=1, le=50, description="Maximum number of historical logs to retrieve.")
 
@@ -44,3 +61,4 @@ class VSCodeAutomationResponse(BaseModel):
     stderr: str
     exit_code: int
     message: Optional[str] = None
+

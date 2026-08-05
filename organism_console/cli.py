@@ -1,0 +1,300 @@
+"""ZENITH CLI — 2027 Edition
+
+Usage:
+  python -m organism_console          # Interactive REPL
+  python -m organism_console <cmd>    # Run one command
+  python -m organism_console --version
+  python -m organism_console --agent coder
+  python -m organism_console --model ibm/granite4.1:8b
+"""
+
+from __future__ import annotations
+
+import sys
+import json
+import logging
+import os
+import atexit
+import signal
+from dotenv import load_dotenv
+
+load_dotenv(override=True)
+
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+try:
+    import truststore
+    truststore.inject_into_ssl()
+except ImportError:
+    pass
+
+from rich.console import Console
+from rich.logging import RichHandler
+
+from organism_console.config import SESSION_FILE, LOG_DIR, VERSION
+from organism_console.state_store import SessionState
+from organism_console.command_registry import registry, CommandContext
+
+from organism_console.api_client import call_api
+from organism_console.ui.banner import print_banner, get_system_stats, estimate_tokens
+from organism_console.ui.live_stream import stream_prompt_with_retry
+from organism_console.loops.autonomous import run_autonomous_goal_loop
+from organism_console.loops.debate import run_debate_loop
+
+
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(message)s",
+    datefmt="[%X]",
+    handlers=[RichHandler(rich_tracebacks=True), logging.FileHandler(LOG_DIR / "cli.log")]
+)
+log = logging.getLogger("zenith_cli")
+
+
+class CLIContext(SessionState):
+    def __init__(self):
+        super().__init__(SESSION_FILE)
+        self.console = Console(highlight=False)
+
+    @property
+    def selected_agent(self):
+        return self.active_agent
+
+    @selected_agent.setter
+    def selected_agent(self, val):
+        self.active_agent = val
+
+    @property
+    def model(self):
+        return self.active_model
+
+    @model.setter
+    def model(self, val):
+        self.active_model = val
+
+
+ctx = CLIContext()
+
+
+_installed_models_cache = None
+
+def get_installed_models():
+    # BUG FIX: Use a global cache that ONLY caches successful backend API responses,
+    # preventing permanent fallback caching when the backend is temporarily offline.
+    global _installed_models_cache
+    if _installed_models_cache is not None:
+        return _installed_models_cache
+
+    try:
+        resp = call_api("/status")
+        if resp:
+            _installed_models_cache = tuple(resp.json().get("installed_models", []))
+            return _installed_models_cache
+    except Exception:
+        pass
+
+    try:
+        from runtime_v2.services.model_registry import get_model
+        coordinator_model, _ = get_model("coordinator")
+        return (coordinator_model,)
+    except Exception:
+        return ("qwen3.5-4b",)
+
+
+def build_command_context(cmd_ctx_console=None, cmd_ctx_state=None) -> CommandContext:
+    """Build a CommandContext with proper closure bindings."""
+    _state = cmd_ctx_state or ctx
+    _console = cmd_ctx_console or ctx.console
+    _installed = get_installed_models()
+    
+    _ctx = CommandContext(
+        state=_state,
+        console=_console,
+        call_api=call_api,
+        run_prompt=lambda p: stream_prompt_with_retry(ctx, ctx.active_agent, p, ctx.history),
+        get_system_stats=get_system_stats,
+        installed_models=_installed,
+    )
+    _ctx.run_goal_loop = lambda g, __ctx=_ctx: run_autonomous_goal_loop(g, __ctx)
+    _ctx.run_debate = lambda g, __ctx=_ctx: run_debate_loop(g, __ctx)
+    _ctx.run_prompt_with_agent = lambda agent, prompt, __state=ctx: stream_prompt_with_retry(__state, agent, prompt, __state.history)
+    return _ctx
+
+
+def print_version():
+    ctx.console.print(f"[bold cyan]ZENITH CLI[/bold cyan] [dim]v{VERSION}[/dim]")
+    ctx.console.print(f"[dim]Python {sys.version.split()[0]} on {sys.platform}[/dim]")
+
+
+def print_help():
+    ctx.console.print(f"[bold cyan]ZENITH CLI[/bold cyan] [dim]v{VERSION}[/dim]")
+    ctx.console.print("[bold]Usage:[/bold] python -m organism_console [OPTIONS] [COMMAND / SLASH_COMMAND]")
+    ctx.console.print("\n[bold cyan]Command-Line Flags:[/bold cyan]")
+    ctx.console.print("  [green]--agent <name>[/green]   Override initial active agent")
+    ctx.console.print("  [green]--model <name>[/green]   Override initial active model")
+    ctx.console.print("  [green]--version, -v[/green]    Show version information")
+    ctx.console.print("  [green]--help, -h[/green]       Show help message and available slash commands\n")
+    ctx.console.print("[bold cyan]Available Slash Commands:[/bold cyan]")
+    cmd_ctx = build_command_context()
+    registry.handle_line("/help", cmd_ctx)
+
+
+def handle_sigint(sig, _frame):
+    # BUG FIX: Raise KeyboardInterrupt so it propagates to the REPL's except block.
+    # Previously this only printed a newline, meaning Ctrl+C during a long LLM stream
+    # would print a blank line but NOT interrupt the blocking stream_prompt() call.
+    ctx.console.print()
+    raise KeyboardInterrupt
+
+
+def setup_readline():
+    """Set up command history with readline if available."""
+    try:
+        import readline
+        histfile = LOG_DIR / ".cli_history"
+        try:
+            readline.read_history_file(str(histfile))
+        except FileNotFoundError:
+            pass
+        readline.set_history_length(500)
+        atexit.register(readline.write_history_file, str(histfile))
+        
+        def completer(text, state):
+            cmd_list = [f"/{k}" for k in registry.commands.keys()
+                       if k.startswith(text.lower()) or f"/{k}".startswith(text)]
+            try:
+                return cmd_list[state]
+            except IndexError:
+                return None
+        
+        readline.set_completer(completer)
+        if sys.platform != "win32":
+            readline.parse_and_bind("tab: complete")
+            readline.parse_and_bind("set bell-style none")
+        return True
+    except ImportError:
+        return False
+
+
+def main():
+    ctx.cloud_enabled = False
+    # Default to local-first routing with cloud fan-out (DeepSeek + ultra-cheap
+    # Ling) as fallback. `/local` forces the fully offline local_only mode.
+    os.environ.setdefault("SWARM_ROUTING_MODE", "auto")
+    
+    from organism_console.token_tracker import start_background_poll
+    start_background_poll()
+
+    # --- CLI arg parsing ---
+    args = sys.argv[1:]
+    if "--version" in args or "-v" in args:
+        print_version()
+        return 0
+    if "--help" in args or "-h" in args:
+        print_help()
+        return 0
+
+    # Parse --agent and --model flags
+    agent_override = None
+    model_override = None
+    filtered_args = []
+    i = 0
+    while i < len(args):
+        if args[i] == "--agent" and i + 1 < len(args):
+            agent_override = args[i + 1]
+            i += 2
+        elif args[i] == "--model" and i + 1 < len(args):
+            model_override = args[i + 1]
+            i += 2
+        else:
+            filtered_args.append(args[i])
+            i += 1
+    args = filtered_args
+
+    if agent_override:
+        ctx.active_agent = agent_override
+        ctx.delegation_chain = [agent_override]
+    if model_override:
+        ctx.active_model = model_override
+
+    signal.signal(signal.SIGINT, handle_sigint)
+
+    # --- Single command mode ---
+    if args:
+        cmd_line = " ".join(args)
+        cmd_ctx = build_command_context()
+        execute_prompt = registry.handle_line(cmd_line, cmd_ctx)
+        if execute_prompt:
+            stream_prompt_with_retry(ctx, ctx.active_agent, execute_prompt, ctx.history)
+        return 0
+
+    # --- Interactive REPL ---
+    setup_readline()
+    print_banner(ctx)
+
+    # Auto-start the background healing watchmen so both infrastructure health
+    # AND code-level repair are self-healed even when no /goal loop is running.
+    from organism_console.core.healing_watchman import HealingWatchman
+    _healing_watchman = HealingWatchman(interval_seconds=60.0, console=ctx.console)
+    _healing_watchman.start()
+    atexit.register(_healing_watchman.stop)
+
+    try:
+        from organism_console.core.self_repair_engine import SelfRepairEngine
+        from organism_console.core.repair_engine import RepairWatchman
+        _repair_watchman = RepairWatchman(SelfRepairEngine(build_command_context()), interval_seconds=30)
+        _repair_watchman.start(start_at_end=True)
+        atexit.register(_repair_watchman.stop)
+        ctx.console.print("[dim]⚕ Auto-repair watchman active (tailing events.jsonl for code failures)[/dim]")
+    except Exception as exc:
+        log.warning(f"Auto-repair watchman failed to start: {exc}")
+
+    while True:
+        try:
+            active = f"[bold magenta]{ctx.active_agent.upper()}[/bold magenta]"
+            prompt_str = f"{active}[bold bright_black] >>> [/bold bright_black]"
+            cmd_line = ctx.console.input(prompt_str).strip()
+
+            if not cmd_line:
+                continue
+
+            cmd_ctx = build_command_context()
+
+            execute_prompt = registry.handle_line(cmd_line, cmd_ctx)
+            if execute_prompt:
+                current_context_tokens = estimate_tokens(execute_prompt + json.dumps(ctx.history))
+                if current_context_tokens > 15000 and len(ctx.history) > 12:
+                    ctx.console.print("[dim]Context pressure warning: tokens exceed 15000. Auto-truncating oldest history...[/dim]")
+                    keep = min(10, len(ctx.history) - 2)
+                    truncate_idx = len(ctx.history) - keep
+                    # BUG FIX: Add bounds check before indexing to prevent IndexError
+                    if 0 < truncate_idx < len(ctx.history) and ctx.history[truncate_idx].get("role") == "user" and "Result:" in str(ctx.history[truncate_idx].get("content", "")):
+                        truncate_idx += 1
+                    truncate_idx = max(1, min(truncate_idx, len(ctx.history) - 1))
+                    # BUG FIX: Explicitly preserve ctx.history[0] (system message) using [0:1]
+                    # instead of [:1] which could fail if ctx.history[0] is unintentionally sliced
+                    ctx.history = ctx.history[0:1] + ctx.history[truncate_idx:]
+                    registry.handle_line("/compress", cmd_ctx)
+
+                ctx.history = stream_prompt_with_retry(ctx, ctx.active_agent, execute_prompt, ctx.history)
+
+        except KeyboardInterrupt:
+            ctx.console.print("\n[dim]Use '/exit' to quit properly.[/dim]")
+            continue
+        except EOFError:
+            break
+        except Exception as e:
+            log.exception("Main loop exception")
+            ctx.console.print(f"[bold red]Unexpected error:[/bold red] {e}")
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

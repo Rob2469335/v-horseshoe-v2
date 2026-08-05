@@ -6,7 +6,6 @@ specialists emerge in real time.
 """
 from __future__ import annotations
 
-import asyncio
 import argparse
 import logging
 import random
@@ -14,8 +13,8 @@ import sys
 
 from swarm_os.config.settings import settings
 from swarm_os.kernel.environment import Environment
-from swarm_os.kernel.swarm_kernel import SwarmKernel
-from swarm_os.kernel.snapshot import latest_snapshot, load_snapshot
+from swarm_os.swarm_kernel import SwarmKernel
+from swarm_os.snapshot import latest_snapshot, load_snapshot
 from swarm_os.scenarios.registry import build as build_scenario
 
 log = logging.getLogger(__name__)
@@ -68,9 +67,9 @@ def main() -> None:
             organisms, start_generation = _restore_from_snapshot(snap)
         else:
             log.warning("no snapshot found — starting fresh")
-            organisms = build_scenario(args.scenario, settings.population_max)
+            organisms = build_scenario(args.scenario)
     else:
-        organisms = build_scenario(args.scenario, settings.population_max)
+        organisms = build_scenario(args.scenario)
 
     log.info("population size=%d starting from generation=%d",
              len(organisms), start_generation)
@@ -87,15 +86,14 @@ def main() -> None:
 
     for gen in range(args.generations):
         try:
-            summary = asyncio.run(kernel.step())
+            summary = kernel.step()
             top      = summary["top_organisms"]
             diversity = summary.get("diversity", {})
 
             if top:
                 best    = top[0]
-                weights = best.get("model_weights", {})
-                dominant_model = max(weights, key=weights.get) if weights else "unknown"
-                dominant_model_short = dominant_model.split(":")[-1]
+                dominant_model = best.get("model", "unknown")
+                dominant_model_short = dominant_model.split(":")[0]
 
                 dom_dist = diversity.get("domain_distribution", {})
                 dom_str  = " ".join(f"{k[0].upper()}:{v:.0%}" for k, v in dom_dist.items())
@@ -115,7 +113,7 @@ def main() -> None:
 
         except KeyboardInterrupt:
             log.info("interrupted at generation %d — saving snapshot", kernel.generation)
-            from swarm_os.kernel.snapshot import save_snapshot
+            from swarm_os.snapshot import save_snapshot
             save_snapshot(kernel.organisms, kernel.generation)
             print("\nSnapshot saved. Resume with: python -m swarm_os --resume")
             sys.exit(0)
@@ -130,7 +128,7 @@ def main() -> None:
 
 def _print_final_report(kernel: SwarmKernel) -> None:
     from swarm_os.kernel.selection import SelectionEngine
-    from swarm_os.kernel.swarm_kernel import _population_diversity
+    from swarm_os.swarm_kernel import _population_diversity
 
     top       = SelectionEngine().top_organisms(kernel.organisms, n=5)
     diversity = _population_diversity(kernel.organisms)
@@ -151,13 +149,10 @@ def _print_final_report(kernel: SwarmKernel) -> None:
 
     for i, o in enumerate(top):
         cog      = o.genome.cognition
-        weights  = o.genome.model_weights
-        dominant = max(weights, key=weights.get)
+        dominant = o.genome.model
         dom_aff  = max(["coding","research","upwork"],
                        key=lambda d: getattr(o.genome, f"{d}_affinity"))
-        w_str    = ", ".join(
-            f"{m.split(':')[-1]}={w:.0%}" for m, w in weights.items() if w > 0.05
-        )
+        w_str    = dominant
         print(f"\n  #{i+1}  {o.id}")
         print(f"       Role         : {dom_aff} specialist")
         print(f"       Avg fitness  : {o.genome.average_fitness:.4f}  "
@@ -175,6 +170,7 @@ def _print_final_report(kernel: SwarmKernel) -> None:
 
     print("\n" + "═" * 68)
     print("\n  To resume:  python -m swarm_os --resume\n")
+
 
 
 

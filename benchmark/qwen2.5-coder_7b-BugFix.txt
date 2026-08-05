@@ -1,0 +1,6 @@
+def factorial(n):
+    if n == 0:
+        return 1
+    return n * factorial(n-1)
+
+[1GΓáÖ [K[1GΓáÖ [K[1GΓá╕ [K[1GΓá╕ [K[1GΓá┤ [K[1GΓáª [K[1GΓáº [K[1GΓáº [K[1GΓáÅ [K[1GΓáï [K[1G[K[2K[1G

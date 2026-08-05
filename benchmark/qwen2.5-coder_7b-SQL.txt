@@ -1,0 +1,35 @@
+To find the second highest salary from an `Employees` table, you can use th[2D[K
+the following SQL query:
+
+```sql
+SELECT MAX(salary) AS SecondHighestSalary
+FROM Employees
+WHERE salary < (SELECT MAX(salary) FROM Employees);
+```
+
+This query works as follows:
+1. The subquery `(SELECT MAX(salary) FROM Employees)` finds the highest sal[3D[K
+salary in the table.
+2. The main query then selects the maximum salary from the `Employees` tabl[4D[K
+table where the salary is less than the highest salary found by the subquer[7D[K
+subquery, effectively giving you the second highest salary.
+
+If there might be duplicate highest salaries and you want to ensure that th[2D[K
+the result is unique, you can use a different approach:
+
+```sql
+SELECT DISTINCT MAX(salary) AS SecondHighestSalary
+FROM Employees e1
+WHERE (SELECT COUNT(*) FROM Employees e2 WHERE e2.salary > e1.salary) = 1;
+```
+
+This query works as follows:
+1. The subquery `(SELECT COUNT(*) FROM Employees e2 WHERE e2.salary > e1.sa[5D[K
+e1.salary) = 1` counts how many employees have a salary higher than the cur[3D[K
+current employee's salary.
+2. The main query selects the distinct maximum salary from the `Employees` [K
+table where there is exactly one employee with a higher salary, ensuring th[2D[K
+that if there are duplicates of the highest salary, you still get the secon[5D[K
+second highest unique salary.
+
+[1GΓáÖ [K[1GΓá╣ [K[1GΓá╕ [K[1GΓá╕ [K[1GΓá╝ [K[1GΓáª [K[1GΓáª [K[1GΓáº [K[1GΓáÅ [K[1GΓáï [K[1G[K[2K[1G

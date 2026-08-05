@@ -1,0 +1,18 @@
+```python
+class ListNode:
+    def __init__(self, x):
+        self.val = x
+        self.next = None
+
+def reverseList(head: ListNode) -> ListNode:
+    prev = None
+    current = head
+    while current is not None:
+        next_node = current.next  # Store next node
+        current.next = prev       # Reverse the link
+        prev = current            # Move pointers one position ahead.
+        current = next_node
+    return prev
+```
+
+[1GΓáÖ [K[1GΓáÖ [K[1GΓá╣ [K[1GΓá╝ [K[1GΓá╝ [K[1GΓá┤ [K[1GΓáº [K[1GΓáç [K[1GΓáç [K[1GΓáÅ [K[1GΓáÖ [K[1GΓáÖ [K[1GΓá╕ [K[1GΓá╝ [K[1GΓá╝ [K[1GΓáª [K[1GΓáª [K[1GΓáç [K[1GΓáç [K[1GΓáï [K[1GΓáÖ [K[1GΓá╣ [K[1GΓá╣ [K[1GΓá╕ [K[1GΓá┤ [K[1GΓá┤ [K[1GΓáª [K[1GΓáç [K[1GΓáç [K[1GΓáÅ [K[1GΓáï [K[1GΓá╣ [K[1GΓá╣ [K[1GΓá╝ [K[1GΓá┤ [K[1GΓá┤ [K[1GΓáº [K[1GΓáç [K[1GΓáÅ [K[1GΓáÅ [K[1GΓáÖ [K[1GΓáÖ [K[1GΓá╕ [K[1GΓá╝ [K[1GΓá┤ [K[1GΓá┤ [K[1GΓáº [K[1GΓáç [K[1GΓáç [K[1GΓáï [K[1GΓáÖ [K[1GΓá╣ [K[1GΓá╣ [K[1GΓá╝ [K[1GΓá┤ [K[1GΓáª [K[1GΓáª [K[1GΓáç [K[1GΓáç [K[1GΓáï [K[1GΓáÖ [K[1GΓá╣ [K[1GΓá╕ [K[1GΓá╕ [K[1GΓá╝ [K[1GΓáª [K[1GΓáº [K[1GΓáç [K[1GΓáÅ [K[1GΓáï [K[1GΓáï [K[1GΓáÖ [K[1GΓá╣ [K[1GΓá╕ [K[1GΓá╝ [K[1GΓáª [K[1GΓáº [K[1GΓáº [K[1GΓáÅ [K[1GΓáÅ [K[1GΓáÖ [K[1GΓáÖ [K[1GΓá╕ [K[1GΓá╕ [K[1GΓá┤ [K[1GΓáª [K[1GΓáº [K[1GΓáç [K[1GΓáç [K[1GΓáÅ [K[1GΓáÖ [K[1GΓá╣ [K[1GΓá╕ [K[1GΓá╕ [K[1GΓá┤ [K[1GΓá┤ [K[1GΓáº [K[1GΓáº [K[1GΓáÅ [K[1GΓáï [K[1GΓáÖ [K[1GΓá╣ [K[1GΓá╕ [K[1GΓá╕ [K[1G[K[2K[1G

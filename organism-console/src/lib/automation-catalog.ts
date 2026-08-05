@@ -179,6 +179,92 @@ export const automationCatalog: AutomationCatalogItem[] = [
     ]
   },
   {
+    id: "upwork-analyzer",
+    title: "Upwork Analyzer",
+    audience: "robert",
+    group: "starter",
+    category: "money",
+    difficulty: "beginner",
+    isStarter: true,
+    plainEnglish: "Looks at Upwork job posts and tells you which ones are the best match for your skills.",
+    whenToUse: "Use this when you want to find freelance work on Upwork but do not want to read through hundreds of bad job posts.",
+    inputs: ["Upwork search URL or job list", "Your profile summary", "Preferred budget range"],
+    outputs: ["Ranked job list", "Match score for each job", "Suggested proposal focus"],
+    example: "Analyze the top 20 React developer jobs and highlight the ones that match my portfolio.",
+    whyItHelps: "It saves hours of manual searching and helps you apply to the jobs you are most likely to win.",
+    commonMistakes: ["Using too many broad search terms", "Applying to jobs with very low match scores"],
+    whatItMeans: "This automation acts like a smart assistant that reads Upwork jobs for you. It compares what the client wants with what you can do, and gives each job a score so you know where to focus.",
+    whyThisMatters: "Freelance sites are crowded. Finding the right job quickly means you can be the first to apply with a great proposal.",
+    wordsToKnow: [
+      { term: "Upwork", meaning: "A website where businesses hire freelancers for project work." },
+      { term: "Match score", meaning: "A number that shows how well your skills fit what the client is asking for." },
+      { term: "Proposal", meaning: "The message you send to a client to explain why they should hire you." }
+    ],
+    beforeYouStart: [
+      "Have your Upwork account ready.",
+      "Make sure your profile description is up to date.",
+      "Know which skills you want to use for work today."
+    ],
+    steps: [
+      "Paste the Upwork search results or job link.",
+      "Check that your profile information is correct.",
+      "Run the analyzer to see the ranked jobs.",
+      "Review the match scores and the \"Why it fits\" notes.",
+      "Choose the top 2 or 3 jobs to write proposals for."
+    ],
+    whatSuccessLooksLike: [
+      "You have a short list of high-quality jobs that fit your skills.",
+      "You spend less time searching and more time earning."
+    ],
+    whenToAskForHelp: [
+      "If the analyzer cannot read the job posts correctly.",
+      "If you are not sure why a job received a low match score."
+    ]
+  },
+  {
+    id: "vscode-automation",
+    title: "VS Code Automation",
+    audience: "robert",
+    group: "starter",
+    category: "coding",
+    difficulty: "beginner",
+    isStarter: true,
+    plainEnglish: "Helps you perform common coding tasks in VS Code using simple commands.",
+    whenToUse: "Use this when you are working on code and want to automate repetitive tasks like formatting, searching, or creating files.",
+    inputs: ["Current project folder", "Task description (e.g., \"Fix all lint errors\")", "Target files"],
+    outputs: ["Updated code files", "Summary of changes made", "List of any errors found"],
+    example: "Find all instances of 'TODO' in the project and list them in a summary file.",
+    whyItHelps: "It makes coding faster and reduces mistakes by handling the boring parts of development.",
+    commonMistakes: ["Running automation on the wrong folder", "Not reviewing changes before saving"],
+    whatItMeans: "VS Code is the tool where you write code. This automation adds \"superpowers\" to it, allowing you to give it instructions in plain English to change or organize your files.",
+    whyThisMatters: "Learning to automate your coding environment is a key skill for a modern developer. It allows you to focus on the logic instead of the typing.",
+    wordsToKnow: [
+      { term: "VS Code", meaning: "Visual Studio Code, a popular program used by developers to write and edit code." },
+      { term: "Lint errors", meaning: "Small mistakes in code formatting or style that can be fixed automatically." },
+      { term: "Project folder", meaning: "The main folder on your computer that contains all the files for your software." }
+    ],
+    beforeYouStart: [
+      "Open your project in VS Code.",
+      "Make sure you have saved your current work.",
+      "Identify one repetitive task you want to finish quickly."
+    ],
+    steps: [
+      "Choose the project folder you are working in.",
+      "Describe the task you want the automation to do.",
+      "Wait for the automation to finish scanning your files.",
+      "Review the suggested changes to your code.",
+      "Accept the changes to update your files."
+    ],
+    whatSuccessLooksLike: [
+      "Your code is cleaner and more organized.",
+      "You finished a repetitive task in seconds instead of minutes."
+    ],
+    whenToAskForHelp: [
+      "If the automation makes a change you do not understand.",
+      "If it cannot find the files you are looking for."
+    ]
+  },
+  {
     id: "make-folder-helper",
     title: "Make Folder Helper",
     audience: "beginner",
@@ -263,6 +349,104 @@ export const automationCatalog: AutomationCatalogItem[] = [
     whenToAskForHelp: [
       "If the message appears to be about an important account and you are unsure.",
       "If you already clicked the link or opened the attachment."
+    ]
+  },
+  {
+    id: "web-search",
+    title: "Web Search",
+    audience: "robert",
+    group: "starter",
+    category: "research",
+    difficulty: "beginner",
+    isStarter: true,
+    plainEnglish: "Searches the web for current information, prices, ideas, news, and answers.",
+    whenToUse: "Use this when you need the most up-to-date information that happened recently, or to compare current prices for things you want to buy.",
+    inputs: ["Search question or topic", "Search depth"],
+    outputs: ["Live web results", "Summary of current facts", "Direct source links"],
+    example: "Find the current news about a specific technology or today's price for a product.",
+    whyItHelps: "Helps avoid outdated answers and makes it easier to compare real current options.",
+    commonMistakes: [
+      "Using search terms that are too short",
+      "Not checking the date on the search results"
+    ],
+    whatItMeans: "This tool is like a personal researcher. It looks at the live internet to find information that is happening right now, which is better than relying on older data.",
+    whyThisMatters: "The world changes fast. Web search ensures you are making decisions based on what is true today, not what was true a year ago.",
+    wordsToKnow: [
+      { term: "real-time", meaning: "Happening right now, with no delay." },
+      { term: "source link", meaning: "The direct address of the website where the information was found." },
+      { term: "outdated", meaning: "Information that is no longer correct because too much time has passed." }
+    ],
+    beforeYouStart: [
+      "Think of 3-4 specific words related to your question.",
+      "Decide if you need local information or global news."
+    ],
+    steps: [
+      "Type your question or topic into the search bar.",
+      "Review the summaries of the top websites found.",
+      "Check the dates on the results to ensure they are current.",
+      "Click the links to read more details on the most promising sites.",
+      "Compare information from different sources to be sure it's right."
+    ],
+    whatSuccessLooksLike: [
+      "You find the latest news, answers, or prices you needed.",
+      "You feel confident that the information is not outdated."
+    ],
+    whenToAskForHelp: [
+      "If the results seem to be mostly ads instead of real information.",
+      "If you find two websites that say the exact opposite thing."
+    ]
+  },
+  {
+    id: "used-rv-finder",
+    title: "Used RV Finder",
+    audience: "robert",
+    group: "starter",
+    category: "money",
+    difficulty: "beginner",
+    isStarter: true,
+    plainEnglish: "Searches for used Class B and Class C motorhomes under $30,000 within 50 miles of your home, compares features, and helps decide which one is the best buy.",
+    whenToUse: "Use this when you are looking for a pre-owned Class B or Class C motorhome to live in full-time and want to find the best quality unit while staying under your $30,000 budget cap and close to home.",
+    inputs: ["Desired RV type (Class B/C)", "Budget cap ($30,000)", "Home location + radius (50 mi)"],
+    outputs: ["Matched used RV list", "Distance from home", "Feature and condition comparison", "Buy/Skip advice"],
+    example: "Find Class B and Class C motorhomes under $30,000 within 50 miles of Roosevelt, NY and compare their features and condition.",
+    whyItHelps: "Saves time, avoids bad RV deals, and helps focus on units with the best mix of price, features, condition, and distance from home.",
+    commonMistakes: [
+      "Judging a unit only by age instead of maintenance",
+      "Ignoring signs of water damage",
+      "Assuming good tire tread means the tires are safe",
+      "Traveling hundreds of miles for a rig you could not fully inspect"
+    ],
+    whatItMeans: "This automation finds used Class B and Class C motorhomes for sale that fit your budget and are within a set distance of your home. It compares features like mileage and floorplans, but most importantly, it helps you evaluate the condition. Remember: A well-maintained older RV can be a better buy than a newer neglected one.",
+    whyThisMatters: "Water damage is the biggest red flag in any used RV. This tool helps you focus on finding a solid, leak-free unit nearby so you can inspect it in person and avoid expensive repairs.",
+    wordsToKnow: [
+      { term: "Class B", meaning: "A camper van built on a van chassis — small, easy to drive, great gas mileage." },
+      { term: "Class C", meaning: "A motorhome with a van-like cab and a coach body behind it — roomier than a B." },
+      { term: "water damage", meaning: "Rot or mold caused by leaks—the #1 thing to avoid in a used RV." },
+      { term: "tire age", meaning: "Tires should be replaced every 5-7 years regardless of how much tread is left." },
+      { term: "independent inspection", meaning: "Hiring a professional to check the RV before you commit to buying it." }
+    ],
+    beforeYouStart: [
+      "Confirm your budget cap is strictly $30,000.",
+      "List the must-have features you want to compare.",
+      "Be ready to ask sellers for full maintenance records.",
+      "Plan to see any shortlisted rig in person before committing."
+    ],
+    steps: [
+      "Search for used Class B and Class C motorhomes that fit your $30,000 budget.",
+      "Check the distance from home on each match.",
+      "Compare the features, mileage, and floorplans of each match.",
+      "Inspect descriptions and photos for signs of leaks in the roof, floor, slide-outs, windows, and seams.",
+      "Verify the age of the tires, not just the tread depth.",
+      "Plan to test all appliances, plumbing, HVAC, and electrical systems.",
+      "Always prefer an independent RV inspection before making a final purchase."
+    ],
+    whatSuccessLooksLike: [
+      "You find a Class B or Class C under $30,000 that has been well-maintained.",
+      "You can drive to see it in person and have the advice needed to decide which one is the best buy."
+    ],
+    whenToAskForHelp: [
+      "If you see any soft spots in the floor or ceiling.",
+      "If the seller cannot provide any maintenance history."
     ]
   }
 ]

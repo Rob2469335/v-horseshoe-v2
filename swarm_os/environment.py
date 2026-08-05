@@ -117,3 +117,4 @@ class Environment:
 
     def resource_pressure(self) -> float:
         return 1.0 - (self.resources["compute"] + self.resources["energy"]) / 200.0
+

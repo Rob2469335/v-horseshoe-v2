@@ -1,0 +1,37 @@
+FastAPI and Flask are both Python web frameworks that are used to build API[3D[K
+APIs. However, there are some differences between them.
+FastAPI is designed to be faster than Flask and offers more features such a[1D[K
+as automatic documentation generation, data validation, and dependency inje[4D[K
+injection. It uses modern Python type hints for better code readability and[3D[K
+and performance.
+Flask is a lightweight framework with fewer features but is more flexible a[1D[K
+and easier to use for small projects. It has a steeper learning curve compa[5D[K
+compared to FastAPI, but it allows more customization of the server and its[3D[K
+its components.
+|Feature| FastAPI| Flask|
+|---|---|---|
+|Performance| Faster than Flask| Slower than FastAPI|
+|Documentation| Automatic documentation generation| No automatic documentat[10D[K
+documentation generation|
+|Data Validation| Built-in data validation using Pydantic| No built-in data[4D[K
+data validation|
+|Dependency Injection| Built-in dependency injection support| No built-in d[1D[K
+dependency injection|
+Based on the comparison table above, FastAPI would be a better choice for b[1D[K
+building a local AI server that requires fast performance and modern featur[6D[K
+features such as automatic documentation generation and data validation. Fl[2D[K
+Flask may be more suitable for small projects or customizing the server's c[1D[K
+components.
+In summary, both FastAPI and Flask are great choices for building APIs in P[1D[K
+Python. The choice between them depends on the specific requirements of you[3D[K
+[1GΓáÖ [K[1GΓáÖ [K[1GΓá╕ [K[1GΓá╝ [K[1GΓá┤ [K[1GΓá┤ [K[1GΓáº [K[1GΓáç [K[1GΓáç [K[1GΓáÅ [K[1GΓáï [K[1GΓáÖ [K[1G[K[2K[1Gtotal duration:       39.1261401s
+load duration:        219.8338ms
+prompt eval count:    54 token(s)
+your project.
+prompt eval duration: 824.961ms
+prompt eval rate:     65.46 tokens/s
+eval count:           267 token(s)
+eval duration:        37.870501s
+eval rate:            7.05 tokens/s
+
+

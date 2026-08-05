@@ -37,3 +37,4 @@ def _load_from_env(s: SwarmSettings) -> SwarmSettings:
 
 
 settings = _load_from_env(SwarmSettings())
+

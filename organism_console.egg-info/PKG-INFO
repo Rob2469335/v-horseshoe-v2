@@ -1,0 +1,5 @@
+Metadata-Version: 2.4
+Name: organism-console
+Version: 0.1.0
+Summary: Organism Console CLI AI runtime
+Requires-Python: >=3.14

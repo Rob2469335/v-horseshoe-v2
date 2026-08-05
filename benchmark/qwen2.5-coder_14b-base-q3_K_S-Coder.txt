@@ -1,0 +1,110 @@
+Sure! Below is an implementation of the Least Recently Used (LRU) cache wit[3D[K
+with `O(1)` time complexity for both reads and writes, along with accompany[9D[K
+accompanying unit tests using the built-in `unittest` module in Python:
+
+```python
+from collections import OrderedDict
+
+class LRUCache(OrderedDict):
+    def __init__(self, capacity: int):
+        super().__init__()
+        self.capacity = capacity
+        
+    def get(self, key: Any) -> Optional[Any]:
+        if key not in self:
+            return None
+        value = super().pop(key)
+        super()[key] = value  # move to end of OrderedDict
+        return value
+    
+    def put(self, key: Any, value: Any):
+        if key in self:
+            del self[key]
+        
+        while len(self) >= self.capacity and self.keys():
+            oldest_key = next(iter(self))
+            del self[oldest_key]
+            
+        super().__setitem__(key, value)
+
+# Unit Tests
+import unittest
+
+class TestLRUCache(unittest.TestCase):
+    
+    def test_lru_cache(self): 
+        cache = LRUCache(2)
+        
+        # Put some items into the cache
+        cache.put("key1", "value1")
+        self.assertEqual(cache["key1"], "value1")
+
+        cache.put("key2", "value2")  
+        self.assertTrue(not "value3" in list(cache.values()))
+    
+        # Test retrieving an item from the cache
+        retrieved = cache.get("key1")
+        expected_retrieved = 'value1'
+        
+        assert(retrieved == expected_retrieved), f"\nRetrieved value '{retr[6D[K
+'{retrieved}' does not match expected result '{expected_retrieved}'."
+    
+    def test_lru_eviction(self):
+        """Test that when capacity is reached, the least recently used item[4D[K
+item gets evicted."""
+        cache = LRUCache(3)
+        
+        # Fill up the cache
+        for i in range(cache.capacity + 1): 
+            key = f'key{i}'
+            val = f'value{i}'    
+            
+            try:  
+                assert(len(list(cache.keys())) == i), \
+                    "\nCache should have exactly {} keys but had {}.".forma[10D[K
+{}.".format(i, len(list(cache.keys()))) 
+            
+                cache[key] = val
+                
+        # Try accessing each key; first two shouldn't be in the cache anymo[5D[K
+anymore due to eviction
+        for idx, key in enumerate(("key0", "key1")):    
+            try:
+                assert(key not in list(cache.keys())), \
+                    "\nKey '{}' should no longer exist in the cache.".forma[13D[K
+cache.".format(key)
+                    
+                retrieved = cache[key]
+                
+                expected_retrieved = f'value{idx+cache.capacity}'
+            
+                self.assertEqual(retrieved, expected_retrieved), \
+                    f"\nRetrieved value '{retrieved}' does not match expect[6D[K
+expected result '{expected_retrieved}'."
+            except Exception as e:
+                print(e)
+                    
+if __name__ == '__main__':
+    unittest.main(argv=[''], verbosity=2)
+```
+
+This script defines an `LRUCache` class which inherits from PythonΓÇÖs built-[6D[K
+built-in `OrderedDict`, allowing us to implement a simple LRU cache. The un[2D[K
+unit tests verify basic functionality, including checking that items are co[2D[K
+correctly added and retrieved, as well as testing whether the least recentl[7D[K
+recently used item gets evicted once the capacity is reached.
+
+The test cases include ensuring correct behavior when adding new entries (`[2D[K
+(`test_lru_cache`) and confirming proper eviction logic for old entries upo[3D[K
+upon reaching maximum storage limit (`test_lru_eviction`). Running these te[2D[K
+tests ensures our LRU cache works correctly under typical usage scenarios.
+
+[1GΓáï [K[1GΓá╣ [K[1GΓá╣ [K[1GΓá╝ [K[1GΓá┤ [K[1GΓáª [K[1GΓáª [K[1GΓáç [K[1GΓáç [K[1GΓáï [K[1GΓáÖ [K[1GΓáÖ [K[1GΓá╣ [K[1GΓá╕ [K[1GΓá╝ [K[1GΓá┤ [K[1GΓáº [K[1GΓáç [K[1GΓáÅ [K[1GΓáï [K[1GΓáï [K[1GΓá╣ [K[1GΓá╣ [K[1GΓá╕ [K[1GΓá╝ [K[1GΓá┤ [K[1GΓáº [K[1GΓáº [K[1GΓáç [K[1GΓáï [K[1GΓáÖ [K[1G[K[2K[1Gtotal duration:       4m51.3668948s
+load duration:        260.9239ms
+prompt eval count:    18 token(s)
+prompt eval duration: 1.528111s
+prompt eval rate:     11.78 tokens/s
+eval count:           751 token(s)
+eval duration:        4m48.197431s
+eval rate:            2.61 tokens/s
+

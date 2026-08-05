@@ -29,3 +29,4 @@ async def load_blueprints() -> None:
 
 def get_blueprints() -> dict[str, dict]:
     return _blueprints
+

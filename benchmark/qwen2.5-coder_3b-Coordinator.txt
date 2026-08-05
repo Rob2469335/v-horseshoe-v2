@@ -1,0 +1,22 @@
+```json
+{
+  "agents": {
+    "agent1": ["Read project", "Search documentation"],
+    "agent2": ["Write Python code"],
+    "agent3": ["Review code"],
+    "agent4": ["Fix failing unit tests"],
+    "agent5": ["Execute git commands"],
+    "agent6": ["Summarize results"]
+  }
+}
+```
+
+[1GΓáÖ [K[1GΓá╣ [K[1GΓá╕ [K[1GΓá╕ [K[1GΓá┤ [K[1GΓá┤ [K[1GΓáª [K[1GΓáº [K[1GΓáç [K[1GΓáÅ [K[1GΓáÖ [K[1GΓá╣ [K[1GΓá╕ [K[1GΓá╕ [K[1GΓá┤ [K[1GΓá┤ [K[1GΓáº [K[1GΓáº [K[1GΓáÅ [K[1GΓáÅ [K[1GΓáï [K[1GΓá╣ [K[1GΓá╕ [K[1GΓá╝ [K[1GΓá┤ [K[1GΓáª [K[1GΓáª [K[1GΓáº [K[1GΓáÅ [K[1GΓáï [K[1GΓáï [K[1GΓá╣ [K[1GΓá╕ [K[1GΓá╕ [K[1GΓá┤ [K[1GΓá┤ [K[1GΓáº [K[1GΓáº [K[1GΓáç [K[1GΓáï [K[1GΓáÖ [K[1GΓáÖ [K[1GΓá╣ [K[1GΓá╝ [K[1GΓá╝ [K[1GΓá┤ [K[1GΓáª [K[1GΓáç [K[1GΓáç [K[1GΓáÅ [K[1GΓáï [K[1GΓá╣ [K[1GΓá╣ [K[1GΓá╕ [K[1GΓá╝ [K[1GΓá┤ [K[1GΓáº [K[1GΓáº [K[1GΓáÅ [K[1GΓáÅ [K[1GΓáÖ [K[1GΓáÖ [K[1GΓá╕ [K[1GΓá╝ [K[1GΓá╝ [K[1G[K[2K[1Gtotal duration:       11.9215524s
+load duration:        5.9402876s
+prompt eval count:    87 token(s)
+prompt eval duration: 573.531ms
+prompt eval rate:     151.69 tokens/s
+eval count:           78 token(s)
+eval duration:        5.397224s
+eval rate:            14.45 tokens/s
+

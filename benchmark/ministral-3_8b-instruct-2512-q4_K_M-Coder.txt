@@ -1,0 +1,154 @@
+Here's an implementation of an **LRU (Least Recently Used) Cache** in Pytho[5D[K
+Python with **O(1)** time complexity for `get`, `put`, and `delete` operati[7D[K
+operations, along with unit tests using `unittest`.
+
+### Approach:
+- Use a **doubly linked list** to maintain the order of usage (most recent [K
+at head, least recent at tail).
+- Use a **hash map (dictionary)** for O(1) access to nodes.
+- When the cache exceeds capacity, remove the node at the tail.
+
+---
+
+### Implementation (`lru_cache.py`):
+```python
+class Node:
+    def __init__(self, key=None, value=None):
+        self.key = key
+        self.value = value
+        self.prev = None
+        self.next = None
+
+class LRUCache:
+    def __init__(self, capacity: int):
+        self.capacity = capacity
+        self.cache = {}  # key -> Node
+        self.head = Node()  # dummy head (most recently used)
+        self.tail = Node()  # dummy tail (least recently used)
+        self.head.next = self.tail
+        self.tail.prev = self.head
+
+    def _add_node(self, node: Node) -> None:
+        """Add a new node right after the head."""
+        node.prev = self.head
+        node.next = self.head.next
+        self.head.next.prev = node
+        self.head.next = node
+
+    def _remove_node(self, node: Node) -> None:
+        """Remove a node from the linked list."""
+        prev_node = node.prev
+        next_node = node.next
+        prev_node.next = next_node
+        next_node.prev = prev_node
+
+    def _move_to_head(self, node: Node) -> None:
+        """Move an existing node to the head (most recently used)."""
+        self._remove_node(node)
+        self._add_node(node)
+
+    def _pop_tail(self) -> Node:
+        """Remove and return the tail node (least recently used)."""
+        node = self.tail.prev
+        self._remove_node(node)
+        return node
+
+    def get(self, key: int) -> int:
+        if key in self.cache:
+            node = self.cache[key]
+            self._move_to_head(node)
+            return node.value
+        return -1  # Not found
+
+    def put(self, key: int, value: int) -> None:
+        if key in self.cache:
+            node = self.cache[key]
+            node.value = value
+            self._move_to_head(node)
+        else:
+            new_node = Node(key, value)
+            self.cache[key] = new_node
+            self._add_node(new_node)
+            if len(self.cache) > self.capacity:
+                tail = self._pop_tail()
+                del self.cache[tail.key]
+```
+
+---
+
+### Unit Tests (`test_lru_cache.py`):
+```python
+import unittest
+
+class TestLRUCache(unittest.TestCase):
+    def setUp(self):
+        self.cache = LRUCache(2)  # Capacity = 2
+
+    def test_initial_state(self):
+        self.assertEqual(self.cache.get(1), -1)
+        self.assertEqual(len(self.cache.cache), 0)
+
+    def test_put_and_get(self):
+        self.cache.put(1, 1)
+        self.cache.put(2, 2)
+        self.assertEqual(self.cache.get(1), 1)  # Returns 1
+        self.cache.put(3, 3)  # Evicts key=2 (LRU)
+        self.assertEqual(self.cache.get(2), -1)  # Returns -1 (not found)
+        self.assertEqual(self.cache.get(3), 3)  # Returns 3
+
+    def test_eviction_order(self):
+        self.cache.put(1, 1)
+        self.cache.put(2, 2)
+        self.cache.get(1)     # Moves 1 to head
+        self.cache.put(3, 3)  # Evicts 2 (LRU)
+        self.assertEqual(self.cache.get(2), -1)
+        self.assertEqual(self.cache.get(1), 1)
+
+    def test_duplicate_key(self):
+        self.cache.put(1, 1)
+        self.cache.put(1, 2)  # Updates value
+        self.assertEqual(self.cache.get(1), 2)
+
+if __name__ == "__main__":
+    unittest.main()
+```
+
+---
+
+### Explanation:
+1. **Node Class**: Represents each entry in the cache with `key`, `value`, [K
+and pointers to previous/next nodes.
+2. **LRUCache Class**:
+   - `__init__`: Initializes dummy head/tail nodes for easier edge-case han[3D[K
+handling.
+   - `_add_node`/`_remove_node`: Helper methods to manage the doubly linked[6D[K
+linked list.
+   - `_move_to_head`: Moves a node to the front when accessed (most recent)[7D[K
+recent).
+   - `_pop_tail`: Removes and returns the least recently used node.
+   - `get`: Returns the value if key exists; otherwise, `-1`. Updates usage[5D[K
+usage order.
+   - `put`: Adds/updates a key-value pair. Evicts LRU item if capacity is e[1D[K
+exceeded.
+3. **Unit Tests**:
+   - Verify basic operations (`get`, `put`).
+   - Test eviction policy (LRU order).
+   - Check duplicate key updates.
+
+---
+
+### Key Features:
+- **O(1) Time Complexity**: All operations (`get`, `put`) are constant time[4D[K
+time due to hash map + linked list.
+- **Space Efficient**: Only stores necessary nodes and avoids redundant che[3D[K
+checks.
+
+[1GΓáÖ [K[1GΓáÖ [K[1GΓá╕ [K[1GΓá╝ [K[1GΓá┤ [K[1GΓáª [K[1GΓáª [K[1GΓáº [K[1GΓáç [K[1GΓáÅ [K[1GΓáÖ [K[1GΓáÖ [K[1G[K[2K[1Gtotal duration:       4m3.6603764s
+load duration:        323.0784ms
+prompt eval count:    571 token(s)
+prompt eval duration: 918.872ms
+prompt eval rate:     621.41 tokens/s
+eval count:           1191 token(s)
+eval duration:        4m2.398392s
+eval rate:            4.91 tokens/s
+

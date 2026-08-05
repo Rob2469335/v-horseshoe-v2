@@ -1,0 +1,50 @@
+{
+  "syntax_error": {
+    "t0_calls": 10,
+    "t1_calls": 0,
+    "t2_calls": 0,
+    "t0_avg_cost": 0.0,
+    "t0_successes": 0,
+    "t0_success_rate": 0.0,
+    "t1_successes": 0,
+    "t1_success_rate": 0.0,
+    "t2_successes": 0,
+    "t2_success_rate": 0.0
+  },
+  "import_resolution": {
+    "t0_calls": 18,
+    "t1_calls": 0,
+    "t2_calls": 0,
+    "t0_avg_cost": 0.0,
+    "t0_successes": 8,
+    "t0_success_rate": 0.4444444444444444,
+    "t1_successes": 0,
+    "t1_success_rate": 0.0,
+    "t2_successes": 0,
+    "t2_success_rate": 0.0
+  },
+  "type_error": {
+    "t0_calls": 0,
+    "t1_calls": 1,
+    "t2_calls": 0,
+    "t0_successes": 0,
+    "t0_success_rate": 0.0,
+    "t1_avg_cost": 0.0,
+    "t1_successes": 0,
+    "t1_success_rate": 0.0,
+    "t2_successes": 0,
+    "t2_success_rate": 0.0
+  },
+  "runtime_exception": {
+    "t0_calls": 0,
+    "t1_calls": 5,
+    "t2_calls": 0,
+    "t0_successes": 0,
+    "t0_success_rate": 0.0,
+    "t1_avg_cost": 0.0,
+    "t1_successes": 0,
+    "t1_success_rate": 0.0,
+    "t2_successes": 0,
+    "t2_success_rate": 0.0
+  }
+}

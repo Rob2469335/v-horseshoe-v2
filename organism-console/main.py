@@ -26,8 +26,9 @@ class GenerateRequest(BaseModel):
 def health() -> dict[str, Any]:
     return {
         "status": "ok",
-        "ollama_reachable": orchestrator.ollama.is_reachable(),
-        "models": orchestrator.ollama.list_models(),
+        "llamacpp_reachable": orchestrator.llm.is_reachable(),
+        "ollama_reachable": orchestrator.llm.is_reachable(),
+        "models": orchestrator.llm.list_models(),
     }
 
 
@@ -96,3 +97,4 @@ def traces_summary(limit: int = 50) -> list[dict]:
 
     out.sort(key=lambda x: -x["latest_timestamp_ms"])
     return out
+

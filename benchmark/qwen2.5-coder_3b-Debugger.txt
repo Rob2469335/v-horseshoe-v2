@@ -1,0 +1,54 @@
+The error message "TypeError: NoneType has no attribute append" indicates t[1D[K
+that you're trying to call the `append` method on a variable that is curren[6D[K
+currently `None`. This usually happens when a function returns `None` where[5D[K
+where it should have returned an actual list or another collection type. Th[2D[K
+The `append` method is only defined for lists and other mutable collections[11D[K
+collections.
+
+Here's an example of how this error might occur:
+
+```python
+def create_list():
+    # Assume this function sometimes returns None
+    return None
+
+# This line will raise the TypeError because 'result' is None
+result = create_list()
+result.append('new item')
+```
+
+To fix this, you need to ensure that `create_list` always returns a list. Y[1D[K
+You can do this by checking if the returned value is `None` and handling it[2D[K
+it appropriately. Here's an example of how you might modify the function:
+
+```python
+def create_list():
+    # Assume this function sometimes returns None
+    items = ['item1', 'item2']  # Replace with actual logic to generate a l[1D[K
+list
+    
+    # Check if items is None and return an empty list if it is
+    return [] if items is None else items
+
+# Now, the line below should work without errors
+result = create_list()
+result.append('new item')
+```
+
+In this corrected version:
+- I added a list `items` inside the function to simulate its behavior.
+- I added a check to see if `items` is `None`. If it is, the function retur[5D[K
+returns an empty list. Otherwise, it returns the list as before.
+
+This ensures that `result` is never `None`, and you can safely call `append[7D[K
+`append` on it without encountering the `TypeError`.
+
+[1GΓáï [K[1GΓáÖ [K[1GΓá╣ [K[1GΓá╕ [K[1GΓá┤ [K[1GΓáª [K[1GΓáª [K[1G[K[2K[1Gtotal duration:       25.0135309s
+load duration:        183.5898ms
+prompt eval count:    55 token(s)
+prompt eval duration: 400.39ms
+prompt eval rate:     137.37 tokens/s
+eval count:           351 token(s)
+eval duration:        24.284964s
+eval rate:            14.45 tokens/s
+

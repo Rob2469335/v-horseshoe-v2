@@ -1,124 +1,116 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List
-
 from .models import PlanStep
 
 
 class Planner:
-    def make_plan(self, task: str, context: Dict[str, Any] | None = None) -> List[PlanStep]:
-        context = context or {}
-        text = (task or "").strip()
-        lower = text.lower()
-        context_keys = sorted(context.keys())
+    def make_plan(self, task: str, context: dict | None = None) -> list[PlanStep]:
+        context = dict(context or {})
+        goal = (task or "").strip()
+        lowered = goal.lower()
 
-        if not text:
-            return [
-                PlanStep(
-                    step_id="step-1",
-                    kind="noop",
-                    goal="no task provided",
-                    assigned_to="orchestrator",
-                    metadata={"context_keys": context_keys},
-                )
-            ]
+        def step(step_id: str, kind: str, assigned_to: str, goal_text: str, **meta) -> PlanStep:
+            merged = dict(context)
+            merged.update(meta)
+            return PlanStep(
+                step_id=step_id,
+                kind=kind,
+                goal=goal_text,
+                assigned_to=assigned_to,
+                metadata=merged,
+            )
 
-        tool_terms = [
-            "run", "execute", "call", "fetch", "download", "open", "invoke"
-        ]
-        coding_terms = [
-            "code", "python", "powershell", "script", "function", "class",
-            "bug", "fix", "refactor", "implement", "build", "fastapi"
-        ]
-        research_terms = [
-            "research", "find", "search", "look up", "investigate", "compare",
-            "analyze", "explain", "summarize", "review"
-        ]
+        is_code = any(k in lowered for k in (
+            "code", "bug", "fix", "patch", "refactor", "implement", "function",
+            "class", "api", "endpoint", "python", ".py", "javascript", "typescript"
+        ))
+        is_research = any(k in lowered for k in (
+            "research", "investigate", "find", "compare", "docs", "documentation",
+            "qdrant", "api", "library", "package", "web"
+        ))
+        is_review = any(k in lowered for k in (
+            "review", "audit", "validate", "check", "verify", "critic", "quality", "test"
+        ))
+        is_plan = any(k in lowered for k in (
+            "plan", "strategy", "design", "architecture", "roadmap"
+        ))
 
-        def has_any(terms: List[str]) -> bool:
-            return any(term in lower for term in terms)
+        steps: list[PlanStep] = []
 
-        if has_any(tool_terms):
-            return [
-                PlanStep(
-                    step_id="step-1",
-                    kind="tool",
-                    goal=f"Execute tool action for: {text}",
-                    assigned_to="tool-runtime",
-                    metadata={"context_keys": context_keys},
-                ),
-                PlanStep(
-                    step_id="step-2",
-                    kind="analyze",
-                    goal=f"Review tool results for: {text}",
-                    assigned_to="orchestrator",
-                    metadata={"context_keys": context_keys},
-                ),
-                PlanStep(
-                    step_id="step-3",
-                    kind="complete",
-                    goal=f"Finalize task: {text}",
-                    assigned_to="orchestrator",
-                    metadata={"context_keys": context_keys},
-                ),
-            ]
+        steps.append(step(
+            "step-1",
+            "plan",
+            "planner",
+            goal,
+            phase="planning",
+            intent="decompose-task",
+        ))
 
-        if has_any(coding_terms):
-            return [
-                PlanStep(
-                    step_id="step-1",
-                    kind="analyze",
-                    goal=f"Analyze implementation task: {text}",
-                    assigned_to="orchestrator",
-                    metadata={"context_keys": context_keys},
-                ),
-                PlanStep(
-                    step_id="step-2",
-                    kind="synthesize",
-                    goal=f"Produce implementation for: {text}",
-                    assigned_to="orchestrator",
-                    metadata={"context_keys": context_keys},
-                ),
-            ]
+        if is_research or not is_code:
+            steps.append(step(
+                "step-2",
+                "analyze",
+                "researcher",
+                f"Research relevant context for: {goal}",
+                phase="research",
+                intent="gather-context",
+            ))
 
-        if has_any(research_terms):
-            return [
-                PlanStep(
-                    step_id="step-1",
-                    kind="retrieve",
-                    goal=f"Gather relevant information for: {text}",
-                    assigned_to="tool-runtime",
-                    metadata={"context_keys": context_keys},
-                ),
-                PlanStep(
-                    step_id="step-2",
-                    kind="analyze",
-                    goal=f"Analyze findings for: {text}",
-                    assigned_to="orchestrator",
-                    metadata={"context_keys": context_keys},
-                ),
-                PlanStep(
-                    step_id="step-3",
-                    kind="synthesize",
-                    goal=f"Synthesize response for: {text}",
-                    assigned_to="orchestrator",
-                    metadata={"context_keys": context_keys},
-                ),
-            ]
+        if is_code:
+            steps.append(step(
+                "step-3",
+                "analyze",
+                "coder",
+                f"Produce or patch code for: {goal}",
+                phase="implementation",
+                intent="write-code",
+            ))
+        else:
+            steps.append(step(
+                "step-3",
+                "tool",
+                "tool-runner",
+                f"Execute required tools for: {goal}",
+                phase="execution",
+                intent="run-tools",
+            ))
 
-        return [
-            PlanStep(
-                step_id="step-1",
-                kind="analyze",
-                goal=f"Analyze task: {text}",
-                assigned_to="orchestrator",
-                metadata={"context_keys": context_keys},
-            ),
-            PlanStep(
-                step_id="step-2",
-                kind="synthesize",
-                goal=f"Synthesize response for: {text}",
-                assigned_to="orchestrator",
-                metadata={"context_keys": context_keys},
-            ),
-        ]
+        steps.append(step(
+            "step-4",
+            "synthesize",
+            "reviewer",
+            f"Review outputs for: {goal}",
+            phase="review",
+            intent="quality-check",
+        ))
+
+        if is_plan and not is_code and not is_research:
+            steps.append(step(
+                "step-5",
+                "synthesize",
+                "coordinator",
+                f"Produce final coordinated response for: {goal}",
+                phase="handoff",
+                intent="final-coordination",
+            ))
+        else:
+            steps.append(step(
+                "step-5",
+                "synthesize",
+                "executor",
+                f"Finalize execution result for: {goal}",
+                phase="finalize",
+                intent="deliver-result",
+            ))
+
+        if is_review and is_code:
+            steps.insert(3, step(
+                "step-3b",
+                "tool",
+                "tool-runner",
+                f"Run validation tools for: {goal}",
+                phase="validation",
+                intent="run-checks",
+            ))
+
+        return steps

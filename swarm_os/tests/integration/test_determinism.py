@@ -37,11 +37,12 @@ async def test_same_seed_same_first_step():
     k1 = build_kernel()
     k2 = build_kernel()
 
-    await k1.step()
-    await k2.step()
+    await k1.step_async()
+    await k2.step_async()
 
     ids1 = sorted(o.id for o in k1.organisms)
     ids2 = sorted(o.id for o in k2.organisms)
 
     assert len(ids1) == len(ids2)
     assert k1.generation == k2.generation
+

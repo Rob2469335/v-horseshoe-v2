@@ -1,0 +1,82 @@
+Here's a review of your `factorial` function:
+
+### **Bugs:**
+1. **Incorrect Base Case**:
+   - The factorial of `0` is defined as `1`, not `0`.
+   - Currently, it returns `0`, which is mathematically wrong.
+
+2. **No Input Validation**:
+   - If `n` is negative, the function will recurse infinitely (or until a s[1D[K
+stack overflow occurs).
+   - Python allows recursion depth limits, so this could crash for large in[2D[K
+inputs or negatives.
+
+3. **Inefficient for Large `n`**:
+   - Recursive factorial has exponential time complexity (`O(n)`) and can h[1D[K
+hit Python's recursion limit (~1000 by default).
+
+---
+
+### **Suggested Improvements:**
+#### **Option 1: Fix Base Case (Recursive)**
+```python
+def factorial(n):
+    if n < 0:
+        raise ValueError("Factorial is not defined for negative numbers.")
+    if n == 0:
+        return 1  # Correct base case
+    return n * factorial(n - 1)
+```
+- **Pros**: Simple, readable.
+- **Cons**: Still limited by recursion depth.
+
+#### **Option 2: Iterative (Better for Large `n`)**
+```python
+def factorial(n):
+    if n < 0:
+        raise ValueError("Factorial is not defined for negative numbers.")
+    result = 1
+    for i in range(1, n + 1):
+        result *= i
+    return result
+```
+- **Pros**: No recursion limit issues, more efficient.
+- **Cons**: Slightly less elegant than recursive version.
+
+#### **Option 3: Memoization (If Called Repeatedly)**
+```python
+from functools import lru_cache
+
+@lru_cache(maxsize=None)
+def factorial(n):
+    if n < 0:
+        raise ValueError("Factorial is not defined for negative numbers.")
+    return 1 if n == 0 else n * factorial(n - 1)
+```
+- **Pros**: Fast repeated calls (caches results).
+- **Cons**: Overhead for single calls.
+
+---
+
+### **Rating: 3/10**
+- **Correctness**: Fails due to wrong base case and no input validation.
+- **Efficiency**: Recursive approach is inefficient for large `n`.
+- **Robustness**: No error handling for edge cases (negative numbers).
+
+---
+### **Final Recommendation:**
+Use the **iterative version** (`Option 2`) unless you specifically need rec[3D[K
+recursion. Add input validation to handle negatives and edge cases properly[8D[K
+properly.
+
+Would you like further optimizations or explanations?
+
+[1GΓáÖ [K[1GΓá╣ [K[1GΓá╣ [K[1GΓá╝ [K[1GΓá╝ [K[1GΓáª [K[1GΓáº [K[1GΓáç [K[1GΓáÅ [K[1GΓáï [K[1GΓáï [K[1G[K[2K[1Gtotal duration:       1m50.7181398s
+load duration:        325.8887ms
+prompt eval count:    597 token(s)
+prompt eval duration: 802.978ms
+prompt eval rate:     743.48 tokens/s
+eval count:           548 token(s)
+eval duration:        1m49.569095s
+eval rate:            5.00 tokens/s
+

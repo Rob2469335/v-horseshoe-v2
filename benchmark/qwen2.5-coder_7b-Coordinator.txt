@@ -1,0 +1,21 @@
+```json
+{
+  "Read project": "Agent1",
+  "Search documentation": "Agent2",
+  "Write Python code": "Agent3",
+  "Review code": "Agent4",
+  "Fix failing unit tests": "Agent5",
+  "Execute git commands": "Agent6",
+  "Summarize results": "Agent7"
+}
+```
+[1GΓáÖ [K[1GΓáÖ [K[1GΓá╕ [K[1GΓá╕ [K[1GΓá╝ [K[1GΓáª [K[1GΓáº [K[1GΓáç [K[1GΓáç [K[1GΓáï [K[1GΓáï [K[1GΓáÖ [K[1GΓá╣ [K[1GΓá╝ [K[1GΓá┤ [K[1GΓáª [K[1GΓáª [K[1GΓáº [K[1GΓáç [K[1GΓáÅ [K[1GΓáï [K[1GΓá╣ [K[1GΓá╕ [K[1GΓá╕ [K[1GΓá┤ [K[1GΓá┤ [K[1GΓáº [K[1GΓáç [K[1GΓáç [K[1GΓáï [K[1GΓáÖ [K[1GΓá╣ [K[1GΓá╕ [K[1GΓá╕ [K[1GΓá┤ [K[1GΓá┤ [K[1GΓáª [K[1GΓáº [K[1GΓáÅ [K[1GΓáï [K[1GΓáÖ [K[1GΓáÖ [K[1GΓá╕ [K[1GΓá╝ [K[1GΓá┤ [K[1GΓáª [K[1GΓáº [K[1GΓáç [K[1GΓáÅ [K[1GΓáÅ [K[1GΓáÖ [K[1GΓáÖ [K[1GΓá╕ [K[1GΓá╕ [K[1GΓá┤ [K[1GΓáª [K[1GΓáº [K[1GΓáç [K[1GΓáç [K[1GΓáï [K[1GΓáï [K[1GΓáÖ [K[1GΓá╣ [K[1GΓá╕ [K[1GΓá╝ [K[1GΓáª [K[1GΓáª [K[1GΓáç [K[1GΓáÅ [K[1GΓáï [K[1GΓáÖ [K[1GΓá╣ [K[1GΓá╣ [K[1GΓá╕ [K[1GΓá╝ [K[1GΓáª [K[1GΓáª [K[1GΓáº [K[1GΓáÅ [K[1GΓáÅ [K[1GΓáÖ [K[1GΓá╣ [K[1GΓá╕ [K[1GΓá╝ [K[1GΓá┤ [K[1GΓáª [K[1GΓáª [K[1GΓáº [K[1GΓáç [K[1GΓáï [K[1GΓáÖ [K[1GΓáÖ [K[1GΓá╕ [K[1GΓá╝ [K[1GΓá╝ [K[1GΓá┤ [K[1GΓáº [K[1GΓáç [K[1GΓáÅ [K[1GΓáï [K[1GΓáÖ [K[1GΓáÖ [K[1GΓá╕ [K[1GΓá╕ [K[1GΓá╝ [K[1GΓáª [K[1GΓáº [K[1GΓáç [K[1GΓáÅ [K[1GΓáï [K[1GΓáÖ [K[1G[K[2K[1Gtotal duration:       21.7733388s
+
+load duration:        9.8788697s
+prompt eval count:    87 token(s)
+prompt eval duration: 1.23172s
+prompt eval rate:     70.63 tokens/s
+eval count:           76 token(s)
+eval duration:        10.656738s
+eval rate:            7.13 tokens/s
+

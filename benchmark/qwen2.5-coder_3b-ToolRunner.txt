@@ -1,0 +1,15 @@
+```json
+{
+  "query": "python logging docs"
+}
+```
+[1GΓáÖ [K[1GΓáÖ [K[1GΓá╕ [K[1GΓá╕ [K[1GΓá┤ [K[1GΓá┤ [K[1GΓáº [K[1GΓáº [K[1GΓáÅ [K[1G[K[2K[1Gtotal duration:       1.9665461s
+
+load duration:        173.9408ms
+prompt eval count:    53 token(s)
+prompt eval duration: 393.314ms
+prompt eval rate:     134.75 tokens/s
+eval count:           16 token(s)
+eval duration:        1.046064s
+eval rate:            15.30 tokens/s
+

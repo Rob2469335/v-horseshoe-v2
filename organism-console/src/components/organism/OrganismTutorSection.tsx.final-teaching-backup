@@ -1,0 +1,372 @@
+import type { Dispatch, SetStateAction } from "react"
+import type { OrganismSubsystem } from "../../features/organism/organism-types"
+
+type ActiveTheme = {
+  accent: string
+  tint: string
+  glow: string
+}
+
+type TutorMeta = {
+  eyebrow: string
+  title: string
+  intro: string
+}
+
+type TutorialContent = {
+  steps: string[]
+  operatorAction: string
+  deepDive: string[]
+}
+
+type OrganismTutorSectionProps = {
+  activeCard: OrganismSubsystem
+  activeTheme: ActiveTheme
+  tutorMeta: TutorMeta
+  tutorialContent: TutorialContent
+  showDeepTutorial: boolean
+  setShowDeepTutorial: Dispatch<SetStateAction<boolean>>
+}
+
+function lessonFor(card: OrganismSubsystem) {
+  switch (card) {
+    case "learning":
+      return {
+        title: "Learning lesson",
+        plain: "Learning means the organism gets better by turning events into reusable signal.",
+        watch: [
+          "If events rise but understanding does not, the system is only collecting noise.",
+          "If later actions become easier, learning is working.",
+          "If success improves after repeated activity, memory is being used."
+        ],
+        act: "Compare event growth with future usefulness. Look for learning that changes what the organism can do next."
+      }
+    case "healing":
+      return {
+        title: "Healing lesson",
+        plain: "Healing means the organism can recover and keep serving when something goes wrong.",
+        watch: [
+          "If readiness drops, you should treat the system as fragile.",
+          "If retries and recovery show up, healing is active.",
+          "If the system keeps serving while recovering, resilience is improving."
+        ],
+        act: "Check whether the organism is stable enough to trust before judging anything else."
+      }
+    case "autonomy":
+      return {
+        title: "Autonomy lesson",
+        plain: "Autonomy means the organism can actually do work through live tools and capability.",
+        watch: [
+          "If a tool exists only in theory, autonomy is not real yet.",
+          "If action surfaces are visible, the user can trust the organism more.",
+          "If execution is blocked, the organism is still dependent."
+        ],
+        act: "Verify that intent and tools line up before you call the system autonomous."
+      }
+    case "vision":
+      return {
+        title: "Vision lesson",
+        plain: "Vision means the organism can use image-aware workflows when the runtime path is live.",
+        watch: [
+          "Configured vision is not enough by itself.",
+          "Exposed to tools means vision can be used by the system.",
+          "Runtime ready means the feature can actually run now."
+        ],
+        act: "Check vision as a live path, not as a label."
+      }
+    default:
+      return {
+        title: "Operator lesson",
+        plain: "Operator control means a human can still understand and steer the organism.",
+        watch: [
+          "If the page is confusing, control is weak.",
+          "If the next action is obvious, control is strong.",
+          "If the system stays explainable, the operator stays in charge."
+        ],
+        act: "Use the page to make decisions quickly, not to hunt for hidden meaning."
+      }
+  }
+}
+
+export function OrganismTutorSection({
+  activeCard,
+  activeTheme,
+  tutorMeta,
+  tutorialContent,
+  showDeepTutorial,
+  setShowDeepTutorial
+}: OrganismTutorSectionProps) {
+  const lesson = lessonFor(activeCard)
+
+  return (
+    <section
+      style={{
+        display: "grid",
+        gridTemplateColumns: "minmax(0, 1.25fr) minmax(320px, 0.92fr)",
+        gap: 18,
+        alignItems: "start",
+        padding: 18,
+        borderRadius: 28,
+        background: `linear-gradient(180deg, ${activeTheme.tint}, rgba(255,255,255,0.02))`,
+        border: `1px solid ${activeTheme.tint}`,
+        boxShadow: `0 24px 60px ${activeTheme.glow}`
+      }}
+    >
+      <div
+        key={activeCard}
+        style={{
+          display: "grid",
+          gap: 14,
+          padding: 18,
+          borderRadius: 24,
+          background: "linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.03))",
+          border: `1px solid ${activeTheme.tint}`,
+          boxShadow: `0 24px 60px ${activeTheme.glow}`,
+          animation: "tutorReveal 260ms cubic-bezier(0.16, 1, 0.3, 1)"
+        }}
+      >
+        <div
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 10,
+            width: "fit-content",
+            padding: "7px 12px",
+            borderRadius: 999,
+            background: activeTheme.tint,
+            color: activeTheme.accent,
+            fontSize: 12,
+            fontWeight: 900,
+            letterSpacing: "0.08em",
+            textTransform: "uppercase"
+          }}
+        >
+          <span
+            style={{
+              width: 10,
+              height: 10,
+              borderRadius: "50%",
+              background: activeTheme.accent,
+              boxShadow: `0 0 16px ${activeTheme.accent}`,
+              animation: "statusBlink 1.8s ease-in-out infinite"
+            }}
+          />
+          {tutorMeta.eyebrow}
+        </div>
+
+        <div style={{ display: "grid", gap: 8 }}>
+          <h2 style={{ margin: 0, color: "white", fontSize: 30, lineHeight: 1.05 }}>
+            {lesson.title}
+          </h2>
+          <p style={{ margin: 0, color: "rgba(236,243,255,0.78)", lineHeight: 1.72 }}>
+            {lesson.plain}
+          </p>
+        </div>
+
+        <article
+          style={{
+            borderRadius: 18,
+            padding: 16,
+            background: activeTheme.tint,
+            border: `1px solid ${activeTheme.tint}`
+          }}
+        >
+          <div
+            style={{
+              color: activeTheme.accent,
+              fontSize: 11,
+              fontWeight: 900,
+              textTransform: "uppercase",
+              letterSpacing: "0.1em",
+              marginBottom: 8
+            }}
+          >
+            Learn
+          </div>
+          <div style={{ color: "white", lineHeight: 1.68, fontSize: 15 }}>
+            {tutorialContent.steps[0] ?? lesson.plain}
+          </div>
+        </article>
+
+        <div>
+          <div
+            style={{
+              color: activeTheme.accent,
+              fontSize: 12,
+              fontWeight: 900,
+              letterSpacing: "0.08em",
+              textTransform: "uppercase",
+              marginBottom: 10
+            }}
+          >
+            Watch
+          </div>
+
+          <div style={{ display: "grid", gap: 10 }}>
+            {lesson.watch.map((item, index) => (
+              <div
+                key={index}
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "36px minmax(0, 1fr)",
+                  gap: 12,
+                  alignItems: "start",
+                  padding: 14,
+                  borderRadius: 16,
+                  background: "rgba(255,255,255,0.03)",
+                  border: "1px solid rgba(255,255,255,0.08)"
+                }}
+              >
+                <div
+                  style={{
+                    width: 36,
+                    height: 36,
+                    borderRadius: "50%",
+                    display: "grid",
+                    placeItems: "center",
+                    background: activeTheme.tint,
+                    color: activeTheme.accent,
+                    fontWeight: 900,
+                    boxShadow: `0 0 18px ${activeTheme.glow}`
+                  }}
+                >
+                  {index + 1}
+                </div>
+                <div style={{ color: "rgba(236,243,255,0.86)", lineHeight: 1.65 }}>{item}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <article
+          style={{
+            borderRadius: 18,
+            padding: 16,
+            background: "rgba(255,255,255,0.03)",
+            border: "1px solid rgba(255,255,255,0.08)"
+          }}
+        >
+          <div
+            style={{
+              color: activeTheme.accent,
+              fontSize: 11,
+              fontWeight: 900,
+              textTransform: "uppercase",
+              letterSpacing: "0.1em",
+              marginBottom: 8
+            }}
+          >
+            Act
+          </div>
+          <div style={{ color: "white", lineHeight: 1.68, marginBottom: 10 }}>
+            {lesson.act}
+          </div>
+          <div style={{ color: "rgba(236,243,255,0.74)", lineHeight: 1.62 }}>
+            {tutorialContent.operatorAction}
+          </div>
+        </article>
+      </div>
+
+      <div style={{ display: "grid", gap: 16 }}>
+        <article
+          style={{
+            borderRadius: 22,
+            padding: 16,
+            background: "linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.03))",
+            border: "1px solid rgba(255,255,255,0.08)",
+            boxShadow: `0 14px 38px ${activeTheme.glow}`
+          }}
+        >
+          <div
+            style={{
+              color: activeTheme.accent,
+              fontSize: 11,
+              fontWeight: 900,
+              textTransform: "uppercase",
+              letterSpacing: "0.1em",
+              marginBottom: 8
+            }}
+          >
+            Tutor question
+          </div>
+          <div style={{ color: "white", fontSize: 22, fontWeight: 800, lineHeight: 1.25, marginBottom: 8 }}>
+            {activeCard === "learning"
+              ? "Is the organism getting smarter from activity?"
+              : activeCard === "healing"
+                ? "Can the organism recover and keep serving?"
+                : activeCard === "autonomy"
+                  ? "Can the organism really act right now?"
+                  : activeCard === "vision"
+                    ? "Is vision live or only configured?"
+                    : "Can the operator still steer this clearly?"}
+          </div>
+          <div style={{ color: "rgba(236,243,255,0.74)", lineHeight: 1.62 }}>
+            {lessonFor(activeCard).plain}
+          </div>
+        </article>
+
+        <article
+          style={{
+            borderRadius: 22,
+            padding: 16,
+            background: "linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.03))",
+            border: "1px solid rgba(255,255,255,0.08)"
+          }}
+        >
+          <div
+            style={{
+              color: activeTheme.accent,
+              fontSize: 11,
+              fontWeight: 900,
+              textTransform: "uppercase",
+              letterSpacing: "0.1em",
+              marginBottom: 8
+            }}
+          >
+            Deeper lesson
+          </div>
+
+          <div style={{ display: "grid", gap: 10 }}>
+            {(showDeepTutorial ? tutorialContent.deepDive : [lesson.watch[0], lesson.watch[1]]).map((item, index) => (
+              <div
+                key={index}
+                style={{
+                  borderRadius: 14,
+                  padding: 12,
+                  background: "rgba(255,255,255,0.03)",
+                  border: "1px solid rgba(255,255,255,0.06)",
+                  color: "rgba(236,243,255,0.82)",
+                  lineHeight: 1.64
+                }}
+              >
+                {item}
+              </div>
+            ))}
+          </div>
+        </article>
+
+        <button
+          type="button"
+          aria-expanded={showDeepTutorial}
+          onClick={() => setShowDeepTutorial((v) => !v)}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "12px 16px",
+            borderRadius: 999,
+            border: `1px solid ${activeTheme.tint}`,
+            background: showDeepTutorial ? activeTheme.tint : "rgba(255,255,255,0.04)",
+            color: "white",
+            fontWeight: 800,
+            cursor: "pointer",
+            boxShadow: showDeepTutorial ? `0 0 24px ${activeTheme.glow}` : "none",
+            transition: "all 180ms cubic-bezier(0.16,1,0.3,1)"
+          }}
+        >
+          {showDeepTutorial ? "Show less detail" : "Show more detail"}
+        </button>
+      </div>
+    </section>
+  )
+}

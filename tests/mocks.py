@@ -19,3 +19,4 @@ class MockSnapshotRepository:
 
     def latest(self) -> Path | None:
         return None
+

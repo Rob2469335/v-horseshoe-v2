@@ -1,0 +1,151 @@
+Certainly! Below is a Python implementation of an LRUCache using a dictiona[8D[K
+dictionary and doubly linked list to achieve O(1) time complexity for both [K
+get and put operations.
+
+```python
+class Node:
+    def __init__(self, key, value):
+        self.key = key
+        self.value = value
+        self.next = None
+        self.prev = None
+
+class LRUCache:
+    def __init__(self, capacity: int):
+        self.capacity = capacity
+        self.cache = {}
+        self.head = Node(0, 0)  # Dummy head node
+        self.tail = Node(0, 0)  # Dummy tail node
+        self.head.next = self.tail
+        self.tail.prev = self.head
+
+    def _add_to_head(self, node):
+        node.prev = self.head
+        node.next = self.head.next
+        self.head.next.prev = node
+        self.head.next = node
+
+    def _remove_node(self, node):
+        node.prev.next = node.next
+        node.next.prev = node.prev
+
+    def get(self, key: int) -> int:
+        if key not in self.cache:
+            return -1
+        
+        # Move the accessed node to the head
+        node = self.cache[key]
+        self._remove_node(node)
+        self._add_to_head(node)
+        
+        return node.value
+
+    def put(self, key: int, value: int) -> None:
+        if key in self.cache:
+            # Update the value of the existing key
+            node = self.cache[key]
+            node.value = value
+            self._remove_node(node)
+            self._add_to_head(node)
+        else:
+            if len(self.cache) == self.capacity:
+                # Remove the least recently used node from the tail
+                lru_node = self.tail.prev
+                del self.cache[lru_node.key]
+                self._remove_node(lru_node)
+            
+            # Add the new key-value pair to the head
+            new_node = Node(key, value)
+            self.cache[key] = new_node
+            self._add_to_head(new_node)
+
+# Unit tests
+import unittest
+
+class TestLRUCache(unittest.TestCase):
+    def test_basic_operations(self):
+        cache = LRUCache(2)
+        
+        # Put operations
+        cache.put(1, 1)
+        cache.put(2, 2)
+        
+        # Get operations
+        self.assertEqual(cache.get(1), 1)     # Returns 1
+        cache.put(3, 3)     # evicts key 2
+        self.assertEqual(cache.get(2), -1)    # returns -1 (not found)
+        cache.put(4, 4)     # evicts key 1
+        self.assertEqual(cache.get(1), -1)    # returns -1 (not found)
+        self.assertEqual(cache.get(3), 3)     # returns 3
+        self.assertEqual(cache.get(4), 4)     # returns 4
+
+    def test_capacity_limit(self):
+        cache = LRUCache(2)
+        
+        # Put operations
+        cache.put(1, 1)
+        cache.put(2, 2)
+        cache.put(3, 3)
+        
+        # Get operations
+        self.assertEqual(cache.get(1), -1)    # returns -1 (not found)
+        self.assertEqual(cache.get(2), -1)    # returns -1 (not found)
+        self.assertEqual(cache.get(3), 3)     # returns 3
+        cache.put(4, 4)     # evicts key 1
+        self.assertEqual(cache.get(1), -1)    # returns -1 (not found)
+
+    def test_put_after_get(self):
+        cache = LRUCache(2)
+        
+        # Put operations
+        cache.put(1, 1)
+        cache.get(1)
+        cache.put(2, 2)
+        
+        # Get operations
+        self.assertEqual(cache.get(1), 1)     # returns 1
+        cache.put(3, 3)     # evicts key 2
+        self.assertEqual(cache.get(2), -1)    # returns -1 (not found)
+        cache.put(4, 4)     # evicts key 1
+        self.assertEqual(cache.get(1), -1)    # returns -1 (not found)
+        self.assertEqual(cache.get(3), 3)     # returns 3
+        self.assertEqual(cache.get(4), 4)     # returns 4
+
+if __name__ == '__main__':
+    unittest.main()
+```
+
+### Explanation:
+- **Node Class**: Represents a node in the doubly linked list, containing a[1D[K
+a key and value.
+- **LRUCache Class**:
+  - Initializes with a capacity.
+  - Uses a dictionary to map keys to nodes.
+  - Maintains two dummy nodes (`head` and `tail`) as sentinels to simplify [K
+boundary conditions.
+  - `_add_to_head`: Moves a node to the head of the list.
+  - `_remove_node`: Removes a node from its current position in the list.
+  - `get`: Retrieves a value by key, updating the order if found.
+  - `put`: Inserts or updates a key-value pair. If necessary, removes the l[1D[K
+least recently used item.
+
+### Unit Tests:
+- **test_basic_operations**: Checks basic put and get operations, including[9D[K
+including eviction when capacity is reached.
+- **test_capacity_limit**: Ensures that the cache can handle operations wit[3D[K
+within its capacity limit.
+- **test_put_after_get**: Verifies that after a get operation, a subsequent[10D[K
+subsequent put operation correctly updates the order.
+
+This implementation should meet the requirements of an LRU Cache with O(1) [K
+time complexity for both get and put operations.
+
+[1GΓáÖ [K[1GΓá╣ [K[1GΓá╕ [K[1GΓá╕ [K[1GΓá┤ [K[1GΓá┤ [K[1G[K[2K[1Gtotal duration:       1m24.9824464s
+load duration:        218.3695ms
+prompt eval count:    47 token(s)
+prompt eval duration: 390.494ms
+prompt eval rate:     120.36 tokens/s
+eval count:           1199 token(s)
+eval duration:        1m24.323347s
+eval rate:            14.22 tokens/s
+

@@ -3,14 +3,19 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "swarm-os"
+name = "organism-console"
 version = "0.1.0"
-description = "Horseshoe Swarm OS runtime and orchestration layer"
-requires-python = ">=3.11"
+description = "Organism Console CLI AI runtime"
+requires-python = ">=3.14"
+
+[project.scripts]
+organism = "organism_console.cli:main"
 
 [tool.setuptools]
 include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["swarm_os*"]
+include = ["organism_console*", "swarm_os*", "runtime_v2*"]
+
+

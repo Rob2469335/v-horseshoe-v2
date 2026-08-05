@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     logs_dir: Path = Path("logs")
     events_dir: Path = Path("data") / "events"
     snapshots_dir: Path = Path("data") / "snapshots"
-    ollama_base_url: str = "http://127.0.0.1:11434"
+    llamacpp_base_url: str = "http://127.0.0.1:8080/v1"
     qdrant_url: str = "http://127.0.0.1:6333"
 
     @property
@@ -32,3 +32,4 @@ class Settings(BaseSettings):
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()
+

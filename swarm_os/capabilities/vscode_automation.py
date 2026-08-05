@@ -1,10 +1,6 @@
 import logging
-import asyncio
-import os
 from pathlib import Path
-from typing import Dict, Any, List
-from swarm_os.capabilities.models import VSCodeAutomationRequest, VSCodeAutomationResponse
-from swarm_os.lib.safety import validate_path
+from typing import Dict, Any
 
 logger = logging.getLogger(__name__)
 
@@ -18,91 +14,209 @@ class VSCodeAutomationHandler:
             "list_files": [],
             "status": ["git", "status"],
             "lint": ["python", "-m", "flake8"],
+            "grep": ["grep", "-r"],
+            "ls": ["ls", "-R"],
+            "cat": ["cat"],
+            "diff": ["git", "diff"],
+            "log": ["git", "log", "-n", "5"],
+            "scout": ["powershell.exe", "-Command", "Write-Host 'Active Branch:'; git branch --show-current; Write-Host '`nRecent Changes:'; git status -s; Write-Host '`nProject Tree:'; Get-ChildItem -Depth 1"],
+            "find_symbol": [],
         }
         logger.info(f"Initialized operational secure VSCodeAutomationHandler at {workspace_root}")
 
-    async def execute(self, payload: VSCodeAutomationRequest) -> VSCodeAutomationResponse:
-        command = payload.command.lower().strip()
-
-        if command not in self.allowed_commands:
-            return VSCodeAutomationResponse(
-                status="rejected",
-                command=command,
-                stdout="",
-                stderr=f"Security Error: Command '{command}' is not on the safety allowlist.",
-                exit_code=1,
-                message="Rejected disallowed workspace command."
-            )
-
-        sanitized_args = []
-        for arg in payload.args:
-            clean_arg = "".join(c for c in str(arg) if c.isalnum() or c in "._-/\\")
-            if clean_arg:
-                try:
-                    validate_path(clean_arg, self.workspace_root)
-                    sanitized_args.append(clean_arg)
-                except ValueError as ve:
-                    return VSCodeAutomationResponse(
-                        status="rejected",
-                        command=command,
-                        stdout="",
-                        stderr=f"Security Containment Error: {str(ve)}",
-                        exit_code=1,
-                        message="Directory containment breach prevented."
-                    )
-
-        if command == "list_files":
-            try:
-                files = []
-                for root, _, filenames in os.walk(self.workspace_root):
-                    for f in filenames:
-                        rel_path = os.path.relpath(os.path.join(root, f), self.workspace_root)
-                        files.append(rel_path.replace("\\", "/"))
-
-                return VSCodeAutomationResponse(
-                    status="executed",
-                    command=command,
-                    stdout="\n".join(files),
-                    stderr="",
-                    exit_code=0,
-                    message="Listed known workspace files safely."
-                )
-            except Exception as e:
-                return VSCodeAutomationResponse(
-                    status="failed",
-                    command=command,
-                    stdout="",
-                    stderr=str(e),
-                    exit_code=500,
-                    message="Failed to scan directory."
-                )
-
-        base_tokens = list(self.allowed_commands[command])
-        full_command = base_tokens + sanitized_args
-
+    def _resolve_path(self, rel_path: str) -> Path:
+        root_path = Path(self.workspace_root).resolve()
+        target_path = (root_path / rel_path).resolve()
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *full_command,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=self.workspace_root
-            )
-            stdout_bytes, stderr_bytes = await proc.communicate()
+            target_path.relative_to(root_path)
+        except ValueError:
+            raise ValueError(f"Security Containment Error: Path is outside workspace: {rel_path}")
+        return target_path
 
-            return VSCodeAutomationResponse(
-                status="executed",
-                command=command,
-                stdout=stdout_bytes.decode("utf-8", errors="replace"),
-                stderr=stderr_bytes.decode("utf-8", errors="replace"),
-                exit_code=proc.returncode if proc.returncode is not None else 0,
-                message="Command executed successfully."
-            )
+    async def execute(self, payload: Any) -> Dict[str, Any]:
+        if isinstance(payload, dict):
+            command = payload.get("command", "")
+            args = payload.get("args", [])
+        else:
+            command = getattr(payload, "command", "")
+            args = getattr(payload, "args", [])
+
+        command = str(command).lower().strip()
+        
+        try:
+            if command == "cat":
+                if not args:
+                    raise ValueError("cat requires a path argument")
+                target_file = self._resolve_path(args[0])
+                if not target_file.is_file():
+                    raise FileNotFoundError(f"File not found: {args[0]}")
+                output = target_file.read_text(encoding="utf-8", errors="replace")
+                
+            elif command == "grep":
+                if not args:
+                    raise ValueError("grep requires a pattern argument")
+                pattern = args[0]
+                search_path = args[1] if len(args) > 1 else ""
+                
+                recursive = True
+                if len(args) > 2 and args[2] == "--recursive":
+                    recursive = True
+                
+                target_dir = self._resolve_path(search_path)
+                matches = []
+                
+                def grep_file(file_path: Path):
+                    try:
+                        content = file_path.read_text(encoding="utf-8", errors="ignore")
+                        for i, line in enumerate(content.splitlines(), 1):
+                            if pattern in line:
+                                rel_file = str(file_path.relative_to(Path(self.workspace_root).resolve())).replace("\\", "/")
+                                matches.append(f"{rel_file}:{i}:{line}")
+                    except Exception:
+                        pass
+
+                if target_dir.is_file():
+                    grep_file(target_dir)
+                elif target_dir.is_dir():
+                    if recursive:
+                        for p in target_dir.rglob("*"):
+                            if p.is_file() and not any(part.startswith('.') or part in ('node_modules', '.venv') for part in p.parts):
+                                grep_file(p)
+                    else:
+                        for p in target_dir.glob("*"):
+                            if p.is_file():
+                                grep_file(p)
+                output = "\n".join(matches)
+
+            elif command == "ls":
+                search_path = args[0] if args else ""
+                target_dir = self._resolve_path(search_path)
+                if not target_dir.exists():
+                    raise FileNotFoundError(f"Path not found: {search_path}")
+                
+                if target_dir.is_file():
+                    output = f"{target_dir.name} ({target_dir.stat().st_size} bytes)"
+                else:
+                    entries = []
+                    for item in target_dir.iterdir():
+                        size_str = f" ({item.stat().st_size} bytes)" if item.is_file() else " (dir)"
+                        entries.append(f"{item.name}{size_str}")
+                    output = "\n".join(entries)
+
+            elif command == "list_files":
+                search_path = args[0] if args else ""
+                target_dir = self._resolve_path(search_path)
+                found_files = []
+                if target_dir.is_dir():
+                    for p in target_dir.rglob("*"):
+                        if p.is_file() and not any(part.startswith('.') or part in ('node_modules', '.venv') for part in p.parts):
+                            rel_file = str(p.relative_to(Path(self.workspace_root).resolve())).replace("\\", "/")
+                            found_files.append(rel_file)
+                output = "\n".join(found_files)
+
+            elif command == "find":
+                search_path = args[0] if args else ""
+                glob_pattern = args[1] if len(args) > 1 else "*"
+                target_dir = self._resolve_path(search_path)
+                
+                found_files = []
+                if target_dir.is_dir():
+                    for p in target_dir.rglob(glob_pattern):
+                        if p.is_file() and not any(part.startswith('.') or part in ('node_modules', '.venv') for part in p.parts):
+                            rel_file = str(p.relative_to(Path(self.workspace_root).resolve())).replace("\\", "/")
+                            found_files.append(rel_file)
+                output = "\n".join(found_files)
+
+            elif command == "lint":
+                if not args:
+                    raise ValueError("lint requires a path argument")
+                target = self._resolve_path(args[0])
+                if not target.exists():
+                    raise FileNotFoundError(f"Path not found: {args[0]}")
+                import asyncio
+                proc = await asyncio.create_subprocess_exec(
+                    "python", "-m", "flake8", str(target),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+                stdout_b, stderr_b = await proc.communicate()
+                if proc.returncode == 0:
+                    output = "No linting errors found. Code looks good!"
+                else:
+                    output = stdout_b.decode("utf-8") + "\n" + stderr_b.decode("utf-8")
+
+            elif command == "find_symbol":
+                if not args:
+                    raise ValueError("find_symbol requires a symbol name argument")
+                symbol_name = args[0]
+                search_path = args[1] if len(args) > 1 else ""
+                target_dir = self._resolve_path(search_path)
+                
+                matches = []
+                import ast
+                
+                def check_file(file_path: Path):
+                    try:
+                        content = file_path.read_text(encoding="utf-8")
+                        tree = ast.parse(content)
+                        for node in ast.walk(tree):
+                            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                                if node.name == symbol_name:
+                                    rel_file = str(file_path.relative_to(Path(self.workspace_root).resolve())).replace("\\", "/")
+                                    matches.append(f"{rel_file}:{node.lineno} -> {node.name}")
+                    except Exception:
+                        pass
+                
+                if target_dir.is_file():
+                    if target_dir.suffix == ".py":
+                        check_file(target_dir)
+                elif target_dir.is_dir():
+                    for p in target_dir.rglob("*.py"):
+                        if not any(part.startswith('.') or part in ('node_modules', '.venv') for part in p.parts):
+                            check_file(p)
+                output = "\n".join(matches) if matches else f"Symbol '{symbol_name}' not found."
+
+            elif command == "scout":
+                if not args:
+                    raise ValueError("scout requires a path argument")
+                file_path = args[0]
+                start_line = int(args[1]) if len(args) > 1 else 1
+                end_line = int(args[2]) if len(args) > 2 else 100
+                
+                target_file = self._resolve_path(file_path)
+                if not target_file.is_file():
+                    raise FileNotFoundError(f"File not found: {file_path}")
+                    
+                lines = target_file.read_text(encoding="utf-8", errors="replace").splitlines()
+                sliced_lines = lines[start_line-1:end_line]
+                output = "\n".join(sliced_lines)
+
+            else:
+                raise ValueError(f"Security Error: Command '{command}' is not on the safety allowlist.")
+
+            return {
+                "ok": True,
+                "output": output,
+                "error": "",
+                "status": "executed",
+                "command": command,
+                "stdout": output,
+                "stderr": "",
+                "exit_code": 0,
+                "message": "Command executed successfully."
+            }
+
         except Exception as e:
-            return VSCodeAutomationResponse(
-                status="failed",
-                command=command,
-                stdout="",
-                stderr=str(e),
-                exit_code=1,
-                message="Subprocess execution failed."
-            )
+            status = "rejected" if "Security Error" in str(e) else "failed"
+            return {
+                "ok": False,
+                "output": "",
+                "error": str(e),
+                "status": status,
+                "command": command,
+                "stdout": "",
+                "stderr": str(e),
+                "exit_code": 1,
+                "message": str(e)
+            }
+

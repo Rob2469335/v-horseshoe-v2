@@ -3,7 +3,7 @@ from typing import Dict
 
 logger = logging.getLogger(__name__)
 
-async def archive_success(agent_id: str, tool_used: str, outcome: Dict):
+async def archive_success(agent_id: str, _tool_used: str, outcome: Dict):
     """
     Only archives high-fitness outcomes to maintain memory quality.
     """
@@ -12,3 +12,4 @@ async def archive_success(agent_id: str, tool_used: str, outcome: Dict):
         logger.info(f"Archiving high-fitness experience for {agent_id}")
     else:
         logger.debug("Outcome below fitness threshold; memory discarded.")
+

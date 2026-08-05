@@ -7,7 +7,7 @@ from pathlib import Path
 from swarm_os.migrations import migrate_snapshot
 
 SNAPSHOT_DIR = Path("swarm_os/data/snapshots")
-SNAPSHOT_VERSION = 2
+SNAPSHOT_VERSION = 4
 
 def save_snapshot(kernel, generation: int) -> Path:
     SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
@@ -30,4 +30,5 @@ def save_snapshot(kernel, generation: int) -> Path:
 def load_snapshot(path: str | Path) -> dict:
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     return migrate_snapshot(data)
+
 

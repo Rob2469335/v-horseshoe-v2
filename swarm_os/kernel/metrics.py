@@ -1,5 +1,5 @@
 from __future__ import annotations
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import Iterable
 
 @dataclass(frozen=True)
@@ -22,3 +22,4 @@ def summarize(organisms: Iterable, generation: int) -> RunMetrics:
         worst_fitness=min(fitness),
         generation=generation,
     )
+
