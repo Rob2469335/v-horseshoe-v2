@@ -21,7 +21,7 @@ filelock==3.29.4
 frozenlist==1.8.0
 fsspec==2026.6.0
 grimp==3.14
-grpcio==1.81.1
+grpcio>=1.66.0
 h11==0.16.0
 h2==4.3.0
 hf-xet==1.5.1
@@ -72,7 +72,7 @@ pytest-asyncio==1.4.0
 python-dotenv==1.0.1
 python-multipart==0.0.32
 pytokens==0.4.1
-pywin32==312
+pywin32==312; sys_platform == "win32"
 PyYAML==6.0.3
 qdrant-client==1.18.0
 referencing==0.37.0
