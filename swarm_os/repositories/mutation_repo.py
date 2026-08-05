@@ -9,7 +9,23 @@ class MutationRepository:
 
     def get_mutation_path(self, mutation_id: str) -> Path:
         return self.root_dir / mutation_id
-        
+
+    def _resolve_within_root(self, raw: str, *, allow_project_root: bool) -> Path:
+        """Resolve a path from mutation metadata and enforce it stays inside the
+        project tree.
+
+        `pending_file` (staged in .data/pending_mutations/<id>/) and
+        `target_path` (the live file the mutation replaces) both come from a
+        metadata.json that a crafted mutation could poison with an absolute or
+        `..`-escaping path, turning `approve()` into an arbitrary file write.
+        Reject any path that resolves outside the allowed base.
+        """
+        resolved = Path(raw).expanduser().resolve()
+        base = (self.root_dir if not allow_project_root else self.root_dir.parents[1]).resolve()
+        if not (resolved == base or base in resolved.parents):
+            raise ValueError(f"Path outside allowed root: {raw}")
+        return resolved
+
     def approve(self, mutation_id: str) -> Dict[str, Any]:
         target_dir = self.get_mutation_path(mutation_id)
         meta_path = target_dir / "metadata.json"
@@ -19,8 +35,11 @@ class MutationRepository:
 
         metadata = json.loads(meta_path.read_text(encoding="utf-8"))
 
-        pending_file = Path(metadata["pending_file"])
-        target_path = Path(metadata["target_path"])
+        # pending_file lives inside the mutation's own staging dir.
+        pending_file = self._resolve_within_root(metadata["pending_file"], allow_project_root=False)
+        # target_path is the live project file being replaced — allow it anywhere
+        # under the project root, but never outside it.
+        target_path = self._resolve_within_root(metadata["target_path"], allow_project_root=True)
 
         if not pending_file.exists():
             raise FileNotFoundError(f"Pending mutation file not found: {pending_file}")

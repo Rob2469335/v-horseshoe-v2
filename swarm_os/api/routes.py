@@ -221,10 +221,10 @@ async def execute_tool(payload: ToolExecuteRequest, runtime=Depends(runtime_dep)
                 result = result.dict()
             return ToolExecuteResponse(status="success", capability=payload.capability, data=result)
         except KeyError as exc:
-            raise HTTPException(status_code=404, detail=f"Capability '{payload.capability}' not found: {exc}")
+            raise HTTPException(status_code=404, detail=f"Capability '{payload.capability}' not found")
         except Exception as exc:
             log.exception("Tool execution failed in agent_runtime.call_tool")
-            raise HTTPException(status_code=500, detail=str(exc))
+            raise HTTPException(status_code=500, detail="Tool execution failed")
     
     if hasattr(runtime, "call_tool") and runtime.call_tool is not None:
         try:
@@ -235,10 +235,10 @@ async def execute_tool(payload: ToolExecuteRequest, runtime=Depends(runtime_dep)
                 result = result.dict()
             return ToolExecuteResponse(status="success", capability=payload.capability, data=result)
         except KeyError as exc:
-            raise HTTPException(status_code=404, detail=f"Capability '{payload.capability}' not found: {exc}")
+            raise HTTPException(status_code=404, detail=f"Capability '{payload.capability}' not found")
         except Exception as exc:
             log.exception("Tool execution failed in runtime.call_tool")
-            raise HTTPException(status_code=500, detail=str(exc))
+            raise HTTPException(status_code=500, detail="Tool execution failed")
         
     raise HTTPException(status_code=501, detail="tool execution not implemented in this runtime")
 
@@ -307,7 +307,7 @@ async def generate(payload: GenerateRequest, orch=Depends(get_orchestrator)):
         content = resp.choices[0].message.content or ""
     except Exception as e:
         log.exception("Generation failed")
-        raise HTTPException(status_code=502, detail=f"LLM generation failed: {e}")
+        raise HTTPException(status_code=502, detail="LLM generation failed")
 
     return GenerateResponse(
         content=content,
@@ -327,7 +327,7 @@ async def autoassign():
         return AutoAssignResponse(mapping=mapping)
     except Exception as e:
         log.error(f"AutoAssign failed: {e}")
-        raise HTTPException(status_code=502, detail=str(e))
+        raise HTTPException(status_code=502, detail="Model auto-assignment failed")
 
 
 def _classify_event_outcome(event: dict) -> str:

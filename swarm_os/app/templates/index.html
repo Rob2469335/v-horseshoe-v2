@@ -1310,7 +1310,7 @@ async function loadStatus() {
     const s = await api('/health');
     setStatLine('status-lines',
       `<div><span style="color:var(--text3)">HEALTH</span>  <span style="color:var(--green)">● Online</span></div>` +
-      `<div><span style="color:var(--text3)">API   </span>  <span style="color:var(--text)">${API}</span></div>`
+      `<div><span style="color:var(--text3)">API   </span>  <span style="color:var(--text)">${esc(API)}</span></div>`
     );
   } catch(e) {
     setStatLine('status-lines',
@@ -1324,10 +1324,10 @@ async function loadStatus() {
     badge.textContent = s.event_count ?? 0;
     setStatLine('status-lines',
       `<div><span style="color:var(--text3)">HEALTH  </span> <span style="color:var(--green)">● Online</span></div>` +
-      `<div><span style="color:var(--text3)">ENV     </span> <span style="color:var(--text)">${s.environment||'dev'}</span></div>` +
+      `<div><span style="color:var(--text3)">ENV     </span> <span style="color:var(--text)">${esc(s.environment||'dev')}</span></div>` +
       `<div><span style="color:var(--text3)">LLAMA.CPP </span> <span style="${(s.llamacpp_reachable || s.ollama_reachable)?'color:var(--green)':'color:var(--red)'}">● ${(s.llamacpp_reachable || s.ollama_reachable)?'Reachable':'Offline'}</span></div>` +
-      `<div><span style="color:var(--text3)">EVENTS  </span> <span style="color:var(--text)">${s.event_count}</span></div>` +
-      `<div><span style="color:var(--text3)">API     </span> <span style="color:var(--text)">${API}</span></div>`
+      `<div><span style="color:var(--text3)">EVENTS  </span> <span style="color:var(--text)">${esc(s.event_count)}</span></div>` +
+      `<div><span style="color:var(--text3)">API     </span> <span style="color:var(--text)">${esc(API)}</span></div>`
     );
   } catch(e) {}
 }

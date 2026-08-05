@@ -357,4 +357,4 @@ async def control_agent_model(agent_id: str, req: Dict[str, Any]) -> Dict[str, A
         return {"status": "ok", "agent_id": agent_id, "model": model_name, "backend": backend}
     except Exception as exc:
         log.exception("Failed to reassign model for %s", agent_id)
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail="Failed to reassign model")

@@ -144,14 +144,16 @@ def create_agent(payload: AgentCreatePayload, request: Request):
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        logger.exception("Agent registration failed")
+        raise HTTPException(status_code=400, detail="Agent registration failed")
 
 @router.get("/agents/{agent_id}")
 def get_agent(agent_id: str, service=Depends(get_agent_service)):
     try:
         return service.get_agent(agent_id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        logger.warning("Unknown agent requested: %s", agent_id)
+        raise HTTPException(status_code=404, detail=f"Unknown agent '{agent_id}'")
 
 @router.post("/agents/{agent_id}/step")
 async def step_agent(agent_id: str, payload: AgentStepPayload, service=Depends(get_agent_service)):
@@ -171,7 +173,8 @@ async def step_agent(agent_id: str, payload: AgentStepPayload, service=Depends(g
     except HTTPException:
         raise
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        log.warning("Agent step failed: unknown agent %s", agent_id)
+        raise HTTPException(status_code=404, detail=f"Unknown agent '{agent_id}'")
 
 @router.post("/agents/{agent_id}/step/stream")
 async def step_agent_stream(agent_id: str, payload: AgentStepPayload, request: Request):
@@ -203,7 +206,7 @@ async def step_agent_stream(agent_id: str, payload: AgentStepPayload, request: R
             # Previously the exception was yielded as a string but not logged,
             # making it impossible to debug production streaming failures.
             logger.exception("step_agent_stream failed for agent_id=%s", agent_id)
-            yield json.dumps({"type": "error", "error": str(exc)}) + "\n"
+            yield json.dumps({"type": "error", "error": "Agent step failed"}) + "\n"
             yield json.dumps({"type": "final", "done": True}) + "\n"
 
     return StreamingResponse(generate(), media_type="application/x-ndjson")
@@ -213,7 +216,8 @@ async def call_agent_tool(agent_id: str, tool_name: str, payload: ToolCallPayloa
     try:
         return await service.run_tool(agent_id, tool_name, payload.payload)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        logger.warning("Agent tool call on unknown agent: %s", agent_id)
+        raise HTTPException(status_code=404, detail=f"Unknown agent '{agent_id}'")
 
 @router.delete("/agents/{agent_id}")
 def delete_agent(agent_id: str, service=Depends(get_agent_service)):
@@ -221,4 +225,5 @@ def delete_agent(agent_id: str, service=Depends(get_agent_service)):
         service.remove_agent(agent_id)
         return {"status": "deleted", "agent_id": agent_id}
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        logger.exception("Agent delete failed for %s", agent_id)
+        raise HTTPException(status_code=400, detail="Agent delete failed")

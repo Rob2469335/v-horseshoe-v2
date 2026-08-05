@@ -221,8 +221,9 @@ async def run_heal_cycle(request: Request) -> dict:
             "checks": checks,
         }
     except Exception as exc:
+        log.exception("Heal cycle evaluation failed")
         return {"recovery_readiness": 0, "active_anomalies": 1, "last_heal_success": False,
-                "checks": {}, "error": str(exc)}
+                "checks": {}, "error": "heal cycle evaluation failed"}
 
 
 @router.get("/healing/evaluate")
@@ -255,8 +256,9 @@ async def evaluate_health(request: Request) -> dict:
             "checks": checks,
         }
     except Exception as exc:
+        log.exception("Health evaluation failed")
         return {"recovery_readiness": 0, "active_anomalies": 1, "last_heal_success": False,
-                "checks": {}, "error": str(exc)}
+                "checks": {}, "error": "health evaluation failed"}
 
 
 
