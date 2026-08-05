@@ -13,6 +13,23 @@ from organism_console.ui.live_stream import stream_prompt
 
 _healing_loop = None
 
+
+def _is_placeholder_final(text: str) -> bool:
+    """True when an agent's final message is a bare success placeholder with no
+    substantive content (e.g. 'Task completed.', 'Done.', 'All done.') — the
+    sign that the agent short-circuited instead of doing the requested work."""
+    t = re.sub(r"\s+", " ", str(text or "")).strip().lower()
+    if not t:
+        return True
+    t = t.strip("[]()\"'`*_ ").strip()
+    # Allow a short substantive answer, but flag bare completion-verbs-only.
+    short = len(t) <= 40
+    verbs = ("task completed", "task complete", "done", "all done", "completed",
+             "finished", "success", "goal achieved", "task done", "complete.")
+    if not short:
+        return False
+    return any(t == v or t.startswith(v + ".") or t.startswith(v + "!") or t == v + "." for v in verbs)
+
 def run_test_suite(goal_text: str = "", baseline: set[str] | None = None) -> tuple[bool, str]:
     """Run pytest against test targets derived from files modified by the agent
     during THIS attempt (not the whole uncommitted working tree — pre-existing
@@ -302,23 +319,42 @@ def run_autonomous_goal_loop(goal: str, cmd_ctx):
             final_msg = ""
             if history and isinstance(history[-1], dict):
                 final_msg = history[-1].get("content", "")
-            
-            syntax_passed = False
-            
+
+            # Empty/placeholder finals: an agent that returns a bare "Task
+            # completed." / "Done." with no substantive content, no file changes,
+            # and no tool activity did NOT actually do the goal. Fail fast with a
+            # concrete correction instead of burning a full review cycle (the
+            # reviewer would just reject it and the loop retries on the same
+            # empty final).
+            try:
+                changed_any = bool(_git_status_paths())
+            except Exception:
+                changed_any = False
+            placeholder = not changed_any and final_msg and _is_placeholder_final(final_msg)
+
             if "Unable to determine next action" in final_msg:
                 passed = False
                 logs = "Final Action:\n" + final_msg + "\nAgent could not determine next action. It likely encountered a critical backend error or model routing failure."
                 console.print("[bold red]✗ Agent execution failed (Routing Fallback).[/bold red]")
                 break
+            elif placeholder:
+                passed = False
+                logs = (
+                    "Agent returned a placeholder final (e.g. 'Task completed.') without making any "
+                    "file changes or doing the requested analysis/research. The goal required real work "
+                    "(read files, run tools, search the web). Re-run with the ORIGINAL goal and do not "
+                    f"short-circuit to a bare success.\nFinal: {final_msg[:200]}"
+                )
+                console.print("[bold red]✗ Agent returned an empty/placeholder final.[/bold red]")
             else:
                 console.print("[dim]Running fast syntax checks...[/dim]")
                 syntax_passed, syntax_error_msg = run_syntax_checks(PROJECT_ROOT)
                 
-            if not syntax_passed and "Unable to determine next action" not in final_msg:
+            if not placeholder and not syntax_passed and "Unable to determine next action" not in final_msg:
                 passed = False
                 logs = f"Syntax Error detected in modified files:\n\n{syntax_error_msg}"
                 console.print("[bold red]✗ Fast Syntax Check Failed.[/bold red]")
-            elif syntax_passed:
+            elif not placeholder and syntax_passed:
                 # Check if any files were actually modified during this attempt
                 try:
                     changed_this_attempt = _git_status_paths() - attempt_baseline
