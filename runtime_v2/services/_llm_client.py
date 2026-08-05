@@ -104,7 +104,7 @@ def get_litellm_model(agent_id: str, fallback_model: str, force_local: bool = Fa
         return "openai/deepseek-v4-flash"
 
     # UPGRADE: route heavy analysis/research work to a fast cloud model when a
-    # key is present and cloud is enabled. A 9B local model at ~6 t/s makes
+    # key is present and cloud is enabled. A 4B local model at ~6 t/s makes
     # codebase audits and web-research synthesis take tens of seconds per step.
     # IMPORTANT: skip the cloud hop if the cloud model is already in a cooldown
     # window (billing/auth failure recorded via record_model_failure) — otherwise

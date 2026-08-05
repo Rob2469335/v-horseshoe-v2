@@ -124,7 +124,7 @@ async def status(runtime: Any = Depends(runtime_dep)):
         pass
 
     # BUG FIX: primary_vision_model must be the ACTUAL vision model (moondream),
-    # not the first installed/generation model (qwen3.5-9b).
+    # not the first installed/generation model (qwen3.5-4b).
     vision_models = [m for m in installed_models if any(marker in m.lower() for marker in ["vl", "vision", "moondream", "llava"])]
 
     return StatusResponse(
@@ -247,13 +247,13 @@ async def generate(payload: GenerateRequest, orch=Depends(get_orchestrator)):
     # Fixes/corrections (T2 deep repair, mutation loop, self-repair) call
     # /generate without a model — default to DeepSeek V4 Flash (funded, cheap,
     # instruction-following) instead of local qwen. A repair fix is a complex
-    # reasoning task; the local 4B/9B burns turns and produces weak patches.
+    # reasoning task; the local 4B burns turns and produces weak patches.
     try:
         from runtime_v2.services._llm_client import _analysis_cloud_model, _analysis_cloud_enabled
         if _analysis_cloud_enabled():
             _model = _analysis_cloud_model()  # openai/deepseek-v4-flash by default
         else:
-            _model = "qwen3.5-9b"
+            _model = "qwen3.5-4b"
     except Exception:
         _model = "openai/deepseek-v4-flash"
     _model = (payload.model or "").strip() or _model

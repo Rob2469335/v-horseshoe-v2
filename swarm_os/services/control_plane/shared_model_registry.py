@@ -13,7 +13,7 @@ class ModelProfile:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 LOCAL_MODEL_SPECS = [
-    # 9B Tier (Primary — dense, all params active per token)
+    # Local 4B Tier (MTP 4B, the only served local generation model)
     ModelProfile(name="qwen3.5-4b", role="general",         capabilities=["fast", "long_context"], metadata={"pp512": 85.0, "tg128": 10.2}),
     ModelProfile(name="qwen3.5-4b", role="reasoning",       capabilities=["reasoning", "long_context"], metadata={"pp512": 85.0, "tg128": 10.2}),
     ModelProfile(name="qwen3.5-4b", role="planner",         capabilities=["reasoning", "long_context"], metadata={"pp512": 85.0, "tg128": 10.2}),

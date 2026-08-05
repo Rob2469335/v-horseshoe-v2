@@ -74,7 +74,7 @@ def classify_intent_with_llm(raw: str, ctx: CommandContext) -> tuple[Optional[st
     if ctx.installed_models:
         for m in ctx.installed_models:
             ml = m.lower()
-            if "qwen3.5" in ml or "qwen3" in ml or "9b" in ml:
+            if "qwen3.5" in ml or "qwen3" in ml:
                 model = m
                 break
         else:

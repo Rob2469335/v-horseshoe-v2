@@ -38,18 +38,11 @@ rem Local generation model (DEFAULT): the unsloth MTP 4B (UD-Q4_K_XL) on the iGP
 rem (-ngl 99) - ~21 t/s (tool-decision) with SWARM_SPEC_DECODE=1 (ngram-mod default),
 rem or ~6.4 t/s plain. Served under the honest alias "qwen3.5-4b".
 rem Override with SWARM_LOCAL_MODEL:
-rem   qwen3.5-9b     = plain 9B Q4_K_M, CPU-native (-ngl 0), ~5.5-6.0 t/s - quality
-rem                    fallback for cloud-offline periods (9B MTP is a dud, +21%)
 rem   qwen3.5-4b     = plain 4B Q4_K_M on the iGPU (same alias)
 rem   qwen3.5-4b-mtp = MTP 4B (same as default)
 set "GEN_MODEL=C:\Users\rober\models\Qwen3.5-4B-UD-Q4_K_XL.gguf"
 set "GEN_ALIAS=qwen3.5-4b"
 set "GEN_NGL=99"
-if "%SWARM_LOCAL_MODEL%"=="qwen3.5-9b" (
-    set "GEN_MODEL=C:\Users\rober\Projects\v-horseshoe-v2\models\Qwen3.5-9B-Q4_K_M.gguf"
-    set "GEN_ALIAS=qwen3.5-9b"
-    set "GEN_NGL=0"
-)
 if "%SWARM_LOCAL_MODEL%"=="qwen3.5-4b" (
     set "GEN_MODEL=C:\Users\rober\models\Qwen3.5-4B-Q4_K_M.gguf"
     set "GEN_ALIAS=qwen3.5-4b"

@@ -8,7 +8,7 @@ log = logging.getLogger(__name__)
 LLAMA_URL = "http://127.0.0.1:8080/v1/chat/completions"
 
 AGENT_MODELS: dict[str, Tuple[str, str]] = {
-    # All agents use Qwen3.5-9B (Q4_K_M) on port 8080.
+    # All agents use Qwen3.5-4B (MTP) on port 8080.
     "coordinator":   ("qwen3.5-4b", "llama"),
     "planner":       ("qwen3.5-4b", "llama"),
     "executor":      ("qwen3.5-4b", "llama"),

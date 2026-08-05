@@ -54,8 +54,6 @@ Write-Host "Cleanup complete ✔" -ForegroundColor Green
 # STEP 2 - llama.cpp microservices
 Write-Host "`n[STEP 2] Starting llama.cpp Microservices (Ports 8080-8083)..." -ForegroundColor Yellow
 
-# To switch to the 35B model, uncomment the line below and comment out the 9B line.
-# $llamaGenJob = Start-Job -ScriptBlock { param($r); Set-Location $r; & .\bin\llama.exe serve -m ".\models\qwen-tuned-latest.gguf" -c 32768 -ctk q8_0 -ctv q8_0 -t 4 -b 256 -ub 512 --port 8080 2>&1 } -ArgumentList $root
 # Runtime speed gates (default ON): grammar-constrained local tool decisions
 # (valid JSON first try, fewer retries) + semantic decision cache (near-duplicate
 # decisions short-circuit the LLM). Both never block on errors. Set env to "0" to
@@ -73,8 +71,8 @@ if (-not $env:SWARM_SEMANTIC_CACHE)  { $env:SWARM_SEMANTIC_CACHE = "1" }
 #     AGENTS.md). Uses a stable system prompt/tool schema to draft long continuations.
 #   - "ngram-simple"            : pattern-matching drafts, no extra model (fallback)
 #   - "draft-mtp,ngram-simple"  : Qwen3.5 built-in MTP head + ngram. REQUIRES an MTP
-#     GGUF (e.g. unsloth Qwen3.5-4B-MTP / -9B-MTP; the plain Qwen3.5-9B/4B GGUFs have
-#     NO MTP head). UD-Q4_K_XL 4B measured 66% acceptance, ~2.0x on the iGPU.
+#     GGUF (e.g. unsloth Qwen3.5-4B-MTP; the plain Qwen3.5-4B GGUF has NO MTP head).
+#     UD-Q4_K_XL 4B measured 66% acceptance, ~2.0x on the iGPU.
 #   - "draft-simple,ngram-simple" + $env:SWARM_DRAFT_MODEL : in-process 0.8B draft
 #     (Qwen3.5-0.8B shares the family vocab; verified identical tokenization).
 $specArgs = @()
@@ -91,19 +89,11 @@ if ($env:SWARM_SPEC_DECODE -ne "0") {
 # (-ngl 99) - ~21 t/s (tool-decision) with SWARM_SPEC_DECODE=1 (ngram-mod default),
 # or ~6.4 t/s plain. Served under the honest alias "qwen3.5-4b".
 # Override with $env:SWARM_LOCAL_MODEL:
-#   - "qwen3.5-9b"     : plain 9B Q4_K_M, CPU-native (-ngl 0), ~5.5-6.0 t/s - quality
-#                        fallback for cloud-offline periods (9B MTP is a dud: +21%,
-#                        50% acceptance - see AGENTS.md)
 #   - "qwen3.5-4b"     : plain 4B Q4_K_M on the iGPU (same alias)
 #   - "qwen3.5-4b-mtp" : MTP 4B (same as default)
 $genModel = "C:\Users\rober\models\Qwen3.5-4B-UD-Q4_K_XL.gguf"
 $genAlias = "qwen3.5-4b"
 $genNgl = "99"
-if ($env:SWARM_LOCAL_MODEL -eq "qwen3.5-9b") {
-    $genModel = ".\models\Qwen3.5-9B-Q4_K_M.gguf"
-    $genAlias = "qwen3.5-9b"
-    $genNgl = "0"
-}
 if ($env:SWARM_LOCAL_MODEL -eq "qwen3.5-4b") {
     $genModel = "C:\Users\rober\models\Qwen3.5-4B-Q4_K_M.gguf"
     $genAlias = "qwen3.5-4b"

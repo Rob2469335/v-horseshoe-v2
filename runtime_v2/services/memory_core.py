@@ -369,7 +369,7 @@ def dump_all_failures(limit: int = 200) -> str:
     This is used by the self-healing orchestrator to do full root-cause analysis.
     Unlike get_relevant_memories() which returns top-3 reranked hits, this returns
     a complete unfiltered dump of every failure the system has recorded, sorted
-    by timestamp (newest first). The 9B model can then synthesize patterns.
+    by timestamp (newest first). The model can then synthesize patterns.
     """
     collection = _get_shard_name("self_reflection")
     
