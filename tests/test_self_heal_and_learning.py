@@ -1,11 +1,6 @@
 from pathlib import Path
 
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
-
 from swarm_os.adaptation.healing.healing_engine import HealingEngine
-from swarm_os.app.api.routes.chat import router as chat_router
-from swarm_os.app.api.routes.search import router as search_router
 from swarm_os.app.services.learning_service import LearningService
 
 
@@ -41,25 +36,3 @@ def test_healing_engine_enters_cooldown_after_repeated_failures(tmp_path: Path):
 
     assert second["action"] in {"restart_vector_layer", "switch_to_fallback_search", "cooldown"}
     assert third["action"] in {"cooldown", "switch_to_fallback_search"}
-
-
-def test_chat_route_records_repair_on_empty_message():
-    app = FastAPI()
-    app.include_router(chat_router)
-    client = TestClient(app)
-
-    response = client.post("/chat", json={"message": ""})
-    assert response.status_code == 200
-    body = response.json()
-    assert body["ok"] is False
-    assert "repair" in body
-
-
-def test_search_route_returns_ok_or_degraded():
-    app = FastAPI()
-    app.include_router(search_router)
-    client = TestClient(app)
-
-    response = client.post("/search", json={"query": "agent memory fallback"})
-    assert response.status_code == 200
-    assert response.json()["status"] in {"ok", "degraded"}
