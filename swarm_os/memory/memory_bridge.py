@@ -659,7 +659,16 @@ class MemoryBridge:
                     consolidated_any = True
 
             return consolidated_any
+        except (httpx.ReadError, httpx.ReadTimeout) as exc:
+            # Qdrant transport error (starting up / briefly unavailable) is
+            # expected during the startup window and on a busy machine — log at
+            # warning WITHOUT a full traceback and retry on the next daemon tick.
+            logger.warning("Memory consolidation skipped (Qdrant transport): %r", exc)
+            return False
         except Exception as exc:
+            if "ResponseHandlingException" in type(exc).__name__ or "UnexpectedResponse" in type(exc).__name__:
+                logger.warning("Memory consolidation skipped (Qdrant transport): %r", exc)
+                return False
             logger.warning("Memory consolidation failed: %s", exc, exc_info=True)
             return False
 
@@ -729,8 +738,13 @@ class MemoryBridge:
             
             await self.graph_repo.save()
             logger.info(f"GraphRAG: Found {len(communities)} communities and computed PageRank.")
+        except (httpx.ReadError, httpx.ReadTimeout) as exc:
+            logger.warning("GraphRAG clustering skipped (Qdrant/LLM transport): %r", exc)
         except Exception as exc:
-            logger.exception("GraphRAG clustering failed: %s", exc)
+            if "ResponseHandlingException" in type(exc).__name__ or "UnexpectedResponse" in type(exc).__name__:
+                logger.warning("GraphRAG clustering skipped (Qdrant transport): %r", exc)
+            else:
+                logger.exception("GraphRAG clustering failed: %s", exc)
 
     async def close(self) -> None:
         await asyncio.to_thread(self.event_repo.save_state, self.state)
