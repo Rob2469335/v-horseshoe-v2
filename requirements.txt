@@ -62,7 +62,7 @@ PyYAML==6.0.3
 qdrant-client==1.18.0
 referencing==0.37.0
 regex==2026.6.28
-requests==2.34.2
+requests==2.33.0
 rich==15.0.0
 rpds-py==2026.6.3
 ruff==0.15.20
