@@ -25,10 +25,21 @@ from typing import Any, Dict
 log = logging.getLogger(__name__)
 
 import ctypes
-from ctypes import wintypes
 
-user32 = ctypes.windll.user32
-kernel32 = ctypes.windll.kernel32
+IS_WINDOWS = getattr(ctypes, "windll", None) is not None
+
+if IS_WINDOWS:
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+else:
+    # Non-Windows (CI runners, macOS, Linux): win32 bindings are unavailable.
+    # The module must still import so tests/collection and tool registration
+    # work; every handler returns a graceful "not supported" error instead.
+    wintypes = None
+    user32 = None
+    kernel32 = None
 
 # ---------------------------------------------------------------------------
 # Mode & guards
@@ -482,6 +493,8 @@ _HANDLERS = {
 
 def screen_handler(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Route `action=<name>` to a screen-control tool. Human-control gate enforced."""
+    if not IS_WINDOWS:
+        return _err("Screen control is Windows-only; not supported on this platform")
     action = str(payload.get("action", "") or "").lower().strip()
     handler = _HANDLERS.get(action)
     if not handler:

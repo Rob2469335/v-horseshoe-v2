@@ -6,7 +6,16 @@ but any mouse/keyboard input action is blocked until SWARM_SCREEN_AUTONOMOUS=1
 """
 from __future__ import annotations
 import asyncio
+import sys
 import pytest
+
+# The screen-control module uses ctypes.windll (Windows-only) for mouse/keyboard
+# input. On non-Windows runners (CI) it imports fine (graceful "not supported")
+# but the functional tests below assert real win32 behavior, so skip them there.
+pytestmark = pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="screen-control tests require Windows (ctypes.windll)",
+)
 
 from swarm_os.lib.mcp import screen
 from swarm_os.lib.mcp.screen import screen_handler
