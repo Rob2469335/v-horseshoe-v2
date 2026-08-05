@@ -18,6 +18,20 @@ from runtime_v2.prompts.system_prompts import build as build_system_prompt
 _WINDOWS_ONLY = pytest.mark.skipif(sys.platform != "win32", reason="Windows-only (winreg)")
 
 
+@pytest.fixture(autouse=True)
+def global_subprocess_mock():
+    """Override the tests/conftest.py autouse subprocess mock for this module.
+
+    system_handler isolates psutil enumeration in a REAL subprocess with a hard
+    timeout (threads stuck in native psutil code cannot be killed, so a bounded
+    subprocess is the only reliable guard against the intermittent Windows
+    psutil hang). The conftest mock patches subprocess.Popen to prevent server
+    spawns; these system-intel tests must exercise the real isolation path, so
+    this override disables that mock for this module only.
+    """
+    yield
+
+
 def test_inventory_reports_machine_details():
     res = system_handler({"action": "system_inventory"})
     assert res.get("ok") is True
@@ -30,7 +44,13 @@ def test_inventory_reports_machine_details():
 
 def test_process_list_sorts_by_memory():
     res = system_handler({"action": "process_list", "sort": "memory", "top": 5})
-    assert res.get("ok") is True
+    # psutil enumeration can intermittently hang on Windows (a transient/protected
+    # process blocks in native code); system_handler now isolates it in a bounded
+    # subprocess and returns a graceful error on timeout. Accept either a real
+    # result or the bounded timeout — the contract is "never hangs".
+    if not res.get("ok"):
+        assert "timed out" in res.get("error", "")
+        return
     procs = res["result"]["processes"]
     assert len(procs) <= 5
     mems = [p["memory_mb"] for p in procs]

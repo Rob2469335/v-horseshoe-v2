@@ -176,7 +176,7 @@ async def chat_search_stream(req: QueryRequest, request: Request):
                         yield f"data: {json.dumps({'content': clean_chunk})}\n\n"
         except Exception as e:
             log.exception("stream_generate failed in chat-search")
-            yield f"data: {json.dumps({'content': f'[Error: {e}]'})}\n\n"
+            yield f"data: {json.dumps({'content': '[Error: stream generation failed]'})}\n\n"
             
     return StreamingResponse(sse_generator(), media_type="text/event-stream")
 
@@ -231,7 +231,7 @@ async def upwork_stream(req: QueryRequest, request: Request):
                         yield f"data: {json.dumps({'content': clean_chunk})}\n\n"
         except Exception as e:
             log.exception("stream_generate failed in upwork")
-            yield f"data: {json.dumps({'content': f'[Error: {e}]'})}\n\n"
+            yield f"data: {json.dumps({'content': '[Error: stream generation failed]'})}\n\n"
             
     return StreamingResponse(sse_generator(), media_type="text/event-stream")
 
@@ -526,7 +526,8 @@ def approve_mutation(mutation_id: str):
         result = repo.approve(mutation_id)
         return {"status": "ok", "result": result}
     except Exception as e:
-        return {"status": "error", "error": str(e)}
+        log.exception("Mutation approve failed")
+        return {"status": "error", "error": f"Failed to approve mutation {mutation_id}"}
 
 @router.post("/mutation-approvals/{mutation_id}/reject")
 def reject_mutation(mutation_id: str):
@@ -708,7 +709,8 @@ async def omnidev_run(req: OmniDevRequest, request: Request):
             final_content = "OmniDev completed the task without producing a final response."
         return {"result": final_content}
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"OmniDev task failed: {exc}")
+        log.exception("OmniDev task failed")
+        raise HTTPException(status_code=500, detail="OmniDev task failed")
 
 
 class RvFinderRequest(BaseModel):
@@ -746,4 +748,4 @@ async def rv_finder_search(req: RvFinderRequest):
         return result
     except Exception as exc:
         log.exception("RV finder search failed")
-        raise HTTPException(status_code=500, detail=f"RV finder search failed: {exc}")
+        raise HTTPException(status_code=500, detail="RV finder search failed")

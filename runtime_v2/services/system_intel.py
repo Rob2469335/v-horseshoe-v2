@@ -27,6 +27,51 @@ def _err(message: str) -> Dict[str, Any]:
     return {"ok": False, "error": str(message)}
 
 
+def _run_isolated(action: str, kwargs: Dict[str, Any], timeout: float = 30.0) -> Dict[str, Any]:
+    """Run a psutil/winreg enumeration in a killable subprocess with a hard timeout.
+
+    Root cause (2026-08): psutil's per-process enumeration (memory_info, exe,
+    cmdline, username, ...) intermittently blocks INDEFINITELY in native code on
+    Windows when a transient/protected process appears mid-scan. Python cannot
+    terminate a thread stuck in native code — a ThreadPoolExecutor-based timeout
+    still leaks the stuck thread and cannot reliably recover. The only correct
+    bound is a separate subprocess that the parent can kill on timeout.
+
+    The worker re-imports this module and calls the handler directly (not
+    system_handler, which would re-enter isolation), printing JSON to stdout.
+    """
+    import json
+    import subprocess
+    import sys
+
+    worker = (
+        "import json,sys;"
+        "import runtime_v2.services.system_intel as si;"
+        "p=json.loads(sys.argv[1]);"
+        "a=str(p.get('action','')).lower().strip();"
+        "h=si._HANDLERS.get(a);"
+        "kw={k:v for k,v in p.items() if k not in ('action','tool','capability')};"
+        "print(json.dumps(h(**kw)));"
+        "sys.stdout.flush()"
+    )
+    payload = json.dumps({"action": action, **kwargs})
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", worker, payload],
+            capture_output=True, text=True, timeout=timeout,
+            creationflags=flags,
+        )
+    except subprocess.TimeoutExpired:
+        return _err(f"system action '{action}' timed out")
+    if proc.returncode != 0:
+        return _err(f"system action '{action}' failed: {proc.stderr.strip()[-200:]}")
+    try:
+        return json.loads(proc.stdout.strip())
+    except Exception:
+        return _err(f"system action '{action}' produced invalid output")
+
+
 # ---------------------------------------------------------------------------
 # Hardware & OS inventory
 # ---------------------------------------------------------------------------
@@ -98,7 +143,10 @@ def _process_entry(proc: psutil.Process) -> Dict[str, Any]:
             "pid": proc.pid,
             "name": proc.name(),
             "status": proc.status(),
-            "cpu_percent": round(proc.cpu_percent(interval=0.05), 1),
+            # interval=None -> non-blocking cached value. Calling cpu_percent
+            # with interval=0.05 synchronously per process makes process_list
+            # take tens of seconds on a busy machine (hundreds of procs).
+            "cpu_percent": round(proc.cpu_percent(interval=None) or 0.0, 1),
             "memory_mb": round(mem.rss / (1024**2), 1) if mem else 0,
             "username": proc.username(),
             "exe": proc.exe(),
@@ -405,6 +453,13 @@ _HANDLERS = {
 }
 
 
+_BOUNDED_ACTIONS = {
+    "process_list", "net_connections", "system_inventory", "disk_analyzer",
+    "startup_items", "registry_query", "installed_apps", "event_log_query",
+    "service_list",
+}
+
+
 def system_handler(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Route `action=<name>` (with optional args) to a read-only system tool."""
     action = str(payload.get("action", "") or "").lower().strip()
@@ -412,6 +467,13 @@ def system_handler(payload: Dict[str, Any]) -> Dict[str, Any]:
     if not handler:
         return _err(f"Unknown system action '{action}'. Available: {', '.join(sorted(_HANDLERS))}")
     kwargs = {k: v for k, v in payload.items() if k not in ("action", "tool", "capability")}
+    if action in _BOUNDED_ACTIONS:
+        # psutil/winreg enumeration can intermittently block indefinitely in
+        # native code on Windows (transient/protected processes). Threads cannot
+        # be killed when stuck in native code, so run these in a subprocess the
+        # parent can terminate on timeout. Worst case is a graceful error, never
+        # a hang that stalls the agent loop, the API, or the test suite.
+        return _run_isolated(action, kwargs, timeout=30.0)
     try:
         return handler(**kwargs)
     except TypeError as exc:

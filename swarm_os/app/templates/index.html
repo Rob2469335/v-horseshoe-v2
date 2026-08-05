@@ -1231,6 +1231,11 @@ Output will appear here…
 
 <script>
 // ── Config ──────────────────────────────────────────────────────────────────
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => (
+    {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]
+  ));
+}
 let API = localStorage.getItem('vh2_api') || 'http://localhost:8000';
 let fitnessHistory = [];
 let allOrganisms = [];
@@ -1289,7 +1294,7 @@ function clog(level, msg, target='console-main') {
   const labels = { info:'INFO', ok:'OK  ', warn:'WARN', err:'ERR ' };
   const div = document.createElement('div');
   div.className = 'log-line';
-  div.innerHTML = `<span class="log-time">${t}</span><span class="log-level ${level}">${labels[level]||level}</span><span class="log-msg">${msg}</span>`;
+  div.innerHTML = `<span class="log-time">${esc(t)}</span><span class="log-level ${esc(level)}">${esc(labels[level]||level)}</span><span class="log-msg">${esc(msg)}</span>`;
   el.appendChild(div);
   el.scrollTop = el.scrollHeight;
   if (el.children.length > 200) el.removeChild(el.firstChild);
@@ -1385,14 +1390,14 @@ async function runChatSearch2() {
     document.getElementById('cs2-results').innerHTML = results.map(x => `
       <div style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:10px">
         <div style="display:flex;justify-content:space-between;margin-bottom:6px">
-          <span class="pill ${x.sender==='system'?'blue':x.sender==='user'?'green':'purple'}">${x.sender}</span>
-          <span style="font-family:'DM Mono',monospace;font-size:10px;color:var(--text3)">${x.timestamp}</span>
+          <span class="pill ${x.sender==='system'?'blue':x.sender==='user'?'green':'purple'}">${esc(x.sender)}</span>
+          <span style="font-family:'DM Mono',monospace;font-size:10px;color:var(--text3)">${esc(x.timestamp)}</span>
           <span class="pill amber">score ${(x.score||0).toFixed(2)}</span>
         </div>
-        <div style="font-size:13px;color:var(--text);line-height:1.5">${x.message}</div>
+        <div style="font-size:13px;color:var(--text);line-height:1.5">${esc(x.message)}</div>
       </div>`).join('');
   } catch(e) {
-    document.getElementById('cs2-results').innerHTML = `<div class="empty" style="color:var(--red)">Error: ${e.message}</div>`;
+    document.getElementById('cs2-results').innerHTML = `<div class="empty" style="color:var(--red)">Error: ${esc(e.message)}</div>`;
   }
 }
 
@@ -1432,7 +1437,7 @@ async function runUpwork2() {
         ${Object.entries(d.fit_metrics||{}).map(([k,v])=>`
           <div>
             <div style="display:flex;justify-content:space-between;margin-bottom:4px">
-              <span style="font-family:'DM Mono',monospace;font-size:11px;color:var(--text3)">${k}</span>
+              <span style="font-family:'DM Mono',monospace;font-size:11px;color:var(--text3)">${esc(k)}</span>
               <span style="font-family:'Space Mono',monospace;font-size:11px;color:var(--text)">${(v*100).toFixed(0)}%</span>
             </div>
             <div style="height:4px;background:var(--border);border-radius:2px">
@@ -1441,10 +1446,10 @@ async function runUpwork2() {
           </div>`).join('')}
       </div>
       <div style="margin-top:16px;font-family:'DM Mono',monospace;font-size:11px;color:var(--text3)">
-        ${JSON.stringify(d.domain_matches||{},null,2)}
+        ${esc(JSON.stringify(d.domain_matches||{},null,2))}
       </div>`;
   } catch(e) {
-    document.getElementById('uw2-result').innerHTML = `<div class="empty" style="color:var(--red)">Error: ${e.message}</div>`;
+    document.getElementById('uw2-result').innerHTML = `<div class="empty" style="color:var(--red)">Error: ${esc(e.message)}</div>`;
   }
 }
 
@@ -1506,10 +1511,10 @@ async function loadEvents() {
       return `<div class="event-item">
         <div class="event-icon ${t}">${icons[e.event_type]||'◉'}</div>
         <div class="event-body">
-          <div class="event-type">${e.event_type}</div>
-          <div class="event-detail">${JSON.stringify(e.payload).slice(0,80)}</div>
+          <div class="event-type">${esc(e.event_type)}</div>
+          <div class="event-detail">${esc(JSON.stringify(e.payload)).slice(0,80)}</div>
         </div>
-        <div class="event-time">${(e.occurred_at||'').slice(11,19)}</div>
+        <div class="event-time">${esc((e.occurred_at||'').slice(11,19))}</div>
       </div>`;
     }).join('');
   } catch(e) {
@@ -1530,13 +1535,13 @@ async function loadSnapshots() {
       const name = s.split('/').pop() || s.split('\\').pop() || s;
       const gen = name.match(/\d+/)?.[0] || i;
       return `<div class="snap-item">
-        <div class="snap-gen">Gen ${gen}</div>
+        <div class="snap-gen">Gen ${esc(gen)}</div>
         <div class="snap-meta">
-          <div class="snap-name">${name}</div>
+          <div class="snap-name">${esc(name)}</div>
           <div class="snap-stats">Snapshot file</div>
         </div>
         <div class="snap-actions">
-          <div class="btn success" onclick="resumeSnapshot('${s}')">↺ Resume</div>
+          <div class="btn success" onclick="resumeSnapshot('${esc(s)}')">↺ Resume</div>
         </div>
       </div>`;
     }).join('');
@@ -1622,21 +1627,21 @@ function updateMockPopulation(gen) {
   document.getElementById('stat-pop').textContent = orgs.length;
 
   document.getElementById('pop-grid').innerHTML = orgs.map(o=>`
-    <div class="organism-card ${o.elite?'elite':''}" onclick="inspectOrg('${o.id}')">
-      <div class="org-id">${o.id}</div>
+    <div class="organism-card ${o.elite?'elite':''}" onclick="inspectOrg('${esc(o.id)}')">
+      <div class="org-id">${esc(o.id)}</div>
       <div class="org-fitness-val">${o.fitness.toFixed(3)}</div>
       <div class="org-fitness-bar"><div class="org-fitness-fill" style="width:${o.fitness*100}%"></div></div>
-      <div class="org-domain domain-${o.domain}">${o.domain}</div>
+      <div class="org-domain domain-${esc(o.domain)}">${esc(o.domain)}</div>
     </div>`).join('');
 
   document.getElementById('top-orgs-list').innerHTML = orgs.slice(0,3).map((o,i)=>`
     <div style="display:flex;align-items:center;gap:12px;padding:12px 20px;border-bottom:1px solid var(--border)">
       <div style="font-family:'Space Mono',monospace;font-size:18px;font-weight:700;color:var(--text3);width:24px">#${i+1}</div>
       <div style="flex:1">
-        <div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:2px">${o.id}</div>
+        <div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:2px">${esc(o.id)}</div>
         <div style="display:flex;gap:6px">
-          <span class="pill ${o.domain==='coding'?'blue':o.domain==='research'?'purple':'amber'}">${o.domain}</span>
-          <span class="pill blue">${o.model}</span>
+          <span class="pill ${o.domain==='coding'?'blue':o.domain==='research'?'purple':'amber'}">${esc(o.domain)}</span>
+          <span class="pill blue">${esc(o.model)}</span>
         </div>
       </div>
       <div style="font-family:'Space Mono',monospace;font-size:14px;font-weight:700;color:var(--green)">${o.fitness.toFixed(4)}</div>
