@@ -25,6 +25,10 @@ class EmbeddingService:
         last_exc = None
         for attempt in range(3):
             try:
+                # Self-heal a closed httpx client (e.g. a background task that
+                # outlived a bridge shutdown) instead of failing permanently.
+                if self.client.is_closed:
+                    self.client = httpx.AsyncClient(timeout=120.0, headers={"Authorization": "Bearer llama"})
                 response = await self.client.post(
                     f"{self.base_url}/v1/embeddings",
                     json={"model": self.model, "input": text}

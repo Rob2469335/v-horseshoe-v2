@@ -258,6 +258,17 @@ async def generate(payload: GenerateRequest, orch=Depends(get_orchestrator)):
         _model = "openai/deepseek-v4-flash"
     _model = (payload.model or "").strip() or _model
     
+    # Accept both shapes: a bare `prompt` string (frontend/fix clients) and the
+    # legacy brain payload that sends a full `messages` list. Derive the prompt
+    # from the last user message when `prompt` is absent, otherwise the brain
+    # path 422s (messages is not a valid `prompt`).
+    if payload.prompt:
+        _messages = [{"role": "user", "content": payload.prompt}]
+    elif payload.messages:
+        _messages = payload.messages
+    else:
+        raise HTTPException(status_code=422, detail="Either 'prompt' or 'messages' is required")
+    
     # Check if the model requests a cloud provider, otherwise default to local llama.cpp.
     # Use the shared _is_local_model() (NOT startswith("openai/")) so cloud models
     # like openai/deepseek-v4-flash are correctly treated as cloud — the old check
@@ -268,7 +279,7 @@ async def generate(payload: GenerateRequest, orch=Depends(get_orchestrator)):
     
     kwargs = {
         "model": litellm_model,
-        "messages": [{"role": "user", "content": payload.prompt}],
+        "messages": _messages,
         "temperature": 0.7,
         "timeout": 120.0,
         "num_ctx": 16384,

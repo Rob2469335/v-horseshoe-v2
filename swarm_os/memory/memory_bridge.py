@@ -417,6 +417,8 @@ class MemoryBridge:
     async def _summarize(self) -> str:
         try:
             snippet = json.dumps(self.session.events[-CHUNK_SIZE:], ensure_ascii=False)
+            if self.http.is_closed:
+                self.http = httpx.AsyncClient(timeout=120.0, headers={"Authorization": "Bearer llama"})
             response = await self.http.post(
                 f"{LLAMA_SUMM}/v1/chat/completions",
                 json={
