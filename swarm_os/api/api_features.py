@@ -104,7 +104,8 @@ async def _keyword_fallback(req: QueryRequest) -> list:
             scored.sort(key=lambda x: -x[0])
             results.extend(item for _, item in scored[: req.top_k - len(results)])
     except Exception:
-        return []
+        # Do not return early — fallback to local-file search below on any collection-level error
+        pass
     # If Qdrant collections exist but contain no matching payloads, fall back
     # to scanning repository markdown files (AGENTS.md, README.md, docs/*.md)
     # so degraded search still returns useful context in test/dev environments
@@ -112,33 +113,19 @@ async def _keyword_fallback(req: QueryRequest) -> list:
     if results:
         return results[: req.top_k]
 
-    # Local-file fallback
+    # Local-file fallback moved to helper to centralize safety and reuse.
     try:
+        from ..api._fallbacks import local_docs_search
         from pathlib import Path
         repo_root = Path(__file__).resolve().parents[2]
-        candidates_files = [repo_root / "AGENTS.md", repo_root / "README.md"]
-        docs_dir = repo_root / "docs"
-        if docs_dir.exists() and docs_dir.is_dir():
-            candidates_files.extend(sorted(docs_dir.glob("**/*.md")))
-
-        file_results = []
-        qtokens = tokens
-        for path in candidates_files:
-            try:
-                text = path.read_text(encoding="utf-8")
-            except Exception:
-                continue
-            hay = text.lower()
-            score = sum(1 for t in qtokens if t in hay)
-            if score:
-                excerpt_start = hay.find(next(iter(qtokens)))
-                excerpt = text[max(0, excerpt_start - 100): excerpt_start + 300] if excerpt_start >= 0 else text[:300]
-                file_results.append((score, {"id": str(path), "score": float(score), "payload": {"path": str(path), "excerpt": excerpt}}))
-        file_results.sort(key=lambda x: -x[0])
-        results = [item for _, item in file_results[: req.top_k]]
+        # if repo_root seems unexpected in test environments, fall back to cwd
+        if not (repo_root / "AGENTS.md").exists():
+            repo_root = Path.cwd()
+        results = await asyncio.to_thread(local_docs_search, repo_root, tokens, req.top_k)
         if results:
             return results
     except Exception:
+        # If helper fails for any reason, fall through to return []
         pass
 
     return results[: req.top_k]
