@@ -19,11 +19,9 @@ npm run build
 
 ## Testing
 
-This project uses [Vitest](https://vitest.dev/) for testing. You can run the tests with:
-
-```bash
-npm run test
-```
+This console has no test suite (the secondary/experimental TanStack Start
+console; the primary web console with Vitest coverage is `../organism-console`).
+Use `npm run build` to verify it compiles.
 
 ## Styling
 

@@ -467,7 +467,7 @@ async def memory_search(q: str, limit: int = 8):
         log.exception("Memory search failed")
         # BUG FIX: Raise HTTPException with 500 instead of returning {"error": ...} with 200 OK.
         # Clients cannot distinguish success from failure when status code is always 200.
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Memory search failed")
 
 @router.get("/traces/summary")
 def trace_summary(orch: Any = Depends(get_orchestrator), limit: int = 50) -> dict[str, Any]:
@@ -510,6 +510,7 @@ def trace_summary(orch: Any = Depends(get_orchestrator), limit: int = 50) -> dic
             },
         }
     except Exception as exc:
+        log.exception("Timeline fetch failed")
         return {
             "count": 0,
             "window": {"limit": limit},
@@ -517,7 +518,7 @@ def trace_summary(orch: Any = Depends(get_orchestrator), limit: int = 50) -> dic
             "phase_counts": {},
             "model_counts": {},
             "latency_ms": {"count": 0, "avg": 0.0, "max": 0.0, "min": 0.0},
-            "error": str(exc),
+            "error": "timeline unavailable",
         }
 
 @router.get("/healing/evaluate")
@@ -600,7 +601,7 @@ async def get_router_stats(orch: Any = Depends(get_orchestrator), runtime: Any =
             "model_distribution": {},
             "status_counts": {},
             "latency_ms": {"avg": 0.0, "max": 0.0, "min": 0.0},
-            "error": str(exc),
+            "error": "router stats unavailable",
         }
 
 
@@ -682,7 +683,7 @@ async def get_critic_stats(orch: Any = Depends(get_orchestrator), runtime: Any =
             "total_evaluated": 0,
             "trace_count": 0,
             "verdict": "healthy",
-            "error": str(exc),
+            "error": "critic stats unavailable",
         }
 
 @router.get("/memories")
@@ -718,6 +719,6 @@ async def get_memories():
         return {"status": "success", "data": memories_by_category}
     except Exception as exc:
         log.exception("Failed to fetch memories")
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail="Failed to fetch memories")
 
 

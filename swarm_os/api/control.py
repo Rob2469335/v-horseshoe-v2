@@ -79,7 +79,8 @@ async def _screen_state() -> Dict[str, Any]:
             "windows": wins.get("result", {}).get("windows", []) if wins.get("ok") else [],
         }
     except Exception as exc:
-        return {"available": False, "error": str(exc)}
+        log.exception("Screen state probe failed")
+        return {"available": False, "error": "screen state unavailable"}
 
 
 async def _heal_status() -> Dict[str, Any]:
@@ -93,7 +94,8 @@ async def _heal_status() -> Dict[str, Any]:
         hs = HealingService()
         value = await hs.status()
     except Exception as exc:
-        value = {"available": False, "error": str(exc)}
+        log.exception("Heal status probe failed")
+        value = {"available": False, "error": "heal status unavailable"}
     with _heal_cache_lock:
         _heal_cache["ts"] = now
         _heal_cache["value"] = value
@@ -140,7 +142,8 @@ async def _resilience() -> Dict[str, Any]:
         cooled.sort(key=lambda c: c["cooldown_remaining_s"], reverse=True)
         return {"models_in_cooldown": cooled, "fallback_stats": get_fallback_stats()}
     except Exception as exc:
-        return {"models_in_cooldown": [], "fallback_stats": {}, "error": str(exc)}
+        log.exception("Model cooldown surface failed")
+        return {"models_in_cooldown": [], "fallback_stats": {}, "error": "model cooldown status unavailable"}
 
 
 def _cooldowns_lock_sync():
@@ -250,7 +253,7 @@ async def control_recover(req: RecoverRequest) -> Dict[str, Any]:
         result = await asyncio.to_thread(SYSTEM_RECOVERY_ACTIONS[issue], anomaly)
     except Exception as exc:
         log.exception("Recovery %s failed", issue)
-        return {"status": "error", "issue": issue, "result": {"ok": False, "error": str(exc)}}
+        return {"status": "error", "issue": issue, "result": {"ok": False, "error": "recovery action failed"}}
 
     # Learn from the outcome — persist a grounded reflexion rule on success.
     if result.get("ok"):

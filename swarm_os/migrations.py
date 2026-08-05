@@ -1,4 +1,4 @@
-# swarm_os/kernel/migrations.py
+# swarm_os/migrations.py
 """
 Snapshot migration system.
 Version history:
@@ -32,7 +32,9 @@ _GENOME_DEFAULTS = {
     "crossover_stability":  0.5,
     "parent_id":            None,
     "generation":           0,
-    "lifetime_fitness":     0.0,
+    # Matches Genome.lifetime_fitness (Dict[str, float]); a float here made
+    # from_dict() crash with 'float' object is not iterable on migrated snapshots.
+    "lifetime_fitness":     {"composite": 0.0, "quality": 0.0, "speed": 0.0, "efficiency": 0.0},
     "evaluations":          0,
 }
 
@@ -116,6 +118,11 @@ def _v3_to_v4(data: dict) -> dict:
         # ── New scalar fields ────────────────────────────────────────────────
         for k, v in _GENOME_DEFAULTS.items():
             g.setdefault(k, v)
+
+        # Normalize lifetime_fitness — it is a Dict[str, float] in Genome, but
+        # snapshots migrated by an earlier buggy version may hold a bare float.
+        if isinstance(g.get("lifetime_fitness"), (int, float)):
+            g["lifetime_fitness"] = dict(_GENOME_DEFAULTS["lifetime_fitness"])
 
         # ── tool_genes dict ───────────────────────────────────────────────────
         if "tool_genes" not in g:

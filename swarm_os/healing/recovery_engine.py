@@ -191,11 +191,23 @@ Enclose the script in a ```python block.
                 # BUG FIX: Use async subprocess to avoid blocking the event loop.
                 # subprocess.run() in an async context stalls all other coroutines.
                 # UPGRADE: run isolated — no network, hard memory/time limits.
+                # BUG FIX (hardening): force cwd INTO the sandbox staging dir so an
+                # LLM-generated script cannot write files to the repo root via a
+                # relative path, and strip sensitive env vars (API keys, feature
+                # gates) so a malicious mutation cannot exfiltrate them or trigger
+                # daemon loops (e.g. SWARM_EVOLUTION=1 spawning another generation).
+                clean_env = {
+                    k: v for k, v in os.environ.items()
+                    if not any(s in k.upper() for s in ("API_KEY", "TOKEN", "SECRET", "PASSWORD"))
+                    and not k.startswith("SWARM_")
+                }
+                clean_env["PYTHONNOUSERSITE"] = "1"
                 proc_handle = await asyncio.create_subprocess_exec(
                     sys.executable, "-I", str(sandbox_file),
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
-                    env={**os.environ, "PYTHONNOUSERSITE": "1"},
+                    cwd=str(sandbox.sandbox_dir),
+                    env=clean_env,
                 )
                 try:
                     async with asyncio.timeout(10):
