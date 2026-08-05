@@ -54,10 +54,21 @@ class VectorStore:
 
     async def _ensure_collection(self, vector_size: int = 768):
         """Create collection if it doesn't exist. Retries with exponential backoff
-        to handle the startup race where Qdrant may not be ready immediately."""
-        # BUG FIX: No retry logic meant a Qdrant startup race (408/connection refused)
-        # silently gave up. Now retries up to 3 times with exponential backoff.
-        for attempt in range(3):
+        to handle the startup race where Qdrant may not be ready immediately
+        (it boots slower than the backend; a 408/connection-refused during the
+        startup window is expected, not fatal — the daemons retry next tick)."""
+        # Pre-check Qdrant is actually up before attempting collection ops, so a
+        # slow boot (which can take 30s+) doesn't burn the retry budget on
+        # connection-refused noise.
+        for _ in range(3):
+            try:
+                await self.client.get_collections()
+                break
+            except Exception:
+                await asyncio.sleep(2.0)
+
+        max_attempts = 5
+        for attempt in range(max_attempts):
             try:
                 if not await self.client.collection_exists(self.collection_name):
                     await self.client.create_collection(
@@ -106,15 +117,20 @@ class VectorStore:
                     logger.info("Created collection: %s", self.collection_name)
                 return  # success
             except Exception as e:
-                wait = 2 ** attempt  # 1s, 2s, 4s
-                if attempt < 2:
+                wait = 2 ** attempt  # 1s, 2s, 4s, 8s, 16s (~31s total)
+                if attempt < max_attempts - 1:
                     logger.warning(
-                        "Qdrant not ready (attempt %d/3) for collection %s: %s — retrying in %ds",
-                        attempt + 1, self.collection_name, e, wait,
+                        "Qdrant not ready (attempt %d/%d) for collection %s: %s — retrying in %ds",
+                        attempt + 1, max_attempts, self.collection_name, e, wait,
                     )
                     await asyncio.sleep(wait)
                 else:
-                    logger.error("Error ensuring collection %s after 3 attempts: %s", self.collection_name, e)
+                    # Startup-window race; collection is ensured lazily on the
+                    # next daemon tick, so this is a warning, not an error.
+                    logger.warning(
+                        "Could not ensure collection %s after %d attempts: %s — will retry on next tick",
+                        self.collection_name, max_attempts, e,
+                    )
 
     async def upsert(
         self,
