@@ -5,9 +5,6 @@ import path from "path"
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
-  optimizeDeps: {
-    exclude: ['three']
-  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
