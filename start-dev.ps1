@@ -132,6 +132,12 @@ if ($env:SWARM_LOCAL_MODEL -eq "qwen3.5-9b") {
     $genAlias = "qwen3.5-9b"
     $genNgl = "0"
 }
+if ($env:SWARM_LOCAL_MODEL -eq "qwen3.5-9b" -and -not (Test-Path $genModel)) {
+    Write-Host "`n[WARN] SWARM_LOCAL_MODEL=qwen3.5-9b but $genModel is missing." -ForegroundColor Yellow
+    Write-Host "The 9B fallback GGUF was pruned (heavy reasoning routes to cloud DeepSeek V4 Flash)." -ForegroundColor Yellow
+    Write-Host "Remove SWARM_LOCAL_MODEL (or set it to qwen3.5-4b / qwen3.5-4b-mtp) to use the default local model.`n" -ForegroundColor Yellow
+    $env:SWARM_LOCAL_MODEL = "qwen3.5-4b-mtp"
+}
 if ($env:SWARM_LOCAL_MODEL -eq "qwen3.5-4b") {
     $genModel = "C:\Users\rober\models\Qwen3.5-4B-Q4_K_M.gguf"
     $genAlias = "qwen3.5-4b"

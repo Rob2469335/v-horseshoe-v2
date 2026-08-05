@@ -240,14 +240,14 @@ Dependency pairing: React 19 ↔ `@react-three/fiber` ^9.5 / `@react-three/drei`
 
 ---
 
-## Qwen3.5-9B Migration
+## Qwen3.5 Local Model
 
-- **Model**: `models/Qwen3.5-9B-Q4_K_M.gguf` (in `models/` directory, 9B params)
-- **Model name in API**: `qwen3.5-4b` (the default MTP 4B served on port 8080; used in `config/agent_models.json` and `model_registry.py`). The 9B is a manual fallback served under `qwen3.5-9b` only when `SWARM_LOCAL_MODEL=qwen3.5-9b`.
+- **Model**: `C:\Users\rober\models\Qwen3.5-4B-UD-Q4_K_XL.gguf` (MTP 4B, served on :8080). The plain 9B fallback (`models/Qwen3.5-9B-Q4_K_M.gguf`) was **pruned 2026-08-05** (5.4 GB; backup at `C:\Users\rober\AppData\Local\Temp\opencode\prune-backup-2026-08-05\`) — heavy reasoning routes to cloud DeepSeek V4 Flash, so the 9B is redundant on this machine. `start-dev.ps1` warns and falls back to the 4B-MTP if `SWARM_LOCAL_MODEL=qwen3.5-9b` is set but the GGUF is missing.
+- **Model name in API**: `qwen3.5-4b` (the default MTP 4B served on port 8080; used in `config/agent_models.json` and `model_registry.py`). The 9B was served under `qwen3.5-9b` only when `SWARM_LOCAL_MODEL=qwen3.5-9b`.
 - **Thinking mode**: Disabled via `/no_think` prepended to all system prompts in `_llm_prompts.py`
-- **Server**: `bin\llama.exe serve -m "models\Qwen3.5-9B-Q4_K_M.gguf" --alias "qwen3.5-9b" -c 16384 -fa on -ctk q8_0 -ctv q8_0 -t 2 -tb 4 -b 2048 -ub 512 -np 1 --timeout 300 --port 8080`
+- **Server**: `bin\llama.exe serve -m "C:\Users\rober\models\Qwen3.5-4B-UD-Q4_K_XL.gguf" --alias "qwen3.5-4b" -c 16384 -fa on -ctk q8_0 -ctv q8_0 -t 2 -tb 4 -b 2048 -ub 512 -np 1 --timeout 300 --port 8080`
 - **Fallback**: `reviewer` agent still uses `openrouter` backend (`deepseek/deepseek-r1:free`)
-- **Analysis agents prefer cloud**: `code_analyzer`, `researcher`, `reviewer` route to **DeepSeek V4 Flash** (`openrouter/deepseek/deepseek-chat`) for all tool decisions + content streaming whenever `OPENROUTER_API_KEY` is present and cloud is enabled (see `runtime_v2/services/_llm_client.py` `_ANALYSIS_CLOUD_AGENTS` / `_analysis_cloud_enabled()`). Override model via `ANALYSIS_CLOUD_MODEL`; force local via `SWARM_ANALYSIS_CLOUD=off` or `/local` (routing mode `local_only`). Rationale: a 9B local model at ~6 t/s makes codebase audits and web-research synthesis take tens of seconds per decision; the cloud model resolves that while local chat stays on qwen3.5-9b.
+- **Analysis agents prefer cloud**: `code_analyzer`, `researcher`, `reviewer` route to **DeepSeek V4 Flash** (`openrouter/deepseek/deepseek-chat`) for all tool decisions + content streaming whenever `OPENROUTER_API_KEY` is present and cloud is enabled (see `runtime_v2/services/_llm_client.py` `_ANALYSIS_CLOUD_AGENTS` / `_analysis_cloud_enabled()`). Override model via `ANALYSIS_CLOUD_MODEL`; force local via `SWARM_ANALYSIS_CLOUD=off` or `/local` (routing mode `local_only`).
 
 ---
 
@@ -261,6 +261,13 @@ Dependency pairing: React 19 ↔ `@react-three/fiber` ^9.5 / `@react-three/drei`
   - **Unused Python deps (19)**: removed `black, cachetools, h2, httptools, httpcore2, httpx2, import-linter, mypy, pytokens, tenacity, watchfiles, websockets, orjson, ast_serialize, librt, mypy_extensions, pathspec, platformdirs, grimp` (zero importers + zero reverse-deps). KEPT `truststore` (imported by conftest/cli/bootstrap/app.main).
   - **Unused npm deps**: organism-console `@react-three/fiber/@react-three/drei/three` (migrated to framer-motion/react-force-graph-2d; removed stale `optimizeDeps.exclude:['three']`); start-console `@tanstack/react-router-ssr-query` → replaced with direct `@tanstack/react-query`.
   - **KEPT after verification** (audit false-positives): `core/event_bus.py` (imported by swarm_stream + orchestrator), `kernel/snapshot_index.py` (simulation_runner + kernel/status), `services/llm/client.py` subdir actually has no importer (the live one is `services/llm_client.py`), `import_lock.py`/`self_heal.py` (bootstrap chain), `adaptation/{chat_model_adapter,verification/repair_verifier}.py`, `app/services/research_service.py`, `healing/skill_extractor.py` (test-imported), `kernel/brain.py` (intentional compat facade), `migrations.py` + `kernel/migrations.py` (both live, different callers). Also removed 2 dead tests (mock app/api chat/search routers) from `test_self_heal_and_learning.py` (adaptation coverage retained in 8 other files).
+
+- **Disk prune (2026-08-05, ~6.5 GB)**: after the dead-code sweep, reclaimed ~6.5 GB:
+  - `models/Qwen3.5-9B-Q4_K_M.gguf` (5.4 GB) pruned — heavy reasoning routes to cloud DeepSeek V4 Flash, so the 9B fallback is redundant on this machine. Backed up (byte-verified) to `C:\Users\rober\AppData\Local\Temp\opencode\prune-backup-2026-08-05\`. `start-dev.ps1` now warns + falls back to the 4B-MTP if `SWARM_LOCAL_MODEL=qwen3.5-9b` is set but the GGUF is gone. `models/` now holds only the 4 live GGUFs (moondream, nomic-embed, reranker, plus the MTP 4B in `C:\Users\rober\models\`).
+  - `organism-console/storage/` (906 MB legacy Qdrant collections, gitignored — not served by the live Qdrant which uses root `/storage/`) deleted from disk.
+  - `scratch-app/` (218 MB throwaway TanStack app, zero references) deleted.
+  - 14 untracked benchmark/voice/export artifacts (~0.6 MB) removed.
+
 
 - **Production-hardening pass on restored full codebase (2026-08-05)**: after restoring the full pre-Copilot tree (PR #12), fixed the remaining release blockers:
   - **CodeQL HIGH js/xss-through-dom** in `swarm_os/app/templates/index.html` — backend/error data (chat-search messages, event payloads, snapshot filenames, organism ids/domains, console log lines) was interpolated into `innerHTML` unescaped. Added an `esc()` HTML-escaper and applied it to every data-interpolating innerHTML site.
