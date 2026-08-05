@@ -67,6 +67,7 @@ class SandboxReplHandler:
             }
 
         import os
+        from swarm_os.services.security_gate import clean_sandbox_env
         project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
         try:
@@ -74,7 +75,8 @@ class SandboxReplHandler:
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                cwd=project_root
+                cwd=project_root,
+                env=clean_sandbox_env(),
             )
             try:
                 async with asyncio.timeout(timeout):

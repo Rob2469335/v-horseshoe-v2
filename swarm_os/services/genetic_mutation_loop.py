@@ -165,19 +165,24 @@ async def run_genetic_mutation(target_file_path: str = str(AGENT_SERVICE_PATH), 
                 await sandbox.scan_sandbox(specific_files=[str(rel_path).replace("\\", "/")])
                     
                 logger.info("Verifying mutation compiles...")
+                from swarm_os.services.security_gate import clean_sandbox_env
                 compile_check = await asyncio.create_subprocess_exec(
                     "python", "-m", "py_compile", str(sandbox_file),
-                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                    cwd=str(sandbox.sandbox_dir),
+                    env=clean_sandbox_env(),
                 )
                 _, compile_err = await compile_check.communicate()
                 if compile_check.returncode != 0:
                     raise Exception(f"Mutation failed to compile: {compile_err.decode()}")
 
                 logger.info("Running real test suite against sandboxed mutation...")
+                from swarm_os.services.security_gate import clean_sandbox_env
                 test_proc = await asyncio.create_subprocess_exec(
                     "python", "-m", "pytest", "tests/test_agentic_loop.py", "-v",
                     cwd=str(sandbox.sandbox_dir),
-                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                    env=clean_sandbox_env(),
                 )
                 test_out, test_err = await test_proc.communicate()
                 if test_proc.returncode != 0:

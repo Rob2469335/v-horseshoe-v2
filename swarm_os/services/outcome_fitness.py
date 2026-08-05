@@ -152,6 +152,39 @@ def genome_has_fitness(genome_id: str) -> bool:
     return best_fitness(genome_id) is not None
 
 
+def best_aggregate_fitness(window: int = 20) -> float | None:
+    """Best composite fitness across ALL recent agent outcomes.
+
+    The evolution population is a single shared tool-policy lineage consumed by
+    every agent (one `_best_genome_tool_weights()` result reordered into each
+    agent's allowed-tool list). Agent outcomes are keyed `agent:<id>` in
+    fitness.jsonl, which never equals the population's `genome_<n>` ids, so an
+    exact-ID `best_fitness()` lookup returns None and every genome scores the
+    flat 0.05 prior (frozen population, 0.0425 elite plateau). Aggregate over
+    all outcomes so the real signal reaches the kernel.
+    """
+    if not FITNESS_PATH.exists():
+        return None
+    best = None
+    try:
+        with open(FITNESS_PATH, "r", encoding="utf-8") as f:
+            lines = f.readlines()[-window:]
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            f = rec.get("fitness", {}).get("composite")
+            if f is not None and (best is None or f > best):
+                best = f
+    except OSError:
+        return None
+    return best
+
+
 def _fitness_env_enabled() -> bool:
     """Opt-in gate for feeding real outcomes to the kernel. Default ON when
     SWARM_EVOLUTION=1, else off (keeps the runtime lean; no overhead when the

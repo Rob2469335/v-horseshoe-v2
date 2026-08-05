@@ -232,7 +232,7 @@ async def get_tool_decision(
                     continue
                 else:
                     log.error("[%s] Agent returned empty after %d retries. Giving up.", agent_id, MAX_EMPTY_RETRIES + 1)
-                    return {"action": "final", "response": f"[SYSTEM: Agent '{agent_id}' returned empty response after {MAX_EMPTY_RETRIES + 1} attempts. Model output was likely truncated. To fix this, please retry the request with a narrower scope (e.g., specify a smaller path, or use --max-characters/--max-chunks if applicable). Check its system prompt definition.]"}
+                    return {"action": "final", "ok": False, "system_failure": "empty_response", "response": f"[SYSTEM: Agent '{agent_id}' returned empty response after {MAX_EMPTY_RETRIES + 1} attempts. Model output was likely truncated. To fix this, please retry the request with a narrower scope (e.g., specify a smaller path, or use --max-characters/--max-chunks if applicable). Check its system prompt definition.]"}
 
             try:
                 result = extract_json(normalize_model_json(content))
@@ -248,7 +248,7 @@ async def get_tool_decision(
                 if empty_retry < MAX_EMPTY_RETRIES:
                     base_messages = base_messages + [{"role": "user", "content": f"SYSTEM RECOVERY: Your JSON was malformed or truncated. Output ONLY a valid JSON object. Allowed actions: {', '.join(allowed)}. Example: {{\"action\":\"filesystem\",\"operation\":\"list\",\"path\":\".\"}}"}]
                     continue
-                return {"action": "final", "response": f"[SYSTEM: {agent_id} produced malformed JSON after {MAX_EMPTY_RETRIES+1} attempts. Check context length.]"}
+                return {"action": "final", "ok": False, "system_failure": "malformed_json", "response": f"[SYSTEM: {agent_id} produced malformed JSON after {MAX_EMPTY_RETRIES+1} attempts. Check context length.]"}
 
             result_action = result.get("action", "final")
             if result_action not in allowed:
@@ -329,7 +329,7 @@ async def get_tool_decision(
                         continue
                     except Exception as local_exc:
                         log.warning("[%s] Local fallback failed: %s", agent_id, str(local_exc)[:80])
-                return {"action": "final", "response": f"[SYSTEM: {agent_id} could not reach a working model ({str(exc)[:120]}). Falling back to the default action.]"}
+                return {"action": "final", "ok": False, "system_failure": "model_unreachable", "response": f"[SYSTEM: {agent_id} could not reach a working model ({str(exc)[:120]}). Falling back to the default action.]"}
             if empty_retry < MAX_EMPTY_RETRIES and not is_timeout:
                 log.warning("[%s] Tool decision transient error (attempt %d/%d): %s — retrying...", agent_id, empty_retry + 1, MAX_EMPTY_RETRIES + 1, str(exc)[:100])
                 base_messages = base_messages + [{"role": "user", "content": f"SYSTEM: Previous LLM call failed ({str(exc)[:60]}). Retry with a valid JSON tool decision."}]
@@ -374,4 +374,4 @@ async def get_tool_decision(
             except Exception as e:
                 log.debug("Failed to record outcome: %s", e)
                 pass
-            return {"action": "final", "response": f"Unable to determine next action after {MAX_EMPTY_RETRIES + 1} attempts. Last error: {repr(exc)}"}
+            return {"action": "final", "ok": False, "system_failure": "decision_failed", "response": f"Unable to determine next action after {MAX_EMPTY_RETRIES + 1} attempts. Last error: {repr(exc)}"}

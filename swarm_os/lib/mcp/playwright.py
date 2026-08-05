@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict
 
+from swarm_os.lib.mcp.web_search import _ssrf_check
+
 logger = logging.getLogger(__name__)
 
 async def playwright_handler(params: Dict[str, Any], trace_hook=None) -> Dict[str, Any]:
@@ -14,6 +16,15 @@ async def playwright_handler(params: Dict[str, Any], trace_hook=None) -> Dict[st
     import os
     from pathlib import Path
     root = Path(os.getenv("ZENITH_PROJECT_ROOT", Path(__file__).resolve().parent.parent.parent))
+
+    # SSRF guard: a headless browser can reach loopback/private/metadata
+    # (Qdrant :6333, llama.cpp :8080-8084, cloud metadata 169.254.169.254).
+    # Block the target BEFORE any page.goto — same boundary web_fetch enforces.
+    if operation in ("navigate", "screenshot", "extract_text") and url:
+        blocked = _ssrf_check(url)
+        if blocked:
+            logger.warning("SSRF blocked in playwright %s: %s", operation, blocked)
+            return {"ok": False, "error": f"SSRF blocked: {blocked}"}
     
     try:
         try:

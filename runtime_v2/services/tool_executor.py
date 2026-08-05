@@ -301,10 +301,27 @@ async def run(tool_name: str, payload: dict) -> dict:
                 # allow known-safe launchers (npx <package>, python -m <module>)
                 # and reject shell metacharacters that could chain commands.
                 cmd = str(command).strip().lower()
-                blocked = any(ch in str(command) for ch in ("&&", "||", ";", "|", "$(", "`", "> ", "< "))
-                args_ok = all(isinstance(a, str) and not any(ch in a for ch in ("&&", "||", ";", "|", "$(", "`")) for a in args)
+                # Block shell metacharacters that could chain/redirect commands.
+                # Windows: '&' runs a second command implicitly via cmd.exe for
+                # .cmd shims (npx.cmd) even without an explicit shell; newlines
+                # also terminate a command. Bare '>'/'>>' redirect (the old list
+                # had trailing spaces, so ">" alone slipped through).
+                blocked = any(ch in str(command) for ch in ("&&", "||", ";", "|", "$(", "`", "&", "\n", "\r", ">", "<"))
+                args_ok = all(
+                    isinstance(a, str)
+                    and not any(ch in a for ch in ("&&", "||", ";", "|", "$(", "`", "&", "\n", "\r", ">", "<"))
+                    for a in args
+                )
                 allowed_launcher = cmd in ("npx", "node", "python", "python3", "uvx")
-                if blocked or not args_ok or not allowed_launcher:
+                # 'python -c <code>' / 'node -e <code>' / '--eval' execute arbitrary
+                # inline code — not a package/module launch — so reject those flags.
+                # ('python -m <module>' stays allowed — it is the sanctioned pattern.)
+                eval_flag_used = any(
+                    isinstance(a, str) and a.strip().lower() in ("-c", "-e", "--eval", "-p", "-i")
+                    and cmd in ("python", "python3", "node")
+                    for a in args
+                )
+                if blocked or not args_ok or not allowed_launcher or eval_flag_used:
                     result = {
                         "ok": False,
                         "error": (
@@ -347,7 +364,8 @@ async def run(tool_name: str, payload: dict) -> dict:
 
                         result = {"ok": True, "result": f"Registered MCP server '{server_name}'. Now available tools: {[t['name'] for t in new_tools] if new_tools else []}"}
                     except Exception as e:
-                        result = {"ok": False, "error": f"Failed to register MCP server: {e}"}
+                        log.exception("MCP register failed for %s", server_name)
+                        result = {"ok": False, "error": "Failed to register MCP server"}
         elif tool_name == "mcp":
             manager = await get_mcp_manager()
             server_name = payload.get("server")
@@ -369,7 +387,8 @@ async def run(tool_name: str, payload: dict) -> dict:
             except TimeoutError:
                 result = {"ok": False, "error": "MCP operation timed out."}
             except Exception as e:
-                result = {"ok": False, "error": f"MCP execution failed: {e}"}
+                log.exception("MCP tool execution failed: %s.%s", server_name, mcp_tool)
+                result = {"ok": False, "error": "MCP tool execution failed"}
         else:
             return {"ok": False, "error": f"Unknown tool: {tool_name}"}
 

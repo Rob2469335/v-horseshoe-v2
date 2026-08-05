@@ -79,3 +79,20 @@ class SecurityGate:
             
         logger.info(f"Security scan passed for {filepath}.")
         return True
+
+
+def clean_sandbox_env(extra: dict | None = None) -> dict:
+    """Build a subprocess env for untrusted (LLM-generated) code: no API keys,
+    tokens, secrets, passwords, or SWARM_* feature gates, so a malicious script
+    cannot exfiltrate credentials or trigger daemon loops. Keeps PATH and the
+    standard library. PYTHONNOUSERSITE=1 keeps -I isolated mode strict."""
+    import os
+    clean = {
+        k: v for k, v in os.environ.items()
+        if not any(s in k.upper() for s in ("API_KEY", "TOKEN", "SECRET", "PASSWORD"))
+        and not k.startswith("SWARM_")
+    }
+    clean["PYTHONNOUSERSITE"] = "1"
+    if extra:
+        clean.update(extra)
+    return clean

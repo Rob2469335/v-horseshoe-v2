@@ -436,6 +436,30 @@ class AgentServiceV2:
     async def _handle_final(self, decision: dict, agent_id: str, model: str, provider: str,
                             messages: list, start_time: float, prompt: str,
                             _fetched_content: bool, state: _CallState):
+        # System-failure finals (LLM unreachable / empty / malformed / decision
+        # loop exhausted): these are NOT real completions. Feed a failed outcome,
+        # record a tool_result-style failure event, and exit as a failure so the
+        # evolutionary kernel and telemetry see the truth instead of a perfect
+        # completion (the run never produced a single real decision).
+        if decision.get("ok") is False:
+            failure_reason = decision.get("system_failure") or "llm_failure"
+            response_text = str(decision.get("response", "[SYSTEM: decision loop failed]"))
+            log.warning("[%s] System-failure final (%s): %s", agent_id, failure_reason, response_text[:120])
+            yield {"agent_id": agent_id, "type": "error", "content": response_text}
+            yield {"agent_id": agent_id, "type": "final", "model": model, "provider": provider, "content": response_text}
+            try:
+                self._record_event(agent_id, "tool_result", {
+                    "tool": "llm_decision", "arguments": {"system_failure": failure_reason},
+                    "ok": False, "error": response_text[:300],
+                })
+            except Exception as _e:
+                log.debug("Failed to record system-failure event: %s", _e)
+            tsr = (state._tool_successes / state._tool_attempts) if state._tool_attempts else 0.0
+            self._feed_outcome(agent_id, prompt, state, completed=False,
+                               tool_success_rate=tsr, turns_used=state._turn)
+            state.handler_status = "DONE"
+            return
+
         # Verify-after-change: reject a final call once when a code file was edited
         # but never tested, forcing the agent to run sandbox_repl before reporting done.
         if state.pending_verify and not state._verify_final_rejected:
@@ -727,16 +751,22 @@ class AgentServiceV2:
         from runtime_v2.prompts.system_prompts import build
         from runtime_v2.services.memory_core import get_relevant_memories
 
-        # Per-run isolation: reset the read-before-write exploration set and the
-        # filesystem read cache so one agent run cannot inherit another agent's
-        # "seen" files (which would let it patch paths it never explored) or read
-        # stale cached content from a previous run.
+        # Per-run isolation: snapshot the shared read-before-write exploration set
+        # and filesystem read cache, then clear them for THIS run so it cannot
+        # inherit another agent's "seen" files (which would let it patch paths it
+        # never explored) or read stale cached content. Restore the prior state in
+        # a finally so a concurrent run's in-flight tracking is NOT wiped mid-run
+        # (clearing the global from one run destroyed another run's state).
         try:
             import runtime_v2.services.tool_executor as _te
+            _explored_snapshot = set(_te._explored_paths)
+            _cache_snapshot = dict(_te._filesystem_read_cache)
             _te._explored_paths.clear()
             _te._filesystem_read_cache.clear()
         except Exception:
-            pass
+            _te = None
+            _explored_snapshot = set()
+            _cache_snapshot = {}
 
         history = list(history or [])
         chain = list(delegation_chain or [agent_id])
@@ -1014,3 +1044,12 @@ class AgentServiceV2:
         except Exception as refl_err:
             log.debug("[%s] max-turns reflexion skipped: %s", agent_id, refl_err)
         self._record_success(model, start_time)
+
+        # Restore the shared exploration state snapshotted at run entry, so
+        # concurrent runs keep their own read-before-write tracking intact.
+        try:
+            if _te is not None:
+                _te._explored_paths = _explored_snapshot
+                _te._filesystem_read_cache = _cache_snapshot
+        except Exception as restore_err:
+            log.debug("[%s] failed to restore shared exploration state: %s", agent_id, restore_err)

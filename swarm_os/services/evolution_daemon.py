@@ -78,9 +78,15 @@ def _score_genome(genome: dict) -> float:
     """Best real outcome fitness recorded for this genome. Returns a small
     prior (0.05) if none yet so novel genomes don't get zero and immediately die."""
     try:
-        from swarm_os.services.outcome_fitness import best_fitness
+        from swarm_os.services.outcome_fitness import best_fitness, best_aggregate_fitness
         f = best_fitness(genome.get("id", ""))
-        return f if f is not None else 0.05
+        if f is not None:
+            return f
+        # Agent outcomes are keyed `agent:<id>` and never equal `genome_<n>`;
+        # fall back to the best aggregate so the population evolves on the real
+        # shared tool-policy signal instead of the flat 0.05 prior.
+        agg = best_aggregate_fitness()
+        return agg if agg is not None else 0.05
     except Exception:
         return 0.05
 
@@ -93,7 +99,15 @@ def _best_genome_tool_weights() -> dict:
         pop = _load_population()
         if not pop:
             return {}
-        scored = [(g.get("fitness", 0.0), g.get("tool_genes", {})) for g in pop]
+        # Score by LIVE outcome fitness (exact id, else aggregate) rather than
+        # the persisted `fitness` field, which is decayed for elites every
+        # generation and 0.0 for newborn children.
+        scored = []
+        for g in pop:
+            s = _score_genome(g)
+            if s is None:
+                s = 0.0
+            scored.append((s, g.get("tool_genes", {})))
         scored.sort(key=lambda x: -x[0])
         return scored[0][1] if scored else {}
     except Exception:
