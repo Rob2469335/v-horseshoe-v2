@@ -65,6 +65,7 @@ def test_kill_refuses_protected_process():
     assert "no safe kill targets" in res.get("reason", "")
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="free_memory uses ctypes.windll (Windows-only)")
 def test_free_memory_is_safe_and_runs():
     from swarm_os.healing.system_recovery import free_memory
     res = free_memory({})

@@ -6,11 +6,16 @@ Event Log. No destructive operations.
 """
 from __future__ import annotations
 import asyncio
+import sys
 import pytest
 
 from runtime_v2.services.system_intel import system_handler
 from runtime_v2.services import tool_executor
 from runtime_v2.prompts.system_prompts import build as build_system_prompt
+
+# net_connections/startup_items/registry_query use winreg + Windows psutil
+# enumerations; they only run on Windows.
+_WINDOWS_ONLY = pytest.mark.skipif(sys.platform != "win32", reason="Windows-only (winreg)")
 
 
 def test_inventory_reports_machine_details():
@@ -33,6 +38,7 @@ def test_process_list_sorts_by_memory():
     assert all("pid" in p for p in procs)
 
 
+@_WINDOWS_ONLY
 def test_net_connections_reports_sockets():
     res = system_handler({"action": "net_connections"})
     assert res.get("ok") is True
@@ -47,12 +53,14 @@ def test_disk_analyzer_finds_largest_paths():
     assert isinstance(result["largest_dirs"], list)
 
 
+@_WINDOWS_ONLY
 def test_startup_items_readable():
     res = system_handler({"action": "startup_items"})
     assert res.get("ok") is True
     assert isinstance(res["result"]["items"], list)
 
 
+@_WINDOWS_ONLY
 def test_registry_query_is_read_only_softare_only():
     res = system_handler({"action": "registry_query", "subkey": r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run"})
     assert res.get("ok") is True

@@ -11,6 +11,7 @@ Covers:
 """
 import asyncio
 import json
+import sys
 
 import pytest
 
@@ -98,7 +99,14 @@ async def test_sandbox_repl_blocks_banned_code():
 
 @pytest.mark.asyncio
 async def test_sandbox_repl_allows_safe_code():
+    # This runs a real `python -I` subprocess. The CI conftest mocks
+    # subprocess.Popen globally (to prevent background servers), which makes
+    # the spawn fail with '[Errno 3] No such process' — skip there.
+    import subprocess
+    from unittest.mock import Mock
     from swarm_os.capabilities.sandbox_repl import SandboxReplHandler
+    if isinstance(subprocess.Popen, Mock):
+        pytest.skip("subprocess.Popen is mocked by the CI conftest; sandbox spawn not possible")
     r = await SandboxReplHandler().execute({"language": "python", "code": "print(2+2)"})
     assert r.get("ok") is True
     assert "4" in r.get("stdout", "")
@@ -114,6 +122,7 @@ async def test_sandbox_repl_blocks_destructive_powershell():
 
 
 # ── security: screen self-promotion blocked ─────────────────────────────────
+@pytest.mark.skipif(sys.platform != "win32", reason="screen-control is Windows-only (ctypes.windll)")
 def test_screen_self_promote_blocked_in_human_mode(monkeypatch):
     from swarm_os.lib.mcp import screen as s
     s.SCREEN_AUTONOMOUS = False
@@ -122,6 +131,7 @@ def test_screen_self_promote_blocked_in_human_mode(monkeypatch):
     assert s.SCREEN_AUTONOMOUS is False
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="screen-control is Windows-only (ctypes.windll)")
 def test_screen_reset_blocked_in_human_mode(monkeypatch):
     from swarm_os.lib.mcp import screen as s
     s.SCREEN_AUTONOMOUS = False

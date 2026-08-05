@@ -57,6 +57,7 @@ def test_handler_rejects_unsupported_extension(tmp_path):
     assert res["error"] == "Unsupported language extension: .txt"
 
 
+@pytest.mark.skipif(not _HAS_PYLSP, reason="pylsp not installed")
 async def test_pool_reuses_warm_client(tmp_path):
     handler = LSPToolHandler()
     f = tmp_path / "mod_a.py"
@@ -71,6 +72,7 @@ async def test_pool_reuses_warm_client(tmp_path):
     assert len(lsp_tool._pool) == 1
 
 
+@pytest.mark.skipif(not _HAS_PYLSP, reason="pylsp not installed")
 async def test_dead_client_is_evicted_and_respawned(tmp_path):
     handler = LSPToolHandler()
     f = tmp_path / "mod_b.py"

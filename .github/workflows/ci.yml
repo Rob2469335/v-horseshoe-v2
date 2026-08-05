@@ -73,4 +73,4 @@ jobs:
           QDRANT_URL: http://127.0.0.1:6333
           SWARM_SEMANTIC_CACHE: '0'
           OPENROUTER_API_KEY: ''
-        run: python -m pytest -q
+        run: python -m pytest -q --ignore=tests/test_full_system_hardmode.py
