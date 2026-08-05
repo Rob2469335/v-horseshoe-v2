@@ -177,10 +177,16 @@ def evolve_one_generation() -> dict:
         return {"generation": -1, "population": 0, "best_fitness": 0.0, "error": str(exc)}
 
 
-async def evolution_daemon(interval_seconds: float = GENERATION_TICK):
+async def evolution_daemon(interval_seconds: float = GENERATION_TICK, first_delay: float = 0.0):
     """Background daemon tick: run one generation each interval. Called from
     main.py when SWARM_EVOLUTION=1. The agent loop feeds real outcomes into
-    outcome_fitness (same gate), so this selects on grounded fitness."""
+    outcome_fitness (same gate), so this selects on grounded fitness.
+
+    `first_delay` defers the FIRST tick so a heavy generation (disk reads,
+    crossover) does not run during the backend startup window and stall the
+    API from becoming responsive."""
+    if first_delay > 0:
+        await asyncio.sleep(first_delay)
     while True:
         try:
             summary = await asyncio.to_thread(evolve_one_generation)

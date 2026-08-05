@@ -167,17 +167,28 @@ async def lifespan(app: FastAPI):
 
 
     import asyncio
+    bg_tasks = set()
     # Background indexing removed: it causes a 10-minute Ollama embedding bottleneck on startup.
     # Users should use the explicit `/index` command in the CLI which utilizes the optimized batch indexer.
 
     try:
         from runtime_v2.services.tool_executor import get_mcp_manager
-        await get_mcp_manager()
-        log.info("External MCP Tools loaded and initialized")
-    except Exception as exc:
-        log.warning(f"Failed to initialize MCP Tools on startup: {exc}")
 
-    bg_tasks = set()
+        async def _mcp_init():
+            try:
+                await get_mcp_manager()
+                log.info("External MCP Tools loaded and initialized")
+            except Exception as exc:
+                log.warning(f"Failed to initialize MCP Tools on startup: {exc}")
+
+        # Load external MCP servers in the BACKGROUND — spawning npx subprocesses
+        # (sqlite/memory/context7) serially can add tens of seconds to startup on
+        # a cold npm cache. The API serves immediately; tools appear shortly after.
+        t_mcp = asyncio.create_task(_mcp_init())
+        bg_tasks.add(t_mcp)
+    except Exception as exc:
+        log.warning(f"MCP init task failed to start: {exc}")
+
     # BUG FIX: Start MemoryBridge background daemons so events are processed into Qdrant memories
     if orchestrator and hasattr(orchestrator, "bridge"):
         t1 = asyncio.create_task(orchestrator.bridge.watch_loop(interval_seconds=5.0))
@@ -189,7 +200,11 @@ async def lifespan(app: FastAPI):
     try:
         from swarm_os.services.reflection_loop import run_reflection
 
-        async def _reflection_daemon(interval_seconds: float = 600.0):
+        async def _reflection_daemon(interval_seconds: float = 600.0, first_delay: float = 120.0):
+            # Defer the first distillation (an LLM call) out of the startup
+            # window so the backend serves immediately.
+            if first_delay > 0:
+                await asyncio.sleep(first_delay)
             while True:
                 try:
                     await run_reflection()
@@ -212,7 +227,12 @@ async def lifespan(app: FastAPI):
         if _os.environ.get("SWARM_GENETIC_MUTATION", "").strip() == "1":
             from swarm_os.services.genetic_mutation_loop import run_genetic_mutation
 
-            async def _mutation_daemon(interval_seconds: float = 3600.0):
+            async def _mutation_daemon(interval_seconds: float = 3600.0, first_delay: float = 180.0):
+                # Defer the first expensive run (LLM + full-repo DangerRoom sandbox
+                # copy + compile + pytest) out of the startup window so the backend
+                # becomes responsive immediately; the hourly cadence then applies.
+                if first_delay > 0:
+                    await asyncio.sleep(first_delay)
                 while True:
                     try:
                         await run_genetic_mutation()
@@ -236,7 +256,7 @@ async def lifespan(app: FastAPI):
         if _os.environ.get("SWARM_EVOLUTION", "").strip() == "1":
             from swarm_os.services.evolution_daemon import evolution_daemon
 
-            t6 = asyncio.create_task(evolution_daemon())
+            t6 = asyncio.create_task(evolution_daemon(first_delay=60.0))
             bg_tasks.add(t6)
             log.info("Started Outcome-Driven Evolution daemon (SWARM_EVOLUTION=1)")
     except Exception as exc:
