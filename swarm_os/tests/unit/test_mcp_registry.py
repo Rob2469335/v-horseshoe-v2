@@ -1,4 +1,6 @@
+import os
 import pytest
+from pathlib import Path
 from swarm_os.agent_runtime import AgentRuntime
 
 
@@ -7,7 +9,9 @@ async def test_filesystem_allows_repo_relative_read():
     rt = AgentRuntime()
     result = await rt.call_tool("filesystem", {"path": "swarm_os/tool_runtime.py"})
     assert result["ok"] is True
-    assert result["path"].endswith("swarm_os\\tool_runtime.py")
+    # Compare with os.sep so this works on both Windows (\) and POSIX (/).
+    assert Path(result["path"]).name == "tool_runtime.py"
+    assert result["path"].replace(os.sep, "/").endswith("swarm_os/tool_runtime.py")
     assert isinstance(result["content"], str)
     assert len(result["content"]) > 0
 
@@ -15,7 +19,9 @@ async def test_filesystem_allows_repo_relative_read():
 @pytest.mark.anyio
 async def test_filesystem_blocks_path_escape():
     rt = AgentRuntime()
-    result = await rt.call_tool("filesystem", {"path": r"..\..\Windows\win.ini"})
+    # A path that escapes the sandbox root regardless of platform.
+    escape = os.path.join(os.pardir, os.pardir, "should-not-exist.txt")
+    result = await rt.call_tool("filesystem", {"path": escape})
     assert result["ok"] is False
     assert "outside sandbox" in result["error"].lower()
 
