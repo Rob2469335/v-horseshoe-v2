@@ -19,7 +19,7 @@ charset-normalizer==3.4.7
 click==8.1.8
 cmake==4.4.0
 colorama==0.4.6
-cryptography==49.0.0
+cryptography==50.0.0
 ctranslate2==4.8.1
 dill==0.4.1
 distro==1.9.0
