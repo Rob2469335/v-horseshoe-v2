@@ -19,7 +19,12 @@ class MCPRegistry:
             requested_path = Path(params.get("path", ""))
             target_path = (self.root / requested_path).resolve()
 
-            if not str(target_path).startswith(str(self.root)):
+            # Robust sandbox boundary check (avoids the fragile str-prefix
+            # comparison that could be bypassed by sibling paths sharing a
+            # string prefix with the root).
+            try:
+                target_path.relative_to(self.root)
+            except ValueError:
                 return {"ok": False, "error": "Access denied: Path outside sandbox", "path": str(target_path)}
 
             if not target_path.exists():
