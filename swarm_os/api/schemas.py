@@ -58,3 +58,13 @@ class CacheStatusResponse(BaseModel):
     """Response showing cache status."""
     cache_size: int
     cached_keys: List[str]
+
+class CreateApprovalRequest(BaseModel):
+    """Request to create a healing approval request."""
+    component: str
+    action: str
+    reason: str
+
+class ApprovalDecisionRequest(BaseModel):
+    """Request to make a decision on an approval (approve/reject)."""
+    note: Optional[str] = None
