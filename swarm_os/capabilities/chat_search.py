@@ -7,10 +7,11 @@ from swarm_os.events.store import EventStore
 logger = logging.getLogger(__name__)
 
 class ChatSearchHandler:
-    def __init__(self, config: Dict[str, Any] = None):
+    def __init__(self, config: Dict[str, Any] = None, events_root: Path = None):
         self.config = config or {}
-        repo_root = Path(__file__).resolve().parents[2]
-        events_root = repo_root / "data" / "events"
+        if events_root is None:
+            repo_root = Path(__file__).resolve().parents[2]
+            events_root = repo_root / "data" / "events"
         self.store = EventStore(events_root)
         logger.info("Initialized operational ChatSearchHandler with EventStore at %s", self.store.path)
 
