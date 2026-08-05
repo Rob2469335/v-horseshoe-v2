@@ -1,5 +1,4 @@
 from pathlib import Path
-import ast
 
 class DuplicateAnalyzer:
     def __init__(self, root: str):

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict
-import json
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -44,7 +47,8 @@ class HealingMetrics:
         try:
             with open(self._path, 'w', encoding='utf-8') as fh:
                 json.dump({'totals': self.totals, 'events': self.events}, fh)
-        except Exception:
+        except Exception as e:
+            log.warning("Failed to persist healing metrics: %s", e)
             pass
 
     def record(self, *, component: str, action: str, executed: bool, verified: bool, escalated: bool) -> None:
@@ -65,7 +69,8 @@ class HealingMetrics:
         # persist metrics
         try:
             self._save()
-        except Exception:
+        except Exception as e:
+            log.warning("Failed to persist healing metrics: %s", e)
             pass
 
     def snapshot(self) -> Dict[str, Any]:

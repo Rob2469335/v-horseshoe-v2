@@ -10,7 +10,6 @@ Guarded: any parse error degrades to an empty string (agents keep working).
 from __future__ import annotations
 import logging
 import os
-import re
 from functools import lru_cache
 from pathlib import Path
 

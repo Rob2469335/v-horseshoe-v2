@@ -1,9 +1,44 @@
 from __future__ import annotations
+import ipaddress
 import logging, os
 from typing import Any, Dict
+from urllib.parse import urlparse
 import httpx
 
 logger = logging.getLogger(__name__)
+
+# SSRF guard: hosts that web_fetch must never read — the swarm's own loopback
+# services (Qdrant 6333, llama.cpp 8080-8084, backend), private/link-local
+# networks, and cloud-metadata endpoints.
+def _ssrf_check(url: str) -> str | None:
+    """Return a human-readable reason if url is an SSRF target, else None."""
+    try:
+        host = urlparse(url).hostname or ""
+        host = host.strip("[]")
+        # Cloud metadata / reserved link-local
+        if host in ("169.254.169.254", "metadata.google.internal", "instance-data", "metadata"):
+            return f"cloud-metadata host '{host}' is not allowed"
+        try:
+            ip = ipaddress.ip_address(host)
+            if ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+                return f"private/loopback/link-local address '{host}' is not allowed"
+        except ValueError:
+            pass  # hostname — resolve below
+        import socket
+        try:
+            resolved = socket.getaddrinfo(host, None)
+        except socket.gaierror:
+            return None  # unresolvable host — let the fetch fail naturally
+        for family, _, _, _, sockaddr in resolved:
+            try:
+                ip = ipaddress.ip_address(sockaddr[0])
+            except ValueError:
+                continue
+            if ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_reserved:
+                return f"host '{host}' resolves to non-public address {sockaddr[0]}"
+    except Exception:
+        pass
+    return None
 
 # UPGRADE: pooled client (avoids fresh TLS/connection per provider) + SSL verify
 # enabled (was verify=False on every call — a security issue).
@@ -121,8 +156,8 @@ async def web_search_handler(params: Dict[str, Any], trace_hook=None) -> Dict[st
 
 
 async def web_fetch_handler(params: Dict[str, Any], trace_hook=None) -> Dict[str, Any]:
-    """Fetch a single URL and return its readable text content (deep web reading —
-    the analogue of an opencode WebFetch, which search snippets do not provide)."""
+    """Fetch a URL and return clean markdown via Crawl4AI (LLM-optimized extraction).
+    Falls back to plain HTTP+regex stripping if Crawl4AI is unavailable."""
     import re as _re
 
     url = str(params.get("url", "")).strip()
@@ -131,9 +166,40 @@ async def web_fetch_handler(params: Dict[str, Any], trace_hook=None) -> Dict[str
     if not url.lower().startswith(("http://", "https://")):
         url = "https://" + url
 
-    max_chars = int(params.get("max_chars", 20000))
-    client = _get_client()
+    # SECURITY: block SSRF targets — the swarm's own loopback services (Qdrant on
+    # 6333, llama.cpp on 8080-8084, backend), private/link-local networks, and
+    # cloud metadata endpoints. A malicious page/instruction must not make the
+    # agent read internal state through web_fetch.
+    _ssrf = _ssrf_check(url)
+    if _ssrf:
+        return {"ok": False, "error": f"web_fetch blocked: {_ssrf}"}
 
+    max_chars = int(params.get("max_chars", 20000))
+
+    # Crawl4AI: browser-level extraction → clean LLM-friendly markdown
+    try:
+        from crawl4ai import AsyncWebCrawler, CrawlerRunConfig
+        run_cfg = CrawlerRunConfig(
+            page_timeout=15000,    # ms — gives JS-heavy pages time to render
+            wait_until="domcontentloaded",
+            remove_overlay_elements=True,   # dismiss cookie/GDPR popups
+            word_count_threshold=10,        # discard near-empty extractions
+        )
+        async with AsyncWebCrawler(verbose=False) as crawler:
+            result = await crawler.arun(url=url, config=run_cfg)
+        if result and result.markdown and len(result.markdown.strip()) > 50:
+            text = result.markdown.strip()
+            title = result.metadata.get("title", "") if result.metadata else ""
+            if len(text) > max_chars:
+                text = text[:max_chars] + "\n...[FETCH TRUNCATED]..."
+            if trace_hook:
+                trace_hook("web_fetch", {"ok": True, "url": url, "chars": len(text), "engine": "crawl4ai"})
+            return {"ok": True, "url": url, "title": title or _extract_title_from_url(url), "content": text}
+    except Exception as c4a_err:
+        logger.debug("Crawl4AI fetch failed for %s, falling back to HTTP: %s", url, c4a_err)
+
+    # Fallback: plain HTTP + regex HTML stripping
+    client = _get_client()
     try:
         r = await client.get(
             url,
@@ -151,7 +217,6 @@ async def web_fetch_handler(params: Dict[str, Any], trace_hook=None) -> Dict[str
         content_type = r.headers.get("content-type", "")
         text = r.text
 
-        # Plain text / JSON passthrough; HTML stripped to readable text.
         if "html" in content_type.lower():
             text = _re.sub(r"(?is)<script.*?</script>", " ", text)
             text = _re.sub(r"(?is)<style.*?</style>", " ", text)
@@ -175,3 +240,10 @@ def _extract_title(html: str, content_type: str) -> str:
         return ""
     m = _re.search(r"(?is)<title[^>]*>(.*?)</title>", html)
     return _re.sub(r"\s+", " ", m.group(1)).strip() if m else ""
+
+
+def _extract_title_from_url(url: str) -> str:
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    return host.replace("www.", "").replace(".com", "").replace(".org", "").replace(".io", "").replace(".net", "").title()

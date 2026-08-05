@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
-from typing import Optional, Dict, Any
-from .governor_models import FailureRecord, ReflectionRecord, gen_id
+from typing import Optional
+from .governor_models import FailureRecord, ReflectionRecord
+
+log = logging.getLogger(__name__)
 
 
 class Learner:
@@ -36,7 +39,8 @@ class Learner:
         try:
             with open(self.timeline_path, 'w', encoding='utf-8') as fh:
                 json.dump(self._cache, fh, indent=2)
-        except Exception:
+        except Exception as e:
+            log.warning("Failed to persist healing learner state: %s", e)
             pass
 
     def persist_failure(self, failure: FailureRecord) -> str:

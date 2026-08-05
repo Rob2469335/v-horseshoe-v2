@@ -52,7 +52,7 @@ def test_command_registry_parsing(tmp_path: Path):
         call_api=mock_call_api,
         run_prompt=mock_run_prompt,
         get_system_stats=mock_get_system_stats,
-        installed_models=["qwen3.5-9b"]
+        installed_models=["qwen3.5-4b"]
     )
     
     # 1. Non-command prompt passes straight through
@@ -310,17 +310,30 @@ class TestDummyHandler:
     rich.prompt.Prompt.ask = lambda *a, **k: "A dummy test tool"
     rich.prompt.Confirm.ask = lambda *a, **k: True
     
+    # Pre-clean any leftover dummy tool from prior runs or aborted tests
+    sandbox_file = Path(__file__).parent.parent / "swarm_os" / "sandbox_tools" / "test_dummy.py"
+    target_file = Path(__file__).parent.parent / "swarm_os" / "capabilities" / "test_dummy.py"
+    for _path in (sandbox_file, target_file):
+        if _path.exists():
+            try:
+                _path.unlink()
+            except Exception:
+                pass
+
     try:
         registry.handle_line("/tools create test_dummy", ctx)
         
         # Verify the file is created in sandbox_tools
-        sandbox_file = Path(__file__).parent.parent / "swarm_os" / "sandbox_tools" / "test_dummy.py"
         assert sandbox_file.exists()
         
-        # Move to capabilities for testing router
-        target_file = Path(__file__).parent.parent / "swarm_os" / "capabilities" / "test_dummy.py"
+        # Move to capabilities for testing router (handle Windows file existence cleanly)
+        if target_file.exists():
+            try:
+                target_file.unlink()
+            except Exception:
+                pass
         import shutil
-        shutil.move(sandbox_file, target_file)
+        shutil.move(str(sandbox_file), str(target_file))
         
         # Verify capability router dynamically loads it
         from swarm_os.capabilities.capability_router import CapabilityRouter
@@ -333,6 +346,7 @@ class TestDummyHandler:
     finally:
         # Clean up
         import os
+        import sys
         if 'target_file' in locals() and target_file.exists():
             try:
                 os.remove(target_file)
@@ -343,6 +357,7 @@ class TestDummyHandler:
                 os.remove(sandbox_file)
             except Exception:
                 pass
+        sys.modules.pop("swarm_os.capabilities.test_dummy", None)
         rich.prompt.Prompt.ask = original_ask
 
 
@@ -490,7 +505,7 @@ def test_natural_language_intent_routing(tmp_path, monkeypatch):
         call_api=mock_call_api,
         run_prompt=lambda *a: None,
         get_system_stats=lambda: {"cpu": 10.0, "ram_pct": 50.0, "ram_color": "green", "ram_used_gb": 8.0, "ram_total_gb": 16.0},
-        installed_models=["qwen3.5-9b"]
+        installed_models=["qwen3.5-4b"]
     )
     
     import subprocess
@@ -527,6 +542,23 @@ def test_natural_language_intent_routing(tmp_path, monkeypatch):
     assert res is None
     assert any(c[0] == "api" and c[1] == "/generate" for c in calls)
     assert any(c[0] == "api" and c[1] == "/readyz" for c in calls)
+
+
+def test_skill_memory_engine_tolerates_missing_fastembed():
+    """Regression: the /upgrade command chain (SelfImprovementAgent ->
+    SkillMemoryEngine) hard-crashed on `from fastembed import TextEmbedding`
+    because fastembed is not a declared dependency. The import must be tolerant
+    so constructing the engine (and running /upgrade's skill phase) does not
+    raise ModuleNotFoundError — embed() surfaces a clear error instead."""
+    import swarm_os.memory.intelligence.skill_memory_engine as m
+
+    assert hasattr(m, "TextEmbedding")  # either the real class or None
+    engine = m.SkillMemoryEngine()
+    assert engine.embedder is None or m.TextEmbedding is not None
+    if engine.embedder is None:
+        import pytest
+        with pytest.raises(RuntimeError):
+            engine.embed("some pattern")
 
 
 

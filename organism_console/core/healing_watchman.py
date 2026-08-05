@@ -1,10 +1,10 @@
 """Background healing watchman for the CLI.
-
+ 
 Ticks the backend healing loop (FailureDetector -> Governor -> RecoveryEngine)
 on a fixed cadence so infrastructure health is self-healed even when no goal
 loop is running. Only governor-approved modes (auto_execute / sandbox_first)
-trigger an actual recovery; everything else is surfaced as a notification.
-
+trigger an actual recovery; approval_required asks the user via a yes/no prompt.
+ 
 Every executed recovery is finalized back through Governor.finalize() so the
 learner records the true outcome (previously the outcome-learning loop was dead).
 """
@@ -54,6 +54,22 @@ class HealingWatchman:
                 pass
         log.info(message)
 
+    def _ask_approval(self, component: str, reasoning: str) -> bool:
+        """Ask the user for yes/no approval via Rich console prompt."""
+        if self.console is None:
+            return False
+        try:
+            from rich.prompt import Confirm
+            return Confirm.ask(
+                f"[bold yellow]⚕ Self-healing wants to fix [cyan]{component}[/cyan][/bold yellow]\n"
+                f"[dim]{reasoning}[/dim]\n"
+                f"[bold]Approve?[/bold]",
+                default=False,
+                console=self.console,
+            )
+        except Exception:
+            return False
+
     def _tick(self):
         loop = self._get_loop()
         heal_result = loop.tick()
@@ -63,14 +79,16 @@ class HealingWatchman:
         decision = heal_result.get("decision", {})
         mode = decision.get("mode", "unknown")
         component = heal_result.get("component", "unknown")
-        reasoning = decision.get("reasoning", "")
-        self._notify(f"[bold yellow]⚕ Self-healing:[/bold yellow] issue detected in [cyan]{component}[/cyan] (mode: {mode})")
+        reasoning = decision.get("mode_reason", "")
 
-        if mode not in ("auto_execute", "sandbox_first"):
-            if mode == "approval_required":
-                self._notify(f"[bold yellow]🔧 Approval required:[/bold yellow] [{component}] {reasoning}")
-            if mode == "reject":
-                self._notify(f"[bold red]⛔ Rejected by Governor:[/bold red] [{component}] {reasoning}")
+        if mode in ("auto_execute", "sandbox_first"):
+            self._notify(f"[bold yellow]⚕ Self-healing:[/bold yellow] issue detected in [cyan]{component}[/cyan] — auto-recovering...")
+        elif mode == "approval_required":
+            if not self._ask_approval(component, reasoning):
+                self._notify(f"[dim]  ✗ Skipped heal for {component}[/dim]")
+                return
+        else:
+            self._notify(f"[bold red]⛔ Rejected by Governor:[/bold red] [{component}] {reasoning}")
             return
 
         symptom = (heal_result.get("all_signals") or [{}])[0] or {"component": component}
@@ -81,8 +99,6 @@ class HealingWatchman:
             result = {"ok": False, "error": str(exc)}
         if result and result.get("ok"):
             self._notify(f"[bold green]✓ Auto-recovered:[/bold green] {result.get('action')}")
-            # Whole-computer healing learns: persist a grounded reflexion rule so a
-            # recurring system issue injects a [PAST-MISTAKE WARNING] into future runs.
             self._store_system_lesson(component, symptom, result)
         else:
             detail = (result or {}).get("error") or (result or {}).get("reason") or "no recovery result"

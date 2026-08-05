@@ -70,6 +70,6 @@ class SelfImprovementAgent:
         
         elif upgrade["type"] == "forgetting":
             self._execute_forgetting()
-            print(f"[self-improvement] Executed forgetting curve")
+            print("[self-improvement] Executed forgetting curve")
         
         self.upgrade_log.append(upgrade)

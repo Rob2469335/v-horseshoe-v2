@@ -14,7 +14,7 @@ class ModelsHandler:
             "status": "success",
             "supported_roles": ["fast", "reasoning", "coding", "vision", "embedding", "reranker"],
             "primary_vision_models": ["moondream:latest", "moondream:latest"],
-            "default_fast_model": "qwen3.5-9b"
+            "default_fast_model": "qwen3.5-4b"
         }
 
 class ChatSearchRequest(BaseModel):

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import httpx
 import logging
-from typing import List, Optional
+from typing import List
 
 logger = logging.getLogger(__name__)
 
@@ -21,17 +21,26 @@ class EmbeddingService:
 
     async def embed(self, text: str) -> List[float]:
         """Generate embedding for a single text."""
-        try:
-            response = await self.client.post(
-                f"{self.base_url}/v1/embeddings",
-                json={"model": self.model, "input": text}
-            )
-            response.raise_for_status()
-            return response.json()["data"][0]["embedding"]
-        except Exception as e:
-            logger.error(f"Embedding failed: {e}")
-            # Raise error to avoid Qdrant mathematical crash on zero-vector
-            raise RuntimeError(f"Embedding failed: {e}")
+        import asyncio
+        last_exc = None
+        for attempt in range(3):
+            try:
+                response = await self.client.post(
+                    f"{self.base_url}/v1/embeddings",
+                    json={"model": self.model, "input": text}
+                )
+                response.raise_for_status()
+                return response.json()["data"][0]["embedding"]
+            except Exception as e:
+                last_exc = e
+                wait = 2 ** attempt
+                if attempt < 2:
+                    logger.debug("Embedding service not ready (attempt %d/3): %s — retrying in %ds", attempt + 1, e, wait)
+                    await asyncio.sleep(wait)
+        
+        logger.error(f"Embedding failed after 3 attempts: {last_exc}")
+        # Raise error to avoid Qdrant mathematical crash on zero-vector
+        raise RuntimeError(f"Embedding failed: {last_exc}")
 
     async def embed_batch(self, texts: List[str]) -> List[List[float]]:
         """Generate embeddings for multiple texts."""

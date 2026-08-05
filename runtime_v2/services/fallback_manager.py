@@ -16,7 +16,7 @@ log = logging.getLogger(__name__)
 _CACHE_TTL = 1800
 _last_fetch_time = 0
 _cached_fallbacks = []
-_cached_stats = {"openrouter": 0, "groq": 0, "gemini": 0, "nvidia": 0, "llama": 0, "ollama": 0, "total": 0}
+_cached_stats = {"deepseek_direct": 0, "openrouter": 0, "groq": 0, "gemini": 0, "nvidia": 0, "llama": 0, "ollama": 0, "total": 0}
 _refresh_lock = asyncio.Lock()
 
 # UPGRADE: pooled httpx client reused across all provider probes instead of a
@@ -37,7 +37,6 @@ def get_http_client() -> httpx.AsyncClient:
 # Outcome-driven cooldowns (upgrade: skip a failing model BEFORE the call, not after).
 # model_name -> {"failures": int, "until": float, "last_error": str}
 _cooldowns: dict[str, dict] = {}
-_cooldown_lock = asyncio.Lock()
 _cooldown_sync_lock = threading.Lock()
 _COOLDOWN_BASE_S = 30.0
 _MAX_COOLDOWN_S = 600.0
@@ -49,8 +48,8 @@ _MAX_COOLDOWN_S = 600.0
 # retry transient failures — timeouts/429/5xx; never 400/401/402/403/404).
 _PERMANENT_ERROR_MARKERS = (
     "402", "payment", "insufficient credits", "no credits", "billing",
-    "requires more credits", "401", "403", "404", "invalid api key",
-    "auth", "forbidden", "not found",
+    "requires more credits", "insufficient balance", "401", "403", "404",
+    "invalid api key", "auth", "forbidden", "not found",
 )
 
 
@@ -62,12 +61,19 @@ def is_permanent_error(error: str) -> bool:
     return any(marker in err for marker in _PERMANENT_ERROR_MARKERS)
 
 
+def _cooldown_key(model: str) -> str:
+    """Cooldown key = the FULL model id. (Previously we took the suffix after the
+    last ':' so every openrouter/*:free model keyed to 'free' and shared one
+    cooldown — one failure pinned ALL free models; one success cleared them all.)"""
+    return (model or "").strip()
+
+
 def record_model_failure(model: str, error: str = "", permanent: bool | None = None) -> None:
     """Called when a model/providers generation fails (tool decision error, JSON repair,
     circuit-breaker trip). Marks the model down for an escalating cooldown window.
     Backoff uses exponential growth + jitter so synchronized failures (thundering
     herd) don't all retry on the same schedule (self-healing best practice)."""
-    key = (model or "").split(":", 1)[-1]
+    key = _cooldown_key(model)
     if not key:
         return
     now = time.time()
@@ -95,13 +101,13 @@ def record_model_failure(model: str, error: str = "", permanent: bool | None = N
 def is_model_cooled_down(model: str) -> bool:
     """Public check — used by the router so routing decisions skip a provider that
     is already in a cooldown window (prevents re-selecting a known-failing model)."""
-    key = (model or "").split(":", 1)[-1]
+    key = _cooldown_key(model)
     return _is_cooldown_active(key)
 
 
 def record_model_success(model: str) -> None:
     """Called on a clean generation — clears any cooldown so the model can be used again."""
-    key = (model or "").split(":", 1)[-1]
+    key = _cooldown_key(model)
     if not key:
         return
     with _cooldowns_lock_sync():
@@ -135,6 +141,11 @@ async def _fetch_openrouter_models() -> list[dict]:
             m_id = m.get("id", "")
             if any(forbidden in m_id.lower() for forbidden in ("claude", "anthropic", "sonnet", "opus", "gpt-4")):
                 continue
+            # FLASH-ONLY policy: DeepSeek models are allowed only as v4-flash
+            # variants. deepseek-v4-pro is 3x the flash price ($0.435/$0.87 vs
+            # $0.14/$0.28) and legacy deepseek-chat/r1 aliases retired 2026-07-24.
+            if "deepseek" in m_id.lower() and "flash" not in m_id.lower():
+                continue
             if (pricing.get("prompt") == "0" and pricing.get("completion") == "0") or ":free" in m_id.lower() or "deepseek" in m_id.lower():
                 models.append({
                     "model": f"openrouter/{m['id']}",
@@ -147,14 +158,14 @@ async def _fetch_openrouter_models() -> list[dict]:
     if not models:
         models = [
             {
-                "model": "openrouter/deepseek/deepseek-r1:free",
-                "context_length": 65536,
+                "model": "openrouter/deepseek/deepseek-v4-flash-0731",
+                "context_length": 1048576,
                 "pricing": "Free",
                 "provider": "OpenRouter",
             },
             {
-                "model": "openrouter/deepseek/deepseek-chat:free",
-                "context_length": 65536,
+                "model": "openrouter/deepseek/deepseek-v4-flash",
+                "context_length": 1048576,
                 "pricing": "Free",
                 "provider": "OpenRouter",
             },
@@ -212,6 +223,10 @@ async def _fetch_nvidia_models() -> list[dict]:
         data = resp.json().get("data", [])
         for m in data:
             m_id = m.get("id", "")
+            # FLASH-ONLY policy (same as OpenRouter): keep deepseek-v4-flash, drop
+            # deepseek-v4-pro ($0.435/$0.87 — 3x flash) and coder variants.
+            if "deepseek" in m_id.lower() and "flash" not in m_id.lower():
+                continue
             models.append({
                 "model": f"nvidia_nim/{m_id}",
                 "context_length": 8192,
@@ -247,6 +262,112 @@ async def _fetch_gemini_models() -> list[dict]:
         log.warning(f"Failed to fetch Gemini models: {e}")
     return models
 
+_ZEN_FREE_BASE = "https://opencode.ai/zen/v1"      # OpenCode Zen FREE tier
+_GO_PAID_BASE = "https://opencode.ai/zen/go/v1"    # OpenCode Go PAID tier
+
+def _is_local_model(model_id: str) -> bool:
+    """True only for local llama.cpp models served via openai/{local_name}."""
+    if model_id.startswith("openai/"):
+        name = model_id.replace("openai/", "").lower()
+        if name.startswith("gpt") or name.startswith("o1") or name.startswith("o3") or "deepseek" in name:
+            return False
+        if name.startswith("zen/"):
+            return False
+        return True
+    return False
+
+
+def _get_opencode_fallback() -> list[dict]:
+    """OpenCode cloud tiers, FREE first then PAID, both deepseek-v4-flash only.
+
+    The user funded the OpenCode Go (paid) account, so the chain leads with the
+    genuinely $0 options then the paid flash — and ONLY v4-flash (no GLM/Kimi/
+    Qwen/pro):
+      1. OpenCode Zen FREE deepseek-v4-flash ($0, https://opencode.ai/zen/v1)
+      2. OpenCode Go PAID deepseek-v4-flash  (https://opencode.ai/zen/go/v1)
+    `openai/zen/...` routes to the free Zen base; `openai/deepseek-v4-flash`
+    routes to the paid Go base via OPENAI_API_BASE. No-op when OPENAI_API_KEY
+    is absent.
+    """
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return []
+    api_base = os.getenv("OPENAI_API_BASE", _GO_PAID_BASE)
+    if "opencode" not in api_base.lower() and "openai" not in api_base.lower():
+        return []
+    return [
+        # 1) OpenCode Zen FREE deepseek-v4-flash — $0.
+        {"model": "openai/zen/deepseek-v4-flash", "context_length": 1048576, "pricing": "Free", "provider": "OpenCode Zen"},
+        # 2) OpenCode Go PAID deepseek-v4-flash — the funded workhorse.
+        {"model": "openai/deepseek-v4-flash", "context_length": 1048576, "pricing": "Paid (Go)", "provider": "OpenCode Go"},
+    ]
+
+def _get_deepseek_direct_fallback() -> list[dict]:
+    """DeepSeek V4 Flash direct (first-party api.deepseek.com) — PRIMARY cloud
+    model when DEEPSEEK_API_KEY is set. Cheapest path available: $0.14/M input
+    (miss), $0.0028/M (cache hit, ~98% cheaper), $0.28/M output. litellm's
+    native `deepseek/` provider routes to api.deepseek.com using DEEPSEEK_API_KEY.
+    Returns [] (no-op) when the key is absent so the swarm keeps its current
+    OpenRouter/free-tier chain."""
+    api_key = os.getenv("DEEPSEEK_API_KEY")
+    if not api_key:
+        return []
+    return [{
+        "model": "deepseek/deepseek-v4-flash",
+        "context_length": 65536,
+        "pricing": "Paid (cheap)",
+        "provider": "DeepSeek Direct",
+    }]
+
+def _get_deepseek_openrouter_fallback() -> list[dict]:
+    """OpenRouter-hosted DeepSeek V4 Flash — guaranteed DeepSeek fallback even if
+    the live model catalog fetch fails. OpenRouter routes DeepSeek across ~22
+    upstream providers, so it is the most-available single DeepSeek endpoint.
+    Includes the 0731 build at $0.09/$0.18/M (36% cheaper than direct) plus the
+    base flash at $0.14/$0.28. No-op when OPENROUTER_API_KEY is absent."""
+    if not os.getenv("OPENROUTER_API_KEY"):
+        return []
+    return [
+        {
+            "model": "openrouter/deepseek/deepseek-v4-flash-0731",
+            "context_length": 1048576,
+            "pricing": "Paid (cheap)",
+            "provider": "OpenRouter (DeepSeek)",
+        },
+        {
+            "model": "openrouter/deepseek/deepseek-v4-flash",
+            "context_length": 1048576,
+            "pricing": "Paid (cheap)",
+            "provider": "OpenRouter (DeepSeek)",
+        },
+    ]
+
+def _get_ling_flash_fallback() -> list[dict]:
+    """OpenRouter-hosted InclusionAI Ling — the ultra-cheap worker tier.
+
+    Ling-2.6-flash (104B MoE / 7.4B active / 256K ctx) is $0.01 input / $0.03
+    output per 1M tokens — roughly 14x cheaper than DeepSeek V4 Flash input and
+    ~6x cheaper on output — ideal for high-volume routing/classification fan-out.
+    Also includes ling-3.0-flash:free ($0) as a no-cost lead-in. Guaranteed even
+    if the live catalog fetch fails (the catalog filter only keeps $0 models).
+    No-op when OPENROUTER_API_KEY is absent."""
+    if not os.getenv("OPENROUTER_API_KEY"):
+        return []
+    return [
+        {
+            "model": "openrouter/inclusionai/ling-3.0-flash:free",
+            "context_length": 262144,
+            "pricing": "Free",
+            "provider": "OpenRouter (Ling)",
+        },
+        {
+            "model": "openrouter/inclusionai/ling-2.6-flash",
+            "context_length": 262144,
+            "pricing": "Paid (ultra-cheap)",
+            "provider": "OpenRouter (Ling)",
+        },
+    ]
+
 async def _fetch_llama_models() -> list[dict]:
     models = []
     try:
@@ -278,85 +399,123 @@ async def refresh_fallbacks_if_needed(mode: str = "auto"):
             
         log.debug("Refreshing fallback arrays (30-min TTL expired)...")
 
-    if mode == "local_only":
-        results = await asyncio.gather(
-            _fetch_llama_models(),
-            return_exceptions=True
-        )
-        results = [[], [], [], [], results[0]]
-    else:
-        results = await asyncio.gather(
-            _fetch_openrouter_models(),
-            _fetch_groq_models(),
-            _fetch_nvidia_models(),
-            _fetch_gemini_models(),
-            _fetch_llama_models(),
-            return_exceptions=True
-        )
+        if mode == "local_only":
+            results = await asyncio.gather(
+                _fetch_llama_models(),
+                return_exceptions=True
+            )
+            results = [[], [], [], [], results[0]]
+        else:
+            results = await asyncio.gather(
+                _fetch_openrouter_models(),
+                _fetch_groq_models(),
+                _fetch_nvidia_models(),
+                _fetch_gemini_models(),
+                _fetch_llama_models(),
+                return_exceptions=True
+            )
 
-    openrouter_models = results[0] if isinstance(results[0], list) else []
-    groq_models = results[1] if isinstance(results[1], list) else []
-    nvidia_models = results[2] if isinstance(results[2], list) else []
-    gemini_models = results[3] if isinstance(results[3], list) else []
-    llama_models = results[4] if isinstance(results[4], list) else []
+        openrouter_models = results[0] if isinstance(results[0], list) else []
+        groq_models = results[1] if isinstance(results[1], list) else []
+        nvidia_models = results[2] if isinstance(results[2], list) else []
+        gemini_models = results[3] if isinstance(results[3], list) else []
+        llama_models = results[4] if isinstance(results[4], list) else []
 
-    groq_models.sort(key=lambda x: ("70b" in x["model"].lower(), "versatile" in x["model"].lower()))
-    nvidia_models.sort(key=lambda x: ("70b" in x["model"].lower(), "nemotron" in x["model"].lower()))
-    gemini_models.sort(key=lambda x: ("pro" in x["model"].lower(),))
-    openrouter_models.sort(key=lambda x: ("70b" in x["model"].lower(),))
+        groq_models.sort(key=lambda x: ("70b" in x["model"].lower(), "versatile" in x["model"].lower()))
+        # NVIDIA free tier hosts deepseek-v4-flash — prioritize it (and any deepseek
+        # model) so the cheapest-and-fast analysis model leads the NVIDIA batch.
+        nvidia_models.sort(key=lambda x: (
+            "deepseek" not in x["model"].lower(),       # deepseek models first
+            "flash" not in x["model"].lower(),          # flash before pro/coder
+            "70b" in x["model"].lower(),
+        ))
+        gemini_models.sort(key=lambda x: ("pro" in x["model"].lower(),))
+        # Prefer DeepSeek models in the fetched OpenRouter batch (they are the cheap
+        # sanctioned analysis models); remaining free/cheap models follow.
+        openrouter_models.sort(key=lambda x: (
+            "deepseek" not in x["model"].lower(),      # deepseek models first
+            "70b" in x["model"].lower(),
+        ))
 
-    valid_llama = []
-    for o in llama_models:
-        name = o["model"].lower().split("/", 1)[-1]
-        if "embed" in name or "rerank" in name or "vl" in name or "moondream" in name:
-            continue
-        valid_llama.append(o)
+        valid_llama = []
+        for o in llama_models:
+            name = o["model"].lower().split("/", 1)[-1]
+            if "embed" in name or "rerank" in name or "vl" in name or "moondream" in name:
+                continue
+            valid_llama.append(o)
 
-    valid_llama.sort(key=lambda x: ("tool" in x["model"].lower(), "coder" in x["model"].lower()))
+        valid_llama.sort(key=lambda x: ("tool" in x["model"].lower(), "coder" in x["model"].lower()))
 
-    all_fallbacks = []
-    all_fallbacks.extend(valid_llama[:3])
-    all_fallbacks.extend(groq_models[:2])
-    all_fallbacks.extend(nvidia_models[:2])
-    all_fallbacks.extend(gemini_models[:2])
-    all_fallbacks.extend(openrouter_models[:5])
-    _cached_fallbacks = all_fallbacks
-    _cached_stats = {
-        "openrouter": len(openrouter_models),
-        "groq": len(groq_models),
-        "gemini": len(gemini_models),
-        "nvidia": len(nvidia_models),
-        "llama.cpp": len(valid_llama),
-        "total": len(all_fallbacks),
-    }
-    _last_fetch_time = current_time
+        all_fallbacks = []
+        # Cloud chain order (researched 2026-08): the three deepseek-v4-flash options
+        # lead INLINE (FREE first, then the funded OpenCode Go account), then
+        # free/cheap backups, then OpenRouter, and paid DeepSeek direct LAST.
+        #
+        # 1) NVIDIA free NIM v4-flash — $0 free tier.
+        all_fallbacks.extend(nvidia_models[:1])
+        # 2) OpenCode Zen FREE deepseek-v4-flash ($0) then OpenCode Go PAID
+        #    deepseek-v4-flash (funded account), then the rest of the Go models.
+        _opencode_models = _get_opencode_fallback()
+        if _opencode_models:
+            all_fallbacks.extend(_opencode_models)
+        # 3) Groq / Gemini free tiers (non-DeepSeek backup clouds).
+        all_fallbacks.extend(groq_models[:2])
+        all_fallbacks.extend(gemini_models[:1])
+        # 4) Ling ultra-cheap worker tier ($0.01/$0.03, plus free ling-3.0 lead-in)
+        #    for high-volume routing/classification fan-out.
+        _ling = _get_ling_flash_fallback()
+        if _ling:
+            all_fallbacks.extend(_ling)
+        # 5) OpenRouter — free-credit last resort (OpenRouter-hosted DeepSeek first,
+        #    then other cheap/free models).
+        _deepseek_or = _get_deepseek_openrouter_fallback()
+        if _deepseek_or:
+            all_fallbacks.extend(_deepseek_or)
+        all_fallbacks.extend(openrouter_models[:3])
+        # 6) DeepSeek DIRECT (paid api.deepseek.com) — LAST resort.
+        _deepseek_direct = _get_deepseek_direct_fallback()
+        if _deepseek_direct:
+            all_fallbacks.extend(_deepseek_direct)
+        all_fallbacks.extend(valid_llama[:2])
+
+        # Dedup by model id (the guaranteed OpenRouter DeepSeek entries can also
+        # appear in the fetched openrouter_models batch).
+        seen = set()
+        deduped = []
+        for f in all_fallbacks:
+            mid = f.get("model", "")
+            if mid in seen:
+                continue
+            seen.add(mid)
+            deduped.append(f)
+        all_fallbacks = deduped
+        _cached_fallbacks = all_fallbacks
+        _cached_stats = {
+            "deepseek_direct": len(_deepseek_direct),
+            "openrouter": len(openrouter_models),
+            "groq": len(groq_models),
+            "gemini": len(gemini_models),
+            "nvidia": len(nvidia_models),
+            "llama.cpp": len(valid_llama),
+            "total": len(all_fallbacks),
+        }
+        _last_fetch_time = current_time
+
 
 async def get_live_fallbacks(mode: str = "auto") -> list[dict]:
-    await refresh_fallbacks_if_needed(mode)
+    """Return the live fallback chain, refreshing the cache if stale.
 
-    # BUG/UPGRADE: skip models currently in a cooldown window (recorded via
-    # record_model_failure on JSON-parse errors, timeouts, or breaker trips).
-    def _not_cooled(f: dict) -> bool:
-        key = str(f.get("model", "")).split(":", 1)[-1]
-        return not _is_cooldown_active(key)
-
-    cached = [f for f in _cached_fallbacks if _not_cooled(f)]
-
-    local_models = [f for f in cached if str(f.get("model", "")).startswith("openai/")]
-    cloud_models = [f for f in cached if not str(f.get("model", "")).startswith("openai/")]
-
-    if mode == "local_only":
-        return local_models
-
-    if mode == "cloud_allowed":
-        return cloud_models + local_models
-
-    # Auto mode: prioritize local
-    return local_models + cloud_models
-
-def get_fallback_stats() -> dict:
-    return _cached_stats
-
-
-
+    Filters out models currently in cooldown (failed recently) so the caller
+    never retried a known-bad model. Callers import this — it was missing,
+    causing `ImportError: cannot import name 'get_live_fallbacks'` at every
+    tool-decision site (stream_runner, _llm_client, agents, chat_service).
+    """
+    await refresh_fallbacks_if_needed(mode=mode)
+    live: list[dict] = []
+    for f in _cached_fallbacks:
+        mid = f.get("model", "")
+        if mid and is_model_cooled_down(mid):
+            continue
+        live.append(f)
+    return live
 

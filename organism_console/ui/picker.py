@@ -140,13 +140,6 @@ class ModelPickerApp(App):
         except Exception:
             self.agent_models = {}
 
-        local_model_names = []
-        try:
-            r = requests.get("http://127.0.0.1:8080/v1/models", headers={"Authorization": "Bearer llama"}, timeout=15, verify=settings.ssl_verify)
-            if r.status_code == 200:
-                local_model_names = [m.get("id") or m.get("model") or m.get("name") for m in r.json().get("data", [])]
-        except Exception:
-            local_model_names = []
 
         self.models = []
         try:
@@ -320,7 +313,7 @@ class ModelPickerApp(App):
                     self.ctx.state.reset_router()
                 self.ctx.console.print(f"[bold green]✓ LIVE OVERRIDE ACTIVE[/bold green] | {a_id.upper()} → [cyan]{clean_name}[/cyan] [dim]({backend})[/dim]")
             else:
-                self.ctx.console.print(f"[bold red]✗ Failed to sync override to backend.[/bold red]")
+                self.ctx.console.print("[bold red]✗ Failed to sync override to backend.[/bold red]")
         except Exception as e:
             self.ctx.console.print(f"[bold red]✗ Failed to sync override to backend:[/bold red] {e}")
 

@@ -1,4 +1,3 @@
-from organism_console.skills.skill_repository import Skill
 from swarm_os.memory.intelligence.skill_memory_engine import SkillMemoryEngine
 from datetime import datetime
 

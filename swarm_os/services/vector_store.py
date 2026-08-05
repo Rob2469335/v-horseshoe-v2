@@ -30,7 +30,10 @@ class VectorStore:
             logger.info("Initialized in-memory AsyncQdrantClient")
         else:
             settings = get_settings()
-            self.client = AsyncQdrantClient(url=settings.qdrant_url)
+            # BUG FIX: Missing timeout caused HTTP 408 errors on startup when Qdrant
+            # wasn't fully ready, producing 'Error ensuring collection: Unexpected
+            # Response: 408 (Request Timeout)' in every startup log.
+            self.client = AsyncQdrantClient(url=settings.qdrant_url, timeout=10.0)
             logger.info("Connected to local Qdrant instance")
 
         self.collection_name = collection_name
@@ -50,55 +53,68 @@ class VectorStore:
             self._ensured = True
 
     async def _ensure_collection(self, vector_size: int = 768):
-        """Create collection if it doesn't exist."""
-        try:
-            if not await self.client.collection_exists(self.collection_name):
-                await self.client.create_collection(
-                    collection_name=self.collection_name,
-                    vectors_config=models.VectorParams(
-                        size=vector_size,
-                        distance=models.Distance.COSINE
-                    ),
-                )
-                try:
-                    await self.client.create_payload_index(
+        """Create collection if it doesn't exist. Retries with exponential backoff
+        to handle the startup race where Qdrant may not be ready immediately."""
+        # BUG FIX: No retry logic meant a Qdrant startup race (408/connection refused)
+        # silently gave up. Now retries up to 3 times with exponential backoff.
+        for attempt in range(3):
+            try:
+                if not await self.client.collection_exists(self.collection_name):
+                    await self.client.create_collection(
                         collection_name=self.collection_name,
-                        field_name="tasks",
-                        field_schema=models.PayloadSchemaType.KEYWORD,
+                        vectors_config=models.VectorParams(
+                            size=vector_size,
+                            distance=models.Distance.COSINE
+                        ),
                     )
-                    await self.client.create_payload_index(
-                        collection_name=self.collection_name,
-                        field_name="types",
-                        field_schema=models.PayloadSchemaType.KEYWORD,
+                    try:
+                        await self.client.create_payload_index(
+                            collection_name=self.collection_name,
+                            field_name="tasks",
+                            field_schema=models.PayloadSchemaType.KEYWORD,
+                        )
+                        await self.client.create_payload_index(
+                            collection_name=self.collection_name,
+                            field_name="types",
+                            field_schema=models.PayloadSchemaType.KEYWORD,
+                        )
+                        await self.client.create_payload_index(
+                            collection_name=self.collection_name,
+                            field_name="models",
+                            field_schema=models.PayloadSchemaType.KEYWORD,
+                        )
+                        await self.client.create_payload_index(
+                            collection_name=self.collection_name,
+                            field_name="consolidated",
+                            field_schema=models.PayloadSchemaType.BOOL,
+                        )
+                        # UPGRADE: index the fields memory_core filters on (category shards,
+                        # timestamp decay) so filtered queries don't do full payload scans.
+                        await self.client.create_payload_index(
+                            collection_name=self.collection_name,
+                            field_name="category",
+                            field_schema=models.PayloadSchemaType.KEYWORD,
+                        )
+                        await self.client.create_payload_index(
+                            collection_name=self.collection_name,
+                            field_name="timestamp",
+                            field_schema=models.PayloadSchemaType.FLOAT,
+                        )
+                    except Exception as e:
+                        logger.warning("Could not create payload indexes: %s", e)
+
+                    logger.info("Created collection: %s", self.collection_name)
+                return  # success
+            except Exception as e:
+                wait = 2 ** attempt  # 1s, 2s, 4s
+                if attempt < 2:
+                    logger.warning(
+                        "Qdrant not ready (attempt %d/3) for collection %s: %s — retrying in %ds",
+                        attempt + 1, self.collection_name, e, wait,
                     )
-                    await self.client.create_payload_index(
-                        collection_name=self.collection_name,
-                        field_name="models",
-                        field_schema=models.PayloadSchemaType.KEYWORD,
-                    )
-                    await self.client.create_payload_index(
-                        collection_name=self.collection_name,
-                        field_name="consolidated",
-                        field_schema=models.PayloadSchemaType.BOOL,
-                    )
-                    # UPGRADE: index the fields memory_core filters on (category shards,
-                    # timestamp decay) so filtered queries don't do full payload scans.
-                    await self.client.create_payload_index(
-                        collection_name=self.collection_name,
-                        field_name="category",
-                        field_schema=models.PayloadSchemaType.KEYWORD,
-                    )
-                    await self.client.create_payload_index(
-                        collection_name=self.collection_name,
-                        field_name="timestamp",
-                        field_schema=models.PayloadSchemaType.FLOAT,
-                    )
-                except Exception as e:
-                    logger.warning("Could not create payload indexes: %s", e)
-                    
-                logger.info(f"Created collection: {self.collection_name}")
-        except Exception as e:
-            logger.error(f"Error ensuring collection: {e}")
+                    await asyncio.sleep(wait)
+                else:
+                    logger.error("Error ensuring collection %s after 3 attempts: %s", self.collection_name, e)
 
     async def upsert(
         self,
@@ -196,7 +212,10 @@ class VectorStore:
         try:
             info = await self.client.get_collection_info(self.collection_name)
             return info.points_count or 0
-        except Exception:
+        except Exception as e:
+            # BUG FIX: was silently swallowing all exceptions; now logged at debug
+            # so 408 timeouts on /status are traceable without flooding warning logs.
+            logger.debug("Qdrant count failed for %s: %s", self.collection_name, e)
             return 0
 
 

@@ -8,8 +8,6 @@ from __future__ import annotations
 
 import logging
 import time
-import json
-import random
 from typing import Any, Callable, Dict, List
 import httpx
 import os
@@ -25,7 +23,7 @@ def _safe_attr(obj, name: str, default):
 
 def _safe_model(genome) -> str:
     value = getattr(genome, "model", None)
-    return value if isinstance(value, str) and value.strip() else "qwen3.5-9b"
+    return value if isinstance(value, str) and value.strip() else "qwen3.5-4b"
 
 def _safe_temperature(genome) -> float:
     return float(getattr(genome, "actual_temperature", 0.2))
@@ -103,21 +101,6 @@ TOOL_SCHEMAS: Dict[str, dict] = {
                     },
                 },
                 "required": ["query"],
-            },
-        },
-    },
-    "code_exec": {
-        "type": "function",
-        "function": {
-            "name": "code_exec",
-            "description": "Extract, validate, and optionally run a code block",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "language": {"type": "string"},
-                    "code":     {"type": "string"},
-                },
-                "required": ["language", "code"],
             },
         },
     },

@@ -89,15 +89,15 @@ if ($env:SWARM_SPEC_DECODE -ne "0") {
 
 # Local generation model (DEFAULT): the unsloth MTP 4B (UD-Q4_K_XL) on the iGPU
 # (-ngl 99) - ~21 t/s (tool-decision) with SWARM_SPEC_DECODE=1 (ngram-mod default),
-# or ~6.4 t/s plain. The qwen3.5-4b,qwen3.5-9b alias keeps the runtime unchanged.
+# or ~6.4 t/s plain. Served under the honest alias "qwen3.5-4b".
 # Override with $env:SWARM_LOCAL_MODEL:
 #   - "qwen3.5-9b"     : plain 9B Q4_K_M, CPU-native (-ngl 0), ~5.5-6.0 t/s - quality
 #                        fallback for cloud-offline periods (9B MTP is a dud: +21%,
 #                        50% acceptance - see AGENTS.md)
-#   - "qwen3.5-4b"     : plain 4B Q4_K_M on the iGPU (backward compat)
-#   - "qwen3.5-4b-mtp" : MTP 4B (same as default; backward compat)
+#   - "qwen3.5-4b"     : plain 4B Q4_K_M on the iGPU (same alias)
+#   - "qwen3.5-4b-mtp" : MTP 4B (same as default)
 $genModel = "C:\Users\rober\models\Qwen3.5-4B-UD-Q4_K_XL.gguf"
-$genAlias = "qwen3.5-4b,qwen3.5-9b"
+$genAlias = "qwen3.5-4b"
 $genNgl = "99"
 if ($env:SWARM_LOCAL_MODEL -eq "qwen3.5-9b") {
     $genModel = ".\models\Qwen3.5-9B-Q4_K_M.gguf"
@@ -106,12 +106,12 @@ if ($env:SWARM_LOCAL_MODEL -eq "qwen3.5-9b") {
 }
 if ($env:SWARM_LOCAL_MODEL -eq "qwen3.5-4b") {
     $genModel = "C:\Users\rober\models\Qwen3.5-4B-Q4_K_M.gguf"
-    $genAlias = "qwen3.5-4b,qwen3.5-9b"
+    $genAlias = "qwen3.5-4b"
     $genNgl = "99"
 }
 if ($env:SWARM_LOCAL_MODEL -eq "qwen3.5-4b-mtp") {
     $genModel = "C:\Users\rober\models\Qwen3.5-4B-UD-Q4_K_XL.gguf"
-    $genAlias = "qwen3.5-4b,qwen3.5-9b"
+    $genAlias = "qwen3.5-4b"
     $genNgl = "99"
 }
 $llamaGenJob = Start-Job -ScriptBlock { param($r, $spec, $m, $a, $ngl); Set-Location $r; & .\bin\llama.exe serve -m $m --alias $a -c 16384 -ctk q8_0 -ctv q8_0 -fa on -t 2 -tb 4 -b 2048 -ub 512 -np 1 --timeout 300 --cache-reuse 1024 --api-key "llama" --cors-origins "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000" -ngl $ngl --port 8080 @spec 2>&1 } -ArgumentList $root, $specArgs, $genModel, $genAlias, $genNgl

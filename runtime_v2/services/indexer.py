@@ -1,11 +1,9 @@
-import os
 import ast
-import json
 import uuid
 import warnings
 import requests
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Optional
 
 QDRANT_URL = "http://127.0.0.1:6333"
 LLAMA_URL = "http://127.0.0.1:8081"
@@ -111,7 +109,7 @@ def extract_chunks(file_path: Path) -> List[Dict[str, str]]:
             if chunks:
                 return chunks
         raise ValueError("Not parsed as Python")
-    except Exception as e:
+    except Exception:
         # Fallback to plain file content if not python or unparseable
         content = read_text_auto(file_path)
         if len(content.strip()) > 0:

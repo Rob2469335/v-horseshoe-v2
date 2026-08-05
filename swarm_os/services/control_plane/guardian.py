@@ -1,4 +1,3 @@
-import os
 from .state import StateManager
 
 class Guardian:

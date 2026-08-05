@@ -1,10 +1,9 @@
 import json
 import httpx
 from datetime import datetime
-from swarm_os.upwork.learning_engine_qdrant import search_similar
 
 LLAMA_URL = "http://127.0.0.1:8080/v1/chat/completions"
-MODEL = "qwen3.5-9b"
+MODEL = "qwen3.5-4b"
 
 # UPGRADE: pooled client reused across all 6 request paths (avoids a fresh
 # TLS/DNS handshake + connection per proposal/estimate/scope/invoice request).
@@ -26,8 +25,19 @@ async def run_upwork_task(task_type: str, user_input: str):
     - queries local Llama LLM with structured prompts
     - returns structured output matching front-end expectations
     """
-    memory = search_similar([0.0]*768, limit=5)  # placeholder embedding hook
-    memory_count = len(memory)
+    # BUG FIX: was `search_similar([0.0]*768, limit=5)` — a zero-vector embedding
+    # query that returned garbage "matches" purely to populate a count. The
+    # `memory_used` field is a diagnostic count, not a retrieval feature, so report
+    # the number of stored memories via a real collection count (fails open to 0 —
+    # never raises, never blocks the proposal generation).
+    memory_count = 0
+    try:
+        from swarm_os.upwork.learning_engine_qdrant import COLLECTION, client
+        if hasattr(client, "count"):
+            _count = client.count(collection_name=COLLECTION, exact=True)
+            memory_count = int(getattr(_count, "count", 0) or 0)
+    except Exception:
+        memory_count = 0
 
     try:
         if task_type == "propose":

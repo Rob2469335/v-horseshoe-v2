@@ -1,6 +1,6 @@
 import pytest
 from swarm_os.tool_runtime import CapabilityToolExecutor
-from swarm_os.capabilities.models import ChatSearchRequest, UpworkAnalysisRequest, VSCodeAutomationRequest
+from swarm_os.capabilities.models import ChatSearchRequest
 
 pytestmark = pytest.mark.anyio
 

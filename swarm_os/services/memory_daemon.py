@@ -15,6 +15,9 @@ class MemoryDaemon:
     async def start(self) -> None:
         """Memory Manager Daemon that actively synthesizes core memory blocks and pages out to Archival Qdrant."""
         try:
+            # BUG FIX: Wait for Qdrant and Embedding services to fully boot before 
+            # starting the first consolidation/graph_rag pass.
+            await asyncio.sleep(15.0)
             while True:
                 try:
                     # Page out memory

@@ -12,4 +12,5 @@ __all__ = [
     "renderer",
     "token_tracker",
     "speech",
+    "__version__",
 ]

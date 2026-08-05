@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import uuid
-import json
 from typing import AsyncGenerator
 from ..core.message_bus import global_bus, Event
 
@@ -29,7 +28,7 @@ class DecoupledSupervisor:
             
             # Simple Tool Parser logic (delegated to a separate parser normally)
             if "<tool_call" in response or '"tool"' in response:
-                log.info(f"[Supervisor] Intercepted tool call, dispatching ToolWorker...")
+                log.info("[Supervisor] Intercepted tool call, dispatching ToolWorker...")
                 # In a real impl, parse the exact tool name and params
                 await self.bus.publish(Event(
                     topic="ToolCallRequested",
@@ -52,7 +51,7 @@ class DecoupledSupervisor:
             # Supervisor automatically requests next generation step
             await self.bus.publish(Event(
                 topic="GenerationRequested",
-                payload={"model": "qwen3.5-9b", "messages": [{"role": "user", "content": f"Observation: {obs}"}]},
+                payload={"model": "qwen3.5-4b", "messages": [{"role": "user", "content": f"Observation: {obs}"}]},
                 correlation_id=trace_id
             ))
 

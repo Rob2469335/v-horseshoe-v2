@@ -66,11 +66,11 @@ async def test_token_budget_exceeded():
     orchestrator.token_manager._budget = 500
     
     with pytest.raises(ValueError, match="Token budget exceeded"):
-        await orchestrator.generate(model="qwen3.5-9b", prompt="Hello")
+        await orchestrator.generate(model="qwen3.5-4b", prompt="Hello")
         
     # Stream generate should yield an error chunk
     chunks = []
-    async for chunk, _, _ in orchestrator.stream_generate(model="qwen3.5-9b", prompt="Hello"):
+    async for chunk, _, _ in orchestrator.stream_generate(model="qwen3.5-4b", prompt="Hello"):
         chunks.append(chunk)
     full_output = "".join(chunks)
     assert "Token budget exceeded" in full_output
@@ -82,7 +82,7 @@ async def test_dynamic_tool_schema_injection():
     orchestrator.llm.generate = AsyncMock(return_value="Final Answer")
     
     messages = [{"role": "user", "content": "Query"}]
-    await orchestrator.generate(model="qwen3.5-9b", messages=messages)
+    await orchestrator.generate(model="qwen3.5-4b", messages=messages)
     
     # Check that schemas were injected into the message content
     call_args = orchestrator.llm.generate.call_args.kwargs
@@ -94,30 +94,39 @@ async def test_dynamic_tool_schema_injection():
 @pytest.mark.asyncio
 async def test_critic_reflection_loop(tmp_path):
     orchestrator = Orchestrator()
+    # BUG FIX: orchestrator.mcp is the module-level shared MCPRegistry singleton
+    # (orchestrator.py:71 `self.mcp = mcp_registry`). Mutating its root here used
+    # to leak into every later test in the process (a filesystem read of
+    # 'swarm_os/foo.py' failed with tmp_path as root). Restore the real root after.
+    _orig_root = orchestrator.mcp.root
     orchestrator.mcp.root = tmp_path
-    orchestrator._get_memory_context = AsyncMock(return_value="")
+    try:
+        orchestrator._get_memory_context = AsyncMock(return_value="")
     
-    # Turn 1: Return invalid tool call that will fail (re-write to a folder that does not exist or empty list)
-    # Turn 2: Final response
-    tool_call_invalid = '<tool_call name="filesystem">{"operation": "read", "path": "does_not_exist.txt"}</tool_call>'
-    final_response = "I see the file does not exist, so I am reporting back."
+        # Turn 1: Return invalid tool call that will fail (re-write to a folder that does not exist or empty list)
+        # Turn 2: Final response
+        tool_call_invalid = '<tool_call name="filesystem">{"operation": "read", "path": "does_not_exist.txt"}</tool_call>'
+        final_response = "I see the file does not exist, so I am reporting back."
     
-    orchestrator.llm.generate = AsyncMock(side_effect=[
-        tool_call_invalid,
-        final_response,
-        AssertionError("generate() called a 3rd time -- loop did not break on plain-text response"),
-    ])
+        orchestrator.llm.generate = AsyncMock(side_effect=[
+            tool_call_invalid,
+            final_response,
+            AssertionError("generate() called a 3rd time -- loop did not break on plain-text response"),
+        ])
     
-    messages = [{"role": "user", "content": "Read non_existent file"}]
-    result, _ = await orchestrator.generate(model="qwen3.5-9b", messages=messages)
+        messages = [{"role": "user", "content": "Read non_existent file"}]
+        result, _ = await orchestrator.generate(model="qwen3.5-4b", messages=messages)
     
-    assert result == final_response
-    # Assert that a critic corrective prompt was added to the history in the second call
-    assert orchestrator.llm.generate.call_count == 2
-    second_call_messages = orchestrator.llm.generate.call_args_list[1][1]["messages"]
-    critic_feedbacks = [m for m in second_call_messages if "Critic Feedback" in m.get("content", "")]
-    assert critic_feedbacks
-    assert "Tool error" in critic_feedbacks[0]["content"]
+        assert result == final_response
+        # Assert that a critic corrective prompt was added to the history in the second call
+        assert orchestrator.llm.generate.call_count == 2
+        second_call_messages = orchestrator.llm.generate.call_args_list[1][1]["messages"]
+        critic_feedbacks = [m for m in second_call_messages if "Critic Feedback" in m.get("content", "")]
+        assert critic_feedbacks
+        assert "Tool error" in critic_feedbacks[0]["content"]
+    finally:
+        orchestrator.mcp.root = _orig_root
+
 
 
 @pytest.mark.asyncio
@@ -131,7 +140,7 @@ async def test_memory_context_keyword_boosting():
             "score": 0.5,
             "payload": {
                 "summary": "Ran upwork crawler task",
-                "models": ["qwen3.5-9b"],
+                "models": ["qwen3.5-4b"],
                 "dominant_outcome": "success"
             }
         },
@@ -139,7 +148,7 @@ async def test_memory_context_keyword_boosting():
             "score": 0.6,
             "payload": {
                 "summary": "File editing failure",
-                "models": ["qwen3.5-9b"],
+                "models": ["qwen3.5-4b"],
                 "dominant_outcome": "failure"
             }
         }

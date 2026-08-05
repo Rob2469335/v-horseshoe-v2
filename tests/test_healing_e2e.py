@@ -61,5 +61,4 @@ def test_healing_policy_requires_approval(tmp_path):
 
     # policy should block and request approval
     assert res.get('executed') is False
-    assert res.get('repair', {}).get('status') == 'approval_required' or res.get('repair', {}).get('status') in ('approval_required',)
-    assert 'approval_request' in res or res.get('reason') == 'policy gated' or True
+    assert res.get('repair', {}).get('status') == 'approval_required'

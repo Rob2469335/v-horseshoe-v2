@@ -1,5 +1,3 @@
-import json
-from datetime import datetime
 
 class MetaCritic:
     """
@@ -7,12 +5,26 @@ class MetaCritic:
     Learns from prediction error, not from raw outcomes.
     """
 
-    def __init__(self):
-        self.weights = {
+    def __init__(self, weights: dict | None = None):
+        self.weights = weights or {
             "success_weight": 0.8,
             "confidence_weight": 0.2,
             "failure_penalty": 0.4
         }
+
+    @classmethod
+    def from_history(cls, entries: list[dict]) -> "MetaCritic":
+        """Seed weights from past journal entries (predicted vs actual), so the
+        critic's learned adjustments survive process restarts instead of resetting
+        to defaults every boot. Replays learn() over the history in chronological
+        order with a small learning rate."""
+        critic = cls()
+        lr = 0.01  # gentle replay — don't let old history dominate fresh signals
+        for entry in entries:
+            predicted = entry.get("predicted", 0.5)
+            actual = bool(entry.get("actual"))
+            critic.learn(float(predicted), actual, learning_rate=lr)
+        return critic
 
     def score(self, success: bool, confidence: float = 1.0):
         base = 1.0 if success else 0.0

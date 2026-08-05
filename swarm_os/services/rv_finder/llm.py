@@ -1,6 +1,6 @@
 """LLM deep-dive — the prompt is an artifact, the LLM is an adapter.
 
-Cloud DeepSeek (OpenRouter) is attempted first, with the local qwen3.5-9b as a
+Cloud DeepSeek (OpenRouter) is attempted first, with the local qwen3.5-4b as a
 fallback. Both run inside the same try/except chain so a failed provider
 degrades to the next instead of failing the whole search.
 """
@@ -63,16 +63,18 @@ async def _llm_deep_dive(listings: list[RVListing], budget: int) -> str:
         from litellm import acompletion
 
         attempts = []
-        if os.environ.get("OPENROUTER_API_KEY"):
+        if os.environ.get("OPENAI_API_KEY"):
             attempts.append({
-                "model": "openrouter/deepseek/deepseek-chat",
+                "model": "openai/deepseek-v4-flash",
                 "messages": [{"role": "user", "content": prompt}],
                 "max_tokens": 1000,
                 "timeout": 60.0,
                 "num_retries": 0,
+                "api_base": os.getenv("OPENAI_API_BASE", "https://opencode.ai/zen/go/v1"),
+                "api_key": os.getenv("OPENAI_API_KEY"),
             })
         attempts.append({
-            "model": "qwen3.5-9b",
+            "model": "qwen3.5-4b",
             "messages": [{"role": "system", "content": "/no_think\n\n"},
                          {"role": "user", "content": prompt}],
             "api_base": "http://127.0.0.1:8080/v1",
@@ -84,9 +86,15 @@ async def _llm_deep_dive(listings: list[RVListing], budget: int) -> str:
         })
         for cfg in attempts:
             try:
-                res = await asyncio.wait_for(acompletion(**cfg), timeout=cfg["timeout"])
+                async with asyncio.timeout(cfg["timeout"]):
+                    res = await acompletion(**cfg)
                 content = res.choices[0].message.content or ""
                 if content.strip():
+                    try:
+                        from runtime_v2.services.usage_log import record_response
+                        record_response(res, cfg.get("model", ""), source="rv_finder_deep_dive")
+                    except Exception as usage_err:  # noqa: BLE001
+                        logger.debug("usage log skipped: %s", usage_err)
                     return content.strip()
             except Exception as e:
                 logger.warning("deep-dive via %s failed: %s", cfg.get("model"), e)

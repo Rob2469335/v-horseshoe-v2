@@ -16,7 +16,7 @@ except ImportError:
 
 _lock = threading.Lock()
 
-_PROVIDER_KEYS = ("ollama_local", "ollama_cloud", "openrouter_free", "openrouter_paid", "nvidia")
+_PROVIDER_KEYS = ("ollama_local", "ollama_cloud", "openrouter_free", "openrouter_paid", "nvidia", "deepseek", "openai_paid")
 
 # Per-provider token accumulators (session)
 _tok = {p: {"in": 0, "out": 0, "est": 0, "calls": 0} for p in _PROVIDER_KEYS}
@@ -46,16 +46,33 @@ _POLL_INTERVAL = 30  # seconds
 
 # ── Provider classifier ───────────────────────────────────────────────────────
 def _classify_provider(model: str, chunk_provider: str | None = None) -> str:
-    """Map model name or chunk provider tag to internal bucket."""
+    """Map model name or chunk provider tag to internal bucket.
+
+    Mirrors the backend's provider naming so the tracker counts real traffic
+    (local llama.cpp, DeepSeek direct/OpenRouter, NVIDIA NIM, ultra-cheap Ling).
+    """
     p = (chunk_provider or "").lower()
     m = (model or "").lower()
 
-    if p == "nvidia" or m.startswith("nvidia/") or "nemotron" in m:
+    if p in ("nvidia", "nvidia_nim") or m.startswith("nvidia") or "nemotron" in m or "nvidia_nim/" in m:
         return "nvidia"
-    if p == "openrouter" or "/" in m:
+
+    if m.startswith("deepseek/"):
+        return "deepseek"
+
+    if m.startswith("openai/"):
+        name = m.replace("openai/", "")
+        if name.startswith("zen/"):
+            return "openai_paid"
+        if name.startswith("gpt") or name.startswith("o1") or name.startswith("o3") or "deepseek" in name:
+            return "openai_paid"
+        return "ollama_local"
+
+    if p == "openrouter" or m.startswith("openrouter/"):
         if m.endswith(":free") or "free" in m:
             return "openrouter_free"
         return "openrouter_paid"
+
     if "480b-cloud" in m or "cloud" in m:
         return "ollama_cloud"
     return "ollama_local"
@@ -160,6 +177,8 @@ def get_status_segment() -> str:
         "openrouter_free": "green",
         "openrouter_paid": "yellow",
         "nvidia":          "bright_green",
+        "deepseek":        "bright_cyan",
+        "openai_paid":     "bright_yellow",
     }.get(s["last_provider"], "white")
 
     lines.append(
@@ -175,6 +194,8 @@ def get_status_segment() -> str:
         "openrouter_free": "or✓",
         "openrouter_paid": "or$",
         "nvidia":          "nv",
+        "deepseek":        "ds",
+        "openai_paid":     "oai",
     }
     for p in _PROVIDER_KEYS:
         t   = tok[p]

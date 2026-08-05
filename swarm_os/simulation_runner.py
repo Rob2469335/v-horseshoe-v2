@@ -6,7 +6,6 @@ specialists emerge in real time.
 """
 from __future__ import annotations
 
-import asyncio
 import argparse
 import logging
 import random

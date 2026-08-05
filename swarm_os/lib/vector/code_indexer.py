@@ -6,10 +6,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import os
-import traceback
 from pathlib import Path
-from typing import Any
 
 import httpx
 
@@ -20,6 +17,7 @@ EMBED_MODEL = "nomic-embed-text:latest"
 EMBED_URL = "http://127.0.0.1:8081/v1"
 OLLAMA_URL = EMBED_URL  # Backward compatibility alias
 QDRANT_URL = "http://127.0.0.1:6333"
+EMBED_DIM = 768  # nomic-embed-text dimension
 
 INCLUDE_EXTS = {".py", ".ts", ".tsx", ".js", ".jsx", ".md", ".yaml", ".toml"}
 EXCLUDE_DIRS = {"node_modules", "__pycache__", ".git", "dist", "build", ".venv", "_legacy_kernel_backup"}

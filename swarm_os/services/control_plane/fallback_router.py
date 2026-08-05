@@ -6,7 +6,7 @@ class FallbackRouter:
 
     def route(self, candidates=None, role=None):
         if not candidates:
-            return "qwen3.5-9b"
+            return "qwen3.5-4b"
 
         # Prefer smallest safe model
         for c in candidates:

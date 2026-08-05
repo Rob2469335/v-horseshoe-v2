@@ -15,13 +15,14 @@ logger = logging.getLogger("ReflectionLoop")
 
 ROOT_DIR = Path(__file__).parent.parent.parent.resolve()
 DIARY_PATH = ROOT_DIR / "swarm_os" / "logs" / "organism_diary.jsonl"
-LOCAL_MODEL = "qwen3.5-9b"  # Local llama.cpp alias
-# Sanctioned free cloud model (DeepSeek V4 flash). Local qwen3.5-9b burns all
-# max_tokens on reasoning_content for the long distiller prompt, producing empty
-# content at ~5 tok/s; DeepSeek chat emits the structured reflection directly.
-CLOUD_MODEL = "openrouter/deepseek/deepseek-chat"
-DISTILLER_MAX_TOKENS_CLOUD = 600
-DISTILLER_MAX_TOKENS_LOCAL = 2048
+LOCAL_MODEL = "qwen3.5-4b"  # Local llama.cpp alias
+# Sanctioned free cloud model (DeepSeek V4 flash via the funded OpenCode Go
+# account). Local qwen3.5-4b burns all max_tokens on reasoning_content for the
+# long distiller prompt, producing empty content at ~5 tok/s; DeepSeek flash
+# emits the structured reflection directly.
+CLOUD_MODEL = "openai/deepseek-v4-flash"
+DISTILLER_MAX_TOKENS_CLOUD = 300
+DISTILLER_MAX_TOKENS_LOCAL = 512
 
 def _record_rule_to_agents_md(component: str, correction: str, confidence: float):
     """SOTA 2026: Auto-document high-confidence ASPO reflection rules into AGENTS.md."""
@@ -272,15 +273,62 @@ def get_latest_failure(filepath: Path) -> dict | None:
                     entry = json.loads(line.decode('utf-8'))
                     err = entry.get("error")
                     if err is not None and err != "" and str(err).lower() != "null":
+                        # Prefer REAL agent failures (entries carrying a component or
+                        # agent id) over genetic-kernel evaluation noise. The diary is
+                        # dominated by kernel eval entries (event=action/evaluation with
+                        # org/generation/avg_fitness) whose errors are sandbox/fitness
+                        # artifacts ("http_422", "[WinError 10061]", ...) — distilling
+                        # those produced the 137 component:"unknown" noise rules that
+                        # swamped ReflexionMemory. Real agent tool failures carry a
+                        # component (agent_id) — those are what the distiller should learn from.
+                        is_agent_failure = bool(entry.get("component") or entry.get("agent"))
+                        if is_agent_failure:
+                            return entry
+                except Exception:
+                    pass
+    # No agent-tagged failure found — fall back to the raw last error so the
+    # distiller still has SOMETHING rather than silently skipping.
+    with open(filepath, 'rb') as f:
+        f.seek(0, os.SEEK_END)
+        file_size = f.tell()
+        position = file_size
+        buffer = b''
+        while position > 0:
+            read_size = min(chunk_size, position)
+            position -= read_size
+            f.seek(position)
+            chunk = f.read(read_size)
+            buffer = chunk + buffer
+            lines = buffer.split(b'\n')
+            if position > 0:
+                buffer = lines.pop(0)
+            for line in reversed(lines):
+                if not line.strip():
+                    continue
+                try:
+                    entry = json.loads(line.decode('utf-8'))
+                    err = entry.get("error")
+                    if err is not None and err != "" and str(err).lower() != "null":
                         return entry
                 except Exception:
                     pass
     return None
 
-async def _distill(distiller_content: str) -> str:
+async def _distill(distiller_content: str, fix_class: str | None = None) -> str:
     """Run the distiller LLM call. Cloud DeepSeek V4 flash first (fast, no
-    thinking tokens), local qwen3.5-9b fallback (needs /no_think system lead +
-    roomy token budget so reasoning + content both fit at ~5 tok/s)."""
+    thinking tokens), local qwen3.5-4b fallback (needs /no_think system lead +
+    roomy token budget so reasoning + content both fit at ~5 tok/s).
+
+    fix_class (from diagnostician.py): "prompt_sensitivity" means the failure
+    is fixable via rule/prompt changes — distillation is worthwhile.
+    "model_variability" means the model itself can't do it — skip the LLM call
+    entirely, it won't produce an actionable rule. Missing/unknown defaults to
+    running distillation (fail-open)."""
+
+    if fix_class == "model_variability":
+        logger.info("Skipping LLM distillation for model_variability failure (not diagnosable)")
+        return ""
+
     attempts = []
     if os.environ.get("OPENROUTER_API_KEY"):
         attempts.append({
@@ -289,38 +337,97 @@ async def _distill(distiller_content: str) -> str:
             "max_tokens": DISTILLER_MAX_TOKENS_CLOUD,
             "timeout": 90.0,
         })
+    if os.environ.get("GROQ_API_KEY"):
+        attempts.append({
+            "model": "groq/llama-3.3-70b-versatile",
+            "messages": [{"role": "user", "content": distiller_content}],
+            "max_tokens": DISTILLER_MAX_TOKENS_CLOUD,
+            "timeout": 90.0,
+        })
+    if os.environ.get("NVIDIA_API_KEY"):
+        attempts.append({
+            "model": "nvidia_nim/meta/llama-3.1-70b-instruct",
+            "messages": [{"role": "user", "content": distiller_content}],
+            "max_tokens": DISTILLER_MAX_TOKENS_CLOUD,
+            "timeout": 90.0,
+        })
+    if os.environ.get("GEMINI_API_KEY"):
+        attempts.append({
+            "model": "gemini/gemini-2.0-flash",
+            "messages": [{"role": "user", "content": distiller_content}],
+            "max_tokens": DISTILLER_MAX_TOKENS_CLOUD,
+            "timeout": 90.0,
+        })
+    if os.environ.get("OPENAI_API_KEY"):
+        api_base = os.getenv("OPENAI_API_BASE", "https://api.opencode.go/v1")
+        api_key = os.environ["OPENAI_API_KEY"]
+        attempts.append({
+            "model": "deepseek-chat",
+            "messages": [{"role": "user", "content": distiller_content}],
+            "api_base": api_base,
+            "api_key": api_key,
+            "custom_llm_provider": "openai",
+            "max_tokens": DISTILLER_MAX_TOKENS_CLOUD,
+            "timeout": 90.0,
+        })
     attempts.append({
-        "model": LOCAL_MODEL,
+        "model": "qwen3.5-0.8b",
         "messages": [
             {"role": "system", "content": "/no_think\n\n"},
             {"role": "user", "content": distiller_content},
         ],
-        "api_base": "http://127.0.0.1:8080/v1",
+        "api_base": "http://127.0.0.1:8084/v1",
         "api_key": "llama",
         "custom_llm_provider": "openai",
         "max_tokens": DISTILLER_MAX_TOKENS_LOCAL,
-        "timeout": 900.0,
+        "timeout": 120.0,
     })
 
     last_exc = None
     for cfg in attempts:
         try:
-            res = await asyncio.wait_for(acompletion(**cfg), timeout=cfg["timeout"])
+            async with asyncio.timeout(cfg["timeout"]):
+                res = await acompletion(**cfg)
             content = res.choices[0].message.content or ""
             if content.strip():
+                try:
+                    from runtime_v2.services.usage_log import record_response
+                    record_response(res, cfg.get("model", ""), source="distill")
+                except Exception as usage_err:  # noqa: BLE001
+                    logger.debug("usage log skipped: %s", usage_err)
                 return content
             logger.warning("Distiller returned empty content from %s", cfg["model"])
         except Exception as e:
             last_exc = e
             msg = str(e)
             logger.warning("Distiller via %s failed: %s", cfg["model"], e)
-            # 402 = OpenRouter credit exhaustion (non-transient). The local qwen
-            # fallback would burn ~300s (2048 tokens) on the single llama slot and
-            # return empty content anyway (qwen spends all tokens on reasoning).
-            # Skip it so the generation slot stays free for real work.
-            if "402" in msg or "credits" in msg.lower():
-                logger.warning("Distiller: credit exhaustion detected, skipping local fallback")
-                break
+            # Retry cloud models with fewer tokens on 402 credit exhaustion
+            if "can only afford" in msg and cfg.get("max_tokens", 0) > 128:
+                import re
+                match = re.search(r"can only afford (\d+)", msg)
+                if match:
+                    affordable = int(match.group(1))
+                    clamped = max(128, min(affordable - 64, 512))
+                    logger.warning("Distiller retrying %s with max_tokens=%d", cfg["model"], clamped)
+                    cfg_copy = dict(cfg)
+                    cfg_copy["max_tokens"] = clamped
+                    try:
+                        async with asyncio.timeout(cfg_copy["timeout"]):
+                            res = await acompletion(**cfg_copy)
+                        content = res.choices[0].message.content or ""
+                        if content.strip():
+                            try:
+                                from runtime_v2.services.usage_log import record_response
+                                record_response(res, cfg.get("model", ""), source="distill_retry")
+                            except Exception as usage_err:  # noqa: BLE001
+                                logger.debug("usage log skipped: %s", usage_err)
+                            return content
+                    except Exception as exc:
+                        # BUG FIX: was silently swallowing the 402 token-reduction
+                        # retry failure with no log. Now debug-logged.
+                        logger.debug("402 retry with fewer tokens failed for %s: %s", cfg["model"], exc)
+            # 402 = OpenRouter credit exhaustion — fall through to local qwen3.5-4b.
+            # With the MTP 4B at ~15 t/s (vs old 5 t/s) the local fallback is viable.
     if last_exc:
         raise last_exc
     return ""
@@ -341,13 +448,24 @@ async def run_reflection():
     content = latest_failure.get("content_preview", "")
     error_msg = latest_failure.get("error")
     component = str(latest_failure.get("component") or latest_failure.get("agent") or "unknown")
+    fix_class = latest_failure.get("fix_class")
+    if fix_class is None:
+        try:
+            from swarm_os.healing.diagnostician import Diagnostician
+            hypotheses = Diagnostician().diagnose({"detail": error_msg or "", "component": component})
+            if hypotheses:
+                fix_class = hypotheses[0].get("fix_class")
+        except Exception as exc:
+            # BUG FIX: was silently swallowing diagnostician failures; now debug-logged
+            # so we can tell when the Diagnostician import/diagnose path breaks.
+            logger.debug("Diagnostician failed during reflection: %s", exc)
 
     logger.info(f"Distilling failure: {error_msg}")
     
     distiller_content = DISTILLER_PROMPT.format(task_description=task_desc, component=component, content_preview=content, error_message=error_msg)
     
     try:
-        rule_full = await _distill(distiller_content)
+        rule_full = await _distill(distiller_content, fix_class=fix_class)
 
         # Parse structured reflection; fall back to extracting any rule text.
         def _field(tag: str) -> str:

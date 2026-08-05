@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
+
+log = logging.getLogger(__name__)
 
 class LearningService:
     def __init__(self, store_path: Path | str | None = None) -> None:
@@ -35,7 +38,8 @@ class LearningService:
                         "repairs": self._repairs,
                         "stats": self._stats
                     }, fh, default=str, indent=2)
-            except Exception:
+            except Exception as e:
+                log.warning("Failed to persist learning outcomes: %s", e)
                 pass
 
     def ingest_outcome(self, outcome: Any) -> dict[str, str]:

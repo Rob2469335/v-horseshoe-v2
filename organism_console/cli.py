@@ -16,9 +16,6 @@ import logging
 import os
 import atexit
 import signal
-from functools import lru_cache
-from pathlib import Path
-from typing import Any, Optional
 from dotenv import load_dotenv
 
 load_dotenv(override=True)
@@ -36,7 +33,6 @@ try:
 except ImportError:
     pass
 
-import swarm_os.bootstrap
 from rich.console import Console
 from rich.logging import RichHandler
 
@@ -50,7 +46,6 @@ from organism_console.ui.live_stream import stream_prompt_with_retry
 from organism_console.loops.autonomous import run_autonomous_goal_loop
 from organism_console.loops.debate import run_debate_loop
 
-import organism_console.commands
 
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(
@@ -109,7 +104,7 @@ def get_installed_models():
         coordinator_model, _ = get_model("coordinator")
         return (coordinator_model,)
     except Exception:
-        return ("qwen3.5-9b",)
+        return ("qwen3.5-4b",)
 
 
 def build_command_context(cmd_ctx_console=None, cmd_ctx_state=None) -> CommandContext:
@@ -189,7 +184,9 @@ def setup_readline():
 
 def main():
     ctx.cloud_enabled = False
-    os.environ["SWARM_ROUTING_MODE"] = "local_only"
+    # Default to local-first routing with cloud fan-out (DeepSeek + ultra-cheap
+    # Ling) as fallback. `/local` forces the fully offline local_only mode.
+    os.environ.setdefault("SWARM_ROUTING_MODE", "auto")
     
     from organism_console.token_tracker import start_background_poll
     start_background_poll()
@@ -238,7 +235,7 @@ def main():
         return 0
 
     # --- Interactive REPL ---
-    has_readline = setup_readline()
+    setup_readline()
     print_banner(ctx)
 
     # Auto-start the background healing watchmen so both infrastructure health

@@ -20,7 +20,7 @@ export function AlertBanner() {
         const res=await fetch(`${backendUrl}/status`); const data=await res.json(); const next:Alert[]=[]
         if(!data.ready) next.push({id:"not-ready",level:"warn",message:"System not fully ready",detail:"Some services are still starting up."})
         if(!data.llamacpp_reachable) next.push({id:"llamacpp-down",level:"error",message:"AI brain is offline",detail:"Run 'llama.cpp' in a terminal to fix this."})
-        if(data.installed_model_count===0) next.push({id:"no-models",level:"warn",message:"No AI models loaded",detail:"Run 'download qwen3.5-9b' to load a model."})
+        if(data.installed_model_count===0) next.push({id:"no-models",level:"warn",message:"No AI models loaded",detail:"Run 'download qwen3.5-4b' to load a model."})
         try { 
           const hr=await fetch(`${backendUrl}/api/admin/healing/evaluate`); 
           const heal=await hr.json(); 

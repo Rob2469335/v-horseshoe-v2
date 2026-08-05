@@ -1,5 +1,4 @@
 import os
-import json
 import uuid
 import requests
 from typing import List, Dict, Any, Optional
@@ -12,6 +11,9 @@ EMBEDDING_MODEL = "nomic-embed-text"
 RERANKER_MODEL = "BAAI/bge-reranker-v2-m3"
 EMBEDDING_DIM = 768  # Dimension for nomic-embed-text
 
+import logging
+_log = logging.getLogger(__name__)
+
 def _get_embedding_dimension() -> int:
     try:
         resp = requests.post(f"{EMBED_URL}/embeddings", headers={"Authorization": "Bearer llama"}, json={
@@ -20,8 +22,10 @@ def _get_embedding_dimension() -> int:
         if resp.status_code == 200:
             vec = resp.json().get("data", [{}])[0].get("embedding", [])
             return len(vec)
-    except Exception:
-        pass
+    except Exception as e:
+        # BUG FIX: was silently swallowed with no log; now debug-logged so probe
+        # failures are traceable without polluting warning-level logs.
+        _log.debug("Embedding dimension probe failed: %s", e)
     return 768
 
 def _get_shard_name(category: str) -> str:
@@ -56,7 +60,7 @@ def init_memory_qdrant(shard: str = "general") -> bool:
             return True
         return False
     except Exception as e:
-        print(f"Failed to connect to Qdrant memory core for {collection}: {e}")
+        _log.warning("Failed to connect to Qdrant memory core for %s: %s", collection, e)
         return False
 
 def get_embedding(text: str) -> Optional[List[float]]:
@@ -70,7 +74,7 @@ def get_embedding(text: str) -> Optional[List[float]]:
             data = resp.json().get("data", [])
             return data[0].get("embedding") if data else None
     except Exception as e:
-        print(f"Error getting embedding: {e}")
+        _log.warning("Error getting embedding: %s", e)
     return None
 
 RERANK_URL = "http://127.0.0.1:8082"
@@ -120,7 +124,10 @@ def rerank_memories(query: str, memories: List[Dict[str, Any]]) -> List[Dict[str
                     })
             return reranked
     except Exception as e:
-        print(f"Failed to call llama-server reranker on port 8082: {e}")
+        # BUG FIX: was using print() instead of logging — failures didn't appear in
+        # structured backend logs. Also upgraded to warning level since reranker
+        # failure degrades memory retrieval quality.
+        _log.warning("Reranker failed, using Stage 1 Dense Retrieval scores: %s", e)
         
     # Fallback to Stage 1 Dense Retrieval scores if API fails
     for mem in memories:
@@ -160,7 +167,7 @@ def _get_kg():
                         data = json.load(f)
                         _kg = nx.node_link_graph(data)
                 except Exception as e:
-                    print(f"Error loading Knowledge Graph: {e}")
+                    _log.warning("Error loading Knowledge Graph: %s", e)
         return _kg
 
 def _save_kg():
@@ -173,7 +180,7 @@ def _save_kg():
                 with open(_kg_file, "w") as f:
                     json.dump(data, f)
             except Exception as e:
-                print(f"Error saving Knowledge Graph: {e}")
+                _log.warning("Error saving Knowledge Graph: %s", e)
 
 def _extract_relations(fact: str):
     """Simple heuristic relation extraction for the Knowledge Graph."""
@@ -225,7 +232,10 @@ def remember_fact(fact: str, category: str = "general") -> bool:
             }]
         }, timeout=10.0)
         success = resp.status_code in (200, 201)
-    except Exception:
+    except Exception as e:
+        # BUG FIX: was silently swallowing Qdrant PUT failures with no log,
+        # making it impossible to know why memories weren't being stored.
+        _log.warning("remember_fact Qdrant PUT failed for category '%s': %s", category, e)
         success = False
 
     # 2. Extract and Store in Knowledge Graph (Hybrid Stack)
@@ -297,7 +307,9 @@ def get_relevant_memories(query: str) -> str:
                         }
                     ]
                 }
-            }, timeout=5.0)
+            # BUG FIX: timeout=5.0 was too short under high RAM pressure (29 GB);
+            # raised to 15.0 to accommodate slower cold Qdrant queries.
+            }, timeout=15.0)
             
             if resp.status_code == 200:
                 for hit in resp.json().get("result", []):
@@ -311,8 +323,10 @@ def get_relevant_memories(query: str) -> str:
                     # Store temporally adjusted score
                     hit["score"] = hit.get("score", 0.0) * decay_factor
                     all_results.append(hit)
-        except Exception:
-            pass
+        except Exception as e:
+            # BUG FIX: was silently swallowing per-shard Qdrant search failures;
+            # logged at debug since shard-miss on startup is expected.
+            _log.debug("Shard '%s' search failed: %s", shard, e)
 
     # --- 2. Knowledge Graph Retrieval ---
     kg_context = []
@@ -399,6 +413,9 @@ def dump_all_failures(limit: int = 200) -> str:
             if not offset:
                 break
         except Exception as e:
+            # BUG FIX: scroll loop broke without logging the exception, making
+            # dump_all_failures silent on Qdrant scroll errors.
+            _log.warning("Failure scroll interrupted: %s", e)
             break
     
     if not all_facts:
@@ -430,7 +447,9 @@ def get_failure_digest() -> dict:
                 count = resp.json().get("result", {}).get("points_count", 0)
                 digest["shards"][shard] = count
                 digest["total"] += count
-        except Exception:
+        except Exception as e:
+            # BUG FIX: was silently swallowing shard info failures.
+            _log.debug("Shard info failed for '%s': %s", shard, e)
             digest["shards"][shard] = 0
     
     return digest
@@ -450,7 +469,7 @@ def deprecate_memory(point_id: str, category: str = "general") -> bool:
         }, timeout=10.0)
         return update_resp.status_code in (200, 201)
     except Exception as e:
-        print(f"Failed to deprecate memory: {e}")
+        _log.warning("Failed to deprecate memory %s in shard '%s': %s", point_id, category, e)
     return False
 
 

@@ -43,7 +43,6 @@ def free_memory(anomaly: Dict[str, Any]) -> Dict[str, Any]:
     Non-destructive (no kills); safe enough to auto-run under governor gate."""
     import psutil
     import ctypes
-    from ctypes import wintypes
 
     emptied = []
     skipped = 0
@@ -147,7 +146,6 @@ def restart_stopped_service(anomaly: Dict[str, Any]) -> Dict[str, Any]:
         return {"ok": False, "action": "restart_stopped_service", "reason": "no service_name in signal detail"}
     try:
         import win32serviceutil
-        import win32service
         status = win32serviceutil.QueryServiceStatus(service_name)
         log.info("Restarting service %s (current state %s)", service_name, status[1])
         win32serviceutil.RestartService(service_name)

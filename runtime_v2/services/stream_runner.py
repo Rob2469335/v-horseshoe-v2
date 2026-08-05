@@ -30,7 +30,6 @@ from runtime_v2.services._llm_client import (
     inject_system_prompt,
     complete_for_tool_decision,
 )
-from runtime_v2.services._llm_cache import get_cache_key
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -83,12 +82,6 @@ async def _store_decision_reflexion(agent_id: str, action: str, failure_reason: 
 async def get_tool_decision(
     model: str, messages: list, agent_id: str, allowed_tools: list = None
 ) -> Optional[dict]:
-    cache_key = get_cache_key(messages, agent_id)
-    # Cache permanently disabled — see commit history for rationale.
-    # cached = _get_cached_decision(cache_key)
-    # if cached:
-    #     return cached
-
     # OPT-IN semantic decision cache (env SWARM_SEMANTIC_CACHE=1). Exact hash
     # first, then Qdrant cosine search above a threshold. Never raises/blocks —
     # a miss or error just falls through to the real LLM decision below.
@@ -104,13 +97,13 @@ async def get_tool_decision(
 
     litellm_model = get_litellm_model(agent_id, model)
     routing_mode = get_routing_mode()
-    from runtime_v2.services.fallback_manager import get_live_fallbacks
+    from runtime_v2.services.fallback_manager import get_live_fallbacks, _is_local_model
     raw_fallbacks = await get_live_fallbacks(mode=routing_mode)
     fallbacks = [
         f["model"]
         for f in raw_fallbacks
-        if not f["model"].startswith("openai/")
-    ][:3]
+        if not _is_local_model(f["model"])
+    ][:4]
 
     allowed = allowed_tools or [
         "delegate", "final", "filesystem", "sandbox_repl", "web_search",
@@ -287,12 +280,14 @@ async def get_tool_decision(
             try:
                 from runtime_v2.services.fallback_manager import record_model_success
                 record_model_success(litellm_model)
-            except Exception:
+            except Exception as e:
+                log.debug("Failed to record outcome: %s", e)
                 pass
             try:
                 from runtime_v2.services.online_routing import record_analysis_outcome
                 record_analysis_outcome(agent_id, True)
-            except Exception:
+            except Exception as e:
+                log.debug("Failed to record outcome: %s", e)
                 pass
             return result
 
@@ -308,7 +303,8 @@ async def get_tool_decision(
             )
             try:
                 record_model_failure(litellm_model, str(exc)[:200])
-            except Exception:
+            except Exception as e:
+                log.debug("Failed to record outcome: %s", e)
                 pass
             if is_permanent_error(str(exc)):
                 log.warning("[%s] Permanent LLM error (%s) — switching to local fallback, no cloud retry.", agent_id, str(exc)[:100])
@@ -321,10 +317,14 @@ async def get_tool_decision(
                 # If the failing model was a cloud model, re-issue the SAME decision
                 # against the local llama.cpp model instead of ending the turn —
                 # a billing 402 should degrade to local, not halt the agent.
-                if litellm_model and not litellm_model.startswith("openai/"):
+                if litellm_model and not _is_local_model(litellm_model):
                     try:
                         import runtime_v2.services._llm_client as _llm_client_mod
-                        litellm_model = _llm_client_mod.get_litellm_model(agent_id, fallback_model="qwen3.5-9b")
+                        litellm_model = _llm_client_mod.get_litellm_model(agent_id, fallback_model="qwen3.5-4b", force_local=True)
+                        # Clear the cloud fallback chain — it contains the doomed
+                        # provider (and other cloud models). litellm would otherwise
+                        # retry them after the local model, defeating the degrade.
+                        fallbacks = []
                         log.warning("[%s] Retrying decision on local model %s after cloud permanent error", agent_id, litellm_model)
                         continue
                     except Exception as local_exc:
@@ -371,6 +371,7 @@ async def get_tool_decision(
             try:
                 from runtime_v2.services.online_routing import record_analysis_outcome
                 record_analysis_outcome(agent_id, False)
-            except Exception:
+            except Exception as e:
+                log.debug("Failed to record outcome: %s", e)
                 pass
             return {"action": "final", "response": f"Unable to determine next action after {MAX_EMPTY_RETRIES + 1} attempts. Last error: {repr(exc)}"}

@@ -113,6 +113,7 @@ class BasicLSPClient:
                     return
                 log.debug("lsp[%s] stderr: %s", self.command[0], line.decode("utf-8", "replace").rstrip())
         except Exception:
+            log.debug("LSP stderr drain error", exc_info=True)
             pass
 
     async def _read_message(self) -> Optional[dict]:
@@ -154,8 +155,9 @@ class BasicLSPClient:
         self._pending[msg_id] = fut
         try:
             await self._send({"jsonrpc": "2.0", "id": msg_id, "method": method, "params": params})
-            return await asyncio.wait_for(fut, timeout=timeout)
-        except asyncio.TimeoutError:
+            async with asyncio.timeout(timeout):
+                return await fut
+        except TimeoutError:
             self._pending.pop(msg_id, None)
             raise TimeoutError(f"LSP request '{method}' timed out after {timeout}s")
 
@@ -180,8 +182,9 @@ class BasicLSPClient:
                 if remaining <= 0:
                     return []
                 try:
-                    msg = await asyncio.wait_for(self._notifications.get(), remaining)
-                except asyncio.TimeoutError:
+                    async with asyncio.timeout(remaining):
+                        msg = await self._notifications.get()
+                except TimeoutError:
                     return []
                 params = msg.get("params", {}) if isinstance(msg, dict) else {}
                 if msg.get("method") == "textDocument/publishDiagnostics" and params.get("uri") == uri:
@@ -207,11 +210,13 @@ class BasicLSPClient:
         if self.process is not None and self.process.returncode is None:
             try:
                 self.process.terminate()
-                await asyncio.wait_for(self.process.wait(), timeout=5.0)
+                async with asyncio.timeout(5.0):
+                    await self.process.wait()
             except Exception:
                 try:
                     self.process.kill()
                 except Exception:
+                    log.debug("Failed to kill LSP server process", exc_info=True)
                     pass
         self.process = None
 
@@ -245,8 +250,8 @@ async def _acquire_client(ext: str) -> BasicLSPClient:
                 try:
                     await client.close()
                 except Exception:
+                    log.debug("LSP client close failed for %s", ext, exc_info=True)
                     pass
-                client = None
         if client is None:
             cfg = LANGUAGE_SERVERS[ext]
             client = BasicLSPClient(cfg["cmd"], str(Path.cwd().resolve()), cfg["languageId"])
@@ -263,6 +268,7 @@ async def _evict_client(ext: str, client: BasicLSPClient):
     try:
         await client.close()
     except Exception:
+        log.debug("LSP evict-close failed for %s", ext, exc_info=True)
         pass
 
 

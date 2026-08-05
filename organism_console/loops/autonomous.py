@@ -13,7 +13,12 @@ from organism_console.ui.live_stream import stream_prompt
 
 _healing_loop = None
 
-def run_test_suite(goal_text: str = "") -> tuple[bool, str]:
+def run_test_suite(goal_text: str = "", baseline: set[str] | None = None) -> tuple[bool, str]:
+    """Run pytest against test targets derived from files modified by the agent
+    during THIS attempt (not the whole uncommitted working tree — pre-existing
+    local edits must not derail the verification or feed the coordinator bogus
+    failure logs). `baseline` is the set of modified paths captured before the
+    attempt; only paths added after it are considered agent work."""
     test_targets = []
     m = re.search(r"tests/[a-zA-Z0-9_]+\.py", goal_text)
     if m:
@@ -22,7 +27,7 @@ def run_test_suite(goal_text: str = "") -> tuple[bool, str]:
     if not test_targets:
         try:
             git_diff = subprocess.run(
-                ["git", "diff", "--name-only"],
+                ["git", "status", "--porcelain"],
                 capture_output=True,
                 text=True,
                 cwd=PROJECT_ROOT,
@@ -30,18 +35,22 @@ def run_test_suite(goal_text: str = "") -> tuple[bool, str]:
                 encoding="utf-8",
                 errors="replace"
             )
-            if git_diff.returncode == 0:
-                modified_files = [line.strip() for line in git_diff.stdout.splitlines() if line.strip()]
-                for f in modified_files:
-                    if f.startswith("tests/") and f.endswith(".py"):
-                        test_targets.append(f)
-                    else:
-                        base = Path(f).stem
-                        if len(base) > 3 and base not in ("main", "__init__"):
-                            tests_dir = PROJECT_ROOT / "tests"
-                            for t_file in tests_dir.glob("test_*.py"):
-                                if base in t_file.name or t_file.name.replace("test_", "").replace(".py", "") in base:
-                                    test_targets.append(f"tests/{t_file.name}")
+            modified_files = []
+            for line in git_diff.stdout.splitlines():
+                if len(line) >= 4:
+                    modified_files.append(line[3:])
+            for f in modified_files:
+                if baseline is not None and f in baseline:
+                    continue
+                if f.startswith("tests/") and f.endswith(".py"):
+                    test_targets.append(f)
+                else:
+                    base = Path(f).stem
+                    if len(base) > 3 and base not in ("main", "__init__"):
+                        tests_dir = PROJECT_ROOT / "tests"
+                        for t_file in tests_dir.glob("test_*.py"):
+                            if base in t_file.name or t_file.name.replace("test_", "").replace(".py", "") in base:
+                                test_targets.append(f"tests/{t_file.name}")
         except Exception:
             pass
 
@@ -53,7 +62,7 @@ def run_test_suite(goal_text: str = "") -> tuple[bool, str]:
     else:
         # Check if files were actually modified during this turn
         try:
-            git_diff = subprocess.run(["git", "diff", "--name-only"], capture_output=True, text=True, cwd=PROJECT_ROOT, timeout=5, encoding="utf-8", errors="replace")
+            git_diff = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True, cwd=PROJECT_ROOT, timeout=5, encoding="utf-8", errors="replace")
             if not git_diff.stdout.strip():
                 return False, "No files were modified. The agent did not generate or change any code to fulfill the goal."
         except Exception:
@@ -219,8 +228,29 @@ def run_autonomous_goal_loop(goal: str, cmd_ctx):
     max_attempts = 5
     baseline_passed = False
     
+    def _git_status_paths() -> set[str]:
+        """Snapshot of current git working-tree paths (modified/untracked)."""
+        try:
+            out = subprocess.run(
+                ["git", "status", "--porcelain"],
+                capture_output=True, text=True, cwd=PROJECT_ROOT, timeout=5,
+                encoding="utf-8", errors="replace"
+            )
+            paths = set()
+            for line in out.stdout.splitlines():
+                if len(line) >= 4:
+                    paths.add(line[3:])
+            return paths
+        except Exception:
+            return set()
+    
     for attempt in range(1, max_attempts + 1):
         console.print(Rule(f"Attempt {attempt}/{max_attempts}", style="magenta dim"))
+        
+        # Baseline the tree BEFORE the agent runs so verification only counts
+        # files the agent actually touched THIS attempt — not the pre-existing
+        # uncommitted work in the tree (which was derailing the whole loop).
+        attempt_baseline = _git_status_paths()
         
         global _healing_loop
         if _healing_loop is None:
@@ -234,7 +264,6 @@ def run_autonomous_goal_loop(goal: str, cmd_ctx):
             console.print(f"[bold yellow]⚕ Self-healing:[/bold yellow] issue detected in [cyan]{component}[/cyan] (mode: {mode})")
             reasoning = decision.get("reasoning", "")
             if mode in ("auto_execute", "sandbox_first"):
-                import asyncio
                 from swarm_os.healing.recovery_engine import RecoveryEngine
                 recovery = RecoveryEngine()
                 symptom = heal_result.get("all_signals", [{}])[0] or {"component": component}
@@ -292,21 +321,29 @@ def run_autonomous_goal_loop(goal: str, cmd_ctx):
             elif syntax_passed:
                 # Check if any files were actually modified during this attempt
                 try:
-                    git_status = subprocess.run(
-                        ["git", "status", "--porcelain"],
-                        capture_output=True, text=True, cwd=PROJECT_ROOT, timeout=5,
-                        encoding="utf-8", errors="replace"
-                    )
-                    if not git_status.stdout.strip():
-                        passed = True
-                        logs = "No files were modified during this attempt (read-only operations only). Skipping test suite."
-                        console.print("[dim]No file changes detected — skipping test verification.[/dim]")
+                    changed_this_attempt = _git_status_paths() - attempt_baseline
+                    if not changed_this_attempt:
+                        console.print("[dim]No file changes detected. Verifying goal...[/dim]")
+                        verify_prompt = f"Did the agent successfully achieve this goal: '{goal}'? The agent's final response was: '{final_msg}'. Answer ONLY 'YES' or 'NO: <reason>'."
+                        resp = call_api("/generate", "POST", {"prompt": verify_prompt, "agent_id": "reviewer"})
+                        if resp and resp.status_code == 200:
+                            data = resp.json()
+                            verdict = data.get("response", data.get("content", "")).strip()
+                            if verdict.startswith("YES"):
+                                passed = True
+                                logs = "Goal achieved without file modifications."
+                            else:
+                                passed = False
+                                logs = f"Goal verification failed: {verdict}"
+                        else:
+                            passed = True
+                            logs = "No files were modified. Verification unavailable."
                     else:
                         console.print("[dim]Running test verification suite...[/dim]")
-                        passed, logs = run_test_suite(goal)
+                        passed, logs = run_test_suite(goal, baseline=attempt_baseline)
                 except Exception:
                     console.print("[dim]Running test verification suite...[/dim]")
-                    passed, logs = run_test_suite(goal)
+                    passed, logs = run_test_suite(goal, baseline=attempt_baseline)
         
         if passed:
             console.print()
@@ -370,8 +407,8 @@ def run_autonomous_goal_loop(goal: str, cmd_ctx):
             
             if entry_agent == "coordinator":
                 current_prompt += (
-                    f"CRITICAL: If you are the `coordinator`, you MUST delegate this to the `debugger` or `coder`.\n"
-                    f"Just output the JSON `delegate` payload and nothing else."
+                    "CRITICAL: If you are the `coordinator`, you MUST delegate this to the `debugger` or `coder`.\n"
+                    "Just output the JSON `delegate` payload and nothing else."
                 )
                 
             current_prompt += "</EPHEMERAL_MESSAGE>\n\n"

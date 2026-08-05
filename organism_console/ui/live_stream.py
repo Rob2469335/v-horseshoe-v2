@@ -7,13 +7,11 @@ from rich.table import Table
 from rich.text import Text
 from rich.panel import Panel
 from rich.rule import Rule
-from rich.tree import Tree
 from rich.markup import escape
 from rich.markdown import Markdown
 
-from organism_console.api_client import call_api
 from organism_console.ui.banner import get_system_stats, estimate_tokens
-from organism_console.renderer import render_step_micro_ui, render_trace_panel, render_tool_execution
+from organism_console.renderer import render_step_micro_ui, render_trace_panel
 from organism_console.token_tracker import record_chunk
 
 log = logging.getLogger("zenith_cli")
@@ -69,7 +67,6 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
         if stats["ram_pct"] > 90:
             ctx.console.print("[bold red]WARNING:[/bold red] RAM critical, expect slower response.")
 
-        client = None
         payload = {
             "agent_id": agent_id,
             "prompt": prompt,
@@ -78,21 +75,18 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
             "delegation_chain": getattr(ctx, "delegation_chain", [agent_id]),
         }
         try:
-            client, resp = await call_api_async_stream(f"/agents/{agent_id}/step/stream", "POST", payload)
+            resp = await call_api_async_stream(f"/agents/{agent_id}/step/stream", "POST", payload)
         except Exception as e:
             ctx.console.print(f"[bold red]ERROR:[/bold red] API call failed: {e}")
             return history
 
         if not resp:
             ctx.console.print("[bold red]ERROR:[/bold red] Backend unreachable.")
-            if client is not None:
-                await client.aclose()
             return history
 
         full_content = ""
         model = "zenith-core"
         phase = "thinking"
-        tool_calls = []
         handoffs_list = []
         start_time = time.time()
         _tokens_counted = False
@@ -247,7 +241,6 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                         elif "<tool_call" in piece:
                             phase = "executing"
 
-                        tool_calls = RE_TOOL_CALL.findall(full_content)
                         topic_match = RE_TOPIC_UPDATE.search(full_content)
                         if topic_match:
                             ctx.current_topic = topic_match.group(1)
@@ -356,8 +349,8 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                 _stream_errored = True
 
             finally:
-                if client is not None:
-                    await client.aclose()
+                if resp is not None:
+                    await resp.aclose()
 
         if _ask_user_triggered:
             continue
@@ -379,7 +372,7 @@ def stream_prompt(ctx, agent_id, prompt, history):
     # This can happen when stream_prompt is invoked from Jupyter, tests, or certain frameworks.
     # Solution: if a loop is already running, offload to a fresh thread with its own loop.
     try:
-        loop = asyncio.get_running_loop()
+        _ = asyncio.get_running_loop()
         # A loop is already running — run in a separate thread to avoid nesting
         import concurrent.futures
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:

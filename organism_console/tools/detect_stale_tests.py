@@ -144,11 +144,24 @@ def check_broken_imports(filepath: Path, repo_root: Path) -> list[dict]:
 
 
 def check_orphaned_tests(tests_dir: Path, repo_root: Path) -> list[dict]:
+    """Identify test files whose corresponding source module no longer exists."""
     issues = []
     for test_file in tests_dir.glob("test_*.py"):
         stem = test_file.stem[len("test_"):]
-        candidates = list((repo_root / "swarm_os").rglob(f"{stem}.py")) + \
-                     list((repo_root / "swarm_os").rglob(f"*{stem}*.py"))
+        candidates = (
+            list((repo_root / "swarm_os").rglob(f"{stem}.py"))
+            + list((repo_root / "swarm_os").rglob(f"*{stem}*.py"))
+            + list((repo_root / "runtime_v2").rglob(f"{stem}.py"))
+            + list((repo_root / "runtime_v2").rglob(f"*{stem}*.py"))
+            + list((repo_root / "organism_console").rglob(f"{stem}.py"))
+        )
+        if not candidates:
+            issues.append({
+                "file": str(test_file),
+                "stem": stem,
+                "diagnosis": "orphaned_test_no_source_module",
+                "severity": "warning",
+            })
     return issues
 
 

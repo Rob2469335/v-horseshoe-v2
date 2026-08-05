@@ -1,13 +1,17 @@
 from organism_console.skills.skill_repository import Skill
 import numpy as np
 import uuid
-from fastembed import TextEmbedding
 from datetime import datetime
+
+try:
+    from fastembed import TextEmbedding
+except ImportError:  # optional embedding backend; embed() degrades gracefully
+    TextEmbedding = None
 
 class SkillMemoryEngine:
     def __init__(self):
         self.repo = None
-        self.embedder = TextEmbedding()
+        self.embedder = TextEmbedding() if TextEmbedding is not None else None
 
     def _get_repo(self):
         if self.repo is None:
@@ -16,6 +20,8 @@ class SkillMemoryEngine:
         return self.repo
 
     def embed(self, text: str) -> np.ndarray:
+        if self.embedder is None:
+            raise RuntimeError("fastembed is not installed — cannot embed skills. `pip install fastembed`.")
         emb = next(self.embedder.embed([text]))
         return np.asarray(emb, dtype=np.float32)
 

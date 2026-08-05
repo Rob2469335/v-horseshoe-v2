@@ -1,5 +1,4 @@
 import importlib
-import traceback
 
 class SelfHeal:
     def __init__(self):

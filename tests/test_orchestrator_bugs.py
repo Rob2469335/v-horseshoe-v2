@@ -46,7 +46,7 @@ async def test_slash_command_not_repeated(orch):
     )
 
     result, model = await orch.generate(
-        model="qwen3.5-9b",
+        model="qwen3.5-4b",
         prompt="fix the routes",
     )
 
@@ -71,7 +71,7 @@ async def test_duplicate_tool_call_breaks_loop(orch):
     orch.mcp.call = AsyncMock(return_value={"ok": True, "data": "result"})
 
     result, model = await orch.generate(
-        model="qwen3.5-9b",
+        model="qwen3.5-4b",
         prompt="search for hello",
     )
 
@@ -95,7 +95,7 @@ def test_detect_provider_nvidia(orch):
 
 
 def test_detect_provider_local_model(orch):
-    assert orch._detect_provider("qwen3.5-9b") == "llama"
+    assert orch._detect_provider("qwen3.5-4b") == "llama"
 
 
 def test_detect_provider_meta_model(orch):

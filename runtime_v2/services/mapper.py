@@ -51,7 +51,7 @@ def generate_repo_map(root_dir: str) -> str:
                                         map_lines.append(f"{symbol_indent}  def {class_node.name}()")
                             elif isinstance(node, ast.FunctionDef):
                                 map_lines.append(f"{symbol_indent}def {node.name}()")
-                    except Exception as e:
+                    except Exception:
                         map_lines.append(f"{symbol_indent}  (Failed to parse)")
                 elif file.endswith((".md", ".json", ".txt", ".yml", ".yaml", ".ps1")):
                     file_indent = "  " * (depth + 1)

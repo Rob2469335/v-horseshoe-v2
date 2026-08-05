@@ -14,9 +14,21 @@ logger = logging.getLogger(__name__)
 def _noop_trace(event: str, payload: Dict[str, Any]) -> None:
     return None
 
+
+def _default_root() -> Path:
+    """Stable sandbox root: the project root, NOT Path.cwd().
+
+    cwd can change at runtime (a test or embedding that chdirs), and the old
+    `Path.cwd()` default made the registry's filesystem root follow whatever
+    directory the process happened to be in — so a filesystem read of
+    'swarm_os/foo.py' failed after any chdir. The project root is deterministic:
+    parents[3] from swarm_os/lib/mcp/registry.py = up from mcp -> lib -> swarm_os
+    -> project root."""
+    return Path(__file__).resolve().parents[3]
+
 class MCPRegistry:
     def __init__(self, root: Path | None = None, trace_hook=None):
-        self.root = (root or Path.cwd()).resolve()
+        self.root = (root or _default_root()).resolve()
         self.trace_hook = trace_hook or _noop_trace
         logger.info(f"Initialized MCPRegistry with root: {self.root}")
 
@@ -50,7 +62,6 @@ class MCPRegistry:
         return {"ok": False, "error": f"Unknown tool: {tool}"}
 
     async def _qdrant_recall(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        import asyncio
         query = str(params.get("query", ""))
         # Enforce swarm_memory collection to prevent fragmentation and silent failures
         collection = "swarm_memory"

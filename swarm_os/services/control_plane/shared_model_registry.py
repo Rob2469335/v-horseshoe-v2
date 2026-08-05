@@ -14,14 +14,14 @@ class ModelProfile:
 
 LOCAL_MODEL_SPECS = [
     # 9B Tier (Primary — dense, all params active per token)
-    ModelProfile(name="qwen3.5-9b", role="general",         capabilities=["fast", "long_context"], metadata={"pp512": 85.0, "tg128": 10.2}),
-    ModelProfile(name="qwen3.5-9b", role="reasoning",       capabilities=["reasoning", "long_context"], metadata={"pp512": 85.0, "tg128": 10.2}),
-    ModelProfile(name="qwen3.5-9b", role="planner",         capabilities=["reasoning", "long_context"], metadata={"pp512": 85.0, "tg128": 10.2}),
-    ModelProfile(name="qwen3.5-9b", role="writer",          capabilities=["writing", "long_context"], metadata={"pp512": 85.0, "tg128": 10.2}),
-    ModelProfile(name="qwen3.5-9b", role="reasoning_long",  capabilities=["reasoning", "long_context"], metadata={"pp512": 85.0, "tg128": 10.2}),
-    ModelProfile(name="qwen3.5-9b", role="deep_coder",      capabilities=["code", "long_context", "reasoning"], metadata={"pp256": 74.9, "tg128": 5.5}),
-    ModelProfile(name="qwen3.5-9b", role="deep_coder_long", capabilities=["code", "long_context", "reasoning"], metadata={"pp256": 74.9, "tg128": 5.5}),
-    ModelProfile(name="qwen3.5-9b", role="coder_long",      capabilities=["code", "long_context"], metadata={"pp256": 74.9, "tg128": 5.5}),
+    ModelProfile(name="qwen3.5-4b", role="general",         capabilities=["fast", "long_context"], metadata={"pp512": 85.0, "tg128": 10.2}),
+    ModelProfile(name="qwen3.5-4b", role="reasoning",       capabilities=["reasoning", "long_context"], metadata={"pp512": 85.0, "tg128": 10.2}),
+    ModelProfile(name="qwen3.5-4b", role="planner",         capabilities=["reasoning", "long_context"], metadata={"pp512": 85.0, "tg128": 10.2}),
+    ModelProfile(name="qwen3.5-4b", role="writer",          capabilities=["writing", "long_context"], metadata={"pp512": 85.0, "tg128": 10.2}),
+    ModelProfile(name="qwen3.5-4b", role="reasoning_long",  capabilities=["reasoning", "long_context"], metadata={"pp512": 85.0, "tg128": 10.2}),
+    ModelProfile(name="qwen3.5-4b", role="deep_coder",      capabilities=["code", "long_context", "reasoning"], metadata={"pp256": 74.9, "tg128": 5.5}),
+    ModelProfile(name="qwen3.5-4b", role="deep_coder_long", capabilities=["code", "long_context", "reasoning"], metadata={"pp256": 74.9, "tg128": 5.5}),
+    ModelProfile(name="qwen3.5-4b", role="coder_long",      capabilities=["code", "long_context"], metadata={"pp256": 74.9, "tg128": 5.5}),
 
     # Auxiliary Models (Embeddings, Reranker, Vision)
     ModelProfile(name="moondream:latest",                                                role="vision",          capabilities=["vision"]),
@@ -34,19 +34,19 @@ LOCAL_MODEL_SPECS = [
 CLOUD_MODEL_SPECS = []
 
 ROLE_POOL = {
-    "general":          ["qwen3.5-9b"],
-    "reasoning":        ["qwen3.5-9b"],
-    "deep_coder":       ["qwen3.5-9b"],
-    "deep_coder_long":  ["qwen3.5-9b"],
-    "coder_long":       ["qwen3.5-9b"],
-    "writer":           ["qwen3.5-9b"],
+    "general":          ["qwen3.5-4b"],
+    "reasoning":        ["qwen3.5-4b"],
+    "deep_coder":       ["qwen3.5-4b"],
+    "deep_coder_long":  ["qwen3.5-4b"],
+    "coder_long":       ["qwen3.5-4b"],
+    "writer":           ["qwen3.5-4b"],
     "vision":           ["moondream:latest"],
     "embedding":        ["nomic-embed-text:latest"],
     "reranker":         ["qllama/bge-reranker-v2-m3:latest"],
-    "planner":          ["qwen3.5-9b"],
-    "researcher":       ["qwen3.5-9b"],
-    "fast":             ["qwen3.5-9b"],
-    "coder":            ["qwen3.5-9b"],
-    "coder_small":      ["qwen3.5-9b"],
+    "planner":          ["qwen3.5-4b"],
+    "researcher":       ["qwen3.5-4b"],
+    "fast":             ["qwen3.5-4b"],
+    "coder":            ["qwen3.5-4b"],
+    "coder_small":      ["qwen3.5-4b"],
 }
 

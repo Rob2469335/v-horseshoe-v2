@@ -79,7 +79,8 @@ async def test_dead_client_is_evicted_and_respawned(tmp_path):
     await handler.execute({"operation": "diagnostics", "file_path": str(f)})
     first = lsp_tool._pool[".py"]
     first.process.terminate()
-    await asyncio.wait_for(first.process.wait(), timeout=5.0)
+    async with asyncio.timeout(5.0):
+        await first.process.wait()
 
     res = await handler.execute({"operation": "diagnostics", "file_path": str(f)})
     assert "result" in res

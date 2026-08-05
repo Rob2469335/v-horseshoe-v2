@@ -5,13 +5,12 @@ try:
     truststore.inject_into_ssl()
 except ImportError:
     pass
-import swarm_os.bootstrap
 
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 
@@ -33,8 +32,9 @@ if os.environ.get("DISABLE_SSL_VERIFICATION", "").lower() in ("1", "true", "yes"
         os.environ["LITELLM_VERIFY_SSL"] = "False"
         os.environ["CURL_CA_BUNDLE"] = ""
         os.environ["REQUESTS_CA_BUNDLE"] = ""
-    except Exception:
-        pass
+    except Exception as _ssl_exc:
+        import logging as _logging
+        _logging.getLogger(__name__).warning("SSL verification override failed: %s", _ssl_exc)
 else:
     os.environ.setdefault("LITELLM_VERIFY_SSL", "True")
 
@@ -167,7 +167,6 @@ async def lifespan(app: FastAPI):
 
 
     import asyncio
-    import sys
     # Background indexing removed: it causes a 10-minute Ollama embedding bottleneck on startup.
     # Users should use the explicit `/index` command in the CLI which utilizes the optimized batch indexer.
 
@@ -203,6 +202,45 @@ async def lifespan(app: FastAPI):
         log.info("Started Reflection daemon (ASPO rule distillation, 10-min interval)")
     except Exception as exc:
         log.warning(f"Reflection daemon unavailable: {exc}")
+
+    # Genetic self-improvement daemon — OPT-IN via SWARM_GENETIC_MUTATION=1.
+    # The mutation loop is expensive (LLM + sandbox compile/test) and stages every
+    # mutation to .data/pending_mutations/ for explicit approval, so it never
+    # modifies live code on its own. Off by default to keep the runtime lean.
+    try:
+        import os as _os
+        if _os.environ.get("SWARM_GENETIC_MUTATION", "").strip() == "1":
+            from swarm_os.services.genetic_mutation_loop import run_genetic_mutation
+
+            async def _mutation_daemon(interval_seconds: float = 3600.0):
+                while True:
+                    try:
+                        await run_genetic_mutation()
+                    except Exception as exc:
+                        log.warning(f"Mutation daemon iteration failed: {exc}")
+                    await asyncio.sleep(interval_seconds)
+
+            t5 = asyncio.create_task(_mutation_daemon())
+            bg_tasks.add(t5)
+            log.info("Started Genetic Mutation daemon (hourly, SWARM_GENETIC_MUTATION=1)")
+    except Exception as exc:
+        log.warning(f"Genetic mutation daemon unavailable: {exc}")
+
+    # Outcome-driven evolution daemon — OPT-IN via SWARM_EVOLUTION=1. The agent
+    # loop feeds REAL outcomes (task completion, tool success, efficiency) into
+    # outcome_fitness when the same gate is on; this daemon runs evolutionary
+    # generations on that grounded fitness (elitism + crossover + mutate) so the
+    # kernel's tool-selection policy evolves against real execution, not LLM noise.
+    try:
+        import os as _os
+        if _os.environ.get("SWARM_EVOLUTION", "").strip() == "1":
+            from swarm_os.services.evolution_daemon import evolution_daemon
+
+            t6 = asyncio.create_task(evolution_daemon())
+            bg_tasks.add(t6)
+            log.info("Started Outcome-Driven Evolution daemon (SWARM_EVOLUTION=1)")
+    except Exception as exc:
+        log.warning(f"Evolution daemon unavailable: {exc}")
 
     try:
         from swarm_os.healing.system_probes import run_system_probes
@@ -274,6 +312,27 @@ def create_app() -> FastAPI:
     app = FastAPI(title="Swarm OS", lifespan=lifespan)
 
     app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+    # SECURITY: opt-in loopback API token. If SWARM_API_TOKEN is set (in .env or
+    # the environment), every request except health/liveness probes and /docs must
+    # carry `Authorization: Bearer <token>`. This neutralizes the unauthenticated
+    # writer surface (code execution, agent steps, heal/admin) for any local
+    # process or browser page when the swarm is deployed. When unset, the app
+    # stays open (local single-user dev default).
+    import os as _os
+    _api_token = _os.getenv("SWARM_API_TOKEN", "").strip()
+    if _api_token:
+
+        @app.middleware("http")
+        async def _api_token_guard(request, call_next):
+            from starlette.responses import JSONResponse
+            path = request.url.path
+            if path in ("/health", "/readyz", "/", "/docs", "/openapi.json"):
+                return await call_next(request)
+            auth = request.headers.get("Authorization", "")
+            if auth != f"Bearer {_api_token}":
+                return JSONResponse(status_code=401, content={"detail": "Unauthorized: missing or invalid SWARM_API_TOKEN"})
+            return await call_next(request)
 
     app.add_middleware(
         CORSMiddleware,

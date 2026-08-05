@@ -25,29 +25,27 @@ if (Test-Path $dotenvPath) {
     }
 }
 
-# Explicit API key fallback defaults (from ZENITH Swarm OS - API Keys)
+# Non-secret environment defaults. Cloud API keys are intentionally NOT hardcoded
+# here — they belong in `.env` (gitignored), which is loaded above. A missing key
+# disables the associated cloud service and the runtime falls back to local models.
 if (-not $env:LLAMA_BASE_URL)       { $env:LLAMA_BASE_URL       = "http://localhost:8080" }
 if (-not $env:OLLAMA_BASE_URL)      { $env:OLLAMA_BASE_URL      = "http://localhost:8080" }
 if (-not $env:QDRANT_LOCAL)         { $env:QDRANT_LOCAL         = "true" }
-
-if (-not $env:TAVILY_API_KEY)       { $env:TAVILY_API_KEY       = "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" }
-if (-not $env:SERPER_API_KEY)       { $env:SERPER_API_KEY       = "5751e133a650826ed6f103b2c5a6486a276cdca4" }
-if (-not $env:EXA_API_KEY)          { $env:EXA_API_KEY          = "bf1234c7-df6c-4974-aa94-20fd21880de0" }
-if (-not $env:SERPAPI_KEY)          { $env:SERPAPI_KEY          = "03307437e7a3ae398613914cf687200db5d66b58ebe863fd136f19d3db325afd" }
-if (-not $env:TINYFISH_API_KEY)     { $env:TINYFISH_API_KEY     = "sk-tinyfish-kaspa7FeVMLfRHcsD6HkIAjl-nXj3OVo" }
-
-if (-not $env:GEMINI_API_KEY)       { $env:GEMINI_API_KEY       = "AQ.Ab8RN6JIZuDjNviEEhROdpzwkpDWKGIbnrBTjqC7wTtcD-stLw" }
-if (-not $env:BRAVE_API_KEY)        { $env:BRAVE_API_KEY        = "BSAwBqBtiiEbP8GvFvNPF66dc_eslQa" }
-if (-not $env:GROQ_API_KEY)         { $env:GROQ_API_KEY         = "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" }
-if (-not $env:OPENROUTER_API_KEY)   { $env:OPENROUTER_API_KEY   = "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" }
-if (-not $env:NVIDIA_API_KEY)       { $env:NVIDIA_API_KEY       = "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" }
-if (-not $env:API_KEY)              { $env:API_KEY              = "pk-prov-7MFTHz2RyPZnabRoRwGF3V2vzq6xCzR3rwf35fkS3KMK" }
-if (-not $env:OPENAI_API_KEY)       { $env:OPENAI_API_KEY       = "sk-XmqUiHu0HlnSravUHSj32BGyzqpKeMlmMNeOQPk5FHmg3cazfwGvCroLKa1XSVlx" }
-if (-not $env:OPENAI_API_BASE)      { $env:OPENAI_API_BASE      = "https://api.opencode.go/v1" }
+if (-not $env:OPENAI_API_BASE)      { $env:OPENAI_API_BASE      = "https://opencode.ai/zen/go/v1" }
 
 if (-not $env:VH2_QDRANT_ENABLED)   { $env:VH2_QDRANT_ENABLED   = "true" }
 if (-not $env:VH2_RERANKER_ENABLED) { $env:VH2_RERANKER_ENABLED = "true" }
 if (-not $env:ZENITH_WEATHER_CITY)  { $env:ZENITH_WEATHER_CITY  = "New York" }
+
+# Warn when a cloud API key is missing so degraded startup is visible, not silent.
+$missingKeys = @()
+foreach ($k in @("OPENROUTER_API_KEY","NVIDIA_API_KEY","GEMINI_API_KEY","GROQ_API_KEY","OPENAI_API_KEY","API_KEY","TAVILY_API_KEY","SERPER_API_KEY","BRAVE_API_KEY","EXA_API_KEY","SERPAPI_KEY","TINYFISH_API_KEY")) {
+    if (-not [Environment]::GetEnvironmentVariable($k)) { $missingKeys += $k }
+}
+if ($missingKeys.Count -gt 0) {
+    Write-Host "Missing cloud API keys (services will use local fallbacks): $($missingKeys -join ', ')" -ForegroundColor Yellow
+    Write-Host "  Add them to .env to enable cloud models/features." -ForegroundColor Yellow
+}
 
 # Normalize key names used by different parts of the app
 if (-not $env:NVIDIA_API_KEY -and $env:NVIDIAAPIKEY) { $env:NVIDIA_API_KEY = $env:NVIDIAAPIKEY }
@@ -78,7 +76,7 @@ Start-Sleep -Seconds 1
 Write-Host "Cleanup complete ✔" -ForegroundColor Green
 
 # STEP 2 - llama.cpp microservices
-Write-Host "`n[STEP 2] Starting llama.cpp Microservices (Ports 8080-8083)..." -ForegroundColor Yellow
+Write-Host "`n[STEP 2] Starting llama.cpp Microservices (Ports 8080-8084)..." -ForegroundColor Yellow
 
 # To switch to the 35B model, uncomment the line below and comment out the 9B line.
 # $llamaGenJob = Start-Job -ScriptBlock { param($r); Set-Location $r; & .\bin\llama.exe serve -m ".\models\qwen-tuned-latest.gguf" -c 32768 -ctk q8_0 -ctv q8_0 -t 4 -b 256 -ub 512 --port 8080 2>&1 } -ArgumentList $root
@@ -107,7 +105,11 @@ $specArgs = @()
 if ($env:SWARM_SPEC_DECODE -ne "0") {
     $specType = if ($env:SWARM_SPEC_TYPE) { $env:SWARM_SPEC_TYPE } else { "ngram-mod" }
     $specArgs = @("--spec-type", $specType)
-    if ($specType -like "*ngram-mod*")    { $specArgs += @("--spec-ngram-mod-n-match", "24", "--spec-ngram-mod-n-min", "48", "--spec-ngram-mod-n-max", "64") }
+    # n-match=16/n-min=32/n-max=64: balanced for tool-decision JSON (~50-100 tokens).
+    # The benchmarked 21 t/s used n-match=24 on long prose; on short structured outputs
+    # that setting yielded only 15.6% acceptance. These values match llama.cpp tool-call
+    # benchmark guidance and should recover acceptance to >40%.
+    if ($specType -like "*ngram-mod*")    { $specArgs += @("--spec-ngram-mod-n-match", "16", "--spec-ngram-mod-n-min", "32", "--spec-ngram-mod-n-max", "64") }
     if ($specType -like "*ngram-simple*") { $specArgs += @("--spec-ngram-simple-size-n", "4", "--spec-ngram-simple-size-m", "16", "--spec-ngram-simple-min-hits", "1") }
     if ($specType -like "*draft-mtp*")     { $specArgs += @("--spec-draft-n-max", "3") }
     if ($env:SWARM_DRAFT_MODEL)            { $specArgs += @("--model-draft", $env:SWARM_DRAFT_MODEL) }
@@ -115,15 +117,15 @@ if ($env:SWARM_SPEC_DECODE -ne "0") {
 
 # Local generation model (DEFAULT): the unsloth MTP 4B (UD-Q4_K_XL) on the iGPU
 # (-ngl 99) - ~21 t/s (tool-decision) with SWARM_SPEC_DECODE=1 (ngram-mod default),
-# or ~6.4 t/s plain. The qwen3.5-4b,qwen3.5-9b alias keeps the runtime unchanged.
+# or ~6.4 t/s plain. Served under the honest alias "qwen3.5-4b".
 # Override with $env:SWARM_LOCAL_MODEL:
 #   - "qwen3.5-9b"     : plain 9B Q4_K_M, CPU-native (-ngl 0), ~5.5-6.0 t/s - quality
 #                        fallback for cloud-offline periods (9B MTP is a dud: +21%,
 #                        50% acceptance - see AGENTS.md)
-#   - "qwen3.5-4b"     : plain 4B Q4_K_M on the iGPU (backward compat)
-#   - "qwen3.5-4b-mtp" : MTP 4B (same as default; backward compat)
+#   - "qwen3.5-4b"     : plain 4B Q4_K_M on the iGPU (same alias)
+#   - "qwen3.5-4b-mtp" : MTP 4B (same as default)
 $genModel = "C:\Users\rober\models\Qwen3.5-4B-UD-Q4_K_XL.gguf"
-$genAlias = "qwen3.5-4b,qwen3.5-9b"
+$genAlias = "qwen3.5-4b"
 $genNgl = "99"
 if ($env:SWARM_LOCAL_MODEL -eq "qwen3.5-9b") {
     $genModel = ".\models\Qwen3.5-9B-Q4_K_M.gguf"
@@ -132,18 +134,29 @@ if ($env:SWARM_LOCAL_MODEL -eq "qwen3.5-9b") {
 }
 if ($env:SWARM_LOCAL_MODEL -eq "qwen3.5-4b") {
     $genModel = "C:\Users\rober\models\Qwen3.5-4B-Q4_K_M.gguf"
-    $genAlias = "qwen3.5-4b,qwen3.5-9b"
+    $genAlias = "qwen3.5-4b"
     $genNgl = "99"
 }
 if ($env:SWARM_LOCAL_MODEL -eq "qwen3.5-4b-mtp") {
     $genModel = "C:\Users\rober\models\Qwen3.5-4B-UD-Q4_K_XL.gguf"
-    $genAlias = "qwen3.5-4b,qwen3.5-9b"
+    $genAlias = "qwen3.5-4b"
     $genNgl = "99"
 }
-$llamaGenJob = Start-Job -ScriptBlock { param($r, $spec, $m, $a, $ngl); Set-Location $r; & .\bin\llama.exe serve -m $m --alias $a -c 16384 -ctk q8_0 -ctv q8_0 -fa on -t 2 -tb 4 -b 2048 -ub 512 -np 1 --timeout 300 --cache-reuse 1024 --api-key "llama" --cors-origins "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000" -ngl $ngl --port 8080 @spec 2>&1 } -ArgumentList $root, $specArgs, $genModel, $genAlias, $genNgl
+# BUG FIX: cache-reuse is not supported by MTP GGUFs (kv_unified=false).
+# Passing it generates a warning on every boot and the flag is silently dropped.
+# Only set it for non-MTP models (plain Q4_K_M builds don't contain 'UD' in name).
+$cacheReuseArg = if ($genModel -like "*UD*") { @() } else { @("--cache-reuse", "1024") }
+# BUG FIX: $specArgs was built above but never passed into Start-Job — the previous
+# code hardcoded --spec-type and ngram params inline, so SWARM_SPEC_DECODE=0 had
+# no effect, draft-mtp missed --spec-draft-n-max 3, and SWARM_DRAFT_MODEL was
+# silently ignored. Now passes $specArgs + $cacheReuseArg as ArgumentList and uses
+# @spec / @cacheReuse splatting inside the ScriptBlock.
+$llamaGenJob = Start-Job -ScriptBlock { param($r, $spec, $cacheReuse, $m, $a, $ngl); Set-Location $r; & .\bin\llama.exe serve -m $m --alias $a -c 16384 -ctk q8_0 -ctv q8_0 -fa on -t 2 -tb 4 -b 2048 -ub 512 -np 1 --timeout 300 @cacheReuse --api-key "llama" --cors-origins "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000" -ngl $ngl --port 8080 @spec 2>&1 } -ArgumentList $root, $specArgs, $cacheReuseArg, $genModel, $genAlias, $genNgl
 $llamaEmbJob = Start-Job -ScriptBlock { param($r); Set-Location $r; & .\bin\llama.exe serve -m ".\models\nomic-embed-text-v1.5.Q8_0.gguf" --embedding --api-key "llama" --cors-origins "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000" --port 8081 -t 2 2>&1 } -ArgumentList $root
 $llamaRerankJob = Start-Job -ScriptBlock { param($r); Set-Location $r; & .\bin\llama.exe serve -m ".\models\qllama-bge-reranker-v2-m3-latest.gguf" --reranking --api-key "llama" --cors-origins "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000" --port 8082 -t 2 2>&1 } -ArgumentList $root
 $llamaVisJob = Start-Job -ScriptBlock { param($r); Set-Location $r; & .\bin\llama.exe serve -m ".\models\moondream-latest.gguf" --override-kv "tokenizer.ggml.pre=str:default" --chat-template "vicuna" --mmproj-auto --api-key "llama" --cors-origins "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000" --port 8083 -t 2 2>&1 } -ArgumentList $root
+# 0.8B summarization server (dedicated to memory consolidation/distiller — fast, lightweight, keeps the main 4B slot free)
+$llamaSummJob = Start-Job -ScriptBlock { param($r); Set-Location $r; & .\bin\llama.exe serve -m "C:\Users\rober\models\Qwen3.5-0.8B.Q4_K_M.gguf" --alias "qwen3.5-0.8b" -c 8192 -t 1 -tb 2 -b 512 -ub 256 -np 1 --timeout 120 --api-key "llama" --cors-origins "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000" --port 8084 2>&1 } -ArgumentList $root
 
 Start-Sleep -Seconds 8
 Write-Host "llama.cpp microservices ✔" -ForegroundColor Green
@@ -282,6 +295,7 @@ try {
         Receive-Job $llamaEmbJob   | ForEach-Object { Write-Host "[llama-emb]    $_" -ForegroundColor DarkGreen }
         Receive-Job $llamaRerankJob | ForEach-Object { Write-Host "[llama-rank]   $_" -ForegroundColor DarkGreen }
         Receive-Job $llamaVisJob   | ForEach-Object { Write-Host "[llama-vis]    $_" -ForegroundColor DarkGreen }
+        Receive-Job $llamaSummJob  | ForEach-Object { Write-Host "[llama-summ]   $_" -ForegroundColor DarkGreen }
         Receive-Job $backendJob  | ForEach-Object { Write-Host "[backend]  $_" -ForegroundColor DarkCyan }
         Receive-Job $frontendJob | ForEach-Object { Write-Host "[frontend] $_" -ForegroundColor DarkYellow }
         Receive-Job $whisperJob  | ForEach-Object { Write-Host "[whisper]  $_" -ForegroundColor DarkMagenta }
@@ -290,8 +304,8 @@ try {
     }
 } finally {
     Write-Host "`nShutting down..." -ForegroundColor Red
-    Stop-Job  $llamaGenJob, $llamaEmbJob, $llamaRerankJob, $llamaVisJob, $backendJob, $frontendJob, $whisperJob, $listenerJob -ErrorAction SilentlyContinue
-    Remove-Job $llamaGenJob, $llamaEmbJob, $llamaRerankJob, $llamaVisJob, $backendJob, $frontendJob, $whisperJob, $listenerJob -ErrorAction SilentlyContinue
+    Stop-Job  $llamaGenJob, $llamaEmbJob, $llamaRerankJob, $llamaVisJob, $llamaSummJob, $backendJob, $frontendJob, $whisperJob, $listenerJob -ErrorAction SilentlyContinue
+    Remove-Job $llamaGenJob, $llamaEmbJob, $llamaRerankJob, $llamaVisJob, $llamaSummJob, $backendJob, $frontendJob, $whisperJob, $listenerJob -ErrorAction SilentlyContinue
     foreach ($svc in @("llama","qdrant","node","python")) {
         Get-Process -Name $svc -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     }

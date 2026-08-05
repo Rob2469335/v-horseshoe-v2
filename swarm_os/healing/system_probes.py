@@ -86,7 +86,6 @@ def check_runaway_processes(cpu_threshold: float = _RUNAWAY_CPU_PERCENT,
     `cpu_percent(None)`, sleep ONCE globally, then sample — otherwise the
     per-process `interval=` blocking calls serialize and take O(n) seconds."""
     import psutil
-    import time
     runaway = []
     procs = []
     for proc in psutil.process_iter(["pid", "name", "cmdline"]):
@@ -153,7 +152,6 @@ def _temp_roots() -> set[str]:
 
 
 def check_temp_growth(threshold_gb: float = _TEMP_THRESHOLD_GB) -> Dict[str, Any]:
-    import tempfile
     cap = int(threshold_gb * 2 * (1024**3))
     total = 0
     largest = []

@@ -31,7 +31,7 @@ export function OrganismConstellation({ population = [] }: { population?: any[] 
       id: org.id || `agent-${index}`,
       name: org.id || `Agent-${index}`,
       fitness: org.fitness || 0.1,
-      genomeType: org.genome?.model || org.model || 'qwen3.5-9b',
+      genomeType: org.genome?.model || org.model || 'qwen3.5-4b',
       generation: org.genome?.generation || 1
     }));
 

@@ -41,6 +41,27 @@ class SecurityGate:
     BANNED_MODULES = ["subprocess", "os.system", "os", "sys", "socket", "ctypes", "pty", "shlex"]
 
     @classmethod
+    def _scan_visitor(cls, code: str) -> BannedNodeVisitor:
+        tree = ast.parse(code, mode="exec")
+        visitor = BannedNodeVisitor(cls.BANNED_CALLS, cls.BANNED_MODULES)
+        visitor.visit(tree)
+        return visitor
+
+    @classmethod
+    def scan_code(cls, code: str) -> None:
+        """Scan inline source code (e.g. an LLM/agent-supplied Python snippet)
+        before execution. Raises SecurityGateViolation on banned calls/modules."""
+        try:
+            visitor = cls._scan_visitor(code)
+        except SyntaxError as e:
+            raise SecurityGateViolation(f"Syntax Error in supplied code: {e}")
+        if visitor.violations:
+            violation_msg = "; ".join(visitor.violations)
+            logger.error("Security Gate triggered on inline code: %s", violation_msg)
+            raise SecurityGateViolation(violation_msg)
+        return True
+
+    @classmethod
     def scan_file(cls, filepath: Path):
         try:
             with open(filepath, "r", encoding="utf-8") as f:

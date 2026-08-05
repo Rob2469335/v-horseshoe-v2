@@ -1,14 +1,12 @@
-import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Dict, Any, List
-from collections import Counter
 
 from organism_console.core.repair_engine import (
-    classify_failure, TieredRepairOrchestrator, load_cures, save_cures,
-    load_lessons, append_lesson, validate_file, meta_classify_lessons,
-    run_adversarial_check, KNOWLEDGE_BASE_DIR, load_budget, save_budget,
+    TieredRepairOrchestrator, load_cures, save_cures,
+    load_lessons, meta_classify_lessons,
+    run_adversarial_check, KNOWLEDGE_BASE_DIR,
 )
 
 import logging

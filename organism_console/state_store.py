@@ -12,7 +12,7 @@ class SessionState:
         
         # Default states
         self.active_agent: str = "coordinator"
-        self.active_model: str = "qwen3.5-9b"
+        self.active_model: str = "qwen3.5-4b"
         self.execution_phase: str = "thinking"
         self.last_tool_call: Optional[Dict[str, Any]] = None
         self.last_error: Optional[str] = None

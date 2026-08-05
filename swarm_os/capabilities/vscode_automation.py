@@ -1,9 +1,6 @@
 import logging
-import asyncio
-import os
 from pathlib import Path
-from typing import Dict, Any, List
-from swarm_os.capabilities.models import VSCodeAutomationRequest, VSCodeAutomationResponse
+from typing import Dict, Any
 
 logger = logging.getLogger(__name__)
 

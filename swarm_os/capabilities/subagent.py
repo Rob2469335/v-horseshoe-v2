@@ -18,6 +18,15 @@ class SubagentHandler:
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         self.config = config or {}
         self.backend_url = os.environ.get("ZENITH_BACKEND_URL", "http://127.0.0.1:8000").rstrip("/")
+        self._client: httpx.AsyncClient | None = None
+
+    def _get_client(self) -> httpx.AsyncClient:
+        if self._client is None:
+            self._client = httpx.AsyncClient(
+                timeout=httpx.Timeout(120.0),
+                limits=httpx.Limits(max_keepalive_connections=5, max_connections=20),
+            )
+        return self._client
 
     async def execute(self, payload: Any) -> Dict[str, Any]:
         if isinstance(payload, dict):
@@ -35,33 +44,33 @@ class SubagentHandler:
         logger.info(f"Spawning subagent '{agent_id}' to execute subtask...")
         
         try:
-            async with httpx.AsyncClient(timeout=120.0) as client:
-                url = f"{self.backend_url}/agents/{agent_id}/step"
-                resp = await client.post(
-                    url,
-                    json={
-                        "prompt": prompt,
-                        "history": history
-                    }
-                )
-                if resp.status_code != 200:
-                    return {
-                        "status": "error",
-                        "message": f"Subagent execution failed with HTTP status {resp.status_code}: {resp.text}"
-                    }
-                
-                chunks = resp.json()
-                final_content = ""
-                for chunk in chunks:
-                    if isinstance(chunk, dict):
-                        final_content += chunk.get("content", "") or chunk.get("thinking", "")
-                
-                return {
-                    "status": "success",
-                    "agent_id": agent_id,
+            client = self._get_client()
+            url = f"{self.backend_url}/agents/{agent_id}/step"
+            resp = await client.post(
+                url,
+                json={
                     "prompt": prompt,
-                    "content": final_content.strip()
+                    "history": history
                 }
+            )
+            if resp.status_code != 200:
+                return {
+                    "status": "error",
+                    "message": f"Subagent execution failed with HTTP status {resp.status_code}: {resp.text}"
+                }
+            
+            chunks = resp.json()
+            final_content = ""
+            for chunk in chunks:
+                if isinstance(chunk, dict):
+                    final_content += chunk.get("content", "") or chunk.get("thinking", "")
+            
+            return {
+                "status": "success",
+                "agent_id": agent_id,
+                "prompt": prompt,
+                "content": final_content.strip()
+            }
         except Exception as e:
             logger.error(f"Failed to execute subagent: {e}")
             return {"status": "error", "message": f"Subagent execution crashed: {e}"}

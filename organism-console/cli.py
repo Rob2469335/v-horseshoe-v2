@@ -66,7 +66,7 @@ def get_installed_models():
             return resp.json().get("installed_models", [])
     except Exception:
         pass
-    return ["phi4-mini:latest"]
+    return ["qwen3.5-4b"]
 
 def main():
     if len(sys.argv) > 1:

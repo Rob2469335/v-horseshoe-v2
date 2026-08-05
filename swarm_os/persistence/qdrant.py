@@ -9,7 +9,7 @@ from typing import Any
 
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import (
-    Distance, VectorParams, PointStruct, Filter
+    Distance, VectorParams, PointStruct
 )
 import httpx
 
@@ -53,15 +53,28 @@ async def init_collections() -> None:
             log.debug(f"Collection exists: {name}")
 
 
+_embed_client: httpx.AsyncClient | None = None
+
+
+def _get_embed_client() -> httpx.AsyncClient:
+    global _embed_client
+    if _embed_client is None:
+        _embed_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(30.0),
+            limits=httpx.Limits(max_keepalive_connections=5, max_connections=20),
+        )
+    return _embed_client
+
+
 async def _embed(text: str) -> list[float]:
     """Get embedding from Ollama nomic-embed-text."""
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(
-            f"{OLLAMA_BASE_URL}/api/embed",
-            json={"model": EMBED_MODEL, "input": text},
-        )
-        resp.raise_for_status()
-        return resp.json()["embeddings"][0]
+    client = _get_embed_client()
+    resp = await client.post(
+        f"{OLLAMA_BASE_URL}/api/embed",
+        json={"model": EMBED_MODEL, "input": text},
+    )
+    resp.raise_for_status()
+    return resp.json()["embeddings"][0]
 
 
 async def upsert(collection_key: str, doc_id: str, text: str, payload: dict[str, Any]) -> None:

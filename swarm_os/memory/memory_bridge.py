@@ -9,7 +9,7 @@ import time
 import uuid
 from collections import deque
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import httpx
 
@@ -20,7 +20,7 @@ from swarm_os.repositories.graph_repo import GraphRepository
 from swarm_os.services.memory_daemon import MemoryDaemon
 from swarm_os.memory._memory_bridge_base import (
     CHUNK_SIZE, SESSION_WINDOW, DEDUP_WINDOW,
-    LLAMA_GEN, LLAMA_EMB, SUM_MODEL, EMBED_MODEL, VECTOR_SIZE,
+    LLAMA_EMB, LLAMA_SUMM, SUM_MODEL, EMBED_MODEL, VECTOR_SIZE,
     DECAY, FLUSH_TRIGGERS, EVENT_TYPE_KEYS,
     Session, Bias,
 )
@@ -265,7 +265,7 @@ class MemoryBridge:
     ) -> Dict[str, Any]:
         local = self.routing_signal(model, event_type)
 
-        query = f"routing decision"
+        query = "routing decision"
         results: List[Dict[str, Any]] = []
 
         try:
@@ -396,7 +396,7 @@ class MemoryBridge:
                 )
             return True
         except Exception as exc:
-            logger.warning("vector store error: %s", exc)
+            logger.exception("vector store error: %s", exc)
             return False
 
     async def _embed(self, text: str) -> Optional[list]:
@@ -418,19 +418,28 @@ class MemoryBridge:
         try:
             snippet = json.dumps(self.session.events[-CHUNK_SIZE:], ensure_ascii=False)
             response = await self.http.post(
-                f"{LLAMA_GEN}/v1/chat/completions",
+                f"{LLAMA_SUMM}/v1/chat/completions",
                 json={
                     "model": SUM_MODEL,
                     "messages": [{"role": "user", "content": f"Summarize in one sentence:\n{snippet}"}],
                     "stream": False,
                     "temperature": 0.0,
+                    "max_tokens": 500,
                 },
-                timeout=300.0,
+                timeout=60.0,
             )
             response.raise_for_status()
             return (response.json()["choices"][0]["message"]["content"] or "").strip()
+        except (httpx.ReadError, httpx.ReadTimeout) as exc:
+            # BUG FIX: the single llama.cpp slot is often busy with a main-agent
+            # generation when _summarize fires. ReadError/ReadTimeout here just means
+            # the slot was occupied — log at debug (not warning) and fall back.
+            logger.debug("summarization skipped (slot busy): %r", exc)
+            types = list(dict.fromkeys(self.session.types))[:3]
+            models = list(dict.fromkeys(m for m in self.session.models if m))[:2]
+            return f"Agent performed {', '.join(types) or 'unknown'} using {', '.join(models) or 'unknown model'}."
         except Exception as exc:
-            logger.warning("summarization error: %r", exc)
+            logger.exception("summarization error: %r", exc)
             types = list(dict.fromkeys(self.session.types))[:3]
             models = list(dict.fromkeys(m for m in self.session.models if m))[:2]
             return f"Agent performed {', '.join(types) or 'unknown'} using {', '.join(models) or 'unknown model'}."
@@ -463,7 +472,9 @@ class MemoryBridge:
                 ensure_ascii=False,
             )
             h = hashlib.sha256(raw.encode("utf-8")).hexdigest()
-        except Exception:
+        except Exception as exc:
+            # BUG FIX: was silently swallowing JSON/hash errors with no log.
+            logger.debug("duplicate check error (treating as non-duplicate): %s", exc)
             return False
 
         if h in self.recent_hashes:
@@ -594,17 +605,28 @@ class MemoryBridge:
                 
                 try:
                     response = await self.http.post(
-                        f"{LLAMA_GEN}/v1/chat/completions",
+                        f"{LLAMA_SUMM}/v1/chat/completions",
                         json={
                             "model": SUM_MODEL,
                             "messages": [{"role": "user", "content": prompt}],
                             "stream": False,
                             "temperature": 0.0,
+                            "max_tokens": 500,
                         },
+                        timeout=60.0,
                     )
                     response.raise_for_status()
                     new_summary = (response.json()["choices"][0]["message"]["content"] or "").strip()
-                except Exception:
+                except (httpx.ReadError, httpx.ReadTimeout) as exc:
+                    # Single llama.cpp slot often busy with a main-agent generation.
+                    # Slot-busy is expected, not an error — log at debug and fall back
+                    # to a concatenated summary instead of a noisy traceback.
+                    logger.debug("consolidation LLM skipped (slot busy) for outcome '%s': %r", outcome, exc)
+                    new_summary = f"Consolidated summary for {len(items)} runs with outcome {outcome}: " + ", ".join(summaries[:3])
+                except Exception as exc:
+                    # BUG FIX: was silently swallowing LLM HTTP failures with no log,
+                    # causing 'Memory consolidation failed:' with blank message.
+                    logger.exception("consolidation LLM failed for outcome '%s': %s", outcome, exc)
                     new_summary = f"Consolidated summary for {len(items)} runs with outcome {outcome}: " + ", ".join(summaries[:3])
 
                 vec = await self._embed(new_summary)
@@ -636,7 +658,7 @@ class MemoryBridge:
 
             return consolidated_any
         except Exception as exc:
-            logger.warning("Memory consolidation failed: %s", exc)
+            logger.warning("Memory consolidation failed: %s", exc, exc_info=True)
             return False
 
     async def cluster_graph_rag(self) -> None:
@@ -665,17 +687,28 @@ class MemoryBridge:
                 
                 try:
                     response = await self.http.post(
-                        f"{LLAMA_GEN}/v1/chat/completions",
+                        f"{LLAMA_SUMM}/v1/chat/completions",
                         json={
                             "model": SUM_MODEL,
                             "messages": [{"role": "user", "content": prompt}],
                             "stream": False,
                             "temperature": 0.0,
+                            "max_tokens": 500,
                         },
+                        timeout=60.0,
                     )
                     response.raise_for_status()
                     summary = (response.json()["choices"][0]["message"]["content"] or "").strip()
-                except Exception:
+                except (httpx.ReadError, httpx.ReadTimeout) as exc:
+                    # Single llama.cpp slot is frequently busy with a main-agent
+                    # generation or consolidation when cluster_graph_rag fires.
+                    # ReadError/ReadTimeout = slot occupied — log at debug and fall
+                    # back to a structural summary instead of a noisy traceback.
+                    logger.debug("graph_rag cluster LLM skipped (slot busy) for cluster %d: %r", idx, exc)
+                    summary = f"Community cluster {idx} containing {len(c)} nodes."
+                except Exception as exc:
+                    # BUG FIX: was silently swallowing LLM HTTP failures with no log.
+                    logger.exception("graph_rag cluster LLM failed for cluster %d: %s", idx, exc)
                     summary = f"Community cluster {idx} containing {len(c)} nodes."
                 
                 await self.graph_repo.set_community_summary(comm_node, summary)
@@ -695,7 +728,7 @@ class MemoryBridge:
             await self.graph_repo.save()
             logger.info(f"GraphRAG: Found {len(communities)} communities and computed PageRank.")
         except Exception as exc:
-            logger.warning("GraphRAG clustering failed: %s", exc)
+            logger.exception("GraphRAG clustering failed: %s", exc)
 
     async def close(self) -> None:
         await asyncio.to_thread(self.event_repo.save_state, self.state)

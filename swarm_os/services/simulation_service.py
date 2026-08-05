@@ -62,6 +62,7 @@ class SimulationService:
                 env,
                 generate_fn=generate_fn,
                 snapshot_repo=self.snapshot_repo,
+                snapshot_every=1,
             )
             kernel.generation = snapshot.get("generation", 0)
 
@@ -74,6 +75,7 @@ class SimulationService:
                 env,
                 generate_fn=generate_fn,
                 snapshot_repo=self.snapshot_repo,
+                snapshot_every=1,
             )
 
-        return await kernel.run(steps)
+        return await kernel.run_steps(steps)

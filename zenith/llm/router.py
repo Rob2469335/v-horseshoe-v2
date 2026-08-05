@@ -20,25 +20,25 @@ class ModelRouter:
         self.tiers = {
             "fast": ModelTier(
                 name="fast",
-                models=["qwen3.5-9b"],
+                models=["qwen3.5-4b"],
                 capability="fast",
                 is_cloud=False
             ),
             "balanced": ModelTier(
                 name="balanced", 
-                models=["qwen3.5-9b"],
+                models=["qwen3.5-4b"],
                 capability="balanced",
                 is_cloud=False
             ),
             "smart": ModelTier(
                 name="smart",
-                models=["qwen3.5-9b"],
+                models=["qwen3.5-4b"],
                 capability="smart",
                 is_cloud=False
             ),
             "expert": ModelTier(
                 name="expert",
-                models=["qwen3.5-9b"],
+                models=["qwen3.5-4b"],
                 capability="expert",
                 is_cloud=False
             ),

@@ -1,3 +1,38 @@
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import asyncio
+    import httpx
+
+_failure_http_client: "httpx.AsyncClient | None" = None
+_failure_http_client_loop: "asyncio.AbstractEventLoop | None" = None
+
+def _get_failure_http_client() -> "httpx.AsyncClient":
+    """Pooled client, but bound to the event loop that created it.
+
+    `run_coro_sync()` runs probes inside a fresh `asyncio.run()` loop on a
+    daemon thread. A module-level client cached across loops holds connections
+    owned by a now-closed loop, so the NEXT probe throws `Event loop is closed`
+    (verified: alternating healthy/failed qdrant probes — the false "heal me"
+    signal that made the watchman nag about a healthy Qdrant). Recreate the
+    client whenever the running loop differs."""
+    import asyncio
+    global _failure_http_client, _failure_http_client_loop
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if _failure_http_client is None or _failure_http_client_loop is not loop:
+        import httpx
+        _failure_http_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(10.0, connect=2.0),
+            limits=httpx.Limits(max_keepalive_connections=5, max_connections=20),
+            headers={"Authorization": "Bearer llama"},
+        )
+        _failure_http_client_loop = loop
+    return _failure_http_client
+
+
 class FailureDetector:
     def __init__(self, backend_url=None, qdrant_url=None, ollama_url=None, probes=None):
         import os
@@ -6,11 +41,11 @@ class FailureDetector:
         self.llamacpp_url = ollama_url or os.getenv("ZENITH_LLAMACPP_URL", "http://127.0.0.1:8080/v1")
         self.probes = probes or {}
 
-    async def _http_ok(self, url, timeout=2):
-        import httpx
+    @staticmethod
+    async def _http_ok(url, timeout=2):
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                r = await client.get(url, headers={"Authorization": "Bearer llama"})
+            client = _get_failure_http_client()
+            r = await client.get(url, timeout=timeout)
             return {"ok": r.status_code == 200, "status_code": r.status_code}
         except Exception as exc:
             return {"ok": False, "error": str(exc)}

@@ -157,13 +157,20 @@ Enclose the script in a ```python block.
     
     for attempt in range(2):
         try:
-            res = await acompletion(
-                model="qwen3.5-9b",
-                messages=messages,
-                api_base="http://localhost:8080/v1",
-                api_key="llama",
-                custom_llm_provider="openai"
-            )
+            # Recovery/repair script generation = complex reasoning — use cloud
+            # DeepSeek V4 Flash (funded, cheap) instead of local qwen3.5-4b.
+            import os as _os
+            _kwargs = {
+                "model": "openai/deepseek-v4-flash",
+                "messages": messages,
+            }
+            _base = _os.getenv("OPENAI_API_BASE", "")
+            _key = _os.getenv("OPENAI_API_KEY", "")
+            if _base:
+                _kwargs["api_base"] = _base
+            if _key:
+                _kwargs["api_key"] = _key
+            res = await acompletion(**_kwargs)
             script_full = res.choices[0].message.content
             messages.append({"role": "assistant", "content": script_full})
             
@@ -191,8 +198,9 @@ Enclose the script in a ```python block.
                     env={**os.environ, "PYTHONNOUSERSITE": "1"},
                 )
                 try:
-                    stdout_b, stderr_b = await asyncio.wait_for(proc_handle.communicate(), timeout=10)
-                except asyncio.TimeoutError:
+                    async with asyncio.timeout(10):
+                        stdout_b, stderr_b = await proc_handle.communicate()
+                except TimeoutError:
                     proc_handle.kill()
                     raise Exception("Recovery script timed out after 10 seconds.")
 
@@ -237,8 +245,7 @@ Enclose the script in a ```python block.
 # Maps a downstream symptom to its upstream root cause
 CAUSAL_GRAPH = {
     "swarm_api": "backend",
-    "qwen3.5-9b": "llamacpp",
-    "phi4-mini": "llamacpp",
+    "qwen3.5-4b": "llamacpp",
     "nomic-embed-text": "llamacpp",
     "frontend": "swarm_api",
     "qdrant_client": "qdrant",

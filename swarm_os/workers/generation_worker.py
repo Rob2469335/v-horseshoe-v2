@@ -12,7 +12,7 @@ class GenerationWorker:
 
     async def handle_generation(self, event: Event):
         payload = event.payload
-        model = payload.get("model", "qwen3.5-9b")
+        model = payload.get("model", "qwen3.5-4b")
         messages = payload.get("messages", [])
         
         log.info(f"[GenerationWorker] Starting generation for model '{model}'")

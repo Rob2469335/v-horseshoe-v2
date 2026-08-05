@@ -23,7 +23,7 @@ if os.name == 'nt':
 
 DICTATION_KEYWORDS = ["dictate", "type", "type this"]
 LLM_API_URL = os.environ.get("LLM_API_URL", "http://127.0.0.1:4000/v1/chat/completions")
-LLM_MODEL = os.environ.get("LLM_MODEL", "qwen3.5-9b")
+LLM_MODEL = os.environ.get("LLM_MODEL", "qwen3.5-4b")
 DICTATION_COUNTDOWN_SECONDS = 1
 DICTATION_ESCAPE_CHARS_RE = re.compile(r'([{}\(\)\+\^%~])')
 

@@ -83,6 +83,7 @@ swarm_os.egg-info/
 # Large local runtime / data dirs (keep on disk, not in git)
 /models/
 /storage/
+/organism-console/storage/
 /bin/
 /pretrained_models/
 /scratch-app/
@@ -176,3 +177,6 @@ swarm_os.egg-info/
 /files.txt
 /_kernel_backup.txt
 /UPGRADE_SUMMARY_VISUAL.txt
+
+# runtime healing state
+swarm_os/healing/_strategy_stats.json

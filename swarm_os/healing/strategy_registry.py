@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from typing import Dict, Any, Optional
 from .governor_models import StrategyStats
+
+log = logging.getLogger(__name__)
 
 
 class StrategyRegistry:
@@ -48,7 +51,8 @@ class StrategyRegistry:
         try:
             with open(self.path, 'w', encoding='utf-8') as fh:
                 json.dump(self._data, fh, indent=2)
-        except Exception:
+        except Exception as e:
+            log.warning("Failed to persist strategy win-rates: %s", e)
             pass
 
     def list_all(self):

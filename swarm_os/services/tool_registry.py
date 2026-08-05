@@ -1,7 +1,7 @@
 import logging
 import hashlib
 import uuid
-from typing import Dict, List, Any
+from typing import Dict
 from qdrant_client.models import PointStruct, VectorParams, Distance
 from swarm_os.services.embedding_service import EmbeddingService
 
@@ -74,21 +74,6 @@ TOOL_SCHEMAS: Dict[str, dict] = {
                     },
                 },
                 "required": ["query"],
-            },
-        },
-    },
-    "code_exec": {
-        "type": "function",
-        "function": {
-            "name": "code_exec",
-            "description": "Extract, validate, and optionally run a code block",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "language": {"type": "string"},
-                    "code":     {"type": "string"},
-                },
-                "required": ["language", "code"],
             },
         },
     },

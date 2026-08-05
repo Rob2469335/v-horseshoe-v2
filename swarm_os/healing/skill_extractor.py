@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from typing import List, Dict, Any, Optional
-from .governor_models import SkillRecord, gen_id
+from .governor_models import SkillRecord
 import time
 
 

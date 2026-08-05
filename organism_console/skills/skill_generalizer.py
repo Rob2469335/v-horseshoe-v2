@@ -36,7 +36,7 @@ class SkillGeneralizer:
 
             # 🔥 ONLY merge small groups (prevents absorption)
             if 2 <= len(group) <= 3:
-                merged = self._merge_skills(group)
+                self._merge_skills(group)
                 merges_made += 1
 
         return merges_made

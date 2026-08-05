@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from typing import Dict, Any, Optional
-from .governor_models import gen_id
 
 
 class Reviewer:

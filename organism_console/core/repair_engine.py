@@ -8,7 +8,6 @@ import time
 from pathlib import Path
 from datetime import date, datetime, timezone
 from typing import Optional, Dict, Any, List, Tuple
-from collections import Counter
 
 import logging
 log = logging.getLogger("zenith_cli")
@@ -113,7 +112,8 @@ def _save_breaker(state: Dict[str, Any]):
     try:
         KNOWLEDGE_BASE_DIR.mkdir(parents=True, exist_ok=True)
         BREAKER_FILE.write_text(json.dumps(state, indent=2), encoding="utf-8")
-    except Exception:
+    except Exception as e:
+        log.warning("Failed to persist circuit breaker state: %s", e)
         pass
 
 
@@ -334,6 +334,42 @@ def run_adversarial_check(engine: Any) -> Dict[str, Any]:
 
 def get_similar_lessons(error_text: str, top_k: int = 3) -> List[Dict]:
     lessons = load_lessons()
+    # CLOSED LOOP (SOTA): merge LLM-distilled ReflexionMemory rules with the
+    # static lesson knowledge base, so repairs are seeded by LEARNED corrections
+    # from past failures — not just the hand-curated lessons file. Reflexion rules
+    # are converted to the same lesson shape (error_keywords from the failure
+    # reason, repair_action from the correction) and deduped against what's there.
+    try:
+        from swarm_os.services.reflection_loop import get_reflection_service
+        import asyncio as _ai
+
+        def _pull_reflexion_lesson():
+            try:
+                svc = get_reflection_service()
+                # check_for_past_mistakes returns a [PAST-MISTAKE WARNING] string
+                # built from the top retrieved ReflexionMemory rules for this error.
+                warning = _ai.run(svc.check_for_past_mistakes(error_text, threshold=0.3, max_chars=1200))
+                if warning and "PAST-MISTAKE" in warning:
+                    lesson = {
+                        "error_text": error_text[:200],
+                        "repair_action": warning[:400],
+                        "failure_type": "reflexion",
+                        "success": None,
+                        "source": "reflexion",
+                        "error_keywords": [w for w in error_text.replace(".", " ").split() if len(w) > 3][:8],
+                    }
+                    if not any(l.get("source") == "reflexion" for l in lessons):
+                        lessons.append(lesson)
+            except Exception as _re:
+                log.debug("reflexion rule merge skipped: %s", _re)
+
+        try:
+            _ai.get_running_loop().run_in_executor(None, _pull_reflexion_lesson)
+        except RuntimeError:
+            _pull_reflexion_lesson()
+    except Exception as _merr:
+        log.debug("reflexion merge unavailable: %s", _merr)
+
     error_lower = error_text.lower()
     scored = []
     for lesson in lessons:
@@ -754,25 +790,10 @@ class RepairWatchman:
                                 return
                             try:
                                 data = json.loads(line)
-                                if data.get("event_type") == "tool_result":
-                                    res = data.get("payload", {}).get("result", {})
-                                    if not res.get("ok", False):
-                                        err = res.get("error", "").strip()
-                                        if err and len(err) < 500:
-                                            if self.engine:
-                                                import re
-                                                from pathlib import Path
-                                                file_path_str = data.get("payload", {}).get("arguments", {}).get("file_path") or data.get("payload", {}).get("arguments", {}).get("TargetFile")
-                                                if not file_path_str:
-                                                    m = re.search(r'File "([^"]+\.py)"', err)
-                                                    if m:
-                                                        file_path_str = m.group(1)
-                                                fpath = Path(file_path_str) if file_path_str else None
-                                                if hasattr(self.engine, "diagnose_and_repair"):
-                                                    self.engine.diagnose_and_repair(err, file_path=fpath)
-                                                elif hasattr(self.engine, "repair"):
-                                                    self.engine.repair(err, file_path=fpath)
-                            except Exception:
+                                _handle_event_line(self.engine, data)
+                            except Exception as e:
+                                log.warning("Failed to parse event line at offset %d: %s", self._last_position, e)
+                                self._last_position += len(line.encode("utf-8")) if line else 1
                                 pass
                     self._last_position = current_size
             except Exception as e:
@@ -780,3 +801,66 @@ class RepairWatchman:
 
             import time as _time
             _time.sleep(self.interval)
+
+
+def _handle_event_line(engine: Any, data: dict) -> None:
+    """Handle ONE parsed event line from events.jsonl.
+
+    Extracted from RepairWatchman._watch so the bug-prone parse logic (which
+    crashed twice with 'NoneType' object is not subscriptable on null payloads)
+    is directly unit-testable in isolation. All accesses are None-tolerant.
+    Never raises: unexpected shapes are logged and skipped.
+    """
+    if not isinstance(data, dict):
+        return
+    if data.get("event_type") == "tool_result":
+        res = (data.get("payload") or {}).get("result", {}) or {}
+        if not res.get("ok", False):
+            err = str(res.get("error", "") or "").strip()
+            if err and len(err) < 500 and engine:
+                import re
+                from pathlib import Path
+                payload = data.get("payload") or {}
+                args = payload.get("arguments") or {}
+                file_path_str = args.get("file_path") or args.get("TargetFile")
+                if not file_path_str:
+                    m = re.search(r'File "([^"]+\.py)"', err)
+                    if m:
+                        file_path_str = m.group(1)
+                fpath = Path(file_path_str) if file_path_str else None
+                if hasattr(engine, "diagnose_and_repair"):
+                    engine.diagnose_and_repair(err, file_path=fpath)
+                elif hasattr(engine, "repair"):
+                    engine.repair(err, file_path=fpath)
+    elif data.get("event_type") == "turn_budget_exhausted":
+        # Turn-budget exhaustion is a LEARNING signal, not a code repair: a
+        # compound goal (filesystem + web_search) burned its turns without
+        # finishing. Record a reflexion so the next run gets a
+        # [PAST-MISTAKE WARNING] to interleave / minimize tool calls — closing
+        # the detection->correction loop for a failure class that used to leave
+        # zero trace.
+        try:
+            payload = data.get("payload") or {}
+            agent_id = payload.get("agent_id") or data.get("source") or "unknown"
+            prompt = str(payload.get("prompt") or "")[:150]
+            log.warning("turn_budget_exhausted for agent %s (prompt: %s)", agent_id, prompt)
+            from swarm_os.services.reflection_loop import get_reflection_service
+            import asyncio as _asyncio
+
+            async def _record_turn_reflexion():
+                await get_reflection_service().store_reflexion(
+                    task=f"agent:{agent_id} compound goal {prompt} exhausted turns",
+                    action="max_turns_reached",
+                    failure_reason="agent ran out of turns before completing a compound goal.",
+                    correction="Prefer completing the goal with the FEWEST tool calls. For compound goals needing both codebase reads and web research, interleave them — do not spend all turns on exploration.",
+                    do_not_repeat=f"agent:{agent_id} must not burn all turns on exploration before the required tool.",
+                    component=agent_id,
+                    confidence=0.6,
+                )
+
+            try:
+                _asyncio.get_running_loop().create_task(_record_turn_reflexion())
+            except RuntimeError:
+                _asyncio.run(_record_turn_reflexion())
+        except Exception as tb_err:
+            log.warning("Failed to record turn-budget reflexion: %s", tb_err)

@@ -5,6 +5,21 @@ import json
 
 log = logging.getLogger(__name__)
 
+_chat_http_client: httpx.AsyncClient | None = None
+
+
+def _get_chat_http_client() -> httpx.AsyncClient:
+    global _chat_http_client
+    if _chat_http_client is None:
+        _chat_http_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(15.0),
+            limits=httpx.Limits(max_keepalive_connections=3, max_connections=10),
+            trust_env=False,
+            proxy=None,
+        )
+    return _chat_http_client
+
+
 class ChatService:
     @staticmethod
     def compact_context_messages(messages: list[dict], max_turns: int = 10, keep_recent: int = 6) -> list[dict]:
@@ -35,7 +50,7 @@ class ChatService:
             f"<COMPACTED_SUMMARY>\n"
             f"Earlier conversation summary: {compacted_count} earlier turns compacted for token budget.\n"
             f"Sample of older topics:\n" + "\n".join(summary_lines) +
-            f"\n</COMPACTED_SUMMARY>"
+            "\n</COMPACTED_SUMMARY>"
         )
 
         compacted_msg = {"role": "system", "content": summary_text}
@@ -49,14 +64,14 @@ class ChatService:
         # 1. Fetch local llama.cpp models
         local_models = []
         try:
-            async with httpx.AsyncClient(timeout=15.0, trust_env=False, proxy=None) as client:
-                resp = await client.get("http://127.0.0.1:8080/v1/models", headers={"Authorization": "Bearer llama"})
-                if resp.status_code == 200:
-                    for m in resp.json().get("data", []):
-                        name = m["id"].lower()
-                        if "embed" in name or "rerank" in name or "vl" in name or "moondream" in name:
-                            continue
-                        local_models.append(m["id"])
+            client = _get_chat_http_client()
+            resp = await client.get("http://127.0.0.1:8080/v1/models", headers={"Authorization": "Bearer llama"})
+            if resp.status_code == 200:
+                for m in resp.json().get("data", []):
+                    name = m["id"].lower()
+                    if "embed" in name or "rerank" in name or "vl" in name or "moondream" in name:
+                        continue
+                    local_models.append(m["id"])
         except Exception as e:
             raise Exception(f"Failed to fetch local models: {e}")
             
@@ -88,7 +103,7 @@ Based on public benchmark knowledge of these local models (parameter sizes, doma
 Rules:
 1. ONLY use the models from the provided local list.
 2. You can assign the same model to multiple roles if it's the best fit.
-3. Return ONLY a raw JSON object mapping the exact role name to the exact model name. No markdown blocks, no formatting. Example: {{"coder": "qwen2.5-coder:7b"}}"""
+3. Return ONLY a raw JSON object mapping the exact role name to the exact model name. No markdown blocks, no formatting. Example: {{"coder": "qwen3.5-4b"}}"""
 
         # 4. Get LLM response
         litellm_fallbacks = [{"model": m} for m in cloud_models[1:]]
@@ -107,6 +122,11 @@ Rules:
             
         resp = await litellm.acompletion(**kwargs)
         content = resp.choices[0].message.content or "{}"
+        try:
+            from runtime_v2.services.usage_log import record_response
+            record_response(resp, best_cloud_model, source="autoassign")
+        except Exception as usage_err:  # noqa: BLE001
+            log.debug("usage log skipped: %s", usage_err)
         
         # Clean up possible markdown if provider ignored format
         content = content.replace("```json", "").replace("```", "").strip()

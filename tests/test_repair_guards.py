@@ -80,6 +80,58 @@ def test_circuit_breaker_daily_cap(tmp_path, monkeypatch):
     assert "daily repair cap" in reason
 
 
+def test_handle_event_line_null_payloads_no_crash():
+    """Regression: RepairWatchman's parse loop crashed with 'NoneType' object is
+    not subscriptable on event lines whose payload/result/arguments are None.
+    The extracted _handle_event_line helper must be None-tolerant and never
+    raise (unexpected shapes are skipped)."""
+    import json
+    events = [
+        {"event_type": "tool_result", "payload": None},
+        {"event_type": "tool_result", "payload": {"result": None}},
+        {"event_type": "tool_result", "payload": {"result": {"ok": False, "error": None}}},
+        {"event_type": "turn_budget_exhausted", "payload": None},
+        {"event_type": "turn_budget_exhausted", "payload": {"agent_id": None, "prompt": None}},
+        {"event_type": "agent_action", "payload": {"action": "final", "turn": 1}},
+        "not-a-dict",
+        None,
+    ]
+    for d in events:
+        repair_engine._handle_event_line(None, d)
+    # Also: a real failing tool_result should NOT crash and should attempt a repair.
+    class FakeEngine:
+        def __init__(self):
+            self.calls = []
+        def repair(self, error_text, file_path=None):
+            self.calls.append(("repair", error_text, file_path))
+        def diagnose_and_repair(self, error_text, file_path=None):
+            self.calls.append(("diagnose", error_text, file_path))
+
+    eng = FakeEngine()
+    repair_engine._handle_event_line(eng, {
+        "event_type": "tool_result",
+        "payload": {"result": {"ok": False, "error": "File not found: runtime_v2/services/agent_service.py"}},
+    })
+    assert eng.calls, "engine should have been invoked for a real failure"
+    assert "agent_service.py" in eng.calls[0][1]
+    # Null-payload tool_result must NOT invoke the engine (nothing to repair).
+    eng.calls.clear()
+    repair_engine._handle_event_line(eng, {"event_type": "tool_result", "payload": None})
+    assert not eng.calls
+
+
+def test_watchman_invokes_handle_event_line(tmp_path, monkeypatch):
+    """The threaded _watch must route parsed lines through the extracted helper
+    (so the null-payload fix actually applies at runtime)."""
+    import json
+    event_file = tmp_path.parent.parent / "data" / "events"
+    # Can't easily create the real path; instead verify the method wiring via
+    # the module: _watch calls _handle_event_line(self.engine, data).
+    import inspect
+    src = inspect.getsource(repair_engine.RepairWatchman._watch)
+    assert "_handle_event_line(self.engine, data)" in src
+
+
 def test_related_test_discovery_finds_governor():
     tests = repair_engine._find_related_tests(Path("swarm_os/healing/governor.py"))
     names = [t.name for t in tests]

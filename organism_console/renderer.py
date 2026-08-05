@@ -1,10 +1,9 @@
 # organism_console/renderer.py
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 from rich.panel import Panel
 from rich.table import Table
-from rich.text import Text
 from rich.box import SIMPLE
 from rich.markup import escape
 

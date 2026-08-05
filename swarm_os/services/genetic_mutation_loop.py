@@ -1,14 +1,13 @@
-import os
 import json
 import asyncio
 import logging
-import random
 import shutil
 import uuid
 from pathlib import Path
 from datetime import datetime, timezone
 from litellm import acompletion
 import re
+import textwrap
 
 from swarm_os.services.danger_room import DangerRoom
 from swarm_os.services.security_gate import SecurityGateViolation
@@ -22,7 +21,9 @@ if logging.getLogger().handlers == []:
 ROOT_DIR = Path(__file__).parent.parent.parent.resolve()
 PENDING_MUTATION_DIR = ROOT_DIR / ".data" / "pending_mutations"
 AGENT_SERVICE_PATH = ROOT_DIR / "runtime_v2" / "api" / "agent_service_v2.py"
-MODEL = "qwen3.5-9b"
+# Code mutation = complex reasoning — use the cloud DeepSeek V4 Flash default
+# (funded, cheap) instead of local qwen3.5-4b which produces weak mutations.
+MODEL = "openai/deepseek-v4-flash"
 
 EVOLUTION_PROMPT = """You are the Swarm OS Genetic Architect. 
 Your goal is to optimize the core engine function `{target_func}` to make it faster and use less memory based on recent performance logs.
@@ -103,14 +104,21 @@ async def run_genetic_mutation(target_file_path: str = str(AGENT_SERVICE_PATH), 
         messages = [{"role": "user", "content": prompt}]
         
         try:
-            res = await acompletion(
-                model=MODEL,
-                messages=messages,
-                api_base="http://127.0.0.1:8080/v1",
-                api_key="llama",
-                custom_llm_provider="openai",
-                temperature=temperature
-            )
+            # Route to cloud DeepSeek (OpenCode Go / OPENAI_API_BASE) when the
+            # model is a cloud id; fall back to local llama.cpp otherwise.
+            _is_cloud = "/" in MODEL and not MODEL.startswith("openai/qwen")
+            import os as _os
+            _kwargs = {"model": MODEL, "messages": messages, "temperature": temperature}
+            if _is_cloud:
+                _base = _os.getenv("OPENAI_API_BASE", "")
+                _key = _os.getenv("OPENAI_API_KEY", "")
+                if _base:
+                    _kwargs["api_base"] = _base
+                if _key:
+                    _kwargs["api_key"] = _key
+            else:
+                _kwargs.update(api_base="http://127.0.0.1:8080/v1", api_key="llama")
+            res = await acompletion(**_kwargs)
             mutated_code_full = res.choices[0].message.content
             
             match = re.search(r"```(?:python)?(.*?)```", mutated_code_full, re.DOTALL)
@@ -119,10 +127,24 @@ async def run_genetic_mutation(target_file_path: str = str(AGENT_SERVICE_PATH), 
             else:
                 # Fallback: remove any remaining backticks to prevent syntax errors
                 mutated_code = mutated_code_full.replace("```python", "").replace("```", "").strip()
-                
+
+            # Re-indent the mutated code to the slice's indentation. LLM output is
+            # top-level (column 0), but the target may be a class method (e.g.
+            # 4-space indent). Splicing an un-indented def into a class would break
+            # the file, so dedent the LLM output then re-indent to the original span.
+            indent_prefix = re.match(r"^\s*", sliced_code).group(0)
+            if indent_prefix:
+                mutated_code = textwrap.indent(textwrap.dedent(mutated_code), indent_prefix)
+
             # Splice the mutated function back into the core code
             # rather than overwriting the entire file with a single function
             new_core_code = core_code.replace(sliced_code, mutated_code)
+
+            if new_core_code == core_code:
+                raise Exception(
+                    "Mutation produced no change (slice not found or identical). "
+                    "Retrying with a stronger instruction."
+                )
                 
             logger.info("Mutation generated. Deploying to Danger Room sandbox for testing...")
             

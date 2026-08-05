@@ -84,7 +84,7 @@ async def _screen_state() -> Dict[str, Any]:
 
 async def _heal_status() -> Dict[str, Any]:
     """Cached heal status — never blocks the 10s poll on the ~16s probe scan."""
-    now = asyncio.get_event_loop().time()
+    now = asyncio.get_running_loop().time()
     with _heal_cache_lock:
         if now - _heal_cache["ts"] < _HEAL_CACHE_TTL and _heal_cache["value"]:
             return _heal_cache["value"]

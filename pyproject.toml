@@ -16,6 +16,6 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["organism_console*"]
+include = ["organism_console*", "swarm_os*", "runtime_v2*"]
 
 

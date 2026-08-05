@@ -1,21 +1,24 @@
 import json
+import logging
 from pathlib import Path
 from typing import Tuple
+
+log = logging.getLogger(__name__)
 
 LLAMA_URL = "http://127.0.0.1:8080/v1/chat/completions"
 
 AGENT_MODELS: dict[str, Tuple[str, str]] = {
     # All agents use Qwen3.5-9B (Q4_K_M) on port 8080.
-    "coordinator":   ("qwen3.5-9b", "llama"),
-    "planner":       ("qwen3.5-9b", "llama"),
-    "executor":      ("qwen3.5-9b", "llama"),
-    "tool-runner":   ("qwen3.5-9b", "llama"),
-    "reviewer":      ("qwen3.5-9b", "llama"),
-    "researcher":    ("qwen3.5-9b", "llama"),
-    "coder":         ("qwen3.5-9b", "llama"),
-    "debugger":      ("qwen3.5-9b", "llama"),
-    "tool-maker":    ("qwen3.5-9b", "llama"),
-    "code_analyzer": ("qwen3.5-9b", "llama"),
+    "coordinator":   ("qwen3.5-4b", "llama"),
+    "planner":       ("qwen3.5-4b", "llama"),
+    "executor":      ("qwen3.5-4b", "llama"),
+    "tool-runner":   ("qwen3.5-4b", "llama"),
+    "reviewer":      ("qwen3.5-4b", "llama"),
+    "researcher":    ("qwen3.5-4b", "llama"),
+    "coder":         ("qwen3.5-4b", "llama"),
+    "debugger":      ("qwen3.5-4b", "llama"),
+    "tool-maker":    ("qwen3.5-4b", "llama"),
+    "code_analyzer": ("qwen3.5-4b", "llama"),
 }
 
 
@@ -28,8 +31,8 @@ def load_overrides():
             for k, v in overrides.items():
                 if isinstance(v, list) and len(v) == 2:
                     AGENT_MODELS[k] = (v[0], v[1])
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning("Failed to load %s — using built-in agent->model defaults: %s", CONFIG_FILE, e)
 
 load_overrides()
 
@@ -48,7 +51,7 @@ def update_model_mapping(new_mapping: dict[str, str]):
     save_overrides()
 
 def get_model(agent_id: str) -> Tuple[str, str]:
-    return AGENT_MODELS.get(agent_id, ("qwen3.5-9b", "llama"))
+    return AGENT_MODELS.get(agent_id, ("qwen3.5-4b", "llama"))
 
 
 

@@ -1,8 +1,11 @@
 from __future__ import annotations
+import logging
 import time
 from dataclasses import dataclass
 from .failure_detector import FailureDetector
 from .governor import Governor
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -69,5 +72,6 @@ class HealingLoop:
                 },
                 "metrics_after": {},
             })
-        except Exception:
+        except Exception as e:
+            log.warning("Governor finalize failed: %s", e)
             pass

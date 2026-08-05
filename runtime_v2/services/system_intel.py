@@ -123,15 +123,9 @@ def process_list(sort: str = "memory", top: int = 40) -> Dict[str, Any]:
 
 
 def service_list() -> Dict[str, Any]:
-    try:
-        from psutil import win_service_get
-    except ImportError:
+    if not hasattr(psutil, "win_service_iter"):
         return _err("Windows services API not available on this platform")
     services = []
-    try:
-        from psutil._pswindows import SERVICES_KEY
-    except ImportError:
-        SERVICES_KEY = None
     try:
         for svc in psutil.win_service_iter():
             try:
@@ -355,8 +349,6 @@ def registry_query(subkey: str, hive: str = "HKLM") -> Dict[str, Any]:
 
 def event_log_query(log: str = "System", max_events: int = 50, level: str = "") -> Dict[str, Any]:
     """Tail the Windows Event Log. level: Error|Warning|Information (optional filter)."""
-    import xml.etree.ElementTree as ET
-    from datetime import datetime, timedelta
 
     log_name = str(log or "System")
     try:

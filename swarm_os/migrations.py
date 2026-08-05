@@ -59,7 +59,7 @@ _DEFAULT_TOOL_GENES = {
     "filesystem":    0.5,
     "context7":      0.5,
     "qdrant_recall": 0.5,
-    "code_exec":     0.5,
+    "sandbox_repl":     0.5,
 }
 
 _MCP_REGISTRY = list(_DEFAULT_TOOL_GENES.keys())

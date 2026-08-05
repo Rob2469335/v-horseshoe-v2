@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 from typing import Dict, Any, Optional
 from .diagnostician import Diagnostician
 from .learner import Learner
 from .governor_models import gen_id, FailureRecord
+
+log = logging.getLogger(__name__)
 
 
 class Governor:
@@ -57,7 +60,8 @@ class Governor:
                 )
                 try:
                     self.learner.persist_failure(fr)
-                except Exception:
+                except Exception as e:
+                    log.warning("Failed to persist failure record for incident %s: %s", incident_id, e)
                     pass
                 return decision
         except Exception:
@@ -143,7 +147,8 @@ class Governor:
         )
         try:
             self.learner.persist_failure(fr)
-        except Exception:
+        except Exception as e:
+            log.warning("Failed to persist failure record for incident %s: %s", incident_id, e)
             pass
 
         return decision
@@ -173,7 +178,8 @@ class Governor:
                         self.learner._cache["failures"] = lst
                         self.learner._save_cache()
                     break
-        except Exception:
+        except Exception as e:
+            log.warning("Failed to finalize incident %s: %s", incident_id, e)
             pass
 
         # update strategy stats if provided
@@ -199,5 +205,6 @@ class Governor:
                 success = outcome.get('outcome') == 'SUCCESS'
                 duration = outcome.get('duration', 0.0) or 0.0
                 strat.update(strategy_id, success=success, duration=duration)
-        except Exception:
+        except Exception as e:
+            log.warning("Failed to update strategy stats: %s", e)
             pass

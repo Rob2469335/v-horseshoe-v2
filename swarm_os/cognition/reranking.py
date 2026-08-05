@@ -12,6 +12,20 @@ log = logging.getLogger("reranker")
 RERANK_URL = "http://127.0.0.1:8082"
 RERANK_MODEL = "qllama-bge-reranker-v2-m3-latest.gguf"
 
+_rerank_client: httpx.AsyncClient | None = None
+
+
+def _get_rerank_client() -> httpx.AsyncClient:
+    global _rerank_client
+    if _rerank_client is None:
+        _rerank_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(30.0),
+            limits=httpx.Limits(max_keepalive_connections=5, max_connections=20),
+            headers={"Authorization": "Bearer llama"},
+        )
+    return _rerank_client
+
+
 async def rerank(query: str, candidates: list[dict], top_k: int = 5) -> list[dict]:
     """
     Score each candidate against the query using the dedicated llama-server reranker API.
@@ -23,19 +37,18 @@ async def rerank(query: str, candidates: list[dict], top_k: int = 5) -> list[dic
     texts = [c["payload"].get("text", "") for c in candidates]
 
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(
-                f"{RERANK_URL}/v1/rerank",
-                headers={"Authorization": "Bearer llama"},
-                json={
-                    "model": RERANK_MODEL,
-                    "query": query,
-                    "documents": texts,
-                    "top_n": top_k
-                },
-            )
-            resp.raise_for_status()
-            results = resp.json().get("results", [])
+        client = _get_rerank_client()
+        resp = await client.post(
+            f"{RERANK_URL}/v1/rerank",
+            json={
+                "model": RERANK_MODEL,
+                "query": query,
+                "documents": texts,
+                "top_n": top_k
+            },
+        )
+        resp.raise_for_status()
+        results = resp.json().get("results", [])
 
         scored = []
         for res in results:

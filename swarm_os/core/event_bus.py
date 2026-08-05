@@ -3,8 +3,7 @@ import time
 import json
 import os
 import logging
-from collections import defaultdict
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List
 
 log = logging.getLogger(__name__)
 

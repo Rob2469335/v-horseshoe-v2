@@ -12,7 +12,12 @@ def _load_dotenv() -> None:
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)
-        os.environ[key.strip()] = value.strip()
+        value = value.strip()
+        # Strip surrounding single/double quotes so a quoted value like
+        # OPENAI_API_BASE="https://..." does not leak literal `"` into URLs.
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]
+        os.environ[key.strip()] = value
 
 
 _load_dotenv()

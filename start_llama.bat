@@ -36,14 +36,14 @@ if not defined SWARM_SEMANTIC_CACHE set "SWARM_SEMANTIC_CACHE=1"
 
 rem Local generation model (DEFAULT): the unsloth MTP 4B (UD-Q4_K_XL) on the iGPU
 rem (-ngl 99) - ~21 t/s (tool-decision) with SWARM_SPEC_DECODE=1 (ngram-mod default),
-rem or ~6.4 t/s plain. The qwen3.5-4b,qwen3.5-9b alias keeps the runtime unchanged.
+rem or ~6.4 t/s plain. Served under the honest alias "qwen3.5-4b".
 rem Override with SWARM_LOCAL_MODEL:
 rem   qwen3.5-9b     = plain 9B Q4_K_M, CPU-native (-ngl 0), ~5.5-6.0 t/s - quality
 rem                    fallback for cloud-offline periods (9B MTP is a dud, +21%)
-rem   qwen3.5-4b     = plain 4B Q4_K_M on the iGPU (backward compat)
-rem   qwen3.5-4b-mtp = MTP 4B (same as default; backward compat)
+rem   qwen3.5-4b     = plain 4B Q4_K_M on the iGPU (same alias)
+rem   qwen3.5-4b-mtp = MTP 4B (same as default)
 set "GEN_MODEL=C:\Users\rober\models\Qwen3.5-4B-UD-Q4_K_XL.gguf"
-set "GEN_ALIAS=qwen3.5-4b,qwen3.5-9b"
+set "GEN_ALIAS=qwen3.5-4b"
 set "GEN_NGL=99"
 if "%SWARM_LOCAL_MODEL%"=="qwen3.5-9b" (
     set "GEN_MODEL=C:\Users\rober\Projects\v-horseshoe-v2\models\Qwen3.5-9B-Q4_K_M.gguf"
@@ -52,15 +52,20 @@ if "%SWARM_LOCAL_MODEL%"=="qwen3.5-9b" (
 )
 if "%SWARM_LOCAL_MODEL%"=="qwen3.5-4b" (
     set "GEN_MODEL=C:\Users\rober\models\Qwen3.5-4B-Q4_K_M.gguf"
-    set "GEN_ALIAS=qwen3.5-4b,qwen3.5-9b"
+    set "GEN_ALIAS=qwen3.5-4b"
     set "GEN_NGL=99"
 )
 if "%SWARM_LOCAL_MODEL%"=="qwen3.5-4b-mtp" (
     set "GEN_MODEL=C:\Users\rober\models\Qwen3.5-4B-UD-Q4_K_XL.gguf"
-    set "GEN_ALIAS=qwen3.5-4b,qwen3.5-9b"
+    set "GEN_ALIAS=qwen3.5-4b"
     set "GEN_NGL=99"
 )
+rem BUG FIX: --cache-reuse 1024 is not supported by MTP GGUFs (kv_unified=false).
+rem The flag is silently dropped but generates a warning on every startup.
+rem Only set it for non-MTP models (plain Q4_K_M; MTP models have 'UD' in filename).
+set "CACHE_REUSE_ARG=--cache-reuse 1024"
+echo %GEN_MODEL% | findstr /i "UD" >nul && set "CACHE_REUSE_ARG="
 
-bin\llama.exe serve -m "%GEN_MODEL%" --alias "%GEN_ALIAS%" -c 16384 -fa on -ctk q8_0 -ctv q8_0 -t 2 -tb 4 -b 2048 -ub 512 -np 1 --timeout 300 --cache-reuse 1024 -ngl %GEN_NGL% --port 8080 %SPEC_ARGS%
+bin\llama.exe serve -m "%GEN_MODEL%" --alias "%GEN_ALIAS%" -c 16384 -fa on -ctk q8_0 -ctv q8_0 -t 2 -tb 4 -b 2048 -ub 512 -np 1 --timeout 300 %CACHE_REUSE_ARG% -ngl %GEN_NGL% --port 8080 %SPEC_ARGS%
 
 pause

@@ -1,5 +1,4 @@
 import requests
-from typing import List, Dict, Any
 from .indexer import get_embeddings, QDRANT_URL, COLLECTION_NAME
 
 def semantic_search(query: str, limit: int = 5) -> str:

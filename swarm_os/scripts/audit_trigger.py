@@ -1,7 +1,5 @@
 import os
 import requests
-import json
-import sys
 
 def audit_file():
     target_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "system_monitor.py")

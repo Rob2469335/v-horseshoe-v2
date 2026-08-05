@@ -2,7 +2,6 @@
 import concurrent.futures
 import json
 import re
-import subprocess
 import sys
 from pathlib import Path
 from typing import List
@@ -25,18 +24,46 @@ def cmd_memory(ctx: CommandContext, args: List[str]) -> None:
         return
     action = args[0].lower()
     text = " ".join(args[1:])
+
+    def _resolve_collection() -> str | None:
+        """Pick a live vector-memory collection instead of a hardcoded one.
+        The old `upwork_learning` collection no longer exists (the memory bridge
+        writes sharded `agent_memory_*_v2` collections), so a hardcoded name
+        returns Qdrant 404 on every query. Prefer the general shard, then any
+        agent_memory_* collection actually present."""
+        import requests as _rq
+        try:
+            resp = _rq.get("http://127.0.0.1:6333/collections", timeout=5)
+            if resp.status_code != 200:
+                return None
+            names = [c.get("name") for c in resp.json().get("result", {}).get("collections", [])]
+            for preferred in ("agent_memory_general_v2", "general", "agent_episodic_memory", "swarm_memory"):
+                if preferred in names:
+                    return preferred
+            for n in names:
+                if isinstance(n, str) and (n.startswith("agent_memory_") or n in ("swarm_memory", "ReflexionMemory")):
+                    return n
+        except Exception:
+            pass
+        return None
+
     if action == "query":
         ctx.console.print(f"[bold cyan]Searching vector memories for: [green]{text}[/green]...[/bold cyan]")
         try:
             import requests
+            collection = _resolve_collection()
+            if collection is None:
+                ctx.console.print("[bold yellow]No vector-memory collection found on Qdrant — inject some memories first.[/bold yellow]")
+                return
             emb_resp = requests.post("http://127.0.0.1:8081/v1/embeddings", json={"input": text[:7000]}, headers={"Authorization": "Bearer llama"}, timeout=10.0)
             vector = emb_resp.json().get("data", [{}])[0].get("embedding", [0.0] * 768) if emb_resp.status_code == 200 else [0.0] * 768
-            q_resp = requests.post("http://127.0.0.1:6333/collections/upwork_learning/points/search", json={"vector": vector, "limit": 5, "with_payload": True}, timeout=10.0)
+            q_resp = requests.post(f"http://127.0.0.1:6333/collections/{collection}/points/search", json={"vector": vector, "limit": 5, "with_payload": True}, timeout=10.0)
             if q_resp.status_code == 200:
                 results = q_resp.json().get("result", [])
                 if not results:
                     ctx.console.print("[dim]No vector memory matches found.[/dim]")
                     return
+                ctx.console.print(f"[dim]collection: {collection}[/dim]")
                 table = Table(box=SIMPLE, header_style="bold cyan")
                 table.add_column("Score", style="bold yellow")
                 table.add_column("Memory Payload", style="white")
@@ -51,14 +78,18 @@ def cmd_memory(ctx: CommandContext, args: List[str]) -> None:
         ctx.console.print("[bold cyan]Injecting text into vector memory store...[/bold cyan]")
         try:
             import requests, uuid
+            collection = _resolve_collection()
+            if collection is None:
+                ctx.console.print("[bold yellow]No vector-memory collection found on Qdrant — cannot inject.[/bold yellow]")
+                return
             emb_resp = requests.post("http://127.0.0.1:8081/v1/embeddings", json={"input": text[:7000]}, headers={"Authorization": "Bearer llama"}, timeout=10.0)
             if emb_resp.status_code != 200:
                 ctx.console.print("[bold red]Failed to generate embedding.[/bold red]")
                 return
             vector = emb_resp.json().get("data", [{}])[0].get("embedding", [0.0] * 768)
-            q_resp = requests.put("http://127.0.0.1:6333/collections/upwork_learning/points", json={"points": [{"id": str(uuid.uuid4()), "vector": vector, "payload": {"text": text, "created_at": datetime.now(timezone.utc).isoformat()}}]}, timeout=10.0)
+            q_resp = requests.put(f"http://127.0.0.1:6333/collections/{collection}/points", json={"points": [{"id": str(uuid.uuid4()), "vector": vector, "payload": {"text": text, "created_at": datetime.now(timezone.utc).isoformat()}}]}, timeout=10.0)
             if q_resp.status_code == 200:
-                ctx.console.print("[bold green]✓ Text stored in vector memory![/bold green]")
+                ctx.console.print(f"[bold green]✓ Text stored in vector memory ({collection})![/bold green]")
             else:
                 ctx.console.print(f"[bold red]Qdrant upsert failed with status {q_resp.status_code}.[/bold red]")
         except Exception as e:
@@ -248,7 +279,7 @@ def cmd_vote(ctx: CommandContext, args: List[str]) -> None:
         if resp and resp.status_code == 200:
             models = resp.json().get("installed_models", [])
     if not models:
-        models = ["qwen3.5-9b", "qwen3.5-9b", "qwen3.5-9b"]
+        models = ["qwen3.5-4b", "qwen3.5-4b", "qwen3.5-4b"]
     targets = models[:3]
     while len(targets) < 3:
         targets.append(targets[0])

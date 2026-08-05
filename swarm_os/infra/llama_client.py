@@ -2,9 +2,22 @@ import httpx
 import os
 import logging
 import json
-from typing import AsyncGenerator, Any
+from typing import AsyncGenerator
 
 log = logging.getLogger(__name__)
+
+_glm_client: httpx.AsyncClient | None = None
+
+
+def _get_glm_client() -> httpx.AsyncClient:
+    global _glm_client
+    if _glm_client is None:
+        _glm_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(180.0),
+            limits=httpx.Limits(max_keepalive_connections=5, max_connections=20),
+        )
+    return _glm_client
+
 
 class LlamaClient:
     def __init__(self, base_url: str = "http://127.0.0.1:8080"):
@@ -24,15 +37,15 @@ class LlamaClient:
                     "messages": messages,
                     "stream": False
                 }
-                async with httpx.AsyncClient(timeout=180.0) as cloud_client:
-                    resp = await cloud_client.post(f"{base_url}/chat/completions", json=payload, headers=headers)
-                    if resp.status_code == 200:
-                        res_data = resp.json()
-                        choices = res_data.get("choices", [])
-                        if choices:
-                            return choices[0].get("message", {}).get("content", "").strip()
-                        return f"[System Note: Cloud response missing expected structure. Raw: {res_data}]"
-                    raise RuntimeError(f"GLM cloud error {resp.status_code}: {resp.text}")
+                cloud_client = _get_glm_client()
+                resp = await cloud_client.post(f"{base_url}/chat/completions", json=payload, headers=headers)
+                if resp.status_code == 200:
+                    res_data = resp.json()
+                    choices = res_data.get("choices", [])
+                    if choices:
+                        return choices[0].get("message", {}).get("content", "").strip()
+                    return f"[System Note: Cloud response missing expected structure. Raw: {res_data}]"
+                raise RuntimeError(f"GLM cloud error {resp.status_code}: {resp.text}")
             except Exception as e:
                 log.error(f"Error in LlamaClient.generate (GLM fork): {e}")
                 raise
@@ -62,24 +75,24 @@ class LlamaClient:
                     "messages": messages,
                     "stream": True
                 }
-                async with httpx.AsyncClient(timeout=180.0) as cloud_client:
-                    async with cloud_client.stream("POST", f"{base_url}/chat/completions", json=payload, headers=headers) as response:
-                        if response.status_code != 200:
-                            raise RuntimeError(f"GLM cloud stream error {response.status_code}")
-                        async for line in response.aiter_lines():
-                            if line.startswith("data: "):
-                                line = line[6:].strip()
-                            if not line or line == "[DONE]":
-                                continue
-                            try:
-                                data = json.loads(line)
-                                choices = data.get("choices", [])
-                                if choices:
-                                    chunk = choices[0].get("delta", {}).get("content", "")
-                                    if chunk:
-                                        yield chunk
-                            except Exception:
-                                pass
+                cloud_client = _get_glm_client()
+                async with cloud_client.stream("POST", f"{base_url}/chat/completions", json=payload, headers=headers) as response:
+                    if response.status_code != 200:
+                        raise RuntimeError(f"GLM cloud stream error {response.status_code}")
+                    async for line in response.aiter_lines():
+                        if line.startswith("data: "):
+                            line = line[6:].strip()
+                        if not line or line == "[DONE]":
+                            continue
+                        try:
+                            data = json.loads(line)
+                            choices = data.get("choices", [])
+                            if choices:
+                                chunk = choices[0].get("delta", {}).get("content", "")
+                                if chunk:
+                                    yield chunk
+                        except Exception:
+                            pass
             except Exception as e:
                 log.error(f"Error in LlamaClient.stream_generate (GLM fork): {e}")
                 raise

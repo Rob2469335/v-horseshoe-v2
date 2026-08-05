@@ -14,13 +14,13 @@ MCP_TOOL_REGISTRY: List[str] = [
     "playwright",
     "filesystem",
     "context7",
-    "code_exec",
+    "sandbox_repl",
 ]
 
 MODEL_TIERS: Dict[str, str] = {
-    "triage": "phi4-mini:latest",
-    "fast": "qwen3.5-9b",
-    "heavy": "qwen3.5-9b",
+    "triage": "qwen3.5-4b",
+    "fast": "qwen3.5-4b",
+    "heavy": "qwen3.5-4b",
 }
 
 
@@ -324,18 +324,35 @@ Do not include markdown blocks, just raw JSON.
         for k, v in patch.items():
             if hasattr(genome.cognition, k) and isinstance(v, (int, float)):
                 setattr(genome.cognition, k, clamp(float(v), 0.0, 1.0))
-    except Exception as e:
+    except Exception:
         # Fallback to random mutation
         genome.cognition.mutate(0.1)
 
 
 def ast_slice(source_code: str, target_func: str) -> str:
-    """Extracts a precise semantic slice (Program Dependence Graph) of a target function."""
+    """Extracts a precise verbatim slice (Program Dependence Graph) of a target function.
+
+    The slice is taken from the ORIGINAL source text using the AST node's exact
+    line/column span, so it can be matched verbatim by the caller's
+    ``core_code.replace(slice, mutated)``. (``ast.unparse()`` is NOT used here:
+    it re-emits normalized code — de-indented methods, normalized quotes — that
+    never appears verbatim in the source, silently turning every mutation into a
+    no-op replace.)
+    """
     try:
         tree = ast.parse(source_code)
+        lines = source_code.splitlines(keepends=True)
         for node in ast.walk(tree):
-            if isinstance(node, ast.FunctionDef) and node.name == target_func:
-                return ast.unparse(node)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == target_func:
+                start_line = node.lineno - 1
+                end_line = node.end_lineno
+                slice_lines = lines[start_line:end_line]
+                if not slice_lines:
+                    continue
+                slice_lines[0] = slice_lines[0][node.col_offset:]
+                if node.end_col_offset is not None:
+                    slice_lines[-1] = slice_lines[-1][:node.end_col_offset]
+                return "".join(slice_lines)
     except Exception:
         pass
     # BUG FIX: Return empty string instead of the full source_code.

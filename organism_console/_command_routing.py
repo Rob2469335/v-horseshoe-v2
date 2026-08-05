@@ -70,7 +70,7 @@ def route_natural_language_keywords(raw: str) -> tuple[Optional[str], list[str]]
 
 
 def classify_intent_with_llm(raw: str, ctx: CommandContext) -> tuple[Optional[str], list[str]]:
-    model = "qwen3.5-9b"
+    model = "qwen3.5-4b"
     if ctx.installed_models:
         for m in ctx.installed_models:
             ml = m.lower()

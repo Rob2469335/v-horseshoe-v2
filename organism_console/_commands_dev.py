@@ -1,7 +1,6 @@
 """Development CLI commands: git, editing, debugging, planning."""
 import subprocess
 import sys
-import ast
 import re
 from pathlib import Path
 from typing import List, Optional
@@ -99,7 +98,7 @@ def cmd_commit(ctx: CommandContext, args: List[str]) -> None:
             return
         ctx.console.print("[bold cyan]Analyzing diff and generating Conventional Commit message...[/bold cyan]")
         prompt = f"Analyze this git diff and write a concise, professional commit message adhering strictly to Conventional Commits:\n\n{diff_text[:3000]}\n\nYour output must follow this format:\n<type>(<scope>): <short description>\n\nDo not output any introductory or concluding text, only the commit message itself."
-        model = ctx.state.active_model or "qwen3.5-9b"
+        model = ctx.state.active_model or "qwen3.5-4b"
         resp = ctx.call_api("/generate", "POST", {"model": model, "prompt": prompt})
         if resp and resp.status_code == 200:
             commit_msg = resp.json().get("response", "").strip().splitlines()[0]
@@ -108,9 +107,9 @@ def cmd_commit(ctx: CommandContext, args: List[str]) -> None:
             if sys.stdin.isatty() and Confirm.ask("[bold yellow]Do you want to stage all changes and commit?[/bold yellow]"):
                 subprocess.run(["git", "add", "."], cwd=project_root)
                 commit_res = subprocess.run(["git", "commit", "-m", commit_msg], capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=project_root)
-                ctx.console.print(f"[green]✓ git add . executed.[/green]")
+                ctx.console.print("[green]✓ git add . executed.[/green]")
                 if commit_res.returncode == 0:
-                    ctx.console.print(f"[bold green]✓ Successfully committed changes![/bold green]")
+                    ctx.console.print("[bold green]✓ Successfully committed changes![/bold green]")
                 else:
                     ctx.console.print(f"[bold red]Failed to commit: {commit_res.stderr or ''}[/bold red]")
         else:
@@ -174,7 +173,7 @@ def cmd_debug(ctx: CommandContext, args: List[str]) -> None:
         ctx.console.print(Panel(syntax_error_msg, title="[bold red]SYNTAX ERROR DETECTED IN MODIFIED FILES[/bold red]", border_style="bold red"))
     ctx.console.print("[bold cyan]Submitting failure trace to LLM for automated diagnostic guide...[/bold cyan]")
     prompt = f"The following developer command failed:\nCommand: {' '.join(command)}\nExit Code: {exit_code}\n\nStderr / Traceback:\n{stderr or stdout}\n\nExplain what caused this crash and provide a clear, step-by-step diagnostic guide on how to fix it."
-    model = ctx.state.active_model or "qwen3.5-9b"
+    model = ctx.state.active_model or "qwen3.5-4b"
     resp = ctx.call_api("/generate", "POST", {"model": model, "prompt": prompt})
     if resp and resp.status_code == 200:
         diag = resp.json().get("response", "").strip()
@@ -200,7 +199,7 @@ def cmd_plan(ctx: CommandContext, args: List[str]) -> None:
         ctx.console.print(f"[bold cyan]Generating structured developer templates for: [green]{objective}[/green]...[/bold cyan]")
         prompt = f"""You are an elite software architect. Create a structured markdown Implementation Plan for: "{objective}".
 Structure: Goal Description, Proposed Changes (files to modify), Verification Plan (tests). Return ONLY markdown."""
-        model = ctx.state.active_model or "qwen3.5-9b"
+        model = ctx.state.active_model or "qwen3.5-4b"
         try:
             resp = ctx.call_api("/generate", "POST", {"model": model, "prompt": prompt})
             if resp and resp.status_code == 200:
@@ -361,7 +360,7 @@ def cmd_compress(ctx: CommandContext, args: List[str]) -> None:
     for msg in to_summarize:
         conv_text += f"{msg.get('role', 'unknown').upper()}: {msg.get('content', '')}\n\n"
     prompt = f"Summarize the following conversation in 2-3 sentences focusing on key actions and decisions:\n\n{conv_text}"
-    fast_model = next((m for m in ctx.installed_models if "3b" in m or "7b" in m), "qwen3.5-9b")
+    fast_model = next((m for m in ctx.installed_models if "3b" in m or "7b" in m), "qwen3.5-4b")
     ctx.console.print(f"[cyan]Compressing {len(to_summarize)} messages using [bold green]{fast_model}[/bold green]...[/cyan]")
     try:
         resp = ctx.call_api("/generate", "POST", {"model": fast_model, "prompt": prompt})
@@ -407,7 +406,7 @@ def cmd_schedule(ctx: CommandContext, args: List[str]) -> None:
         ctx.state.scheduled_tasks = []
     ctx.state.scheduled_tasks.append({"interval": args[0], "command": " ".join(args[1:]), "created_at": __import__('time').time()})
     ctx.state.save()
-    ctx.console.print(f"[bold green]✓ Scheduled task registered[/bold green]")
+    ctx.console.print("[bold green]✓ Scheduled task registered[/bold green]")
 
 
 @registry.register("checkpoint", "Save a named time-travel snapshot. Usage: /checkpoint <name>")

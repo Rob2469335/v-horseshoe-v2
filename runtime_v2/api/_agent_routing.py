@@ -57,6 +57,34 @@ def fast_route_coordinator(user_prompt: str) -> dict | None:
     if msg in _GREETINGS or (len(words) <= 3 and any(g in msg for g in _GREETINGS)):
         return {"action": "final", "response": "Hello! What can I help you with today?"}
 
+    # Collect ALL matching routes. Multi-intent messages (e.g. "analyze codebase
+    # AND search internet") need the LLM to decompose — don't fast-route.
+    matches = []
+    for keywords, target_agent in _ROUTES:
+        if any(kw in msg for kw in keywords):
+            matches.append(target_agent)
+
+    # FIX-INTENT PRECEDENCE: if the goal implies EDITING/FIXING code (write, fix,
+    # patch, implement, create, change, modify, solve), route to `coder` — the
+    # edit-capable agent — even when it also matches analysis keywords. This makes
+    # "analyze my codebase for bugs and fix them" actually FIX (like a human
+    # maintainer / opencode) instead of returning a report-only analysis. The
+    # analyzer reports; the coder edits. Without this, the LLM coordinator
+    # typically picks code_analyzer for compound goals and nothing gets fixed.
+    # "how to fix X" (research intent) is excluded so how-to questions still go
+    # to researcher.
+    _FIX_KEYWORDS = ("write", "patch", "implement", "create", "change", "modify",
+                     "solve", "repair", "correct", "fix this", "fix the bug",
+                     "fix the bugs", "fix it", "fix the", "and fix", "to fix the",
+                     "fix broken", "fix failing")
+    fix_intent = any(kw in msg for kw in _FIX_KEYWORDS) and "how to fix" not in msg and "how do i fix" not in msg
+    if fix_intent and "coder" not in matches:
+        matches.append("coder")
+
+    if len(matches) >= 2:
+        log.info("[coordinator] multi-intent detected (matched %s) → falling back to LLM", matches)
+        return None
+
     for keywords, target_agent in _ROUTES:
         if any(kw in msg for kw in keywords):
             log.info("[coordinator] fast-route → %s (matched on: %r)", target_agent,
@@ -69,6 +97,34 @@ def fast_route_coordinator(user_prompt: str) -> dict | None:
 
     log.info("[coordinator] fast-route → None (ambiguous, falling back to LLM)")
     return None
+
+
+def matches_task_keywords(user_prompt: str) -> bool:
+    """True when the message matches any routing keyword — i.e. it is a real
+    task, not a greeting. Used as a hard guard: a coordinator may never answer a
+    task with action=final just because stale episodic memory claims it was done."""
+    msg = (user_prompt or "").lower()
+    return any(kw in msg for keywords, _ in _ROUTES for kw in keywords)
+
+
+def best_route_target(user_prompt: str) -> str:
+    """Highest-priority route target for a task message. Deterministic fallback
+    used when the LLM coordinator violates the 'never final on a task' rule."""
+    msg = (user_prompt or "").lower()
+    # FIX-INTENT PRECEDENCE: editing/fixing goals go to coder (edit-capable)
+    # rather than the report-only analyzer, matching a human maintainer.
+    # "how to fix X" (research intent) is excluded so how-to questions stay on
+    # researcher.
+    _FIX_KEYWORDS = ("write", "patch", "implement", "create", "change", "modify",
+                     "solve", "repair", "correct", "fix this", "fix the bug",
+                     "fix the bugs", "fix it", "fix the", "and fix", "to fix the",
+                     "fix broken", "fix failing")
+    if any(kw in msg for kw in _FIX_KEYWORDS) and "how to fix" not in msg and "how do i fix" not in msg:
+        return "coder"
+    for keywords, target_agent in _ROUTES:
+        if any(kw in msg for kw in keywords):
+            return target_agent
+    return "planner"
 
 
 # ---------------------------------------------------------------------------
@@ -95,6 +151,13 @@ _AGENT_WARMUP: dict[str, list[dict]] = {
         {"action": "filesystem", "operation": "read", "path": "runtime_v2/services/stream_runner.py"},
     ],
 }
+
+# Research-only goals must hit web_search BEFORE anything else — a codebase/LLM
+# bias otherwise makes the researcher read files/memory first and never search,
+# or burn the turn budget on filesystem before web_search. The first turn is
+# injected deterministically (web_search with the user's goal as the query),
+# mirroring code_analyzer's deterministic grounding. Zero filesystem.
+_RESEARCHER_FIRST_TURNS = 1
 
 
 def fast_start_for_agent(agent_id: str, turn: int) -> dict | None:

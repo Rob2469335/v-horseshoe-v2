@@ -15,12 +15,12 @@ _http_client = httpx.AsyncClient(
     timeout=httpx.Timeout(120.0)
 )
 
-SWARM_MODEL = os.environ.get("SWARMMODEL", "qwen3.5-9b")
+SWARM_MODEL = os.environ.get("SWARMMODEL", "qwen3.5-4b")
 EMBED_MODEL = os.environ.get("EMBEDMODEL", "nomic-embed-text-v1.5")
-FAST_MODEL = os.environ.get("FASTMODEL", "qwen3.5-9b")
+FAST_MODEL = os.environ.get("FASTMODEL", "qwen3.5-4b")
 AGENT_MODEL = os.environ.get("SWARMAGENTMODEL", os.environ.get("ROUTEAGENTMODEL", SWARM_MODEL))
-CODE_MODEL = os.environ.get("SWARMCODEMODEL", os.environ.get("ROUTECODEMODEL", "qwen3.5-9b"))
-CHAT_MODEL = os.environ.get("SWARMCHATMODEL", os.environ.get("ROUTECHATMODEL", "qwen3.5-9b"))
+CODE_MODEL = os.environ.get("SWARMCODEMODEL", os.environ.get("ROUTECODEMODEL", "qwen3.5-4b"))
+CHAT_MODEL = os.environ.get("SWARMCHATMODEL", os.environ.get("ROUTECHATMODEL", "qwen3.5-4b"))
 
 async def safe_generate_async(prompt: str, model: str, num_predict: int = 200, keep_alive: str = "15m", timeout: float = 120.0) -> str:
     async with MODEL_SEMAPHORE:

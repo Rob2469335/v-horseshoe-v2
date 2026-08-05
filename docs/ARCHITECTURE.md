@@ -1,5 +1,13 @@
 # Zenith OS Architecture - AI Agent Framework Upgrade
 
+> **Status 2026-08**: This document describes the `src/` "next-gen" agent stack
+> (HybridMemory, DynamicRouter, SelfHealingAgentRuntime). That stack was REMOVED
+> in 2026-08 — it was a test-only third agent runtime with zero importers in the
+> live app (which runs `runtime_v2/` + `swarm_os/`). The examples below are
+> retained as a design reference only; do NOT import `src.*`. The live swarm's
+> resilience comes from `swarm_os/healing/` (FailureDetector, Governor,
+> RecoveryEngine, circuit-breaker cooldowns in `fallback_manager.py`).
+
 ## Overview
 
 This document describes the upgraded Zenith OS architecture integrating cutting-edge AI agent framework capabilities including:

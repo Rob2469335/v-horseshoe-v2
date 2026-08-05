@@ -20,7 +20,6 @@ import json
 import logging
 import os
 import threading
-from typing import Optional
 
 log = logging.getLogger(__name__)
 

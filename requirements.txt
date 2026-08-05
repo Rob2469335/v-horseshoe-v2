@@ -46,7 +46,7 @@ librt==0.12.0
 litellm==1.83.7
 markdown-it-py==4.2.0
 MarkupSafe==3.0.3
-mcp==1.28.1
+mcp>=1.28.1,<2
 mdurl==0.1.2
 multidict==6.7.1
 mypy==2.1.0
@@ -94,7 +94,8 @@ typer==0.26.8
 typing-inspection==0.4.2
 typing_extensions==4.16.0
 urllib3==2.7.0
-uvicorn==0.49.0
+crawl4ai>=0.9.0
+uvicorn>=0.52.1
 watchfiles==1.2.0
 websockets==16.0
 yarl==1.24.2

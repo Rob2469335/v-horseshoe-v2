@@ -1,5 +1,4 @@
 from __future__ import annotations
-import swarm_os.bootstrap
 import json, logging
 import asyncio
 import time
@@ -8,6 +7,57 @@ from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 log = logging.getLogger(__name__)
+
+# Internet-involving goal keywords (used to force web_search-first on analysis
+# agents, so the warmup's filesystem reads never starve the web portion).
+_INTERNET_GOAL_RE = re.compile(
+    r"search (the )?(internet|web)|on the internet|via web|web ?research|"
+    r"improvements?|upgrades?|latest|sota|best practices|current state of|"
+    r"how(-| )to|what.s the (newest|latest)",
+    re.IGNORECASE,
+)
+
+# Fix-intent keywords: a goal containing these implies the agent should EDIT code,
+# not just report on it. Used to force routing to the edit-capable `coder` agent.
+# "how to fix X" (research intent) is excluded so how-to questions stay on
+# researcher.
+_FIX_INTENT_RE = re.compile(
+    r"\bfix(es|ed|ing)?\b|\bpatch\b|\bwrite\b|\bimplement\b|\bcreate\b|"
+    r"\bchange\b|\bmodify\b|\bsolve\b|\brepair\b|\bcorrect\b|\bupdate\b",
+    re.IGNORECASE,
+)
+
+
+def _is_fix_intent(text: str) -> bool:
+    """True when the goal directs the agent to EDIT code (not just research a
+    'how to fix' question)."""
+    low = (text or "").lower()
+    if "how to fix" in low or "how do i fix" in low or "how do you fix" in low:
+        return False
+    return bool(_FIX_INTENT_RE.search(low))
+
+
+def _clean_search_query(prompt: str, max_len: int = 300) -> str:
+    """Extract a clean web-search query from a delegated goal prompt.
+
+    The prompt passed to a delegated agent includes the coordinator's system
+    wrapper ("CRITICAL INSTRUCTION ... You are the coordinator agent ... your
+    ONLY job is to route..."). Sending that whole block as the web_search query
+    wastes tokens and pollutes the results. Strip the instruction boilerplate and
+    keep only the actual goal line.
+    """
+    text = (prompt or "").strip()
+    # If it looks like a wrapped/delegated goal, cut at the first instruction marker.
+    for marker in ("*** CRITICAL INSTRUCTION ***", "CRITICAL INSTRUCTION", "\n\nYou are the"):
+        idx = text.find(marker)
+        if idx > 0:
+            text = text[:idx].strip()
+            break
+    # Trim any leading "Goal:" / "Task:" labels.
+    text = re.sub(r"^(Goal|Task|Task Goal)\s*[:：]\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:max_len]
+
 
 # Bounded dedup cache for reflexion lessons (agent, action, error) -> last store
 # time. Prevents identical repeated failures from spamming ReflexionMemory.
@@ -27,13 +77,25 @@ class _CallState:
     tool_payload: dict = field(default_factory=dict)
     tool_result: Any = None
     tool_result_str: str = ""
+    # Outcome-fitness: real-task-outcome signal fed to the evolutionary kernel.
+    _start_time: float = 0.0
+    _tool_attempts: int = 0
+    _tool_successes: int = 0
+    _turn: int = 0
     # Todo tracking (multi-step task state, like a human agent's checklist)
     todos: list = field(default_factory=list)
     todo_id: int = 0
     # Verify-after-change: set after a successful patch/write on a code file;
-    # a `final` while pending_verify is rejected once so the agent tests first.
+    # a final while pending_verify is rejected once so the agent tests first.
     pending_verify: bool = False
     _verify_final_rejected: bool = False
+    # Internet-research tracking: set when the agent runs web_search successfully,
+    # so internet-involving goals cannot short-circuit to final without it.
+    did_web_search: bool = False
+    # Set when the agent deep-reads at least one page via web_fetch — an
+    # internet goal needs actual fetched content, not just search snippets.
+    did_web_fetch: bool = False
+    _web_final_rejected: bool = False
 
 from runtime_v2.api._agent_config import (
     MAX_TURNS, MAX_DEPTH, ANALYSIS_AGENTS,
@@ -41,6 +103,7 @@ from runtime_v2.api._agent_config import (
 )
 from runtime_v2.api._agent_routing import (
     lookup_model, fast_route_coordinator, fast_start_for_agent,
+    matches_task_keywords, best_route_target, _RESEARCHER_FIRST_TURNS,
 )
 
 
@@ -88,17 +151,47 @@ class AgentServiceV2:
         if self.orchestrator and hasattr(self.orchestrator, "router"):
             try:
                 self.orchestrator.router.record_success(model, (time.time() - start_time) * 1000)
-            except Exception:
+            except Exception as e:
+                log.debug("Failed to record router success: %s", e)
                 pass
         self._record_event("generation_completed", "agent_service_v2", {
             "model": model, "duration_ms": (time.time() - start_time) * 1000,
             "status": "success", "learning_outcome": {"result": "success"}})
 
+    def _feed_outcome(self, agent_id: str, prompt: str, state: _CallState,
+                      completed: bool = True, tool_success_rate: float = 0.0,
+                      turns_used: int = 0):
+        """Feed a REAL agent outcome to the outcome-fitness store so the
+        evolutionary kernel can select on grounded fitness instead of LLM noise.
+        Gated by SWARM_EVOLUTION=1 (zero overhead otherwise). Deterministic
+        signals only — never self-judged by the proposing model."""
+        try:
+            from swarm_os.services.outcome_fitness import _fitness_env_enabled
+            if not _fitness_env_enabled():
+                return
+            import time as _t
+            elapsed = max(0.01, _t.time() - (state._start_time or _t.time()))
+            # Efficiency = baseline(8 turns) / actual, clipped to [0,1].
+            efficiency = min(1.0, 8.0 / max(1, turns_used or 8)) if completed else 0.0
+            from swarm_os.services.outcome_fitness import record_outcome
+            record_outcome(
+                f"agent:{agent_id}",
+                completion=1.0 if completed else 0.0,
+                test_pass=1.0 if completed else 0.0,
+                tool_success=tool_success_rate,
+                efficiency=efficiency,
+                task=str(prompt)[:200],
+                agent_id=agent_id,
+            )
+        except Exception as exc:
+            log.debug("[%s] outcome feed skipped: %s", agent_id, exc)
+
     async def _remember(self, text: str, category: str = "general"):
         try:
             from runtime_v2.services.memory_core import remember_fact
             await asyncio.to_thread(remember_fact, text, category=category)
-        except Exception:
+        except Exception as e:
+            log.debug("Failed to remember fact: %s", e)
             pass
 
     async def _remember_failure(self, agent_id: str, action: str, tool_payload: dict,
@@ -111,7 +204,8 @@ class AgentServiceV2:
             await self._remember(
                 f"Agent {agent_id} called {action} which failed with {error}. Strategy needs adjustment.",
                 category=category)
-        except Exception:
+        except Exception as e:
+            log.debug("Failed to remember fact: %s", e)
             pass
         try:
             # Dedup guard: skip if this exact agent+action+error was already
@@ -123,6 +217,11 @@ class AgentServiceV2:
                 if now - _failure_lessons_seen[key] < 300:
                     return
             _failure_lessons_seen[key] = now
+            # Prune stale dedup entries so the dict can't grow unboundedly.
+            if len(_failure_lessons_seen) > 200:
+                stale = [k for k, ts in _failure_lessons_seen.items() if now - ts >= 300]
+                for k in stale:
+                    _failure_lessons_seen.pop(k, None)
 
             from swarm_os.services.reflection_loop import get_reflection_service
             correction, do_not = self._failure_lesson(action, tool_payload, error)
@@ -144,6 +243,30 @@ class AgentServiceV2:
                 component=agent_id,
                 confidence=0.75,
             )
+            # Also write the failure to the organism diary so run_reflection()'s
+            # LLM distiller sees REAL agent failures (it previously only read the
+            # genetic-kernel diary, whose entries carry no component — producing the
+            # 137 component:"unknown" noise rules that swamped ReflexionMemory).
+            # The entry carries `component` so get_latest_failure() prefers it.
+            try:
+                from swarm_os.services.reflection_loop import DIARY_PATH
+                diary_path = DIARY_PATH
+                diary_path.parent.mkdir(parents=True, exist_ok=True)
+                import time as _t
+                record = {
+                    "ts": _t.time(),
+                    "event": "tool_failure",
+                    "component": agent_id,
+                    "agent": agent_id,
+                    "task": str(task_hint)[:300],
+                    "content_preview": str(tool_payload)[:200],
+                    "error": str(error)[:300],
+                    "action": action,
+                }
+                with open(diary_path, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(record, ensure_ascii=False) + "\n")
+            except Exception as diary_err:
+                log.debug("[%s] diary write skipped: %s", agent_id, diary_err)
         except Exception as exc:
             log.debug("[%s] reflexion store skipped: %s", agent_id, exc)
 
@@ -218,11 +341,54 @@ class AgentServiceV2:
             fast = fast_route_coordinator(prompt)
             if fast is not None:
                 return fast
-            return await self._call_llm(model, trimmed_messages, agent_id, allowed_tools)
+            decision = await self._call_llm(model, trimmed_messages, agent_id, allowed_tools)
+            # FIX-INTENT GUARD: if the goal implies editing/fixing code, force the
+            # delegate target to `coder` (edit-capable) even when the LLM coordinator
+            # picks the report-only code_analyzer. A compound "analyze + fix bugs"
+            # goal must actually FIX (like a human maintainer / opencode), not just
+            # return an analysis report.
+            if decision and decision.get("action") == "delegate":
+                if _is_fix_intent(prompt) and decision.get("target_agent") not in ("coder", "debugger"):
+                    log.info("[coordinator] fix-intent goal → forcing delegate target coder (was %s)",
+                             decision.get("target_agent"))
+                    return {"action": "delegate", "target_agent": "coder", "task": decision.get("task") or prompt}
+            # HARD GUARD (not just a prompt rule): a coordinator may NEVER answer a
+            # real task with action=final. Stale episodic memory ("this task was
+            # already completed") routinely fools small local models into
+            # short-circuiting, and the prompt rule 4 is not reliably followed.
+            # If the goal contains action keywords, force a delegate to the
+            # highest-priority route instead.
+            if decision and decision.get("action") == "final" and matches_task_keywords(prompt):
+                target = best_route_target(prompt)
+                log.warning("[coordinator] Blocked short-circuit final on task goal → delegating to %s", target)
+                return {"action": "delegate", "target_agent": target, "task": prompt}
+            return decision
 
         fast = fast_start_for_agent(agent_id, turn)
         if fast is not None:
+            # INTERNET-GOAL FIX: if an analysis agent was handed an internet goal
+            # (codebase + web, or pure web), inject web_search BEFORE the
+            # filesystem warmup. The warmup consumed all 8 turns with file reads
+            # (4 warmup + repeated reads) and the agent hit "max turns reached"
+            # without ever calling web_search — the guard rejected the final but
+            # there was no budget left to search. Searching first guarantees the
+            # internet portion of the goal is actually done.
+            if turn == 0 and agent_id in ANALYSIS_AGENTS:
+                query = (prompt or "").strip()
+                internet_goal = bool(_INTERNET_GOAL_RE.search(query)) if query else False
+                if internet_goal:
+                    log.info("[%s] internet goal — fast-start turn %d → web_search (before warmup)", agent_id, turn)
+                    return {"action": "web_search", "query": _clean_search_query(query)}
             return fast
+        # Research-only goals: the FIRST action is deterministically web_search,
+        # never filesystem. Without this, the LLM's codebase bias reads files /
+        # memory first and either never searches or burns the turn budget before
+        # web_search. The user's goal is the query; the LLM takes over next turn.
+        if agent_id == "researcher" and turn < _RESEARCHER_FIRST_TURNS:
+            query = (prompt or "").strip()
+            if query:
+                log.info("[researcher] fast-start turn %d → web_search", turn)
+                return {"action": "web_search", "query": _clean_search_query(query)}
         return await self._call_llm(model, trimmed_messages, agent_id, allowed_tools)
 
     async def _call_llm(self, model: str, messages: list, agent_id: str, allowed_tools: list) -> Optional[dict]:
@@ -305,6 +471,54 @@ class AgentServiceV2:
             state.handler_status = "CONTINUE"
             return
 
+        # Reject final from internet-involving goals if the agent never ran web_search
+        # Internet-goal guard: only applies to agents that actually HAVE the
+        # web_search tool (reviewer does not — its tool list is read/search/repl
+        # only, so demanding web_search would block a legit final). Keywords are
+        # internet-INTENT phrases only; bare "modern"/"latest" are dropped (they
+        # frequently appear in purely-local goals and caused false positives).
+        prompt_lower = (prompt or "").lower()
+        internet_goal = any(k in prompt_lower for k in (
+            "search internet", "search the web", "search the internet", "web search",
+            "search online", "research best practices", "find improvements",
+            "state of the art", "latest versions", "modern best practices",
+            "what's new", "what is new",
+        ))
+        has_web_search_tool = "web_search" in self._get_allowed_tools(agent_id)
+        # REQUIRE both web_search AND web_fetch for internet goals on analysis
+        # agents. Searching is not enough — the agent must deep-read at least one
+        # authoritative page (docs/SO/GitHub) so the final answer is grounded in
+        # actual fetched content, not just search snippets. This matches how a
+        # human researcher (or opencode) works: search → fetch → read → synthesize.
+        needs_fetch = "web_fetch" in self._get_allowed_tools(agent_id)
+        if internet_goal and not state.did_web_search and has_web_search_tool and agent_id in ANALYSIS_AGENTS:
+            # Reject on EVERY final until web_search actually runs — not just the
+            # first (a one-shot latch let the agent call final a second time and
+            # "complete" the goal without ever doing the internet research it was
+            # explicitly asked for).
+            state._web_final_rejected = True
+            state.handler_status = "CONTINUE"
+            log.warning("[%s] Rejected final: internet goal without web_search.", agent_id)
+            messages.append({"role": "user", "content": (
+                "SYSTEM: The goal explicitly asks you to search the internet, but you called "
+                "action=final without running action=web_search. You MUST run web_search with "
+                "concrete queries about the technologies/issues you found, then web_fetch at "
+                "least one result, before you can call action=final. Do NOT skip this step."
+            )})
+            return
+        if internet_goal and needs_fetch and not state.did_web_fetch and agent_id in ANALYSIS_AGENTS:
+            state._web_final_rejected = True
+            state.handler_status = "CONTINUE"
+            log.warning("[%s] Rejected final: internet goal without web_fetch.", agent_id)
+            messages.append({"role": "user", "content": (
+                "SYSTEM: You searched the web, but you called action=final without deep-reading "
+                "any result. You MUST use action=web_fetch to read at least one authoritative "
+                "page (official docs, Stack Overflow, GitHub) about the topic, extract the "
+                "relevant details, and THEN synthesize your final answer from that content. "
+                "Do NOT finalize from search snippets alone."
+            )})
+            return
+
         response_text = str(decision.get("response", "Task complete."))
 
         if agent_id == "reviewer" and ("FAIL" in response_text.upper() or str(decision.get("verdict", "")).upper() == "FAIL"):
@@ -318,6 +532,9 @@ class AgentServiceV2:
         yield {"agent_id": agent_id, "content": response_text, "model": model}
         yield {"agent_id": agent_id, "type": "final", "model": model, "provider": provider, "content": response_text}
         self._record_success(model, start_time)
+        tsr = (state._tool_successes / state._tool_attempts) if state._tool_attempts else 1.0
+        self._feed_outcome(agent_id, prompt, state, completed=True,
+                           tool_success_rate=tsr, turns_used=state._turn)
         await self._remember(f"[{agent_id}] task completed: {str(prompt)[:80]} -> {response_text[:120]}", category="general")
         state.handler_status = "DONE"
 
@@ -413,10 +630,29 @@ class AgentServiceV2:
         log.info("[%s] %s ok=%s", agent_id, action, result.get("ok"))
         state.tool_success = result.get("ok", False)
         state.tool_result = result
+        state._tool_attempts += 1
+        if state.tool_success:
+            state._tool_successes += 1
 
         if not state.tool_success:
             consecutive_errors += 1
             await self._remember_failure(agent_id, action, tool_payload, result.get('error', 'unknown error'))
+            # Persist the tool_result failure to the event store so downstream
+            # consumers that tail events.jsonl (RepairWatchman, /autofix, the goal
+            # loop's verification) actually SEE tool failures. Previously only
+            # generation_completed/agent_action/stream_completed were recorded and
+            # tool failures existed only in the SSE stream — the whole repair +
+            # reflexion-from-events path was starved (events.jsonl had 0 tool_result
+            # lines).
+            try:
+                self._record_event("tool_result", agent_id, {
+                    "tool": action,
+                    "arguments": tool_payload,
+                    "result": {"ok": False, "error": str(result.get('error', 'unknown error'))[:500]},
+                    "agent_id": agent_id,
+                })
+            except Exception as evt_err:
+                log.debug("[%s] tool_result event skipped: %s", agent_id, evt_err)
         else:
             # BUG FIX: Decay rather than hard-reset so a failure→success→failure
             # oscillation still reaches the breaker. Previously a success zeroed the
@@ -425,8 +661,15 @@ class AgentServiceV2:
             if not _fetched_content:
                 if action == "filesystem" and tool_payload.get("operation") in ("read", "read_all"):
                     _fetched_content = True
-                if action in ("semantic_search", "web_search", "lsp"):
+                if action in ("semantic_search", "web_search", "web_fetch", "lsp"):
                     _fetched_content = True
+                if action in ("system", "screen"):
+                    _fetched_content = True
+
+            if action == "web_search" and state.tool_success:
+                state.did_web_search = True
+            if action == "web_fetch" and state.tool_success:
+                state.did_web_fetch = True
 
             # Verify-after-change: editing a code file must be followed by a test
             # run before the agent may finalize (mirrors running tests/lint before
@@ -455,7 +698,23 @@ class AgentServiceV2:
     # -----------------------------------------------------------------------
     def _get_allowed_tools(self, agent_id: str) -> list:
         from runtime_v2.prompts.system_prompts import _AGENT_TOOLS
-        return _AGENT_TOOLS.get(agent_id, ["delegate", "final", "filesystem"])
+        allowed = _AGENT_TOOLS.get(agent_id, ["delegate", "final", "filesystem"])
+        # SOTA evolution hook: when SWARM_EVOLUTION=1, order the allowed tools by
+        # the best evolved genome's tool_genes (high-weight = preferred from real
+        # outcomes). This makes the agent's tool-selection policy evolve from real
+        # task outcomes instead of staying a fixed hand-authored list. No-op when
+        # evolution is off (zero overhead).
+        try:
+            import os as _os
+            if _os.environ.get("SWARM_EVOLUTION", "").strip() != "1":
+                return allowed
+            from swarm_os.services.evolution_daemon import _best_genome_tool_weights
+            weights = _best_genome_tool_weights()
+            if weights:
+                allowed = sorted(allowed, key=lambda t: -weights.get(t, 0.0))
+        except Exception as _e:
+            log.debug("[%s] evolved tool ordering skipped: %s", agent_id, _e)
+        return allowed
 
     # -----------------------------------------------------------------------
     # Main agent loop
@@ -467,6 +726,17 @@ class AgentServiceV2:
     ) -> AsyncGenerator[dict, None]:
         from runtime_v2.prompts.system_prompts import build
         from runtime_v2.services.memory_core import get_relevant_memories
+
+        # Per-run isolation: reset the read-before-write exploration set and the
+        # filesystem read cache so one agent run cannot inherit another agent's
+        # "seen" files (which would let it patch paths it never explored) or read
+        # stale cached content from a previous run.
+        try:
+            import runtime_v2.services.tool_executor as _te
+            _te._explored_paths.clear()
+            _te._filesystem_read_cache.clear()
+        except Exception:
+            pass
 
         history = list(history or [])
         chain = list(delegation_chain or [agent_id])
@@ -521,9 +791,11 @@ class AgentServiceV2:
         _fetched_content = agent_id not in ANALYSIS_AGENTS
         _reviewer_fails = 0
         state = _CallState()
+        state._start_time = start_time if start_time else time.time()
         initial_messages_len = len(messages)
 
         for turn in range(MAX_TURNS):
+            state._turn = turn + 1
             # --- Context window trim ---
             sys_msgs = [m for m in messages if m.get("role") == "system"]
             non_sys_msgs = [m for m in messages if m.get("role") != "system"]
@@ -582,7 +854,7 @@ class AgentServiceV2:
             if loop_status:
                 yield {"agent_id": agent_id, "type": "error", "content": f"Agent {agent_id} caught in a loop. Tripping circuit breaker."}
                 if agent_id != "debugger" and healing_attempts < 1:
-                    yield {"agent_id": agent_id, "type": "error", "content": f"Circuit Breaker Tripped! Initiating Autonomous Self-Healing Sequence..."}
+                    yield {"agent_id": agent_id, "type": "error", "content": "Circuit Breaker Tripped! Initiating Autonomous Self-Healing Sequence..."}
                     heal_task = (f"The agent '{agent_id}' is stuck in an infinite loop. Review the history and write a plan to fix the code or environment so they can succeed without looping. Provide a 'final' action when healed.")
                     yield {"agent_id": agent_id, "type": "agent_handoff", "from": agent_id, "to": "debugger", "task": heal_task}
                     async for chunk in self.step_agent_stream("debugger", heal_task, history=messages[-6:], delegation_chain=["debugger"]):
@@ -710,4 +982,35 @@ class AgentServiceV2:
                 messages = messages[:initial_messages_len] + new_messages[first_to_keep:]
 
         yield {"agent_id": agent_id, "type": "final", "model": model, "provider": provider, "content": "[System: max turns reached]"}
+        # Feed the FAILED outcome (completion=0) to the fitness store so the
+        # kernel learns turn-exhaustion is a bad strategy — completion-gated at 0.4.
+        tsr = (state._tool_successes / state._tool_attempts) if state._tool_attempts else 0.0
+        self._feed_outcome(agent_id, prompt, state, completed=False,
+                           tool_success_rate=tsr, turns_used=MAX_TURNS)
+        # Give the healing/learning system VISIBILITY into turn-budget exhaustion.
+        # Previously max-turns just yielded a string — no event, no reflexion, so
+        # a compound goal (filesystem + web_search) that ran out of turns left no
+        # trace the circuit breaker / ReflectionDaemon / RepairWatchman could act on.
+        try:
+            self._record_event("turn_budget_exhausted", agent_id, {
+                "agent_id": agent_id,
+                "turns_used": MAX_TURNS,
+                "prompt": str(prompt)[:300],
+                "actions": [json.dumps(a, ensure_ascii=False)[:100] for a in history_actions][-6:],
+            })
+        except Exception as evt_err:
+            log.debug("[%s] turn_budget event skipped: %s", agent_id, evt_err)
+        try:
+            from swarm_os.services.reflection_loop import get_reflection_service
+            await get_reflection_service().store_reflexion(
+                task=f"agent:{agent_id} compound goal {str(prompt)[:150]} exhausted {MAX_TURNS} turns",
+                action="max_turns_reached",
+                failure_reason="agent ran out of turns before completing the goal (likely a compound goal needing filesystem + web_search, or a slow LLM).",
+                correction="Prefer completing the goal with the FEWEST tool calls. If a compound goal requires both codebase reads and web research, interleave them — do not spend all turns on exploration. Consider delegating to a specialized agent.",
+                do_not_repeat=f"agent:{agent_id} must not burn all {MAX_TURNS} turns on exploration before the required tool (web_search/filesystem) is used.",
+                component=agent_id,
+                confidence=0.6,
+            )
+        except Exception as refl_err:
+            log.debug("[%s] max-turns reflexion skipped: %s", agent_id, refl_err)
         self._record_success(model, start_time)

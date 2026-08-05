@@ -16,14 +16,14 @@ async def test_get_memory_context():
         {
             "payload": {
                 "summary": "Ran search task successfully",
-                "models": ["qwen3.5-9b"],
+                "models": ["qwen3.5-4b"],
                 "dominant_outcome": "success"
             }
         },
         {
             "payload": {
                 "summary": "File editing failed",
-                "models": ["qwen3.5-9b"],
+                "models": ["qwen3.5-4b"],
                 "dominant_outcome": "failure"
             }
         }
@@ -52,12 +52,12 @@ async def test_generate_react_loop(tmp_path):
         orchestrator.llm.generate.side_effect = [tool_call_text, final_response]
         
         result, model = await orchestrator.generate(
-            model="qwen3.5-9b",
+            model="qwen3.5-4b",
             prompt="Write hello to temp_react.txt"
         )
         
         assert result == final_response
-        assert model == "qwen3.5-9b"
+        assert model == "qwen3.5-4b"
         
         # Verify file was written inside the sandbox
         written_file = tmp_path / "temp_react.txt"
@@ -85,7 +85,7 @@ async def test_generate_react_loop_alternative_format(tmp_path):
         orchestrator.llm.generate.side_effect = [tool_call_text, final_response]
         
         result, model = await orchestrator.generate(
-            model="qwen3.5-9b",
+            model="qwen3.5-4b",
             prompt="Write hello alt to temp_react_alt.txt"
         )
         
@@ -125,7 +125,7 @@ async def test_stream_generate_react_loop(tmp_path):
         
         chunks = []
         async for chunk, model, trace_id in orchestrator.stream_generate(
-            model="qwen3.5-9b",
+            model="qwen3.5-4b",
             prompt="Write hello stream"
         ):
             chunks.append(chunk)

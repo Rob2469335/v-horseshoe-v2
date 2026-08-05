@@ -56,7 +56,7 @@ export const Route = createFileRoute('/api/chat')({
           const { messages } = await request.json()
 
           const result = streamText({
-            model: localLLM('qwen3.5-9b'),
+            model: localLLM('qwen3.5-4b'),
             messages: await convertToModelMessages(messages),
             instructions: 'You are Zenith Swarm OS. You are a biological intelligence interface. You must use the provided tools to fetch system statuses or data when asked.',
             tools,

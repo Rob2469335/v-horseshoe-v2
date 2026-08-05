@@ -1,5 +1,4 @@
 import ast
-import os
 import networkx as nx
 from pathlib import Path
 import logging

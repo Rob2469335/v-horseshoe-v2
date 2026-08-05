@@ -1,6 +1,5 @@
 # swarm_os/api/admin.py
 from __future__ import annotations
-import asyncio
 
 import logging
 from pathlib import Path
@@ -12,7 +11,6 @@ router = APIRouter(prefix='/admin', tags=['admin'])
 # lazy import RuntimeGraph removed (fix circular import)
 from swarm_os.kernel.status import build_status
 from swarm_os.repositories.file_snapshot_repository import FileSnapshotRepository
-from swarm_os.services.orchestrator import Orchestrator
 from swarm_os.services.simulation_service import SimulationService
 
 log = logging.getLogger(__name__)
@@ -170,7 +168,7 @@ def run_simulation(
 @router.get("/replay")
 async def admin_replay(request: Request) -> dict:
     """Event replay dashboard data."""
-    from swarm_os.api.dependencies import runtime_dep, _safe_events
+    from swarm_os.api.dependencies import _safe_events
     runtime = getattr(request.app.state, "runtime", None)
     events = []
     healing_attempts = 0
@@ -241,7 +239,6 @@ async def evaluate_health(request: Request) -> dict:
         if healing:
             detector = getattr(healing, "detector", None)
             if detector:
-                import inspect
                 if hasattr(detector, "status"):
                     report = detector.status()
                 elif hasattr(detector, "check"):

@@ -1,7 +1,7 @@
 import httpx
 
 LLAMA_URL = "http://127.0.0.1:8080/v1/chat/completions"
-MODEL = "qwen3.5-9b"
+MODEL = "qwen3.5-4b"
 
 # UPGRADE: pooled client (avoids fresh TLS/connection per call)
 _client: httpx.AsyncClient | None = None

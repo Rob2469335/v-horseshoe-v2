@@ -14,10 +14,10 @@ from ..config.settings import settings as swarm_settings
 from ..core.settings import get_settings
 from ..events.store import EventStore
 from ..events.envelope import EventEnvelope
-from ..infra.llama_client import LlamaClient, OllamaClient
+from ..infra.llama_client import LlamaClient
 from ..services.simulation_service import SimulationService
 from swarm_os.services.control_plane.critic import Critic
-from swarm_os.services.control_plane.models import ModelProfile, RouteDecision
+from swarm_os.services.control_plane.models import ModelProfile
 from swarm_os.services.control_plane.planner import Planner
 from swarm_os.services.control_plane.policy import PolicyEngine
 from swarm_os.services.control_plane.router import Router
@@ -73,10 +73,10 @@ class Orchestrator:
 
         self.router = Router(
             profiles=[
-                ModelProfile(name="qwen3.5-9b", role="fast", max_tokens=16384),
-                ModelProfile(name="qwen3.5-9b", role="coding", max_tokens=16384),
-                ModelProfile(name="qwen3.5-9b", role="reasoning", max_tokens=16384),
-                ModelProfile(name="qwen3.5-9b", role="reviewer", max_tokens=16384),
+                ModelProfile(name="qwen3.5-4b", role="fast", max_tokens=16384),
+                ModelProfile(name="qwen3.5-4b", role="coding", max_tokens=16384),
+                ModelProfile(name="qwen3.5-4b", role="reasoning", max_tokens=16384),
+                ModelProfile(name="qwen3.5-4b", role="reviewer", max_tokens=16384),
                 ModelProfile(name="moondream:latest", role="vision", preferred_temp=0.2, max_tokens=8192),
             ],
             default_role="reasoning",
@@ -143,7 +143,7 @@ class Orchestrator:
                 _models_cache_time = time.time()
                 return _cached_models
             except Exception:
-                return _cached_models or ["qwen3.5-9b"]
+                return _cached_models or ["qwen3.5-4b"]
 
     def _parse_tool_call(self, text: str) -> tuple[str, str] | None:
         """Delegated to decoupled ToolParser."""
@@ -216,7 +216,6 @@ class Orchestrator:
                 return "Duplicate generation suppressed — an identical request is already in progress.", model
             _active_generations[_dedup_hash] = now
 
-        intent = self._classify_intent(messages)
         target_role = self._infer_task_role(messages)
         installed_candidates = await self._fetch_installed_models()
 
@@ -231,7 +230,7 @@ class Orchestrator:
             allow_fallback=True,
         )
 
-        chosen_model = route_decision.model or "qwen3.5-9b"
+        chosen_model = route_decision.model or "qwen3.5-4b"
 
         self.trace.add(
             trace_id=trace_id,
@@ -259,7 +258,7 @@ class Orchestrator:
             "OPENROUTER_API_KEY" if provider == "openrouter" else "NVIDIA_API_KEY", ""
         ).strip():
             log.info(f"[Orchestrator] No API key for {provider}, falling back to local model")
-            chosen_model = "qwen3.5-9b"
+            chosen_model = "qwen3.5-4b"
             provider = "llama"
 
         max_steps = 5
@@ -287,7 +286,7 @@ class Orchestrator:
                 tool_info = self._parse_tool_call(result)
                 if not tool_info:
                     final_result = result
-                    log.info(f"[Orchestrator] Plain-text response received. Exiting loop.")
+                    log.info("[Orchestrator] Plain-text response received. Exiting loop.")
                     break
                 if tool_info:
                     tool_name, params_str = tool_info
@@ -356,7 +355,7 @@ class Orchestrator:
                     # For handled slash commands, return immediately instead of continuing
                     # The command shim is a terminal action — no need to re-prompt the model
                     if tool_name == "command":
-                        log.info(f"[Orchestrator] Slash command handled. Returning immediately.")
+                        log.info("[Orchestrator] Slash command handled. Returning immediately.")
                         final_result = observation.get("result", result)
                         messages.append({"role": "assistant", "content": result})
                         messages.append({"role": "user", "content": f"TOOL OBSERVATION:\n{obs_str}\n\nContinue with the next assistant response."})
@@ -368,7 +367,7 @@ class Orchestrator:
                         messages.append({"role": "assistant", "content": result})
                         messages.append({"role": "user", "content": f"TOOL OBSERVATION:\n{obs_str}\n\nContinue with the next step."})
                         continue
-            except Exception as exc:
+            except Exception:
                 self.router.record_failure(model=chosen_model, cooldown_seconds=60.0)
                 log.exception("Generation failed")
                 async with _generation_lock:
@@ -443,7 +442,7 @@ class Orchestrator:
 
         if not messages:
             log.warning("[Orchestrator] No input messages provided for stream_generate")
-            yield f"\n[Error: No input provided]", "none", "none"
+            yield "\n[Error: No input provided]", "none", "none"
             return
 
         # Dynamic Tool Schema Discovery & Injection
@@ -467,7 +466,6 @@ class Orchestrator:
         trace_id = self.trace.new_trace_id()
         start_ms = time.time() * 1000.0
 
-        intent = self._classify_intent(messages)
         target_role = self._infer_task_role(messages)
         installed_candidates = await self._fetch_installed_models()
 
@@ -482,7 +480,7 @@ class Orchestrator:
             allow_fallback=True,
         )
 
-        chosen_model = route_decision.model or "qwen3.5-9b"
+        chosen_model = route_decision.model or "qwen3.5-4b"
 
         log.info("[Orchestrator] Routing decision: %s. Starting LLM stream...", chosen_model)
         
@@ -495,7 +493,7 @@ class Orchestrator:
             "OPENROUTER_API_KEY" if provider == "openrouter" else "NVIDIA_API_KEY", ""
         ).strip():
             log.info(f"[Orchestrator] No API key for {provider}, falling back to local model")
-            chosen_model = "qwen3.5-9b"
+            chosen_model = "qwen3.5-4b"
             provider = "llama"
 
         max_steps = 5
@@ -532,7 +530,7 @@ class Orchestrator:
 
                     if dedup_key in handled_tool_keys:
                         log.info(f"[Orchestrator] DUPLICATE tool call detected in stream: {tool_name}. Breaking loop.")
-                        yield f"\n[System: Duplicate tool call detected. Stopping loop.]\n", chosen_model, trace_id
+                        yield "\n[System: Duplicate tool call detected. Stopping loop.]\n", chosen_model, trace_id
                         break
 
                     log.info(f"[Orchestrator] Intercepted tool call in stream_generate(): {tool_name} with params: {params_str}")
@@ -595,7 +593,7 @@ class Orchestrator:
 
                     # For handled slash commands, break immediately — the shim is terminal
                     if tool_name == "command":
-                        log.info(f"[Orchestrator] Slash command handled in stream. Continuing.")
+                        log.info("[Orchestrator] Slash command handled in stream. Continuing.")
                         obs_text = f"\n[Observation: {obs_str}]\n"
                         yield obs_text, chosen_model, trace_id
                         messages.append({"role": "assistant", "content": accumulated_text})
@@ -610,7 +608,7 @@ class Orchestrator:
                     messages.append({"role": "user", "content": f"TOOL OBSERVATION:\n{obs_str}\n\nContinue with the next assistant response."})
                     continue
                 else:
-                    log.info(f"[Orchestrator] Final stream result received. Exiting loop.")
+                    log.info("[Orchestrator] Final stream result received. Exiting loop.")
                     break
             except Exception as exc:
                 log.exception("[Orchestrator] Streaming failed with error")

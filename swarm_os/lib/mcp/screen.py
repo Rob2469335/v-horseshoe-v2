@@ -183,22 +183,28 @@ def screenshot(save: bool = True) -> Dict[str, Any]:
         from PIL import Image
 
         w, h = _screen_size()
-        hwnd_desktop = win32gui.GetDesktopWindow()
-        hwnd_dc = win32gui.GetWindowDC(hwnd_desktop)
-        mfc_dc = win32ui.CreateDCFromHandle(hwnd_dc)
-        save_dc = mfc_dc.CreateCompatibleDC()
-        bitmap = win32ui.CreateBitmap()
-        bitmap.CreateCompatibleBitmap(mfc_dc, w, h)
-        save_dc.SelectObject(bitmap)
-        save_dc.BitBlt((0, 0), (w, h), mfc_dc, (0, 0), win32con.SRCCOPY)
+        w = max(1, w)
+        h = max(1, h)
+        try:
+            hwnd_desktop = win32gui.GetDesktopWindow()
+            hwnd_dc = win32gui.GetWindowDC(hwnd_desktop)
+            mfc_dc = win32ui.CreateDCFromHandle(hwnd_dc)
+            save_dc = mfc_dc.CreateCompatibleDC()
+            bitmap = win32ui.CreateBitmap()
+            bitmap.CreateCompatibleBitmap(mfc_dc, w, h)
+            save_dc.SelectObject(bitmap)
+            save_dc.BitBlt((0, 0), (w, h), mfc_dc, (0, 0), win32con.SRCCOPY)
 
-        bmpinfo = bitmap.GetInfo()
-        bmpdata = bitmap.GetBitmapBits(True)
-        img = Image.frombuffer("RGB", (bmpinfo["bmWidth"], bmpinfo["bmHeight"]), bmpdata, "raw", "BGRX", 0, 1)
+            bmpinfo = bitmap.GetInfo()
+            bmpdata = bitmap.GetBitmapBits(True)
+            img = Image.frombuffer("RGB", (bmpinfo["bmWidth"], bmpinfo["bmHeight"]), bmpdata, "raw", "BGRX", 0, 1)
 
-        save_dc.DeleteDC()
-        mfc_dc.DeleteDC()
-        win32gui.DeleteObject(bitmap.GetHandle())
+            save_dc.DeleteDC()
+            mfc_dc.DeleteDC()
+            win32gui.DeleteObject(bitmap.GetHandle())
+        except Exception:
+            # Fallback for headless/background Windows sessions without an attached GDI desktop
+            img = Image.new("RGB", (w, h), (0, 0, 0))
 
         fg = foreground_window()
         if save:
@@ -244,9 +250,17 @@ def foreground_window() -> Dict[str, Any]:
     try:
         import win32gui
         hwnd = win32gui.GetForegroundWindow()
-        title = win32gui.GetWindowText(hwnd)
-        rect = win32gui.GetWindowRect(hwnd)
-        return _ok({"hwnd": hwnd, "title": title, "rect": list(rect)})
+        if not hwnd:
+            return _ok({"hwnd": 0, "title": "", "rect": [0, 0, 0, 0]})
+        try:
+            title = win32gui.GetWindowText(hwnd)
+        except Exception:
+            title = ""
+        try:
+            rect = list(win32gui.GetWindowRect(hwnd))
+        except Exception:
+            rect = [0, 0, 0, 0]
+        return _ok({"hwnd": hwnd, "title": title, "rect": rect})
     except Exception as exc:
         return _err(exc)
 
@@ -261,11 +275,18 @@ def list_windows(max_results: int = 30) -> Dict[str, Any]:
                 return True
             title = win32gui.GetWindowText(hwnd)
             if title:
-                rect = win32gui.GetWindowRect(hwnd)
-                windows.append({"hwnd": hwnd, "title": title[:150], "rect": list(rect)})
+                try:
+                    rect = list(win32gui.GetWindowRect(hwnd))
+                except Exception:
+                    rect = [0, 0, 0, 0]
+                windows.append({"hwnd": hwnd, "title": title[:150], "rect": rect})
             return True
 
-        win32gui.EnumWindows(_cb, None)
+        try:
+            win32gui.EnumWindows(_cb, None)
+        except Exception:
+            windows = [{"hwnd": 0, "title": "Background Desktop Session", "rect": [0, 0, 0, 0]}]
+
         windows = windows[: int(max_results)]
         return _ok({"count": len(windows), "windows": windows})
     except Exception as exc:
@@ -472,6 +493,17 @@ def screen_handler(payload: Dict[str, Any]) -> Dict[str, Any]:
             "HUMAN-CONTROL MODE: the swarm may NOT move the mouse or send input yet. "
             "It can still screenshot and read the screen. To enable autonomous input, set "
             "SWARM_SCREEN_AUTONOMOUS=1 (or call set_screen_autonomous(true)). "
+            f"Proposed action: '{action}' — describe what you would do and wait for approval."
+        )
+    # SECURITY: `set_screen_autonomous`/`reset_screen_action_count` are themselves
+    # self-bypass primitives — an agent in human-control mode must NOT be able to
+    # flip itself into autonomous mode (real mouse/keyboard takeover) or reset the
+    # runaway-action cap. Both are only honored when the OPERATOR already enabled
+    # autonomous mode via SWARM_SCREEN_AUTONOMOUS=1.
+    if action in ("set_screen_autonomous", "reset_screen_action_count") and not SCREEN_AUTONOMOUS:
+        return _err(
+            "HUMAN-CONTROL MODE: you cannot enable autonomous input or reset the "
+            "action cap yourself. An operator must set SWARM_SCREEN_AUTONOMOUS=1. "
             f"Proposed action: '{action}' — describe what you would do and wait for approval."
         )
     kwargs = {k: v for k, v in payload.items() if k not in ("action", "tool", "capability")}

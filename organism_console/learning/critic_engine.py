@@ -1,5 +1,4 @@
-from datetime import datetime, timedelta
-import json
+from datetime import datetime
 from organism_console.skills.skill_repository import SkillRepository
 
 class CriticEngine:

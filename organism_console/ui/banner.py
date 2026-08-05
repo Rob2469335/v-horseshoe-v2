@@ -6,10 +6,8 @@ import threading
 import copy
 from rich.table import Table
 from rich.panel import Panel
-from rich.box import SIMPLE
 
-from organism_console.config import BACKEND_URL, VERSION, START_TIME
-from organism_console.api_client import call_api
+from organism_console.config import BACKEND_URL, START_TIME
 from swarm_os.config.settings import settings
 from organism_console.token_tracker import get_status_segment
 
@@ -61,8 +59,8 @@ def fetch_weather_bg(city=None):
         # 1. Geocode
         if city == "auto":
             geo_resp = requests.get("http://ip-api.com/json/", timeout=2).json()
-            lat, lon = geo_resp.get("lat"), geo_resp.get("lon")
             city_name = geo_resp.get("city", "auto")
+            lat, lon = geo_resp.get("lat"), geo_resp.get("lon")
         else:
             geo_resp = requests.get(f"https://geocoding-api.open-meteo.com/v1/search?name={city}&count=1", timeout=2).json()
             results = geo_resp.get("results")
@@ -88,8 +86,8 @@ def fetch_weather_bg(city=None):
         desc = "Sunny" if code <= 1 else "Cloudy" if code <= 3 else "Fog" if code <= 49 else "Rain" if code <= 69 else "Snow" if code <= 79 else "Storm"
         
         with _WEATHER_LOCK:
-            _WEATHER_CACHE = f"[bold #00ffcc]{desc}[/bold #00ffcc] | Temp: [bold #ffaa00]{temp}°F[/bold #ffaa00] | Hum: [bold #00aaff]{hum}%[/bold #00aaff]"
-    except Exception as e:
+            _WEATHER_CACHE = f"[bold #00ffcc]{city_name} {desc}[/bold #00ffcc] | Temp: [bold #ffaa00]{temp}°F[/bold #ffaa00] | Hum: [bold #00aaff]{hum}%[/bold #00aaff]"
+    except Exception:
         with _WEATHER_LOCK:
             _WEATHER_CACHE = "[dim]Weather Offline[/dim]"
 
@@ -116,32 +114,35 @@ def run_startup_checks(ctx):
     ]
 
     def check(name, url):
-        try:
-            t0 = time.time()
-            r = requests.get(url, timeout=2, verify=settings.ssl_verify)
-            ms = int((time.time() - t0) * 1000)
-            ok = r.status_code == 200
-            extra = ""
-            if name == "Swarm API" and ok:
-                try:
-                    data = r.json()
-                    ready = data.get("ready", False)
-                    extra = f" [dim]({'READY' if ready else 'NOT READY'})[/dim]"
-                except Exception:
-                    pass
-            return name, ok, ms, extra
-        except Exception:
-            return name, False, 0, ""
+        for attempt in range(2):
+            try:
+                t0 = time.time()
+                r = requests.get(url, timeout=3, verify=settings.ssl_verify)
+                ms = int((time.time() - t0) * 1000)
+                ok = r.status_code == 200
+                extra = ""
+                if name == "Swarm API" and ok:
+                    try:
+                        data = r.json()
+                        ready = data.get("ready", False)
+                        extra = f" [dim]({'READY' if ready else 'NOT READY'})[/dim]"
+                    except Exception:
+                        pass
+                return name, ok, ms, extra
+            except Exception:
+                if attempt < 2:
+                    time.sleep(3)
+        return name, False, 0, ""
 
     ctx.console.print()
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
         futures = {ex.submit(check, n, u): n for n, u in services}
         for fut in concurrent.futures.as_completed(futures):
             name, ok, ms, extra = fut.result()
             if ok:
                 ctx.console.print(f"  [bold green]OK[/bold green]  {name:<12} [dim]{ms}ms{extra}[/dim]")
             else:
-                ctx.console.print(f"  [bold red]FAIL[/bold red] {name:<12} [dim]unreachable[/dim]")
+                ctx.console.print(f"  [bold yellow]...[/bold yellow] {name:<12} [dim]checking ...[/dim]")
     ctx.console.print()
 
 def estimate_tokens(text: str) -> int:

@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict
+
+log = logging.getLogger(__name__)
 
 class HealingAction:
     def __init__(self, action: str, reason: str) -> None:
@@ -51,7 +54,8 @@ class HealingEngine:
                 self.state_path.parent.mkdir(parents=True, exist_ok=True)
                 with open(self.state_path, "w", encoding="utf-8") as fh:
                     json.dump(self.state, fh, default=str)
-            except Exception:
+            except Exception as e:
+                log.warning("Failed to persist healing engine state: %s", e)
                 pass
 
     def plan(self, health_state: dict[str, str]) -> HealingAction:
@@ -62,7 +66,7 @@ class HealingEngine:
 
     def execute(self, symptom: Dict[str, Any]) -> Dict[str, Any]:
         component = symptom.get("component", "system")
-        status = symptom.get("status", "unknown")
+        symptom_status = symptom.get("status", "unknown")
 
         # Get attempt count for this component
         attempts = self.state.get("attempts", {}).get(component, 0)
@@ -128,7 +132,8 @@ class HealingEngine:
                 "action": action,
                 "executed": False,
                 "repair": {"status": "approval_required"},
-                "policy": {"permitted": permitted, "reasons": reasons}
+                "policy": {"permitted": permitted, "reasons": reasons},
+                "symptom_status": symptom_status,
             }
             if req:
                 res["approval_request"] = req
@@ -140,7 +145,8 @@ class HealingEngine:
                 "action": action,
                 "executed": False,
                 "repair": {"status": "skipped"},
-                "policy": {"permitted": permitted, "reasons": reasons}
+                "policy": {"permitted": permitted, "reasons": reasons},
+                "symptom_status": symptom_status,
             }
 
         executed = True

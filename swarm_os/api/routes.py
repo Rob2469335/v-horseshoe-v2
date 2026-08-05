@@ -1,8 +1,8 @@
 # swarm_os/api/routes.py
 from __future__ import annotations
 
-import json
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from collections import Counter, defaultdict
@@ -46,9 +46,7 @@ from swarm_os.services.chat_service import ChatService
 # --- Helper Functions ---
 async def _safe_ollama_models(runtime: Any) -> list[str]:
     models = set()
-    import httpx
     import asyncio
-    from pathlib import Path
     
     async def fetch_port(port: int):
         try:
@@ -80,8 +78,7 @@ async def _safe_ollama_models(runtime: Any) -> list[str]:
     if any("qwen3.5" in m.lower() for m in ordered):
         ordered = [m for m in ordered if "qwen3.5" in m.lower()] + [m for m in ordered if "qwen3.5" not in m.lower()]
     return ordered
-    
-    return sorted(list(models))
+
 
 def _build_capabilities(installed_models: list[str], runtime: Any = None) -> dict[str, Any]:
     vision_models = [m for m in installed_models if any(marker in m.lower() for marker in ["vl", "vision", "moondream", "llava"])]
@@ -208,7 +205,7 @@ async def cache_status(request: Request, runtime=Depends(runtime_dep)):
             count = (await vs.client.count(c.name)).count
             total_qdrant_points += count
             cached_keys.append(f"qdrant_{c.name}_{count}")
-    except Exception as e:
+    except Exception:
         pass
         
     return CacheStatusResponse(cache_size=total_qdrant_points, cached_keys=cached_keys)
@@ -247,10 +244,26 @@ async def execute_tool(payload: ToolExecuteRequest, runtime=Depends(runtime_dep)
 
 @router.post("/generate", response_model=GenerateResponse)
 async def generate(payload: GenerateRequest, orch=Depends(get_orchestrator)):
-    _model = (payload.model or "").strip() or "qwen3.5-9b"
+    # Fixes/corrections (T2 deep repair, mutation loop, self-repair) call
+    # /generate without a model — default to DeepSeek V4 Flash (funded, cheap,
+    # instruction-following) instead of local qwen. A repair fix is a complex
+    # reasoning task; the local 4B/9B burns turns and produces weak patches.
+    try:
+        from runtime_v2.services._llm_client import _analysis_cloud_model, _analysis_cloud_enabled
+        if _analysis_cloud_enabled():
+            _model = _analysis_cloud_model()  # openai/deepseek-v4-flash by default
+        else:
+            _model = "qwen3.5-9b"
+    except Exception:
+        _model = "openai/deepseek-v4-flash"
+    _model = (payload.model or "").strip() or _model
     
-    # Check if the model requests a cloud provider, otherwise default to local llama.cpp
-    is_local = "/" not in _model or _model.startswith("openai/")
+    # Check if the model requests a cloud provider, otherwise default to local llama.cpp.
+    # Use the shared _is_local_model() (NOT startswith("openai/")) so cloud models
+    # like openai/deepseek-v4-flash are correctly treated as cloud — the old check
+    # misclassified them as local and sent them to the wrong endpoint.
+    from runtime_v2.services.fallback_manager import _is_local_model
+    is_local = _is_local_model(_model)
     litellm_model = f"openai/{_model}" if is_local and not _model.startswith("openai/") else _model
     
     kwargs = {
@@ -266,6 +279,16 @@ async def generate(payload: GenerateRequest, orch=Depends(get_orchestrator)):
     if is_local:
         kwargs["api_base"] = "http://127.0.0.1:8080/v1"
         kwargs["api_key"] = "llama"
+    else:
+        # Cloud fix/correction path: give the model its own endpoint/key so the
+        # request genuinely reaches the cloud provider (DeepSeek via OpenCode Go,
+        # or whatever OPENAI_API_BASE is set to) — not the local llama.cpp slot.
+        base = os.getenv("OPENAI_API_BASE", "")
+        key = os.getenv("OPENAI_API_KEY", "")
+        if base:
+            kwargs["api_base"] = base
+        if key:
+            kwargs["api_key"] = key
         
     try:
         import litellm

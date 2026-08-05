@@ -6,7 +6,7 @@ from collections import defaultdict
 from litellm import acompletion
 from runtime_v2.services.memory_core import remember_fact
 
-MODEL = "qwen3.5-9b"
+MODEL = "openai/deepseek-v4-flash"  # rule extraction = correction reasoning → cloud DeepSeek (funded)
 
 async def extract_and_inject_rules():
     print("[Offline Learner] Reading events.jsonl...")
@@ -80,14 +80,21 @@ Format your output as a simple list of rules, one per line. No markdown formatti
 """
     
     try:
-        response = await acompletion(
-            model=MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            api_base="http://127.0.0.1:8080/v1",
-            api_key="llama",
-            custom_llm_provider="openai",
-            max_tokens=500
-        )
+        _kwargs = {
+            "model": MODEL,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 500,
+        }
+        if "/" in MODEL and not MODEL.startswith("openai/qwen"):
+            _base = os.getenv("OPENAI_API_BASE", "")
+            _key = os.getenv("OPENAI_API_KEY", "")
+            if _base:
+                _kwargs["api_base"] = _base
+            if _key:
+                _kwargs["api_key"] = _key
+        else:
+            _kwargs.update(api_base="http://127.0.0.1:8080/v1", api_key="llama", custom_llm_provider="openai")
+        response = await acompletion(**_kwargs)
         rules_text = response.choices[0].message.content.strip()
     except Exception as e:
         print(f"[Offline Learner] LLM failed: {e}")

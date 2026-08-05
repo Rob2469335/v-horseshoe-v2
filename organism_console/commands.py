@@ -196,7 +196,6 @@ def cmd_autofix(cmd_ctx: CommandContext, args: List[str]) -> None:
             cmd_ctx.console.print(f"[dim]  Test saved: {result['generated_test_file']}[/dim]")
 
     stats = engine.show_stats()
-    total = stats["total_repairs"]
     successes = stats["t0_hits"] + stats["t1_hits"] + stats["t2_hits"]
     failures = stats["failures"]
 
@@ -243,12 +242,13 @@ def cmd_autofix(cmd_ctx: CommandContext, args: List[str]) -> None:
 
     # Phase 5: Autonomous agent fallback for unfixed
     if failures > 0 and Confirm.ask("\n[bold yellow]Dispatch autonomous agent for remaining unfixed bugs?[/bold yellow]"):
-        unfixed = [err for err, _count, _ftype, _tier, _ in classified if err]
+        # Only dispatch the errors where we have no known cure — don't re-run fixed ones.
+        unfixed = [(err, count) for err, count, _ftype, _tier, has_cure in classified if not has_cure]
         instruction = (
             "I am the Swarm OS self-repair engine. I have identified the following recurring exceptions "
-            "and bugs. Please search the codebase, find where these errors "
+            "and bugs with no known cure. Please search the codebase, find where these errors "
             "originate from, and write the code to fix them permanently.\n\n"
-            + "\n".join(f"- ({count}x) {err}" for err, count in counter.most_common(limit))
+            + "\n".join(f"- ({count}x) {err}" for err, count in unfixed)
         )
         try:
             if cmd_ctx.run_goal_loop:
