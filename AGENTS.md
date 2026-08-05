@@ -192,12 +192,6 @@ Package split from the deleted 1,275-line `rv_finder.py`. Exposed as `find_best_
 > cooldowns.
 
 ### organism_console/ (CLI Frontend)
-| `orchestration/health_monitor.py` | 536 | Health monitoring |
-| `agent_memory/episodic_store.py` | 518 | `EpisodicStore` — temporal event history |
-| `orchestration/circuit_breaker.py` | 422 | Circuit breaker pattern |
-| `agent_memory/vector_store.py` | 412 | In-memory vector store (`VectorStore`) |
-
-### organism_console/ (CLI Frontend)
 
 | File | Lines | Role |
 |------|-------|------|
