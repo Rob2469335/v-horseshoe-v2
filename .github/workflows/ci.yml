@@ -17,8 +17,8 @@ jobs:
         options: >-
           --health-cmd "curl -sSf http://127.0.0.1:6333/health || exit 1"
           --health-interval 10s
-          --health-timeout 5s
-          --health-retries 12
+          --health-timeout 30s
+          --health-retries 30
     steps:
       - name: Checkout
         uses: actions/checkout@v4
