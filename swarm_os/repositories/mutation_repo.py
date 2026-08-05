@@ -22,7 +22,7 @@ class MutationRepository:
         """
         resolved = Path(raw).expanduser().resolve()
         base = (self.root_dir if not allow_project_root else self.root_dir.parents[1]).resolve()
-        if not (resolved == base or base in resolved.parents):
+        if not resolved.is_relative_to(base):
             raise ValueError(f"Path outside allowed root: {raw}")
         return resolved
 
