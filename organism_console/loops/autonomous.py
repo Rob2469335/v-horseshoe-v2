@@ -268,6 +268,8 @@ def run_autonomous_goal_loop(goal: str, cmd_ctx):
         # files the agent actually touched THIS attempt — not the pre-existing
         # uncommitted work in the tree (which was derailing the whole loop).
         attempt_baseline = _git_status_paths()
+        state.delegation_chain = [entry_agent]
+        state.save()
         
         global _healing_loop
         if _healing_loop is None:
