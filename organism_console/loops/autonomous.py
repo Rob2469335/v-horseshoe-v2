@@ -232,6 +232,7 @@ def run_autonomous_goal_loop(goal: str, cmd_ctx):
             "You are the `coordinator` agent. Your ONLY job is to act as a router. You MUST NOT attempt to solve this goal yourself.\n"
             "You MUST immediately use the `delegate` tool to route this task.\n"
             "- For simple or well-defined coding tasks, delegate DIRECTLY to the `coder` agent to save time.\n"
+            "- For internet research, analyzing the state of the art, or finding external information, delegate DIRECTLY to the `researcher` agent.\n"
             "- For complex, multi-file architectures requiring deep thought, delegate to the `planner`.\n"
             "Just output the JSON `delegate` payload and nothing else."
         )
@@ -445,7 +446,7 @@ def run_autonomous_goal_loop(goal: str, cmd_ctx):
             
             if entry_agent == "coordinator":
                 current_prompt += (
-                    "CRITICAL: If you are the `coordinator`, you MUST delegate this to the `debugger` or `coder`.\n"
+                    "CRITICAL: If you are the `coordinator`, you MUST delegate this to the `debugger`, `coder`, `researcher`, or `planner`.\n"
                     "Just output the JSON `delegate` payload and nothing else."
                 )
                 

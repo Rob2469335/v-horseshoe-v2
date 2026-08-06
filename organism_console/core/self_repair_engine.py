@@ -55,7 +55,9 @@ class SelfRepairEngine:
         ftype = result.get("failure_type", "unknown")
         val = " [yellow](reverted)[/yellow]" if result.get("validation_error") else ""
         test = " [dim]+test[/dim]" if result.get("generated_test") else ""
-        console.print(f"  [{ftype}] T{tier} {status}{val}{test}: {result.get('repair_action', 'no action')[:120]}")
+        repair_act = result.get('repair_action')
+        repair_act_str = str(repair_act) if repair_act is not None else 'no action'
+        console.print(f"  [{ftype}] T{tier} {status}{val}{test}: {repair_act_str[:120]}")
 
     def _save_generated_test(self, result: Dict[str, Any], error_text: str) -> Optional[Path]:
         test_code = result.get("generated_test")

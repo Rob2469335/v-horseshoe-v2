@@ -532,7 +532,7 @@ class AgentServiceV2:
                 "SYSTEM: You searched the web, but you called action=final without deep-reading "
                 "any result. You MUST use action=web_fetch to read at least one authoritative "
                 "page (official docs, Stack Overflow, GitHub) about the topic, extract the "
-                "relevant details, and THEN synthesize your final answer from that content. "
+                "relevant details, and THEN implement the necessary changes or synthesize your final answer from that content. "
                 "Do NOT finalize from search snippets alone."
             )})
             return
