@@ -185,7 +185,7 @@ _AGENT_TOOLS = {
     "coder": ["filesystem", "semantic_search", "web_search", "web_fetch", "sandbox_repl", "lsp", "mcp", "todo", "remember", "deprecate_memory", "final"],
     "tool-runner": ["sandbox_repl", "filesystem", "mcp", "final"],
     "reviewer": ["filesystem", "semantic_search", "sandbox_repl", "lsp", "mcp", "todo", "remember", "deprecate_memory", "final"],
-    "debugger": ["filesystem", "sandbox_repl", "semantic_search", "web_search", "system", "screen", "lsp", "mcp", "todo", "remember", "deprecate_memory", "final"],
+    "debugger": ["filesystem", "sandbox_repl", "semantic_search", "web_search", "web_fetch", "system", "screen", "lsp", "mcp", "todo", "remember", "deprecate_memory", "final"],
     "tool-maker": ["filesystem", "sandbox_repl", "mcp_register", "final"],
     "code_analyzer": ["filesystem", "web_search", "web_fetch", "system", "screen", "semantic_search", "sandbox_repl", "todo", "final"],
 }

@@ -362,20 +362,22 @@ class AgentServiceV2:
             return decision
 
         fast = fast_start_for_agent(agent_id, turn)
+        
+        # INTERNET-GOAL FIX: if an analysis agent was handed an internet goal
+        # (codebase + web, or pure web), inject web_search BEFORE the
+        # filesystem warmup. The warmup consumed all 8 turns with file reads
+        # (4 warmup + repeated reads) and the agent hit "max turns reached"
+        # without ever calling web_search — the guard rejected the final but
+        # there was no budget left to search. Searching first guarantees the
+        # internet portion of the goal is actually done.
+        if turn == 0 and agent_id in INTERNET_GOAL_AGENTS:
+            query = (prompt or "").strip()
+            internet_goal = bool(_INTERNET_GOAL_RE.search(query)) if query else False
+            if internet_goal:
+                log.info("[%s] internet goal — fast-start turn %d → web_search (before warmup)", agent_id, turn)
+                return {"action": "web_search", "query": _clean_search_query(query)}
+
         if fast is not None:
-            # INTERNET-GOAL FIX: if an analysis agent was handed an internet goal
-            # (codebase + web, or pure web), inject web_search BEFORE the
-            # filesystem warmup. The warmup consumed all 8 turns with file reads
-            # (4 warmup + repeated reads) and the agent hit "max turns reached"
-            # without ever calling web_search — the guard rejected the final but
-            # there was no budget left to search. Searching first guarantees the
-            # internet portion of the goal is actually done.
-            if turn == 0 and agent_id in INTERNET_GOAL_AGENTS:
-                query = (prompt or "").strip()
-                internet_goal = bool(_INTERNET_GOAL_RE.search(query)) if query else False
-                if internet_goal:
-                    log.info("[%s] internet goal — fast-start turn %d → web_search (before warmup)", agent_id, turn)
-                    return {"action": "web_search", "query": _clean_search_query(query)}
             return fast
         # Research-only goals: the FIRST action is deterministically web_search,
         # never filesystem. Without this, the LLM's codebase bias reads files /
