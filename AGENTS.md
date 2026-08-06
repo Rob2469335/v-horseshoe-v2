@@ -253,6 +253,8 @@ Dependency pairing: React 19 ↔ `@react-three/fiber` ^9.5 / `@react-three/drei`
 
 ## Recent Changes (do NOT re-apply)
 
+- **Coder internet goal enforcement fix**: `runtime_v2/api/agent_service_v2.py` — The `coder` agent was bypassing internet search requirements (web_search / web_fetch guards) for internet-flagged goals because the guards were gated by `ANALYSIS_AGENTS`, which deliberately excludes `coder`. Created a new `INTERNET_GOAL_AGENTS` tuple in `_agent_config.py` that includes `coder` and swapped the gating at the three specific enforcement sites while preserving the correct report-only guard.
+
 - **Genetic mutation loop historical-context fix (2026-08-05)**: `swarm_os/services/genetic_mutation_loop.py` — The mutation daemon was passing a static string for failed mutations to `memory_bridge._add()`, depriving the LLM of actionable context on retry. Added surgical capture of the actual `Exception` string into `last_error` within the `except` blocks, appending it to the failure `details` payload. This ensures `get_memory_context` retrieves concrete failure reasons for the next run. Tests 100% green.
 
 - **Goal-loop placeholder-final fail-fast (2026-08-05)**: `organism_console/loops/autonomous.py` — when a delegated agent returns a bare "Task completed."/"Done." final with no file changes and no real analysis, the verification loop would burn a full review cycle (reviewer rejects it, loop retries on the same empty final). Added `_is_placeholder_final()` + a fail-fast guard that treats a placeholder final as an immediate failed attempt with concrete corrective feedback fed back to the agent. Committed `6c9728a`.

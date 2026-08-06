@@ -98,7 +98,7 @@ class _CallState:
     _web_final_rejected: bool = False
 
 from runtime_v2.api._agent_config import (
-    MAX_TURNS, MAX_DEPTH, ANALYSIS_AGENTS,
+    MAX_TURNS, MAX_DEPTH, ANALYSIS_AGENTS, INTERNET_GOAL_AGENTS,
     _DEFAULTS, MAX_HISTORY_TURNS, MAX_RESULT_CHARS,
 )
 from runtime_v2.api._agent_routing import (
@@ -370,7 +370,7 @@ class AgentServiceV2:
             # without ever calling web_search — the guard rejected the final but
             # there was no budget left to search. Searching first guarantees the
             # internet portion of the goal is actually done.
-            if turn == 0 and agent_id in ANALYSIS_AGENTS:
+            if turn == 0 and agent_id in INTERNET_GOAL_AGENTS:
                 query = (prompt or "").strip()
                 internet_goal = bool(_INTERNET_GOAL_RE.search(query)) if query else False
                 if internet_goal:
@@ -512,7 +512,7 @@ class AgentServiceV2:
         # actual fetched content, not just search snippets. This matches how a
         # human researcher (or opencode) works: search → fetch → read → synthesize.
         needs_fetch = "web_fetch" in self._get_allowed_tools(agent_id)
-        if internet_goal and not state.did_web_search and has_web_search_tool and agent_id in ANALYSIS_AGENTS:
+        if internet_goal and not state.did_web_search and has_web_search_tool and agent_id in INTERNET_GOAL_AGENTS:
             # Reject on EVERY final until web_search actually runs — not just the
             # first (a one-shot latch let the agent call final a second time and
             # "complete" the goal without ever doing the internet research it was
@@ -527,7 +527,7 @@ class AgentServiceV2:
                 "least one result, before you can call action=final. Do NOT skip this step."
             )})
             return
-        if internet_goal and needs_fetch and not state.did_web_fetch and agent_id in ANALYSIS_AGENTS:
+        if internet_goal and needs_fetch and not state.did_web_fetch and agent_id in INTERNET_GOAL_AGENTS:
             state._web_final_rejected = True
             state.handler_status = "CONTINUE"
             log.warning("[%s] Rejected final: internet goal without web_fetch.", agent_id)

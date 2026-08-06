@@ -7,6 +7,12 @@ MAX_DEPTH = 15
 # Agents that must fetch content before finalizing
 ANALYSIS_AGENTS = ("code_analyzer", "reviewer", "researcher")
 
+# Agents that must actually search the internet before finalizing when the
+# goal is internet-flagged. Broader than ANALYSIS_AGENTS, which also gates
+# the separate _fetched_content report-only check that doesn't apply to
+# coder (a file-editing agent, not a report-only one).
+INTERNET_GOAL_AGENTS = ANALYSIS_AGENTS + ("coder",)
+
 # Default metadata for each agent
 _DEFAULTS: Dict[str, Tuple[str, str, str]] = {
     "coordinator":   ("coordinator",   "Delegates work to planner.",        "reasoning"),
