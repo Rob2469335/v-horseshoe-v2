@@ -484,7 +484,7 @@ class T2DeepRepair:
         lessons_section = ""
         if similar_lessons:
             lessons_section = "\n## Past Lessons from Similar Repairs\n" + "\n".join(
-                f"- Previous error: {l.get('error_text', '')[:200]}\n  Fix: {l.get('repair_action', '')[:200]}\n  Result: {'Success' if l.get('success') else 'Failed'}"
+                f"- Previous error: {str(l.get('error_text', '') or '')[:200]}\n  Fix: {str(l.get('repair_action', '') or '')[:200]}\n  Result: {'Success' if l.get('success') else 'Failed'}"
                 for l in similar_lessons
             )
 
@@ -640,7 +640,7 @@ class TieredRepairOrchestrator:
                     result["repair_action"] = cure["action"]
                     result["confidence"] = cure.get("confidence", 0.5)
                     if self.cmd_ctx:
-                        self.cmd_ctx.console.print(f"[dim]Found cure for [{failure_type}]: {cure['action'][:80]}...[/dim]")
+                        self.cmd_ctx.console.print(f"[dim]Found cure for [{failure_type}]: {str(cure.get('action', '') or '')[:80]}...[/dim]")
 
         tier_order = _optimize_tier_order(failure_type)
 
@@ -791,8 +791,8 @@ class RepairWatchman:
                             try:
                                 data = json.loads(line)
                                 _handle_event_line(self.engine, data)
-                            except Exception as e:
-                                log.warning("Failed to parse event line at offset %d: %s", self._last_position, e)
+                            except Exception:
+                                log.exception("Failed to parse event line at offset %d", self._last_position)
                                 self._last_position += len(line.encode("utf-8")) if line else 1
                                 pass
                     self._last_position = current_size

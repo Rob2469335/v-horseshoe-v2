@@ -498,13 +498,8 @@ class AgentServiceV2:
         # only, so demanding web_search would block a legit final). Keywords are
         # internet-INTENT phrases only; bare "modern"/"latest" are dropped (they
         # frequently appear in purely-local goals and caused false positives).
-        prompt_lower = (prompt or "").lower()
-        internet_goal = any(k in prompt_lower for k in (
-            "search internet", "search the web", "search the internet", "web search",
-            "search online", "research best practices", "find improvements",
-            "state of the art", "latest versions", "modern best practices",
-            "what's new", "what is new",
-        ))
+        query = (prompt or "").strip()
+        internet_goal = bool(_INTERNET_GOAL_RE.search(query)) if query else False
         has_web_search_tool = "web_search" in self._get_allowed_tools(agent_id)
         # REQUIRE both web_search AND web_fetch for internet goals on analysis
         # agents. Searching is not enough — the agent must deep-read at least one
@@ -657,7 +652,8 @@ class AgentServiceV2:
 
         if not state.tool_success:
             consecutive_errors += 1
-            await self._remember_failure(agent_id, action, tool_payload, result.get('error', 'unknown error'))
+            extracted_err = result.get('error') or result.get('stderr') or 'unknown error'
+            await self._remember_failure(agent_id, action, tool_payload, str(extracted_err))
             # Persist the tool_result failure to the event store so downstream
             # consumers that tail events.jsonl (RepairWatchman, /autofix, the goal
             # loop's verification) actually SEE tool failures. Previously only
@@ -669,7 +665,7 @@ class AgentServiceV2:
                 self._record_event("tool_result", agent_id, {
                     "tool": action,
                     "arguments": tool_payload,
-                    "result": {"ok": False, "error": str(result.get('error', 'unknown error'))[:500]},
+                    "result": {"ok": False, "error": str(extracted_err)[:500]},
                     "agent_id": agent_id,
                 })
             except Exception as evt_err:
@@ -858,7 +854,7 @@ class AgentServiceV2:
                         heal_task = (f"The agent '{agent_id}' has failed {consecutive_errors} times consecutively while talking to the LLM backend. "
                                      "The LLM is likely down or overloaded. Diagnose and fix.")
                         yield {"agent_id": agent_id, "type": "agent_handoff", "from": agent_id, "to": "debugger", "task": heal_task}
-                        async for chunk in self.step_agent_stream("debugger", heal_task, history=messages[-6:], delegation_chain=["debugger"]):
+                        async for chunk in self.step_agent_stream("debugger", heal_task, history=messages[-6:], delegation_chain=chain + ["debugger"]):
                             chunk.setdefault("delegated_by", agent_id)
                             yield chunk
                         healing_attempts += 1
@@ -884,7 +880,7 @@ class AgentServiceV2:
                     yield {"agent_id": agent_id, "type": "error", "content": "Circuit Breaker Tripped! Initiating Autonomous Self-Healing Sequence..."}
                     heal_task = (f"The agent '{agent_id}' is stuck in an infinite loop. Review the history and write a plan to fix the code or environment so they can succeed without looping. Provide a 'final' action when healed.")
                     yield {"agent_id": agent_id, "type": "agent_handoff", "from": agent_id, "to": "debugger", "task": heal_task}
-                    async for chunk in self.step_agent_stream("debugger", heal_task, history=messages[-6:], delegation_chain=["debugger"]):
+                    async for chunk in self.step_agent_stream("debugger", heal_task, history=messages[-6:], delegation_chain=chain + ["debugger"]):
                         chunk.setdefault("delegated_by", agent_id)
                         yield chunk
                     healing_attempts += 1
@@ -990,7 +986,7 @@ class AgentServiceV2:
                                  "Review the last few tool errors and write a plan to fix the code, syntax, or environment so they can succeed. "
                                  "Provide a 'final' action when healed.")
                     yield {"agent_id": agent_id, "type": "agent_handoff", "from": agent_id, "to": "debugger", "task": heal_task}
-                    async for chunk in self.step_agent_stream("debugger", heal_task, history=messages[-6:], delegation_chain=["debugger"]):
+                    async for chunk in self.step_agent_stream("debugger", heal_task, history=messages[-6:], delegation_chain=chain + ["debugger"]):
                         chunk.setdefault("delegated_by", agent_id)
                         yield chunk
                     healing_attempts += 1

@@ -40,6 +40,18 @@ _stats = {"hits": 0, "semantic_hits": 0, "misses": 0, "errors": 0, "lookups": 0}
 # Cosine threshold above which a candidate is treated as a safe semantic hit.
 SEMANTIC_THRESHOLD = float(os.environ.get("SWARM_SEMANTIC_CACHE_THRESHOLD", "0.85"))
 
+def _contains_secrets(text: str) -> bool:
+    """Return True if the text contains patterns that look like obvious secrets."""
+    import re
+    # Match common secret prefixes or formats (e.g. Bearer tokens, API keys)
+    # This is a lightweight heuristic as recommended by SOTA to bypass cache for sensitive data.
+    secret_patterns = [
+        r"Bearer\s+[a-zA-Z0-9_\-\.]+",
+        r"sk-[a-zA-Z0-9]{20,}",
+        r"AKIA[0-9A-Z]{16}",
+    ]
+    return any(re.search(p, text) for p in secret_patterns)
+
 
 def _enabled() -> bool:
     return os.environ.get("SWARM_SEMANTIC_CACHE", "0") == "1"
@@ -167,10 +179,14 @@ async def cache_tool_decision(messages: list, agent_id: str, decision: dict):
     if not _enabled():
         return
     try:
+        last_msg = _last_user_text(messages)
+        if _contains_secrets(str(decision)) or (last_msg and _contains_secrets(last_msg)):
+            log.debug("Skipping semantic cache write: obvious secret detected")
+            return
+
         cache_key = get_cache_key(messages, agent_id)
         _put_exact(cache_key, decision)
 
-        last_msg = _last_user_text(messages)
         if not last_msg or len(last_msg.strip()) < 10:
             return
 

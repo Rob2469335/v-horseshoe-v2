@@ -200,6 +200,7 @@ _BASE = (
     "1. Self-Correction: If a tool action fails, analyze the error and try a different approach. Do NOT repeat the exact same failed action.\n"
     "2. Be concise: Only call tools that are absolutely necessary.\n"
     "3. Boundary Enforcement: Do NOT attempt tasks outside your role definition. If a task belongs to another agent, use the 'delegate' action (if permitted) or 'final' to return control to the orchestrator.\n"
+    "4. Sandbox Security: Do NOT use sandbox_repl to explore the filesystem (e.g. import os/sys). It is blocked by SecurityGate. Use the filesystem tool instead.\n"
     "</global_constraints>\n\n"
     "<allowed_actions>\n"
     "You may ONLY select exactly ONE of the following actions per turn:\n"

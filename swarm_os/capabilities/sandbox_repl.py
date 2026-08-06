@@ -30,6 +30,7 @@ class SandboxReplHandler:
                     "ok": False,
                     "stdout": "",
                     "stderr": f"Security Gate blocked execution: {e}",
+                    "error": f"Security Gate blocked execution: {e}",
                     "returncode": 1,
                 }
             cmd = [sys.executable, "-I", "-c", str(code)]
