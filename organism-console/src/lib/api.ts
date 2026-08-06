@@ -66,6 +66,8 @@ export const api = {
   getRouterStats: <T>(baseUrl: string) => fetchJson<T>(baseUrl, appConfig.endpoints.routerStats),
   getCriticStats: <T>(baseUrl: string) => fetchJson<T>(baseUrl, appConfig.endpoints.criticStats),
   getMemories: <T>(baseUrl: string) => fetchJson<T>(baseUrl, appConfig.endpoints.memories),
+  getWorkspaceChanges: (baseUrl: string) =>
+    fetchJson<import("../components/organism/DiffReviewPanel").WorkspaceChanges>(baseUrl, appConfig.endpoints.workspaceChanges),
   sendChat: (baseUrl: string, prompt: string) =>
     postJson<GenerateRequest, ChatResponse>(baseUrl, "/generate", { prompt })
 }

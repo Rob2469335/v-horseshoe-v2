@@ -37,6 +37,8 @@ except ImportError:
 
 from rich.console import Console
 from rich.logging import RichHandler
+from rich.markup import escape
+from rich.panel import Panel
 
 from organism_console.config import SESSION_FILE, LOG_DIR, VERSION
 from organism_console.state_store import SessionState
@@ -202,7 +204,9 @@ def main():
         print_help()
         return 0
 
-    # Parse --agent and --model flags
+    # Parse --agent and --model flags (plus --continue / --json passthrough)
+    continue_flag = "--continue" in args
+    json_flag = "--json" in args
     agent_override = None
     model_override = None
     filtered_args = []
@@ -231,31 +235,80 @@ def main():
 
     signal.signal(signal.SIGINT, handle_sigint)
 
-    def _run_agentic(execute_prompt: str) -> None:
+    def _run_agentic(execute_prompt: str) -> dict:
         # opencode-parity: snapshot the working tree before an editing agent runs
-        # so `/undo` can restore exactly what it changed, and remember the prompt
-        # for `/redo`.
-        from organism_console._commands_opencode import EDITING_AGENTS, snapshot_worktree
+        # so `/undo` can restore exactly what it changed, remember the prompt
+        # for `/redo`, and print a diff review of what the run actually changed.
+        import time as _time
+        from organism_console._commands_opencode import (
+            EDITING_AGENTS, build_run_diff, snapshot_worktree,
+        )
         ctx.state.last_prompt = execute_prompt
+        snap = None
         if ctx.active_agent in EDITING_AGENTS:
             try:
-                ctx.undo_stack.append(snapshot_worktree())
+                snap = snapshot_worktree()
+                ctx.undo_stack.append(snap)
                 ctx.undo_stack = ctx.undo_stack[-5:]
             except Exception:
-                pass
-        ctx.history = stream_prompt_with_retry(ctx, ctx.active_agent, execute_prompt, ctx.history)
+                snap = None
+        _t0 = _time.time()
+        result_history = stream_prompt_with_retry(ctx, ctx.active_agent, execute_prompt, ctx.history)
+        ctx.history = result_history
+        elapsed = _time.time() - _t0
+        content = ""
+        if result_history and isinstance(result_history[-1], dict) and result_history[-1].get("role") == "assistant":
+            content = str(result_history[-1].get("content", ""))
+        files_changed = []
+        if snap:
+            try:
+                files_changed = build_run_diff(snap)
+            except Exception:
+                files_changed = []
+            if files_changed:
+                summary = "\n".join(
+                    f"  [bold white]{escape(r['path'])}[/bold white] "
+                    f"[green]+{r['added']}[/green] [red]−{r['removed']}[/red]"
+                    for r in files_changed
+                )
+                ctx.console.print(Panel(
+                    summary,
+                    title=f"[bold green]Changed files ({len(files_changed)})[/bold green] — [dim]/diff-last to view[/dim]",
+                    border_style="green",
+                ))
+        if getattr(ctx, "toasts_enabled", True) and elapsed > 10 and not json_flag:
+            from organism_console.notifications import notify
+            notify(
+                "ZENITH run complete",
+                f"{ctx.active_agent} finished in {elapsed:.0f}s"
+                + (f" · {len(files_changed)} file(s) changed" if files_changed else ""),
+            )
+        return {"history": result_history, "content": content, "files_changed": files_changed, "elapsed": elapsed}
 
     # --- Single command mode ---
     if args:
         cmd_line = " ".join(args)
         cmd_ctx = build_command_context()
         execute_prompt = registry.handle_line(cmd_line, cmd_ctx)
-        if execute_prompt:
-            _run_agentic(execute_prompt)
+        result = _run_agentic(execute_prompt) if execute_prompt else {}
+        if json_flag:
+            print(json.dumps({
+                "ok": bool(result.get("content")),
+                "agent": ctx.active_agent,
+                "model": ctx.active_model,
+                "prompt": execute_prompt or cmd_line,
+                "content": result.get("content", ""),
+                "files_changed": [r["path"] for r in result.get("files_changed", [])],
+            }, indent=2))
         return 0
     # --- Interactive REPL ---
     setup_readline()
-    print_banner(ctx)
+    from organism_console.notifications import set_enabled as _set_toasts
+    _set_toasts(getattr(ctx, "toasts_enabled", True))
+    if continue_flag:
+        ctx.console.print(f"[bold cyan]↻ Resumed session[/bold cyan] [dim]— {len(ctx.history)} history turn(s), agent: {ctx.active_agent}[/dim]")
+    else:
+        print_banner(ctx)
 
     # Auto-start the background healing watchmen so both infrastructure health
     # AND code-level repair are self-healed even when no /goal loop is running.
@@ -277,6 +330,7 @@ def main():
     while True:
         try:
             from organism_console._commands_opencode import mode_badge
+            from organism_console.permissions import auto_mode as _perm_auto
             cwd = Path.cwd().name
             branch = ""
             try:
@@ -290,7 +344,8 @@ def main():
             except Exception:
                 pass
             branch_str = f"[bold green]{branch}[/bold green] " if branch else ""
-            prompt_str = f"{mode_badge(ctx.active_agent)} {branch_str}[bold bright_black]{cwd}[/bold bright_black] >>> "
+            auto_ind = " [dim]auto[/dim]" if _perm_auto() else ""
+            prompt_str = f"{mode_badge(ctx.active_agent)}{auto_ind} {branch_str}[bold bright_black]{cwd}[/bold bright_black] >>> "
             cmd_line = ctx.console.input(prompt_str).strip()
 
             if not cmd_line:

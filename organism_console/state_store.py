@@ -42,6 +42,7 @@ class SessionState:
         # working-tree snapshots for /undo, and the last prompt for /redo.
         self.undo_stack: List[Dict[str, Any]] = []
         self.last_prompt: str = ""
+        self.toasts_enabled: bool = True
 
         self.load()
 
@@ -80,6 +81,7 @@ class SessionState:
             self.last_provider = data.get("last_provider", self.last_provider)
             self.scheduled_tasks = data.get("scheduled_tasks", self.scheduled_tasks)
             self.checkpoints = data.get("checkpoints", self.checkpoints)
+            self.toasts_enabled = data.get("toasts_enabled", self.toasts_enabled)
         except Exception as e:
             import logging
             logging.getLogger("zenith_cli").error(f"Failed to load session state: {e}")
@@ -115,6 +117,7 @@ class SessionState:
                 "history_pointer": self.history_pointer,
                 "scheduled_tasks": self.scheduled_tasks,
                 "checkpoints": self.checkpoints,
+                "toasts_enabled": self.toasts_enabled,
             }.items()}
             return json.dumps(snap, indent=2)
         

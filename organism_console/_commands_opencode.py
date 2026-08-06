@@ -12,6 +12,7 @@ working tree before every agentic run so `/undo` can restore exactly what the
 coder/debugger changed).
 """
 import ast
+import difflib
 import shutil
 import subprocess
 from pathlib import Path
@@ -19,6 +20,8 @@ from typing import Dict, List, Optional
 
 from rich.markup import escape
 from rich.panel import Panel
+from rich.table import Table
+from rich.box import SIMPLE
 
 from organism_console.command_registry import registry
 from organism_console._command_context import CommandContext
@@ -79,12 +82,15 @@ def _git_porcelain(root: Path) -> tuple[list[str], list[str]]:
 def snapshot_worktree(root: Path = PROJECT_ROOT) -> Dict:
     """Capture the current working-tree state so it can be restored by /undo.
 
-    Returns {"tracked": {relpath: bytes}, "untracked": set(relpath)}. Only the
-    files that differ from HEAD are captured — the agent's own pre-existing
-    edits are what an undo must bring back.
+    Returns {"tracked": {relpath: bytes}, "untracked": set(relpath),
+    "untracked_content": {relpath: bytes}}. Only the files that differ from
+    HEAD are captured — the agent's own pre-existing edits are what an undo
+    must bring back. The untracked byte contents power the /diff-last diff
+    review (baseline for files the agent edits in place).
     """
     modified, untracked = _git_porcelain(root)
     tracked = {}
+    untracked_content = {}
     for rel in modified:
         path = root / rel
         if path.is_file():
@@ -92,7 +98,14 @@ def snapshot_worktree(root: Path = PROJECT_ROOT) -> Dict:
                 tracked[rel] = path.read_bytes()
             except OSError:
                 pass
-    return {"tracked": tracked, "untracked": set(untracked)}
+    for rel in untracked:
+        path = root / rel
+        if path.is_file():
+            try:
+                untracked_content[rel] = path.read_bytes()
+            except OSError:
+                pass
+    return {"tracked": tracked, "untracked": set(untracked), "untracked_content": untracked_content}
 
 
 def restore_snapshot(snap: Dict, root: Path = PROJECT_ROOT) -> List[str]:
@@ -123,6 +136,195 @@ def restore_snapshot(snap: Dict, root: Path = PROJECT_ROOT) -> List[str]:
         except OSError:
             pass
     return restored
+
+
+def _git_show_head(root: Path, rel: str) -> Optional[bytes]:
+    """Return the committed (HEAD) bytes of a file, or None if untracked/new."""
+    try:
+        res = subprocess.run(
+            ["git", "show", f"HEAD:{rel}"],
+            capture_output=True, cwd=root, timeout=10,
+        )
+        if res.returncode == 0:
+            return res.stdout
+    except Exception:
+        pass
+    return None
+
+
+def _diff_kind(line: str) -> str:
+    if line.startswith("+++") or line.startswith("---"):
+        return "!"
+    if line.startswith("@@"):
+        return "@"
+    if line.startswith("+"):
+        return "+"
+    if line.startswith("-"):
+        return "-"
+    return " "
+
+
+def build_run_diff(snap: Dict, root: Path = PROJECT_ROOT) -> List[Dict]:
+    """Compute the per-file unified diff of what changed since a snapshot.
+
+    Each entry: {"path", "added", "removed", "lines": [(kind, text), ...]}
+    where kind is + - space @ (hunk header) ! (file header). The snapshot's
+    pre-run bytes are the baseline (falling back to HEAD for files that were
+    clean pre-run), so the result is exactly what the agent changed — the
+    opencode "session review" view.
+    """
+    modified, untracked = _git_porcelain(root)
+    candidates = set(snap.get("tracked") or {})
+    candidates |= set(snap.get("untracked_content") or {})
+    candidates |= set(snap.get("untracked") or set())
+    candidates |= set(modified) | set(untracked)
+
+    def _read(rel: str) -> Optional[bytes]:
+        p = root / rel
+        try:
+            return p.read_bytes() if p.is_file() else None
+        except OSError:
+            return None
+
+    tracked = snap.get("tracked") or {}
+    untracked_content = snap.get("untracked_content") or {}
+    results: List[Dict] = []
+    for rel in sorted(candidates):
+        if " -> " in rel:
+            continue
+        old = tracked.get(rel, untracked_content.get(rel, _git_show_head(root, rel)))
+        new = _read(rel)
+        if old == new:
+            continue
+        old_text = (old or b"").decode("utf-8", errors="replace")
+        new_text = (new or b"").decode("utf-8", errors="replace")
+        old_lines = old_text.splitlines() if old is not None else []
+        new_lines = new_text.splitlines() if new is not None else []
+        diff_lines = list(difflib.unified_diff(
+            old_lines, new_lines, fromfile=f"a/{rel}", tofile=f"b/{rel}", lineterm="", n=2
+        ))
+        if not diff_lines:
+            continue
+        added = sum(1 for l in diff_lines if l.startswith("+") and not l.startswith("+++"))
+        removed = sum(1 for l in diff_lines if l.startswith("-") and not l.startswith("---"))
+        results.append({
+            "path": rel,
+            "added": added,
+            "removed": removed,
+            "lines": [(_diff_kind(l), l) for l in diff_lines],
+        })
+    return results
+
+
+def render_run_diff(results: List[Dict], max_lines: int = 400) -> str:
+    """Render build_run_diff() output as rich-markup lines (capped)."""
+    parts: List[str] = []
+    budget = max_lines
+    for r in results:
+        parts.append(
+            f"[bold white]{escape(r['path'])}[/bold white] "
+            f"[green]+{r['added']}[/green] [red]−{r['removed']}[/red]"
+        )
+        for kind, line in r["lines"]:
+            if budget <= 0:
+                parts.append("[dim]… (diff truncated)[/dim]")
+                break
+            budget -= 1
+            txt = escape(line)
+            if kind == "+":
+                parts.append(f"  [green]{txt}[/green]")
+            elif kind == "-":
+                parts.append(f"  [red]{txt}[/red]")
+            elif kind == "@":
+                parts.append(f"  [cyan]{txt}[/cyan]")
+            elif kind == "!":
+                parts.append(f"  [bright_black]{txt}[/bright_black]")
+            else:
+                parts.append(f"  [white]{txt}[/white]")
+    return "\n".join(parts)
+
+
+def last_snapshot(ctx: CommandContext) -> Optional[Dict]:
+    stack = getattr(ctx.state, "undo_stack", None)
+    return stack[-1] if stack else None
+
+
+@registry.register("permissions", "Show or edit the permission policy table (allow/ask/deny)")
+def cmd_permissions(ctx: CommandContext, args: List[str]) -> None:
+    from organism_console import permissions as perms
+    if not args:
+        rows = sorted(perms.all_policies().items())
+        table = Table(box=SIMPLE, header_style="bold cyan", title="Permission policy")
+        table.add_column("Tool", style="bold green")
+        table.add_column("Policy", style="bold yellow")
+        for tool, policy in rows:
+            color = {"allow": "green", "ask": "yellow", "deny": "red"}.get(policy, "white")
+            table.add_row(tool, f"[{color}]{policy}[/{color}]")
+        ctx.console.print(table)
+        auto = perms.auto_mode()
+        ctx.console.print(f"[dim]auto-approve: [bold]{'on' if auto else 'off'}[/bold] (toggle with /auto)[/dim]")
+        ctx.console.print("[dim]usage: /permissions <tool> allow|ask|deny — tools: read write patch grep glob web_search web_fetch sandbox_repl system screen healing approval git[/dim]")
+        return
+    if len(args) != 2:
+        ctx.console.print("[yellow]Usage: /permissions <tool> allow|ask|deny[/yellow]")
+        return
+    tool, policy = args[0].lower(), args[1].lower()
+    if perms.set_policy(tool, policy):
+        ctx.console.print(f"[green]✓[/green] [white]{tool}[/white] → [bold]{policy}[/bold]")
+    else:
+        ctx.console.print(f"[red]✗[/red] unknown tool or policy: [white]{tool} {policy}[/white]")
+
+
+@registry.register("auto", "Toggle auto-approve mode (approves anything not explicitly denied)")
+def cmd_auto(ctx: CommandContext, args: List[str]) -> None:
+    from organism_console import permissions as perms
+    want = args[0].lower() if args else None
+    if want in ("on", "1", "true", "yes"):
+        on = True
+    elif want in ("off", "0", "false", "no"):
+        on = False
+    else:
+        on = not perms.auto_mode()
+    perms.set_auto_mode(on)
+    ctx.state.save()
+    state = "ON" if on else "off"
+    ctx.console.print(
+        f"[yellow]auto-approve {state}[/yellow] — "
+        f"[dim]{'non-denied actions run without prompting' if on else 'actions prompt for approval again'}.[/dim]"
+    )
+
+
+@registry.register("toasts", "Toggle desktop attention notifications on run completion / questions")
+def cmd_toasts(ctx: CommandContext, args: List[str]) -> None:
+    want = args[0].lower() if args else None
+    if want in ("on", "1", "true", "yes"):
+        on = True
+    elif want in ("off", "0", "false", "no"):
+        on = False
+    else:
+        on = not getattr(ctx.state, "toasts_enabled", True)
+    ctx.state.toasts_enabled = on
+    ctx.state.save()
+    from organism_console.notifications import set_enabled
+    set_enabled(on)
+    ctx.console.print(f"[dim]desktop notifications [bold]{'on' if on else 'off'}[/bold][/dim]")
+
+
+@registry.register("diff-last", "Show a unified diff of what the last agent run changed", aliases=["changes"])
+def cmd_diff_last(ctx: CommandContext, args: List[str]) -> None:
+    snap = last_snapshot(ctx)
+    if not snap:
+        ctx.console.print("[yellow]No previous run snapshot — nothing to diff.[/yellow]")
+        return
+    results = build_run_diff(snap)
+    if not results:
+        ctx.console.print("[dim]Last run made no file changes.[/dim]")
+        return
+    ctx.console.print(Panel(
+        render_run_diff(results),
+        title=f"[bold cyan]Changes from last run ({len(results)} file{'s' if len(results) != 1 else ''})[/bold cyan]",
+        border_style="cyan",
+    ))
 
 
 @registry.register("build", "BUILD mode: plain prompts edit files via the coder agent (opencode-Build)")

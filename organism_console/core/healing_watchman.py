@@ -64,6 +64,11 @@ class HealingWatchman:
         if self.console is None:
             return False
         try:
+            from organism_console.permissions import blocked as _perm_blocked, should_ask as _perm_should_ask
+            if _perm_blocked("healing"):
+                return False
+            if not _perm_should_ask("healing"):
+                return True
             from rich.prompt import Confirm
             from organism_console.renderer import INPUT_LOCK
             with INPUT_LOCK:

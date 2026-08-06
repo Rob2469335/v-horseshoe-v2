@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import logging
+import re
+import subprocess
 from pathlib import Path
 from fastapi import APIRouter, Request, BackgroundTasks, HTTPException
 from swarm_os.app.runtime_access import get_runtime_service
@@ -224,6 +226,48 @@ async def run_heal_cycle(request: Request) -> dict:
         log.exception("Heal cycle evaluation failed")
         return {"recovery_readiness": 0, "active_anomalies": 1, "last_heal_success": False,
                 "checks": {}, "error": "heal cycle evaluation failed"}
+
+
+@router.get("/changes")
+def workspace_changes(max_diff_chars: int = 6000) -> dict:
+    """Live diff review of uncommitted workspace changes (drives the web console panel).
+
+    Returns {stat: [{path, added, deleted}], diff: <unified text, capped>}. No
+    user-controlled input reaches the subprocess (fixed args only), so it is
+    safe to expose; bounded timeout; degrades to an empty payload outside a
+    git work tree.
+    """
+    root = Path(__file__).resolve().parent.parent.parent
+    try:
+        stat_res = subprocess.run(
+            ["git", "diff", "HEAD", "--stat"], capture_output=True, text=True,
+            encoding="utf-8", errors="replace", cwd=root, timeout=10,
+        )
+        if stat_res.returncode != 0:
+            return {"stat": [], "diff": "", "truncated": False, "is_git": False,
+                    "error": (stat_res.stderr or "not a git work tree").strip()}
+        stat_lines = []
+        for line in (stat_res.stdout or "").splitlines():
+            m = re.match(r"\s*(.+?)\s*\|\s*(\d+)\s+[+-]+", line)
+            if m:
+                stat_lines.append({"path": m.group(1).strip(), "lines": int(m.group(2))})
+            elif line.strip():
+                continue
+        detail_res = subprocess.run(
+            ["git", "diff", "HEAD"], capture_output=True, text=True,
+            encoding="utf-8", errors="replace", cwd=root, timeout=10,
+        )
+        diff_text = detail_res.stdout or ""
+        truncated = len(diff_text) > max_diff_chars
+        return {
+            "stat": stat_lines,
+            "diff": diff_text[:max_diff_chars],
+            "truncated": truncated,
+            "is_git": True,
+        }
+    except Exception as exc:
+        log.warning("workspace changes unavailable: %s", exc)
+        return {"stat": [], "diff": "", "truncated": False, "is_git": False, "error": str(exc)}
 
 
 @router.get("/healing/evaluate")

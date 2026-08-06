@@ -14,7 +14,8 @@ export const appConfig = {
     adminGeneration: "/api/admin/generation",
     routerStats: "/router",
     criticStats: "/critic",
-    memories: "/memories"
+    memories: "/memories",
+    workspaceChanges: "/admin/changes"
   },
   requestTimeoutMs: 60000,
   sseEnabled: true

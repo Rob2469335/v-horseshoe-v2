@@ -117,6 +117,7 @@ swarm_os.egg-info/
 /COMPREHENSIVE_UPGRADE_PLAN.md
 /FIXES_SUMMARY.md
 /organism_console/.session.json
+/organism_console/.permissions.json
 
 # One-off root scripts / diagnostics
 /audit_test.py

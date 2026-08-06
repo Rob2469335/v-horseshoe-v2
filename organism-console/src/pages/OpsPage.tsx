@@ -11,6 +11,7 @@ import {
 import type { HealthResponse } from "../lib/types"
 import { useUiStore } from "../state/ui-store"
 import { AutomationRunner } from "../components/organism/AutomationRunner"
+import DiffReviewPanel from "../components/organism/DiffReviewPanel"
 
 function AutomationGroup({
   title,
@@ -297,6 +298,9 @@ export default function OpsPage() {
 
         {/* Left Column: Catalog */}
         <article className="w-1/3 flex flex-col overflow-y-auto pr-2 gap-8 custom-scrollbar pb-10">
+
+          {/* LIVE DIFF REVIEW — what the agents changed */}
+          <DiffReviewPanel backendUrl={backendUrl} />
 
           {/* UPWORK AGENT BLOCK */}
           <div className="flex flex-col gap-3 bg-[#04080f]/40 border border-cyan-500/20 p-5 rounded-2xl shadow-[inset_0_0_20px_rgba(34,211,238,0.05)]">

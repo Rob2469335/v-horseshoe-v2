@@ -307,6 +307,10 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                         question = chunk.get("question", "Input requested:")
                         options = chunk.get("options", [])
 
+                        if getattr(ctx, "toasts_enabled", True):
+                            from organism_console.notifications import notify
+                            notify("ZENITH needs your input", question[:120])
+
                         live.stop()
                         ctx.console.print()
 
@@ -315,7 +319,19 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                         else:
                             ctx.console.print(Panel(Markdown(question), title="❓ [bold cyan]Question[/bold cyan]", border_style="cyan", padding=(0, 1)))
 
-                        if options:
+                        auto_answer = None
+                        if "APPROVAL REQUIRED" in question:
+                            from organism_console.permissions import blocked as _perm_blocked, should_ask as _perm_should_ask
+                            if _perm_blocked("approval"):
+                                auto_answer = "no"
+                            elif not _perm_should_ask("approval"):
+                                auto_answer = "yes"
+                            if auto_answer is not None:
+                                ctx.console.print(f"[dim]auto-approve: {auto_answer}[/dim]")
+
+                        if auto_answer is not None:
+                            answer = auto_answer
+                        elif options:
                             from rich.prompt import Prompt
                             from organism_console.renderer import INPUT_LOCK
                             choices = []
