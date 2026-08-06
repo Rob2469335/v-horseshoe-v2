@@ -123,3 +123,55 @@ def test_mode_commands_switch_active_agent(tmp_path):
     assert state.active_agent == "code_analyzer"
     registry.commands["chat"]["func"](ctx, [])
     assert state.active_agent == "coordinator"
+
+
+def test_run_agentic_sets_last_prompt_on_cli_context(monkeypatch, tmp_path):
+    """run_agentic must write last_prompt/undo_stack onto the session state
+    object directly (CLIContext IS the SessionState). The pre-fix closure used
+    `ctx.state.last_prompt`, but CLIContext has no `.state` attribute — every
+    CLI prompt crashed with AttributeError after the SOTA upgrade."""
+    from organism_console.cli import run_agentic
+    from organism_console.state_store import SessionState
+    import io
+    from rich.console import Console
+
+    state = SessionState(tmp_path / "session.json")
+    state.save = lambda **kwargs: None
+    state.console = Console(file=io.StringIO(), force_terminal=False)
+    state.active_agent = "coder"
+    state.history = []
+
+    def _fake_stream(*_args, **_kwargs):
+        return [{"role": "assistant", "content": "done"}]
+
+    monkeypatch.setattr("organism_console.cli.stream_prompt_with_retry", _fake_stream)
+    monkeypatch.setattr("organism_console._commands_opencode.snapshot_worktree", lambda *_, **__: {"test": "snap"})
+    monkeypatch.setattr("organism_console._commands_opencode.build_run_diff", lambda *_, **__: [])
+
+    result = run_agentic(state, "fix the bug", json_flag=True)
+    assert result["content"] == "done"
+    assert state.last_prompt == "fix the bug"
+    assert state.undo_stack == [{"test": "snap"}]
+
+
+def test_run_agentic_non_editing_agent_skips_snapshot(monkeypatch, tmp_path):
+    from organism_console.cli import run_agentic
+    from organism_console.state_store import SessionState
+    import io
+    from rich.console import Console
+
+    state = SessionState(tmp_path / "session.json")
+    state.save = lambda **kwargs: None
+    state.console = Console(file=io.StringIO(), force_terminal=False)
+    state.active_agent = "coordinator"
+    state.history = []
+
+    def _fake_stream(*_args, **_kwargs):
+        return [{"role": "assistant", "content": "hi"}]
+
+    monkeypatch.setattr("organism_console.cli.stream_prompt_with_retry", _fake_stream)
+    monkeypatch.setattr("organism_console._commands_opencode.snapshot_worktree", lambda *_, **__: {"should": "not be called"})
+
+    run_agentic(state, "hello", json_flag=True)
+    assert state.last_prompt == "hello"
+    assert state.undo_stack == []

@@ -131,6 +131,62 @@ def build_command_context(cmd_ctx_console=None, cmd_ctx_state=None) -> CommandCo
     return _ctx
 
 
+def run_agentic(ctx: SessionState, execute_prompt: str, json_flag: bool = False) -> dict:
+    """Run a prompt through the active agent (opencode-parity BUILD behavior).
+
+    Snapshots the working tree before an editing agent runs so `/undo` can
+    restore exactly what it changed, remembers the prompt for `/redo`, and
+    prints a diff review of what the run actually changed. `ctx` is the
+    session state itself (CLIContext / SessionState) — `last_prompt` and
+    `undo_stack` live directly on it.
+    """
+    import time as _time
+    from organism_console._commands_opencode import (
+        EDITING_AGENTS, build_run_diff, snapshot_worktree,
+    )
+    ctx.last_prompt = execute_prompt
+    snap = None
+    if ctx.active_agent in EDITING_AGENTS:
+        try:
+            snap = snapshot_worktree()
+            ctx.undo_stack.append(snap)
+            ctx.undo_stack = ctx.undo_stack[-5:]
+        except Exception:
+            snap = None
+    _t0 = _time.time()
+    result_history = stream_prompt_with_retry(ctx, ctx.active_agent, execute_prompt, ctx.history)
+    ctx.history = result_history
+    elapsed = _time.time() - _t0
+    content = ""
+    if result_history and isinstance(result_history[-1], dict) and result_history[-1].get("role") == "assistant":
+        content = str(result_history[-1].get("content", ""))
+    files_changed = []
+    if snap:
+        try:
+            files_changed = build_run_diff(snap)
+        except Exception:
+            files_changed = []
+        if files_changed:
+            summary = "\n".join(
+                f"  [bold white]{escape(r['path'])}[/bold white] "
+                f"[green]+{r['added']}[/green] [red]−{r['removed']}[/red]"
+                for r in files_changed
+            )
+            ctx.console.print(Panel(
+                summary,
+                title=f"[bold green]Changed files ({len(files_changed)})[/bold green] — [dim]/diff-last to view[/dim]",
+                border_style="green",
+            ))
+    if getattr(ctx, "toasts_enabled", True) and elapsed > 10 and not json_flag:
+        from organism_console.notifications import notify
+        notify(
+            "ZENITH run complete",
+            f"{ctx.active_agent} finished in {elapsed:.0f}s"
+            + (f" · {len(files_changed)} file(s) changed" if files_changed else ""),
+        )
+    return {"history": result_history, "content": content, "files_changed": files_changed, "elapsed": elapsed}
+
+
 def print_version():
     ctx.console.print(f"[bold cyan]ZENITH CLI[/bold cyan] [dim]v{VERSION}[/dim]")
     ctx.console.print(f"[dim]Python {sys.version.split()[0]} on {sys.platform}[/dim]")
@@ -235,62 +291,12 @@ def main():
 
     signal.signal(signal.SIGINT, handle_sigint)
 
-    def _run_agentic(execute_prompt: str) -> dict:
-        # opencode-parity: snapshot the working tree before an editing agent runs
-        # so `/undo` can restore exactly what it changed, remember the prompt
-        # for `/redo`, and print a diff review of what the run actually changed.
-        import time as _time
-        from organism_console._commands_opencode import (
-            EDITING_AGENTS, build_run_diff, snapshot_worktree,
-        )
-        ctx.state.last_prompt = execute_prompt
-        snap = None
-        if ctx.active_agent in EDITING_AGENTS:
-            try:
-                snap = snapshot_worktree()
-                ctx.undo_stack.append(snap)
-                ctx.undo_stack = ctx.undo_stack[-5:]
-            except Exception:
-                snap = None
-        _t0 = _time.time()
-        result_history = stream_prompt_with_retry(ctx, ctx.active_agent, execute_prompt, ctx.history)
-        ctx.history = result_history
-        elapsed = _time.time() - _t0
-        content = ""
-        if result_history and isinstance(result_history[-1], dict) and result_history[-1].get("role") == "assistant":
-            content = str(result_history[-1].get("content", ""))
-        files_changed = []
-        if snap:
-            try:
-                files_changed = build_run_diff(snap)
-            except Exception:
-                files_changed = []
-            if files_changed:
-                summary = "\n".join(
-                    f"  [bold white]{escape(r['path'])}[/bold white] "
-                    f"[green]+{r['added']}[/green] [red]−{r['removed']}[/red]"
-                    for r in files_changed
-                )
-                ctx.console.print(Panel(
-                    summary,
-                    title=f"[bold green]Changed files ({len(files_changed)})[/bold green] — [dim]/diff-last to view[/dim]",
-                    border_style="green",
-                ))
-        if getattr(ctx, "toasts_enabled", True) and elapsed > 10 and not json_flag:
-            from organism_console.notifications import notify
-            notify(
-                "ZENITH run complete",
-                f"{ctx.active_agent} finished in {elapsed:.0f}s"
-                + (f" · {len(files_changed)} file(s) changed" if files_changed else ""),
-            )
-        return {"history": result_history, "content": content, "files_changed": files_changed, "elapsed": elapsed}
-
     # --- Single command mode ---
     if args:
         cmd_line = " ".join(args)
         cmd_ctx = build_command_context()
         execute_prompt = registry.handle_line(cmd_line, cmd_ctx)
-        result = _run_agentic(execute_prompt) if execute_prompt else {}
+        result = run_agentic(ctx, execute_prompt, json_flag) if execute_prompt else {}
         if json_flag:
             print(json.dumps({
                 "ok": bool(result.get("content")),
@@ -369,7 +375,7 @@ def main():
                     ctx.history = ctx.history[0:1] + ctx.history[truncate_idx:]
                     registry.handle_line("/compress", cmd_ctx)
 
-                _run_agentic(execute_prompt)
+                run_agentic(ctx, execute_prompt, json_flag)
 
         except KeyboardInterrupt:
             ctx.console.print("\n[dim]Use '/exit' to quit properly.[/dim]")
