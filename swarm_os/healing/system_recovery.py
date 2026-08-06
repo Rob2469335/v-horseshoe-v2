@@ -202,7 +202,8 @@ SYSTEM_RECOVERY_ACTIONS: Dict[str, Any] = {
     "disk_space": clean_temp_files,
     "runaway_process": kill_runaway_process,
     "stopped_service": restart_stopped_service,
+    "temp_growth": clean_temp_files,
 }
 
 # Which system issues are safe enough to auto-run when the governor says so.
-DESTRUCTIVE_SYSTEM_ACTIONS = {"disk_space", "runaway_process", "stopped_service"}
+DESTRUCTIVE_SYSTEM_ACTIONS = {"disk_space", "runaway_process", "stopped_service", "temp_growth"}
