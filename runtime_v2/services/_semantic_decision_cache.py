@@ -149,9 +149,18 @@ async def get_semantic_cached_decision(messages: list, agent_id: str) -> Optiona
         await _ensure_components()
         query = f"agent:{agent_id} decision {last_msg[:400]}"
         emb = await _embedder.embed(query)
+        from qdrant_client.models import Filter, FieldCondition, MatchValue
         resp = await _client.query_points(
             collection_name=_collection,
             query=emb,
+            query_filter=Filter(
+                must=[
+                    FieldCondition(
+                        key="agent_id",
+                        match=MatchValue(value=agent_id),
+                    )
+                ]
+            ),
             limit=1,
         )
         points = getattr(resp, "points", resp)
