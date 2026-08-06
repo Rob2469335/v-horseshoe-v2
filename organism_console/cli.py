@@ -16,6 +16,8 @@ import logging
 import os
 import atexit
 import signal
+import subprocess
+from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv(override=True)
@@ -220,10 +222,28 @@ def main():
     if agent_override:
         ctx.active_agent = agent_override
         ctx.delegation_chain = [agent_override]
+    else:
+        # opencode-parity default: BUILD mode (coder) — plain prompts edit files.
+        ctx.active_agent = "coder"
+        ctx.delegation_chain = ["coder"]
     if model_override:
         ctx.active_model = model_override
 
     signal.signal(signal.SIGINT, handle_sigint)
+
+    def _run_agentic(execute_prompt: str) -> None:
+        # opencode-parity: snapshot the working tree before an editing agent runs
+        # so `/undo` can restore exactly what it changed, and remember the prompt
+        # for `/redo`.
+        from organism_console._commands_opencode import EDITING_AGENTS, snapshot_worktree
+        ctx.state.last_prompt = execute_prompt
+        if ctx.active_agent in EDITING_AGENTS:
+            try:
+                ctx.undo_stack.append(snapshot_worktree())
+                ctx.undo_stack = ctx.undo_stack[-5:]
+            except Exception:
+                pass
+        ctx.history = stream_prompt_with_retry(ctx, ctx.active_agent, execute_prompt, ctx.history)
 
     # --- Single command mode ---
     if args:
@@ -231,9 +251,8 @@ def main():
         cmd_ctx = build_command_context()
         execute_prompt = registry.handle_line(cmd_line, cmd_ctx)
         if execute_prompt:
-            stream_prompt_with_retry(ctx, ctx.active_agent, execute_prompt, ctx.history)
+            _run_agentic(execute_prompt)
         return 0
-
     # --- Interactive REPL ---
     setup_readline()
     print_banner(ctx)
@@ -257,8 +276,21 @@ def main():
 
     while True:
         try:
-            active = f"[bold magenta]{ctx.active_agent.upper()}[/bold magenta]"
-            prompt_str = f"{active}[bold bright_black] >>> [/bold bright_black]"
+            from organism_console._commands_opencode import mode_badge
+            cwd = Path.cwd().name
+            branch = ""
+            try:
+                _br = subprocess.run(
+                    ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                    capture_output=True, text=True, encoding="utf-8", errors="replace",
+                    cwd=Path(__file__).parent.parent.resolve(), timeout=5,
+                )
+                if _br.returncode == 0 and _br.stdout.strip():
+                    branch = _br.stdout.strip()
+            except Exception:
+                pass
+            branch_str = f"[bold green]{branch}[/bold green] " if branch else ""
+            prompt_str = f"{mode_badge(ctx.active_agent)} {branch_str}[bold bright_black]{cwd}[/bold bright_black] >>> "
             cmd_line = ctx.console.input(prompt_str).strip()
 
             if not cmd_line:
@@ -282,7 +314,7 @@ def main():
                     ctx.history = ctx.history[0:1] + ctx.history[truncate_idx:]
                     registry.handle_line("/compress", cmd_ctx)
 
-                ctx.history = stream_prompt_with_retry(ctx, ctx.active_agent, execute_prompt, ctx.history)
+                _run_agentic(execute_prompt)
 
         except KeyboardInterrupt:
             ctx.console.print("\n[dim]Use '/exit' to quit properly.[/dim]")

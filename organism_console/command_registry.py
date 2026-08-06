@@ -131,6 +131,7 @@ def _ensure_commands_loaded() -> None:
         from organism_console import _commands_system  # noqa: F401
         from organism_console import _commands_dev     # noqa: F401
         from organism_console import _commands_ai      # noqa: F401
+        from organism_console import _commands_opencode  # noqa: F401
 
 
 # Restore module-level import side-effects for backward compatibility

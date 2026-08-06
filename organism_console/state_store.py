@@ -38,6 +38,10 @@ class SessionState:
         self.last_provider: str = "llama.cpp"
         self.scheduled_tasks: List[Dict[str, Any]] = []
         self.checkpoints: Dict[str, Dict[str, Any]] = {}
+        # opencode-parity runtime state (not persisted across restarts):
+        # working-tree snapshots for /undo, and the last prompt for /redo.
+        self.undo_stack: List[Dict[str, Any]] = []
+        self.last_prompt: str = ""
 
         self.load()
 
