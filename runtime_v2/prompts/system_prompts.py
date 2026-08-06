@@ -164,7 +164,7 @@ _TOOL_DEFINITIONS = {
     "system": "- action=system  → action (system_inventory|process_list|service_list|net_connections|disk_analyzer|installed_apps|startup_items|registry_query|event_log_query), plus per-action args. Read-only host analysis: hardware/OS/disk/network inventory, running processes/services, open ports, installed apps, startup items, Event Log. NEVER use this to modify the machine.",
     "screen": "- action=screen  → action (screenshot|foreground_window|list_windows|cursor_position|mouse_move|left_click|right_click|double_click|scroll|type|key). See the screen; input actions are BLOCKED until human-control mode is lifted (SWARM_SCREEN_AUTONOMOUS=1). Propose the click/type you would do and wait for approval. Screenshot returns a PNG path you can reference.",
     "filesystem": "- action=filesystem  → operation (read|read_all|write|patch|list|grep|glob), path (string or list); optional: content, old, new, pattern. For glob: pattern like '**/*.py'",
-    "sandbox_repl": "- action=sandbox_repl  → language (python|powershell|pytest), code",
+    "sandbox_repl": "- action=sandbox_repl  → language (python|powershell|pytest), code. Python: `import os` IS allowed (read/list/walk/path), but destructive os calls (system/remove/rename/chmod), subprocess, sockets, and eval/exec/open are BLOCKED — prefer pathlib + filesystem tools for file work.",
     "vscode_automation": "- action=vscode_automation  → command, args",
     "semantic_search": "- action=semantic_search  → query",
     "lsp": "- action=lsp  → operation (diagnostics|hover), file_path; optional: line, character",

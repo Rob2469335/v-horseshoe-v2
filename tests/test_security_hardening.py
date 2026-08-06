@@ -187,3 +187,80 @@ def test_security_gate_scan_code():
         SecurityGate.scan_code("import os; os.system('x')")
     with pytest.raises(SecurityGateViolation):
         SecurityGate.scan_code("eval('1+1')")
+
+
+# ── security gate: os is attribute-gated, not wholesale-banned ─────────────
+# The debugger/coder agents legitimately run `import os; os.walk('.')` in
+# sandbox_repl. Only dangerous os ATTRIBUTES (process exec, file mutation,
+# privilege, env mutation) are blocked — not the module itself.
+def test_security_gate_allows_readonly_os_usage():
+    from swarm_os.services.security_gate import SecurityGate
+    for safe in (
+        "import os\nfor _, dirs, files in os.walk('.'):\n    pass",
+        "import os\npaths = [os.path.join('.', f) for f in os.listdir('.')]",
+        "import os as o\nprint(o.path.exists('x'))",
+        "import os.path\nprint(os.path.abspath('.'))",
+        "import sys\nprint(sys.argv)",
+        "from os import walk\nprint(list(walk('.')))",
+        "from os.path import exists\nprint(exists('x'))",
+    ):
+        SecurityGate.scan_code(safe), safe
+
+
+def test_security_gate_blocks_dangerous_os_attributes():
+    from swarm_os.services.security_gate import SecurityGate, SecurityGateViolation
+    for bad in (
+        "import os\nos.system('whoami')",
+        "import os as o\no.system('whoami')",
+        "import os\nos.remove('x.py')",
+        "import os\nos.popen('whoami')",
+        "from os import system\nsystem('whoami')",
+        "from os import system as s\ns('whoami')",
+        "import os\nos.putenv('A', 'B')",
+    ):
+        with pytest.raises(SecurityGateViolation):
+            SecurityGate.scan_code(bad)
+
+
+@pytest.mark.asyncio
+async def test_sandbox_repl_allows_readonly_os_code():
+    # `import os; os.walk('.')` (the debugger's natural file-listing snippet)
+    # must pass the gate so the debugger path doesn't loop-trip on it.
+    from swarm_os.services.security_gate import SecurityGate
+    SecurityGate.scan_code("import os\nfor _, dirs, files in os.walk('.'):\n    print(dirs)")
+    import subprocess
+    from unittest.mock import Mock
+    from swarm_os.capabilities.sandbox_repl import SandboxReplHandler
+    if isinstance(subprocess.Popen, Mock):
+        pytest.skip("subprocess.Popen is mocked by the CI conftest; sandbox spawn not possible")
+    r = await SandboxReplHandler().execute({"language": "python", "code": "import os; print(len(list(os.walk('.'))))"})
+    assert r.get("ok") is True
+
+
+# ── security gate: lsp accepts path/file_path alias ────────────────────────
+@pytest.mark.asyncio
+async def test_lsp_accepts_path_alias_for_file_path():
+    from swarm_os.capabilities.lsp_tool import LSPToolHandler
+    import tempfile, os
+    with tempfile.TemporaryDirectory() as tmp:
+        py = os.path.join(tmp, "t.py")
+        with open(py, "w", encoding="utf-8") as f:
+            f.write("x = 1\n")
+        # A real pylsp spawn is slow/unavailable; assert the alias mapping
+        # resolves past the "Missing 'file_path'" guard (which is where the
+        # debugger's `path` key previously died).
+        payload = {"operation": "diagnostics", "path": py}
+        handler = LSPToolHandler()
+        # swap the actual LSP client acquisition so this test doesn't spawn pylsp
+        import swarm_os.capabilities.lsp_tool as lt
+        async def _fake_acquire(ext):
+            class _FakeClient:
+                last_used = 0.0
+                async def get_diagnostics(self, fp):
+                    return [{"source": "pylint", "code": "C0114"}]
+            return _FakeClient()
+        lt._acquire_client = _fake_acquire
+        r = await handler.execute(payload)
+        assert "Missing 'file_path'" not in r.get("error", "")
+        assert r.get("result") == [{"source": "pylint", "code": "C0114"}]
+

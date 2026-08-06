@@ -295,7 +295,7 @@ class LSPToolHandler:
                 return {"error": "Invalid payload format. Expected dict."}
 
             operation = payload.get("operation", "diagnostics")
-            file_path = payload.get("file_path", "")
+            file_path = payload.get("file_path") or payload.get("path", "")
 
             if not file_path:
                 return {"error": "Missing 'file_path'"}
