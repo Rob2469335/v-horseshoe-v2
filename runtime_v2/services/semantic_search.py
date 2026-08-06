@@ -15,6 +15,8 @@ def semantic_search(query: str, limit: int = 5) -> str:
             "with_payload": True
         }, timeout=10.0)
         
+        if resp.status_code == 404:
+            return "No relevant code snippets found. Has the codebase been indexed? (Index not found)"
         if resp.status_code != 200:
             raise RuntimeError(f"Error: Qdrant search failed with status {resp.status_code}.")
             

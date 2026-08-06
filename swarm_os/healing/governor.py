@@ -123,6 +123,9 @@ class Governor:
         if forced_approval:
             decision["mode"] = "approval_required"
             decision["mode_reason"] = f"low strategy win-rate ({strat_win_rate:.0%}) for component — human oversight required"
+        elif hypotheses and hypotheses[0].get("fix_class") == "model_variability":
+            decision["mode"] = "approval_required"
+            decision["mode_reason"] = "model variability detected (not fixable by prompt/rules) — human or cloud escalation required"
         elif top_conf >= auto_threshold:
             decision["mode"] = "auto_execute"
         elif top_conf < approval_threshold:

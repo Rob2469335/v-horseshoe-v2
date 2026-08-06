@@ -192,12 +192,14 @@ class SemanticToolRegistry:
 
     async def _wait_init(self):
         if self._init_task:
-            await self._init_task
-        elif not self._ensured:
-            await self._init_registry()
-            self._ensured = True
+            success = await self._init_task
+            self._init_task = None
+            if success:
+                self._ensured = True
+        if not self._ensured:
+            self._ensured = await self._init_registry()
 
-    async def _init_registry(self):
+    async def _init_registry(self) -> bool:
         self.initialized = False
         try:
             collections_response = await self.client.get_collections()
@@ -209,8 +211,10 @@ class SemanticToolRegistry:
                 )
                 await self._populate_tools()
             self.initialized = True
+            return True
         except Exception as e:
             log.error("Failed to initialize SemanticToolRegistry: %s", e)
+            return False
 
     async def _populate_tools(self):
         points = []

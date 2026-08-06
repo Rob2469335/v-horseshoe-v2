@@ -317,8 +317,8 @@ async def run(tool_name: str, payload: dict) -> dict:
                 # inline code — not a package/module launch — so reject those flags.
                 # ('python -m <module>' stays allowed — it is the sanctioned pattern.)
                 eval_flag_used = any(
-                    isinstance(a, str) and a.strip().lower() in ("-c", "-e", "--eval", "-p", "-i")
-                    and cmd in ("python", "python3", "node")
+                    isinstance(a, str) and a.strip().lower() in ("-c", "-e", "--eval", "-p", "-i", "--call")
+                    and cmd in ("python", "python3", "node", "npx", "uvx")
                     for a in args
                 )
                 if blocked or not args_ok or not allowed_launcher or eval_flag_used:
@@ -419,4 +419,4 @@ async def run(tool_name: str, payload: dict) -> dict:
         return result
     except Exception as exc:
         log.exception("Tool %s failed", tool_name)
-        return {"ok": False, "error": str(exc)}
+        return {"ok": False, "error": _sanitize_string(str(exc))}

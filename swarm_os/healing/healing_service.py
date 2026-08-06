@@ -5,15 +5,17 @@ from .failure_detector import FailureDetector
 from .recovery_engine import RecoveryEngine
 from .rollback_manager import RollbackManager
 from .healing_events import HealingEvent
+from .governor import Governor
 
 logger = logging.getLogger(__name__)
 
 class HealingService:
-    def __init__(self, detector=None, tracker=None, engine=None, rollback=None):
+    def __init__(self, detector=None, tracker=None, engine=None, rollback=None, governor=None):
         self.detector = detector or FailureDetector()
         self.tracker = tracker or AnomalyTracker()
         self.engine = engine or RecoveryEngine()
         self.rollback = rollback or RollbackManager()
+        self.governor = governor or Governor()
         # BUG FIX: Lock to prevent concurrent run_once() and heal() racing on the same component
         self._recovery_lock = asyncio.Lock()
         # BUG FIX: Track real heal outcomes instead of fabricating metrics
@@ -65,11 +67,21 @@ class HealingService:
             try:
                 logger.warning(f"Failure detected in {name}. Attempting recovery.")
                 anomaly = self.tracker.record(name, 'warning', f'{name} check failed', {})
-                async with self._recovery_lock:
-                    result = await self.engine.recover(anomaly)
-                ok = result.get('ok', False)
-                self._record_heal(ok)
-                healed.append({'service': name, 'ok': ok, 'detail': result.get('message', result.get('error', ''))})
+                decision = self.governor.decide(anomaly)
+                if decision.get("mode") in ["auto_execute", "sandbox_first"]:
+                    async with self._recovery_lock:
+                        result = await self.engine.recover(anomaly)
+                    ok = result.get('ok', False)
+                    self._record_heal(ok)
+                    healed.append({'service': name, 'ok': ok, 'detail': result.get('message', result.get('error', ''))})
+                    self.governor.finalize(decision.get("incident_id"), {
+                        "outcome": "SUCCESS" if ok else "FAILURE",
+                        "repair": {"action": result.get("action"), "component": name},
+                        "metrics_after": {}
+                    })
+                else:
+                    logger.info(f"Skipping auto-recovery for {name}: Governor mode is {decision.get('mode')}")
+                    healed.append({'service': name, 'ok': False, 'detail': f"Governor requires {decision.get('mode')}"})
             except Exception as exc:
                 logger.error(f"Recovery failed for {name}: {exc}", exc_info=True)
                 self._record_heal(False)
@@ -87,6 +99,7 @@ class HealingService:
     async def heal(self, source, action="recover", **payload):
         logger.info(f"Initiating manual heal for {source} (Action: {action})")
         anomaly = self.tracker.record(source, "warning", payload.get("reason", "failure detected"), payload)
+        decision = self.governor.decide(anomaly)
         async with self._recovery_lock:
             result = await self.engine.recover(anomaly)
 
@@ -96,6 +109,12 @@ class HealingService:
             logger.info(f"Successfully healed {source}.")
         else:
             logger.error(f"Manual heal failed for {source}.")
+            
+        self.governor.finalize(decision.get("incident_id"), {
+            "outcome": "SUCCESS" if success else "FAILURE",
+            "repair": {"action": result.get("action", action), "component": source},
+            "metrics_after": {}
+        })
 
         event = HealingEvent.build(
             "healing_attempt",

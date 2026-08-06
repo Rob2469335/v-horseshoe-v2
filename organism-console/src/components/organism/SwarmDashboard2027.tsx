@@ -410,14 +410,15 @@ const AgentConsole = ({ backendUrl, latestHandoff }: { backendUrl: string, lates
   useEffect(() => {
     if (!latestHandoff) return;
     const data = latestHandoff;
+    const type = data.type || data.event;
     let color = '#fff';
-    if (data.type === 'agent_handoff') color = '#22d3ee';
-    else if (data.type === 'tool_result') color = '#fef08a';
-    else if (data.type === 'final') color = '#4ade80';
-    else if (data.type === 'error') color = '#f87171';
+    if (type === 'agent_handoff') color = '#22d3ee';
+    else if (type === 'tool_result') color = '#fef08a';
+    else if (type === 'final') color = '#4ade80';
+    else if (type === 'error') color = '#f87171';
 
     const timestamp = new Date().toISOString().substring(11, 19);
-    const text = `[${timestamp}] [${data.agent_id || 'system'}] [${data.type}] ${data.content || data.task || ''}`;
+    const text = `[${timestamp}] [${data.agent_id || 'system'}] [${type}] ${data.content || data.task || ''}`;
     
     setLogs(prev => [...prev.slice(-99), { id: Math.random().toString(), text, color }]);
   }, [latestHandoff]);
@@ -441,6 +442,7 @@ const AgentConsole = ({ backendUrl, latestHandoff }: { backendUrl: string, lates
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt, history: [] })
       });
+      if (!res.ok) throw new Error(`Backend responded with ${res.status}`);
       if (!res.body) return;
       const reader = res.body.getReader();
       const decoder = new TextDecoder();

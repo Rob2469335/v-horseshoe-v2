@@ -58,7 +58,7 @@ class CloudLLMClient:
         # Strip prefixes from model name for the cloud API
         clean_model = model.replace("openrouter/", "").replace("nvidia/", "")
         if provider == "openrouter" and any(forbidden in clean_model.lower() for forbidden in ("claude", "anthropic", "sonnet", "opus", "gpt-4")):
-            clean_model = "deepseek/deepseek-chat"
+            clean_model = "deepseek/deepseek-v4-flash"
         
         payload = {
             "model": clean_model,

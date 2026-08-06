@@ -86,7 +86,7 @@ def record_model_failure(model: str, error: str = "", permanent: bool | None = N
             # Payment/auth failures won't clear on their own — pin at max cooldown
             # so the provider is skipped until it is explicitly cleared by success.
             backoff = _MAX_COOLDOWN_S
-            entry["until"] = now + backoff
+            entry["until"] = float('inf')
         else:
             backoff = min(_MAX_COOLDOWN_S, _COOLDOWN_BASE_S * (2 ** (entry["failures"] - 1)))
             backoff *= random.uniform(0.75, 1.25)  # ±25% jitter

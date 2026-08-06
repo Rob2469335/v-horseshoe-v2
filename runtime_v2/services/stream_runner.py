@@ -153,11 +153,13 @@ async def get_tool_decision(
                 from runtime_v2.services.memory_core import get_relevant_memories
                 memory_query = f"agent:{agent_id} {_last_user_msg[:200]}"
                 memories_str = await asyncio.to_thread(get_relevant_memories, memory_query)
-                injected_chars = len(memories_str or "")
+                injected_chars = 0
                 if memories_str:
                     mem_budget = min(600, _headroom * 4)
-                    system_prompt = system_prompt + f"\n\n[RELEVANT MEMORIES]\n{memories_str[:mem_budget]}"
-                    log.debug("[%s] Injected %d chars of memory (%d token headroom)", agent_id, min(600, len(memories_str)), _headroom)
+                    injected_mem = memories_str[:mem_budget]
+                    injected_chars = len(injected_mem)
+                    system_prompt = system_prompt + f"\n\n[RELEVANT MEMORIES]\n{injected_mem}"
+                    log.debug("[%s] Injected %d chars of memory (%d token headroom)", agent_id, injected_chars, _headroom)
                 # ReflexionMemory: inject a distilled "do-not-repeat" hint from past
                 # failures so the agent's own ASPO lessons steer this decision.
                 try:
@@ -166,6 +168,8 @@ async def get_tool_decision(
                     if hint and len(hint) > 10:
                         remaining = min(400, (_headroom * 4) - injected_chars)
                         if remaining > 50:
+                            if len(hint) > remaining:
+                                hint = hint[:remaining - 3] + "..."
                             system_prompt = system_prompt + f"\n\n[PAST-MISTAKE WARNING]\n{hint[:remaining]}"
                             log.debug("[%s] Injected reflexion warning (%d chars)", agent_id, min(400, len(hint)))
                 except Exception as refl_err:

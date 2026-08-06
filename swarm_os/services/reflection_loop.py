@@ -122,12 +122,14 @@ class ReflectionService:
 
     async def _wait_init(self):
         if self._init_task:
-            await self._init_task
-        elif not self._ensured:
-            await self._init_collection()
-            self._ensured = True
+            success = await self._init_task
+            self._init_task = None
+            if success:
+                self._ensured = True
+        if not self._ensured:
+            self._ensured = await self._init_collection()
 
-    async def _init_collection(self):
+    async def _init_collection(self) -> bool:
         try:
             collections_response = await self.client.get_collections()
             collections = collections_response.collections
@@ -136,8 +138,10 @@ class ReflectionService:
                     collection_name=self.collection,
                     vectors_config=VectorParams(size=768, distance=Distance.COSINE)
                 )
+            return True
         except Exception as e:
             logger.error("Failed to init ReflexionMemory: %s", e)
+            return False
 
     async def check_for_past_mistakes(self, task_context: str, threshold: float = 0.75, max_chars: int = 700) -> str:
         """Ranked retrieval with recency+confidence decay (top-k, not single hit).
@@ -236,7 +240,7 @@ class ReflectionService:
                 ],
                 wait=True
             )
-            _record_rule_to_agents_md(component, correction, confidence)
+            await asyncio.to_thread(_record_rule_to_agents_md, component, correction, confidence)
         except Exception as e:
             logger.error("Failed to store reflexion: %s", e)
 

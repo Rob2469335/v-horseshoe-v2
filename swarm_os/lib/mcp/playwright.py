@@ -46,6 +46,15 @@ async def playwright_handler(params: Dict[str, Any], trace_hook=None) -> Dict[st
                 viewport={"width": 1280, "height": 720},
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
             )
+            
+            async def route_handler(route, request):
+                if _ssrf_check(request.url):
+                    logger.warning("SSRF blocked in playwright request: %s", request.url)
+                    await route.abort("accessdenied")
+                else:
+                    await route.continue_()
+            await context.route("**/*", route_handler)
+            
             page = await context.new_page()
 
             if operation == "navigate":

@@ -305,6 +305,11 @@ async def generate(payload: GenerateRequest, orch=Depends(get_orchestrator)):
         import litellm
         resp = await litellm.acompletion(**kwargs)
         content = resp.choices[0].message.content or ""
+        try:
+            from runtime_v2.services.usage_log import record_response
+            record_response(resp, litellm_model, source="api_generate")
+        except Exception as usage_err:
+            log.debug("usage log skipped: %s", usage_err)
     except Exception:
         log.exception("Generation failed")
         raise HTTPException(status_code=502, detail="LLM generation failed")

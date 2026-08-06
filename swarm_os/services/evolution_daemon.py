@@ -78,15 +78,14 @@ def _score_genome(genome: dict) -> float:
     """Best real outcome fitness recorded for this genome. Returns a small
     prior (0.05) if none yet so novel genomes don't get zero and immediately die."""
     try:
-        from swarm_os.services.outcome_fitness import best_fitness, best_aggregate_fitness
+        from swarm_os.services.outcome_fitness import best_fitness
         f = best_fitness(genome.get("id", ""))
         if f is not None:
-            return f
-        # Agent outcomes are keyed `agent:<id>` and never equal `genome_<n>`;
-        # fall back to the best aggregate so the population evolves on the real
-        # shared tool-policy signal instead of the flat 0.05 prior.
-        agg = best_aggregate_fitness()
-        return agg if agg is not None else 0.05
+            # Apply decayed fitness if this is an elite that has survived multiple generations.
+            # (Decay is tracked in memory to prevent immortal elites from dominating forever)
+            decay = FITNESS_DECAY ** genome.get("decay_generations", 0)
+            return round(f * decay, 4)
+        return 0.05
     except Exception:
         return 0.05
 
@@ -95,23 +94,33 @@ def _best_genome_tool_weights() -> dict:
     """Return the tool_genes of the highest-fitness genome in the current
     population — the EVOLVED tool-selection policy. Used by the agent loop to
     order allowed tools by what real outcomes proved most effective."""
+    _, weights = get_active_genome(explore=False)
+    return weights
+
+def get_active_genome(explore: bool = True) -> tuple[str, dict]:
+    """Return (genome_id, tool_weights) for the agent loop to evaluate. 
+    Uses epsilon-greedy to balance exploitation (best genome) with exploration (random newborn)."""
     try:
         pop = _load_population()
         if not pop:
-            return {}
-        # Score by LIVE outcome fitness (exact id, else aggregate) rather than
-        # the persisted `fitness` field, which is decayed for elites every
-        # generation and 0.0 for newborn children.
+            return "", {}
+        
+        # 20% exploration of other genomes so newborns can be evaluated
+        if explore and random.random() < 0.2:
+            g = random.choice(pop)
+            return g.get("id", ""), g.get("tool_genes", {})
+
+        # Score by LIVE outcome fitness
         scored = []
         for g in pop:
             s = _score_genome(g)
             if s is None:
                 s = 0.0
-            scored.append((s, g.get("tool_genes", {})))
+            scored.append((s, g.get("id", ""), g.get("tool_genes", {})))
         scored.sort(key=lambda x: -x[0])
-        return scored[0][1] if scored else {}
+        return scored[0][1], scored[0][2] if scored else {}
     except Exception:
-        return {}
+        return "", {}
 
 
 def _crossover_mutate(a: dict, b: dict, generation: int) -> dict:
@@ -154,9 +163,10 @@ def evolve_one_generation() -> dict:
 
         # Elitism: keep top ELITE_COUNT unchanged.
         elites = pop[:ELITE_COUNT]
-        # Decay elite fitness (survivor cost).
+        # Decay elite fitness (survivor cost) by incrementing decay_generations.
         for g in elites:
-            g["fitness"] = round(g["fitness"] * FITNESS_DECAY, 4)
+            g["decay_generations"] = g.get("decay_generations", 0) + 1
+            g["fitness"] = _score_genome(g)
 
         # Breed the rest from the top half (tournament-lite).
         parents = pop[: max(ELITE_COUNT, POPULATION_SIZE // 2)]

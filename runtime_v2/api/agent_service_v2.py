@@ -159,7 +159,7 @@ class AgentServiceV2:
 
     def _feed_outcome(self, agent_id: str, prompt: str, state: _CallState,
                       completed: bool = True, tool_success_rate: float = 0.0,
-                      turns_used: int = 0):
+                      turns_used: int = 0, genome_id: str = ""):
         """Feed a REAL agent outcome to the outcome-fitness store so the
         evolutionary kernel can select on grounded fitness instead of LLM noise.
         Gated by SWARM_EVOLUTION=1 (zero overhead otherwise). Deterministic
@@ -172,7 +172,7 @@ class AgentServiceV2:
             efficiency = min(1.0, 8.0 / max(1, turns_used or 8)) if completed else 0.0
             from swarm_os.services.outcome_fitness import record_outcome
             record_outcome(
-                f"agent:{agent_id}",
+                genome_id=genome_id or f"agent:{agent_id}",
                 completion=1.0 if completed else 0.0,
                 test_pass=1.0 if completed else 0.0,
                 tool_success=tool_success_rate,
@@ -453,7 +453,7 @@ class AgentServiceV2:
                 log.debug("Failed to record system-failure event: %s", _e)
             tsr = (state._tool_successes / state._tool_attempts) if state._tool_attempts else 0.0
             self._feed_outcome(agent_id, prompt, state, completed=False,
-                               tool_success_rate=tsr, turns_used=state._turn)
+                               tool_success_rate=tsr, turns_used=state._turn, genome_id=getattr(state, 'genome_id', ''))
             state.handler_status = "DONE"
             return
 
@@ -550,7 +550,7 @@ class AgentServiceV2:
         self._record_success(model, start_time)
         tsr = (state._tool_successes / state._tool_attempts) if state._tool_attempts else 1.0
         self._feed_outcome(agent_id, prompt, state, completed=True,
-                           tool_success_rate=tsr, turns_used=state._turn)
+                           tool_success_rate=tsr, turns_used=state._turn, genome_id=getattr(state, 'genome_id', ''))
         await self._remember(f"[{agent_id}] task completed: {str(prompt)[:80]} -> {response_text[:120]}", category="general")
         state.handler_status = "DONE"
 
@@ -713,24 +713,11 @@ class AgentServiceV2:
     # -----------------------------------------------------------------------
     # Helpers
     # -----------------------------------------------------------------------
-    def _get_allowed_tools(self, agent_id: str) -> list:
+    def _get_allowed_tools(self, agent_id: str, genome_weights: dict = None) -> list:
         from runtime_v2.prompts.system_prompts import _AGENT_TOOLS
         allowed = _AGENT_TOOLS.get(agent_id, ["delegate", "final", "filesystem"])
-        # SOTA evolution hook: when SWARM_EVOLUTION=1, order the allowed tools by
-        # the best evolved genome's tool_genes (high-weight = preferred from real
-        # outcomes). This makes the agent's tool-selection policy evolve from real
-        # task outcomes instead of staying a fixed hand-authored list. No-op when
-        # evolution is off (zero overhead).
-        try:
-            import os as _os
-            if _os.environ.get("SWARM_EVOLUTION", "").strip() != "1":
-                return allowed
-            from swarm_os.services.evolution_daemon import _best_genome_tool_weights
-            weights = _best_genome_tool_weights()
-            if weights:
-                allowed = sorted(allowed, key=lambda t: -weights.get(t, 0.0))
-        except Exception as _e:
-            log.debug("[%s] evolved tool ordering skipped: %s", agent_id, _e)
+        if genome_weights:
+            allowed = sorted(allowed, key=lambda t: -genome_weights.get(t, 0.0))
         return allowed
 
     # -----------------------------------------------------------------------
@@ -741,15 +728,6 @@ class AgentServiceV2:
         history: Optional[List[dict]] = None,
         delegation_chain: Optional[List[str]] = None,
     ) -> AsyncGenerator[dict, None]:
-        from runtime_v2.prompts.system_prompts import build
-        from runtime_v2.services.memory_core import get_relevant_memories
-
-        # Per-run isolation: snapshot the shared read-before-write exploration set
-        # and filesystem read cache, then clear them for THIS run so it cannot
-        # inherit another agent's "seen" files (which would let it patch paths it
-        # never explored) or read stale cached content. Restore the prior state in
-        # a finally so a concurrent run's in-flight tracking is NOT wiped mid-run
-        # (clearing the global from one run destroyed another run's state).
         try:
             import runtime_v2.services.tool_executor as _te
             _explored_snapshot = set(_te._explored_paths)
@@ -761,11 +739,40 @@ class AgentServiceV2:
             _explored_snapshot = set()
             _cache_snapshot = {}
 
+        try:
+            async for chunk in self._step_agent_stream_inner(agent_id, prompt, history, delegation_chain):
+                yield chunk
+        finally:
+            try:
+                if _te is not None:
+                    _te._explored_paths = _explored_snapshot
+                    _te._filesystem_read_cache = _cache_snapshot
+            except Exception as restore_err:
+                log.debug("[%s] failed to restore shared exploration state: %s", agent_id, restore_err)
+
+    async def _step_agent_stream_inner(
+        self, agent_id: str, prompt: str,
+        history: Optional[List[dict]] = None,
+        delegation_chain: Optional[List[str]] = None,
+    ) -> AsyncGenerator[dict, None]:
+        from runtime_v2.prompts.system_prompts import build
+        from runtime_v2.services.memory_core import get_relevant_memories
+
+        genome_id, genome_weights = "", {}
+        try:
+            import os as _os
+            if _os.environ.get("SWARM_EVOLUTION", "").strip() == "1":
+                from swarm_os.services.evolution_daemon import get_active_genome
+                genome_id, genome_weights = get_active_genome(explore=True)
+        except Exception:
+            pass
+
         history = list(history or [])
         chain = list(delegation_chain or [agent_id])
 
         if len(chain) >= MAX_DEPTH:
             yield {"agent_id": agent_id, "type": "error", "content": f"Max delegation depth: {' -> '.join(chain)}"}
+            self._feed_outcome(agent_id, prompt, _CallState(), completed=False, genome_id=genome_id)
             return
 
         model, provider = await lookup_model(agent_id)
@@ -805,7 +812,7 @@ class AgentServiceV2:
                "requested_role": self._agents.get(agent_id, {}).get("model_role", "fast"),
                "attempt": 1, "temperature": 0.1}
 
-        allowed_tools = self._get_allowed_tools(agent_id)
+        allowed_tools = self._get_allowed_tools(agent_id, genome_weights=genome_weights)
         consecutive_errors = 0
         unauthorized_tool_errors = 0
         decision_counts = {}
@@ -814,6 +821,7 @@ class AgentServiceV2:
         _fetched_content = agent_id not in ANALYSIS_AGENTS
         _reviewer_fails = 0
         state = _CallState()
+        state.genome_id = genome_id
         state._start_time = start_time if start_time else time.time()
         initial_messages_len = len(messages)
 
@@ -863,6 +871,8 @@ class AgentServiceV2:
                         continue
                     yield {"agent_id": agent_id, "type": "final", "model": model, "provider": provider,
                            "content": f"Task aborted after {consecutive_errors} LLM failures: {exc}"}
+                    tsr = (state._tool_successes / state._tool_attempts) if state._tool_attempts else 0.0
+                    self._feed_outcome(agent_id, prompt, state, completed=False, tool_success_rate=tsr, turns_used=state._turn, genome_id=getattr(state, 'genome_id', ''))
                     return
                 yield {"agent_id": agent_id, "type": "tool_result", "tool": "llm", "result": {"error": f"LLM decision failed: {exc}"}}
                 messages.append({"role": "user", "content": f"Result: {{\"error\": \"LLM decision failed: {exc}\"}}. Retry with a different approach."})
@@ -890,6 +900,8 @@ class AgentServiceV2:
                     messages.append({"role": "user", "content": "The autonomous self-healing cycle has finished. Please formulate a DIFFERENT action to avoid looping."})
                     continue
                 yield {"agent_id": agent_id, "type": "final", "model": model, "provider": provider, "content": "Healing failed. Loop aborted."}
+                tsr = (state._tool_successes / state._tool_attempts) if state._tool_attempts else 0.0
+                self._feed_outcome(agent_id, prompt, state, completed=False, tool_success_rate=tsr, turns_used=state._turn, genome_id=getattr(state, 'genome_id', ''))
                 return
 
             # --- Validate decision ---
@@ -909,6 +921,8 @@ class AgentServiceV2:
                     consecutive_errors += 1
                     if consecutive_errors >= 3:
                         yield {"agent_id": agent_id, "type": "error", "content": f"Agent {agent_id} aborted after 3 consecutive errors."}
+                        tsr = (state._tool_successes / state._tool_attempts) if state._tool_attempts else 0.0
+                        self._feed_outcome(agent_id, prompt, state, completed=False, tool_success_rate=tsr, turns_used=state._turn, genome_id=getattr(state, 'genome_id', ''))
                         return
                     yield {"agent_id": agent_id, "type": "tool_result", "tool": "ask_user", "result": {"error": f"ask_user not allowed for {agent_id}"}}
                     messages.append({"role": "assistant", "content": json.dumps({"action": "ask_user"})})
@@ -933,6 +947,8 @@ class AgentServiceV2:
                 unauthorized_tool_errors += 1
                 if unauthorized_tool_errors >= 3:
                     yield {"agent_id": agent_id, "type": "error", "content": f"Agent {agent_id} aborted after 3 consecutive unauthorized tool errors."}
+                    tsr = (state._tool_successes / state._tool_attempts) if state._tool_attempts else 0.0
+                    self._feed_outcome(agent_id, prompt, state, completed=False, tool_success_rate=tsr, turns_used=state._turn, genome_id=getattr(state, 'genome_id', ''))
                     return
                 error_msg = f"Unauthorized tool '{action}' for role '{agent_id}'. Allowed: {allowed_tools}"
                 yield {"agent_id": agent_id, "type": "tool_result", "tool": action, "result": {"error": error_msg}}
@@ -958,6 +974,8 @@ class AgentServiceV2:
                 consecutive_errors += 1
                 if consecutive_errors >= 3:
                     yield {"agent_id": agent_id, "type": "error", "content": f"Agent {agent_id} aborted after 3 consecutive delegation errors."}
+                    tsr = (state._tool_successes / state._tool_attempts) if state._tool_attempts else 0.0
+                    self._feed_outcome(agent_id, prompt, state, completed=False, tool_success_rate=tsr, turns_used=state._turn, genome_id=getattr(state, 'genome_id', ''))
                     return
                 error_msg = (f"Self-delegation blocked: {agent_id}." if state.handler_status == "SELF_DELEGATION_ERROR"
                             else f"Circular delegation blocked. '{decision.get('target_agent')}' is already active in the chain ({' -> '.join(chain)}). Use 'final' to return results."
@@ -995,6 +1013,8 @@ class AgentServiceV2:
                     continue
                 yield {"agent_id": agent_id, "type": "error", "content": "Healing failed or aborted to prevent infinite loop."}
                 yield {"agent_id": agent_id, "type": "final", "model": model, "provider": provider, "content": "Healing failed. Manual intervention required."}
+                tsr = (state._tool_successes / state._tool_attempts) if state._tool_attempts else 0.0
+                self._feed_outcome(agent_id, prompt, state, completed=False, tool_success_rate=tsr, turns_used=state._turn, genome_id=getattr(state, 'genome_id', ''))
                 return
 
             # --- Message compaction: keep only last 2 tool turns ---
@@ -1009,7 +1029,7 @@ class AgentServiceV2:
         # kernel learns turn-exhaustion is a bad strategy — completion-gated at 0.4.
         tsr = (state._tool_successes / state._tool_attempts) if state._tool_attempts else 0.0
         self._feed_outcome(agent_id, prompt, state, completed=False,
-                           tool_success_rate=tsr, turns_used=MAX_TURNS)
+                           tool_success_rate=tsr, turns_used=MAX_TURNS, genome_id=getattr(state, 'genome_id', ''))
         # Give the healing/learning system VISIBILITY into turn-budget exhaustion.
         # Previously max-turns just yielded a string — no event, no reflexion, so
         # a compound goal (filesystem + web_search) that ran out of turns left no
@@ -1037,12 +1057,3 @@ class AgentServiceV2:
         except Exception as refl_err:
             log.debug("[%s] max-turns reflexion skipped: %s", agent_id, refl_err)
         self._record_success(model, start_time)
-
-        # Restore the shared exploration state snapshotted at run entry, so
-        # concurrent runs keep their own read-before-write tracking intact.
-        try:
-            if _te is not None:
-                _te._explored_paths = _explored_snapshot
-                _te._filesystem_read_cache = _cache_snapshot
-        except Exception as restore_err:
-            log.debug("[%s] failed to restore shared exploration state: %s", agent_id, restore_err)

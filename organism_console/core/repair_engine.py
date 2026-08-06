@@ -694,10 +694,14 @@ class TieredRepairOrchestrator:
                             result["confidence"] = float(diag.get("confidence", 0.3))
                             result["tier_used"] = 2
                             if diag.get("files_to_modify") or diag.get("code_patch"):
-                                if diag.get("code_patch") and file_path and file_path.exists():
-                                    file_path.write_text(diag.get("code_patch"), encoding="utf-8")
-                                result["fixed"] = True
-                                self._snapshot_and_validate(file_path, result, original_content)
+                                if diag.get("code_patch") and (not file_path or not file_path.exists()):
+                                    result["validation_error"] = "LLM provided a code patch but no valid target file path was supplied"
+                                    result["fixed"] = False
+                                else:
+                                    if diag.get("code_patch"):
+                                        file_path.write_text(diag.get("code_patch"), encoding="utf-8")
+                                    result["fixed"] = True
+                                    self._snapshot_and_validate(file_path, result, original_content)
                             result["generated_test"] = diag.get("test_patch") or diag.get("test_code")
                         except (json.JSONDecodeError, ValueError):
                             result["repair_action"] = response_text[:500]

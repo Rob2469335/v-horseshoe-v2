@@ -45,11 +45,22 @@ def _ssrf_check(url: str) -> str | None:
 _client: httpx.AsyncClient | None = None
 
 
+async def _ssrf_redirect_hook(response: httpx.Response):
+    if response.is_redirect:
+        loc = response.headers.get("location")
+        if loc:
+            from urllib.parse import urljoin
+            next_url = urljoin(str(response.request.url), loc)
+            blocked = _ssrf_check(next_url)
+            if blocked:
+                raise httpx.RequestError(f"SSRF blocked on redirect: {blocked}", request=response.request)
+
 def _get_client() -> httpx.AsyncClient:
     global _client
     if _client is None or _client.is_closed:
         _client = httpx.AsyncClient(
             timeout=httpx.Timeout(connect=5.0, read=20.0, write=20.0, pool=10.0),
+            event_hooks={"response": [_ssrf_redirect_hook]}
         )
     return _client
 

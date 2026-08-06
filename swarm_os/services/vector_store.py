@@ -47,12 +47,14 @@ class VectorStore:
 
     async def _wait_init(self):
         if self._init_task:
-            await self._init_task
-        elif not self._ensured:
-            await self._ensure_collection(self.vector_size)
-            self._ensured = True
+            success = await self._init_task
+            self._init_task = None
+            if success:
+                self._ensured = True
+        if not self._ensured:
+            self._ensured = await self._ensure_collection(self.vector_size)
 
-    async def _ensure_collection(self, vector_size: int = 768):
+    async def _ensure_collection(self, vector_size: int = 768) -> bool:
         """Create collection if it doesn't exist. Retries with exponential backoff
         to handle the startup race where Qdrant may not be ready immediately
         (it boots slower than the backend; a 408/connection-refused during the
@@ -86,7 +88,7 @@ class VectorStore:
                         init_options = getattr(self.client, "_init_options", {})
                         if init_options.get("location") == ":memory:":
                             logger.debug("Skipping payload indexes for in-memory Qdrant")
-                            return
+                            return True
                         await self.client.create_payload_index(
                             collection_name=self.collection_name,
                             field_name="tasks",
@@ -123,7 +125,7 @@ class VectorStore:
                         logger.warning("Could not create payload indexes: %s", e)
 
                     logger.info("Created collection: %s", self.collection_name)
-                return  # success
+                return True # success
             except Exception as e:
                 wait = 2 ** attempt  # 1s, 2s, 4s, 8s, 16s (~31s total)
                 if attempt < max_attempts - 1:
@@ -139,6 +141,7 @@ class VectorStore:
                         "Could not ensure collection %s after %d attempts: %s — will retry on next tick",
                         self.collection_name, max_attempts, e,
                     )
+        return False
 
     async def upsert(
         self,

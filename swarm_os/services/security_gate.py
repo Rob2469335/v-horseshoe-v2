@@ -64,7 +64,9 @@ class SecurityGate:
     @classmethod
     def scan_file(cls, filepath: Path):
         try:
-            with open(filepath, "r", encoding="utf-8") as f:
+            # BUG FIX: Read bytes directly so ast.parse respects any # coding: cookie.
+            # Avoids AST execution gap where UTF-8 parse passes but execution uses CP037.
+            with open(filepath, "rb") as f:
                 tree = ast.parse(f.read(), filename=str(filepath))
         except SyntaxError as e:
             raise SecurityGateViolation(f"Syntax Error in {filepath}: {e}")
