@@ -24,6 +24,13 @@ def test_edit_agents_route_to_cloud_when_key_present():
             assert get_litellm_model(agent, "qwen3.5-4b") == "openai/deepseek-v4-flash"
 
 
+def test_executor_routes_to_cloud_when_key_present():
+    # executor now orchestrates compound goals (chaining researcher->coder->
+    # tool-runner); the local 4B cannot follow a multi-agent chain reliably.
+    with _patch_env(OPENAI_API_KEY="sk-test", SWARM_ANALYSIS_CLOUD="auto", SWARM_ROUTING_MODE="auto"):
+        assert get_litellm_model("executor", "qwen3.5-4b") == "openai/deepseek-v4-flash"
+
+
 def test_analysis_agent_stays_local_without_cloud_key():
     with _patch_env(OPENAI_API_KEY="", SWARM_ANALYSIS_CLOUD="auto", SWARM_ROUTING_MODE="auto"):
         for agent in ("code_analyzer", "researcher", "reviewer", "coder", "debugger"):
@@ -44,7 +51,7 @@ def test_analysis_cloud_can_be_explicitly_disabled():
 
 def test_non_analysis_agent_stays_local_even_with_cloud_key():
     with _patch_env(OPENAI_API_KEY="sk-test", SWARM_ANALYSIS_CLOUD="auto", SWARM_ROUTING_MODE="auto"):
-        for agent in ("coordinator", "planner", "executor", "tool-runner", "tool-maker"):
+        for agent in ("coordinator", "planner", "tool-runner", "tool-maker"):
             assert get_litellm_model(agent, "qwen3.5-4b") == "openai/qwen3.5-4b"
 
 

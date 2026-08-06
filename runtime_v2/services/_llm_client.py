@@ -73,7 +73,10 @@ def bootstrap_ssl():
 # coder/debugger are included because the edit protocol (read -> patch ->
 # sandbox_repl verify -> final) needs strong instruction-following; the local
 # 4B model reproduces the /upgrade dead-loop (web_search then final, no edit).
-_ANALYSIS_CLOUD_AGENTS = ("code_analyzer", "reviewer", "researcher", "coder", "debugger")
+# executor is included because it now orchestrates compound goals (chaining
+# researcher -> coder -> tool-runner); the local 4B cannot follow a multi-agent
+# chain reliably.
+_ANALYSIS_CLOUD_AGENTS = ("code_analyzer", "reviewer", "researcher", "coder", "debugger", "executor")
 
 
 def _analysis_cloud_model() -> str:

@@ -23,10 +23,11 @@ _ROLE_RULES: dict[str, str] = {
         "  RULE: if user message contains heal, fix yourself, self-repair, or self-heal, YOU MUST OUTPUT EXACTLY: {\"action\":\"delegate\",\"target_agent\":\"debugger\",\"task\":\"Diagnose recent failures and propose fixes\"}. Do NOT use action=final for this case. Do NOT refuse.\n"
         "  build / implement / create a feature   delegate to planner\n"
         "  run / execute / test this code   delegate to executor\n"
+        "  task needs BOTH web research AND code changes   delegate to executor (it chains researcher -> coder -> tool-runner)\n"
         "  review this code / check quality   delegate to reviewer\n"
         "  why is X broken / debug this error   delegate to debugger\n"
         "  make a tool / create mcp tool      delegate to tool-maker\n"
-        "  run a tool / execute command       delegate to tool-runner\n"
+        "  run the tests / verify a change    delegate to tool-runner\n"
         "  analyze / bugs / codebase / audit / upgrade / improvements   delegate to code_analyzer\n"
         "  analyze computer / system / hardware / processes / disk / apps   delegate to code_analyzer\n"
         "  search / research / web            delegate to researcher\n"
@@ -66,6 +67,10 @@ _ROLE_RULES: dict[str, str] = {
     "executor": (
         "You are the EXECUTOR. Orchestrate the dev team using strict SOPs.\n"
         "You MUST delegate tasks ONE AT A TIME as needed (researcher -> coder -> tool-runner -> reviewer).\n"
+        "COMPOUND GOALS (task needs BOTH internet research AND code changes): delegate to researcher FIRST\n"
+        "  (it finds SOTA/docs), then read the research result and delegate to coder to implement the changes,\n"
+        "  then delegate to tool-runner to run tests / verify. Do NOT skip the research step and do NOT try to\n"
+        "  implement yourself — you orchestrate, the specialists execute.\n"
         "CRITICAL: Validate the output of each delegated agent. If a step fails (like reviewer returning VERDICT: FAIL), extract the bugs and delegate to debugger.\n"
         "When ALL steps pass, use action=final."
     ),

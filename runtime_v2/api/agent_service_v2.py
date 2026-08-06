@@ -143,6 +143,7 @@ from runtime_v2.api._agent_config import (
 from runtime_v2.api._agent_routing import (
     lookup_model, fast_route_coordinator, fast_start_for_agent,
     matches_task_keywords, best_route_target, _RESEARCHER_FIRST_TURNS,
+    is_compound_goal,
 )
 
 
@@ -396,12 +397,22 @@ class AgentServiceV2:
                          answer, target, goal[:80])
                 return {"action": "delegate", "target_agent": target, "task": goal}
             decision = await self._call_llm(model, trimmed_messages, agent_id, allowed_tools)
-            # FIX-INTENT GUARD: if the goal implies editing/fixing code, force the
-            # delegate target to `coder` (edit-capable) even when the LLM coordinator
-            # picks the report-only code_analyzer. A compound "analyze + fix bugs"
-            # goal must actually FIX (like a human maintainer / opencode), not just
-            # return an analysis report.
+            # COMPOUND-GOAL GUARD: a goal needing BOTH internet research AND code
+            # changes must go to `executor` (the orchestrator that chains
+            # researcher → coder → tool-runner), NOT collapse onto coder — which
+            # then has to satisfy the edit + web_search + web_fetch obligations
+            # inside MAX_TURNS and loop-trips (the /upgrade dead-loop).
             if decision and decision.get("action") == "delegate":
+                if is_compound_goal(prompt) and decision.get("target_agent") not in ("executor", "coder", "debugger"):
+                    log.info("[coordinator] compound goal → forcing delegate target executor (was %s)",
+                             decision.get("target_agent"))
+                    return {"action": "delegate", "target_agent": "executor",
+                            "task": decision.get("task") or prompt}
+                # FIX-INTENT GUARD: if the goal implies editing/fixing code, force the
+                # delegate target to `coder` (edit-capable) even when the LLM coordinator
+                # picks the report-only code_analyzer. A compound "analyze + fix bugs"
+                # goal must actually FIX (like a human maintainer / opencode), not just
+                # return an analysis report.
                 if _is_fix_intent(prompt) and decision.get("target_agent") not in ("coder", "debugger"):
                     log.info("[coordinator] fix-intent goal → forcing delegate target coder (was %s)",
                              decision.get("target_agent"))
@@ -438,6 +449,18 @@ class AgentServiceV2:
             if internet_goal:
                 log.info("[%s] internet goal — fast-start turn %d → web_search (before warmup)", agent_id, turn)
                 return {"action": "web_search", "query": _clean_search_query(query)}
+
+        # EXECUTOR COMPOUND-GOAL CHAINING: executor is the orchestrator that splits a
+        # compound internet+fix goal across the team (researcher → coder → tool-runner).
+        # Its FIRST action must be research-first — deterministically delegate to
+        # researcher so the code-changes downstream are grounded in real findings,
+        # instead of coder researching itself and loop-tripping the /upgrade dead-loop.
+        if turn == 0 and agent_id == "executor":
+            query = (prompt or "").strip()
+            if query and bool(_INTERNET_GOAL_RE.search(query)):
+                log.info("[executor] compound goal — fast-start turn %d → delegate researcher (research first)", turn)
+                return {"action": "delegate", "target_agent": "researcher",
+                        "task": _clean_search_query(query)}
 
         if fast is not None:
             return fast
@@ -590,13 +613,27 @@ class AgentServiceV2:
         query = (prompt or "").strip()
         internet_goal = bool(_INTERNET_GOAL_RE.search(query)) if query else False
         has_web_search_tool = "web_search" in self._get_allowed_tools(agent_id)
+        # FIX-DELIVERABLE RELAXATION: when `coder` has ACTUALLY edited a file on a
+        # fix-intent goal, the edit IS the deliverable — the web research was either
+        # discharged upstream (executor chain: researcher → coder) or is a *means*
+        # to the fix, not an end. Requiring web_search AND web_fetch on top of a
+        # completed edit is the double-bind that loop-tripped the /upgrade cycle
+        # ("coder caught in a loop" after editing, then the fix-intent + internet
+        # obligations collided inside MAX_TURNS). The internet guard still fully
+        # applies to REPORT agents (code_analyzer/researcher) and to coder BEFORE it
+        # has edited (i.e. it cannot skip research and final with no code change).
+        fix_deliverable = (
+            agent_id == "coder"
+            and _is_fix_intent(prompt)
+            and state.did_code_change
+        )
         # REQUIRE both web_search AND web_fetch for internet goals on analysis
         # agents. Searching is not enough — the agent must deep-read at least one
         # authoritative page (docs/SO/GitHub) so the final answer is grounded in
         # actual fetched content, not just search snippets. This matches how a
         # human researcher (or opencode) works: search → fetch → read → synthesize.
         needs_fetch = "web_fetch" in self._get_allowed_tools(agent_id)
-        if internet_goal and not state.did_web_search and has_web_search_tool and agent_id in INTERNET_GOAL_AGENTS:
+        if internet_goal and not state.did_web_search and has_web_search_tool and agent_id in INTERNET_GOAL_AGENTS and not fix_deliverable:
             # Reject on EVERY final until web_search actually runs — not just the
             # first (a one-shot latch let the agent call final a second time and
             # "complete" the goal without ever doing the internet research it was
@@ -611,7 +648,7 @@ class AgentServiceV2:
                 "least one result, before you can call action=final. Do NOT skip this step."
             )})
             return
-        if internet_goal and needs_fetch and not state.did_web_fetch and agent_id in INTERNET_GOAL_AGENTS:
+        if internet_goal and needs_fetch and not state.did_web_fetch and agent_id in INTERNET_GOAL_AGENTS and not fix_deliverable:
             state._web_final_rejected = True
             state.handler_status = "CONTINUE"
             log.warning("[%s] Rejected final: internet goal without web_fetch.", agent_id)

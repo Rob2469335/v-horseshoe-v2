@@ -39,13 +39,46 @@ _ROUTES: list[tuple[list[str], str]] = [
       "patch", "modify this"], "coder"),
     (["make a tool", "create a tool", "mcp server", "mcp tool", "new plugin",
       "custom tool", "tool-maker"], "tool-maker"),
-    (["run this", "execute", "run the tests", "run tests", "deploy", "run the script",
-      "run all"], "executor"),
+    (["run this", "execute", "deploy", "run the script", "run all", "run the code"], "executor"),
+    (["run the tests", "run tests", "run the test suite", "run test suite",
+      "test this code", "verify", "check the tests", "verify the"], "tool-runner"),
     (["review", "code review", "check quality", "assess this", "is this good",
       "verdict", "approve"], "reviewer"),
     (["explain", "summarize", "what does this", "what does the", "describe",
       "read this file", "read the file", "show me"], "coder"),
 ]
+
+
+_COMPOUND_FIX_KEYWORDS = (
+    "write", "patch", "implement", "create", "change", "modify",
+    "solve", "repair", "correct", "fix this", "fix the bug",
+    "fix the bugs", "fix it", "fix the", "and fix", "to fix the",
+    "fix broken", "fix failing",
+)
+
+# Internet-involving goal keywords. Mirror of the `_INTERNET_GOAL_RE` in
+# agent_service_v2 (kept here so routing can classify compound goals without
+# importing from the agent loop).
+_COMPOUND_WEB_KEYWORDS = (
+    "search the internet", "search the web", "search online", "research",
+    "look up", "internet", "via web", "web research", "improvements",
+    "upgrades", "sota", "best practices", "latest", "current state",
+)
+
+
+def is_compound_goal(user_prompt: str) -> bool:
+    """True when the goal requires BOTH internet/web research AND code changes —
+    the `/upgrade` case ("find SOTA via web search, analyze the codebase, and
+    implement upgrades"). Such goals must route to `executor` (the orchestrator),
+    which chains researcher → coder → tool-runner, instead of collapsing the whole
+    compound onto `coder` — which then tries to satisfy edit AND web_search AND
+    web_fetch obligations inside MAX_TURNS and loop-trips the circuit breaker."""
+    msg = (user_prompt or "").lower()
+    if "how to fix" in msg or "how do i fix" in msg or "how do you fix" in msg:
+        return False
+    fix_intent = any(kw in msg for kw in _COMPOUND_FIX_KEYWORDS)
+    web_intent = any(kw in msg for kw in _COMPOUND_WEB_KEYWORDS)
+    return fix_intent and web_intent
 
 
 def fast_route_coordinator(user_prompt: str) -> dict | None:
@@ -56,6 +89,15 @@ def fast_route_coordinator(user_prompt: str) -> dict | None:
 
     if msg in _GREETINGS or (len(words) <= 3 and any(g in msg for g in _GREETINGS)):
         return {"action": "final", "response": "Hello! What can I help you with today?"}
+
+    # COMPOUND-GOAL PRECEDENCE: a goal that needs BOTH internet research AND code
+    # changes routes deterministically to `executor`, which chains the dev team
+    # (researcher → coder → tool-runner). Without this, the whole compound lands
+    # on `coder`, which must research AND edit AND verify inside 8 turns — the
+    # /upgrade dead-loop (loop-tripped circuit breaker, "No file changes").
+    if is_compound_goal(msg):
+        log.info("[coordinator] compound internet+fix goal → executor (chains researcher→coder→tool-runner)")
+        return {"action": "delegate", "target_agent": "executor", "task": user_prompt}
 
     # Collect ALL matching routes. Multi-intent messages (e.g. "analyze codebase
     # AND search internet") need the LLM to decompose — don't fast-route.
@@ -111,6 +153,11 @@ def best_route_target(user_prompt: str) -> str:
     """Highest-priority route target for a task message. Deterministic fallback
     used when the LLM coordinator violates the 'never final on a task' rule."""
     msg = (user_prompt or "").lower()
+    # COMPOUND-GOAL PRECEDENCE: both research AND code changes → executor
+    # (orchestrator chains the team), not coder (which would double-bind on the
+    # edit + web_search + web_fetch final guards — the /upgrade dead-loop).
+    if is_compound_goal(msg):
+        return "executor"
     # FIX-INTENT PRECEDENCE: editing/fixing goals go to coder (edit-capable)
     # rather than the report-only analyzer, matching a human maintainer.
     # "how to fix X" (research intent) is excluded so how-to questions stay on
@@ -149,6 +196,16 @@ _AGENT_WARMUP: dict[str, list[dict]] = {
         {"action": "filesystem", "operation": "glob", "path": "runtime_v2", "pattern": "**/*.py"},
         {"action": "filesystem", "operation": "read", "path": "runtime_v2/api/agent_service_v2.py"},
         {"action": "filesystem", "operation": "read", "path": "runtime_v2/services/stream_runner.py"},
+    ],
+    "coder": [
+        # coder's tool decisions run on cloud DeepSeek but it had NO deterministic
+        # grounding — the /upgrade dead-loop showed it web_search-ing before ever
+        # reading a file (the goal text leads with research verbs, so it researches
+        # first and never edits). Short grounding (project map + real paths only —
+        # the LLM reads what it needs to edit in its own turns). The full
+        # 4-step read+glob deep-dive is reserved for code_analyzer.
+        {"action": "filesystem", "operation": "read", "path": "AGENTS.md"},
+        {"action": "filesystem", "operation": "glob", "path": "runtime_v2", "pattern": "**/*.py"},
     ],
 }
 

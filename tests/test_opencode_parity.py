@@ -349,8 +349,9 @@ async def test_internet_goal_web_searches_before_warmup():
 async def test_coder_not_forced_into_web_search_on_turn_0():
     """The turn-0 web_search injection is for REPORT agents (ANALYSIS_AGENTS)
     only. The `coder` is an EDIT agent — forcing web_search at turn 0 derailed it
-    into pure research so it never edited (the /upgrade dead-loop). coder should
-    fall through to its own LLM decision so it reads/edits first."""
+    into pure research so it never edited (the /upgrade dead-loop). coder instead
+    gets the deterministic FILESYSTEM warmup (read AGENTS.md, glob runtime_v2) so
+    it grounds in the real codebase before deciding, then the LLM takes over."""
     from runtime_v2.api.agent_service_v2 import AgentServiceV2
     service = AgentServiceV2()
     service._call_llm = AsyncMock(return_value={"action": "final", "response": "x"})
@@ -362,8 +363,20 @@ async def test_coder_not_forced_into_web_search_on_turn_0():
         "analyze the codebase and implement SOTA upgrades via web search",
         0,
     )
-    # Not the injected web_search — the coder's own decision is used.
-    assert decision["action"] == "final"
+    # NOT the injected web_search — coder grounds with the filesystem warmup
+    # (read AGENTS.md), which prevents the research-first derail.
+    assert decision["action"] == "filesystem"
+    assert decision.get("operation") == "read"
+    assert not service._call_llm.called
+    # Turn past the warmup hands control back to the LLM.
+    service._call_llm.reset_mock()
+    await service._get_decision(
+        "coder", "m",
+        [{"role": "user", "content": "hi"}],
+        ["web_search", "web_fetch", "filesystem", "final"],
+        "analyze the codebase and implement SOTA upgrades via web search",
+        3,
+    )
     assert service._call_llm.called
 
 
@@ -387,8 +400,9 @@ async def test_coordinator_routes_after_ask_user_answer_no_requery():
         "coordinator", "m", messages, ["delegate", "ask_user", "final"], "", 0)
     assert decision["action"] == "delegate"
     # "all"/"everything" maps to no specific route → falls back to the goal's
-    # route, which is fix-intent ("implement") → coder. Crucially NOT ask_user.
-    assert decision["target_agent"] == "coder"
+    # route, which is compound (implement + web search) → executor. Crucially
+    # NOT ask_user and not a bare coder (which would double-bind).
+    assert decision["target_agent"] == "executor"
     assert not service._call_llm.called
 
 
@@ -460,4 +474,128 @@ async def test_coordinator_fix_intent_forces_coder_over_analyzer():
     )
     assert decision["action"] == "delegate"
     assert decision["target_agent"] == "coder"
+
+
+def test_compound_goal_routes_to_executor():
+    """A goal needing BOTH internet research AND code changes (the /upgrade case)
+    routes to `executor` — the orchestrator that chains researcher -> coder ->
+    tool-runner — NOT collapsing onto coder (which loop-tripped trying to satisfy
+    the edit + web_search + web_fetch obligations inside MAX_TURNS)."""
+    for goal in (
+        "research SOTA upgrades via web search and implement them in the codebase",
+        "analyze the codebase, search the internet for improvements, and fix them",
+        "find best practices online and implement the improvements",
+    ):
+        decision = fast_route_coordinator(goal)
+        assert decision is not None, goal
+        assert decision["target_agent"] == "executor", goal
+
+
+def test_compound_goal_does_not_hijack_single_intent_goals():
+    """Pure fix and pure research goals still route to their specialist agents."""
+    assert fast_route_coordinator("write a new function in stream_runner")["target_agent"] == "coder"
+    assert fast_route_coordinator("search the internet for the latest python version")["target_agent"] == "researcher"
+    assert fast_route_coordinator("run the tests")["target_agent"] == "tool-runner"
+
+
+def test_tool_runner_is_reachable():
+    """tool-runner had no keyword route in _ROUTES — the only agent with zero
+    reachability. Test-running/verification goals must now reach it."""
+    for goal in ("run the tests", "run tests", "run the test suite", "check the tests"):
+        decision = fast_route_coordinator(goal)
+        assert decision is not None, goal
+        assert decision["target_agent"] == "tool-runner", goal
+
+
+def test_best_route_target_compound_returns_executor():
+    from runtime_v2.api._agent_routing import best_route_target
+    assert best_route_target("research SOTA upgrades via web search and implement them") == "executor"
+    assert best_route_target("analyze my codebase for bugs and fix them") == "coder"
+    assert best_route_target("run the tests") == "tool-runner"
+
+
+@pytest.mark.asyncio
+async def test_executor_compound_goal_delegates_researcher_first():
+    """The executor orchestrator, handed a compound internet+fix goal, must
+    deterministically delegate research to `researcher` on turn 0 — so the code
+    changes downstream are grounded in real findings (research-first chaining)."""
+    from runtime_v2.api.agent_service_v2 import AgentServiceV2
+    service = AgentServiceV2()
+    service._call_llm = AsyncMock(return_value={"action": "final", "response": "x"})
+    service._agents = {"executor": {}}
+    decision = await service._get_decision(
+        "executor", "m",
+        [{"role": "user", "content": "hi"}],
+        ["delegate", "sandbox_repl", "final"],
+        "research SOTA upgrades via web search and implement them in the codebase",
+        0,
+    )
+    assert decision["action"] == "delegate"
+    assert decision["target_agent"] == "researcher"
+    assert not service._call_llm.called
+    # Non-internet executor task does NOT force a research delegate.
+    service._call_llm.reset_mock()
+    await service._get_decision(
+        "executor", "m",
+        [{"role": "user", "content": "hi"}],
+        ["delegate", "sandbox_repl", "final"],
+        "run this script and report the output",
+        0,
+    )
+    assert service._call_llm.called
+
+
+@pytest.mark.asyncio
+async def test_coder_fix_deliverable_skips_internet_final_guard():
+    """FIX-DELIVERABLE RELAXATION: once coder has actually edited a file on a
+    fix-intent goal, the edit IS the deliverable — the internet-goal guards
+    (web_search + web_fetch) must NOT reject the final. Requiring research on top
+    of a completed edit is the double-bind that loop-tripped the /upgrade cycle."""
+    service = AgentServiceV2()
+    state = _CallState()
+    state.did_code_change = True
+    messages = [{"role": "user", "content": "hi"}]
+    gen = service._handle_final(
+        {"action": "final", "response": "implemented"}, "coder", "m", "p",
+        messages, 0.0, "analyze the codebase and implement SOTA upgrades via web search", True, state)
+    async for _ in gen:
+        pass
+    # Not rejected by the fix-intent invariant (code changed) NOR the internet
+    # guards (fix deliverable) — goes through to response handling.
+    assert state.handler_status != "CONTINUE"
+    assert state.handler_status != "ABORT"
+
+
+@pytest.mark.asyncio
+async def test_coder_internet_guard_still_applies_before_edit():
+    """The relaxation only fires AFTER coder edits. A fix-intent internet goal with
+    NO code change is still rejected — coder cannot skip research AND skip editing."""
+    service = AgentServiceV2()
+    state = _CallState()
+    messages = [{"role": "user", "content": "hi"}]
+    gen = service._handle_final(
+        {"action": "final", "response": "no edit"}, "coder", "m", "p",
+        messages, 0.0, "analyze the codebase and implement SOTA upgrades via web search", True, state)
+    async for _ in gen:
+        pass
+    assert state.handler_status == "CONTINUE"
+    assert any("operation=write" in m.get("content", "") or "operation=patch" in m.get("content", "")
+               for m in messages)
+
+
+@pytest.mark.asyncio
+async def test_report_agent_internet_guard_unaffected_by_fix_deliverable():
+    """The relaxation is coder-only. A report agent (code_analyzer) with an
+    internet goal still must web_search — even if the goal text has fix verbs."""
+    service = AgentServiceV2()
+    state = _CallState()
+    state.did_code_change = True  # would be meaningless for code_analyzer
+    messages = [{"role": "user", "content": "hi"}]
+    gen = service._handle_final(
+        {"action": "final", "response": "done"}, "code_analyzer", "m", "p",
+        messages, 0.0, "analyze my codebase and search internet for improvements", True, state)
+    async for _ in gen:
+        pass
+    assert state.handler_status == "CONTINUE"
+    assert any("web_search" in m.get("content", "") for m in messages)
 
