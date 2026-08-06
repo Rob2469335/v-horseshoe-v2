@@ -65,12 +65,15 @@ def bootstrap_ssl():
         pass
 
 
-# Heavy analysis/research agents prefer a fast cloud model when available.
+# Heavy analysis/research/edit agents prefer a fast cloud model when available.
 # Default DeepSeek V4 Flash served via the funded OpenCode Go account
 # (openai/... routes to https://opencode.ai/zen/go/v1 in build_kwargs); override
 # via ANALYSIS_CLOUD_MODEL. Disable with SWARM_ANALYSIS_CLOUD=off or by running
 # /local (SWARM_ROUTING_MODE=local_only). Agent keys mirror _agent_config.
-_ANALYSIS_CLOUD_AGENTS = ("code_analyzer", "reviewer", "researcher")
+# coder/debugger are included because the edit protocol (read -> patch ->
+# sandbox_repl verify -> final) needs strong instruction-following; the local
+# 4B model reproduces the /upgrade dead-loop (web_search then final, no edit).
+_ANALYSIS_CLOUD_AGENTS = ("code_analyzer", "reviewer", "researcher", "coder", "debugger")
 
 
 def _analysis_cloud_model() -> str:

@@ -16,26 +16,35 @@ def test_analysis_agent_routes_to_cloud_when_key_present():
             assert get_litellm_model(agent, "qwen3.5-4b") == "openai/deepseek-v4-flash"
 
 
+def test_edit_agents_route_to_cloud_when_key_present():
+    # coder/debugger need strong instruction-following for the read->edit->
+    # verify protocol; the local 4B reproduced the /upgrade dead-loop instead.
+    with _patch_env(OPENAI_API_KEY="sk-test", SWARM_ANALYSIS_CLOUD="auto", SWARM_ROUTING_MODE="auto"):
+        for agent in ("coder", "debugger"):
+            assert get_litellm_model(agent, "qwen3.5-4b") == "openai/deepseek-v4-flash"
+
+
 def test_analysis_agent_stays_local_without_cloud_key():
     with _patch_env(OPENAI_API_KEY="", SWARM_ANALYSIS_CLOUD="auto", SWARM_ROUTING_MODE="auto"):
-        for agent in ("code_analyzer", "researcher", "reviewer"):
+        for agent in ("code_analyzer", "researcher", "reviewer", "coder", "debugger"):
             assert get_litellm_model(agent, "qwen3.5-4b") == "openai/qwen3.5-4b"
 
 
 def test_analysis_agent_stays_local_in_local_only_mode():
     with _patch_env(OPENAI_API_KEY="sk-test", SWARM_ANALYSIS_CLOUD="auto", SWARM_ROUTING_MODE="local_only"):
-        for agent in ("code_analyzer", "researcher", "reviewer"):
+        for agent in ("code_analyzer", "researcher", "reviewer", "coder", "debugger"):
             assert get_litellm_model(agent, "qwen3.5-4b") == "openai/qwen3.5-4b"
 
 
 def test_analysis_cloud_can_be_explicitly_disabled():
     with _patch_env(OPENAI_API_KEY="sk-test", SWARM_ANALYSIS_CLOUD="off", SWARM_ROUTING_MODE="auto"):
-        assert get_litellm_model("code_analyzer", "qwen3.5-4b") == "openai/qwen3.5-4b"
+        for agent in ("code_analyzer", "coder"):
+            assert get_litellm_model(agent, "qwen3.5-4b") == "openai/qwen3.5-4b"
 
 
 def test_non_analysis_agent_stays_local_even_with_cloud_key():
     with _patch_env(OPENAI_API_KEY="sk-test", SWARM_ANALYSIS_CLOUD="auto", SWARM_ROUTING_MODE="auto"):
-        for agent in ("coordinator", "coder", "debugger", "executor"):
+        for agent in ("coordinator", "planner", "executor", "tool-runner", "tool-maker"):
             assert get_litellm_model(agent, "qwen3.5-4b") == "openai/qwen3.5-4b"
 
 
