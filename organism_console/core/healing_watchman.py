@@ -55,18 +55,25 @@ class HealingWatchman:
         log.info(message)
 
     def _ask_approval(self, component: str, reasoning: str) -> bool:
-        """Ask the user for yes/no approval via Rich console prompt."""
+        """Ask the user for yes/no approval via Rich console prompt.
+
+        Runs on a background daemon thread while the main thread may be waiting
+        on an ask_user input — the shared INPUT_LOCK serializes them so the
+        approval prompt never steals/consumes the ask_user answer on stdin.
+        """
         if self.console is None:
             return False
         try:
             from rich.prompt import Confirm
-            return Confirm.ask(
-                f"[bold yellow]⚕ Self-healing wants to fix [cyan]{component}[/cyan][/bold yellow]\n"
-                f"[dim]{reasoning}[/dim]\n"
-                f"[bold]Approve?[/bold]",
-                default=False,
-                console=self.console,
-            )
+            from organism_console.renderer import INPUT_LOCK
+            with INPUT_LOCK:
+                return Confirm.ask(
+                    f"[bold yellow]⚕ Self-healing wants to fix [cyan]{component}[/cyan][/bold yellow]\n"
+                    f"[dim]{reasoning}[/dim]\n"
+                    f"[bold]Approve?[/bold]",
+                    default=False,
+                    console=self.console,
+                )
         except Exception:
             return False
 

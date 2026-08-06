@@ -9,8 +9,6 @@ from __future__ import annotations
 import pytest
 
 from swarm_os.services.rv_finder.analysis import (
-    _analyze_life_ease,
-    _analyze_mpg,
     _build_analysis,
     _is_motorhome_like,
     _title_motorhome,

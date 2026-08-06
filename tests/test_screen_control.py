@@ -5,7 +5,6 @@ but any mouse/keyboard input action is blocked until SWARM_SCREEN_AUTONOMOUS=1
 (or set_screen_autonomous(True)). An action cap stops runaway loops.
 """
 from __future__ import annotations
-import asyncio
 import sys
 import pytest
 

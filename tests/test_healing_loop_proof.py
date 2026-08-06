@@ -1,5 +1,3 @@
-import pytest
-import time
 from unittest.mock import MagicMock
 from swarm_os.healing.healing_loop import HealingLoop
 

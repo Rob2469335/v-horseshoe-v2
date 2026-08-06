@@ -1,11 +1,20 @@
 # organism_console/renderer.py
 from __future__ import annotations
 
+import threading
 from typing import Any, Dict, List
 from rich.panel import Panel
 from rich.table import Table
 from rich.box import SIMPLE
 from rich.markup import escape
+
+# Serializes ALL interactive stdin prompts in the console so that concurrent
+# prompters (the main thread's ask_user input and the background healing-watchman
+# thread's approval Confirm.ask) never read from stdin at the same time. Without
+# this, the two prompts race and swallow each other's input — the user's answer
+# to an ask_user question got consumed by the healing `Approve? [y/n]` prompt
+# (and vice-versa), leaving the agent stuck re-asking.
+INPUT_LOCK = threading.Lock()
 
 
 def render_delegation_tree(chain: List[str]) -> str:

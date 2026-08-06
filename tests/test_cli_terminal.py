@@ -1,7 +1,6 @@
 # tests/test_cli_terminal.py
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from rich.console import Console
 
@@ -484,7 +483,6 @@ def test_new_cli_commands(tmp_path, monkeypatch):
 
 
 def test_natural_language_intent_routing(tmp_path, monkeypatch):
-    import requests
     from organism_console.state_store import SessionState
     from organism_console.command_registry import registry, CommandContext
     

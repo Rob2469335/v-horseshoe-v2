@@ -1,7 +1,6 @@
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import AsyncMock, patch
 import pytest
 from swarm_os.services.tool_registry import SemanticToolRegistry, TOOL_SCHEMAS
-import asyncio
 import types
 
 class MockScoredPoint:

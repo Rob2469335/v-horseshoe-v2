@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-import json
-import os
 import pytest
 import httpx
 from unittest.mock import AsyncMock, MagicMock, patch
-from pathlib import Path
 
 from swarm_os.lib.mcp.web_search import web_search_handler
 from swarm_os.lib.mcp.registry import registry

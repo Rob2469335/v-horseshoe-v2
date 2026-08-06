@@ -1,7 +1,6 @@
 # tests/test_nl_prompt_routing.py
 from __future__ import annotations
 
-import pytest
 from unittest.mock import MagicMock
 from organism_console.command_registry import registry, route_natural_language_keywords
 from organism_console.cli import build_command_context

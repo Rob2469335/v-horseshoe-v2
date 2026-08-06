@@ -13,15 +13,13 @@ Covers:
 """
 import asyncio
 
-import pytest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 
 def _run_complete(env_on: bool, local_model: bool) -> dict:
     """Call complete_for_tool_decision through a mocked litellm.acompletion /
     Router, returning the outgoing kwargs dict (captures response_format)."""
     import runtime_v2.services._llm_client as llm_client
-    import litellm
 
     captured: dict = {}
 

@@ -6,7 +6,6 @@ import rerank` raised ImportError. This verifies the modules are importable and
 degrade gracefully (never raise) when the embedding/rerank servers are offline.
 """
 from __future__ import annotations
-import asyncio
 import pytest
 
 

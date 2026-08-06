@@ -6,9 +6,8 @@ Covers:
 3. The agent loop feeds real outcomes (completion/tool-success) to the store.
 """
 from __future__ import annotations
-import json
 import pytest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 
 def test_compute_fitness_completion_gating():

@@ -5,7 +5,6 @@ restart, so the 'evolution' (weight adjustments from prediction error) was lost.
 These verify the journal can be read back and used to seed weights.
 """
 from __future__ import annotations
-import json
 
 
 def test_critic_journal_roundtrip(tmp_path):

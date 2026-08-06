@@ -1,6 +1,4 @@
-import pytest
 import json
-from pathlib import Path
 from swarm_os.services.control_plane.router import Router
 from swarm_os.services.control_plane.models import ModelProfile
 

@@ -317,15 +317,19 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
 
                         if options:
                             from rich.prompt import Prompt
+                            from organism_console.renderer import INPUT_LOCK
                             choices = []
                             for i, o in enumerate(options):
                                 if isinstance(o, dict):
                                     choices.append(str(o.get("label", o.get("value", i))))
                                 else:
                                     choices.append(str(o))
-                            answer = Prompt.ask("[bold cyan]Choose option[/bold cyan]", choices=choices)
+                            with INPUT_LOCK:
+                                answer = Prompt.ask("[bold cyan]Choose option[/bold cyan]", choices=choices)
                         else:
-                            answer = ctx.console.input("[bold cyan]Your response:[/bold cyan] ").strip()
+                            from organism_console.renderer import INPUT_LOCK
+                            with INPUT_LOCK:
+                                answer = ctx.console.input("[bold cyan]Your response:[/bold cyan] ").strip()
 
                         new_history = list(history)
                         if prompt:

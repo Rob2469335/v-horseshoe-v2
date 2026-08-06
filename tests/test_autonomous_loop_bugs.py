@@ -11,7 +11,7 @@ Bug #4: Git stash prompt shown even when nothing changed - should check git stat
 import importlib
 import sys
 from pathlib import Path
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch, MagicMock
 
 import pytest
 
@@ -97,7 +97,6 @@ class TestBug1ReadOnlyDetection:
         ro_match = re.search(r"READ_ONLY_KEYWORDS\s*=\s*\[(.*?)\]", src, re.DOTALL)
         wr_match = re.search(r"WRITE_KEYWORDS\s*=\s*\[(.*?)\]", src, re.DOTALL)
         assert ro_match and wr_match, "READ_ONLY_KEYWORDS / WRITE_KEYWORDS not found"
-        ro_kw = [w.strip().strip('"').strip("'") for w in ro_match.group(1).split(",") if w.strip().strip('"').strip("'")]
         wr_kw = [w.strip().strip('"').strip("'") for w in wr_match.group(1).split(",") if w.strip().strip('"').strip("'")]
         goal_lower = goal.lower()
         has_wr = any(kw in goal_lower for kw in wr_kw)

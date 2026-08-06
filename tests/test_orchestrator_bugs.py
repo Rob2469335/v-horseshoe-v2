@@ -3,8 +3,6 @@
   2. Cloud provider routing (openrouter/free should NOT go to Ollama)
 """
 import pytest
-import json
-import httpx
 from unittest.mock import AsyncMock, patch, MagicMock
 from swarm_os.core.orchestrator import Orchestrator
 

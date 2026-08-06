@@ -1,5 +1,3 @@
-import os
-import tempfile
 
 from swarm_os.adaptation.healing.healing_engine import HealingEngine
 from swarm_os.adaptation.repair.repair_executor import RepairExecutor

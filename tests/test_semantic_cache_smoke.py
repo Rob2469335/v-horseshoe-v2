@@ -1,6 +1,5 @@
 import os
 import pytest
-import asyncio
 
 @pytest.mark.asyncio
 async def test_semantic_cache_smoke():

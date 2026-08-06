@@ -1,8 +1,6 @@
 from __future__ import annotations
 import pytest
-import json
 from unittest.mock import AsyncMock, MagicMock
-from pathlib import Path
 from swarm_os.services.orchestrator import Orchestrator
 
 @pytest.mark.asyncio

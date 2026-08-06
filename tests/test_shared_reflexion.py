@@ -6,7 +6,6 @@ env-gated (SWARM_SHARED_REFLEXION=1, off by default) so existing behavior is
 preserved exactly when the variable is unset.
 """
 from __future__ import annotations
-import asyncio
 import time
 import pytest
 from types import SimpleNamespace

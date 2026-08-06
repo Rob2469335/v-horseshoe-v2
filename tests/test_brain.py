@@ -1,7 +1,4 @@
 from unittest.mock import MagicMock, patch
-import pytest
-import time
-from types import SimpleNamespace
 from swarm_os.brain import _build_system_prompt, make_swarm_brain
 
 class MockCognition:
@@ -69,7 +66,7 @@ def test_brain_http_exponential_backoff(mock_sleep):
         
         mock_client.post.side_effect = [resp_429, resp_429, resp_200]
         
-        result = brain_fn({"task": "test task"})
+        brain_fn({"task": "test task"})
         
         # Should have called post 3 times
         assert mock_client.post.call_count == 3

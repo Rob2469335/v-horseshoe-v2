@@ -8,7 +8,6 @@ from faster_whisper import WhisperModel
 import logging
 
 # Only disable SSL for HuggingFace Hub downloads (not globally)
-import os
 os.environ['HF_HUB_DISABLE_SSL_VERIFICATION'] = '1'
 os.environ['CURL_CA_BUNDLE'] = ''
 

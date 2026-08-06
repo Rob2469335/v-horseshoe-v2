@@ -3,7 +3,6 @@ import os
 from swarm_os.healing.diagnostician import Diagnostician
 from swarm_os.healing.learner import Learner
 from swarm_os.healing.governor import Governor
-from swarm_os.healing.governor_models import gen_id
 
 
 def test_governor_decide_and_persist(tmp_path):

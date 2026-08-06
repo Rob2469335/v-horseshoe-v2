@@ -5,7 +5,6 @@ network connections, disk usage, installed apps, startup items, registry, and
 Event Log. No destructive operations.
 """
 from __future__ import annotations
-import asyncio
 import sys
 import pytest
 

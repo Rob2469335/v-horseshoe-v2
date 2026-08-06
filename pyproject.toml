@@ -18,4 +18,12 @@ include-package-data = true
 where = ["."]
 include = ["organism_console*", "swarm_os*", "runtime_v2*"]
 
+[tool.ruff]
+# .vulture_whitelist.py is a dead-code whitelist for vulture: it intentionally
+# lists bare names (swarm_os, organism_console, Columns, ...) so the static
+# analyzer treats them as used. Ruff's F821 (undefined name) flags these bare
+# names on this file and must not be treated as a defect — exclude the file.
+exclude = [".vulture_whitelist.py"]
+
+
 

@@ -85,7 +85,6 @@ def test_handle_event_line_null_payloads_no_crash():
     not subscriptable on event lines whose payload/result/arguments are None.
     The extracted _handle_event_line helper must be None-tolerant and never
     raise (unexpected shapes are skipped)."""
-    import json
     events = [
         {"event_type": "tool_result", "payload": None},
         {"event_type": "tool_result", "payload": {"result": None}},
@@ -123,8 +122,6 @@ def test_handle_event_line_null_payloads_no_crash():
 def test_watchman_invokes_handle_event_line(tmp_path, monkeypatch):
     """The threaded _watch must route parsed lines through the extracted helper
     (so the null-payload fix actually applies at runtime)."""
-    import json
-    event_file = tmp_path.parent.parent / "data" / "events"
     # Can't easily create the real path; instead verify the method wiring via
     # the module: _watch calls _handle_event_line(self.engine, data).
     import inspect

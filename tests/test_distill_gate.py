@@ -1,10 +1,9 @@
 from __future__ import annotations
-import asyncio
 import json
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, patch
 import pytest
 
 
@@ -49,8 +48,7 @@ async def test_distill_runs_for_none_fix_class():
 @pytest.mark.asyncio
 async def test_run_reflection_classifies_mv_skips_distill():
     """Full upstream wire: diary error → Diagnostician.classify → _distill skip."""
-    from swarm_os.services.reflection_loop import run_reflection, DIARY_PATH
-    original_diary = str(DIARY_PATH)
+    from swarm_os.services.reflection_loop import run_reflection
 
     with tempfile.TemporaryDirectory() as tmp:
         diary_path = Path(tmp) / "test_diary.jsonl"

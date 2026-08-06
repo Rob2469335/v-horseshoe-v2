@@ -7,7 +7,6 @@ import io
 import wave
 import torch
 import torch.nn.functional as F
-import torchaudio
 import os
 import sys
 import ssl

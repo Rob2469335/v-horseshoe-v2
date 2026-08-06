@@ -59,6 +59,38 @@ def _clean_search_query(prompt: str, max_len: int = 300) -> str:
     return text[:max_len]
 
 
+# The CLI (organism_console/ui/live_stream.py) feeds a user's typed answer to an
+# `ask_user` back as a user message beginning with `Observation:` containing
+# {"answer": "<text>"}. These helpers detect that continuation turn.
+_OBSERVATION_ANSWER_RE = re.compile(r'"answer"\s*:\s*"([^"]*)"')
+
+
+def _answer_from_history(messages: list) -> str | None:
+    """Return the user's typed answer if the history is a post-ask_user
+    continuation; otherwise None."""
+    for m in messages:
+        if m.get("role") != "user":
+            continue
+        content = str(m.get("content", ""))
+        if content.strip().startswith("Observation:"):
+            match = _OBSERVATION_ANSWER_RE.search(content)
+            if match:
+                return match.group(1).strip()
+    return None
+
+
+def _original_goal(messages: list) -> str:
+    """The first real (non-Observation) user message — the goal the coordinator
+    asked about before the ask_user continuation."""
+    for m in messages:
+        if m.get("role") != "user":
+            continue
+        content = str(m.get("content", ""))
+        if not content.strip().startswith("Observation:"):
+            return content.strip()
+    return ""
+
+
 # Bounded dedup cache for reflexion lessons (agent, action, error) -> last store
 # time. Prevents identical repeated failures from spamming ReflexionMemory.
 _failure_lessons_seen: dict = {}
@@ -96,6 +128,13 @@ class _CallState:
     # internet goal needs actual fetched content, not just search snippets.
     did_web_fetch: bool = False
     _web_final_rejected: bool = False
+    # Set when the editing agent (`coder`) successfully writes or patches a
+    # file this run. Used as a hard invariant: an editing agent that is handed a
+    # fix-intent goal may NOT finalize without having actually modified code
+    # (it otherwise just runs web_search and restates the goal — the repeated
+    # /upgrade autonomous-loop failure where every attempt ended with
+    # "No file changes detected").
+    did_code_change: bool = False
 
 from runtime_v2.api._agent_config import (
     MAX_TURNS, MAX_DEPTH, ANALYSIS_AGENTS, INTERNET_GOAL_AGENTS,
@@ -338,6 +377,24 @@ class AgentServiceV2:
             fast = fast_route_coordinator(prompt)
             if fast is not None:
                 return fast
+            # POST-ASK_USER GUARD: a coordinator re-invoked with the user's answer
+            # already in history (an `Observation` from a prior ask_user) must NOT
+            # re-ask the same question. The caller (CLI live_stream) drives the
+            # loop by re-calling with the answer appended — the coordinator is
+            # stateless, so without this it just re-asks forever (the /upgrade
+            # "which upgrades?" infinite loop). Route deterministically now that
+            # the user has answered.
+            answer = _answer_from_history(trimmed_messages)
+            if answer is not None:
+                goal = _original_goal(trimmed_messages) or prompt
+                goal_target = best_route_target(goal)
+                answer_target = best_route_target(answer)
+                # Honor a specific answer route (non-default); otherwise fall back
+                # to the goal's own best route (e.g. "upgrade everything" → coder).
+                target = answer_target if answer_target != "planner" else goal_target
+                log.info("[coordinator] ask_user answered '%s' → delegating to %s (goal='%s')",
+                         answer, target, goal[:80])
+                return {"action": "delegate", "target_agent": target, "task": goal}
             decision = await self._call_llm(model, trimmed_messages, agent_id, allowed_tools)
             # FIX-INTENT GUARD: if the goal implies editing/fixing code, force the
             # delegate target to `coder` (edit-capable) even when the LLM coordinator
@@ -370,7 +427,12 @@ class AgentServiceV2:
         # without ever calling web_search — the guard rejected the final but
         # there was no budget left to search. Searching first guarantees the
         # internet portion of the goal is actually done.
-        if turn == 0 and agent_id in INTERNET_GOAL_AGENTS:
+        # NOTE: applied to REPORT agents (ANALYSIS_AGENTS) only — NOT coder.
+        # coder is an EDIT agent; forcing web_search at turn 0 derails it into
+        # pure research and it never edits (the repeated /upgrade dead-loop).
+        # coder reads/edits first and uses web_search at its own discretion
+        # (+ is still bound by the internet-goal web_fetch final guard).
+        if turn == 0 and agent_id in ANALYSIS_AGENTS:
             query = (prompt or "").strip()
             internet_goal = bool(_INTERNET_GOAL_RE.search(query)) if query else False
             if internet_goal:
@@ -469,6 +531,31 @@ class AgentServiceV2:
                 "SYSTEM: You edited a code file but have not verified it runs. "
                 "Use action=sandbox_repl (language=pytest or language=python) to test the "
                 "change before calling action=final. Do NOT report success without a test run."
+            )})
+            return
+
+        # Editing-agent invariant: the `coder` is an EDIT agent. If it was handed a
+        # fix-intent goal (write/fix/implement/patch/modify/solve/repair/...) but
+        # finalizes WITHOUT modifying any file, it did not do the task — it ran a
+        # few web_searches and restated the goal. This reproduced as the /upgrade
+        # autonomous loop failing 5/5 attempts with "No file changes detected".
+        # Reject the final on EVERY such attempt until a file is written or patched.
+        # (Complementary to pending_verify above: that fires only AFTER an edit; this
+        # fires when NO edit has happened yet.)
+        if (
+            agent_id == "coder"
+            and _is_fix_intent(prompt)
+            and not state.did_code_change
+        ):
+            state.handler_status = "CONTINUE"
+            log.warning("[coder] Rejected final: fix-intent goal with no code change.")
+            messages.append({"role": "user", "content": (
+                "SYSTEM: Your task requires EDITING CODE (the goal uses "
+                "write/fix/implement/patch/modify/solve/repair), but you called "
+                "action=final without modifying any file. Use action=filesystem with "
+                "operation=write (new file) or operation=patch (modify an existing file; "
+                "read it first) to make the actual code change, then run sandbox_repl "
+                "to verify it. Do NOT finalize until you have written or patched a file."
             )})
             return
 
@@ -694,6 +781,7 @@ class AgentServiceV2:
             # run before the agent may finalize (mirrors running tests/lint before
             # declaring done).
             if action == "filesystem" and tool_payload.get("operation") in ("write", "patch"):
+                state.did_code_change = True
                 path = str(tool_payload.get("path", ""))
                 if path.endswith((".py", ".js", ".ts", ".tsx", ".jsx", ".go", ".rs")):
                     state.pending_verify = True

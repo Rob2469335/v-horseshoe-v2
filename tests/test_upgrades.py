@@ -1,14 +1,11 @@
 from __future__ import annotations
 import pytest
-import json
-import asyncio
 from unittest.mock import AsyncMock, MagicMock
-from pathlib import Path
 
 from swarm_os.services.orchestrator import Orchestrator
 from swarm_os.services.control_plane.strategy_registry import strategy_registry
 from swarm_os.services.control_plane.strategy import BanditStrategy
-from swarm_os.services.control_plane.models import ModelProfile, ModelState
+from swarm_os.services.control_plane.models import ModelProfile
 from qdrant_client import models as qdrant_models
 
 

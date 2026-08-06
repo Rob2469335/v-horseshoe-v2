@@ -1,4 +1,3 @@
-import os
 import ssl
 try:
     ssl._create_default_https_context = ssl._create_unverified_context
@@ -11,7 +10,7 @@ try:
 except ImportError:
     pass
 
-import swarm_os.bootstrap
+import swarm_os.bootstrap  # noqa: F401  (side-effect import: initializes bootstrap)
 from fastapi.testclient import TestClient
 import pytest
 

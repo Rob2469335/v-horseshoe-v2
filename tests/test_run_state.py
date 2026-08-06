@@ -1,4 +1,4 @@
-from swarm_os.main import app
+from swarm_os.main import app  # noqa: F401  (app-import regression check)
 
 def test_run_state(client):
     response = client.get("/api/admin/run-state")

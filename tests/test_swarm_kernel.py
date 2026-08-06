@@ -58,7 +58,7 @@ async def test_population_stays_bounded():
 @pytest.mark.anyio
 async def test_elite_clones_do_not_alias_parent_fitness():
     from swarm_os.kernel.swarm_kernel import _clone_organism
-    env = Environment()
+    _env = Environment()
     org = Organism("parent", make_brain(), Genome())
     clone = _clone_organism(org, "elite_parent_g0", generate_fn=None)
 

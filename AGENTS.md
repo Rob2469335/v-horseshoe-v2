@@ -5,12 +5,42 @@
 Four-layer design:
 - **swarm_os/** — Core swarm intelligence platform (orchestrator, API, brain, memory, healing, control plane)
 - **runtime_v2/** — Async agent runtime (agent loop, LLM client, tool execution, contracts)
-- **src/** — Next-gen agent runtime & memory stores (agent_runtime, orchestrator, hybrid memory)
 - **organism_console/** — CLI interactive shell frontend
+- **start-console/** — web/SSR console experiment (not the live frontend; see Module Map)
+- ~~**src/**~~ — REMOVED 2026-08 (was a test-only parallel agent stack; see note below)
 
 Test framework: pytest (pytest.ini at root)
 Python: >=3.14
 Build: setuptools, `organism` CLI entrypoint
+
+---
+
+## Lint / CI
+
+Ruff — the project gates on **E9/F only** (syntax errors + Pyflakes). There is
+no `ruff.toml` / `[tool.ruff]` select, so use the explicit select. This is the
+authoritative pass/fail that CI runs:
+
+    ruff check . --select E9/F
+
+Standard day-to-day workflow:
+
+    ruff format .
+    ruff check . --fix
+    ruff check .
+    pytest
+
+Notes:
+- `.vulture_whitelist.py` is excluded via `[tool.ruff]` in `pyproject.toml` — its
+  bare names are an intentional vulture dead-code whitelist that ruff's F821
+  (undefined name) would otherwise flag.
+- Side-effect imports that look "unused" are kept with `# noqa: F401`, e.g.
+  `import swarm_os.bootstrap` in `tests/conftest.py` (initializes bootstrap) and
+  `from swarm_os.main import app` in the admin/explorer/run_state tests (app-import
+  regression checks). Do not strip these.
+- Only `E9/F` is enforced. The full default ruff ruleset is **not** gated (the repo
+  carries ~1900 pre-existing style errors like E501); fixing them is out-of-policy,
+  style-only churn. Do not mass-fix beyond E9/F.
 
 ---
 
@@ -20,43 +50,39 @@ Build: setuptools, `organism` CLI entrypoint
 
 | File | Lines | Role |
 |------|-------|------|
-| `orchestrator.py` | 585 | `Orchestrator.generate()` — text generation loop with tool-call parsing, dedup, routing |
+| `orchestrator.py` | 673 | `Orchestrator.generate()` — text generation loop with tool-call parsing, dedup, routing |
 | `message_bus.py` | 78 | Async event bus with `Event` dataclass, `subscribe()`/`publish()` via `asyncio.Queue` |
-| `tool_parser.py` | 97 | `ToolParser` — stateless tool-call extraction from LLM text (3 pattern formats + CLI) |
+| `tool_parser.py` | 104 | `ToolParser` — stateless tool-call extraction from LLM text (3 pattern formats + CLI) |
 | `settings.py` | — | Settings/config dataclasses |
 
 ### swarm_os/api/ (HTTP API)
 
 | File | Lines | Role |
 |------|-------|------|
-| `routes.py` | 626 | Main router: `/readyz`, `/router`, `/critic`, `/memories`, `/timeline`, `/healing/evaluate`, `/traces/summary`, `/tools/cache`, `/tools/execute`, `/models/autoassign` |
-| `api_features.py` | 646 | Feature router: `/features/search` (dense-vector search + rerank, `{status: ok\|degraded, fallback, results}` with keyword-scan degraded fallback), chat-search SSE, Upwork analyzer, codebase indexing, snapshot lifecycle, approval workflows |
-| `agents.py` | 201 | Agent CRUD + step execution + model management |
-| `admin.py` | 207 | Health evaluation, heal cycles, simulation management |
-| `schemas.py` | 88 | Pydantic schemas |
+| `routes.py` | 729 | Main router: `/readyz`, `/router`, `/critic`, `/memories`, `/timeline`, `/healing/evaluate`, `/traces/summary`, `/tools/cache`, `/tools/execute`, `/models/autoassign` |
+| `api_features.py` | 767 | Feature router: `/features/search` (dense-vector search + rerank, `{status: ok\|degraded, fallback, results}` with keyword-scan degraded fallback), chat-search SSE, Upwork analyzer, codebase indexing, snapshot lifecycle, approval workflows |
+| `agents.py` | 229 | Agent CRUD + step execution + model management |
+| `admin.py` | 269 | Health evaluation, heal cycles, simulation management |
+| `schemas.py` | 106 | Pydantic schemas |
 | `dependencies.py` | 38 | FastAPI DI: `runtime_dep()`, `get_orchestrator()` |
-| `api_health.py` | — | Health endpoint logic |
-| `health.py` | — | Health probe helpers |
 
 ### swarm_os/services/ (Application Services)
 
 | File | Lines | Role |
 |------|-------|------|
-| `tool_registry.py` | 291 | `SemanticToolRegistry` — Qdrant-backed semantic tool discovery with async client |
-| `llm_client.py` | 208 | `CloudLLMClient` — detects provider (OpenRouter/NVIDIA/llama.cpp) via litellm |
-| `genetic_mutation_loop.py` | 234 | Code mutation loop for self-improvement (DangerRoom+SecurityGate+compile+pytest validated, staged for approval; daemonized hourly via `SWARM_GENETIC_MUTATION=1`) |
-| `vector_store.py` | 202 | Qdrant vector store wrapper (AsyncQdrantClient) |
-| `reflection_loop.py` | 474 | `ReflectionService` — ASPO rule distiller: failures → correction rules → Qdrant (diary + agent tool_failure entries, component-preferring `get_latest_failure`) |
-| `chat_service.py` | 137 | Context compaction, model auto-assignment, reachability checks |
-| `knowledge_graph.py` | 76 | AST import dependency graph (networkx) |
+| `tool_registry.py` | 304 | `SemanticToolRegistry` — Qdrant-backed semantic tool discovery with async client |
+| `llm_client.py` | 241 | `CloudLLMClient` — detects provider (OpenRouter/NVIDIA/llama.cpp) via litellm |
+| `genetic_mutation_loop.py` | 275 | Code mutation loop for self-improvement (DangerRoom+SecurityGate+compile+pytest validated, staged for approval; daemonized hourly via `SWARM_GENETIC_MUTATION=1`) |
+| `vector_store.py` | 248 | Qdrant vector store wrapper (AsyncQdrantClient) |
+| `reflection_loop.py` | 513 | `ReflectionService` — ASPO rule distiller: failures → correction rules → Qdrant (diary + agent tool_failure entries, component-preferring `get_latest_failure`) |
+| `chat_service.py` | 153 | Context compaction, model auto-assignment, reachability checks |
+| `knowledge_graph.py` | 75 | AST import dependency graph (networkx) |
 | `system_service.py` | 69 | Multi-layer health (system, LLM, Qdrant) |
-| `security_gate.py` | 70 | AST code security scanner (banned calls/modules) |
-| `danger_room.py` | 91 | Isolated sandbox for safe code mutation testing |
-| `memory_daemon.py` | 31 | Background memory consolidation (5-min interval) |
+| `security_gate.py` | 100 | AST code security scanner (banned calls/modules) |
+| `danger_room.py` | 101 | Isolated sandbox for safe code mutation testing |
+| `memory_daemon.py` | 34 | Background memory consolidation (5-min interval) |
 | `token_manager.py` | 37 | Token budget tracking with async lock |
 | `embedding_service.py` | — | Dedicated embedding client (port 8081, nomic-embed) |
-| `health.py` | — | Backend health checker |
-| `llm/client.py` | 111 | Lower-level LLM client with thread pool + semaphore |
 | `outcome_fitness.py` | — | Real task-outcome fitness feed (research-grounded composite, completion-gated); persisted to `data/evolution/fitness.jsonl`, gated by `SWARM_EVOLUTION=1` |
 | `evolution_daemon.py` | — | Outcome-driven evolution daemon: score population by best recorded outcome, elite-selection + crossover + mutate, persist next generation; `_best_genome_tool_weights()` exposes the evolved tool policy |
 
@@ -77,32 +103,27 @@ Package split from the deleted 1,275-line `rv_finder.py`. Exposed as `find_best_
 
 | File | Lines | Role |
 |------|-------|------|
-| `strategy.py` | 303 | Pluggable routing strategies (Default/Deep) |
-| `router.py` | 150 | Routes requests to optimal models based on profiles, cooldowns, strategy |
-| `planner.py` | 103 | Task decomposition into `PlanStep` sequences |
-| `models.py` | 69 | Model profile dataclasses |
-| `trace.py` | 60 | Structured `TraceEvent` observability |
-| `shared_model_registry.py` | 60 | Centralized `ModelProfile` definitions for local + cloud models |
-| `strategy_registry.py` | 48 | Strategy registration |
-| `bootstrap.py` | 36 | Control plane initialization |
-| `critic.py` | 36 | Evaluates execution results against structural contracts |
-| `state.py` | 32 | State tracking |
-| `guardian.py` | 26 | Performance monitoring, cooldown/metacognition triggers |
-| `plugin_state.py` | 24 | Plugin state management |
-| `policy.py` | 23 | Step budget enforcement (max 12 steps) |
-| `registry.py` | 22 | Service registry |
-| `fallback_router.py` | 13 | Fallback chain for cloud models |
-| `state_manager.py` | 12 | State manager |
+| `strategy.py` | 349 | Pluggable routing strategies (Default/Deep) |
+| `router.py` | 184 | Routes requests to optimal models based on profiles, cooldowns, strategy |
+| `planner.py` | 116 | Task decomposition into `PlanStep` sequences |
+| `models.py` | 77 | Model profile dataclasses |
+| `trace.py` | 75 | Structured `TraceEvent` observability |
+| `shared_model_registry.py` | 52 | Centralized `ModelProfile` definitions for local + cloud models |
+| `strategy_registry.py` | 67 | Strategy registration |
+| `bootstrap.py` | 43 | Control plane initialization |
+| `critic.py` | 41 | Evaluates execution results against structural contracts |
+| `state.py` | 37 | State tracking |
+| `plugin_state.py` | 28 | Plugin state management |
+| `policy.py` | 29 | Step budget enforcement (max 12 steps) |
 
 ### swarm_os/healing/ (Self-Healing)
 
 | File | Lines | Role |
 |------|-------|------|
-| `recovery_engine.py` | 318 | Coordinated recovery with anomaly tracking (DangerRoom-isolated LLM repair scripts, root-cause dispatch) |
-| `healing_service.py` | 85 | `AnomalyTracker`, `FailureDetector`, `RecoveryEngine`, `RollbackManager` |
-| `governor.py` | 120 | Governance model tracking |
-| `offline_learner.py` | 108 | Batch rule extraction from events.jsonl |
-| `reviewer.py` | — | Heal review logic |
+| `recovery_engine.py` | 364 | Coordinated recovery with anomaly tracking (DangerRoom-isolated LLM repair scripts, root-cause dispatch) |
+| `healing_service.py` | 128 | `AnomalyTracker`, `FailureDetector`, `RecoveryEngine`, `RollbackManager` |
+| `governor.py` | 213 | Governance model tracking |
+| `offline_learner.py` | 126 | Batch rule extraction from events.jsonl |
 | `healing_loop.py` | — | Healing event loop |
 | `failure_detector.py` | — | Failure detection probes |
 
@@ -110,33 +131,33 @@ Package split from the deleted 1,275-line `rv_finder.py`. Exposed as `find_best_
 
 | File | Lines | Role |
 |------|-------|------|
-| `memory_bridge.py` | 656 | `MemoryBridge` — event ingestion, vector ops, consolidation, GraphRAG, integrates with EventLogRepo, GraphRepo, MemoryDaemon |
-| `_memory_bridge_base.py` | 42 | Constants: `CHUNK_SIZE`, `SUM_MODEL`, `VECTOR_SIZE`, `Session`, `Bias` dataclasses |
+| `memory_bridge.py` | 756 | `MemoryBridge` — event ingestion, vector ops, consolidation, GraphRAG, integrates with EventLogRepo, GraphRepo, MemoryDaemon |
+| `_memory_bridge_base.py` | 52 | Constants: `CHUNK_SIZE`, `SUM_MODEL`, `VECTOR_SIZE`, `Session`, `Bias` dataclasses |
 
 ### swarm_os/infra/ (Infrastructure Clients)
 
 | File | Lines | Role |
 |------|-------|------|
-| `llama_client.py` | 122 | `LlamaClient` (was `OllamaClient`) — local llama.cpp inference (port 8080), streaming, GLM cloud fork |
+| `llama_client.py` | 146 | `LlamaClient` (was `OllamaClient`) — local llama.cpp inference (port 8080), streaming, GLM cloud fork |
 
 ### swarm_os/repositories/ (Data Access Layer)
 
 | File | Lines | Role |
 |------|-------|------|
-| `graph_repo.py` | 118 | Persists `networkx.DiGraph` as GraphML with async save/lock/eviction |
-| `event_log_repo.py` | 54 | Tail-reads `events.jsonl` using file offsets, watermark resume |
-| `mutation_repo.py` | 49 | Manages pending code mutations with approve/reject/rollback |
-| `file_snapshot_repository.py` | 23 | Concrete JSON-file snapshots |
-| `snapshot_repository.py` | 12 | Abstract base class for snapshot persistence |
+| `graph_repo.py` | 133 | Persists `networkx.DiGraph` as GraphML with async save/lock/eviction |
+| `event_log_repo.py` | 64 | Tail-reads `events.jsonl` using file offsets, watermark resume |
+| `mutation_repo.py` | 78 | Manages pending code mutations with approve/reject/rollback |
+| `file_snapshot_repository.py` | 32 | Concrete JSON-file snapshots |
+| `snapshot_repository.py` | 18 | Abstract base class for snapshot persistence |
 
 ### swarm_os/kernel/ (Kernel)
 
 | File | Lines | Role |
 |------|-------|------|
-| `genetics.py` | 341 | Genetic mutation engine (consolidated from genetics + genetics_v2) |
-| `selection.py` | 357 | Selection/mating logic |
-| `organism.py` | 133 | Organism lifecycle |
-| `brain.py` | 102 | Brain logic |
+| `genetics.py` | 396 | Genetic mutation engine (consolidated from genetics + genetics_v2) |
+| `selection.py` | 419 | Selection/mating logic |
+| `organism.py` | 160 | Organism lifecycle |
+| `brain.py` | 132 | Brain logic |
 
 ### swarm_os/lib/vector/ (Vector Search & Code Indexing)
 
@@ -157,27 +178,27 @@ Package split from the deleted 1,275-line `rv_finder.py`. Exposed as `find_best_
 
 | File | Lines | Role |
 |------|-------|------|
-| `agent_service_v2.py` | 857 | `AgentServiceV2` class — `step_agent_stream()` main agent loop. Orchestrates decisions, actions, healing. Persists tool_result failure events + diary writes + turn-budget reflexions. |
-| `_agent_config.py` | 25 | Constants: `MAX_TURNS`, `MAX_DEPTH`, `_DEFAULTS`, `ANALYSIS_AGENTS` |
-| `_agent_routing.py` | 146 | `fast_route_coordinator()`, `fast_start_for_agent()`, `matches_task_keywords()`, `best_route_target()`, `lookup_model()` — keyword routing + warmup + researcher web-first turn |
+| `agent_service_v2.py` | 1099 | `AgentServiceV2` class — `step_agent_stream()` main agent loop. Orchestrates decisions, actions, healing. Persists tool_result failure events + diary writes + turn-budget reflexions. |
+| `_agent_config.py` | 36 | Constants: `MAX_TURNS`, `MAX_DEPTH`, `_DEFAULTS`, `ANALYSIS_AGENTS`, `INTERNET_GOAL_AGENTS` |
+| `_agent_routing.py` | 173 | `fast_route_coordinator()`, `fast_start_for_agent()`, `matches_task_keywords()`, `best_route_target()`, `lookup_model()` — keyword routing + warmup + researcher web-first turn |
 
 ### runtime_v2/services/ (LLM & Tool Services)
 
 | File | Lines | Role |
 |------|-------|------|
-| `memory_core.py` | 442 | `remember_fat()`, `get_relevant_memories()` — Qdrant-backed memory |
-| `_llm_parser.py` | 230 | `extract_json()`, `normalize_decision()`, `normalize_model_json()`, `TOOL_CALL_SCHEMA`, `fire_and_forget()` |
-| `stream_runner.py` | 347 | `get_tool_decision()` — orchestration: MCP schema, memory injection, retry loop, LLM call |
-| `tool_executor.py` | 374 | `run(tool_name, payload)` — dispatches tool calls |
-| `fallback_manager.py` | 469 | `get_live_fallbacks()` — cloud model fallbacks, cooldowns, DeepSeek/Ling/OpenCode chain |
-| `_llm_client.py` | 377 | `complete_for_tool_decision()`, `stream_content()`, `build_router()` (litellm Router, per-deployment endpoint/key), `build_kwargs()`, `_cloud_response_format()` (strict json_schema), `SSL setup`, `get_litellm_model()` |
-| `model_registry.py` | 71 | `get_model(agent_id)` — agent → model mapping (deepseek-coder → qwen3.5-4b) |
-| `_llm_prompts.py` | 71 | `build_tool_decision_system()`, `JSON_REPAIR_PROMPT` (includes `/no_think` for Qwen3) |
-| `_llm_cache.py` | 30 | Decision cache with TTL eviction |
-| `usage_log.py` | 234 | Durable per-model cost telemetry to `data/usage/usage.jsonl` |
-| `learning/evolving_critic.py` | 34 | `EvolvingCritic.score()` — metacognition feedback; seeds weights from journal history |
-| `learning/critic_journal.py` | 35 | `CriticJournal.log()`/`load()` — durable JSONL journal of critic predictions (read-back enables restart persistence) |
-| `learning/meta_critic.py` | 47 | `MetaCritic` self-adjusting critic; `from_history()` replays journal entries to seed weights |
+| `memory_core.py` | 475 | `remember_fat()`, `get_relevant_memories()` — Qdrant-backed memory |
+| `_llm_parser.py` | 252 | `extract_json()`, `normalize_decision()`, `normalize_model_json()`, `TOOL_CALL_SCHEMA`, `fire_and_forget()` |
+| `stream_runner.py` | 381 | `get_tool_decision()` — orchestration: MCP schema, memory injection, retry loop, LLM call |
+| `tool_executor.py` | 422 | `run(tool_name, payload)` — dispatches tool calls |
+| `fallback_manager.py` | 521 | `get_live_fallbacks()` — cloud model fallbacks, cooldowns, DeepSeek/Ling/OpenCode chain |
+| `_llm_client.py` | 429 | `complete_for_tool_decision()`, `stream_content()`, `build_router()` (litellm Router, per-deployment endpoint/key), `build_kwargs()`, `_cloud_response_format()` (strict json_schema), `SSL setup`, `get_litellm_model()` |
+| `model_registry.py` | 97 | `get_model(agent_id)` — agent → model mapping (deepseek-coder → qwen3.5-4b) |
+| `_llm_prompts.py` | 78 | `build_tool_decision_system()`, `JSON_REPAIR_PROMPT` (includes `/no_think` for Qwen3) |
+| `_grammar_schema.py` | — | GBNF grammar for local tool-desicision constrained decoding (`SWARM_GRAMMAR_DECODE=1`) |
+| `usage_log.py` | 261 | Durable per-model cost telemetry to `data/usage/usage.jsonl` |
+| `learning/evolving_critic.py` | 40 | `EvolvingCritic.score()` — metacognition feedback; seeds weights from journal history |
+| `learning/critic_journal.py` | 40 | `CriticJournal.log()`/`load()` — durable JSONL journal of critic predictions (read-back enables restart persistence) |
+| `learning/meta_critic.py` | 59 | `MetaCritic` self-adjusting critic; `from_history()` replays journal entries to seed weights |
 
 ### src/ (REMOVED 2026-08 — was a test-only third agent stack)
 
@@ -195,18 +216,17 @@ Package split from the deleted 1,275-line `rv_finder.py`. Exposed as `find_best_
 
 | File | Lines | Role |
 |------|-------|------|
-| `_commands_dev.py` | 448 | Dev commands: `diff`, `commit`, `branch`, `debug`, `patch`, `impact`, `compress` |
-| `_commands_ai.py` | 426 | AI commands: `heal`, `upgrade`, `goal`, `vote`, `memory`, `simulation` |
-| `_commands_system.py` | 382 | System commands: `help`, `status`, `trace`, `cloud`, `tools`, `mcp`, `routing` |
-| `commands.py` | 311 | Legacy commands |
-| `cli.py` | 233 | CLI entrypoint and main loop |
-| `token_tracker.py` | 209 | Token and model tracking display |
-| `state_store.py` | 158 | CLI state persistence |
-| `renderer.py` | 132 | Output rendering |
-| `command_registry.py` | 118 | `CommandRegistry` class + `registry` instance |
-| `_command_routing.py` | 116 | `route_natural_language_keywords()`, `classify_intent_with_llm()` |
-| `_command_deps.py` | 88 | AST import dependency analysis (`ImportVisitor`, `resolve_module_path`) |
-| `_command_context.py` | 24 | `CommandContext` data class |
+| `_commands_dev.py` | 495 | Dev commands: `diff`, `commit`, `branch`, `debug`, `patch`, `impact`, `compress` |
+| `_commands_ai.py` | 513 | AI commands: `heal`, `upgrade`, `goal`, `vote`, `memory`, `simulation` |
+| `_commands_system.py` | 426 | System commands: `help`, `status`, `trace`, `cloud`, `tools`, `mcp`, `routing` |
+| `cli.py` | 300 | CLI entrypoint and main loop |
+| `token_tracker.py` | 267 | Token and model tracking display |
+| `state_store.py` | 166 | CLI state persistence |
+| `renderer.py` | 150 | Output rendering |
+| `command_registry.py` | 137 | `CommandRegistry` class + `registry` instance |
+| `_command_routing.py` | 129 | `route_natural_language_keywords()`, `classify_intent_with_llm()` |
+| `_command_deps.py` | 104 | AST import dependency analysis (`ImportVisitor`, `resolve_module_path`) |
+| `_command_context.py` | 26 | `CommandContext` data class |
 
 ### start-console/ (Current-Gen Web Console — TanStack Start SSR + React 19)
 
@@ -235,7 +255,7 @@ Dependency pairing: React 19 ↔ `@react-three/fiber` ^9.5 / `@react-three/drei`
 - **Healing**: circuit breaker after 3 consecutive errors or loop detection. Delegates to `debugger` agent.
 - **Memory**: Qdrant vector store (`memory_core.py`). `remember_fact(category="general"|"self_reflection")`. `get_relevant_memories()` for RAG.
 - **Async**: All new services use `asyncio` (AsyncQdrantClient, asyncio.Lock, asyncio.Queue, asyncio.to_thread).
-- **Control Plane**: `services/control_plane/` — 17 modules for model routing, task planning, critic evaluation, strategy selection.
+- **Control Plane**: `services/control_plane/` — 12 modules for model routing, task planning, critic evaluation, strategy selection.
 - **Repository Pattern**: `repositories/` — Data access layer with EventLog, Graph, Mutation, Snapshot repos.
 
 ---
@@ -252,6 +272,14 @@ Dependency pairing: React 19 ↔ `@react-three/fiber` ^9.5 / `@react-three/drei`
 ---
 
 ## Recent Changes (do NOT re-apply)
+
+- **`/upgrade` / ask_user infinite re-ask + stdin race fixed (2026-08-06)**: The document-verified "route internet goals to researcher" fix was being defeated because (a) `coder` ran 2 `web_search`es then `final`-ed without editing any file → "No file changes detected", 5/5 verification failures, and (b) after an `ask_user`, the stateless coordinator re-asked the same question forever.
+  - **Hard edit-invariant** (`runtime_v2/api/agent_service_v2.py`): `_CallState.did_code_change` is set on a successful filesystem `write`/`patch`; in `_handle_final`, `coder` on a **fix-intent** goal (`_is_fix_intent`) is rejected on EVERY `final` until it has actually modified a file ("use filesystem write/patch, then sandbox_repl"). The turn-0 `web_search` injection is now restricted to `ANALYSIS_AGENTS` only (report agents) — `coder` (edit agent) is no longer derailed into pure research; it reads/edits first and researches at its discretion (still bound by the internet-goal `web_fetch` final guard).
+  - **Post-ask_user guard** (`agent_service_v2.py`): the CLI (`organism_console/ui/live_stream.py`) feeds the user's typed answer back as an `Observation: {"answer": ...}` history turn and re-calls `/step/stream` with `prompt=""`. The stateless coordinator previously ignored this and re-asked. New `_answer_from_history()`/`_original_goal()` detect an answered turn; in `_get_decision` the coordinator then deterministically `delegate`s (honoring a specific answer route, else the goal's own route — e.g. "upgrade everything" → `coder`) and never re-asks. A first legitimate question still asks.
+  - **stdin race** (`organism_console/renderer.py` new `INPUT_LOCK`, wrapped in `healing_watchman.py` `Confirm.ask` and `live_stream.py` ask_user `input`/`Prompt.ask`): the background healing-watchman thread's `Approve? [y/n]` prompt read stdin concurrently with the main thread's ask_user prompt, swallowing the user's answer (the log showed `Your response: all` → `Please enter Y or N`). The shared lock serializes all interactive stdin prompts.
+  - Context: the earlier doc claim "route to researcher prevents empty coder internet-search loops" was real but insufficient — there was no hard invariant that the edit agent must actually edit, and no consumed-answer state machine. Tests: `test_opencode_parity.py` +5 (coder fix-intent blocked without change / allowed after change / non-fix unaffected / coder not forced into web_search on turn 0 / coordinator routes after ask_user answer, still asks without answer).
+
+- **AGENTS.md accuracy audit + ruff E9/F zero-clean sweep (2026-08-06)**: Audited AGENTS.md against the filesystem and fixed stale/false claims: removed 10 module-map rows referencing deleted files (incl. several that contradicted the same doc's "removed" notes: `services/llm/client.py`, `control_plane/{guardian,registry,fallback_router,state_manager}.py`, `healing/reviewer.py`, `api/{api_health,health}.py`, `services/health.py`, `_llm_cache.py`, `organism_console/commands.py`); struck `src/` from the Architecture Overview (it's REMOVED); fixed "control_plane 17 modules" → 12; updated every module-map line count to the actual current value. Also ran the full ruff `--select E9,F --fix` sweep: **89 → 0 errors** (62 auto-fixed unused imports/redefinitions, 14 manually, 7 intentional `.vulture_whitelist.py` F821s excluded via a new `[tool.ruff] exclude` in `pyproject.toml`, 4 intentional side-effect imports kept with `# noqa: F401`). Added a `## Lint / CI` section and the `[tool.ruff]` config to `pyproject.toml`.
 
 - **Autonomous Internet Upgrades & Self-Repair Fixes (2026-08-06)**: (1) Fixed a `TypeError` in `organism_console/core/self_repair_engine.py` that crashed the repair loop when `repair_action` was `None`. (2) Updated `organism_console/loops/autonomous.py` to instruct the `coordinator` agent to route internet research and state-of-the-art upgrade goals to `researcher` instead of `coder`, preventing the local `coder` model from outputting empty internet-search loops. (3) Added `researcher` and `planner` to the valid target agents in the autonomous verification failure feedback loop, ensuring failed upgrades can properly re-route through the research step. (4) Updated `runtime_v2/api/agent_service_v2.py` web-fetch rejection message so agents are explicitly told to implement the changes after fetching docs rather than just synthesizing an answer.
 

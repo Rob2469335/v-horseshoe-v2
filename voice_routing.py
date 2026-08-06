@@ -6,7 +6,6 @@ dependencies (torch, speechbrain, openwakeword, etc.).
 
 import os
 import re
-import time
 import requests
 
 if os.name == 'nt':

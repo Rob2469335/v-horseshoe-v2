@@ -10,7 +10,6 @@ Covers:
 - developer: cooldown keys are per-model (no :free collision)
 """
 import asyncio
-import json
 import sys
 
 import pytest
@@ -63,7 +62,6 @@ async def test_organism_act_dict_content_does_not_break_gather(monkeypatch):
 # ── memory_bridge slot-busy graceful fallback ───────────────────────────────
 @pytest.mark.asyncio
 async def test_memory_bridge_read_timeout_falls_back_quietly(monkeypatch):
-    import httpx
     from swarm_os.memory.memory_bridge import MemoryBridge
 
     class FakeVS:

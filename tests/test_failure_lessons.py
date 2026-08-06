@@ -5,11 +5,10 @@ ReflexionMemory rule (not just episodic memory) so check_for_past_mistakes()
 can inject a [PAST-MISTAKE WARNING] into a future run's system prompt.
 """
 from __future__ import annotations
-import asyncio
 import pytest
 from unittest.mock import AsyncMock, patch
 
-from runtime_v2.api.agent_service_v2 import AgentServiceV2, _failure_lessons_seen, _CallState
+from runtime_v2.api.agent_service_v2 import AgentServiceV2, _CallState
 
 
 @pytest.mark.asyncio
@@ -41,7 +40,7 @@ async def test_remember_failure_stores_reflexion_with_do_not_repeat():
     with patch("runtime_v2.api.agent_service_v2.time.time", return_value=1000.0), \
          patch("runtime_v2.api.agent_service_v2._failure_lessons_seen", {}), \
          patch("swarm_os.services.reflection_loop.get_reflection_service",
-               return_value=AsyncMock(store_reflexion=store_mock)) as get_svc:
+               return_value=AsyncMock(store_reflexion=store_mock)):
         await service._remember_failure(
             "code_analyzer", "filesystem",
             {"operation": "read", "path": "runtime_v2/core/agent_service_v2.py"},

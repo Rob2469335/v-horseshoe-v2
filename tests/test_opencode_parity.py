@@ -8,9 +8,8 @@
 """
 from __future__ import annotations
 import asyncio
-import json
 import pytest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 from runtime_v2.prompts.system_prompts import build as build_system_prompt
 from runtime_v2.services.project_map import build_project_map
@@ -87,7 +86,6 @@ async def test_todo_tracking_add_and_done():
 
 @pytest.mark.asyncio
 async def test_todo_injected_into_trimmed_messages():
-    service = AgentServiceV2()
     state = _CallState()
     state.todos = [{"id": 1, "text": "find real paths", "done": False}]
     trimmed = [{"role": "system", "content": "sys"}, {"role": "user", "content": "do the thing"}]
@@ -108,7 +106,8 @@ async def test_pending_verify_blocks_final_once():
     gen = service._handle_final(
         {"action": "final", "response": "done"}, "coder", "m", "p",
         messages, 0.0, "task", True, state)
-    events = [e async for e in gen]
+    async for _ in gen:
+        pass
     assert state.handler_status == "CONTINUE"
     assert any("sandbox_repl" in m.get("content", "") for m in messages)
     # Second call goes through (already rejected once)
@@ -123,6 +122,60 @@ async def test_pending_verify_blocks_final_once():
 
 
 @pytest.mark.asyncio
+async def test_coder_fix_intent_final_blocked_without_code_change():
+    """The `coder` is an EDIT agent: a fix-intent goal (write/implement/patch/
+    modify/solve/repair) finalizing with NO file change restates the goal instead
+    of doing it (the /upgrade autonomous loop failed 5/5 attempts with "No file
+    changes detected"). Every such final must be rejected until a file is actually
+    written or patched."""
+    service = AgentServiceV2()
+    state = _CallState()
+    messages = [{"role": "user", "content": "hi"}]
+    gen = service._handle_final(
+        {"action": "final", "response": "analyze codebase for improvements"},
+        "coder", "m", "p",
+        messages, 0.0,
+        "analyze the codebase and implement SOTA upgrades", True, state)
+    async for _ in gen:
+        pass
+    assert state.handler_status == "CONTINUE"
+    assert not state.did_code_change
+    assert any("operation=write" in m.get("content", "") or "operation=patch" in m.get("content", "")
+               for m in messages)
+
+
+@pytest.mark.asyncio
+async def test_coder_fix_intent_final_allowed_after_code_change():
+    """Once the coder has actually modified a file (did_code_change), the
+    edit-invariant guard no longer blocks the final."""
+    service = AgentServiceV2()
+    state = _CallState()
+    state.did_code_change = True
+    messages = [{"role": "user", "content": "hi"}]
+    gen = service._handle_final(
+        {"action": "final", "response": "done"}, "coder", "m", "p",
+        messages, 0.0, "implement the fix", True, state)
+    async for _ in gen:
+        pass
+    assert state.handler_status != "CONTINUE"
+
+
+@pytest.mark.asyncio
+async def test_coder_non_fix_final_not_blocked_by_edit_invariant():
+    """A non-fix-intent coder task (e.g. a pure explanation) is NOT forced to edit
+    code — the edit-invariant only fires on fix-intent goals."""
+    service = AgentServiceV2()
+    state = _CallState()
+    messages = [{"role": "user", "content": "hi"}]
+    gen = service._handle_final(
+        {"action": "final", "response": "explained"}, "coder", "m", "p",
+        messages, 0.0, "explain what this function does", True, state)
+    async for _ in gen:
+        pass
+    assert state.handler_status != "CONTINUE"
+
+
+@pytest.mark.asyncio
 async def test_internet_goal_blocks_final_without_web_search():
     service = AgentServiceV2()
     state = _CallState()
@@ -131,7 +184,8 @@ async def test_internet_goal_blocks_final_without_web_search():
     gen = service._handle_final(
         {"action": "final", "response": "done"}, "code_analyzer", "m", "p",
         messages, 0.0, "analyze my codebase and search internet for improvements", True, state)
-    events = [e async for e in gen]
+    async for _ in gen:
+        pass
     assert state.handler_status == "CONTINUE"
     assert state._web_final_rejected is True
     assert any("web_search" in m.get("content", "") for m in messages)
@@ -147,7 +201,8 @@ async def test_internet_goal_blocks_second_final_too():
     gen = service._handle_final(
         {"action": "final", "response": "done"}, "code_analyzer", "m", "p",
         messages, 0.0, prompt, True, state)
-    events = [e async for e in gen]
+    async for _ in gen:
+        pass
     assert state.handler_status == "CONTINUE"
     assert state._web_final_rejected is True
     # ...and a SECOND final is rejected too (the one-shot latch let the agent
@@ -155,7 +210,8 @@ async def test_internet_goal_blocks_second_final_too():
     gen2 = service._handle_final(
         {"action": "final", "response": "done"}, "code_analyzer", "m", "p",
         messages, 0.0, prompt, True, state)
-    events2 = [e async for e in gen2]
+    async for _ in gen2:
+        pass
     assert state.handler_status == "CONTINUE"
     assert state._web_final_rejected is True
 
@@ -172,7 +228,8 @@ async def test_internet_goal_final_allowed_after_web_search():
     gen = service._handle_final(
         {"action": "final", "response": "done"}, "code_analyzer", "m", "p",
         messages, 0.0, "analyze my codebase and search internet for improvements", True, state)
-    events = [e async for e in gen]
+    async for _ in gen:
+        pass
     # Not rejected - goes through to response handling.
     assert state.handler_status != "CONTINUE"
 
@@ -190,7 +247,8 @@ async def test_internet_goal_final_blocked_without_web_fetch():
     gen = service._handle_final(
         {"action": "final", "response": "done"}, "code_analyzer", "m", "p",
         messages, 0.0, "analyze my codebase and search internet for improvements", True, state)
-    events = [e async for e in gen]
+    async for _ in gen:
+        pass
     assert state.handler_status == "CONTINUE"
     assert state.did_web_fetch is False
     assert any("web_fetch" in m.get("content", "") for m in messages)
@@ -230,7 +288,7 @@ def test_research_goal_injects_web_search_first_with_no_llm_and_no_filesystem():
     assert not service._call_llm.called
     # Turn 1+ hands control back to the LLM.
     service._call_llm.reset_mock()
-    decision_next = asyncio.run(service._get_decision(
+    asyncio.run(service._get_decision(
         "researcher", "m",
         [{"role": "user", "content": "hi"}],
         ["web_search", "final", "filesystem"],
@@ -287,6 +345,71 @@ async def test_internet_goal_web_searches_before_warmup():
     assert decision3["action"] == "filesystem"
 
 
+@pytest.mark.asyncio
+async def test_coder_not_forced_into_web_search_on_turn_0():
+    """The turn-0 web_search injection is for REPORT agents (ANALYSIS_AGENTS)
+    only. The `coder` is an EDIT agent — forcing web_search at turn 0 derailed it
+    into pure research so it never edited (the /upgrade dead-loop). coder should
+    fall through to its own LLM decision so it reads/edits first."""
+    from runtime_v2.api.agent_service_v2 import AgentServiceV2
+    service = AgentServiceV2()
+    service._call_llm = AsyncMock(return_value={"action": "final", "response": "x"})
+    service._agents = {"coder": {}}
+    decision = await service._get_decision(
+        "coder", "m",
+        [{"role": "user", "content": "hi"}],
+        ["web_search", "web_fetch", "filesystem", "final"],
+        "analyze the codebase and implement SOTA upgrades via web search",
+        0,
+    )
+    # Not the injected web_search — the coder's own decision is used.
+    assert decision["action"] == "final"
+    assert service._call_llm.called
+
+
+@pytest.mark.asyncio
+async def test_coordinator_routes_after_ask_user_answer_no_requery():
+    """POST-ASK_USER GUARD: once the user has answered an ask_user (the CLI feeds
+    it back as an `Observation:` history turn), the stateless coordinator must
+    DELEGATE on that answer — never re-ask the same question. Regression for the
+    /upgrade infinite 'which upgrades?' loop where every answer was ignored."""
+    from runtime_v2.api.agent_service_v2 import AgentServiceV2
+    service = AgentServiceV2()
+    service._call_llm = AsyncMock(return_value={"action": "ask_user", "question": "which upgrades?"})
+    service._agents = {"coordinator": {}}
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "analyze codebase and implement SOTA upgrades via web search"},
+        {"role": "assistant", "content": "which upgrades?"},
+        {"role": "user", "content": 'Observation: {"answer": "all"}'},
+    ]
+    decision = await service._get_decision(
+        "coordinator", "m", messages, ["delegate", "ask_user", "final"], "", 0)
+    assert decision["action"] == "delegate"
+    # "all"/"everything" maps to no specific route → falls back to the goal's
+    # route, which is fix-intent ("implement") → coder. Crucially NOT ask_user.
+    assert decision["target_agent"] == "coder"
+    assert not service._call_llm.called
+
+
+@pytest.mark.asyncio
+async def test_coordinator_still_asks_without_answer_in_history():
+    """The guard must not suppress a legitimate first ask_user — with no
+    Observation answer in history, the coordinator falls through to the LLM."""
+    from runtime_v2.api.agent_service_v2 import AgentServiceV2
+    service = AgentServiceV2()
+    service._call_llm = AsyncMock(return_value={"action": "ask_user", "question": "which upgrades?"})
+    service._agents = {"coordinator": {}}
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "analyze codebase and implement SOTA upgrades via web search"},
+    ]
+    decision = await service._get_decision(
+        "coordinator", "m", messages, ["delegate", "ask_user", "final"], "", 0)
+    assert decision["action"] == "ask_user"
+    assert service._call_llm.called
+
+
 def test_clean_search_query_strips_coordinator_boilerplate():
     """The web_search query must be the clean goal, not the delegated task's
     coordinator instruction wrapper (which wastes search tokens and pollutes
@@ -311,7 +434,7 @@ def test_fix_intent_routes_to_coder():
     """FIX-LOOP: a goal that implies editing code ('analyze and fix bugs') must
     route to the edit-capable coder agent, not the report-only code_analyzer —
     matching how a human maintainer (or opencode) actually fixes things."""
-    from runtime_v2.api._agent_routing import fast_route_coordinator, best_route_target
+    from runtime_v2.api._agent_routing import best_route_target
     assert best_route_target("analyze my codebase for bugs and fix them") == "coder"
     assert best_route_target("write a fix for the bug in stream_runner") == "coder"
     # Pure analysis stays on code_analyzer; pure web stays on researcher.
