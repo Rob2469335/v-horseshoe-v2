@@ -99,6 +99,7 @@ async def run_genetic_mutation(target_file_path: str = str(AGENT_SERVICE_PATH), 
     
     messages = [{"role": "user", "content": prompt}]
     max_retries = 3
+    last_error = ""
 
     for attempt in range(max_retries):
         messages = [{"role": "user", "content": prompt}]
@@ -224,9 +225,11 @@ async def run_genetic_mutation(target_file_path: str = str(AGENT_SERVICE_PATH), 
                 break # Success! Exit the retry loop.
 
         except SecurityGateViolation as e:
+            last_error = str(e)
             logger.warning(f"Security Gate Violation on attempt {attempt + 1}: {e}")
             prompt = EVOLUTION_PROMPT.format(target_func=target_func, core_code_slice=sliced_code) + f"\n\nERROR ON LAST ATTEMPT:\nYour previous mutation failed the security gate with the following violation:\n{e}\nPlease fix the code so it passes the security scan."
         except Exception as e:
+            last_error = str(e)
             logger.warning(f"Sandbox test failed on attempt {attempt + 1}: {e}")
             prompt = EVOLUTION_PROMPT.format(target_func=target_func, core_code_slice=sliced_code) + f"\n\nERROR ON LAST ATTEMPT:\nYour previous mutation failed sandbox testing with the following error:\n{e}\nPlease fix the code."
     else:
@@ -237,7 +240,7 @@ async def run_genetic_mutation(target_file_path: str = str(AGENT_SERVICE_PATH), 
             "model": MODEL,
             "outcome": "failure",
             "task_id": "engine_evolution",
-            "details": "Max retries reached. Mutation failed."
+            "details": f"Max retries reached. Mutation failed. Last error: {last_error}" if last_error else "Max retries reached. Mutation failed."
         })
         await memory_bridge._flush()
         mutation_history.append("failure")
