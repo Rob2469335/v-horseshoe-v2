@@ -363,7 +363,7 @@ async def run(tool_name: str, payload: dict) -> dict:
                         new_tools = new_mgr.cached_tools
 
                         result = {"ok": True, "result": f"Registered MCP server '{server_name}'. Now available tools: {[t['name'] for t in new_tools] if new_tools else []}"}
-                    except Exception as e:
+                    except Exception:
                         log.exception("MCP register failed for %s", server_name)
                         result = {"ok": False, "error": "Failed to register MCP server"}
         elif tool_name == "mcp":
@@ -386,7 +386,7 @@ async def run(tool_name: str, payload: dict) -> dict:
                 result = {"ok": False, "error": str(e)}
             except TimeoutError:
                 result = {"ok": False, "error": "MCP operation timed out."}
-            except Exception as e:
+            except Exception:
                 log.exception("MCP tool execution failed: %s.%s", server_name, mcp_tool)
                 result = {"ok": False, "error": "MCP tool execution failed"}
         else:

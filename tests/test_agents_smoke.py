@@ -1,6 +1,6 @@
 from __future__ import annotations
 import pytest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock
 from fastapi.testclient import TestClient
 from swarm_os.app.main import app
 
@@ -26,6 +26,28 @@ def test_list_agents_shape(client):
     agents = r.json()
     assert isinstance(agents, list)
     assert len(agents) >= 6
+
+def test_step_agent_unknown_agent_returns_404():
+    from fastapi import FastAPI
+    from swarm_os.api.agents import router
+
+    service = MagicMock()
+    service.step_agent_stream = MagicMock(side_effect=KeyError("missing"))
+    test_app = FastAPI()
+    test_app.include_router(router)
+    test_app.dependency_overrides[__import__(
+        "swarm_os.api.agents", fromlist=["get_agent_service"]
+    ).get_agent_service] = lambda: service
+
+    with TestClient(test_app) as test_client:
+        response = test_client.post(
+            "/agents/missing/step",
+            json={"prompt": "ping"},
+        )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Unknown agent 'missing'"}
+
 
 def test_create_agent_shape(client):
     payload = {

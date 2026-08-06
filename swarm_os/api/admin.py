@@ -220,7 +220,7 @@ async def run_heal_cycle(request: Request) -> dict:
             "last_heal_success": result.get("success", True),
             "checks": checks,
         }
-    except Exception as exc:
+    except Exception:
         log.exception("Heal cycle evaluation failed")
         return {"recovery_readiness": 0, "active_anomalies": 1, "last_heal_success": False,
                 "checks": {}, "error": "heal cycle evaluation failed"}
@@ -255,7 +255,7 @@ async def evaluate_health(request: Request) -> dict:
             "last_heal_success": anomalies == 0,
             "checks": checks,
         }
-    except Exception as exc:
+    except Exception:
         log.exception("Health evaluation failed")
         return {"recovery_readiness": 0, "active_anomalies": 1, "last_heal_success": False,
                 "checks": {}, "error": "health evaluation failed"}

@@ -10,7 +10,6 @@ POST /features/search endpoint raise ImportError and return 503
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 import threading
 

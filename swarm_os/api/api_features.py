@@ -1,9 +1,11 @@
 # swarm_os/api/api_features.py
 from __future__ import annotations
 
+import asyncio
 import logging
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
+from ..capabilities.models import VSCodeAutomationRequest
 from .schemas import CreateApprovalRequest, ApprovalDecisionRequest
 
 log = logging.getLogger(__name__)
@@ -106,6 +108,12 @@ async def _keyword_fallback(req: QueryRequest) -> list:
     except Exception:
         # Do not return early — fallback to local-file search below on any collection-level error
         pass
+    finally:
+        try:
+            await client.close()
+        except Exception:
+            log.debug("Failed to close degraded-search Qdrant client", exc_info=True)
+
     # If Qdrant collections exist but contain no matching payloads, fall back
     # to scanning repository markdown files (AGENTS.md, README.md, docs/*.md)
     # so degraded search still returns useful context in test/dev environments
@@ -174,7 +182,7 @@ async def chat_search_stream(req: QueryRequest, request: Request):
                     clean_chunk = chunk.replace("Assistant: <tool>", "").strip()
                     if clean_chunk:
                         yield f"data: {json.dumps({'content': clean_chunk})}\n\n"
-        except Exception as e:
+        except Exception:
             log.exception("stream_generate failed in chat-search")
             yield f"data: {json.dumps({'content': '[Error: stream generation failed]'})}\n\n"
             
@@ -229,7 +237,7 @@ async def upwork_stream(req: QueryRequest, request: Request):
                     clean_chunk = chunk.replace("Assistant: <tool>", "").strip()
                     if clean_chunk:
                         yield f"data: {json.dumps({'content': clean_chunk})}\n\n"
-        except Exception as e:
+        except Exception:
             log.exception("stream_generate failed in upwork")
             yield f"data: {json.dumps({'content': '[Error: stream generation failed]'})}\n\n"
             
@@ -237,11 +245,19 @@ async def upwork_stream(req: QueryRequest, request: Request):
 
 @router.get("/vscode")
 async def vscode_status():
-    return {"status": "stub", "message": "vscode_automation handler not yet implemented"}
+    """Describe the workspace-safe VS Code automation capability."""
+    return {
+        "status": "available",
+        "commands": ["cat", "find_symbol", "grep", "lint", "list_files", "ls", "scout"],
+    }
+
 
 @router.post("/vscode")
-async def vscode_stream(req: QueryRequest, request: Request):
-    return {"status": "stub", "message": "POST /vscode not implemented yet"}
+async def vscode_execute(req: VSCodeAutomationRequest):
+    """Execute an allowlisted workspace operation through the capability handler."""
+    from ..capabilities.vscode_automation import VSCodeAutomationHandler
+
+    return await VSCodeAutomationHandler().execute(req)
 
 # ---------------------------------------------------------------------------
 # Module-level variables (can be monkeypatched by tests)
@@ -525,7 +541,7 @@ def approve_mutation(mutation_id: str):
     try:
         result = repo.approve(mutation_id)
         return {"status": "ok", "result": result}
-    except Exception as e:
+    except Exception:
         log.exception("Mutation approve failed")
         return {"status": "error", "error": f"Failed to approve mutation {mutation_id}"}
 
@@ -708,7 +724,7 @@ async def omnidev_run(req: OmniDevRequest, request: Request):
         if not final_content:
             final_content = "OmniDev completed the task without producing a final response."
         return {"result": final_content}
-    except Exception as exc:
+    except Exception:
         log.exception("OmniDev task failed")
         raise HTTPException(status_code=500, detail="OmniDev task failed")
 
@@ -746,6 +762,6 @@ async def rv_finder_search(req: RvFinderRequest):
             radius_miles=req.radius_miles,
         )
         return result
-    except Exception as exc:
+    except Exception:
         log.exception("RV finder search failed")
         raise HTTPException(status_code=500, detail="RV finder search failed")

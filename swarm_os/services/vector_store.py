@@ -79,6 +79,14 @@ class VectorStore:
                         ),
                     )
                     try:
+                        # The embedded Qdrant backend scans payloads in memory and
+                        # explicitly warns that indexes have no effect. Skip index
+                        # creation there; server-backed collections still receive
+                        # the production indexes below.
+                        init_options = getattr(self.client, "_init_options", {})
+                        if init_options.get("location") == ":memory:":
+                            logger.debug("Skipping payload indexes for in-memory Qdrant")
+                            return
                         await self.client.create_payload_index(
                             collection_name=self.collection_name,
                             field_name="tasks",

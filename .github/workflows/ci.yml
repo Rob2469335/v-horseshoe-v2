@@ -50,17 +50,18 @@ jobs:
           python -m pip install --upgrade pip
           pip install ruff mypy pip-audit
 
-      - name: Run ruff
-        run: |
-          ruff check . || true
+      - name: Validate installed dependencies
+        run: python -m pip check
 
-      - name: Run mypy
-        run: |
-          mypy --ignore-missing-imports . || true
+      - name: Run production correctness lint
+        run: ruff check --select E9,F swarm_os runtime_v2 organism_console
+
+      - name: Run mypy (advisory)
+        continue-on-error: true
+        run: mypy --ignore-missing-imports swarm_os runtime_v2 organism_console
 
       - name: Run pip-audit
-        run: |
-          pip-audit || true
+        run: pip-audit -r requirements.txt
 
       - name: Wait for Qdrant
         run: |
@@ -77,3 +78,33 @@ jobs:
           SWARM_SEMANTIC_CACHE: '0'
           OPENROUTER_API_KEY: ''
         run: python -m pytest -q --ignore=tests/test_full_system_hardmode.py
+
+  frontend:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [organism-console, start-console]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: ${{ matrix.app }}/package-lock.json
+
+      - name: Install dependencies
+        working-directory: ${{ matrix.app }}
+        run: npm ci
+
+      - name: Run active-console tests
+        if: matrix.app == 'organism-console'
+        working-directory: ${{ matrix.app }}
+        run: npm test
+
+      - name: Build production bundle
+        working-directory: ${{ matrix.app }}
+        run: npm run build

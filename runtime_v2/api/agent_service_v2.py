@@ -140,7 +140,6 @@ class AgentServiceV2:
         self._agents[agent_id] = {"id": agent_id, "role": c.get("role", "generalist"),
             "description": c.get("description", ""), "model_role": c.get("model_role", "fast"), "config": c}
     def remove_agent(self, agent_id: str) -> None: self._agents.pop(agent_id, None)
-    async def _preload_model(self, model_name: str): pass
 
     # -----------------------------------------------------------------------
     # Helpers: record performance metrics & memory after completion
@@ -169,8 +168,6 @@ class AgentServiceV2:
             from swarm_os.services.outcome_fitness import _fitness_env_enabled
             if not _fitness_env_enabled():
                 return
-            import time as _t
-            elapsed = max(0.01, _t.time() - (state._start_time or _t.time()))
             # Efficiency = baseline(8 turns) / actual, clipped to [0,1].
             efficiency = min(1.0, 8.0 / max(1, turns_used or 8)) if completed else 0.0
             from swarm_os.services.outcome_fitness import record_outcome

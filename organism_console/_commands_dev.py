@@ -149,8 +149,18 @@ def cmd_debug(ctx: CommandContext, args: List[str]) -> None:
     ctx.console.print(f"[bold cyan]Executing command: [white]{' '.join(command)}[/white]...[/bold cyan]")
     project_root = Path(__file__).parent.parent.resolve()
     try:
-        cmd_target = " ".join(command) if sys.platform == "win32" else command
-        res = subprocess.run(cmd_target, capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=project_root, timeout=60, shell=(sys.platform == "win32"))
+        # Execute the parsed argv directly on every platform. Using a shell on
+        # Windows made metacharacters in user input executable by cmd.exe.
+        res = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            cwd=project_root,
+            timeout=60,
+            shell=False,
+        )
         stdout = res.stdout or ""
         stderr = res.stderr or ""
         exit_code = res.returncode

@@ -136,7 +136,10 @@ def index_codebase(root_dir: str, clear: bool = True) -> tuple[int, int]:
     # First, clear existing points in the collection so we don't duplicate
     if clear:
         try:
-            requests.delete(f"{QDRANT_URL}/collections/{COLLECTION_NAME}")
+            requests.delete(
+                f"{QDRANT_URL}/collections/{COLLECTION_NAME}",
+                timeout=10.0,
+            )
             init_qdrant()
         except Exception:
             pass

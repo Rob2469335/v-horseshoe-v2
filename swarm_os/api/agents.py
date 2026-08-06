@@ -143,7 +143,7 @@ def create_agent(payload: AgentCreatePayload, request: Request):
         return {"status": "created", "agent_id": payload.agent_id}
     except HTTPException:
         raise
-    except Exception as exc:
+    except Exception:
         logger.exception("Agent registration failed")
         raise HTTPException(status_code=400, detail="Agent registration failed")
 
@@ -151,7 +151,7 @@ def create_agent(payload: AgentCreatePayload, request: Request):
 def get_agent(agent_id: str, service=Depends(get_agent_service)):
     try:
         return service.get_agent(agent_id)
-    except KeyError as exc:
+    except KeyError:
         logger.warning("Unknown agent requested: %s", agent_id)
         raise HTTPException(status_code=404, detail=f"Unknown agent '{agent_id}'")
 
@@ -172,8 +172,8 @@ async def step_agent(agent_id: str, payload: AgentStepPayload, service=Depends(g
         return chunks
     except HTTPException:
         raise
-    except KeyError as exc:
-        log.warning("Agent step failed: unknown agent %s", agent_id)
+    except KeyError:
+        logger.warning("Agent step failed: unknown agent %s", agent_id)
         raise HTTPException(status_code=404, detail=f"Unknown agent '{agent_id}'")
 
 @router.post("/agents/{agent_id}/step/stream")
@@ -201,7 +201,7 @@ async def step_agent_stream(agent_id: str, payload: AgentStepPayload, request: R
 
             yield json.dumps({"type": "final", "done": True}) + "\n"
 
-        except Exception as exc:
+        except Exception:
             # BUG FIX: Log the full exception so errors aren't silently swallowed.
             # Previously the exception was yielded as a string but not logged,
             # making it impossible to debug production streaming failures.
@@ -215,7 +215,7 @@ async def step_agent_stream(agent_id: str, payload: AgentStepPayload, request: R
 async def call_agent_tool(agent_id: str, tool_name: str, payload: ToolCallPayload, service=Depends(get_agent_service)):
     try:
         return await service.run_tool(agent_id, tool_name, payload.payload)
-    except KeyError as exc:
+    except KeyError:
         logger.warning("Agent tool call on unknown agent: %s", agent_id)
         raise HTTPException(status_code=404, detail=f"Unknown agent '{agent_id}'")
 
@@ -224,6 +224,6 @@ def delete_agent(agent_id: str, service=Depends(get_agent_service)):
     try:
         service.remove_agent(agent_id)
         return {"status": "deleted", "agent_id": agent_id}
-    except Exception as exc:
+    except Exception:
         logger.exception("Agent delete failed for %s", agent_id)
         raise HTTPException(status_code=400, detail="Agent delete failed")

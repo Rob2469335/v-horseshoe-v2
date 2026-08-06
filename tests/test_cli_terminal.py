@@ -406,8 +406,12 @@ def test_new_cli_commands(tmp_path, monkeypatch):
             self.stdout = stdout
             self.stderr = stderr
             self.returncode = returncode
-            
+
+    debug_invocations = []
+
     def mock_run(cmd, *args, **kwargs):
+        if cmd and cmd[0] == "echo":
+            debug_invocations.append((cmd, kwargs))
         if cmd[0] == "git" and "diff" in cmd:
             return MockCompletedProcess(stdout="diff content")
         if cmd[0] == "git" and "branch" in cmd:
@@ -427,9 +431,13 @@ def test_new_cli_commands(tmp_path, monkeypatch):
     registry.handle_line("/branch", ctx)
     registry.handle_line("/branch test-branch", ctx)
     
-    # 5. Test /debug
+    # 5. Test /debug. It must execute argv directly, never through a shell.
     registry.handle_line("/debug echo hello", ctx)
-    
+    assert debug_invocations
+    debug_argv, debug_kwargs = debug_invocations[0]
+    assert debug_argv == ["echo", "hello"]
+    assert debug_kwargs["shell"] is False
+
     # 6. Test /prompt
     # Change project root temporarily for mandates_file
     import organism_console.command_registry as reg_mod

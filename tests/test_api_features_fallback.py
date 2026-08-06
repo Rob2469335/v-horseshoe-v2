@@ -1,6 +1,4 @@
-import asyncio
 from fastapi.testclient import TestClient
-import importlib
 
 import swarm_os.api.api_features as api_features
 
@@ -21,8 +19,22 @@ def test_local_file_fallback(monkeypatch):
         return [{"id": "local-doc", "score": 1.0, "payload": {"path": "AGENTS.md", "excerpt": "doc"}}]
     monkeypatch.setattr(fb, "local_docs_search", fake_local)
 
-    app = api_features.router.include_in_app if hasattr(api_features.router, 'include_in_app') else None
-    # create a minimal FastAPI app mounting the router
+    class FakeQdrantClient:
+        closed = False
+
+        def __init__(self, **_kwargs):
+            pass
+
+        async def scroll(self, **_kwargs):
+            return ([], None)
+
+        async def close(self):
+            type(self).closed = True
+
+    import qdrant_client
+    monkeypatch.setattr(qdrant_client, "AsyncQdrantClient", FakeQdrantClient)
+
+    # Create a minimal FastAPI app mounting the router.
     from fastapi import FastAPI
     app = FastAPI()
     app.include_router(api_features.router)
@@ -31,10 +43,15 @@ def test_local_file_fallback(monkeypatch):
     res = client.post("/features/search", json={"query": "swarm", "collection": "chat_archive", "top_k": 3})
     assert res.status_code == 200
     body = res.json()
-    assert body["status"] in {"ok", "degraded"}
-    # If degraded, ensure the lexical fallback returned at least one result
-    if body["status"] == "degraded":
-        assert body["fallback"] is True
-        assert isinstance(body["results"], list)
-        # results may be empty in some CI/test environments; ensure shape is correct
-        assert "results" in body
+    assert body == {
+        "status": "degraded",
+        "fallback": True,
+        "results": [
+            {
+                "id": "local-doc",
+                "score": 1.0,
+                "payload": {"path": "AGENTS.md", "excerpt": "doc"},
+            }
+        ],
+    }
+    assert FakeQdrantClient.closed is True

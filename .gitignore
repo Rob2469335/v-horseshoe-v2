@@ -67,6 +67,7 @@ everything_*.json
 everything_*.txt
 everything_*.csv
 everything_*.html
+pip_audit_results.json
 temp_screenshot.png
 
 # Generated runtime artifacts

@@ -172,7 +172,7 @@ class MemoryBridge:
         # Epistemic Logic (Theory of Mind)
         details = str(event.get("details", "")).lower()
         if "found" in details or "discovered" in details or "learned" in details:
-            fact_node = f"Fact_{hashlib.md5(details.encode()).hexdigest()[:8]}"
+            fact_node = f"Fact_{hashlib.sha256(details.encode()).hexdigest()[:8]}"
             self._spawn(self.graph_repo.add_fact(
                 fact_node, agent_node, details, ts
             ))

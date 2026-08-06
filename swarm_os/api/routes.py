@@ -220,9 +220,9 @@ async def execute_tool(payload: ToolExecuteRequest, runtime=Depends(runtime_dep)
             elif hasattr(result, "dict"):
                 result = result.dict()
             return ToolExecuteResponse(status="success", capability=payload.capability, data=result)
-        except KeyError as exc:
+        except KeyError:
             raise HTTPException(status_code=404, detail=f"Capability '{payload.capability}' not found")
-        except Exception as exc:
+        except Exception:
             log.exception("Tool execution failed in agent_runtime.call_tool")
             raise HTTPException(status_code=500, detail="Tool execution failed")
     
@@ -234,9 +234,9 @@ async def execute_tool(payload: ToolExecuteRequest, runtime=Depends(runtime_dep)
             elif hasattr(result, "dict"):
                 result = result.dict()
             return ToolExecuteResponse(status="success", capability=payload.capability, data=result)
-        except KeyError as exc:
+        except KeyError:
             raise HTTPException(status_code=404, detail=f"Capability '{payload.capability}' not found")
-        except Exception as exc:
+        except Exception:
             log.exception("Tool execution failed in runtime.call_tool")
             raise HTTPException(status_code=500, detail="Tool execution failed")
         
@@ -305,7 +305,7 @@ async def generate(payload: GenerateRequest, orch=Depends(get_orchestrator)):
         import litellm
         resp = await litellm.acompletion(**kwargs)
         content = resp.choices[0].message.content or ""
-    except Exception as e:
+    except Exception:
         log.exception("Generation failed")
         raise HTTPException(status_code=502, detail="LLM generation failed")
 
@@ -463,7 +463,7 @@ async def memory_search(q: str, limit: int = 8):
         return {"results": results[:limit]}
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         log.exception("Memory search failed")
         # BUG FIX: Raise HTTPException with 500 instead of returning {"error": ...} with 200 OK.
         # Clients cannot distinguish success from failure when status code is always 200.
@@ -509,7 +509,7 @@ def trace_summary(orch: Any = Depends(get_orchestrator), limit: int = 50) -> dic
                 "min": round(min(durations), 3) if durations else 0.0,
             },
         }
-    except Exception as exc:
+    except Exception:
         log.exception("Timeline fetch failed")
         return {
             "count": 0,
@@ -717,7 +717,7 @@ async def get_memories():
                 memories_by_category[name] = payloads
                 
         return {"status": "success", "data": memories_by_category}
-    except Exception as exc:
+    except Exception:
         log.exception("Failed to fetch memories")
         raise HTTPException(status_code=500, detail="Failed to fetch memories")
 
