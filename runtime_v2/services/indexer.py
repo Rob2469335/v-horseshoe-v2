@@ -10,9 +10,53 @@ LLAMA_URL = "http://127.0.0.1:8081"
 COLLECTION_NAME = "codebase_index"
 EMBEDDING_MODEL = "nomic-embed-text-v1.5.Q8_0.gguf"
 
+# The nomic-embed server context varies across boots (512-2048 ctx seen). A
+# chunk too large for the model's context makes /v1/embeddings reject the WHOLE
+# batch (model_create 400), silently dropping every file in it — only 592/1737
+# files landed before this. `_fit_token_budget()` word-choops each text to a
+# character budget derived from the model's LIVE n_ctx (code is dense: ~3.5
+# chars/token, 15% headroom), so a request never exceeds the server's context
+# and every file actually indexes. The budget grows automatically when n_ctx is
+# raised (e.g. `-b 8192 -ub 8192` boots at n_ctx=2048 -> ~6100 chars/chunk),
+# which also cuts the number of chunks ~4x versus a fixed 512-token budget.
+TOKEN_BUDGET_CHARS = 1800
+
+
+def _embed_context_budget_chars() -> int:
+    """Character budget from the embed model's live n_ctx (fallback:
+    TOKEN_BUDGET_CHARS). Keeps every chunk inside the server's context."""
+    try:
+        resp = requests.get(f"{LLAMA_URL}/v1/models", timeout=5.0)
+        ctx = resp.json()["data"][0]["meta"]["n_ctx"]
+        if ctx and ctx > 0:
+            return max(512, int(ctx * 3.5 * 0.85))
+    except Exception:
+        pass
+    return TOKEN_BUDGET_CHARS
+
+
+def _fit_token_budget(text: str) -> str:
+    """Word-chopping budget: never send the embed model a text that could
+    overflow its context. Preserves whole words up to the budget."""
+    if not text:
+        return text
+    budget = _embed_context_budget_chars()
+    if len(text) <= budget:
+        return text
+    out = []
+    n = 0
+    for w in text.split():
+        if n + len(w) + 1 > budget:
+            break
+        out.append(w)
+        n += len(w) + 1
+    return " ".join(out)
+
+
 def get_embeddings(texts: List[str]) -> Optional[List[List[float]]]:
-    # Truncate to prevent context window overflows (stay under 2048 token batch limit)
-    texts = [text[:4000] for text in texts]
+    # Fit every text to the embed model's context so an oversized input can't
+    # reject the whole batch (silent file drop in index_codebase).
+    texts = [_fit_token_budget(text) for text in texts]
     try:
         resp = requests.post(f"{LLAMA_URL}/v1/embeddings", headers={"Authorization": "Bearer llama"}, json={
             "model": EMBEDDING_MODEL,
