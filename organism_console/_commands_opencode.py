@@ -108,16 +108,27 @@ def snapshot_worktree(root: Path = PROJECT_ROOT) -> Dict:
     return {"tracked": tracked, "untracked": set(untracked), "untracked_content": untracked_content}
 
 
-def restore_snapshot(snap: Dict, root: Path = PROJECT_ROOT) -> List[str]:
+def restore_snapshot(snap: Dict, root: Path = PROJECT_ROOT, scope: Optional[List[str]] = None) -> List[str]:
     """Restore a snapshot captured by snapshot_worktree(). Returns restored relpaths.
 
     - Tracked files that were modified are written back byte-for-byte.
     - Untracked files that did NOT exist at snapshot time (agent-created) are removed.
+
+    With `scope` (a list of relpaths), restore ONLY those relpaths — a
+    diff-scoped revert that touches exactly the files in scope and nothing else
+    (2026 autonomy rollback: 'revert the evidence-justified diff', never a
+    scoped-in-time whole-tree restore). Without scope, restore the full captured
+    delta (the CLI /undo behavior).
     """
     restored: list[str] = []
     current_modified, current_untracked = _git_porcelain(root)
     created_by_agent = [p for p in current_untracked if p not in snap.get("untracked", set())]
-    for rel in sorted(created_by_agent):
+    if scope is None:
+        candidates = created_by_agent
+    else:
+        scope_set = set(scope)
+        candidates = [p for p in created_by_agent if p in scope_set]
+    for rel in sorted(candidates):
         path = root / rel
         try:
             if path.is_dir():
@@ -127,7 +138,11 @@ def restore_snapshot(snap: Dict, root: Path = PROJECT_ROOT) -> List[str]:
             restored.append(rel)
         except OSError:
             pass
-    for rel, content in (snap.get("tracked") or {}).items():
+    tracked_items = (snap.get("tracked") or {}).items()
+    if scope is not None:
+        scope_set = set(scope)
+        tracked_items = [(rel, content) for rel, content in tracked_items if rel in scope_set]
+    for rel, content in tracked_items:
         path = root / rel
         try:
             path.parent.mkdir(parents=True, exist_ok=True)

@@ -165,9 +165,10 @@ def test_verification_failed_not_handled(monkeypatch, tmp_path):
 def test_agents_md_append_marked_auto_repair(monkeypatch, tmp_path):
     (tmp_path / "AGENTS.md").write_text(
         "## Self-Healing & Self-Learning Fixes\n- existing rule\n", encoding="utf-8")
-    loop = wl.WatchLoop(_make_engine(), interval_seconds=0.01)
-    loop._append_agents_md({"timestamp": "2026-08-07T00:00:00Z", "file": "swarm_os/api/routes.py",
-                            "tier": 0, "fixed": True, "error": "boom"})
+    wl._audit_write(
+        {"timestamp": "2026-08-07T00:00:00Z", "trigger": "watch_loop", "file": "swarm_os/api/routes.py",
+         "tier": 0, "fixed": True, "error": "boom"},
+        "- **[AUTO-REPAIR] (2026-08-07T00:00:00Z)**: swarm_os/api/routes.py (tier 0, fixed=True) — error: boom\n")
     content = (tmp_path / "AGENTS.md").read_text(encoding="utf-8")
     assert "[AUTO-REPAIR]" in content
     assert content.count("## Self-Healing & Self-Learning Fixes") == 1  # section intact

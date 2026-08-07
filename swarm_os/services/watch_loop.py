@@ -51,6 +51,37 @@ _AGENTS_MD = Path("AGENTS.md")
 _RULES_MARKER = "## Self-Healing & Self-Learning Fixes\n"
 
 
+def _audit_write(entry: dict, agents_md_line: str) -> None:
+    """SHARED, lock-guarded audit writer for the autonomous layer.
+
+    Every distinct autonomous event — [AUTO-REPAIR], [ROLLBACK-COMPLETED],
+    [ROLLBACK-REFUSED] — goes through THIS one writer so there is exactly ONE
+    writer per shared file (data/events/auto_repairs.jsonl + the AGENTS.md
+    changelog). A parallel append path would reintroduce the two-writer race
+    that the single-tailer watch-loop fix eliminated. Both writes use the same
+    filelock primitive; never a plain open('a').
+    """
+    try:
+        _AUDIT_FILE.parent.mkdir(parents=True, exist_ok=True)
+        lock = FileLock(str(_AUDIT_FILE) + ".lock", timeout=5.0)
+        with lock:
+            with _AUDIT_FILE.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception as exc:
+        log.warning("Audit log write failed: %s", exc)
+    try:
+        if not _AGENTS_MD.exists():
+            return
+        lock = FileLock(str(_AGENTS_MD) + ".lock", timeout=5.0)
+        with lock:
+            content = _AGENTS_MD.read_text(encoding="utf-8")
+            if _RULES_MARKER in content:
+                content = content.replace(_RULES_MARKER, _RULES_MARKER + "\n" + agents_md_line, 1)
+                _AGENTS_MD.write_text(content, encoding="utf-8")
+    except Exception as exc:
+        log.warning("AGENTS.md changelog append failed: %s", exc)
+
+
 def _now() -> float:
     return time.time()
 
@@ -180,34 +211,9 @@ class WatchLoop:
             "validation_error": result.get("validation_error"),
             "fix_class": result.get("fix_class"),
         }
-        try:
-            _AUDIT_FILE.parent.mkdir(parents=True, exist_ok=True)
-            lock = FileLock(str(_AUDIT_FILE) + ".lock", timeout=5.0)
-            with lock:
-                with _AUDIT_FILE.open("a", encoding="utf-8") as f:
-                    f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-        except Exception as exc:
-            log.warning("WatchLoop: auto-repair audit log write failed (%s).", exc)
-        self._append_agents_md(entry)
-
-    def _append_agents_md(self, entry: dict) -> None:
-        """Append a clearly-marked [AUTO-REPAIR] line to the AGENTS.md changelog
-        section under the SAME filelock primitive used by the structured audit
-        log, so this never races with a human/Flash editing AGENTS.md (a
-        read-modify-write race would corrupt the section)."""
-        try:
-            if not _AGENTS_MD.exists():
-                return
-            summary = f"{entry.get('file') or 'unknown'} (tier {entry.get('tier')}, fixed={entry.get('fixed')})"
-            line = f"- **[AUTO-REPAIR] ({entry.get('timestamp')})**: {summary} — error: {str(entry.get('error'))[:120]}\n"
-            lock = FileLock(str(_AGENTS_MD) + ".lock", timeout=5.0)
-            with lock:
-                content = _AGENTS_MD.read_text(encoding="utf-8")
-                if _RULES_MARKER in content:
-                    content = content.replace(_RULES_MARKER, _RULES_MARKER + "\n" + line, 1)
-                    _AGENTS_MD.write_text(content, encoding="utf-8")
-        except Exception as exc:
-            log.warning("WatchLoop: AGENTS.md [AUTO-REPAIR] append failed (%s).", exc)
+        summary = f"{str(file_path) or 'unknown'} (tier {result.get('tier_used')}, fixed={bool(result.get('fixed'))})"
+        line = f"- **[AUTO-REPAIR] ({entry['timestamp']})**: {summary} — error: {str(err)[:120]}\n"
+        _audit_write(entry, line)
 
     async def _watch(self) -> None:
         while self._running:
@@ -278,16 +284,47 @@ class WatchLoop:
             )
             return
         try:
+            # 2026 autonomy move 4 Phase A: capture the PRE-repair worktree state
+            # BEFORE the repair writes. Ordering is the entire mechanism: snapshot
+            # captured after the repair would hold post-repair bytes, so a restore
+            # would be a silent no-op while every test still passes. Captured
+            # here (before diagnose_and_repair), stored durably, and its id is
+            # threaded into the audit record so a regression can find the exact
+            # pre-state to revert.
+            snapshot_id = self._capture_repair_snapshot(fpath)
             if hasattr(self.engine, "diagnose_and_repair"):
                 result = self.engine.diagnose_and_repair(err, file_path=fpath)
             elif hasattr(self.engine, "repair"):
                 result = self.engine.repair(err, file_path=fpath)
             else:
                 result = {}
+            result["snapshot_id"] = snapshot_id
             self._record_repair()
             self._audit_repair(err, fpath, result or {})
         except Exception as exc:
             log.warning("WatchLoop: repair dispatch failed (%s).", exc)
+
+    def _capture_repair_snapshot(self, file_path) -> str:
+        """Capture the current worktree as a durable, diff-scoped repair snapshot
+        (Phase A: capture + revert together). Scope = the repair's single target
+        file — the repair engine is single-file by construction (every tier writes
+        only the `file_path` dispatched on), so intended == actual write scope."""
+        try:
+            from organism_console._commands_opencode import snapshot_worktree
+            from runtime_v2.services.run_snapshot import build_repair_snapshot, write_run_snapshot
+            from pathlib import Path as _P
+            root = _P.cwd()
+            scope = []
+            if file_path:
+                try:
+                    scope = [str(_P(file_path).resolve().relative_to(root.resolve())).replace("\\", "/")]
+                except Exception:
+                    scope = [str(file_path)]
+            snap = build_repair_snapshot(snapshot_worktree(root), scope=scope)
+            return write_run_snapshot(snap)
+        except Exception as exc:
+            log.warning("WatchLoop: repair snapshot capture failed (%s); repair proceeds without a revert point.", exc)
+            return ""
 
     def _handle_turn_budget(self, data: dict) -> None:
         """Learning-only (no repair dispatch) — same principle as verification_failed:

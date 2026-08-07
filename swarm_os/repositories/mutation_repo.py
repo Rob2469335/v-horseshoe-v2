@@ -51,14 +51,60 @@ class MutationRepository:
             backup_path = target_path.with_suffix(target_path.suffix + ".bak")
             shutil.copy2(target_path, backup_path)
 
+        # Record the bytes actually written by the approval (the repair's own
+        # output), so rollback() can do a CONTENT comparison (bytes, not mtime):
+        # current-on-disk == approved-bytes -> unchanged since repair, safe to
+        # revert; otherwise a later write happened -> refuse (never clobber).
+        approved_bytes = pending_file.read_bytes()
+
         shutil.copy2(pending_file, target_path)
 
         metadata["approved"] = True
         if backup_path:
             metadata["backup_path"] = str(backup_path)
+        metadata["approved_bytes_hex"] = approved_bytes.hex()
 
         meta_path.write_text(json.dumps(metadata, indent=2))
         return metadata
+
+    def rollback(self, mutation_id: str) -> Dict[str, Any]:
+        """Revert an approved mutation by restoring the pre-approval .bak, but
+        ONLY if the target file is byte-identical to what the approval wrote.
+
+        Content comparison (not mtime/existence): a touch that changes mtime with
+        no content change reads as 'unchanged' and safely rolls back; a genuine
+        later write reads as 'conflict' and refuses — never clobber a second
+        repair's work. Distinct terminal states, all audited by the caller:
+        rolled_back / refused_conflict / unavailable. Never a silent no-op.
+        """
+        target_dir = self.get_mutation_path(mutation_id)
+        meta_path = target_dir / "metadata.json"
+        if not meta_path.exists():
+            return {"ok": False, "reason": "unavailable", "detail": "mutation metadata not found"}
+        try:
+            metadata = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            return {"ok": False, "reason": "unavailable", "detail": f"metadata unreadable: {exc}"}
+        if not metadata.get("approved"):
+            return {"ok": False, "reason": "unavailable", "detail": "mutation not approved"}
+        target_path = self._resolve_within_root(metadata["target_path"], allow_project_root=True)
+        backup_path = metadata.get("backup_path")
+        if not backup_path or not Path(backup_path).exists():
+            return {"ok": False, "reason": "unavailable", "detail": "backup .bak missing"}
+        approved_hex = metadata.get("approved_bytes_hex")
+        try:
+            current = target_path.read_bytes()
+        except Exception as exc:
+            return {"ok": False, "reason": "unavailable", "detail": f"target unreadable: {exc}"}
+        if approved_hex is None:
+            # Legacy metadata without the approval-time capture: refuse rather
+            # than guess (cannot distinguish a later write from the approved one).
+            return {"ok": False, "reason": "refused_conflict", "detail": "approval-time bytes not recorded; cannot verify unchanged-since-repair"}
+        if current.hex() != approved_hex:
+            return {"ok": False, "reason": "refused_conflict", "detail": "file modified since repair; refusing to clobber a later write"}
+        backup_path_resolved = self._resolve_within_root(backup_path, allow_project_root=True)
+        shutil.copy2(backup_path_resolved, target_path)
+        return {"ok": True, "rolled_back": str(target_path), "reason": "rolled_back"}
         
     def reject(self, mutation_id: str) -> bool:
         target_dir = self.get_mutation_path(mutation_id)
