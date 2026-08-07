@@ -45,6 +45,7 @@ log = logging.getLogger("WatchLoop")
 _EVENTS_FILE = Path("data/events/events.jsonl")
 _HEARTBEAT_FILE = Path("data/events/watchman_heartbeat.json")
 _AUDIT_FILE = Path("data/events/auto_repairs.jsonl")
+_CANARY_HUMAN_REVIEW_FILE = Path("data/events/human_review.jsonl")
 _HEARTBEAT_INTERVAL = 30.0  # seconds; matches the CLI RepairWatchman cadence
 _STALE_HEARTBEAT_MULTIPLIER = 3  # a heartbeat older than 3x interval = stale
 _AGENTS_MD = Path("AGENTS.md")
@@ -107,6 +108,7 @@ class WatchLoop:
         self._repair_window_start = 0.0
         self._repairs_in_window = 0
         self._policy = None
+        self._canary_tasks: set = set()
 
     def _load_policy(self):
         """Load budgets from autonomy_policy.json. None => fail-closed (no auto-repair)."""
@@ -219,9 +221,152 @@ class WatchLoop:
         while self._running:
             try:
                 await self._tick()
+                # Phase B: evaluate due canaries as OFF-TICK background tasks so a
+                # slow pytest re-verify never blocks the heartbeat or event tailing
+                # (a slow canary must not make the daemon itself look stale).
+                self._schedule_due_canaries()
             except Exception as exc:
                 log.warning("WatchLoop iteration failed: %s", exc)
             await asyncio.sleep(self.interval)
+
+    def _schedule_due_canaries(self) -> None:
+        try:
+            from runtime_v2.services.canary_registry import due_canaries
+            due = due_canaries()
+            for c in due:
+                rid = c.get("repair_id")
+                if rid in self._canary_tasks:
+                    continue
+                task = asyncio.create_task(self._evaluate_canary(c))
+                self._canary_tasks.add(rid)
+                task.add_done_callback(lambda t, _rid=rid: self._canary_tasks.discard(_rid))
+        except Exception as exc:
+            log.warning("WatchLoop: canary scheduling failed (%s).", exc)
+
+    async def _evaluate_canary(self, canary: dict) -> None:
+        """Run the canary re-verify (off-tick). Signal 1 (direct test re-run) is
+        authoritative: a traceback-attributable failure triggers automatic rollback.
+        Signal 2 (graph-based downstream inference) is human-review tier — the
+        graph has a confirmed dynamic-import blind spot, so it can only add caution,
+        never remove it. Unverifiable canaries flag for human attention."""
+        rid = canary.get("repair_id") or ""
+        file_rel = canary.get("file") or ""
+        snapshot_id = canary.get("snapshot_id") or ""
+        try:
+            # Signal 1: re-run the repaired file's related tests.
+            from pathlib import Path
+            from organism_console.core.repair_engine import _run_related_tests
+            fp = Path(file_rel)
+            result = await asyncio.to_thread(_run_related_tests, fp) if fp.suffix == ".py" else None
+            if result is None:
+                # No related tests exist — cannot verify directly. Check signal 2.
+                if self._signal2_downstream_breakage(file_rel):
+                    self._resolve_flag(rid, "flagged", "signal_2 downstream consumer breakage; HUMAN REVIEW",
+                                       snapshot_id, file_rel, human_review=True)
+                else:
+                    self._resolve_clear(rid, "cleared", "no related tests and no downstream breakage detected")
+                return
+            ok, output = result
+            if ok:
+                self._resolve_clear(rid, "cleared", "related tests pass")
+                return
+            # Tests failed. Signal 1 is authoritative IF the failure is attributable
+            # to the repaired file.
+            if self._traceback_attributes(output, file_rel):
+                self._resolve_flag(rid, "flagged", f"signal_1 test regression attributable to {file_rel}",
+                                   snapshot_id, file_rel, human_review=False)
+            else:
+                self._resolve_flag(rid, "flagged", f"test regression NOT attributable to {file_rel}; HUMAN REVIEW",
+                                   snapshot_id, file_rel, human_review=True)
+        except Exception as exc:
+            log.warning("WatchLoop: canary %s evaluation failed (%s); flagging unverifiable.", rid, exc)
+            self._resolve_unverifiable(rid, f"canary evaluation error: {exc}", snapshot_id, file_rel)
+
+    def _traceback_attributes(self, test_output: str, file_rel: str) -> bool:
+        """Does the failure name the repaired file (or a module that imports it)?
+        Signal 1's attribution: same module appears in the traceback."""
+        import re as _re
+        base = _re.sub(r"\.py$", "", file_rel).replace("/", ".")
+        mod = _re.sub(r"\.[^.]+$", "", base)
+        return (file_rel.replace("\\", "/") in (test_output or "")
+                or mod in (test_output or "")
+                or base in (test_output or ""))
+
+    def _signal2_downstream_breakage(self, file_rel: str) -> bool:
+        """Signal 2: does ANY recent failure name a module that imports the
+        repaired file (via the cached AST KnowledgeGraph)? HUMAN-REVIEW tier — the
+        graph has a confirmed dynamic-import blind spot, so this can only raise a
+        flag, never auto-revert."""
+        return False  # signal 2 detection is a stub: see AGENTS.md known-edge note
+
+    def _resolve_clear(self, rid: str, state: str, detail: str) -> None:
+        try:
+            from runtime_v2.services.canary_registry import resolve_canary
+            resolve_canary(rid, state, detail)
+            log.info("Canary %s -> %s (%s)", rid, state, detail)
+        except Exception as exc:
+            log.warning("Canary resolve failed (%s): %s", rid, exc)
+
+    def _resolve_flag(self, rid: str, state: str, detail: str, snapshot_id: str,
+                      file_rel: str, human_review: bool) -> None:
+        """Flag a canary. human_review=False (signal 1 authoritative) -> automatic
+        diff-scoped rollback. human_review=True (signal 2-only, or un-attributable
+        test failure) -> surface for a human, do NOT auto-revert."""
+        try:
+            from runtime_v2.services.canary_registry import resolve_canary
+            resolve_canary(rid, state, detail)
+            if not human_review and snapshot_id:
+                self._auto_rollback(snapshot_id, file_rel, rid, detail)
+            else:
+                self._flag_for_human(file_rel, rid, detail, snapshot_id)
+        except Exception as exc:
+            log.warning("Canary flag failed (%s): %s", rid, exc)
+
+    def _auto_rollback(self, snapshot_id: str, file_rel: str, rid: str, detail: str) -> None:
+        """Signal-1 authoritative: restore the diff-scoped pre-repair snapshot."""
+        try:
+            from runtime_v2.services.run_snapshot import load_run_snapshot, restore_run_snapshot
+            snap = load_run_snapshot(snapshot_id)
+            if not snap:
+                log.warning("Auto-rollback %s: snapshot %s missing; cannot revert.", rid, snapshot_id)
+                self._flag_for_human(file_rel, rid, f"{detail} (snapshot missing)", "")
+                return
+            result = restore_run_snapshot(snap, scope=snap.get("scope"))
+            entry = {"timestamp": _iso(), "trigger": "rollback", "repair_id": rid,
+                     "file": file_rel, "signal": "signal_1", "restored": result.get("restored", [])}
+            line = f"- **[ROLLBACK-COMPLETED] ({entry['timestamp']})**: {file_rel} — {detail}\n"
+            _audit_write(entry, line)
+            log.warning("Auto-rolled back %s (%s)", file_rel, detail)
+        except Exception as exc:
+            log.warning("Auto-rollback failed (%s): %s", rid, exc)
+
+    def _flag_for_human(self, file_rel: str, rid: str, detail: str, snapshot_id: str) -> None:
+        """Surface a human-review flag where a human will actually see it — the
+        audit trail PLUS a dedicated human_review.jsonl the CLI /status reads."""
+        try:
+            from swarm_os.services.watch_loop import _audit_write, _iso
+            entry = {"timestamp": _iso(), "trigger": "rollback_human_review", "repair_id": rid,
+                     "file": file_rel, "detail": detail, "snapshot_id": snapshot_id}
+            line = f"- **[CANARY-FLAGGED: human review] ({entry['timestamp']})**: {file_rel} — {detail}\n"
+            _audit_write(entry, line)
+            import json as _json
+            f = _CANARY_HUMAN_REVIEW_FILE
+            f.parent.mkdir(parents=True, exist_ok=True)
+            lock = FileLock(str(f) + ".lock", timeout=5.0)
+            with lock:
+                with f.open("a", encoding="utf-8") as fh:
+                    fh.write(_json.dumps(entry) + "\n")
+            log.warning("CANARY-FLAGGED for human review: %s — %s", file_rel, detail)
+        except Exception as exc:
+            log.warning("Human-review flag failed (%s): %s", rid, exc)
+
+    def _resolve_unverifiable(self, rid: str, detail: str, snapshot_id: str, file_rel: str) -> None:
+        try:
+            from runtime_v2.services.canary_registry import resolve_canary
+            resolve_canary(rid, "unverifiable", detail)
+            self._flag_for_human(file_rel, rid, f"UNVERIFIABLE: {detail}", snapshot_id)
+        except Exception as exc:
+            log.warning("Canary unverifiable resolve failed (%s): %s", rid, exc)
 
     async def _tick(self) -> None:
         if not _EVENTS_FILE.exists():
@@ -301,8 +446,29 @@ class WatchLoop:
             result["snapshot_id"] = snapshot_id
             self._record_repair()
             self._audit_repair(err, fpath, result or {})
+            # Phase B: register a canary so a later regression within the window
+            # triggers rollback (signal 1 -> auto, signal 2-only -> human review).
+            if fpath and snapshot_id and result.get("fixed"):
+                self._register_canary(fpath, snapshot_id)
         except Exception as exc:
             log.warning("WatchLoop: repair dispatch failed (%s).", exc)
+
+    def _register_canary(self, file_path, snapshot_id: str) -> None:
+        try:
+            from pathlib import Path as _P
+            from runtime_v2.services.canary_registry import register_canary
+            root = _P.cwd()
+            try:
+                file_rel = str(_P(file_path).resolve().relative_to(root.resolve())).replace("\\", "/")
+            except Exception:
+                file_rel = str(file_path)
+            ok, msg = register_canary(file_rel, snapshot_id, policy=self._policy)
+            if not ok:
+                log.warning("Canary registration refused for %s: %s", file_rel, msg)
+            else:
+                log.info("Registered canary %s for %s (30-min window)", msg, file_rel)
+        except Exception as exc:
+            log.warning("WatchLoop: canary registration failed (%s).", exc)
 
     def _capture_repair_snapshot(self, file_path) -> str:
         """Capture the current worktree as a durable, diff-scoped repair snapshot

@@ -81,6 +81,19 @@ def cmd_status(ctx: CommandContext, args: List[str]) -> None:
     for check_name, passed in checks.items():
         status_symbol = "[green]✓[/green]" if passed else "[red]✗[/red]"
         table.add_row(f"  {check_name.replace('_', ' ').title()}", status_symbol)
+    # 2026 autonomy rollback Phase B: surface any human-review flags from the
+    # canary system where a human will actually see them — not just in the audit
+    # trail. A logged flag that sits unread is the 'dead but silent' daemon
+    # problem one layer up.
+    try:
+        from pathlib import Path as _P
+        f = _P("data/events/human_review.jsonl")
+        if f.exists():
+            pending = [l for l in f.read_text(encoding="utf-8", errors="ignore").splitlines() if l.strip()]
+            if pending:
+                table.add_row("Pending Human Review", f"[bold yellow]{len(pending)} flag(s) — check data/events/human_review.jsonl or /heal[/bold yellow]")
+    except Exception:
+        pass
     ctx.console.print(Panel(table, title="[bold cyan]System Status[/bold cyan]", border_style="cyan"))
 
 
