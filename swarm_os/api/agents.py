@@ -19,6 +19,10 @@ class AgentStepPayload(BaseModel):
     history: List[Dict[str, Any]] | None = None
     focus_file: str | None = None
     delegation_chain: List[str] | None = None
+    # 2026 autonomy move 3: resume a durable-checkpointed run instead of replaying
+    # from the top. The id is looked up by the STORED checkpoint, never re-derived
+    # from caller text — so a slightly different prompt can't silently start fresh.
+    resume: str | None = None
 
 class ToolCallPayload(BaseModel):
     payload: Dict[str, Any] | None = None
@@ -196,6 +200,7 @@ async def step_agent_stream(agent_id: str, payload: AgentStepPayload, request: R
                 payload.prompt,
                 payload.history or [],
                 payload.delegation_chain,
+                resume=payload.resume,
             ):
                 yield json.dumps(chunk) + "\n"
 

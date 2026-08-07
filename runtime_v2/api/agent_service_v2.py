@@ -412,6 +412,48 @@ class AgentServiceV2:
             state.test_pass_result = None
             log.debug("[coder] L3 test run skipped: %s", exc)
 
+    # --- Durable checkpoint helpers (2026 autonomy move 3) ---
+    # The critical _CallState fields that L1-L6 correctness depends on. These MUST
+    # round-trip through a checkpoint; dropping any one on resume would silently
+    # reintroduce the bug that pattern was built to close (e.g. reset read_paths
+    # -> L1 falsely rejects an already-grounded final; reset _tests_ran ->
+    # re-runs the expensive sandbox test and double-feeds the outcome).
+    _CHECKPOINT_STATE_FIELDS = (
+        "read_paths", "test_pass_result", "_tests_ran",
+        "_contract_finals", "premature_finals", "reviewer_fails",
+        "did_code_change", "pending_verify", "_verify_final_rejected",
+        "did_web_search", "did_web_fetch", "_web_final_rejected",
+        "last_search_urls", "_web_fetch_injected",
+        "_executor_research_delegated", "_executor_impl_delegated",
+        "todos", "todo_id",
+        "_tool_attempts", "_tool_successes", "_turn",
+        "genome_id",
+    )
+
+    def _state_to_dict(self, state: _CallState) -> dict:
+        out = {}
+        for f in self._CHECKPOINT_STATE_FIELDS:
+            v = getattr(state, f, None)
+            if isinstance(v, set):
+                v = sorted(v)
+            out[f] = v
+        return out
+
+    def _state_from_dict(self, state: _CallState, d: dict) -> _CallState:
+        if not isinstance(d, dict):
+            return state
+        for f in self._CHECKPOINT_STATE_FIELDS:
+            if f not in d:
+                continue
+            v = d[f]
+            if f == "read_paths" and isinstance(v, list):
+                v = set(v)
+            try:
+                setattr(state, f, v)
+            except Exception:
+                pass
+        return state
+
     def _feed_outcome(self, agent_id: str, prompt: str, state: _CallState,
                       completed: bool = True, tool_success_rate: float = 0.0,
                       turns_used: int = 0, genome_id: str = ""):
@@ -1235,6 +1277,7 @@ class AgentServiceV2:
         history: Optional[List[dict]] = None,
         delegation_chain: Optional[List[str]] = None,
         research_discharged: bool = False,
+        resume: Optional[str] = None,
     ) -> AsyncGenerator[dict, None]:
         try:
             import runtime_v2.services.tool_executor as _te
@@ -1248,7 +1291,7 @@ class AgentServiceV2:
             _cache_snapshot = {}
 
         try:
-            async for chunk in self._step_agent_stream_inner(agent_id, prompt, history, delegation_chain, research_discharged):
+            async for chunk in self._step_agent_stream_inner(agent_id, prompt, history, delegation_chain, research_discharged, resume=resume):
                 yield chunk
         finally:
             try:
@@ -1263,6 +1306,7 @@ class AgentServiceV2:
         history: Optional[List[dict]] = None,
         delegation_chain: Optional[List[str]] = None,
         research_discharged: bool = False,
+        resume: Optional[str] = None,
     ) -> AsyncGenerator[dict, None]:
         from runtime_v2.prompts.system_prompts import build
         from runtime_v2.services.memory_core import get_relevant_memories
@@ -1334,8 +1378,82 @@ class AgentServiceV2:
         state._start_time = start_time if start_time else time.time()
         initial_messages_len = len(messages)
 
-        for turn in range(MAX_TURNS):
+        # --- Resume from a durable checkpoint (2026 autonomy move 3) ---
+        # When a resume id is supplied, load the stored run state so an
+        # interrupted run continues from its last consistent turn boundary
+        # instead of replaying from the top — preserving everything L1-L6
+        # verified/tested/reinforced (read_paths, test_pass_result, _tests_ran,
+        # _contract_finals, the guards, the fitness counters). The prompt/history
+        # passed on the resume call are REPLACED by the stored ones (the stored id
+        # is authoritative). If the checkpoint can't be found/loaded, fail safe by
+        # starting fresh (never a silently-wrong partial resume).
+        start_turn = 0
+        if resume:
+            try:
+                from runtime_v2.services.checkpointing import load_checkpoint
+                ckpt = load_checkpoint(resume)
+                if ckpt:
+                    prompt = str(ckpt.get("prompt") or prompt)
+                    messages = list(ckpt.get("messages") or messages)
+                    chain = list(ckpt.get("delegation_chain") or chain)
+                    research_discharged = bool(ckpt.get("research_discharged", research_discharged))
+                    genome_id = str(ckpt.get("genome_id") or genome_id)
+                    genome_weights = dict(ckpt.get("genome_weights") or {})
+                    self._state_from_dict(state, ckpt.get("state") or {})
+                    lg = ckpt.get("loop_guards") or {}
+                    consecutive_errors = int(lg.get("consecutive_errors", 0) or 0)
+                    unauthorized_tool_errors = int(lg.get("unauthorized_tool_errors", 0) or 0)
+                    healing_attempts = int(lg.get("healing_attempts", 0) or 0)
+                    _fetched_content = bool(lg.get("_fetched_content", _fetched_content))
+                    decision_counts = dict(lg.get("decision_counts") or {})
+                    history_actions = list(lg.get("history_actions") or [])
+                    start_turn = int(ckpt.get("turn", 0) or 0)
+                    initial_messages_len = int(ckpt.get("initial_messages_len", len(messages)) or len(messages))
+                    yield {"agent_id": agent_id, "type": "resumed", "from_turn": start_turn,
+                           "prompt": str(prompt)[:80]}
+                    log.info("[%s] resumed from checkpoint %s at turn %d", agent_id, resume, start_turn)
+                else:
+                    log.warning("[%s] resume id %s not found; starting fresh", agent_id, resume)
+                    yield {"agent_id": agent_id, "type": "resumed", "from_turn": 0, "fresh": True}
+            except Exception as ckpt_err:
+                log.warning("[%s] resume failed (%s); starting fresh", agent_id, ckpt_err)
+
+        for turn in range(start_turn, MAX_TURNS):
             state._turn = turn + 1
+            # --- Durable checkpoint (2026 autonomy move 3) ---
+            # Persist at the TOP of each turn, BEFORE the decision is fetched, so a
+            # crash mid-turn resumes from a consistent prior boundary. Written
+            # every turn (atomic overwrite-latest) so the most recent state is what
+            # a resume loads. NOT deleted here — delete happens only when the final
+            # is ACCEPTED by L1 (handler_status == DONE), never on a rejected/
+            # aborted/max-turns exit.
+            try:
+                from runtime_v2.services.checkpointing import write_checkpoint, checkpoint_id
+                ckpt = {
+                    "checkpoint_id": checkpoint_id(agent_id, prompt),
+                    "agent_id": agent_id,
+                    "prompt": prompt,
+                    "turn": state._turn,
+                    "messages": messages,
+                    "state": self._state_to_dict(state),
+                    "loop_guards": {
+                        "consecutive_errors": consecutive_errors,
+                        "unauthorized_tool_errors": unauthorized_tool_errors,
+                        "healing_attempts": healing_attempts,
+                        "_fetched_content": _fetched_content,
+                        "decision_counts": decision_counts,
+                        "history_actions": history_actions,
+                    },
+                    "delegation_chain": chain,
+                    "research_discharged": research_discharged,
+                    "genome_id": genome_id,
+                    "genome_weights": genome_weights,
+                    "resolved_model": resolved_model,
+                    "initial_messages_len": initial_messages_len,
+                }
+                write_checkpoint(ckpt["checkpoint_id"], ckpt)
+            except Exception as ckpt_err:
+                log.debug("[%s] checkpoint write skipped: %s", agent_id, ckpt_err)
             # --- Context window trim ---
             sys_msgs = [m for m in messages if m.get("role") == "system"]
             non_sys_msgs = [m for m in messages if m.get("role") != "system"]
@@ -1489,6 +1607,15 @@ class AgentServiceV2:
             if action == "final":
                 async for _ in self._handle_final(decision, agent_id, model, provider, messages, start_time, prompt, _fetched_content, state, research_discharged):
                     yield _
+                # Delete the checkpoint ONLY when the final was ACCEPTED by L1
+                # (handler_status == DONE). An L1-rejected final (CONTINUE) or any
+                # failed-exit path must keep the checkpoint — the run isn't done.
+                if state.handler_status == "DONE":
+                    try:
+                        from runtime_v2.services.checkpointing import delete_checkpoint, checkpoint_id
+                        delete_checkpoint(checkpoint_id(agent_id, prompt))
+                    except Exception as ckpt_err:
+                        log.debug("[%s] checkpoint delete skipped: %s", agent_id, ckpt_err)
                 if state.handler_status in ("DONE", "ABORT"):
                     return
                 continue
