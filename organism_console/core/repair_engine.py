@@ -37,8 +37,13 @@ _REPO_ROOT = KNOWLEDGE_BASE_DIR.parent.parent
 
 # R6: only repair inside source trees. Everything else (tests, config, docs,
 # model files, build/pipeline files, .env) is off-limits for auto-repair.
+# 2026: the ceiling is now the WRITTEN autonomy policy (autonomy_policy.json),
+# loaded at startup via swarm_os/services/autonomy_policy.py — the code enforces
+# the policy file and does NOT duplicate it (the old `src/` entry here went stale
+# precisely because this constant drifted from the written intent). _is_repairable_path
+# resolves the actual allowed dirs from the policy; these module constants remain
+# only as the degraded fail-closed fallback if the policy cannot be loaded.
 REPAIR_ALLOWED_DIRS = (
-    _REPO_ROOT / "src",
     _REPO_ROOT / "swarm_os",
     _REPO_ROOT / "runtime_v2",
     _REPO_ROOT / "organism_console",
@@ -64,16 +69,28 @@ BREAKER_FILE = KNOWLEDGE_BASE_DIR / "repair_breaker.json"
 
 
 def _is_repairable_path(file_path: Optional[Path]) -> bool:
-    """Allowlist source dirs + blocklist sensitive paths (constitutional R1-R7)."""
+    """Allowlist source dirs + blocklist sensitive paths (constitutional R1-R7).
+
+    2026: consults the written autonomy policy first (single source of truth —
+    directory-level + dependency-aware self-modify block). Falls back to the
+    module constants ONLY if the policy cannot be loaded, and that fallback is
+    fail-closed (missing policy -> not repairable)."""
     if not file_path:
-        return True
+        return False
+    try:
+        from swarm_os.services.autonomy_policy import get_autonomy_policy
+        policy = get_autonomy_policy()
+        if policy is not None:
+            return policy.is_repairable(file_path)
+    except Exception:
+        pass
+    # Degraded fail-closed fallback (policy missing/unloadable).
     try:
         resolved = Path(file_path).resolve()
     except Exception:
         return False
     if resolved.suffix != ".py":
         return False
-    # Never touch our own knowledge base or generated tests.
     try:
         if str(resolved).startswith(str(KNOWLEDGE_BASE_DIR.resolve())):
             return False

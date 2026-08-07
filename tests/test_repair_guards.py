@@ -6,8 +6,29 @@ import organism_console.core.repair_engine as repair_engine
 
 
 def test_is_repairable_path_allows_source_trees():
-    for p in ("src/core/foo.py", "swarm_os/memory/memory_bridge.py", "runtime_v2/services/x.py"):
-        assert repair_engine._is_repairable_path(Path(p))
+    # App-code source trees are repairable (src/ was deleted 2026-08; not listed).
+    for p in ("swarm_os/services/tool_registry.py", "runtime_v2/services/x.py",
+              "organism_console/core/y.py"):
+        assert repair_engine._is_repairable_path(Path(p)), p
+
+
+def test_is_repairable_path_blocks_self_modify_machinery():
+    # The autonomy policy (autonomy_policy.json) blocks the self-healing machinery
+    # AND its dependencies (dependency-aware scan) from unsupervised repair —
+    # recovery_engine imports memory_bridge, which imports vector_store, so all
+    # three are off-limits to a buggy repair.
+    blocked_self = (
+        "swarm_os/healing/recovery_engine.py",
+        "swarm_os/healing/governor.py",
+        "swarm_os/services/reflection_loop.py",
+        "swarm_os/services/security_gate.py",
+        "swarm_os/memory/memory_bridge.py",
+        "swarm_os/services/vector_store.py",
+        "swarm_os/app/main.py",
+        "autonomy_policy.json",
+    )
+    for p in blocked_self:
+        assert not repair_engine._is_repairable_path(Path(p)), p
 
 
 def test_is_repairable_path_blocks_sensitive():

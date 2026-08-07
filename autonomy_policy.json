@@ -1,0 +1,101 @@
+{
+  "version": 2,
+  "policy_name": "Autonomy Policy — unattended self-healing ceiling",
+  "last_reviewed": "2026-08-07",
+  "purpose": "Defines the ceiling of what the autonomous self-healing/self-learning layer may do WITHOUT a human in the loop. Everything here is a hard boundary chosen deliberately. Anything not explicitly allowed is denied. Loaded at startup by the watch-loop and repair engine via swarm_os/services/autonomy_policy.py; the version number makes policy changes reviewable and revertable. The code enforces THIS file — it does not duplicate it.",
+
+  "scope_ceiling": {
+    "summary": "App code only. The autonomous layer may repair/modify application code, never its own orchestration/healing/security/watch/evolution machinery. The self-modify block set is directory-level AND dependency-aware: any file under the blocked dirs, plus any project file the repair machinery imports, is off-limits — even if it lives in an otherwise-allowed directory.",
+    "repair_allowed_dirs": ["swarm_os", "runtime_v2", "organism_console"],
+    "never_self_modify": {
+      "orchestration": true,
+      "healing": true,
+      "security_gate": true,
+      "watch_loop": true,
+      "evolution_daemon": true,
+      "reflection_loop": true,
+      "reason": "A buggy repair must not be able to damage the safety layer that is doing the repairing. Editing these paths unattended requires human sign-off. Directory-level anchors below are combined with the loader's dependency-aware scan of what the repair/watch machinery imports.",
+      "blocked_paths": [
+        "swarm_os/healing/",
+        "swarm_os/services/security_gate.py",
+        "swarm_os/services/reflection_loop.py",
+        "swarm_os/services/evolution_daemon.py",
+        "swarm_os/services/outcome_fitness.py",
+        "swarm_os/services/autonomy_policy.py",
+        "swarm_os/app/main.py",
+        "autonomy_policy.json"
+      ]
+    },
+    "blocked_patterns": [
+      "tests", "test_", "conftest", ".env", ".git", ".venv", "venv", "node_modules",
+      "models", "docs", "data", "logs", "_data",
+      "AGENTS.md", "README", "package.json", "package-lock.json", "pyproject.toml",
+      "requirements", "pytest.ini", "tox.ini", "start-dev", "start_llama",
+      "scripts"
+    ],
+    "blocked_patterns_comments": {
+      "scripts": "scripts/ blocked: helper/ops tooling, not application logic, deliberately excluded from auto-repair scope."
+    },
+    "hard_model_boundary": {
+      "never_route_to": ["claude", "anthropic", "sonnet", "opus", "gpt-4"],
+      "reason": "Cost/trust boundary already enforced in _llm_client; kept here as the written record."
+    }
+  },
+
+  "evolution": {
+    "promotion": "staged_human_approved",
+    "reason": "Genome selection ranks by real fitness but a new generation's tool policy must be staged and reviewed before it becomes active. Nothing promotes itself.",
+    "details": {
+      "genomes_path": "data/evolution/genomes.jsonl",
+      "fitness_path": "data/evolution/fitness.jsonl",
+      "staging": "next generation written to data/evolution/staged/<gen>.jsonl, not active until approved",
+      "active_on": "explicit approval (CLI command or policy approval)",
+      "gated_by": "SWARM_EVOLUTION=1"
+    }
+  },
+
+  "rollback": {
+    "trigger": "signal_gated_diff_scoped",
+    "reason": "Automatic rollback fires ONLY on an explicit, measurable regression signal, and reverts ONLY the evidence-justified diff via the persisted snapshot/.bak — never a whole-tree revert.",
+    "signal_gate": {
+      "on_regression": true,
+      "signal_types": [
+        "post_repair_test_regression",
+        "downstream_consumer_breakage"
+      ],
+      "concrete_conditions": {
+        "post_repair_test_regression": "The repository test suite (pytest) must have PASSED before the repair was accepted, AND within the canary window (default 30 min after the repair ships) a re-run of the same suite FAILS with an error attributable to the repaired file (same module in the traceback). Threshold: ANY failing test whose traceback names the repaired file or its imported module.",
+        "downstream_consumer_breakage": "Within the canary window (default 30 min), an agent goal or tool call fails with an error whose traceback names a module that imports the repaired file (transitively, one level of imports). Threshold: ANY such failure — not a rate — because the failure is deterministic-attributable to the changed file."
+      },
+      "canary_window_minutes": 30,
+      "revert_scope": "diff_only",
+      "never_whole_tree": true,
+      "revert_sources": ["data/run_snapshots/", "mutation_repo .bak"],
+      "budget": "bounded per incident (1) + per day (mirrors repair_breaker daily cap)"
+    }
+  },
+
+  "watch_loop": {
+    "enabled": true,
+    "runs_in": "backend (server-side daemon in main.py lifespan), not just the CLI",
+    "event_sources": ["data/events/events.jsonl"],
+    "decision": "failure_class -> budget -> verify (2026 Self-Healing Orchestrators pattern)",
+    "per_incident_repair_budget": 1,
+    "daily_repair_budget": 50,
+    "ask_human_on": "confidence_floor_not_met (never trusts the agent's own confidence; uses deterministic ranker)",
+    "escalation": {
+      "beyond_budget": "stops, flags, waits for human",
+      "no_evidence": "stays silent (evidence-grounded or stay silent)"
+    }
+  },
+
+  "approval_model": {
+    "unattended_allowed": "application-code repairs under the scope_ceiling + signal-gated rollback",
+    "human_approval_required": [
+      "any change to never_self_modify paths",
+      "evolution promotion to active",
+      "rollback broader than the evidence-justified diff",
+      "any repair that exceeds the daily/per-incident budget"
+    ]
+  }
+}
