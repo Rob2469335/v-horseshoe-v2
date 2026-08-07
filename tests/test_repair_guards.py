@@ -249,3 +249,12 @@ def test_tier2_skips_llm_patch_for_model_variability(tmp_path, monkeypatch):
     # Disclosure: this path skips the patch but does NOT re-dispatch a retry
     # (regeneration is the agent loop's job upstream). Make that explicit.
     assert res.get("retry_dispatched") is False
+
+def test_save_breaker_uses_filelock(tmp_path, monkeypatch):
+    """2026 coexistence: the shared breaker file must be written under filelock so
+    two engines can never lose an increment or race the trip threshold — the
+    write path is never the weak link."""
+    import inspect
+    src = inspect.getsource(repair_engine._save_breaker)
+    assert "FileLock" in src
+    assert "BREAKER_FILE" in src

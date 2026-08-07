@@ -326,10 +326,20 @@ def main():
     try:
         from organism_console.core.self_repair_engine import SelfRepairEngine
         from organism_console.core.repair_engine import RepairWatchman
-        _repair_watchman = RepairWatchman(SelfRepairEngine(build_command_context()), interval_seconds=30)
-        _repair_watchman.start(start_at_end=True)
-        atexit.register(_repair_watchman.stop)
-        ctx.console.print("[dim]⚕ Auto-repair watchman active (tailing events.jsonl for code failures)[/dim]")
+        # Coexistence guard (2026): when the backend's autonomous watch-loop is
+        # enabled (SWARM_AUTONOMY=1, the default), the CLI must NOT start its own
+        # code-repair watchman. Two independent tailers on the same events.jsonl
+        # would double-dispatch repairs on the same file and race on the shared
+        # repair_breaker.json / repair_lessons.jsonl state (no cross-process lock).
+        # One code-repair tailer, one engine, one writer to the shared state.
+        import os as _os_cli
+        if _os_cli.environ.get("SWARM_AUTONOMY", "1").strip() != "1":
+            _repair_watchman = RepairWatchman(SelfRepairEngine(build_command_context()), interval_seconds=30)
+            _repair_watchman.start(start_at_end=True)
+            atexit.register(_repair_watchman.stop)
+            ctx.console.print("[dim]⚕ Auto-repair watchman active (tailing events.jsonl for code failures)[/dim]")
+        else:
+            log.info("SWARM_AUTONOMY=1 — backend watch-loop owns code repair; CLI RepairWatchman not started.")
     except Exception as exc:
         log.warning(f"Auto-repair watchman failed to start: {exc}")
 

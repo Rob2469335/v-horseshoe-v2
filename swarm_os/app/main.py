@@ -301,6 +301,33 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         log.warning(f"Evolution daemon unavailable: {exc}")
 
+    # Autonomous watch-loop (2026 autonomy layer): tails events.jsonl server-side
+    # and triggers code repair WITHOUT a human launching the CLI. Reads its budgets
+    # from autonomy_policy.json (fail-closed if the policy is missing). Deferred
+    # past the boot window so the API serves immediately; registered in bg_tasks
+    # so shutdown cancels it cleanly. Gated by SWARM_AUTONOMY=1 (default on when
+    # unset) — set to 0 to keep repairs manual-only.
+    try:
+        import os as _os_autonomy
+        if _os_autonomy.environ.get("SWARM_AUTONOMY", "1").strip() == "1":
+            from swarm_os.services.watch_loop import WatchLoop
+            from organism_console.core.self_repair_engine import SelfRepairEngine
+
+            async def _autonomy_watch(first_delay: float = 60.0):
+                if first_delay > 0:
+                    await asyncio.sleep(first_delay)
+                loop = WatchLoop(SelfRepairEngine(), interval_seconds=30.0)
+                loop.start(start_at_end=True)
+                log.info("Started autonomous watch-loop (server-side, SWARM_AUTONOMY=1)")
+                while loop.is_running:
+                    await asyncio.sleep(30.0)
+
+            t_auto = asyncio.create_task(_autonomy_watch())
+            bg_tasks.add(t_auto)
+            log.info("Autonomous watch-loop daemon registered")
+    except Exception as exc:
+        log.warning(f"Autonomous watch-loop unavailable: {exc}")
+
     try:
         from swarm_os.healing.system_probes import run_system_probes
 

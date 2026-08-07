@@ -128,7 +128,15 @@ def _load_breaker() -> Dict[str, Any]:
 def _save_breaker(state: Dict[str, Any]):
     try:
         KNOWLEDGE_BASE_DIR.mkdir(parents=True, exist_ok=True)
-        BREAKER_FILE.write_text(json.dumps(state, indent=2), encoding="utf-8")
+        # 2026 (watch-loop coexistence): the breaker file is shared state (daily
+        # cap + circuit-open timestamps). Serialize the write path with the same
+        # filelock primitive used for AGENTS.md / auto_repairs so a read-modify-
+        # write from two engines can never lose an increment or race the trip
+        # threshold. The CLI watchman is gated off when SWARM_AUTONOMY=1, so this
+        # is belt-and-suspenders — but the write must never be the weak link.
+        from filelock import FileLock
+        with FileLock(str(BREAKER_FILE) + ".lock", timeout=5.0):
+            BREAKER_FILE.write_text(json.dumps(state, indent=2), encoding="utf-8")
     except Exception as e:
         log.warning("Failed to persist circuit breaker state: %s", e)
         pass
