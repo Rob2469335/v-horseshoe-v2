@@ -75,11 +75,19 @@ def _seed_population() -> list[dict]:
 
 
 def _score_genome(genome: dict) -> float:
-    """Best real outcome fitness recorded for this genome. Returns a small
-    prior (0.05) if none yet so novel genomes don't get zero and immediately die."""
+    """Best real outcome fitness recorded for this genome. Falls back to the
+    best AGGREGATE outcome across all agents when no exact `genome_<n>` record
+    exists: the population is a single shared tool-policy lineage consumed by
+    every agent (one `_best_genome_tool_weights()` result reordered into each
+    allowed-tool list), and live outcomes are keyed `agent:<id>` in
+    fitness.jsonl, so without the aggregate fallback every genome scores the
+    flat 0.05 prior and the population freezes (0.0425 elite plateau). 0.05 is
+    returned only when there is no real signal at all."""
     try:
-        from swarm_os.services.outcome_fitness import best_fitness
+        from swarm_os.services.outcome_fitness import best_fitness, best_aggregate_fitness
         f = best_fitness(genome.get("id", ""))
+        if f is None:
+            f = best_aggregate_fitness()
         if f is not None:
             # Apply decayed fitness if this is an elite that has survived multiple generations.
             # (Decay is tracked in memory to prevent immortal elites from dominating forever)

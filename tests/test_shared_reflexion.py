@@ -69,6 +69,30 @@ async def test_store_auto_assigns_scope():
 
 
 @pytest.mark.asyncio
+async def test_store_deterministic_id_overwrites_duplicate_failure():
+    service, client = _make_service()
+    await service.store_reflexion(
+        "agent:code_analyzer audit", "read", "File not found: x.py",
+        "list the parent dir first", component="code_analyzer", confidence=0.7,
+    )
+    first_id = client.upsert.await_args.kwargs["points"][0].id
+    await service.store_reflexion(
+        "agent:code_analyzer audit", "read", "File not found: x.py",
+        "list the parent dir first", component="code_analyzer", confidence=0.7,
+    )
+    second_id = client.upsert.await_args.kwargs["points"][0].id
+    assert first_id == second_id, "repeated identical failure must reuse the same point id"
+    assert client.upsert.await_count == 2
+    # different failure_reason -> different point id
+    await service.store_reflexion(
+        "agent:code_analyzer audit", "read", "File not found: y.py",
+        "list the parent dir first", component="code_analyzer", confidence=0.7,
+    )
+    third_id = client.upsert.await_args.kwargs["points"][0].id
+    assert third_id != first_id, "different failure must map to a distinct point id"
+
+
+@pytest.mark.asyncio
 async def test_store_respects_explicit_scope():
     service, client = _make_service()
     await service.store_reflexion(

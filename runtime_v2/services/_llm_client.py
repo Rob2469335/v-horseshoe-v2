@@ -38,8 +38,23 @@ def _cloud_response_format(litellm_model: str) -> dict:
     json_schema (schema-constrained JSON) when the provider supports it — this
     prevents the malformed-JSON retry loops that the regex-salvage parser used to
     absorb. Fall back to plain json_object for providers without json_schema
-    support (e.g. some llama.cpp forks / older endpoints)."""
+    support (e.g. some llama.cpp forks / older endpoints).
+
+    LIVE-VERIFIED 2026-08-06: the OpenCode Go/Zen proxies
+    (https://opencode.ai/zen/go/v1) REJECT the strict json_schema response_format
+    with `400 invalid_request_error: This response_format type is unavailable
+    now` — even though litellm's supports_response_schema("openai/deepseek-v4-
+    flash") returns True (it trusts the DeepSeek provider table, not the actual
+    proxy). Because the analysis-cloud primary IS openai/deepseek-v4-flash, every
+    cloud tool decision died on that 400 (non-retryable → the Router never reached
+    the fallback chain) and the /upgrade loop failed with "Unable to determine
+    next action". json_object is verified 200 on the same endpoint. So: any model
+    whose RESOLVED endpoint is an OpenCode proxy gets json_object, regardless of
+    what litellm's support table says."""
     try:
+        base, _, _ = _endpoint_for(litellm_model)
+        if base and "opencode.ai" in base:
+            return {"type": "json_object"}
         from litellm import supports_response_schema
         if supports_response_schema(litellm_model):
             return {

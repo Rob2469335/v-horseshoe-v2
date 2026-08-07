@@ -22,6 +22,36 @@ def client():
     with TestClient(app) as test_client:
         yield test_client
 
+
+@pytest.fixture(scope="session", autouse=True)
+def harden_testclient_shutdown():
+    import logging
+    import threading
+    from starlette import testclient as _starlette_testclient
+
+    log = logging.getLogger("tests.conftest")
+    _orig_exit = _starlette_testclient.TestClient.__exit__
+
+    def _bounded_exit(self, *args):
+        t = threading.Thread(
+            target=_orig_exit,
+            args=(self, *args),
+            name="testclient-exit",
+            daemon=True,
+        )
+        t.start()
+        t.join(timeout=20)
+        if t.is_alive():
+            log.warning(
+                "TestClient shutdown exceeded 20s (anyio#1014 portal wakeup lost "
+                "on asyncio); abandoning teardown to keep the suite running"
+            )
+
+    _starlette_testclient.TestClient.__exit__ = _bounded_exit
+    yield
+    _starlette_testclient.TestClient.__exit__ = _orig_exit
+
+
 from unittest.mock import patch, AsyncMock, MagicMock
 from qdrant_client import AsyncQdrantClient
 

@@ -39,7 +39,11 @@ def test_evolution_selects_elite_on_real_fitness(tmp_path, monkeypatch):
     of.record_outcome("genome_1", completion=0.0, tool_success=0.2, test_pass=0.0, efficiency=0.0)
 
     summary = ed.evolve_one_generation()
-    assert "genome_0" in summary["elites"]  # best real fitness kept
+    # The real signal must reach the kernel (was a frozen 0.0425 elite plateau
+    # when every genome scored the 0.05 prior because live outcomes are keyed
+    # `agent:<id>`, never `genome_<n>`). With the shared-lineage aggregate
+    # fallback, fresh children inherit the lineage's best signal, so we assert
+    # the plateau is broken and the population is intact — not any one id.
     assert summary["population"] == ed.POPULATION_SIZE
     assert summary["best_fitness"] > 0.5
 
@@ -50,6 +54,42 @@ def test_evolution_daemon_never_raises(tmp_path, monkeypatch):
     # Empty/missing paths -> graceful
     summary = ed.evolve_one_generation()
     assert summary["generation"] >= 0 or "error" in summary
+
+
+def test_score_genome_falls_back_to_aggregate_fitness(tmp_path, monkeypatch):
+    """Reviewer item #4: live outcomes are keyed `agent:<id>` which never equals
+    the population's `genome_<n>` ids, so exact-ID best_fitness returns None and
+    every genome scores the flat 0.05 prior (frozen population). _score_genome
+    must fall back to best_aggregate_fitness() so the real signal reaches the
+    kernel."""
+    from swarm_os.services import evolution_daemon as ed
+    from swarm_os.services import outcome_fitness as of
+
+    monkeypatch.setattr(ed, "GENOMES_PATH", tmp_path / "genomes.jsonl")
+    monkeypatch.setattr(of, "FITNESS_PATH", tmp_path / "fitness.jsonl")
+
+    # Only agent-keyed outcomes exist (the live shape).
+    of.record_outcome("agent:coder", completion=1.0, tool_success=1.0, test_pass=1.0, efficiency=1.0)
+
+    score = ed._score_genome({"id": "genome_12345_99"})
+    assert score > 0.5  # aggregate fallback, not the 0.05 prior
+    assert of.best_fitness("genome_12345_99") is None  # exact match truly absent
+
+
+def test_score_genome_exact_match_takes_precedence(tmp_path, monkeypatch):
+    """When a genome has a real exact-ID outcome, that must win over the
+    aggregate fallback."""
+    from swarm_os.services import evolution_daemon as ed
+    from swarm_os.services import outcome_fitness as of
+
+    monkeypatch.setattr(ed, "GENOMES_PATH", tmp_path / "genomes.jsonl")
+    monkeypatch.setattr(of, "FITNESS_PATH", tmp_path / "fitness.jsonl")
+
+    of.record_outcome("genome_7", completion=1.0, tool_success=1.0, test_pass=1.0, efficiency=1.0)
+    # Weak aggregate signal present too.
+    of.record_outcome("agent:other", completion=0.0, tool_success=0.2, test_pass=0.0, efficiency=0.0)
+
+    assert ed._score_genome({"id": "genome_7"}) > 0.5
 
 
 @pytest.mark.asyncio

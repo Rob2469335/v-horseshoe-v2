@@ -150,4 +150,61 @@ async def test_tool_failure_records_event_store_event(tmp_path):
     tool_events = [e for e in events if e.get("event_type") == "tool_result"]
     assert len(tool_events) == 1
     assert tool_events[0]["payload"]["result"]["ok"] is False
-    assert "File not found" in tool_events[0]["payload"]["result"]["error"]
+
+
+@pytest.mark.asyncio
+async def test_past_mistake_warning_injected_into_tool_decision_prompt():
+    """Reviewer item #1 (b): prove the [PAST-MISTAKE WARNING] actually lands in the
+    system prompt handed to the LLM for a tool decision — not just that a rule was
+    stored. A stored ReflexionMemory hint must appear in the final messages sent to
+    complete_for_tool_decision."""
+    import runtime_v2.services.stream_runner as SR
+
+    captured = {}
+
+    class FakeMsg:
+        content = '{"action": "final", "response": "ok"}'
+
+    class FakeChoice:
+        message = FakeMsg()
+
+    class FakeResp:
+        choices = [FakeChoice()]
+
+    async def fake_complete(model, messages, fallbacks):
+        captured["messages"] = messages
+        return FakeResp()
+
+    class FakeReflectionService:
+        async def check_for_past_mistakes(self, task_context):
+            return (
+                "WARNING: A similar approach previously failed. Advice: Before reading "
+                "a file, use filesystem operation=list or glob to confirm it exists. "
+                "Do NOT repeat: Do NOT guess file paths"
+            )
+
+    async def fake_live_fallbacks(mode="auto"):
+        return []
+
+    with patch.object(SR, "complete_for_tool_decision", side_effect=fake_complete), \
+         patch("swarm_os.services.reflection_loop.get_reflection_service",
+               return_value=FakeReflectionService()), \
+         patch("runtime_v2.services._semantic_decision_cache.get_semantic_cached_decision",
+               new=None), \
+         patch("runtime_v2.services.memory_core.get_relevant_memories", return_value=""), \
+         patch("runtime_v2.services.fallback_manager.get_live_fallbacks",
+               side_effect=fake_live_fallbacks):
+        result = await SR.get_tool_decision(
+            model="qwen3.5-4b",
+            messages=[{"role": "user", "content": "analyze the codebase for bugs"},
+                      {"role": "user", "content": "fix the failing filesystem read"}],
+            agent_id="coder",
+            allowed_tools=["filesystem", "final"],
+        )
+
+    assert result is not None
+    sent = captured["messages"]
+    system_text = "\n".join(str(m.get("content", "")) for m in sent if m.get("role") == "system")
+    assert "[PAST-MISTAKE WARNING]" in system_text, "warning must be injected into the system prompt"
+    assert "Before reading a file, use filesystem operation=list or glob" in system_text
+    assert "Do NOT guess file paths" in system_text

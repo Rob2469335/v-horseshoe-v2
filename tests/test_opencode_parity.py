@@ -381,6 +381,145 @@ async def test_coder_not_forced_into_web_search_on_turn_0():
 
 
 @pytest.mark.asyncio
+async def test_web_fetch_injected_after_web_search_on_internet_goal():
+    """WEB-FETCH INJECTION (2026-08-06): the researcher (even routed to cloud
+    deepseek) repeatedly re-selects web_search after a successful search and never
+    calls web_fetch — every `final` was rejected by the internet web_fetch guard
+    until the loop detector tripped. After web_search succeeds, the next decision
+    is deterministically forced to web_fetch the top result URL."""
+    from runtime_v2.api.agent_service_v2 import AgentServiceV2, _CallState
+    service = AgentServiceV2()
+    service._call_llm = AsyncMock(return_value={"action": "final", "response": "x"})
+    service._agents = {"researcher": {}}
+    # Simulate a prior successful web_search that returned result URLs.
+    state = _CallState()
+    state.did_web_search = True
+    state.last_search_urls = [
+        "https://www.langchain.com/resources/ai-agent-frameworks",
+        "https://example.com/2",
+    ]
+    decision = await service._get_decision(
+        "researcher", "m",
+        [{"role": "user", "content": "hi"}],
+        ["web_search", "web_fetch", "final"],
+        "search the internet for SOTA ai agent frameworks",
+        4,
+        state,
+    )
+    assert decision["action"] == "web_fetch"
+    assert decision["url"] == "https://www.langchain.com/resources/ai-agent-frameworks"
+    assert state._web_fetch_injected
+    assert not service._call_llm.called
+    # Once web_fetch has happened (or the injection fired), the LLM is free again.
+    state.did_web_fetch = True
+    service._call_llm.reset_mock()
+    await service._get_decision(
+        "researcher", "m",
+        [{"role": "user", "content": "hi"}],
+        ["web_search", "web_fetch", "final"],
+        "search the internet for SOTA ai agent frameworks",
+        5,
+        state,
+    )
+    assert service._call_llm.called
+    # No URLs captured -> no injection, LLM decides.
+    service._call_llm.reset_mock()
+    state2 = _CallState()
+    state2.did_web_search = True
+    await service._get_decision(
+        "researcher", "m",
+        [{"role": "user", "content": "hi"}],
+        ["web_search", "web_fetch", "final"],
+        "search the internet for SOTA ai agent frameworks",
+        4,
+        state2,
+    )
+    assert service._call_llm.called
+
+
+@pytest.mark.asyncio
+async def test_executor_delegates_research_phase_then_impl_phase():
+    """COMPOUND-GOAL DECOMPOSITION (2026-08-06): the /upgrade compound goal
+    ('research + analyze + implement') must be split into two deterministic
+    delegations: turn 0 → researcher with ONLY the research phase; after research
+    returns → coder with ONLY the implementation phase. Previously the executor
+    handed the FULL compound goal to researcher, which then tried all three jobs
+    inside MAX_TURNS=8 and hit turn_budget_exhausted on the search phase."""
+    from runtime_v2.api.agent_service_v2 import AgentServiceV2, _CallState
+    service = AgentServiceV2()
+    service._call_llm = AsyncMock(return_value={"action": "final", "response": "x"})
+    service._agents = {"researcher": {}, "coder": {}}
+    goal = ("Find SOTA Python AI agent upgrades via web_search. Research GitHub, "
+            "Arxiv, HuggingFace. Analyze the codebase and use filesystem to "
+            "implement upgrades.")
+    state = _CallState()
+    # Turn 0: executor delegates the RESEARCH phase only.
+    d0 = await service._get_decision(
+        "executor", "m",
+        [{"role": "user", "content": "hi"}],
+        ["delegate", "final"],
+        goal, 0, state,
+    )
+    assert d0["action"] == "delegate"
+    assert d0["target_agent"] == "researcher"
+    assert "implement" not in d0["task"]
+    assert "Research GitHub" in d0["task"]
+    # After research returns (executor re-invoked on a later turn), the
+    # IMPLEMENTATION phase goes to coder.
+    state._executor_research_delegated = True
+    d1 = await service._get_decision(
+        "executor", "m",
+        [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "delegate"},
+         {"role": "user", "content": "TOOL RESULT (delegate) researcher responded: findings"}],
+        ["delegate", "final"],
+        goal, 2, state,
+    )
+    assert d1["action"] == "delegate"
+    assert d1["target_agent"] == "coder"
+    assert "implement" in d1["task"]
+    assert not service._call_llm.called
+
+
+@pytest.mark.asyncio
+async def test_executor_phase2_only_after_research_delegated():
+    """The executor's coder phase-2 injection must NOT fire before research was
+    actually delegated (else an executor with a code-only goal would hand the
+    whole task to coder without research, skipping the grounding step)."""
+    from runtime_v2.api.agent_service_v2 import AgentServiceV2, _CallState
+    service = AgentServiceV2()
+    service._call_llm = AsyncMock(return_value={"action": "final", "response": "x"})
+    service._agents = {"coder": {}}
+    goal = "Fix the bug in runtime_v2/services/memory_core.py"
+    state = _CallState()
+    await service._get_decision(
+        "executor", "m",
+        [{"role": "user", "content": "hi"}],
+        ["delegate", "final"],
+        goal, 3, state,
+    )
+    # No research flag set → no forced coder delegation; LLM decides.
+    assert service._call_llm.called
+
+
+@pytest.mark.asyncio
+async def test_split_compound_goal_phases():
+    """The goal splitter extracts only the research sentences for researcher and
+    only the implementation sentences for coder."""
+    from runtime_v2.api.agent_service_v2 import _split_compound_goal
+    r, i = _split_compound_goal(
+        "Find SOTA Python AI agent upgrades via web_search. Research GitHub, Arxiv, "
+        "HuggingFace. Analyze the codebase and use filesystem to implement upgrades."
+    )
+    assert "Research GitHub" in r
+    assert "implement" not in r
+    assert "implement upgrades" in i
+    assert "web_search" not in i
+    # Single-phase goals degrade gracefully (both parts non-empty).
+    r2, i2 = _split_compound_goal("search the internet for the latest python version")
+    assert r2 and i2
+
+
+@pytest.mark.asyncio
 async def test_coordinator_routes_after_ask_user_answer_no_requery():
     """POST-ASK_USER GUARD: once the user has answered an ask_user (the CLI feeds
     it back as an `Observation:` history turn), the stateless coordinator must
@@ -598,4 +737,122 @@ async def test_report_agent_internet_guard_unaffected_by_fix_deliverable():
         pass
     assert state.handler_status == "CONTINUE"
     assert any("web_search" in m.get("content", "") for m in messages)
+
+
+@pytest.mark.asyncio
+async def test_research_discharged_relaxes_internet_guard_downstream():
+    """PER-AGENT-ROLE SCOPING (2026-08-06): after the executor chain's researcher
+    already did web_search + web_fetch, the downstream coder/code_analyzer must NOT
+    be re-forced through the internet-goal guards. Previously the guard re-checked
+    the goal TEXT (which still contains 'internet/upgrades') against every agent in
+    the chain, forcing identical re-searches of the same URLs — wasted turns + cloud
+    calls on research already done once upstream."""
+    service = AgentServiceV2()
+    state = _CallState()
+    state.did_code_change = True  # coder edited the file (fix deliverable met)
+    messages = [{"role": "user", "content": "hi"}]
+    gen = service._handle_final(
+        {"action": "final", "response": "implemented the upgrade"}, "coder", "m", "p",
+        messages, 0.0,
+        "Analyze the codebase and use filesystem to implement the upgrades.",
+        True, state, research_discharged=True)
+    async for _ in gen:
+        pass
+    # Not rejected by the internet guards — research was discharged upstream.
+    assert state.handler_status != "CONTINUE"
+    # coder edit invariant still applies: a fix-intent goal with no code change is
+    # still rejected even with research discharged.
+    state2 = _CallState()
+    messages2 = [{"role": "user", "content": "hi"}]
+    gen2 = service._handle_final(
+        {"action": "final", "response": "no edit"}, "coder", "m", "p",
+        messages2, 0.0,
+        "Analyze the codebase and use filesystem to implement the upgrades.",
+        True, state2, research_discharged=True)
+    async for _ in gen2:
+        pass
+    assert state2.handler_status == "CONTINUE"
+    assert any("operation=write" in m.get("content", "") or "operation=patch" in m.get("content", "")
+               for m in messages2)
+
+
+@pytest.mark.asyncio
+async def test_research_discharged_reaches_child_coder_via_handle_delegate():
+    """FULL-RECURSION-PATH PROPAGATION (2026-08-06): the live /upgrade evidence
+    showed coder still being rejected for 'internet goal without web_search' even
+    after the executor chain's researcher already researched. The unit tests only
+    covered _handle_final in isolation — never the recursion through
+    _handle_delegate → step_agent_stream(child) that actually carries the flag.
+    This test drives the REAL _handle_delegate: executor → researcher (phase 1,
+    flag stays False for researcher), then executor → coder (phase 2, flag must be
+    True because state._executor_research_delegated was set on phase 1)."""
+    from runtime_v2.api.agent_service_v2 import AgentServiceV2, _CallState
+    service = AgentServiceV2()
+    service._agents = {"researcher": {}, "coder": {}}
+    captured: list[tuple[str, bool]] = []
+
+    async def fake_child_stream(agent: str, task: str, **kwargs):
+        captured.append((agent, kwargs.get("research_discharged", False)))
+        yield {"agent_id": agent, "type": "final", "content": "done",
+               "model": "m", "provider": "p"}
+
+    service.step_agent_stream = fake_child_stream
+    state = _CallState()
+    goal = ("Find SOTA upgrades via web_search. Research GitHub. Then analyze the "
+            "codebase and use filesystem to implement upgrades.")
+
+    # Phase 1: executor delegates the RESEARCH half to researcher.
+    messages: list = []
+    async for _ in service._handle_delegate(
+            {"action": "delegate", "target_agent": "researcher", "task": goal},
+            "executor", ["executor"], "m", "p", messages, goal, 0.0, state):
+        pass
+    assert captured == [("researcher", False)]
+    assert state._executor_research_delegated is True
+
+    # Phase 2: after research returned, executor delegates the IMPLEMENTATION half
+    # to coder. _handle_delegate must hand research_discharged=True to the child
+    # so coder's final is not re-forced through the internet-goal guards.
+    async for _ in service._handle_delegate(
+            {"action": "delegate", "target_agent": "coder", "task": goal},
+            "executor", ["executor"], "m", "p", messages, goal, 0.0, state):
+        pass
+    assert captured[-1] == ("coder", True)
+
+    # And a coder child invoked WITHOUT the executor phase-1 flag (e.g. the
+    # coordinator delegated a compound goal straight to coder) must still get
+    # research_discharged=False — the guards stay active, research not done yet.
+    state2 = _CallState()
+    captured2: list[tuple[str, bool]] = []
+    service.step_agent_stream = fake_child_stream
+    async def _capture2(agent: str, task: str, **kwargs):
+        captured2.append((agent, kwargs.get("research_discharged", False)))
+        yield {"agent_id": agent, "type": "final", "content": "done",
+               "model": "m", "provider": "p"}
+    service.step_agent_stream = _capture2
+    async for _ in service._handle_delegate(
+            {"action": "delegate", "target_agent": "coder", "task": goal},
+            "executor", ["executor"], "m", "p", [], goal, 0.0, state2):
+        pass
+    assert captured2 == [("coder", False)]
+
+
+def test_natural_phrasing_compound_goal_routes_to_executor():
+    """COMPOUND-GOAL DECOMPOSITION (2026-08-06, finding #5): the naturally-phrased
+    /upgrade variant — 'analyze my codebase for bugs and search internet for
+    improvements and upgrades' — has NO explicit fix verb, but is still a compound
+    research+code goal. It must route to executor (which splits the phases) instead
+    of falling to code_analyzer/coder and exhausting the turn budget re-searching."""
+    from runtime_v2.api._agent_routing import is_compound_goal, best_route_target
+    from runtime_v2.api.agent_service_v2 import _split_compound_goal
+    g = "analyze my codebase for bugs and search internet for improvements and upgrades"
+    assert is_compound_goal(g)
+    assert best_route_target(g) == "executor"
+    r, i = _split_compound_goal(g)
+    assert "search internet" in r
+    assert "implement" not in r
+    # Pure single-intent goals are NOT hijacked.
+    assert not is_compound_goal("analyze my codebase for bugs")
+    assert not is_compound_goal("search the internet for the latest python version")
+
 

@@ -59,6 +59,62 @@ def _clean_search_query(prompt: str, max_len: int = 300) -> str:
     return text[:max_len]
 
 
+# Sentence-level intent keywords used by `_split_compound_goal`. Research
+# sentences ask the agent to FIND external information; implementation
+# sentences direct the agent to EDIT the codebase.
+_RESEARCH_SENT_RE = re.compile(
+    r"\b(research|search|find|investigate|look (up|into)|browse|survey)\b|"
+    r"sota|state of the art|best practices|latest|github|arxiv|huggingface|"
+    r"\bweb[- ]?research\b|via web|on the internet",
+    re.IGNORECASE,
+)
+_IMPLEMENT_SENT_RE = re.compile(
+    r"\b(implement|fix|patch|write|create|modify|change|update|refactor|"
+    r"edit|solve|repair|correct)\b|use filesystem|analyze the codebase|"
+    r"rewrite broken code",
+    re.IGNORECASE,
+)
+
+
+def _split_compound_goal(goal: str):
+    """Split a compound 'research THEN implement' goal into its two phases so the
+    executor can delegate each phase to the agent whose turn budget matches its
+    job — instead of handing the whole thing to researcher, which then burns all
+    MAX_TURNS on the search phase before ever reaching analysis/implementation
+    (the observed /upgrade turn_budget_exhausted for researcher).
+
+    Returns (research_part, implementation_part). Sentences are classified by
+    intent; implementation keywords take precedence when a sentence contains both
+    (e.g. "Analyze the codebase and use filesystem to implement upgrades.").
+    A phase with no matching sentences falls back to the full goal so nothing is
+    silently dropped.
+    """
+    text = _clean_search_query(goal)
+    if not text:
+        return "", ""
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
+    research_parts, implement_parts = [], []
+    for s in sentences:
+        has_research = bool(_RESEARCH_SENT_RE.search(s))
+        has_implement = bool(_IMPLEMENT_SENT_RE.search(s))
+        if has_implement:
+            # Implementation wins on ambiguity (compound "analyze the codebase
+            # AND use filesystem to implement upgrades" is an EDIT directive).
+            implement_parts.append(s)
+        elif has_research:
+            research_parts.append(s)
+        else:
+            # Neutral sentence: keep it with the phase that has content so far.
+            (research_parts if not implement_parts else implement_parts).append(s)
+    research = " ".join(research_parts).strip()
+    implementation = " ".join(implement_parts).strip()
+    if not research:
+        research = text if not implementation else implementation
+    if not implementation:
+        implementation = research
+    return research, implementation
+
+
 # The CLI (organism_console/ui/live_stream.py) feeds a user's typed answer to an
 # `ask_user` back as a user message beginning with `Observation:` containing
 # {"answer": "<text>"}. These helpers detect that continuation turn.
@@ -128,6 +184,17 @@ class _CallState:
     # internet goal needs actual fetched content, not just search snippets.
     did_web_fetch: bool = False
     _web_final_rejected: bool = False
+    # Top URLs from the last successful web_search, captured so the loop can
+    # deterministically inject a web_fetch (the model — even cloud deepseek —
+    # repeatedly re-selects web_search instead of web_fetch, loop-tripping the
+    # circuit breaker before any page is ever read).
+    last_search_urls: list = field(default_factory=list)
+    _web_fetch_injected: bool = False
+    # Executor compound-goal chaining phase flags: research was delegated (and
+    # returned) so the implementation phase must now go to coder — deterministically,
+    # because the executor LLM has been observed to re-loop instead of delegating.
+    _executor_research_delegated: bool = False
+    _executor_impl_delegated: bool = False
     # Set when the editing agent (`coder`) successfully writes or patches a
     # file this run. Used as a hard invariant: an editing agent that is handed a
     # fix-intent goal may NOT finalize without having actually modified code
@@ -373,7 +440,11 @@ class AgentServiceV2:
     # Decision fetching: fast-route, warmup, or LLM call
     # -----------------------------------------------------------------------
     async def _get_decision(self, agent_id: str, model: str, trimmed_messages: list,
-                            allowed_tools: list, prompt: str, turn: int) -> Optional[dict]:
+                            allowed_tools: list, prompt: str, turn: int,
+                            state: "_CallState" = None,
+                            research_discharged: bool = False) -> Optional[dict]:
+        if state is None:
+            state = _CallState()
         if agent_id == "coordinator" and turn == 0:
             fast = fast_route_coordinator(prompt)
             if fast is not None:
@@ -443,7 +514,7 @@ class AgentServiceV2:
         # pure research and it never edits (the repeated /upgrade dead-loop).
         # coder reads/edits first and uses web_search at its own discretion
         # (+ is still bound by the internet-goal web_fetch final guard).
-        if turn == 0 and agent_id in ANALYSIS_AGENTS:
+        if turn == 0 and agent_id in ANALYSIS_AGENTS and not research_discharged:
             query = (prompt or "").strip()
             internet_goal = bool(_INTERNET_GOAL_RE.search(query)) if query else False
             if internet_goal:
@@ -455,12 +526,32 @@ class AgentServiceV2:
         # Its FIRST action must be research-first — deterministically delegate to
         # researcher so the code-changes downstream are grounded in real findings,
         # instead of coder researching itself and loop-tripping the /upgrade dead-loop.
+        # COMPOUND-GOAL DECOMPOSITION (2026-08-06): the delegated researcher task is
+        # ONLY the research phase — NOT the full "analyze + implement" goal. Handing
+        # the whole compound goal to researcher made it try all three jobs inside
+        # MAX_TURNS=8 and burn out on the search phase (turn_budget_exhausted). The
+        # implementation phase stays with executor, which delegates it to coder after
+        # research returns.
         if turn == 0 and agent_id == "executor":
             query = (prompt or "").strip()
             if query and bool(_INTERNET_GOAL_RE.search(query)):
-                log.info("[executor] compound goal — fast-start turn %d → delegate researcher (research first)", turn)
+                research_part, _impl_part = _split_compound_goal(query)
+                log.info("[executor] compound goal — fast-start turn %d → delegate researcher (research phase only)", turn)
                 return {"action": "delegate", "target_agent": "researcher",
-                        "task": _clean_search_query(query)}
+                        "task": research_part or _clean_search_query(query)}
+
+        # EXECUTOR PHASE-2 CHAINING: once the research delegation has returned,
+        # deterministically hand the IMPLEMENTATION phase to coder — the executor
+        # LLM has been observed re-looping (re-delegating/asking) instead of
+        # delegating the code work. The goal was split at turn 0, so coder gets
+        # only the implement portion, scoped to its own MAX_TURNS budget.
+        if agent_id == "executor" and state._executor_research_delegated and not state._executor_impl_delegated:
+            query = (prompt or "").strip()
+            _r_part, impl_part = _split_compound_goal(query)
+            state._executor_impl_delegated = True
+            log.info("[executor] research returned — delegating implementation phase → coder")
+            return {"action": "delegate", "target_agent": "coder",
+                    "task": impl_part or query or "implement the researched upgrades"}
 
         if fast is not None:
             return fast
@@ -473,6 +564,26 @@ class AgentServiceV2:
             if query:
                 log.info("[researcher] fast-start turn %d → web_search", turn)
                 return {"action": "web_search", "query": _clean_search_query(query)}
+
+        # INTERNET-GOAL WEB_FETCH INJECTION (deterministic, not prompt-only):
+        # once web_search has actually succeeded on an internet goal, the NEXT
+        # decision is forced to deep-read the top result. The model — even the
+        # cloud deepseek analysis hop — repeatedly re-selects web_search
+        # (observed live: 3× web_search, each final rejected by the web_fetch
+        # guard, then the loop detector tripped). Relying on the LLM to pick
+        # web_fetch is unreliable, so mirror the turn-0 web_search injection.
+        if (
+            state.did_web_search
+            and not state.did_web_fetch
+            and not state._web_fetch_injected
+            and state.last_search_urls
+            and not research_discharged
+        ):
+            state._web_fetch_injected = True
+            url = state.last_search_urls[0]
+            log.info("[%s] internet goal — web_search done, injecting web_fetch → %s", agent_id, url)
+            return {"action": "web_fetch", "url": url}
+
         return await self._call_llm(model, trimmed_messages, agent_id, allowed_tools)
 
     async def _call_llm(self, model: str, messages: list, agent_id: str, allowed_tools: list) -> Optional[dict]:
@@ -519,7 +630,8 @@ class AgentServiceV2:
     # -----------------------------------------------------------------------
     async def _handle_final(self, decision: dict, agent_id: str, model: str, provider: str,
                             messages: list, start_time: float, prompt: str,
-                            _fetched_content: bool, state: _CallState):
+                            _fetched_content: bool, state: _CallState,
+                            research_discharged: bool = False):
         # System-failure finals (LLM unreachable / empty / malformed / decision
         # loop exhausted): these are NOT real completions. Feed a failed outcome,
         # record a tool_result-style failure event, and exit as a failure so the
@@ -632,8 +744,15 @@ class AgentServiceV2:
         # authoritative page (docs/SO/GitHub) so the final answer is grounded in
         # actual fetched content, not just search snippets. This matches how a
         # human researcher (or opencode) works: search → fetch → read → synthesize.
+        # RESEARCH-DISCHARGED RELAXATION: when the executor chain ALREADY ran the
+        # research phase (researcher did web_search + web_fetch before delegating
+        # implementation to coder / analysis to code_analyzer), the downstream agent
+        # must NOT be re-forced to re-search the same handful of URLs. The guard is
+        # scoped per-agent-role-in-chain, not per-goal-text (the goal text still
+        # contains "internet/upgrades" — re-checking it against the downstream agent
+        # wastes turns and cloud calls on research that was already done once).
         needs_fetch = "web_fetch" in self._get_allowed_tools(agent_id)
-        if internet_goal and not state.did_web_search and has_web_search_tool and agent_id in INTERNET_GOAL_AGENTS and not fix_deliverable:
+        if internet_goal and not state.did_web_search and has_web_search_tool and agent_id in INTERNET_GOAL_AGENTS and not fix_deliverable and not research_discharged:
             # Reject on EVERY final until web_search actually runs — not just the
             # first (a one-shot latch let the agent call final a second time and
             # "complete" the goal without ever doing the internet research it was
@@ -648,7 +767,7 @@ class AgentServiceV2:
                 "least one result, before you can call action=final. Do NOT skip this step."
             )})
             return
-        if internet_goal and needs_fetch and not state.did_web_fetch and agent_id in INTERNET_GOAL_AGENTS and not fix_deliverable:
+        if internet_goal and needs_fetch and not state.did_web_fetch and agent_id in INTERNET_GOAL_AGENTS and not fix_deliverable and not research_discharged:
             state._web_final_rejected = True
             state.handler_status = "CONTINUE"
             log.warning("[%s] Rejected final: internet goal without web_fetch.", agent_id)
@@ -685,7 +804,8 @@ class AgentServiceV2:
     # -----------------------------------------------------------------------
     async def _handle_delegate(self, decision: dict, agent_id: str, chain: list,
                                model: str, provider: str, messages: list,
-                               prompt: str, start_time: float, state: _CallState):
+                               prompt: str, start_time: float, state: _CallState,
+                               research_discharged: bool = False):
         target = decision.get("target_agent", "executor")
         task = decision.get("task", prompt)
 
@@ -728,7 +848,19 @@ class AgentServiceV2:
             if m.get("role") == "user" and "TOOL RESULT (delegate)" in content_str: continue
             child_history.append(m)
 
-        async for chunk in self.step_agent_stream(target, task, history=child_history, delegation_chain=chain + [target]):
+        if agent_id == "executor" and target == "researcher":
+            state._executor_research_delegated = True
+
+        # RESEARCH-DISCHARGED PROPAGATION: when the executor hands the IMPLEMENTATION
+        # phase to coder AFTER the researcher already did web_search + web_fetch, pass
+        # research_discharged=True so coder's final is not re-forced through the
+        # internet-goal guards (research was done upstream — re-searching the same
+        # handful of URLs burns turns and cloud calls for nothing).
+        child_research_discharged = research_discharged
+        if agent_id == "executor" and target == "coder" and state._executor_research_delegated:
+            child_research_discharged = True
+
+        async for chunk in self.step_agent_stream(target, task, history=child_history, delegation_chain=chain + [target], research_discharged=child_research_discharged):
             chunk.setdefault("delegated_by", agent_id)
             if chunk.get("type") == "final":
                 child_final_response = str(chunk.get("content", f"Task completed by {target}."))
@@ -811,6 +943,7 @@ class AgentServiceV2:
 
             if action == "web_search" and state.tool_success:
                 state.did_web_search = True
+                state.last_search_urls = self._extract_search_urls(result)
             if action == "web_fetch" and state.tool_success:
                 state.did_web_fetch = True
 
@@ -840,6 +973,23 @@ class AgentServiceV2:
     # -----------------------------------------------------------------------
     # Helpers
     # -----------------------------------------------------------------------
+    def _extract_search_urls(self, result: dict) -> list:
+        """Pull up to 3 result URLs from a successful web_search tool result so
+        the loop can deterministically deep-read the top hit."""
+        try:
+            urls = []
+            results = result.get("results") if isinstance(result, dict) else None
+            if isinstance(results, list):
+                for item in results:
+                    u = item.get("url") if isinstance(item, dict) else None
+                    if isinstance(u, str) and u.startswith("http") and u not in urls:
+                        urls.append(u)
+                    if len(urls) >= 3:
+                        break
+            return urls
+        except Exception:
+            return []
+
     def _get_allowed_tools(self, agent_id: str, genome_weights: dict = None) -> list:
         from runtime_v2.prompts.system_prompts import _AGENT_TOOLS
         allowed = _AGENT_TOOLS.get(agent_id, ["delegate", "final", "filesystem"])
@@ -854,6 +1004,7 @@ class AgentServiceV2:
         self, agent_id: str, prompt: str,
         history: Optional[List[dict]] = None,
         delegation_chain: Optional[List[str]] = None,
+        research_discharged: bool = False,
     ) -> AsyncGenerator[dict, None]:
         try:
             import runtime_v2.services.tool_executor as _te
@@ -867,7 +1018,7 @@ class AgentServiceV2:
             _cache_snapshot = {}
 
         try:
-            async for chunk in self._step_agent_stream_inner(agent_id, prompt, history, delegation_chain):
+            async for chunk in self._step_agent_stream_inner(agent_id, prompt, history, delegation_chain, research_discharged):
                 yield chunk
         finally:
             try:
@@ -881,6 +1032,7 @@ class AgentServiceV2:
         self, agent_id: str, prompt: str,
         history: Optional[List[dict]] = None,
         delegation_chain: Optional[List[str]] = None,
+        research_discharged: bool = False,
     ) -> AsyncGenerator[dict, None]:
         from runtime_v2.prompts.system_prompts import build
         from runtime_v2.services.memory_core import get_relevant_memories
@@ -974,7 +1126,7 @@ class AgentServiceV2:
 
             # --- Get decision (fast-route, warmup, or LLM) ---
             try:
-                decision = await self._get_decision(agent_id, model, trimmed_messages, allowed_tools, prompt, turn)
+                decision = await self._get_decision(agent_id, model, trimmed_messages, allowed_tools, prompt, turn, state, research_discharged)
             except (asyncio.TimeoutError, Exception) as exc:
                 # BUG FIX: Don't abort the run on a single LLM failure — count it and
                 # let the circuit breaker trigger the debugger, so a down backend heals
@@ -1013,6 +1165,26 @@ class AgentServiceV2:
                 continue
             if loop_status:
                 yield {"agent_id": agent_id, "type": "error", "content": f"Agent {agent_id} caught in a loop. Tripping circuit breaker."}
+                # LEARN FROM THE LOOP (fix #5): a repeated-action loop is the
+                # single highest-frequency agent failure mode — but it never fed
+                # the reflexion pipeline, only handed off to a debugger that wrote
+                # a prose healing plan. Store a structured rule so future runs get
+                # a [PAST-MISTAKE WARNING] instead of re-walking the same dead-end
+                # sequence of identical tool calls.
+                try:
+                    from swarm_os.services.reflection_loop import get_reflection_service
+                    _loop_sig = json.dumps({k: v for k, v in (decision or {}).items() if k in ("action", "operation", "path", "query", "target_agent") and v}, ensure_ascii=False)[:200]
+                    await get_reflection_service().store_reflexion(
+                        task=f"agent:{agent_id} looping on repeated tool call {_loop_sig} goal {str(prompt)[:120]}",
+                        action="loop_detected",
+                        failure_reason=f"agent repeated the same tool decision >=3 times within the last 8 actions ({_loop_sig}) and tripped the circuit breaker.",
+                        correction="Do NOT repeat the same tool call with identical arguments. If a tool failed, read the error, change the approach (different file/path/query/operation), or delegate. A repeated identical call will never produce a different result.",
+                        do_not_repeat=f"agent:{agent_id} must not call the same tool with the same arguments more than twice.",
+                        component=agent_id,
+                        confidence=0.8,
+                    )
+                except Exception as loop_refl_err:
+                    log.debug("[%s] loop reflexion skipped: %s", agent_id, loop_refl_err)
                 if agent_id != "debugger" and healing_attempts < 1:
                     yield {"agent_id": agent_id, "type": "error", "content": "Circuit Breaker Tripped! Initiating Autonomous Self-Healing Sequence..."}
                     heal_task = (f"The agent '{agent_id}' is stuck in an infinite loop. Review the history and write a plan to fix the code or environment so they can succeed without looping. Provide a 'final' action when healed.")
@@ -1085,14 +1257,14 @@ class AgentServiceV2:
             unauthorized_tool_errors = 0
 
             if action == "final":
-                async for _ in self._handle_final(decision, agent_id, model, provider, messages, start_time, prompt, _fetched_content, state):
+                async for _ in self._handle_final(decision, agent_id, model, provider, messages, start_time, prompt, _fetched_content, state, research_discharged):
                     yield _
                 if state.handler_status in ("DONE", "ABORT"):
                     return
                 continue
 
             if action == "delegate":
-                async for _ in self._handle_delegate(decision, agent_id, chain, model, provider, messages, prompt, start_time, state):
+                async for _ in self._handle_delegate(decision, agent_id, chain, model, provider, messages, prompt, start_time, state, research_discharged):
                     yield _
                 if state.handler_status in ("COORDINATOR_DONE", "RECOVERED"):
                     return

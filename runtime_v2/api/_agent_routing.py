@@ -54,6 +54,15 @@ _COMPOUND_FIX_KEYWORDS = (
     "solve", "repair", "correct", "fix this", "fix the bug",
     "fix the bugs", "fix it", "fix the", "and fix", "to fix the",
     "fix broken", "fix failing",
+    # Code-WORK intent beyond explicit fix verbs: "analyze my codebase for bugs
+    # and search internet for improvements" is ALSO compound (code analysis +
+    # web research) — it has no "fix" verb but still needs the research phase
+    # split off from the code-work phase. Without these, the goal fell through
+    # to code_analyzer/coder and exhausted the turn budget re-searching (the
+    # naturally-phrased /upgrade variant, Doc 4 in the 2026-08-06 audit).
+    "analyze the codebase", "analyze my codebase", "analyze your codebase",
+    "analyze the project", "audit the codebase", "scan for bugs",
+    "find bugs", "refactor the codebase",
 )
 
 # Internet-involving goal keywords. Mirror of the `_INTERNET_GOAL_RE` in

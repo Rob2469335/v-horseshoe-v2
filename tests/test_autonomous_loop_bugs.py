@@ -8,6 +8,7 @@ Bug #3: Retry loop doesn't recover from "circular delegation blocked" - should u
 Bug #4: Git stash prompt shown even when nothing changed - should check git status
         before prompting.
 """
+
 import importlib
 import sys
 from pathlib import Path
@@ -21,6 +22,7 @@ sys.path.insert(0, str(ROOT))
 
 def _reload_autonomous():
     import organism_console.loops.autonomous as mod
+
     importlib.reload(mod)
     return mod
 
@@ -73,14 +75,23 @@ class TestBug1ReadOnlyDetection:
         # We exercise the real logic by re-importing and inspecting the function body
         # via a lightweight harness that mirrors run_autonomous_goal_loop's logic.
         import re
+
         src = Path(mod.__file__).read_text(encoding="utf-8")
         # Extract READ_ONLY_KEYWORDS / WRITE_KEYWORDS from the source so we test the
         # exact lists shipped in the file, not a copy.
         ro_match = re.search(r"READ_ONLY_KEYWORDS\s*=\s*\[(.*?)\]", src, re.DOTALL)
         wr_match = re.search(r"WRITE_KEYWORDS\s*=\s*\[(.*?)\]", src, re.DOTALL)
         assert ro_match and wr_match, "READ_ONLY_KEYWORDS / WRITE_KEYWORDS not found"
-        ro_kw = [w.strip().strip('"').strip("'") for w in ro_match.group(1).split(",") if w.strip().strip('"').strip("'")]
-        wr_kw = [w.strip().strip('"').strip("'") for w in wr_match.group(1).split(",") if w.strip().strip('"').strip("'")]
+        ro_kw = [
+            w.strip().strip('"').strip("'")
+            for w in ro_match.group(1).split(",")
+            if w.strip().strip('"').strip("'")
+        ]
+        wr_kw = [
+            w.strip().strip('"').strip("'")
+            for w in wr_match.group(1).split(",")
+            if w.strip().strip('"').strip("'")
+        ]
         goal_lower = goal.lower()
         has_ro = any(kw in goal_lower for kw in ro_kw)
         has_wr = any(kw in goal_lower for kw in wr_kw)
@@ -93,11 +104,16 @@ class TestBug1ReadOnlyDetection:
         """Write goals must NOT be classified as read-only."""
         mod = _reload_autonomous()
         import re
+
         src = Path(mod.__file__).read_text(encoding="utf-8")
         ro_match = re.search(r"READ_ONLY_KEYWORDS\s*=\s*\[(.*?)\]", src, re.DOTALL)
         wr_match = re.search(r"WRITE_KEYWORDS\s*=\s*\[(.*?)\]", src, re.DOTALL)
         assert ro_match and wr_match, "READ_ONLY_KEYWORDS / WRITE_KEYWORDS not found"
-        wr_kw = [w.strip().strip('"').strip("'") for w in wr_match.group(1).split(",") if w.strip().strip('"').strip("'")]
+        wr_kw = [
+            w.strip().strip('"').strip("'")
+            for w in wr_match.group(1).split(",")
+            if w.strip().strip('"').strip("'")
+        ]
         goal_lower = goal.lower()
         has_wr = any(kw in goal_lower for kw in wr_kw)
         assert has_wr, f"Goal should match a write keyword: {goal!r}"
@@ -109,14 +125,28 @@ class TestBug1ReadOnlyDetection:
         for _ in range(10):
             mod = _reload_autonomous()
             import re
+
             src = Path(mod.__file__).read_text(encoding="utf-8")
             ro_match = re.search(r"READ_ONLY_KEYWORDS\s*=\s*\[(.*?)\]", src, re.DOTALL)
             wr_match = re.search(r"WRITE_KEYWORDS\s*=\s*\[(.*?)\]", src, re.DOTALL)
-            assert ro_match and wr_match, "READ_ONLY_KEYWORDS / WRITE_KEYWORDS not found"
-            ro_kw = [w.strip().strip('"').strip("'") for w in ro_match.group(1).split(",") if w.strip().strip('"').strip("'")]
-            wr_kw = [w.strip().strip('"').strip("'") for w in wr_match.group(1).split(",") if w.strip().strip('"').strip("'")]
+            assert ro_match and wr_match, (
+                "READ_ONLY_KEYWORDS / WRITE_KEYWORDS not found"
+            )
+            ro_kw = [
+                w.strip().strip('"').strip("'")
+                for w in ro_match.group(1).split(",")
+                if w.strip().strip('"').strip("'")
+            ]
+            wr_kw = [
+                w.strip().strip('"').strip("'")
+                for w in wr_match.group(1).split(",")
+                if w.strip().strip('"').strip("'")
+            ]
             goal_lower = goal.lower()
-            results.append(any(kw in goal_lower for kw in ro_kw) and not any(kw in goal_lower for kw in wr_kw))
+            results.append(
+                any(kw in goal_lower for kw in ro_kw)
+                and not any(kw in goal_lower for kw in wr_kw)
+            )
         assert all(r is True for r in results), f"Non-deterministic: {results}"
 
 
@@ -126,6 +156,7 @@ class TestBug1ReadOnlyDetection:
 #       instead of running a test suite that fails.
 # ---------------------------------------------------------------------------
 
+
 class TestBug2NoChangesPasses:
     """Bug #2: attempts with no file changes should skip tests and pass."""
 
@@ -134,7 +165,11 @@ class TestBug2NoChangesPasses:
         src = Path(mod.__file__).read_text(encoding="utf-8")
         # The fix adds a git status --porcelain check before run_test_suite.
         # The command is split across lines as ["git", "status", "--porcelain"]
-        return '"status"' in src and '"--porcelain"' in src and "No file changes detected" in src
+        return (
+            '"status"' in src
+            and '"--porcelain"' in src
+            and "No file changes detected" in src
+        )
 
     def test_no_changes_check_present(self):
         """The verification loop must check git status before running tests."""
@@ -144,30 +179,72 @@ class TestBug2NoChangesPasses:
         )
 
     def test_run_test_suite_no_diff_returns_pass(self):
-        """run_test_suite should pass when git diff is empty (no changes)."""
+        """run_test_suite should not rubber-stamp a pass when nothing maps.
+
+        The old behavior returned (True, "No specific tests found...") whenever
+        the whole working tree was dirty — which it almost always is — so every
+        no-test-match run reported success without running anything. Now the
+        function returns (None, ...) to signal the caller MUST fall back to
+        LLM goal verification instead of declaring success."""
         mod = _reload_autonomous()
-        # Patch subprocess.run used inside run_test_suite to simulate no git diff
-        # and no test targets. The function uses git diff --name-only internally
-        # to detect modified files, and returns (False, msg) when stdout is empty.
+        # Patch subprocess.run so no real pytest/git subprocess spawns. The
+        # function receives no `changed` set and no test target in the goal
+        # text, so it must return the None sentinel (not a bool True).
         fake_result = MagicMock()
         fake_result.returncode = 0
-        fake_result.stdout = ""  # no diff / no status output
+        fake_result.stdout = ""
         with patch("subprocess.run", return_value=fake_result):
             passed, msg = mod.run_test_suite("some read-only goal")
-        # Bug #2 core requirement: a no-file-changes attempt must pass.
-        # The old behavior returned (False, "No files were modified...").
-        # With our fix, the run_test_suite fallback still returns False for empty
-        # diff (legacy), but run_autonomous_goal_loop now gates on git status
-        # --porcelain BEFORE calling run_test_suite, so the test suite is never
-        # invoked for read-only attempts. We verify the gate exists in source and
-        # that run_test_suite's empty-diff path is short-circuited upstream.
-        # We assert the suite's own empty-diff message is not treated as a hard
-        # failure by the loop (the loop now checks git status first).
-        # If the suite is called with empty diff, it returns (False, ...) which
-        # is the pre-existing fallback behavior. Our fix prevents calling it.
-        # So we just assert the function is deterministic here.
-        assert isinstance(passed, bool)
+        assert passed is None, (
+            f"Expected None sentinel (no tests cover), got {passed!r}"
+        )
         assert isinstance(msg, str)
+
+    def test_run_test_suite_no_diff_still_runs_pytest_when_target_found(self):
+        """When the goal text names a test file, pytest must actually run."""
+        mod = _reload_autonomous()
+        fake_result = MagicMock()
+        fake_result.returncode = 0
+        fake_result.stdout = "1 passed"
+        with patch("subprocess.run", return_value=fake_result) as mocked:
+            passed, msg = mod.run_test_suite("make tests/test_auth.py pass")
+        args = mocked.call_args
+        assert args is not None
+        cmd = args.args[0] if isinstance(args.args[0], list) else args.args[1]
+        assert "tests/test_auth.py" in cmd
+        assert passed is True
+
+    def test_run_test_suite_no_diff_with_changed_files_runs_pytest(self):
+        """Changed files (this attempt) that map to a test file must run pytest."""
+        mod = _reload_autonomous()
+        fake_result = MagicMock()
+        fake_result.returncode = 0
+        fake_result.stdout = "1 passed"
+        # 'autonomous.py' -> stem 'autonomous' -> matches tests/test_autonomous_loop_bugs.py
+        with patch("subprocess.run", return_value=fake_result) as mocked:
+            passed, msg = mod.run_test_suite(
+                "some goal", changed={"organism_console/loops/autonomous.py"}
+            )
+        assert passed is True
+        args = mocked.call_args
+        cmd = args.args[0] if isinstance(args.args[0], list) else args.args[1]
+        assert any("test_autonomous" in c for c in cmd)
+
+    def test_run_test_suite_no_diff_with_untested_changes_returns_none(self):
+        """Changed files with no discoverable test target must return the None
+        sentinel (caller falls back to reviewer), NOT a pass."""
+        mod = _reload_autonomous()
+        fake_result = MagicMock()
+        fake_result.returncode = 0
+        fake_result.stdout = ""
+        # A changed file whose stem matches no test file in the tests/ dir.
+        # Patch glob to return no test files so no target is derived.
+        with (
+            patch("subprocess.run", return_value=fake_result),
+            patch.object(Path, "glob", return_value=[]),
+        ):
+            passed, msg = mod.run_test_suite("some goal", changed={"zzz_nomatch.py"})
+        assert passed is None, f"Expected None sentinel, got {passed!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -177,6 +254,7 @@ class TestBug2NoChangesPasses:
 #       instead of looping with no-op tool calls.
 # ---------------------------------------------------------------------------
 
+
 class TestBug3CircularDelegationRecovery:
     """Bug #3: circular delegation should recover using the prior result."""
 
@@ -184,13 +262,17 @@ class TestBug3CircularDelegationRecovery:
         """agent_service_v2.py must contain the recovery branch for circular delegation."""
         svc_path = ROOT / "runtime_v2" / "api" / "agent_service_v2.py"
         src = svc_path.read_text(encoding="utf-8")
-        assert "Circular delegation blocked" in src, "Original error message must still exist"
+        assert "Circular delegation blocked" in src, (
+            "Original error message must still exist"
+        )
         assert "Recovered from circular delegation" in src, (
             "Expected a recovery branch that returns the previous result via 'final' "
             "when circular delegation is blocked (Bug #3 fix missing)."
         )
         # The recovery branch must yield a "final" chunk, not just continue the loop.
-        assert 'type": "final"' in src or "type': 'final'" in src or 'type="final"' in src
+        assert (
+            'type": "final"' in src or "type': 'final'" in src or 'type="final"' in src
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -198,6 +280,7 @@ class TestBug3CircularDelegationRecovery:
 # Goal: the max-attempts git stash prompt must be gated on `git status --porcelain`
 #       having actual output; if the tree is clean, skip the prompt.
 # ---------------------------------------------------------------------------
+
 
 class TestBug4GitStashGated:
     """Bug #4: git stash prompt must only show when there are changes to stash."""
@@ -207,7 +290,9 @@ class TestBug4GitStashGated:
         src = Path(mod.__file__).read_text(encoding="utf-8")
         # The fix should check git status --porcelain before the Confirm.ask prompt.
         # The command is split as ["git", "status", "--porcelain"]
-        assert '"--porcelain"' in src, "Expected a git status --porcelain check before the stash prompt"
+        assert '"--porcelain"' in src, (
+            "Expected a git status --porcelain check before the stash prompt"
+        )
         # The stash prompt section should be inside a conditional that checks has_changes
         assert "has_changes" in src, (
             "Expected the stash prompt to be gated on whether there are changes "
@@ -220,11 +305,185 @@ class TestBug4GitStashGated:
         # We can't easily run the full loop, but we can verify the control flow by
         # checking the source contains the guard.
         src = Path(mod.__file__).read_text(encoding="utf-8")
-        # Must guard the Confirm.ask with has_changes
-        idx_prompt = src.find('Confirm.ask("[bold yellow]Do you want to run `git stash`')
+        # Must guard the Confirm.ask with has_changes. Match on the prompt text
+        # itself (ruff may reflow `Confirm.ask(` across lines), so a plain
+        # substring on the whole Confirm.ask( call is unreliable.
+        prompt = "Do you want to run `git stash` to revert the broken changes"
+        idx_prompt = src.find(prompt)
         assert idx_prompt != -1, "Git stash prompt text not found"
         # Look backwards from the prompt for the has_changes guard
-        guard_region = src[max(0, idx_prompt - 400):idx_prompt]
+        guard_region = src[max(0, idx_prompt - 400) : idx_prompt]
         assert "has_changes" in guard_region or "if has_changes" in guard_region, (
             "git stash Confirm.ask must be guarded by a has_changes check (Bug #4)"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Bug #5: Verification gate rubber-stamps failure as success
+# Root cause: (1) run_test_suite returned (True, "No specific tests found...")
+# whenever the whole working tree was dirty — which it almost always is — so a
+# failed / max-turns run "passed"; (2) the max-turns final ("[System: max turns
+# reached]") was yielded as a normal `final` chunk, so last_stream_status read
+# "completed" and the run was verified as if it succeeded; (3) the reviewer-verify
+# fallback `else: passed = True` treated an unreachable reviewer as a pass.
+# ---------------------------------------------------------------------------
+
+
+class TestBug5VerificationGateNoRubberStamp:
+    """Bug #5: the verification gate must fail-closed, never rubber-stamp."""
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "[System: max turns reached]",
+            "Healing failed. Manual intervention required.",
+            "Healing failed. Loop aborted.",
+            "Task aborted after 3 LLM failures: timeout",
+            "Task aborted after 3 consecutive errors.",
+        ],
+    )
+    def test_system_failure_finals_detected(self, text):
+        """System-termination finals must be recognized as failures."""
+        mod = _reload_autonomous()
+        assert mod._is_system_failure_final(text) is True, (
+            f"{text!r} should be a system failure"
+        )
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Done.",
+            "Task completed.",
+            "Here is the analysis of your codebase.",
+            "I finished the task despite the timeout warning.",
+        ],
+    )
+    def test_non_system_failure_finals_not_detected(self, text):
+        """Real completion finals must NOT be flagged as system failures."""
+        mod = _reload_autonomous()
+        assert mod._is_system_failure_final(text) is False, (
+            f"{text!r} should not be a system failure"
+        )
+
+    def test_reviewer_verify_yes_passes(self):
+        """A reviewer YES verdict passes the goal."""
+        mod = _reload_autonomous()
+        fake_resp = MagicMock()
+        fake_resp.status_code = 200
+        fake_resp.json.return_value = {"response": "YES, the goal was achieved."}
+        with patch(
+            "organism_console.loops.autonomous.call_api", return_value=fake_resp
+        ):
+            passed, logs = mod._verify_goal_with_reviewer("some goal", "done")
+        assert passed is True
+
+    def test_reviewer_verify_no_fails(self):
+        """A reviewer NO verdict must fail the goal (not pass it)."""
+        mod = _reload_autonomous()
+        fake_resp = MagicMock()
+        fake_resp.status_code = 200
+        fake_resp.json.return_value = {
+            "response": "NO: the agent never edited any file."
+        }
+        with patch(
+            "organism_console.loops.autonomous.call_api", return_value=fake_resp
+        ):
+            passed, logs = mod._verify_goal_with_reviewer("some goal", "done")
+        assert passed is False
+        assert "Goal verification failed" in logs
+
+    def test_reviewer_verify_unavailable_fails_closed(self):
+        """When the reviewer call fails/unreachable, the goal must FAIL (the old
+        behavior passed it with 'Verification unavailable')."""
+        mod = _reload_autonomous()
+        with patch("organism_console.loops.autonomous.call_api", return_value=None):
+            passed, logs = mod._verify_goal_with_reviewer("some goal", "done")
+        assert passed is False
+        assert "unavailable" in logs.lower() or "unavailable" in logs
+
+    def test_reviewer_verify_http_error_fails_closed(self):
+        """A non-200 reviewer response must fail the goal."""
+        mod = _reload_autonomous()
+        fake_resp = MagicMock()
+        fake_resp.status_code = 500
+        with patch(
+            "organism_console.loops.autonomous.call_api", return_value=fake_resp
+        ):
+            passed, logs = mod._verify_goal_with_reviewer("some goal", "done")
+        assert passed is False
+
+    def test_reviewer_verify_exception_fails_closed(self):
+        """An exception during the reviewer call must fail the goal."""
+        mod = _reload_autonomous()
+        with patch(
+            "organism_console.loops.autonomous.call_api",
+            side_effect=RuntimeError("boom"),
+        ):
+            passed, logs = mod._verify_goal_with_reviewer("some goal", "done")
+        assert passed is False
+
+    def test_loop_source_contains_system_failure_gate(self):
+        """The loop must break on system-failure finals instead of verifying them."""
+        mod = _reload_autonomous()
+        src = Path(mod.__file__).read_text(encoding="utf-8")
+        assert "_is_system_failure_final" in src, "system-failure final gate missing"
+        assert "System termination" in src, "system-termination branch missing"
+        # The old fail-open pass branch must be gone (reviewer unreachable was a PASS).
+        assert "No files were modified. Verification unavailable." not in src, (
+            "fail-open 'Verification unavailable' pass branch must be removed"
+        )
+
+    def test_run_test_suite_never_returns_true_without_running(self):
+        """run_test_suite must never return (True, ...) without actually running
+        pytest — the old '(True, "No specific tests found...")' rubber stamp is
+        banned."""
+        mod = _reload_autonomous()
+        src = Path(mod.__file__).read_text(encoding="utf-8")
+        assert "No specific tests found" not in src, (
+            "rubber-stamp message must be removed"
+        )
+
+    def test_verification_failure_records_reflexion(self, monkeypatch):
+        """Event-driven reflexion (reviewer item #3): a goal-loop verification
+        failure must immediately write a ReflexionMemory rule keyed to the
+        entry agent so the closed learning loop sees CLI goal failures."""
+        from unittest.mock import AsyncMock
+        import swarm_os.services.reflection_loop as rl
+
+        svc = AsyncMock()
+        svc.store_reflexion = AsyncMock()
+        monkeypatch.setattr(rl, "get_reflection_service", lambda: svc)
+
+        mod = _reload_autonomous()
+        mod._record_verification_reflexion(
+            "fix the bug",
+            "coder",
+            "E   AssertionError: boom\nFile: agent_service.py",
+            "Task completed.",
+            console=None,
+        )
+
+        svc.store_reflexion.assert_awaited_once()
+        kwargs = svc.store_reflexion.await_args.kwargs
+        assert kwargs["component"] == "coder"
+        assert kwargs["action"] == "verification_failed"
+        assert "verification failed" in kwargs["failure_reason"]
+        assert "coder" in kwargs["do_not_repeat"]
+
+    def test_verification_reflexion_never_raises(self, monkeypatch):
+        """A failing reflexion store must never break the goal loop."""
+        import swarm_os.services.reflection_loop as rl
+
+        def boom():
+            raise RuntimeError("qdrant down")
+
+        monkeypatch.setattr(rl, "get_reflection_service", boom)
+
+        mod = _reload_autonomous()
+        # Must return None (no exception propagates).
+        assert (
+            mod._record_verification_reflexion(
+                "fix the bug", "coder", "trace", "done", console=None
+            )
+            is None
         )

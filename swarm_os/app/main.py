@@ -246,6 +246,45 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         log.warning(f"Genetic mutation daemon unavailable: {exc}")
 
+    # Codebase index self-heal daemon: `semantic_search` is offered to
+    # coder/researcher/debugger/code_analyzer, but the `codebase_index` collection
+    # was only ever built by the manual CLI `/index` command — a fresh backend
+    # always returned "Index not found" for every agent turn until a human
+    # remembered to index. Rebuild the index on startup (deferred past the boot
+    # window so the API serves immediately; embedding service :8081 is the
+    # dedicated nomic-embed slot) whenever the collection is missing or empty.
+    try:
+        import os as _os2
+        if _os2.environ.get("SWARM_CODEBASE_INDEX", "1").strip() == "1":
+            from runtime_v2.services.indexer import (
+                index_codebase, collection_exists,
+            )
+            import logging as _logging
+            _index_log = _logging.getLogger("swarm_os.app.main.codebase_index")
+
+            async def _index_daemon(first_delay: float = 90.0):
+                # Defer out of the startup window: first-time indexing embeds the
+                # whole repo (hundreds of batches through :8081) — running it
+                # immediately would starve the CPU/embedding slot at boot.
+                if first_delay > 0:
+                    await asyncio.sleep(first_delay)
+                try:
+                    if collection_exists():
+                        _index_log.info("codebase_index present — skipping startup rebuild")
+                        return
+                    root = _os2.getcwd()
+                    _index_log.info("Rebuilding codebase index for %s ...", root)
+                    files, chunks = await asyncio.to_thread(index_codebase, root)
+                    _index_log.info("Codebase index ready: %s files, %s chunks", files, chunks)
+                except Exception as exc:
+                    _index_log.warning("Codebase index rebuild failed: %s", exc)
+
+            t_idx = asyncio.create_task(_index_daemon())
+            bg_tasks.add(t_idx)
+            log.info("Started codebase-index self-heal daemon (SWARM_CODEBASE_INDEX=1)")
+    except Exception as exc:
+        log.warning(f"Codebase index daemon unavailable: {exc}")
+
     # Outcome-driven evolution daemon — OPT-IN via SWARM_EVOLUTION=1. The agent
     # loop feeds REAL outcomes (task completion, tool success, efficiency) into
     # outcome_fitness when the same gate is on; this daemon runs evolutionary

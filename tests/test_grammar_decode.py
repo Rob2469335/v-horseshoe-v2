@@ -109,6 +109,28 @@ def test_cloud_response_format_uses_strict_schema_when_supported():
         assert rf == {"type": "json_object"}
 
 
+def test_cloud_response_format_opencode_proxy_never_gets_json_schema():
+    """LIVE-VERIFIED 2026-08-06: the OpenCode Go/Zen proxies reject strict
+    json_schema with `400: This response_format type is unavailable now` even
+    though litellm.supports_response_schema("openai/deepseek-v4-flash") returns
+    True (it trusts the DeepSeek name, not the actual proxy). Every cloud tool
+    decision died on that 400. The endpoint-resolved OpenCode base must force
+    json_object regardless of litellm's support table."""
+    import runtime_v2.services._llm_client as llm_client
+    from unittest.mock import patch
+
+    # litellm would happily say "supported" — but the proxy rejects it.
+    with patch("litellm.supports_response_schema", return_value=True):
+        for model in ("openai/deepseek-v4-flash", "openai/zen/deepseek-v4-flash"):
+            rf = llm_client._cloud_response_format(model)
+            assert rf == {"type": "json_object"}, f"{model} must degrade to json_object"
+
+    # Non-OpenCode providers keep strict schema when litellm says supported.
+    with patch("litellm.supports_response_schema", return_value=True):
+        rf = llm_client._cloud_response_format("openrouter/deepseek/deepseek-chat")
+        assert rf["type"] == "json_schema"
+
+
 def test_schema_remains_synced():
     """Guard: _grammar_schema.py must stay byte-aligned with the parser schema."""
     from runtime_v2.services._grammar_schema import TOOL_DECISION_JSON_SCHEMA as gs

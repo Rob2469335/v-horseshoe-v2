@@ -14,6 +14,16 @@ from swarm_os.services.security_gate import SecurityGateViolation
 from swarm_os.memory.memory_bridge import MemoryBridge
 from swarm_os.kernel.genetics import ast_slice
 
+# Raised by the fail-fast AST syntax pre-check (a truncated/unterminated function
+# body). Carries the SyntaxError's .msg/.lineno so the retry prompt can tell the
+# model the exact line that failed — distinct from a sandbox test failure so the
+# corrective instruction is "complete the function body", not "fix the test".
+class _MutationSyntaxError(Exception):
+    def __init__(self, msg: str, lineno: int | None = None):
+        super().__init__(msg)
+        self.msg = msg
+        self.lineno = lineno
+
 logger = logging.getLogger("GeneticEvolution")
 if logging.getLogger().handlers == []:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -146,7 +156,22 @@ async def run_genetic_mutation(target_file_path: str = str(AGENT_SERVICE_PATH), 
                     "Mutation produced no change (slice not found or identical). "
                     "Retrying with a stronger instruction."
                 )
-                
+
+            # FAIL-FAST syntax gate: reject a broken mutation BEFORE the full
+            # DangerRoom sandbox deploy/teardown cycle. Previously a malformed
+            # splice (e.g. the recurring "expected an indented block after
+            # function definition" mutation) only failed at the py_compile step
+            # inside the sandbox, wasting a full copy/deploy/pytest cycle per
+            # attempt while the model kept re-proposing the same broken code.
+            try:
+                import ast
+                ast.parse(new_core_code)
+            except SyntaxError as e:
+                raise _MutationSyntaxError(
+                    f"Mutation failed syntax pre-check: {e.msg} (line {e.lineno})",
+                    lineno=e.lineno,
+                )
+
             logger.info("Mutation generated. Deploying to Danger Room sandbox for testing...")
             
             async with DangerRoom(ROOT_DIR) as sandbox:
@@ -227,11 +252,30 @@ async def run_genetic_mutation(target_file_path: str = str(AGENT_SERVICE_PATH), 
         except SecurityGateViolation as e:
             last_error = str(e)
             logger.warning(f"Security Gate Violation on attempt {attempt + 1}: {e}")
-            prompt = EVOLUTION_PROMPT.format(target_func=target_func, core_code_slice=sliced_code) + f"\n\nERROR ON LAST ATTEMPT:\nYour previous mutation failed the security gate with the following violation:\n{e}\nPlease fix the code so it passes the security scan."
+            prompt = prompt + f"\n\nERROR ON LAST ATTEMPT:\nYour previous mutation failed the security gate with the following violation:\n{e}\nPlease fix the code so it passes the security scan."
+        except _MutationSyntaxError as e:
+            # Dedicated branch for the AST syntax pre-check (reviewer fix #2): the
+            # recurring "expected an indented block after function definition"
+            # defect class is NOT a sandbox failure — it is a truncated/malformed
+            # function body. Give the model the exact line + an explicit
+            # "the body is incomplete" directive instead of the generic sandbox
+            # message, so it stops re-proposing unterminated defs.
+            last_error = str(e)
+            logger.warning(f"Mutation syntax pre-check failed on attempt {attempt + 1}: {e}")
+            prompt = prompt + (
+                f"\n\nERROR ON LAST ATTEMPT (SYNTAX PRE-CHECK):\n"
+                f"Your previous mutation was rejected BEFORE testing because it does not "
+                f"parse as valid Python: {e.msg} on line {e.lineno}.\n"
+                f"The mutation is likely a TRUNCATED or UNTERMINATED function body — every "
+                f"def/class/if/for/while must be followed by an indented body, and the closing "
+                f"brace/indent must be present. Re-emit the COMPLETE function including all "
+                f"inner statements and the final dedent. Match the indentation of the original "
+                f"slice ({indent_prefix!r})."
+            )
         except Exception as e:
             last_error = str(e)
             logger.warning(f"Sandbox test failed on attempt {attempt + 1}: {e}")
-            prompt = EVOLUTION_PROMPT.format(target_func=target_func, core_code_slice=sliced_code) + f"\n\nERROR ON LAST ATTEMPT:\nYour previous mutation failed sandbox testing with the following error:\n{e}\nPlease fix the code."
+            prompt = prompt + f"\n\nERROR ON LAST ATTEMPT:\nYour previous mutation failed sandbox testing with the following error:\n{e}\nPlease fix the code."
     else:
         logger.critical("Evolution halted! The agent failed to produce a valid mutation after maximum retries.")
         # Record failure to memory graph

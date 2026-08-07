@@ -219,11 +219,16 @@ class ReflectionService:
             if scope is None:
                 scope = _auto_scope(confidence, failure_reason)
             embedding = await self.embedder.embed(task)
+            # Deterministic point id keyed on (component, failure_reason):
+            # a repeated failure overwrites the prior rule instead of flooding
+            # the collection with near-duplicate points (observed: 60 copies of
+            # "File not found: x.py" crowded out specific per-task lessons).
+            point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{component}|{failure_reason}"))
             await self.client.upsert(
                 collection_name=self.collection,
                 points=[
                     PointStruct(
-                        id=str(uuid.uuid4()),
+                        id=point_id,
                         vector=embedding,
                         payload={
                             "task": task,

@@ -53,6 +53,15 @@ def init_qdrant() -> bool:
         print(f"Failed to connect to Qdrant: {e}")
         return False
 
+
+def collection_exists() -> bool:
+    """True when the codebase index collection already exists in Qdrant."""
+    try:
+        resp = requests.get(f"{QDRANT_URL}/collections/{COLLECTION_NAME}", timeout=5.0)
+        return resp.status_code == 200
+    except Exception:
+        return False
+
 def read_text_auto(file_path: Path) -> str:
     """Reads a file's text, automatically detecting UTF-16 (LE/BE BOM or null-byte heuristic) and UTF-8."""
     try:
@@ -140,9 +149,18 @@ def index_codebase(root_dir: str, clear: bool = True) -> tuple[int, int]:
                 f"{QDRANT_URL}/collections/{COLLECTION_NAME}",
                 timeout=10.0,
             )
-            init_qdrant()
         except Exception:
             pass
+        # CRITICAL: verify the collection was actually re-created after the
+        # delete. A failed recreate used to be swallowed silently, permanently
+        # removing the collection so semantic_search 404'd with "Index not found"
+        # for every future agent turn. Fail loudly instead of leaving a broken
+        # index (or a missing one) behind.
+        if not init_qdrant():
+            raise RuntimeError(
+                "Failed to re-create the codebase index collection after clearing it. "
+                "Is Qdrant reachable?"
+            )
 
     all_points = []
     current_batch_chunks = []
