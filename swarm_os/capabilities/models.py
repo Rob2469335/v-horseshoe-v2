@@ -13,7 +13,7 @@ class ModelsHandler:
         return {
             "status": "success",
             "supported_roles": ["fast", "reasoning", "coding", "vision", "embedding", "reranker"],
-            "primary_vision_models": ["moondream:latest", "moondream:latest"],
+            "primary_vision_models": ["Qwen3VL-2B-Instruct", "Qwen3-VL-2B"],
             "default_fast_model": "qwen3.5-4b"
         }
 

@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 class EmbeddingService:
     """Generate embeddings using llama.cpp model."""
 
-    def __init__(self, base_url: str = "http://127.0.0.1:8081", model: str = "nomic-embed-text-v1.5.Q8_0"):
+    def __init__(self, base_url: str = "http://127.0.0.1:8081", model: str = "gte-modernbert-base-Q8_0.gguf"):
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.client = httpx.AsyncClient(timeout=120.0, headers={"Authorization": "Bearer llama"})

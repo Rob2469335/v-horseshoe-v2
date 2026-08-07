@@ -15,6 +15,30 @@ import sys
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def global_subprocess_mock(request):
+    """Shadow the CI conftest's autouse subprocess.Popen mock for this module.
+
+    The sandbox integration tests (test_sandbox_repl_*) MUST use the REAL Popen
+    so the actual sandbox_repl -> scan_code_isolated -> python -I scanner wiring
+    is exercised on every CI run. A mocked Popen returning code 0 would silently
+    pass every scan, which for the L6 fail-closed security gate is the exact
+    divergence between "looked fine in CI" and "fail-closed in production" we
+    refuse to accept. All other tests in this module keep the conftest-style mock
+    (they don't spawn a real scan subprocess and must not launch background
+    servers / npx).
+    """
+    if request.node.name.startswith("test_sandbox_repl_"):
+        yield  # real subprocess.Popen stays intact for the scan subprocess
+        return
+    from unittest.mock import patch
+    with patch("subprocess.Popen") as mock_popen:
+        mock_popen.return_value.communicate.return_value = (b"", b"")
+        mock_popen.return_value.returncode = 0
+        mock_popen.return_value.pid = 99999
+        yield mock_popen
+
+
 # ── Organism.act() dict-content coercion ─────────────────────────────────────
 def _brain_returning_dict_content():
     def brain(ctx):
@@ -97,14 +121,10 @@ async def test_sandbox_repl_blocks_banned_code():
 
 @pytest.mark.asyncio
 async def test_sandbox_repl_allows_safe_code():
-    # This runs a real `python -I` subprocess. The CI conftest mocks
-    # subprocess.Popen globally (to prevent background servers), which makes
-    # the spawn fail with '[Errno 3] No such process' — skip there.
-    import subprocess
-    from unittest.mock import Mock
+    # This runs the REAL isolated scan subprocess + a real `python -I` exec — the
+    # module-scoped global_subprocess_mock fixture keeps Popen real for
+    # test_sandbox_repl_* so the L6 wiring is verified on every CI run.
     from swarm_os.capabilities.sandbox_repl import SandboxReplHandler
-    if isinstance(subprocess.Popen, Mock):
-        pytest.skip("subprocess.Popen is mocked by the CI conftest; sandbox spawn not possible")
     r = await SandboxReplHandler().execute({"language": "python", "code": "print(2+2)"})
     assert r.get("ok") is True
     assert "4" in r.get("stdout", "")
@@ -225,14 +245,11 @@ def test_security_gate_blocks_dangerous_os_attributes():
 @pytest.mark.asyncio
 async def test_sandbox_repl_allows_readonly_os_code():
     # `import os; os.walk('.')` (the debugger's natural file-listing snippet)
-    # must pass the gate so the debugger path doesn't loop-trip on it.
+    # must pass the gate so the debugger path doesn't loop-trip on it. Runs the
+    # real isolated scan subprocess (module fixture keeps Popen real for this).
     from swarm_os.services.security_gate import SecurityGate
     SecurityGate.scan_code("import os\nfor _, dirs, files in os.walk('.'):\n    print(dirs)")
-    import subprocess
-    from unittest.mock import Mock
     from swarm_os.capabilities.sandbox_repl import SandboxReplHandler
-    if isinstance(subprocess.Popen, Mock):
-        pytest.skip("subprocess.Popen is mocked by the CI conftest; sandbox spawn not possible")
     r = await SandboxReplHandler().execute({"language": "python", "code": "import os; print(len(list(os.walk('.'))))"})
     assert r.get("ok") is True
 
@@ -264,3 +281,114 @@ async def test_lsp_accepts_path_alias_for_file_path():
         assert "Missing 'file_path'" not in r.get("error", "")
         assert r.get("result") == [{"source": "pylint", "code": "C0114"}]
 
+
+# ── L6: process-separated security gate (fail-closed on crashed scanner) ─────
+import subprocess as _subprocess
+from unittest.mock import Mock
+
+
+def _popen_side_effect(returncode: int, stderr: str = "", timeout_raise: bool = False):
+    """Build a fake Popen whose communicate() yields the given outcome."""
+    proc = Mock()
+    if timeout_raise:
+        proc.communicate.side_effect = _subprocess.TimeoutExpired(cmd="scan", timeout=5)
+    else:
+        proc.communicate.return_value = (b"", stderr.encode("utf-8", errors="replace"))
+    proc.returncode = returncode
+    return proc
+
+
+def test_scan_code_isolated_allows_clean_code(monkeypatch):
+    from swarm_os.services.security_gate import scan_code_isolated
+    proc = _popen_side_effect(0)
+    monkeypatch.setattr(_subprocess, "Popen", lambda *a, **k: proc)
+    ok, reason = scan_code_isolated("x = 1 + 2")
+    assert ok is True
+    assert reason == ""
+
+
+def test_scan_code_isolated_denies_on_detected_threat(monkeypatch):
+    from swarm_os.services.security_gate import scan_code_isolated
+    # Simulate the scanner process detecting a banned call: exit 1 + stderr reason.
+    proc = _popen_side_effect(1, stderr="DENY: Banned built-in call found: 'eval'")
+    monkeypatch.setattr(_subprocess, "Popen", lambda *a, **k: proc)
+    ok, reason = scan_code_isolated("eval('1+1')")
+    assert ok is False
+    assert "eval" in reason  # explicit denial reason, not generic
+    assert "DENY" in reason
+
+
+def test_scan_code_isolated_denies_on_crashed_scanner(monkeypatch):
+    """L6 acceptance: a CRASHED scan subprocess (non-zero exit, NO denial reason
+    on stderr — i.e. it died rather than reporting) must DENY with a clear
+    reason, never degrade to 'scan passed, nothing to report'."""
+    from swarm_os.services.security_gate import scan_code_isolated
+    proc = _popen_side_effect(2, stderr="")  # crashed, no reason
+    monkeypatch.setattr(_subprocess, "Popen", lambda *a, **k: proc)
+    ok, reason = scan_code_isolated("x = 1")
+    assert ok is False
+    assert reason  # non-empty reason
+    assert "exit 2" in reason  # explicit, distinguishable from a passed scan
+
+
+def test_scan_code_isolated_denies_on_spawn_failure(monkeypatch):
+    """L6: a scan subprocess that fails to SPAWN must deny with a clear reason."""
+    from swarm_os.services.security_gate import scan_code_isolated
+
+    def _boom(*a, **k):
+        raise OSError("no such executable")
+    monkeypatch.setattr(_subprocess, "Popen", _boom)
+    ok, reason = scan_code_isolated("x = 1")
+    assert ok is False
+    assert "could not start" in reason
+
+
+def test_scan_code_isolated_denies_on_timeout(monkeypatch):
+    """L6: a scan subprocess that hangs past the timeout must DENY (fail closed),
+    not fall through to execution."""
+    from swarm_os.services.security_gate import scan_code_isolated
+    proc = _popen_side_effect(0, timeout_raise=True)
+    monkeypatch.setattr(_subprocess, "Popen", lambda *a, **k: proc)
+    ok, reason = scan_code_isolated("x = 1", timeout=5)
+    assert ok is False
+    assert "timed out" in reason
+
+
+def test_scan_code_isolated_denial_is_not_misread_as_pass(monkeypatch):
+    """L6 (theater-proof): a scan subprocess returning a MALFORMED/garbage exit
+    (e.g. exit code 99, meaning 'crashed') must be treated as a denial, never as
+    a pass — the channel is binary (exit 0 = allow, anything else = deny)."""
+    from swarm_os.services.security_gate import scan_code_isolated
+    for bad_rc in (1, 2, 99, -1, 130, 255):
+        proc = _popen_side_effect(bad_rc, stderr="some random output that is not a verdict")
+
+        def _fake_popen(*a, **k):
+            return proc
+
+        monkeypatch.setattr(_subprocess, "Popen", _fake_popen)
+        ok, _ = scan_code_isolated("x = 1")
+        assert ok is False, f"exit {bad_rc} must deny, not pass"
+
+
+async def test_sandbox_repl_denies_exec_when_scan_unavailable(monkeypatch):
+    """L6: if the isolated scan itself THROWS (e.g. the to_thread wrapper fails),
+    the sandbox must fail closed and DENY execution — not execute the code."""
+    from swarm_os.capabilities.sandbox_repl import SandboxReplHandler
+
+    def _scan_boom(*a, **k):
+        raise RuntimeError("scanner subprocess vanished")
+    import swarm_os.services.security_gate as sg_mod
+    monkeypatch.setattr(sg_mod, "scan_code_isolated", _scan_boom)
+    r = await SandboxReplHandler().execute({"language": "python", "code": "print('DANGER')"})
+    assert r.get("ok") is False
+    assert "denied" in (r.get("stderr", "") + r.get("error", "")).lower()
+    assert "print('DANGER')" not in r.get("stdout", "")  # never executed
+
+
+async def test_sandbox_repl_powershell_guard_still_fires_after_l6(monkeypatch):
+    """L6 regression: the existing PowerShell destructive-command guard must
+    still run (it was NOT bypassed by the process-boundary change)."""
+    from swarm_os.capabilities.sandbox_repl import SandboxReplHandler
+    r = await SandboxReplHandler().execute({"language": "powershell", "command": "Remove-Item C:\\x -Recurse"})
+    assert r.get("ok") is False
+    assert "Security Gate" in r.get("stderr", "")

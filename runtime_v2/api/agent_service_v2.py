@@ -37,6 +37,31 @@ def _is_fix_intent(text: str) -> bool:
     return bool(_FIX_INTENT_RE.search(low))
 
 
+# L1 (2026 structural verifier): template / placeholder finals. These are the
+# "the agent short-circuited instead of doing the work" responses — a bare
+# completion sentence with no substantive content. The goal-loop also checks
+# these, but the agent loop must fail-closed on them too (before the final is
+# accepted / fed to outcome/remember).
+_PLACEHOLDER_RE = re.compile(
+    r"^\s*(task\s+(completed|complete|done)|all\s+done|done|completed|finished|"
+    r"success|goal\s+achieved|ok|okay|no\s+(changes|issues|errors|improvements))\s*[.!]?\s*$",
+    re.IGNORECASE,
+)
+
+
+def _is_placeholder_final(text: str) -> bool:
+    """True when a final response is a bare completion/template placeholder with
+    no substantive content (e.g. 'Task completed.' / 'Done.' / 'No changes.'),
+    even when it is a complete sentence — the structural-verifier signal that
+    the agent finished without doing/describing the requested work."""
+    t = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not t:
+        return True
+    if len(t) > 120:
+        return False  # long responses are substantive enough to not be a template
+    return bool(_PLACEHOLDER_RE.match(t))
+
+
 def _clean_search_query(prompt: str, max_len: int = 300) -> str:
     """Extract a clean web-search query from a delegated goal prompt.
 
@@ -202,6 +227,29 @@ class _CallState:
     # /upgrade autonomous-loop failure where every attempt ended with
     # "No file changes detected").
     did_code_change: bool = False
+    # L1 (2026 structural verifier): files actually READ this run (via filesystem
+    # operation=read/read_all) vs merely LISTED/GLOBbed. An analysis agent may
+    # not reference a file path in its final that it never actually read — only
+    # seeing the name in a listing is not "read the content", so a vague final
+    # that cites never-read paths fails closed (treated like a system failure).
+    # L1 (2026 structural verifier): file paths the agent genuinely grounded on
+    # this run. Populated from BOTH filesystem read/read_all AND real
+    # semantic_search hits (whose returned chunks carry `File: <path>` lines) —
+    # a semantic_search hit is real content grounding, not a placeholder dodge.
+    # An analysis agent may not cite a .py path in its final unless it actually
+    # saw that file's content this run (via read or a real search hit).
+    read_paths: set = field(default_factory=set)
+    # L1: number of times a final was rejected for a contract violation
+    # (placeholder / unreferenced-read). Mirrors `premature_finals`: after 2
+    # strikes the run aborts instead of looping forever under MAX_TURNS.
+    _contract_finals: int = 0
+    # L3 (2026 real-test signal): actual test outcome after a coder code change.
+    # None = not yet run / no test suite; else 1.0 (exit 0) or 0.0 (failed).
+    # Replaces the completion-proxy of outcome_fitness's test_pass when set.
+    test_pass_result: float | None = None
+    # Guard so the in-sandbox test run happens at most once per step_agent_stream
+    # (it is expensive — a full DangerRoom copy + pytest).
+    _tests_ran: bool = False
 
 from runtime_v2.api._agent_config import (
     MAX_TURNS, MAX_DEPTH, ANALYSIS_AGENTS, INTERNET_GOAL_AGENTS,
@@ -264,6 +312,106 @@ class AgentServiceV2:
             "model": model, "duration_ms": (time.time() - start_time) * 1000,
             "status": "success", "learning_outcome": {"result": "success"}})
 
+    def _fitness_gate_on(self) -> bool:
+        try:
+            from swarm_os.services.outcome_fitness import _fitness_env_enabled
+            return _fitness_env_enabled()
+        except Exception:
+            return False
+
+    def _find_related_tests(self, file_path: str) -> list:
+        """Locate test files that exercise a changed module (by name, then content)."""
+        try:
+            from pathlib import Path
+            repo = Path(__file__).resolve().parent.parent.parent.parent
+            tests_dir = repo / "tests"
+            if not tests_dir.exists():
+                return []
+            base = Path(file_path).stem
+            mod = str(file_path).replace("\\", "/").replace(".py", "")
+            out = []
+            for t in sorted(tests_dir.glob("test_*.py")):
+                if base in t.name or t.name.replace("test_", "").replace(".py", "") in base:
+                    out.append(t)
+                    if len(out) >= 5:
+                        break
+            if not out:
+                for t in sorted(tests_dir.glob("test_*.py")):
+                    try:
+                        head = t.read_text(encoding="utf-8", errors="ignore")[:4000]
+                    except Exception:
+                        continue
+                    if mod in head or base in head:
+                        out.append(t)
+                        if len(out) >= 5:
+                            break
+            return out
+        except Exception:
+            return []
+
+    def _structural_verify(self, file_path: str, repo=None) -> bool:
+        """Minimal non-transcriptional verification of an edited Python file:
+        it must exist, be non-trivial, and parse (ast.parse). This is the L3
+        fallback when no related test suite exists — NOT a free pass. A file that
+        fails this (doesn't exist / empty / syntax-broken) is scored 0.0, and a
+        merely-untested-but-sounding file still only earns a DISCOUNTED 0.5 so it
+        can never out-compete a genuinely verified (tested) 1.0. `repo` overrides
+        the project root (test seam)."""
+        try:
+            from pathlib import Path
+            if repo is None:
+                repo = Path(__file__).resolve().parent.parent.parent.parent
+            p = repo / (file_path or "")
+            if not p.exists() or p.is_dir():
+                return False
+            src = p.read_text(encoding="utf-8", errors="ignore")
+            if not src.strip():
+                return False
+            try:
+                import ast as _ast
+                _ast.parse(src)
+            except SyntaxError:
+                return False
+            return True
+        except Exception:
+            return False
+
+    async def _run_change_tests(self, state: _CallState, changed_file: str):
+        """L3 (2026): run the changed module's related tests in a DangerRoom
+        sandbox and record the REAL test_pass.
+
+        - Poll tests exist: run them in-sandbox -> 1.0 (exit 0) / 0.0 (fail).
+        - No related test found: NOT an automatic pass (that would be the
+          Self-Repair Trap). Structurally verify the edited file via
+          `_structural_verify` (ast.parse + non-empty). Raw score:
+              broken/unparseable           -> 0.0
+              sound but UNVERIFIED by test -> 0.5 (discounted — cannot out-compete
+                                              a verified 1.0 in selection)
+        Never raises; an error records None (treated as unverified downstream)."""
+        try:
+            tests = self._find_related_tests(changed_file or "")
+            if not tests:
+                if self._structural_verify(changed_file):
+                    state.test_pass_result = 0.5  # untested but sound -> discounted
+                    log.info("[coder] L3: no related tests for %s; unverified change scored 0.5 (discounted)", changed_file)
+                else:
+                    state.test_pass_result = 0.0  # broken / unparseable -> fail
+                    log.warning("[coder] L3: no tests AND structural verify FAILED for %s -> 0.0", changed_file)
+                return
+            from pathlib import Path
+            from swarm_os.services.danger_room import DangerRoom
+            root = Path(__file__).resolve().parent.parent.parent.parent
+            async with DangerRoom(root) as dr:
+                targets = [dr.sandbox_dir / "tests" / t.name for t in tests]
+                targets = [t for t in targets if t.exists()]
+                res = await dr.run_tests(targets, timeout=120.0)
+                state.test_pass_result = 1.0 if res.get("ok") else 0.0
+                log.info("[coder] L3 real-test signal: ok=%s exit=%s targets=%d",
+                         res.get("ok"), res.get("exit_code"), len(targets))
+        except Exception as exc:
+            state.test_pass_result = None
+            log.debug("[coder] L3 test run skipped: %s", exc)
+
     def _feed_outcome(self, agent_id: str, prompt: str, state: _CallState,
                       completed: bool = True, tool_success_rate: float = 0.0,
                       turns_used: int = 0, genome_id: str = ""):
@@ -277,11 +425,20 @@ class AgentServiceV2:
                 return
             # Efficiency = baseline(8 turns) / actual, clipped to [0,1].
             efficiency = min(1.0, 8.0 / max(1, turns_used or 8)) if completed else 0.0
+            # L3 (2026 real-test signal): if a real in-sandbox test run happened
+            # (coder code change), use its true outcome — NOT the completion proxy.
+            # A broken fix that merely completes without erroring is now scored as
+            # a test FAIL, not a pass. Falls back to the completion proxy only when
+            # no real test result exists.
+            if state.test_pass_result is not None:
+                test_pass = state.test_pass_result
+            else:
+                test_pass = 1.0 if completed else 0.0
             from swarm_os.services.outcome_fitness import record_outcome
             record_outcome(
                 genome_id=genome_id or f"agent:{agent_id}",
                 completion=1.0 if completed else 0.0,
-                test_pass=1.0 if completed else 0.0,
+                test_pass=test_pass,
                 tool_success=tool_success_rate,
                 efficiency=efficiency,
                 task=str(prompt)[:200],
@@ -782,6 +939,56 @@ class AgentServiceV2:
 
         response_text = str(decision.get("response", "Task complete."))
 
+        # 2026 L1 structural verifier: fail closed on a final that violates the
+        # task contract, independent of whether tests exist. Two checks:
+        #   (a) placeholder/template finals — a bare "Task completed." / "Done."
+        #       is a short-circuit signal and is rejected as a failed run (same
+        #       treatment as a system-failure final: NOT fed as a success).
+        #   (b) analysis agents that reference specific .py file paths in their
+        #       final which were NEVER actually read this run (only listed/globbed
+        #       or mentioned) — the final would be claiming analysis of files whose
+        #       content the agent never saw.
+        # These run on EVERY final, fail closed, and only for report/analysis
+        # agents (coder's fix-intent invariant already forces a code edit).
+        contract_error = None
+        if agent_id in ANALYSIS_AGENTS:
+            if _is_placeholder_final(response_text):
+                contract_error = (
+                    "SYSTEM (L1 contract): you called action=final with only a placeholder response "
+                    f"({response_text!r}). This is a short-circuit, not a completed task. Re-run the goal "
+                    "and produce a substantive final that states the actual findings/fixes. Do NOT finalize "
+                    "with a bare completion sentence."
+                )
+            else:
+                refs = set(re.findall(r"[\w./\\-]+\.py", response_text))
+                unread = {p for p in refs if p.replace("\\", "/").lstrip("./") not in {
+                    r.replace("\\", "/").lstrip("./") for r in state.read_paths
+                }}
+                if unread:
+                    contract_error = (
+                        "SYSTEM (L1 contract): your final references file paths that were never actually "
+                        f"read this run: {sorted(unread)[:5]}. Merely listing or mentioning a file is not "
+                        "reading its content. Use action=filesystem (operation=read) on the files you are "
+                        "reporting on, then produce a grounded final."
+                    )
+        if contract_error:
+            state._contract_finals += 1
+            if state._contract_finals >= 2:
+                log.error("[%s] Aborting: final rejected twice for contract violations.", agent_id)
+                err_txt = f"Task FAILED: {agent_id} could not produce a substantive, grounded final."
+                yield {"agent_id": agent_id, "type": "error", "content": err_txt}
+                yield {"agent_id": agent_id, "type": "final", "model": model, "provider": provider, "content": err_txt}
+                tsr = (state._tool_successes / state._tool_attempts) if state._tool_attempts else 0.0
+                self._feed_outcome(agent_id, prompt, state, completed=False,
+                                   tool_success_rate=tsr, turns_used=state._turn,
+                                   genome_id=getattr(state, 'genome_id', ''))
+                state.handler_status = "ABORT"
+                return
+            state.handler_status = "CONTINUE"
+            log.warning("[%s] L1 contract violation: %s", agent_id, contract_error[:160])
+            messages.append({"role": "user", "content": contract_error})
+            return
+
         if agent_id == "reviewer" and ("FAIL" in response_text.upper() or str(decision.get("verdict", "")).upper() == "FAIL"):
             state.reviewer_fails += 1
             if state.reviewer_fails >= 3:
@@ -936,10 +1143,24 @@ class AgentServiceV2:
             if not _fetched_content:
                 if action == "filesystem" and tool_payload.get("operation") in ("read", "read_all"):
                     _fetched_content = True
+                    p = str(tool_payload.get("path", "")).replace("\\", "/")
+                    if p:
+                        state.read_paths.add(p)
                 if action in ("semantic_search", "web_search", "web_fetch", "lsp"):
                     _fetched_content = True
                 if action in ("system", "screen"):
                     _fetched_content = True
+
+            # L1 grounding: a successful semantic_search returns real code-chunk
+            # hits whose formatted text carries `File: <path>` lines. Those are
+            # genuine content grounding (paths the agent actually saw), so they
+            # populate read_paths too — a substantive final citing a search-hit
+            # file must NOT be falsely rejected as "never read".
+            if action == "semantic_search" and state.tool_success:
+                for hit_path in re.findall(r"(?im)^File:\s*([\w./\\-]+\.py)", str(result.get("result", ""))):
+                    hit_path = hit_path.replace("\\", "/").lstrip("./")
+                    if hit_path:
+                        state.read_paths.add(hit_path)
 
             if action == "web_search" and state.tool_success:
                 state.did_web_search = True
@@ -956,6 +1177,15 @@ class AgentServiceV2:
                 if path.endswith((".py", ".js", ".ts", ".tsx", ".jsx", ".go", ".rs")):
                     state.pending_verify = True
                     state._verify_final_rejected = False
+                # L3 (2026 real-test signal): after a REAL code change by the edit
+                # agent, actually run the related tests IN THE SANDBOX and record the
+                # true test_pass (not the completion-proxy). At most once per stream
+                # (expensive: DangerRoom copy + pytest). Gated by SWARM_EVOLUTION=1 —
+                # zero overhead when evolution is off.
+                if (agent_id == "coder" and not state._tests_ran
+                        and self._fitness_gate_on()):
+                    state._tests_ran = True
+                    await self._run_change_tests(state, path)
             if action == "sandbox_repl" and state.tool_success:
                 state.pending_verify = False
                 state._verify_final_rejected = False

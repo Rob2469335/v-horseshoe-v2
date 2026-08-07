@@ -22,15 +22,30 @@ class SandboxReplHandler:
             # sandbox is NOT a real isolation boundary (runs as the user, cwd=root),
             # so block banned calls/modules (exec/eval/subprocess/os/sys/socket/...)
             # deterministically instead of pretending it is safe.
+            # 2026 L6: the scan itself runs in a SEPARATE process (scan_code_isolated)
+            # so a buggy/compromised scanner does not share fate with the exec-side.
+            # Fail-closed: any scan error/timeout/non-zero exit denies execution with
+            # an explicit reason (never a generic "passed").
             try:
-                from swarm_os.services.security_gate import SecurityGate, SecurityGateViolation
-                SecurityGate.scan_code(str(code))
-            except SecurityGateViolation as e:
+                from swarm_os.services.security_gate import scan_code_isolated
+                scan_ok, scan_reason = await asyncio.to_thread(scan_code_isolated, str(code))
+                if not scan_ok:
+                    return {
+                        "ok": False,
+                        "stdout": "",
+                        "stderr": scan_reason,
+                        "error": scan_reason,
+                        "returncode": 1,
+                    }
+            except Exception as e:
+                # Fail closed: a scan subprocess failure must DENY, never fall
+                # through to execution (a malformed scan response must not be
+                # misread as "scan passed").
                 return {
                     "ok": False,
                     "stdout": "",
-                    "stderr": f"Security Gate blocked execution: {e}",
-                    "error": f"Security Gate blocked execution: {e}",
+                    "stderr": f"Security gate unavailable, execution denied: {e}",
+                    "error": f"Security gate unavailable, execution denied: {e}",
                     "returncode": 1,
                 }
             cmd = [sys.executable, "-I", "-c", str(code)]

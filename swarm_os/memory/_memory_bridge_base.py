@@ -19,7 +19,7 @@ LLAMA_GEN = "http://127.0.0.1:8080"
 LLAMA_EMB = "http://127.0.0.1:8081"
 LLAMA_SUMM = "http://127.0.0.1:8084"  # 0.8B dedicated summarizer
 SUM_MODEL = "qwen3.5-0.8b"
-EMBED_MODEL = "nomic-embed-text-v1.5.Q8_0"
+EMBED_MODEL = "gte-modernbert-base-Q8_0.gguf"
 VECTOR_SIZE = 768
 
 DECAY = 180.0

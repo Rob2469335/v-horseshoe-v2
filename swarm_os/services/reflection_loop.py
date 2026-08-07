@@ -24,6 +24,54 @@ CLOUD_MODEL = "openai/deepseek-v4-flash"
 DISTILLER_MAX_TOKENS_CLOUD = 300
 DISTILLER_MAX_TOKENS_LOCAL = 512
 
+def _corrections_similar(a: str, b: str, threshold: float = 0.5) -> bool:
+    """Content-based test of whether two reflexion corrections say the SAME thing
+    (2026 L5: judge repeat-vs-conflict on the fact's content, not on the key
+    having been written before). Deterministic, no LLM.
+
+    Normalize to lowercased alphanumeric words (dropping stopwords/short tokens),
+    then compare token overlaps: two corrections are "the same fact" when at least
+    `threshold` of the smaller set's meaningful words appears in the other. Either
+    side empty is treated as same (no substance to contradict)."""
+    import re as _re
+    _STOP = {"the", "a", "an", "to", "of", "for", "on", "in", "with", "and",
+             "or", "is", "are", "be", "do", "not", "you", "your", "it", "its",
+             "use", "using", "file", "files", "first", "then", "before", "so"}
+    # Negation is a STRONG conflict signal: "never web_search" vs "web_search for
+    # every goal" share tokens but direct the agent opposite ways. If a negation
+    # marker appears on exactly ONE side, treat as a conflict regardless of the
+    # token overlap — the same precedence discipline as the L2 classifier (a
+    # semantic opposite must never be reinforced as "the same fact").
+    _NEG = re.compile(r"\b(never|don't|do not|not|without|avoid|must not|should not)\b")
+    a_neg = bool(_NEG.search(str(a or "").lower()))
+    b_neg = bool(_NEG.search(str(b or "").lower()))
+    if a_neg != b_neg:
+        return False  # one side forbids, the other commands -> conflicting
+    def _words(s):
+        return {w for w in _re.findall(r"[a-z0-9]+", str(s or "").lower())
+                if len(w) > 2 and w not in _STOP}
+    wa, wb = _words(a), _words(b)
+    if not wa or not wb:
+        return True  # nothing substantive -> ambiguous, treat as same (reinforce)
+    overlap = len(wa & wb) / max(1.0, min(len(wa), len(wb)))
+    return overlap >= threshold
+
+
+_RULE_SAME = "same"
+_RULE_CONFLICT = "conflict"
+
+def _classify_rule(existing: dict | None, correction: str) -> str:
+    """Classify a reflector write as same-fact (reinforce) or conflict (overwrite)
+    based on the correction CONTENT (not the point existing). A new, materially
+    different correction for the same failure_reason is a genuine conflict; an
+    identical/rephrased one is the same fact recurring."""
+    if not existing:
+        return _RULE_SAME  # first write, just store it
+    if _corrections_similar(existing.get("correction", ""), correction):
+        return _RULE_SAME
+    return _RULE_CONFLICT
+
+
 def _record_rule_to_agents_md(component: str, correction: str, confidence: float):
     """SOTA 2026: Auto-document high-confidence ASPO reflection rules into AGENTS.md."""
     if confidence < 0.85 or not correction:
@@ -224,6 +272,81 @@ class ReflectionService:
             # the collection with near-duplicate points (observed: 60 copies of
             # "File not found: x.py" crowded out specific per-task lessons).
             point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{component}|{failure_reason}"))
+            # 2026 L5 (trust-gated consolidation): a repeated failure must
+            # REINFORCE the stored rule, not flat-overwrite it. Read the existing
+            # point; if present, bump its count and raise confidence (capped) so a
+            # recurring failure's lesson accumulates evidence and becomes more
+            # load-bearing, while a one-off stays tentative. The strongest
+            # correction is retained (longer/more-specific wins).
+            existing = None
+            retrieve_failed = False
+            try:
+                resp = await self.client.retrieve(
+                    collection_name=self.collection,
+                    ids=[point_id],
+                    with_payload=True,
+                    with_vectors=False,
+                )
+                if resp:
+                    existing = resp[0].payload or {}
+            except Exception as exc:
+                # 2026 L5 (trust-gated consolidation): a GENUINE retrieve failure
+                # (DB/vector-store timeout, corrupt payload) is NOT the same as "no
+                # prior record exists". The old behavior silently degraded both to
+                # existing=None — a flaky retrieve would misclassify a real
+                # CONFLICT as a brand-new first-write (silently discarding history,
+                # exactly what L5 forbids) and stop confidence from accumulating for
+                # reasons unrelated to the fact. Now it's logged loudly and the
+                # write is FLAGGED so the failure is observable, not folded into the
+                # happy-path default.
+                retrieve_failed = True
+                logger.warning(
+                    "Reflexion retrieve FAILED for (component=%s, reason=%s): %s — "
+                    "treating as unclassified first-write (history not consulted)",
+                    component, failure_reason, exc,
+                )
+                existing = None
+
+            # 2026 L5 (trust-gated consolidation): judge a write as SAME-FACT
+            # (reinforce: bump count + confidence) vs CONFLICT (overwrite + log)
+            # based on the CORRECTION CONTENT, not on the key having been written
+            # before. Same precedence discipline as the L2 classifier: a repeated
+            # write with DIFFERENT advice is a conflict (never always-reinforce),
+            # an identical/rephrased repeat is same-fact (never always-overwrite).
+            verdict = _classify_rule(existing, correction)
+            count = int(existing.get("count", 1) or 1) if existing else 1
+            prev_conf = float(existing.get("confidence", confidence) or confidence) if existing else confidence
+            if verdict == _RULE_CONFLICT:
+                # A genuinely different correction for the same failure_reason: the
+                # old content is SUPERSEDED (overwrite with the new) and the
+                # conflict is logged, not silently discarded. Count carries over as
+                # recurrence evidence; confidence for the new content is modest.
+                if existing and existing.get("correction") not in (None, "", correction):
+                    logger.info(
+                        "Reflexion CONFLICT for (component=%s, reason=%s): overwriting "
+                        "prior rule %r with new rule %r",
+                        component, failure_reason,
+                        str(existing.get("correction"))[:60], str(correction)[:60],
+                    )
+                best_conf = max(confidence, prev_conf * 0.5)
+                scope = existing.get("scope", scope) if existing else scope
+            else:
+                # SAME FACT: reinforce — a true repeat (existing point) increments
+                # count and raises confidence (capped) so a recurring failure
+                # accumulates evidence and becomes load-bearing, while a first
+                # write stays at count=1 / tentative. Keep the more specific
+                # (longer) correction.
+                if existing:
+                    count = count + 1
+                    best_conf = min(0.98, prev_conf + 0.08)
+                else:
+                    count = 1
+                    best_conf = prev_conf
+                if existing and existing.get("correction") and len(str(existing.get("correction"))) > len(correction or ""):
+                    correction = existing.get("correction")
+                if existing and existing.get("do_not_repeat"):
+                    do_not_repeat = existing.get("do_not_repeat")
+                best_conf = max(best_conf, confidence)
             await self.client.upsert(
                 collection_name=self.collection,
                 points=[
@@ -239,13 +362,15 @@ class ReflectionService:
                             "component": component,
                             "scope": scope,
                             "timestamp": time.time(),
-                            "confidence": confidence,
+                            "confidence": best_conf,
+                            "count": count,
+                            "retrieve_failed": retrieve_failed,
                         }
                     )
                 ],
                 wait=True
             )
-            await asyncio.to_thread(_record_rule_to_agents_md, component, correction, confidence)
+            await asyncio.to_thread(_record_rule_to_agents_md, component, correction, best_conf)
         except Exception as e:
             logger.error("Failed to store reflexion: %s", e)
 

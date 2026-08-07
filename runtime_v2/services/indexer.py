@@ -8,7 +8,7 @@ from typing import List, Dict, Optional
 QDRANT_URL = "http://127.0.0.1:6333"
 LLAMA_URL = "http://127.0.0.1:8081"
 COLLECTION_NAME = "codebase_index"
-EMBEDDING_MODEL = "nomic-embed-text-v1.5.Q8_0.gguf"
+EMBEDDING_MODEL = "gte-modernbert-base-Q8_0.gguf"
 
 # The nomic-embed server context varies across boots (512-2048 ctx seen). A
 # chunk too large for the model's context makes /v1/embeddings reject the WHOLE
@@ -21,15 +21,27 @@ EMBEDDING_MODEL = "nomic-embed-text-v1.5.Q8_0.gguf"
 # which also cuts the number of chunks ~4x versus a fixed 512-token budget.
 TOKEN_BUDGET_CHARS = 1800
 
+# Cap the embed request size. See _embed_context_budget_chars: on CPU, big
+# chunks embed ~100x slower per char, and full AST segments can be tens of KB.
+# Keep chunks at function/class granularity (~1-1.5k chars) where the embed
+# server runs at 1300-1700 tok/s.
+_MAX_BUDGET_CHARS = 4000
+
 
 def _embed_context_budget_chars() -> int:
     """Character budget from the embed model's live n_ctx (fallback:
-    TOKEN_BUDGET_CHARS). Keeps every chunk inside the server's context."""
+    TOKEN_BUDGET_CHARS), capped so a single embed request stays in the fast
+    CPU regime. The raw n_ctx (e.g. gte-modernbert 8192 -> ~24k chars) lets
+    huge AST class/function bodies through; embedding a 24k-char text is
+    ~100x slower per char than a ~1-2k-char chunk on CPU, so a batch of 16
+    oversized chunks crawls. Capping ~4k chars keeps semantic chunk granularity
+    (functions/classes) while each embed lands in the 1300-1700 tok/s region.
+    """
     try:
         resp = requests.get(f"{LLAMA_URL}/v1/models", timeout=5.0)
         ctx = resp.json()["data"][0]["meta"]["n_ctx"]
         if ctx and ctx > 0:
-            return max(512, int(ctx * 3.5 * 0.85))
+            return max(1024, min(int(ctx * 3.5 * 0.85), _MAX_BUDGET_CHARS))
     except Exception:
         pass
     return TOKEN_BUDGET_CHARS

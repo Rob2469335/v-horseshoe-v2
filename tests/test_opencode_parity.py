@@ -225,8 +225,11 @@ async def test_internet_goal_final_allowed_after_web_search():
     state.did_web_search = True
     state.did_web_fetch = True
     messages = [{"role": "user", "content": "hi"}]
+    # Substantive, grounded final (NOT a placeholder — under L1 a bare "done" now
+    # correctly fails closed even when the web guards pass).
     gen = service._handle_final(
-        {"action": "final", "response": "done"}, "code_analyzer", "m", "p",
+        {"action": "final", "response": "The latest SOTA approach is documented on the official Qwen blog; the agent loop should route fixes to coder."},
+        "code_analyzer", "m", "p",
         messages, 0.0, "analyze my codebase and search internet for improvements", True, state)
     async for _ in gen:
         pass
@@ -856,3 +859,110 @@ def test_natural_phrasing_compound_goal_routes_to_executor():
     assert not is_compound_goal("search the internet for the latest python version")
 
 
+@pytest.mark.asyncio
+async def test_l1_placeholder_final_rejected_for_analysis_agent():
+    """2026 L1 structural verifier: an analysis agent that emits a bare placeholder
+    final ('Task completed.') — even after a semantic_search set _fetched_content —
+    must have the final rejected (CONTINUE) with a corrective message, not accepted
+    and fed to remember/completion. This is the exact 'code_analyzer: list/skip-read
+    -> vague final' failure class."""
+    from runtime_v2.api.agent_service_v2 import _is_placeholder_final
+    assert _is_placeholder_final("Task completed.")
+    assert _is_placeholder_final("Done")
+    assert _is_placeholder_final("No changes.")
+    assert not _is_placeholder_final("I found that runtime_v2/api/agent_service_v2.py routes tools via the orchestrator; the read-before-write guard needs a patch.")
+
+    service = AgentServiceV2()
+    state = _CallState()
+    messages = [{"role": "user", "content": "hi"}]
+    gen = service._handle_final(
+        {"action": "final", "response": "Task completed."}, "code_analyzer", "m", "p",
+        messages, 0.0, "analyze the codebase for bugs", True, state)
+    async for _ in gen:
+        pass
+    assert state.handler_status == "CONTINUE"
+    assert any("L1 contract" in m.get("content", "") for m in messages)
+
+
+@pytest.mark.asyncio
+async def test_l1_final_referencing_unread_files_rejected():
+    """2026 L1: an analysis agent whose final cites .py files that were NEVER read
+    this run (only mentioned/listed) must have the final rejected — the claim is
+    not grounded in content the agent actually saw."""
+    service = AgentServiceV2()
+    state = _CallState()
+    # Only read one file; the final will reference a different, never-read one.
+    state.read_paths.add("runtime_v2/api/agent_service_v2.py")
+    messages = [{"role": "user", "content": "hi"}]
+    gen = service._handle_final(
+        {"action": "final", "response": "I audited swarm_os/core/orchestrator.py and it has a bug."},
+        "code_analyzer", "m", "p",
+        messages, 0.0, "analyze the codebase for bugs", True, state)
+    async for _ in gen:
+        pass
+    assert state.handler_status == "CONTINUE"
+    assert any("L1 contract" in m.get("content", "") for m in messages)
+
+
+@pytest.mark.asyncio
+async def test_l1_legitimate_final_with_read_files_passes():
+    """2026 L1: a substantive final that only references files the agent ACTUALLY
+    read this run must pass through (not be rejected)."""
+    service = AgentServiceV2()
+    state = _CallState()
+    state.read_paths.add("runtime_v2/api/agent_service_v2.py")
+    messages = [{"role": "user", "content": "hi"}]
+    gen = service._handle_final(
+        {"action": "final",
+         "response": "runtime_v2/api/agent_service_v2.py hosts the agent loop; the read-before-write guard is sound."},
+        "code_analyzer", "m", "p",
+        messages, 0.0, "analyze the codebase for bugs", True, state)
+    events = [e async for e in gen]
+    assert state.handler_status != "CONTINUE"
+    assert any(e.get("type") == "final" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_l1_two_placeholder_finals_abort():
+    """2026 L1: after two placeholder/contract rejections the run aborts as failed
+    (not looped forever), and outcome is fed as NOT completed."""
+    service = AgentServiceV2()
+    state = _CallState()
+    messages = [{"role": "user", "content": "hi"}]
+    gen = service._handle_final(
+        {"action": "final", "response": "Task completed."}, "code_analyzer", "m", "p",
+        messages, 0.0, "analyze the codebase", True, state)
+    async for _ in gen:
+        pass
+    assert state.handler_status == "CONTINUE"
+    gen2 = service._handle_final(
+        {"action": "final", "response": "Task completed."}, "code_analyzer", "m", "p",
+        messages, 0.0, "analyze the codebase", True, state)
+    events2 = [e async for e in gen2]
+    assert state.handler_status == "ABORT"
+    assert any(e.get("type") == "final" for e in events2)
+@pytest.mark.asyncio
+async def test_l1_legitimate_semantic_search_only_final_passes():
+    """2026 L1 grounding: a substantive final citing a file the agent grounded on
+    via semantic_search (a real hit with chunk content, not a filesystem read)
+    must PASS — a legitimate search-grounded answer is not a placeholder dodge.
+    Populates state.read_paths from the semantic_search 'File: <path>' result."""
+    service = AgentServiceV2()
+    state = _CallState()
+    # Simulate what _handle_tool does after a successful semantic_search whose
+    # result text carries a File: line for the cited path.
+    semantic_text = "--- Result 1 (Relevance: 0.93) ---\nFile: runtime_v2/api/agent_service_v2.py\nSymbol: agent_service_v2.py_part_42\nCode:\n```python\ndef _handle_final...\n```"
+    import re as _re
+    for hp in _re.findall(r"(?im)^File:\s*([\w./\\-]+\.py)", semantic_text):
+        state.read_paths.add(hp.replace("\\", "/").lstrip("./"))
+    assert "runtime_v2/api/agent_service_v2.py" in state.read_paths
+
+    messages = [{"role": "user", "content": "hi"}]
+    gen = service._handle_final(
+        {"action": "final",
+         "response": "Per the codebase index, runtime_v2/api/agent_service_v2.py implements _handle_final with the read-before-write guard."},
+        "code_analyzer", "m", "p",
+        messages, 0.0, "analyze the codebase for bugs", True, state)
+    events = [e async for e in gen]
+    assert state.handler_status != "CONTINUE"
+    assert any(e.get("type") == "final" for e in events)

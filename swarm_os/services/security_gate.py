@@ -150,3 +150,69 @@ def clean_sandbox_env(extra: dict | None = None) -> dict:
     if extra:
         clean.update(extra)
     return clean
+
+
+# L6 (2026 process-separated gate): the scanner runs in a SEPARATE process from
+# the agent/exec-side so a compromised or buggy scanner does not share fate or
+# memory with the thing it gates. The scanner receives the untrusted code on
+# stdin and returns its decision ONLY via exit code + stderr — there is no
+# verdict document to parse or spoof, so a malformed/garbage response cannot
+# fallback-guess into an allow. Fail-closed: spawn error / timeout / non-zero
+# exit are all DENY with an explicit reason.
+_SCAN_RUNNER = r"""
+import sys
+sys.path.insert(0, {project_root!r})
+from swarm_os.services.security_gate import SecurityGate, SecurityGateViolation
+code = sys.stdin.read()
+try:
+    SecurityGate.scan_code(code)
+except SecurityGateViolation as e:
+    sys.stderr.write("DENY: %s" % e)
+    sys.exit(1)
+sys.exit(0)
+"""
+
+
+def scan_code_isolated(code: str, project_root: str | None = None,
+                       timeout: float = 20.0) -> tuple[bool, str]:
+    """Run the AST security scan for untrusted code in a SEPARATE process and
+    return (ok, reason).
+
+    Returns (True, "") when the scan PASSES (exit 0). Otherwise returns
+    (False, reason) with an explicit reason — never a generic "passed". A crash
+    (non-zero exit), a spawn error, or a timeout are all DENY. Never raises."""
+    import os
+    import subprocess
+    import sys
+    if project_root is None:
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    runner = _SCAN_RUNNER.format(project_root=project_root)
+    cmd = [sys.executable, "-I", "-c", runner]
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=clean_sandbox_env(),
+        )
+    except Exception as exc:
+        return (False, f"Security gate scan process could not start: {exc}")
+    try:
+        _, err_bytes = proc.communicate(input=code.encode("utf-8", errors="replace"), timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        proc.wait()
+        return (False, "Security gate scan timed out; execution denied.")
+    # Fail-closed hardening: only a REAL integer exit code of 0 is an allow. A
+    # mocked/unusual returncode (test harness), a None, or a non-int (a crashed
+    # scanner object) must DENY — never fall through as if the scan passed.
+    rc = proc.returncode
+    if isinstance(rc, int) and rc == 0:
+        return (True, "")
+    err = err_bytes.decode("utf-8", errors="replace").strip()
+    reason = err or f"security gate scan failed (exit {rc!r})"
+    return (False, f"Security Gate blocked execution: {reason}")

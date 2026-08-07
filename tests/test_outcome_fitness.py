@@ -121,3 +121,95 @@ async def test_handle_final_feeds_real_outcome(tmp_path, monkeypatch):
     assert recs, "expected a persisted outcome"
     assert recs[-1]["completion"] == 1.0
     assert recs[-1]["tool_success"] == 1.0
+@pytest.mark.asyncio
+async def test_feed_outcome_uses_real_test_pass(tmp_path, monkeypatch):
+    """L3 (2026): when a real in-sandbox test run recorded a FAILED outcome
+    (0.0) for a coder that otherwise completed cleanly, _feed_outcome must feed
+    test_pass=0.0 — NOT the completion-proxy 1.0. This is the Self-Repair Trap
+    fix: 'it finished' no longer stands in for 'it actually works'."""
+    from runtime_v2.api.agent_service_v2 import AgentServiceV2, _CallState
+    from swarm_os.services import outcome_fitness as of
+    monkeypatch.setattr(of, "FITNESS_PATH", tmp_path / "fitness.jsonl")
+    monkeypatch.setenv("SWARM_EVOLUTION", "1")
+    service = AgentServiceV2()
+    state = _CallState()
+    state._turn = 4
+    state._tool_attempts = 3
+    state._tool_successes = 3
+    # A real test run happened and FAILED, even though the run completed.
+    state.test_pass_result = 0.0
+    service._feed_outcome("coder", "implement the fix", state, completed=True, tool_success_rate=1.0, turns_used=4, genome_id="agent:coder")
+    recs = of.recent_fitness()
+    assert recs
+    assert recs[-1]["test_pass"] == 0.0
+    assert recs[-1]["completion"] == 1.0  # completed but tests failed -> scored as broken
+
+
+@pytest.mark.asyncio
+async def test_danger_room_run_tests_returns_real_exit_code(tmp_path, monkeypatch):
+    """L3: DangerRoom.run_tests runs pytest in the sandbox and returns the REAL
+    exit code (a rewrite that breaks a test yields exit!=0, ok=False)."""
+    from swarm_os.services.danger_room import DangerRoom
+    # Build a tiny sandbox with a passing and a failing test.
+    (tmp_path / "tests").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "tests" / "test_a.py").write_text("def test_ok():\n    assert 1 == 1\n", encoding="utf-8")
+    (tmp_path / "tests" / "test_bad.py").write_text("def test_fails():\n    assert 1 == 2\n", encoding="utf-8")
+
+    async def fake_setup(self):
+        self.is_active = True
+        self.sandbox_dir = tmp_path
+        return tmp_path
+
+    monkeypatch.setattr(DangerRoom, "setup", fake_setup)
+    dr = DangerRoom(tmp_path)
+    dr.is_active = True
+    dr.sandbox_dir = tmp_path
+
+    ok_res = await dr.run_tests([tmp_path / "tests" / "test_a.py"])
+    assert ok_res["ok"] is True
+    assert ok_res["exit_code"] == 0
+
+    # Whole suite (includes the failing test) must fail.
+    bad_res = await dr.run_tests([tmp_path / "tests"])
+    assert bad_res["ok"] is False
+    assert bad_res["exit_code"] != 0
+@pytest.mark.asyncio
+async def test_run_change_tests_no_tests_sound_file_is_discounted(tmp_path, monkeypatch):
+    """L3: when no related test is found AND the edited file is structurally sound
+    (parses, non-empty), it must be scored 0.5 (discounted UNVERIFIED), NOT a free
+    1.0 — so an unverified change can never out-compete a genuinely tested pass."""
+    from runtime_v2.api.agent_service_v2 import AgentServiceV2, _CallState
+    service = AgentServiceV2()
+    monkeypatch.setattr(AgentServiceV2, "_find_related_tests", lambda self, fp: [])
+    monkeypatch.setattr(service, "_structural_verify", lambda fp: True)
+    state = _CallState()
+    await service._run_change_tests(state, "some/edited.py")
+    assert state.test_pass_result == 0.5
+
+
+@pytest.mark.asyncio
+async def test_run_change_tests_no_tests_broken_file_is_zero(tmp_path, monkeypatch):
+    """L3: no test found AND structural verify FAILS (broken/unparseable edit)
+    must score 0.0 — the exact Self-Repair Trap hole: a mutation that breaks the
+    file must never sail through as a fitness-positive."""
+    from runtime_v2.api.agent_service_v2 import AgentServiceV2, _CallState
+    service = AgentServiceV2()
+    monkeypatch.setattr(AgentServiceV2, "_find_related_tests", lambda self, fp: [])
+    monkeypatch.setattr(service, "_structural_verify", lambda fp: False)
+    state = _CallState()
+    await service._run_change_tests(state, "some/edited.py")
+    assert state.test_pass_result == 0.0
+
+
+def test_structural_verify_detects_parse_and_emptiness(tmp_path):
+    """L3 structural verifier (ast.parse + non-empty) must reject broken/empty
+    files and accept valid ones, using the repo-root test seam."""
+    from runtime_v2.api.agent_service_v2 import AgentServiceV2
+    service = AgentServiceV2()
+    (tmp_path / "good.py").write_text("x = 1\n", encoding="utf-8")
+    (tmp_path / "bad.py").write_text("def broken(:\n    pass\n", encoding="utf-8")
+    (tmp_path / "empty.py").write_text("", encoding="utf-8")
+    assert service._structural_verify("good.py", repo=tmp_path) is True
+    assert service._structural_verify("bad.py", repo=tmp_path) is False
+    assert service._structural_verify("empty.py", repo=tmp_path) is False
+    assert service._structural_verify("nonexistent.py", repo=tmp_path) is False

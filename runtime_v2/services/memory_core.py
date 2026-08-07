@@ -7,9 +7,9 @@ EMBED_URL = os.getenv("EMBED_URL", os.getenv("LLAMA_URL", os.getenv("OLLAMA_URL"
 OLLAMA_URL = EMBED_URL  # Backward compatibility alias
 QDRANT_URL = os.getenv("QDRANT_URL", "http://127.0.0.1:6333")
 COLLECTION_NAME = "agent_episodic_memory_v2"
-EMBEDDING_MODEL = "nomic-embed-text"
-RERANKER_MODEL = "BAAI/bge-reranker-v2-m3"
-EMBEDDING_DIM = 768  # Dimension for nomic-embed-text
+EMBEDDING_MODEL = "gte-modernbert-base-Q8_0.gguf"
+RERANKER_MODEL = "gte-reranker-modernbert-base-Q8_0.gguf"
+EMBEDDING_DIM = 768  # Dimension for gte-modernbert-base
 
 import logging
 _log = logging.getLogger(__name__)
@@ -78,7 +78,7 @@ def get_embedding(text: str) -> Optional[List[float]]:
     return None
 
 RERANK_URL = "http://127.0.0.1:8082"
-RERANK_MODEL = "qllama-bge-reranker-v2-m3-latest.gguf"
+RERANK_MODEL = "gte-reranker-modernbert-base-Q8_0.gguf"
 
 # Bound concurrent rerank HTTP calls. When analysis agents launch, semantic
 # memory search can fire dozens of rerank requests at once; the BGE reranker is

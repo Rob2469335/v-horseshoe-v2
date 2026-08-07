@@ -77,7 +77,7 @@ class Orchestrator:
                 ModelProfile(name="qwen3.5-4b", role="coding", max_tokens=16384),
                 ModelProfile(name="qwen3.5-4b", role="reasoning", max_tokens=16384),
                 ModelProfile(name="qwen3.5-4b", role="reviewer", max_tokens=16384),
-                ModelProfile(name="moondream:latest", role="vision", preferred_temp=0.2, max_tokens=8192),
+                ModelProfile(name="Qwen3VL-2B-Instruct", role="vision", preferred_temp=0.2, max_tokens=8192),
             ],
             default_role="reasoning",
             cooldown_multiplier=2.0,

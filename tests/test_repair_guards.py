@@ -144,3 +144,87 @@ class _FakeDate:
 
     def isoformat(self):
         return self.today_iso
+
+def test_classify_fix_class_prompt_sensitivity_default():
+    # Explicit rule/format violations -> prompt_sensitivity (cheap to patch)
+    assert repair_engine.classify_fix_class("Output was malformed JSON: expected, got garbage")
+    assert repair_engine.classify_fix_class("syntax error at line 3: unexpected indent") == "prompt_sensitivity"
+
+
+def test_classify_fix_class_real_tracebacks_are_patchable():
+    # 2026 L2 regression: REAL Python tracebacks (including ones the user has
+    # actually hit) must classify as prompt_sensitivity so the T2 patch path
+    # still fires — these are ordinary code defects, NOT model limitations.
+    patchable_via_ps_term = [
+        "TypeError: cannot unpack non-iterable NoneType object",
+        "ImportError: cannot import name 'X' from 'Y'",
+        "ValueError: cannot convert float NaN to integer",
+        "TypeError: unable to serialize object of type 'NoneType'",
+        "NameError: name 'baseline_passed' is not defined",
+        "AttributeError: 'NoneType' object has no attribute 'check'",
+        "KeyError: 'payload'",
+        "IndexError: list index out of range",
+    ]
+    for tb in patchable_via_ps_term:
+        assert repair_engine.classify_fix_class(tb) == "prompt_sensitivity", tb
+
+
+def test_ps_term_explicitly_hits_not_defined_and_nameerror():
+    # This case actually exercises a PS-term match ("not defined" + "nameerror"),
+    # NOT the default — guards against someone later narrowing the default and
+    # this silently changing meaning.
+    tb = "NameError: name 'baseline_passed' is not defined"
+    assert repair_engine.classify_fix_class(tb) == "prompt_sensitivity"
+    lower = tb.lower()
+    assert any(t in lower for t in repair_engine.FIX_PS_TERMS)
+
+
+def test_unmatched_traceback_falls_through_to_patchable_default():
+    # "coroutine ... was never awaited" matches NO PS term and NO MV term — this
+    # verifies unmatched text falls through to the patchable DEFAULT without
+    # accidentally tripping MV, rather than pretending it hit a PS signal.
+    tb = "coroutine 'FailureDetector.check' was never awaited"
+    assert repair_engine.classify_fix_class(tb) == "prompt_sensitivity"
+    lower = tb.lower()
+    assert not any(t in lower for t in repair_engine.FIX_PS_TERMS)
+    assert not any(t in lower for t in repair_engine.FIX_MV_TERMS)
+
+
+def test_classify_fix_class_model_variability_only_without_structural_signal():
+    # Genuinely model-limitation language, with NO structural/schema signal,
+    # -> model_variability (skip LLM patch).
+    assert repair_engine.classify_fix_class("The model hallucinated and gave a wrong answer") == "model_variability"
+    assert repair_engine.classify_fix_class("I don't know how to do this, it's out of scope") == "model_variability"
+
+
+def test_should_attempt_llm_patch_skips_mv():
+    assert repair_engine._should_attempt_llm_patch("malformed json: expected value")
+    assert not repair_engine._should_attempt_llm_patch("hallucinated answer")
+
+def test_tier2_skips_llm_patch_for_model_variability(tmp_path, monkeypatch):
+    # Diagnose-before-patch: an MV failure must NOT make the /generate call even
+    # when the T2 branch is reachable (cmd_ctx present). Isolate the circuit
+    # breaker so a prior test's breaker state can't short-circuit this into the
+    # early-return path.
+    monkeypatch.setattr(repair_engine, "BREAKER_FILE", tmp_path / "breaker.json")
+    called = {"n": 0}
+    def fake_call(*a, **k):
+        called["n"] += 1
+        raise AssertionError("should not call LLM for model_variability")
+    monkeypatch.setattr("organism_console.api_client.call_api", fake_call)
+
+    class _FakeCtx:
+        def __init__(self):
+            self.console = type("C", (), {"print": staticmethod(lambda *a, **k: None)})()
+            self.state = type("S", (), {"active_agent": "coder"})()
+    orch = repair_engine.TieredRepairOrchestrator(cmd_ctx=_FakeCtx())
+    f = tmp_path / "bug.py"
+    f.write_text("x = 1\n", encoding="utf-8")
+    res = orch.repair("The model gave a wrong answer and it's out of scope", file_path=f)
+    assert res["fix_class"] == "model_variability"
+    assert not res["fixed"]
+    assert "model_variability" in (res.get("validation_error") or "")
+    assert called["n"] == 0
+    # Disclosure: this path skips the patch but does NOT re-dispatch a retry
+    # (regeneration is the agent loop's job upstream). Make that explicit.
+    assert res.get("retry_dispatched") is False

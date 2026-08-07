@@ -24,11 +24,11 @@ LOCAL_MODEL_SPECS = [
     ModelProfile(name="qwen3.5-4b", role="coder_long",      capabilities=["code", "long_context"], metadata={"pp256": 74.9, "tg128": 5.5}),
 
     # Auxiliary Models (Embeddings, Reranker, Vision)
-    ModelProfile(name="moondream:latest",                                                role="vision",          capabilities=["vision"]),
-    ModelProfile(name="moondream:latest",                                           role="vision_alt",      capabilities=["vision"]),
-    ModelProfile(name="nomic-embed-text-v1.5",                                         role="embedding",       capabilities=["embedding"]),
-    ModelProfile(name="nomic-embed-text:latest",                                    role="embedding_alt",   capabilities=["embedding"]),
-    ModelProfile(name="qllama/bge-reranker-v2-m3:latest",                           role="reranker",        capabilities=["rerank"]),
+    ModelProfile(name="Qwen3VL-2B-Instruct",                                            role="vision",          capabilities=["vision"]),
+    ModelProfile(name="Qwen3-VL-2B",                                                    role="vision_alt",      capabilities=["vision"]),
+    ModelProfile(name="gte-modernbert-base",                                            role="embedding",       capabilities=["embedding"]),
+    ModelProfile(name="gte-modernbert-base",                                            role="embedding_alt",   capabilities=["embedding"]),
+    ModelProfile(name="gte-reranker-modernbert-base",                                   role="reranker",        capabilities=["rerank"]),
 ]
 
 CLOUD_MODEL_SPECS = []
@@ -40,9 +40,9 @@ ROLE_POOL = {
     "deep_coder_long":  ["qwen3.5-4b"],
     "coder_long":       ["qwen3.5-4b"],
     "writer":           ["qwen3.5-4b"],
-    "vision":           ["moondream:latest"],
-    "embedding":        ["nomic-embed-text:latest"],
-    "reranker":         ["qllama/bge-reranker-v2-m3:latest"],
+    "vision":           ["Qwen3VL-2B-Instruct"],
+    "embedding":        ["gte-modernbert-base"],
+    "reranker":         ["gte-reranker-modernbert-base"],
     "planner":          ["qwen3.5-4b"],
     "researcher":       ["qwen3.5-4b"],
     "fast":             ["qwen3.5-4b"],

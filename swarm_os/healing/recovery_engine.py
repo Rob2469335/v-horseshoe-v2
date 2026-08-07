@@ -258,7 +258,7 @@ Enclose the script in a ```python block.
 CAUSAL_GRAPH = {
     "swarm_api": "backend",
     "qwen3.5-4b": "llamacpp",
-    "nomic-embed-text": "llamacpp",
+    "gte-modernbert-base": "llamacpp",
     "frontend": "swarm_api",
     "qdrant_client": "qdrant",
     "memory_bridge": "qdrant"

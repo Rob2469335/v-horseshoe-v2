@@ -206,6 +206,60 @@ def classify_failure(error_text: str) -> Tuple[str, int]:
                 return failure_type, info["tier"]
     return "unknown", 2
 
+
+# PS/MV fix_class (2026 self-healing: diagnose BEFORE patching). Mirrors the
+# Diagnostician in swarm_os/healing (kept local here to avoid a cross-package
+# import from the CLI layer). A failure classified `model_variability` means the
+# model itself cannot perform the task — retrying/LLM-patching is wasted spend,
+# so the repair orchestrator skips the expensive T2 LLM call and records why.
+#
+# IMPORTANT (2026 L2 review): "cannot" / "unable to" are intentionally NOT in
+# FIX_MV_TERMS. Those words appear constantly in PATCHABLE Python tracebacks
+# (e.g. "cannot unpack non-iterable NoneType object", "cannot import name 'X'",
+# "unable to serialize object") — treating them as model_variability would skip
+# real fixes. FIX_PS_TERMS (structural/schema signals) are checked FIRST and win
+# ties; MV only fires when no structural signal matched.
+FIX_PS_TERMS = (
+    "json", "format", "invalid", "malformed", "forbidden", "unauthorized",
+    "not allowed", "missing field", "syntax error", "parse", "schema",
+    "expected", "must be", "should not", "violation", "rule", "constraint",
+    "not defined", "nameerror", "typeerror", "attributeerror", "importerror",
+    "keyerror", "indexerror", "valueerror", "traceback",
+)
+# MV fires ONLY when no structural/PS signal matched. Keep only signals that are
+# genuinely about the MODEL being the limitation, not generic traceback language.
+FIX_MV_TERMS = (
+    "hallucin", "don't know", "i don't know", "cannot reason", "wrong answer",
+    "misunderstanding", "nonsense", "not capable", "out of scope",
+)
+
+
+def classify_fix_class(error_text: str) -> str:
+    """Classify a failure as prompt_sensitivity vs model_variability.
+
+    PS = fixable by a prompt/rule/small-patch change (cheap to attempt).
+    MV = the model can't do it; retry/LLM-patch is wasted (escalate/record).
+
+    Structural/schema signals (PS) are checked FIRST and win ties, so a code
+    defect whose traceback happens to contain ambiguous model-y language is
+    still routed to the patch path. MV only fires when NO structural signal
+    matched at all. Default is PS (a code defect is the common case — cheaper
+    to attempt a patch than to refuse it).
+    """
+    text = str(error_text or "").lower()
+    if any(t in text for t in FIX_PS_TERMS):
+        return "prompt_sensitivity"
+    if any(t in text for t in FIX_MV_TERMS):
+        return "model_variability"
+    return "prompt_sensitivity"
+
+
+def _should_attempt_llm_patch(error_text: str) -> bool:
+    """2026 L2 gate: skip the expensive T2 LLM repair for model_variability
+    failures — the model is the limitation, so an LLM-generated patch cannot
+    succeed and would only burn a /generate call + tokens."""
+    return classify_fix_class(error_text) != "model_variability"
+
 def load_cures() -> Dict[str, List[Dict]]:
     if CURES_FILE.exists():
         try:
@@ -615,6 +669,8 @@ class TieredRepairOrchestrator:
                 "validation_error": breaker_reason,
                 "generated_test": None,
                 "skipped": True,
+                "fix_class": classify_fix_class(error_text),
+                "retry_dispatched": False,
             }
             if self.cmd_ctx:
                 self.cmd_ctx.console.print(f"[yellow]⚕ {breaker_reason} — skipping repair.[/yellow]")
@@ -631,8 +687,13 @@ class TieredRepairOrchestrator:
             "similar_lessons_used": len(similar_lessons),
             "validation_error": None,
             "generated_test": None,
+            "fix_class": classify_fix_class(error_text),
+            # 2026 L2 disclosure: this orchestrator only skips the LLM patch for
+            # model_variability — it does NOT re-dispatch a generation attempt
+            # here. Regeneration is the agent loop's job upstream. Set True only
+            # if a retry is actually dispatched on this path.
+            "retry_dispatched": False,
         }
-
         cures = load_cures()
         if failure_type in cures:
             for cure in cures[failure_type]:
@@ -664,6 +725,16 @@ class TieredRepairOrchestrator:
                     result["confidence"] = 0.6
                     self._snapshot_and_validate(file_path, result, original_content)
             elif attempt_tier == 2 and self.cmd_ctx:
+                # 2026 L2 (diagnose-before-patch): a model_variability failure means
+                # the model itself is the limitation — an LLM patch cannot succeed,
+                # so skip the /generate call instead of burning tokens on retry.
+                # Checked BEFORE the path guard: MV skips regardless of path.
+                if not _should_attempt_llm_patch(error_text):
+                    result["validation_error"] = "fix_class=model_variability: LLM patch skipped (model limitation, not patchable)"
+                    result["fix_class"] = "model_variability"
+                    if self.cmd_ctx:
+                        self.cmd_ctx.console.print("[yellow]Skpping T2 LLM patch: model_variability failure (diagnose-before-patch)[/yellow]")
+                    break
                 # R6: don't burn an LLM call repairing a protected path.
                 if file_path and not _is_repairable_path(file_path):
                     result["validation_error"] = "path not in allowlist / blocked sensitive path"

@@ -55,6 +55,47 @@ class DangerRoom:
                 await self.teardown()
                 raise e
 
+    async def run_tests(self, test_targets: List[str] = None,
+                        timeout: float = 120.0) -> dict:
+        """Run pytest against test targets INSIDE the sandbox and return a REAL
+        exit code (2026 L3: real test_pass replaces the completion-proxy of
+        outcome_fitness).
+
+        The sandbox copy already happened in setup(); scanning (AST security
+        gate) is the caller's responsibility via scan_sandbox(). Returns:
+          {"exit_code": int, "ok": bool (exit_code==0), "output": str}
+        Fails-closed on any setup/subprocess error (ok=False). Never raises."""
+        if not self.is_active:
+            return {"exit_code": -1, "ok": False, "output": "sandbox not active"}
+
+        import sys as _sys
+        cmd = [_sys.executable, "-m", "pytest", "-q", "--tb=line"]
+        if test_targets:
+            cmd += [str(t) for t in test_targets]
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                cwd=str(self.sandbox_dir),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+            try:
+                out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+                return {"exit_code": -1, "ok": False,
+                        "output": f"test run timed out after {timeout}s (sandbox)"}
+            text = out.decode("utf-8", errors="replace")
+            return {
+                "exit_code": proc.returncode,
+                "ok": proc.returncode == 0,
+                "output": text[-4000:],
+            }
+        except Exception as exc:
+            logger.warning("DangerRoom test run failed: %s", exc)
+            return {"exit_code": -1, "ok": False, "output": f"test run error: {exc}"}
+
     async def merge_back(self, relative_files: List[str]):
         if not self.is_active:
             raise RuntimeError("Sandbox is not active")
