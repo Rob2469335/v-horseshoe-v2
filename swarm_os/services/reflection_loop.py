@@ -231,18 +231,59 @@ class ReflectionService:
                     merged.append(r)
                 results = merged
             if results:
+                # 2026 move 5a: when the reranker runs, its relevance judgment is
+                # the PRIMARY rank — it judges the actual query against each
+                # candidate, which dense similarity only approximates. Recency
+                # decay + confidence are a MINIMUM FILTER and a TIEBREAK, never a
+                # co-equal multiplier: multiplying them against the rerank score
+                # would let a dense-nearest-but-wrong precedent win on its dense
+                # score, which is exactly the failure mode this fix exists for.
+                # On reranker outage, fall back to the dense ordering (existing
+                # behavior) so retrieval still works, just less precisely.
                 now = time.time()
+                reranked_by_score = {}
+                try:
+                    candidates = [
+                        {
+                            "id": getattr(r, "id", None),
+                            "payload": r.payload or {},
+                            "_dense": r.score or 0.0,
+                            "_age": now - float((r.payload or {}).get("timestamp", now)),
+                        }
+                        for r in results
+                    ]
+                    from runtime_v2.services.memory_core import rerank_memories
+                    rr = await asyncio.to_thread(rerank_memories, task_context, [
+                        {"payload": c["payload"], "id": c["id"]} for c in candidates
+                    ])
+                    for item in rr:
+                        cid = item.get("id")
+                        if cid is not None:
+                            reranked_by_score[cid] = float(item.get("score", 0.0))
+                except Exception as _rerank_err:
+                    logger.debug("Rerank of past-mistake candidates failed; using dense scores: %s", _rerank_err)
+
                 best = None
-                best_score = 0.0
+                best_rank = -1.0
                 for r in results:
                     payload = r.payload or {}
+                    cid = getattr(r, "id", None)
                     sim = r.score or 0.0
                     age = now - float(payload.get("timestamp", now))
                     decay = max(0.3, 1.0 - (age / (30 * 86400)))  # halve after ~30 days
                     confidence = float(payload.get("confidence", 0.5))
-                    ranked = sim * decay * confidence
-                    if ranked > best_score:
-                        best_score = ranked
+                    # Minimum-confidence filter: never surface a rule whose
+                    # confidence has decayed below the retrieval threshold.
+                    if confidence * decay < 0.3:
+                        continue
+                    if cid is not None and cid in reranked_by_score:
+                        # Rerank is PRIMARY; decay is the tiebreak.
+                        rank = reranked_by_score[cid]
+                        rank += decay * 0.001  # tiny tiebreak for equal rerank scores
+                    else:
+                        rank = sim * decay * confidence  # dense fallback ordering
+                    if rank > best_rank:
+                        best_rank = rank
                         best = payload
                 if best:
                     correction = best.get("correction", "")
@@ -464,6 +505,22 @@ async def _distill(distiller_content: str, fix_class: str | None = None) -> str:
         return ""
 
     attempts = []
+    # 2026 model policy: the funded OpenCode Go flash leads the chain (DeepSeek
+    # V4 Flash via OPENAI_API_KEY/base), then the free tiers. Model string is
+    # `deepseek-v4-flash` on the openai provider — the stale `deepseek-chat`
+    # alias was retired and would silently fall to a worse provider.
+    if os.environ.get("OPENAI_API_KEY"):
+        api_base = os.getenv("OPENAI_API_BASE", "https://api.opencode.go/v1")
+        api_key = os.environ["OPENAI_API_KEY"]
+        attempts.append({
+            "model": "deepseek-v4-flash",
+            "messages": [{"role": "user", "content": distiller_content}],
+            "api_base": api_base,
+            "api_key": api_key,
+            "custom_llm_provider": "openai",
+            "max_tokens": DISTILLER_MAX_TOKENS_CLOUD,
+            "timeout": 90.0,
+        })
     if os.environ.get("OPENROUTER_API_KEY"):
         attempts.append({
             "model": CLOUD_MODEL,
@@ -489,18 +546,6 @@ async def _distill(distiller_content: str, fix_class: str | None = None) -> str:
         attempts.append({
             "model": "gemini/gemini-2.0-flash",
             "messages": [{"role": "user", "content": distiller_content}],
-            "max_tokens": DISTILLER_MAX_TOKENS_CLOUD,
-            "timeout": 90.0,
-        })
-    if os.environ.get("OPENAI_API_KEY"):
-        api_base = os.getenv("OPENAI_API_BASE", "https://api.opencode.go/v1")
-        api_key = os.environ["OPENAI_API_KEY"]
-        attempts.append({
-            "model": "deepseek-chat",
-            "messages": [{"role": "user", "content": distiller_content}],
-            "api_base": api_base,
-            "api_key": api_key,
-            "custom_llm_provider": "openai",
             "max_tokens": DISTILLER_MAX_TOKENS_CLOUD,
             "timeout": 90.0,
         })

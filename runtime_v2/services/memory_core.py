@@ -94,7 +94,7 @@ def rerank_memories(query: str, memories: List[Dict[str, Any]]) -> List[Dict[str
         return []
         
     reranked = []
-    texts = [mem.get("payload", {}).get("fact", "") for mem in memories]
+    texts = [mem.get("payload", {}).get("fact", "") or mem.get("payload", {}).get("correction", "") for mem in memories]
     
     try:
         with _RERANK_SEM:

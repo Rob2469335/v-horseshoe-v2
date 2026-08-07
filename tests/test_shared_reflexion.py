@@ -28,6 +28,12 @@ def _make_service() -> tuple[ReflectionService, MagicMock]:
     service.client = MagicMock()
     service.client.query_points = AsyncMock()
     service.client.upsert = AsyncMock()
+    # 2026 move 5a: check_for_past_mistakes now routes candidates through the
+    # reranker. These pre-existing tests assert the shared-retrieval/decay logic,
+    # not reranking — so force the rerank to a deterministic no-op (dense
+    # fallback ordering), which is exactly what a reranker outage produces.
+    import runtime_v2.services.memory_core as _mc
+    _mc.rerank_memories = lambda q, m: []
     return service, service.client
 
 
