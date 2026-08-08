@@ -15,6 +15,101 @@ Build: setuptools, `organism` CLI entrypoint
 
 ---
 
+## Standing Building Rules (read BEFORE every build — the Copilot guardrail, codified 2026-08-08)
+
+This is a production codebase that is already complete and CI-green — NOT a
+greenfield project, NOT a refactor target, NOT something to "reconcile" or
+"restructure." Your work is surgical, evidence-based ONLY. These rules apply to
+**every** build task in **every** agent/tool (opencode, Copilot, Claude, Codex,
+etc.). They exist because a mass "reconcile onto clean base" once silently
+deleted ~768 tracked files — the single most damaging thing ever done to this
+repo. They never get relaxed.
+
+### HARD PROHIBITIONS (absolute)
+- **NEVER delete, move, rename, or restructure files/directories** unless
+  explicitly asked. "Dead code cleanup," "consolidation," "reconcile,"
+  "dedupe," "unify," "simplify the layout" are NOT authorized actions.
+- **NEVER commit in bulk.** One logical change per commit, with a specific
+  type-prefixed message (`FIX:`/`FEAT:`/`CI:`/`ARCH:`/`REFACTOR:`/`SERVICE:`/
+  `HEAL:`/etc.). Never `git add -A` / `git add .` without listing exactly what
+  and why.
+- **NEVER "fix" files you were not asked to touch** — even on an obvious bug
+  while reading. Report it; don't change it.
+- **NEVER rewrite an existing file wholesale.** Minimal, surgical edits only. A
+  diff touching >~50 lines of an existing module requires explicit
+  justification.
+- **NEVER change dependencies (add/remove/bump)** or build/start scripts, CI
+  config, or requirements unless asked.
+- **NEVER commit secrets, API keys, `.env`, or `data/` runtime state.**
+- **NEVER weaken a test or delete a test** to make a suite pass; fix the code.
+
+### REQUIRED PROCESS (every change)
+1. Read `AGENTS.md` first — especially "Recent Changes (do NOT re-apply)".
+   Never redo, undo, or contradict something already documented there.
+2. State the exact file(s) you will change and the one-line reason.
+3. Get a **baseline** before touching anything (the relevant test subset —
+   `pytest tests/ -q` or the targeted suite; the project gates on
+   `ruff check . --select E9/F` and Python >=3.14).
+4. Make the minimal edit.
+5. Re-run the relevant tests after the edit. On ANY failure, STOP and report —
+   do not make it pass by deleting/weakening tests.
+6. Show the `git diff` for your change before it's approved/committed.
+7. Update `AGENTS.md` "Recent Changes" only **after** the change is accepted.
+
+### EVIDENCE-FIRST ENGINEERING (verify, don't assume — applies to your own procedure too)
+- **See the real code before patching.** Never write a patch from guessing at the
+  codebase. Read the actual file/function, confirm which file owns the behavior,
+  and read the schema/fields available before validating against them.
+- **Empirically validate the defect before committing to a fix.** Don't assume an
+  error text matches a branch's pattern — reproduce it against a scratch copy
+  first, then inject/verify against the real thing.
+- **Root-cause, don't work around.** Never manually force a mechanism "just to
+  prove it could work" — read the actual comparison/logic, check it against the
+  real captured input, and fix the real bug.
+- **Confirm before continuing to the next stage.** No skipping ahead; every
+  prerequisite checkpoint is independently confirmed before the dependent step
+  starts.
+- **Re-confirm live state immediately before acting** (heartbeat/readyz/git) — a
+  recap from earlier is not a current claim. "I checked ten minutes ago" isn't
+  "it's true right now."
+- **Read file/content directly; do not infer it from a log line or summary saying
+  it happened.** Each checkpoint is confirmed independently, in order.
+- **Scope honesty:** name what a test proves AND what it does not. State aloud
+  which tier/path a passed test actually exercised.
+
+### SEAM-LEVEL E2E TESTING
+- A component that passes its own unit tests in isolation can still fail AT THE
+  SEAM. Unit fixtures must mirror real workload shape (real paths, real
+  subprocess output, real separators) — hand-built ideal fixtures are the exact
+  blind spot the autonomy e2e exists to catch.
+- A real bug found in live/working output is FIXED, not "documented as a known
+  gap" — especially one that undermines a fail-closed guarantee.
+- Implement in the documented order (L1→L2→L3→L5→L6, table order); do not
+  reorder or jump.
+
+### CONVENTIONS (match the repo)
+- Full day-to-day lint/test loop: `ruff format .` → `ruff check . --fix` →
+  `ruff check . --select E9,F` → `pytest`. CI gates on **E9/F only**; the full
+  default rule set (~1900 pre-existing style errors) is out-of-policy — do not
+  mass-fix beyond E9/F.
+- Python: `asyncio.timeout` not `asyncio.wait_for`, no bare `except:`, no
+  `except Exception: pass` without a log line.
+- Never reintroduce `qwen3.5-9b` / `Qwen3.5-9B` (pruned). Cloud policy: free
+  models + DeepSeek V4 Flash only; no Claude/Anthropic/GPT-4 unless explicitly
+  instructed.
+- Do NOT suggest deleting `organism-console` for `start-console` (researched +
+  rejected: start-console bypasses the backend).
+
+### ENVIRONMENT NOTES
+- Windows. PowerShell "windows sandbox ... Access is denied" is a launch issue:
+  retry with a narrower command, not a code bug.
+- Live services (llama.cpp :8080-8084, Qdrant :6333) may or may not be running;
+  tests are designed to not require them.
+- The backend must boot in ~1s. Verify `start-dev.ps1` reaches "Uvicorn running"
+  quickly after startup changes.
+
+---
+
 ## Lint / CI
 
 Ruff — the project gates on **E9/F only** (syntax errors + Pyflakes). There is
@@ -767,6 +862,14 @@ Converted `except:` → `except Exception:` (or specific types) in `swarm_os/cor
 ---
 
 ## Self-Healing & Self-Learning Fixes
+
+- **Rule (code_analyzer)**: Failure: The code_analyzer attempted to read file 'x.py' without first verifying it exists, and failed because the file was not found in the filesy...
+
+- **[CANARY-FLAGGED: human review] (2026-08-08T16:50:24.115806+00:00)**: runtime_v2/services/indexer.py — test regression NOT attributable to runtime_v2/services/indexer.py; HUMAN REVIEW
+
+- **[AUTO-REPAIR] (2026-08-08T16:39:16.860863+00:00)**: runtime_v2\services\indexer.py (tier 0, fixed=True) — error: SyntaxError: unexpected indent (runtime_v2/services/indexer.py, line 22)
+
+- **Rule (code_analyzer)**: Failure: The code_analyzer agent attempted to read file 'x.py' without verifying its existence, and failed when the filesystem returned "File not f...
 
 - **Rule (system:None)**: Recurring system issue 'None' was resolved via free_memory; re-check the machine before proceeding.
 
