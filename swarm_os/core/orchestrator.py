@@ -50,6 +50,37 @@ _active_generations: dict[str, float] = {}
 _generation_lock = asyncio.Lock()
 _GEN_LOCK_TTL = 300.0
 
+
+def _dedup_key(messages: list[dict]) -> str:
+    """Hash the input messages into a stable dedup key."""
+    _dedup_input = json.dumps(
+        [{"role": m.get("role"), "content": m.get("content")} for m in messages],
+        sort_keys=True,
+        ensure_ascii=False,
+    )
+    return hashlib.sha256(_dedup_input.encode()).hexdigest()[:16]
+
+
+async def _acquire_generation_slot(dedup_hash: str) -> bool:
+    """Register a generation in _active_generations under the lock. Returns True
+    if an identical generation is ALREADY running (caller should suppress)."""
+    async with _generation_lock:
+        now = time.time()
+        # Prune stale entries older than TTL
+        stale = [k for k, ts in _active_generations.items() if now - ts > _GEN_LOCK_TTL]
+        for k in stale:
+            del _active_generations[k]
+        if dedup_hash in _active_generations:
+            return True
+        _active_generations[dedup_hash] = now
+        return False
+
+
+async def _release_generation_slot(dedup_hash: str) -> None:
+    async with _generation_lock:
+        _active_generations.pop(dedup_hash, None)
+
+
 class Orchestrator:
     """
     The central brain of Swarm OS. 
@@ -203,18 +234,10 @@ class Orchestrator:
         start_ms = time.time() * 1000.0
 
         # ISSUE 17: Dedup key based on input messages — reject duplicate concurrent generation.
-        _dedup_input = json.dumps([{"role": m.get("role"), "content": m.get("content")} for m in messages], sort_keys=True, ensure_ascii=False)
-        _dedup_hash = hashlib.sha256(_dedup_input.encode()).hexdigest()[:16]
-        async with _generation_lock:
-            now = time.time()
-            # Prune stale entries older than TTL
-            stale = [k for k, ts in _active_generations.items() if now - ts > _GEN_LOCK_TTL]
-            for k in stale:
-                del _active_generations[k]
-            if _dedup_hash in _active_generations:
-                log.warning("[Orchestrator] Duplicate generation blocked (hash=%s). A generation with identical messages is already running.", _dedup_hash)
-                return "Duplicate generation suppressed — an identical request is already in progress.", model
-            _active_generations[_dedup_hash] = now
+        _dedup_hash = _dedup_key(messages)
+        if await _acquire_generation_slot(_dedup_hash):
+            log.warning("[Orchestrator] Duplicate generation blocked (hash=%s). A generation with identical messages is already running.", _dedup_hash)
+            return "Duplicate generation suppressed — an identical request is already in progress.", model
 
         target_role = self._infer_task_role(messages)
         installed_candidates = await self._fetch_installed_models()
@@ -359,8 +382,7 @@ class Orchestrator:
                         final_result = observation.get("result", result)
                         messages.append({"role": "assistant", "content": result})
                         messages.append({"role": "user", "content": f"TOOL OBSERVATION:\n{obs_str}\n\nContinue with the next assistant response."})
-                        async with _generation_lock:
-                            _active_generations.pop(_dedup_hash, None)
+                        await _release_generation_slot(_dedup_hash)
                         return final_result, model
                     else:
                         # Tool succeeded — append observation and let model continue
@@ -370,8 +392,7 @@ class Orchestrator:
             except Exception:
                 self.router.record_failure(model=chosen_model, cooldown_seconds=60.0)
                 log.exception("Generation failed")
-                async with _generation_lock:
-                    _active_generations.pop(_dedup_hash, None)
+                await _release_generation_slot(_dedup_hash)
                 raise
 
         # If we exhausted all steps without a final result, use what we have
@@ -414,8 +435,7 @@ class Orchestrator:
             )
         )
 
-        async with _generation_lock:
-            _active_generations.pop(_dedup_hash, None)
+        await _release_generation_slot(_dedup_hash)
         return final_result, chosen_model
 
 
@@ -465,6 +485,14 @@ class Orchestrator:
 
         trace_id = self.trace.new_trace_id()
         start_ms = time.time() * 1000.0
+
+        # Dedup parity with generate(): rapid double-clicks on a streaming
+        # endpoint would otherwise spawn duplicate concurrent LLM requests.
+        _dedup_hash = _dedup_key(messages)
+        if await _acquire_generation_slot(_dedup_hash):
+            log.warning("[Orchestrator] Duplicate stream generation blocked (hash=%s). An identical stream is already running.", _dedup_hash)
+            yield "Duplicate generation suppressed — an identical request is already in progress.", "none", trace_id
+            return
 
         target_role = self._infer_task_role(messages)
         installed_candidates = await self._fetch_installed_models()
@@ -643,6 +671,8 @@ class Orchestrator:
                 }
             )
         )
+
+        await _release_generation_slot(_dedup_hash)
 
 
     async def evolve(self) -> None:
