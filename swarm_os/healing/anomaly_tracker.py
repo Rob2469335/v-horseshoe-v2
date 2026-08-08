@@ -17,10 +17,15 @@ class AnomalyTracker:
         self.last_time: dict[str, float] = {}
 
     def _prune_if_needed(self):
-        """Prune oldest tracked sources to prevent unbounded memory growth."""
+        """Prune tracked sources to prevent unbounded memory growth. Evicts the
+        LEAST-RECENTLY-UPDATED sources (by last_time), not the first-inserted
+        ones — a plain dict keeps insertion order, so evicting the head would
+        arbitrarily delete long-running ACTIVE components while idle ones
+        survived."""
         if len(self.ema_freq) > MAX_TRACKED_SOURCES:
-            # Remove oldest half (simple eviction — production would use LRU)
-            to_remove = list(self.ema_freq.keys())[:MAX_TRACKED_SOURCES // 2]
+            # Sort by last update time ascending; drop the oldest half.
+            by_recency = sorted(self.ema_freq, key=lambda k: self.last_time.get(k, 0.0))
+            to_remove = by_recency[:MAX_TRACKED_SOURCES // 2]
             for key in to_remove:
                 self.ema_freq.pop(key, None)
                 self.last_time.pop(key, None)
