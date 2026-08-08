@@ -104,13 +104,16 @@ class Planner:
             ))
 
         if is_review and is_code:
-            steps.insert(3, step(
-                "step-3b",
-                "tool",
-                "tool-runner",
-                f"Run validation tools for: {goal}",
-                phase="validation",
-                intent="run-checks",
-            ))
+            for idx, existing in enumerate(steps):
+                if existing.metadata.get("phase") == "review":
+                    steps.insert(idx, step(
+                        "step-3b",
+                        "tool",
+                        "tool-runner",
+                        f"Run validation tools for: {goal}",
+                        phase="validation",
+                        intent="run-checks",
+                    ))
+                    break
 
         return steps
