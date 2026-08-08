@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -28,7 +29,9 @@ class GraphRepository:
                 self.evict_old_nodes(max_nodes=2000)
                 graph_copy = self.graph.copy()
                 self.path.parent.mkdir(parents=True, exist_ok=True)
-                await asyncio.to_thread(nx.write_graphml, graph_copy, self.path)
+                tmp = self.path.with_suffix(".graphml.tmp")
+                await asyncio.to_thread(nx.write_graphml, graph_copy, tmp)
+                os.replace(tmp, self.path)
         except Exception as exc:
             logger.warning("Failed to save graph: %s", exc)
 

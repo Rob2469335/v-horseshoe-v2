@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 from pathlib import Path
 from typing import Dict, Any
@@ -46,25 +47,28 @@ class MutationRepository:
 
         target_path.parent.mkdir(parents=True, exist_ok=True)
 
+        approved_bytes = pending_file.read_bytes()
+
         backup_path = None
         if target_path.exists():
             backup_path = target_path.with_suffix(target_path.suffix + ".bak")
             shutil.copy2(target_path, backup_path)
-
-        # Record the bytes actually written by the approval (the repair's own
-        # output), so rollback() can do a CONTENT comparison (bytes, not mtime):
-        # current-on-disk == approved-bytes -> unchanged since repair, safe to
-        # revert; otherwise a later write happened -> refuse (never clobber).
-        approved_bytes = pending_file.read_bytes()
-
-        shutil.copy2(pending_file, target_path)
 
         metadata["approved"] = True
         if backup_path:
             metadata["backup_path"] = str(backup_path)
         metadata["approved_bytes_hex"] = approved_bytes.hex()
 
-        meta_path.write_text(json.dumps(metadata, indent=2))
+        # Write the approved payload to the target atomically (tmp + replace) so
+        # a crash mid-write cannot leave a half-written live file, then persist
+        # the metadata the same way.
+        tmp_target = target_path.with_suffix(target_path.suffix + ".tmp")
+        shutil.copy2(pending_file, tmp_target)
+        os.replace(tmp_target, target_path)
+
+        tmp_meta = meta_path.with_suffix(".json.tmp")
+        tmp_meta.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+        os.replace(tmp_meta, meta_path)
         return metadata
 
     def rollback(self, mutation_id: str) -> Dict[str, Any]:

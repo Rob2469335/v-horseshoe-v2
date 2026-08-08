@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
@@ -44,9 +45,9 @@ class EventLogRepository:
 
     def save_offset(self, offset: int) -> None:
         self.watermark_path.parent.mkdir(parents=True, exist_ok=True)
-        self.watermark_path.write_text(
+        _atomic_write_text(
+            self.watermark_path,
             json.dumps({"offset": offset}, ensure_ascii=False, indent=2),
-            encoding="utf-8",
         )
 
     def load_state(self) -> Dict[str, Any]:
@@ -56,9 +57,20 @@ class EventLogRepository:
         except Exception:
             return {}
 
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    """Write text atomically: write to a temp sibling, then os.replace.
+
+    Prevents a concurrent crash from leaving a truncated watermark/state file
+    that would silently zero the memory-bridge resume offset."""
+    tmp = path.with_name(f"{path.name}.tmp")
+    tmp.write_text(content, encoding="utf-8")
+    os.replace(tmp, path)
+
     def save_state(self, state: Dict[str, Any]) -> None:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
-        self.state_path.write_text(
+        _atomic_write_text(
+            self.state_path,
             json.dumps(state, ensure_ascii=False, indent=2),
-            encoding="utf-8",
         )
