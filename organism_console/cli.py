@@ -296,16 +296,24 @@ def main():
         cmd_line = " ".join(args)
         cmd_ctx = build_command_context()
         execute_prompt = registry.handle_line(cmd_line, cmd_ctx)
-        result = run_agentic(ctx, execute_prompt, json_flag) if execute_prompt else {}
-        if json_flag:
-            print(json.dumps({
-                "ok": bool(result.get("content")),
-                "agent": ctx.active_agent,
-                "model": ctx.active_model,
-                "prompt": execute_prompt or cmd_line,
-                "content": result.get("content", ""),
-                "files_changed": [r["path"] for r in result.get("files_changed", [])],
-            }, indent=2))
+        try:
+            result = run_agentic(ctx, execute_prompt, json_flag) if execute_prompt else {}
+            if json_flag:
+                print(json.dumps({
+                    "ok": bool(result.get("content")),
+                    "agent": ctx.active_agent,
+                    "model": ctx.active_model,
+                    "prompt": execute_prompt or cmd_line,
+                    "content": result.get("content", ""),
+                    "files_changed": [r["path"] for r in result.get("files_changed", [])],
+                }, indent=2))
+        except KeyboardInterrupt:
+            # BUG FIX: graceful Ctrl+C in single-command mode — match the REPL
+            # (which catches KeyboardInterrupt) instead of dumping a raw traceback
+            # when the user aborts a long single-shot run mid-stream.
+            ctx.console.print("\n[dim]Interrupted.[/dim]")
+            if json_flag:
+                print(json.dumps({"ok": False, "agent": ctx.active_agent, "content": "", "files_changed": []}))
         return 0
     # --- Interactive REPL ---
     setup_readline()
