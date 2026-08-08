@@ -68,8 +68,9 @@ async def run_genetic_mutation(target_file_path: str = str(AGENT_SERVICE_PATH), 
     mutation_history = mutation_history[-50:]
     
     target_file = Path(target_file_path).resolve()
-    with open(target_file, "r", encoding="utf-8") as f:
-        core_code = f.read()
+    # to_thread: don't block the shared async event loop (the API + daemons run
+    # on the same loop) on synchronous disk I/O.
+    core_code = await asyncio.to_thread(target_file.read_text, encoding="utf-8")
     
     # AST Slicing: Only extract the targeted bottleneck rather than truncating randomly
     sliced_code = ast_slice(core_code, target_func)
@@ -182,8 +183,7 @@ async def run_genetic_mutation(target_file_path: str = str(AGENT_SERVICE_PATH), 
                 # Ensure the path exists in the sandbox
                 sandbox_file.parent.mkdir(parents=True, exist_ok=True)
                 # We write the FULL combined code to the sandbox
-                with open(sandbox_file, "w", encoding="utf-8") as f:
-                    f.write(new_core_code)
+                await asyncio.to_thread(sandbox_file.write_text, new_core_code, encoding="utf-8")
                     
                 logger.info("Phase 2: Executing Security Gate scan on mutation...")
                 await sandbox.scan_sandbox(specific_files=[str(rel_path).replace("\\", "/")])
