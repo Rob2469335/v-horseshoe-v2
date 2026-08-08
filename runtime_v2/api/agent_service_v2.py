@@ -805,7 +805,8 @@ class AgentServiceV2:
     # -----------------------------------------------------------------------
     def _check_loop(self, decision: dict, decision_counts: dict, history_actions: list) -> Optional[str]:
         _essential_keys = ("action", "operation", "target_agent", "path", "query",
-                           "language", "code", "server_name", "tool", "question")
+                           "language", "code", "server_name", "tool", "question",
+                           "item_id", "item", "name", "args", "items")
         _dup_sig = json.dumps({k: v for k, v in decision.items() if k in _essential_keys and v}, sort_keys=True)
         decision_counts[_dup_sig] = decision_counts.get(_dup_sig, 0) + 1
         history_actions.append(_dup_sig)
@@ -1003,9 +1004,13 @@ class AgentServiceV2:
                 )
             else:
                 refs = set(re.findall(r"[\w./\\-]+\.py", response_text))
-                unread = {p for p in refs if p.replace("\\", "/").lstrip("./") not in {
-                    r.replace("\\", "/").lstrip("./") for r in state.read_paths
-                }}
+                read_paths = {r.replace("\\", "/").lstrip("./") for r in state.read_paths}
+                read_basenames = {p.rsplit("/", 1)[-1] for p in read_paths}
+                unread = {
+                    p for p in refs
+                    if p.replace("\\", "/").lstrip("./") not in read_paths
+                    and p.replace("\\", "/").rsplit("/", 1)[-1] not in read_basenames
+                }
                 if unread:
                     contract_error = (
                         "SYSTEM (L1 contract): your final references file paths that were never actually "
