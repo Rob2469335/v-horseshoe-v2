@@ -431,6 +431,39 @@ def cmd_cloud_off(ctx: CommandContext, args: List[str]) -> None:
     ctx.console.print("[bold green]Routing mode:[/bold green] local_only")
 
 
+@registry.register("cooldowns",
+                   "Inspect or clear model fallback cooldowns. Usage: /cooldowns "
+                   "[list | clear <model>] — clear is scoped to ONE model (the "
+                   "manual exit for a billing-402 pin after a top-up).")
+def cmd_cooldowns(ctx: CommandContext, args: List[str]) -> None:
+    from runtime_v2.services.fallback_manager import (
+        _cooldowns,
+        clear_model_cooldown,
+    )
+    sub = (args[0] if args else "").lower()
+    if sub == "clear":
+        if len(args) < 2:
+            ctx.console.print("[yellow]Usage: /cooldowns clear <model-id>[/yellow]")
+            return
+        cleared = clear_model_cooldown(args[1])
+        if cleared:
+            ctx.console.print(f"[bold green]Cleared cooldown[/bold green] for [cyan]{args[1]}[/cyan]")
+        else:
+            ctx.console.print(f"[dim]No cooldown entry for {args[1]}[/dim]")
+        return
+    # list (default)
+    with __import__("runtime_v2.services.fallback_manager", fromlist=["_cooldowns_lock_sync"])._cooldowns_lock_sync():
+        entries = dict(_cooldowns)
+    if not entries:
+        ctx.console.print("[dim]No models in cooldown.[/dim]")
+        return
+    for mid, e in entries.items():
+        until = e.get("until", 0)
+        label = "PERMANENT (billing/auth pin — clear after top-up via /cooldowns clear)" \
+            if until == float('inf') else f"until {until:.0f}"
+        ctx.console.print(f"[cyan]{mid}[/cyan]: {label} ({e.get('failures', 0)} failure(s))")
+
+
 @registry.register("speak", "Toggle speech feedback")
 def cmd_speak(ctx: CommandContext, args: List[str]) -> None:
     ctx.state.speech_enabled = not getattr(ctx.state, "speech_enabled", False)

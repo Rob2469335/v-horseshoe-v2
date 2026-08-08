@@ -199,24 +199,47 @@ def test_cooldown_keys_are_per_model(monkeypatch):
     fm.record_model_success("openrouter/foo:free")
 
 
-def test_permanent_error_cooldown_is_finite_not_inf():
-    """Catch-22 regression: a permanent (billing/auth) failure must NOT pin a
-    model at until=float('inf'). float('inf') meant the model was never
-    re-selected (get_live_fallbacks filters cooled-down models), so
-    record_model_success could never fire — it stayed dead until restart even
-    after a refill. The fix caps it at a finite window so it retries and can
-    clear itself."""
-    import time
+def test_permanent_error_pins_until_manual_clear():
+    """A permanent (billing/auth) failure pins the model at float('inf') — the
+    documented fail-closed contract (AGENTS.md): the model is NOT auto-retried,
+    so a definitively-broken paid key can't burn attempts or silently succeed
+    part of the time and mask a billing problem. The exit is the manual,
+    model-scoped `clear_model_cooldown` after a human tops up."""
     from runtime_v2.services import fallback_manager as fm
     fm.record_model_failure("openrouter/bill:free", "402 Insufficient Balance", permanent=True)
     try:
         key = fm._cooldown_key("openrouter/bill:free")
         entry = fm._cooldowns.get(key)
         assert entry is not None
-        assert entry["until"] != float('inf')
-        assert entry["until"] > time.time()  # still cooled down now
-        assert entry["until"] <= time.time() + fm._PERMANENT_COOLDOWN_S + 1
+        assert entry["until"] == float('inf')
+        # Still cooled down (never auto-recovers).
+        assert fm.is_model_cooled_down("openrouter/bill:free") is True
     finally:
+        fm.record_model_success("openrouter/bill:free")
+
+
+def test_clear_model_cooldown_is_scoped_to_one_model():
+    """The manual clear must target ONE model only — it must NOT wipe the
+    legitimate exponential-backoff cooldowns of OTHER transiently
+    rate-limited models."""
+    from runtime_v2.services import fallback_manager as fm
+    fm.record_model_failure("openrouter/a:free", "boom")          # transient backoff
+    fm.record_model_failure("openrouter/bill:free", "402 Insufficient Balance", permanent=True)
+    try:
+        assert fm.is_model_cooled_down("openrouter/a:free")
+        assert fm.is_model_cooled_down("openrouter/bill:free")
+
+        cleared = fm.clear_model_cooldown("openrouter/bill:free")
+        assert cleared is True
+        # The billing pin is lifted...
+        assert not fm.is_model_cooled_down("openrouter/bill:free")
+        # ...but the OTHER model's transient backoff is untouched.
+        assert fm.is_model_cooled_down("openrouter/a:free")
+
+        # Clearing a model with no entry returns False (no-op).
+        assert fm.clear_model_cooldown("openrouter/never-existed:free") is False
+    finally:
+        fm.record_model_success("openrouter/a:free")
         fm.record_model_success("openrouter/bill:free")
 
 
