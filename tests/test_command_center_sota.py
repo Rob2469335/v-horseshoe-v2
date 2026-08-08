@@ -123,3 +123,115 @@ def test_browser_tier_keys_on_domain_not_exe(monkeypatch):
     # Bank tab: chrome.exe still no grant, domain bank.com no grant -> view-only.
     monkeypatch.setattr(pw, "active_domain", lambda: "bank.com")
     assert sc._app_tier() == "view-only"
+
+# ── Build 3: recurring task scheduler ───────────────────────────────────────
+import datetime as _dt
+
+from swarm_os.services import task_scheduler as ts
+
+
+def test_task_crud(monkeypatch, tmp_path):
+    monkeypatch.setattr(ts, "_TASKS_FILE", tmp_path / "tasks.json")
+    t = ts.create_task("summarize my email inbox", "daily 08:00", enabled=True)
+    assert t["id"]
+    assert ts.list_tasks()[0]["goal"] == "summarize my email inbox"
+    assert ts.set_task_enabled(t["id"], False) is True
+    assert ts.list_tasks()[0]["enabled"] is False
+    assert ts.delete_task(t["id"]) is True
+    assert ts.list_tasks() == []
+
+
+def test_is_due_daily(monkeypatch, tmp_path):
+    monkeypatch.setattr(ts, "_TASKS_FILE", tmp_path / "tasks.json")
+    t = ts.create_task("summarize my inbox", "daily 08:00")
+    with ts._LOCK:
+        data = ts._load()
+        data[t["id"]]["last_run"] = (_dt.datetime.now() - _dt.timedelta(days=1)).isoformat()
+        ts._save(data)
+    # Monkeypatch datetime.now to a fixed 09:00 today so the daily window passes.
+    class _FakeDT(_dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            real = _dt.datetime.now()
+            return cls(real.year, real.month, real.day, 9, 0)
+    monkeypatch.setattr(ts, "datetime", _FakeDT)
+    with ts._LOCK:
+        data = ts._load()
+    assert ts._is_due(data[t["id"]], time.time()) is True
+
+
+def test_ceiling_gate_is_authority_before_keyword_scan(monkeypatch, tmp_path):
+    """The permission-model check is LOAD-BEARING. A goal with a send hint is
+    refused by is_scheduler_allowed (email_send is important) — the permission
+    model stops it, not a string match. The keyword scan is defense-in-depth."""
+    monkeypatch.setattr(ts, "_TASKS_FILE", tmp_path / "tasks.json")
+    allowed, reason = ts._ceiling_gate("send an email to my boss")
+    assert allowed is False
+    assert "email_send" in reason  # refused by the permission model
+    # A keyword-blocked goal (transaction) is also refused.
+    allowed2, _ = ts._ceiling_gate("checkout my shopping cart")
+    assert allowed2 is False
+
+
+def test_unmapped_goal_refuses_not_dispatched(monkeypatch, tmp_path):
+    """A goal that isn't a known-safe pattern REFUSES-AND-FLAGS — it is never
+    dispatched to run_browser_task as a gamble."""
+    monkeypatch.setattr(ts, "_TASKS_FILE", tmp_path / "tasks.json")
+    t = ts.create_task("optimize my local database indexes", "hourly", enabled=True)
+    with ts._LOCK:
+        data = ts._load()
+        data[t["id"]]["last_run"] = (_dt.datetime.now() - _dt.timedelta(hours=2)).isoformat()
+        ts._save(data)
+    calls = {"n": 0}
+    async def runner(task):
+        calls["n"] += 1
+        return {"ok": True}
+    ran = asyncio.run(ts.run_due_tasks(runner=runner))
+    assert ran == []
+    assert calls["n"] == 0  # runner never called
+    with ts._LOCK:
+        result = ts._load()[t["id"]]["result"]
+        assert result.get("blocked") == "unmapped_goal"
+
+
+def test_safe_goal_dispatches(monkeypatch, tmp_path):
+    monkeypatch.setattr(ts, "_TASKS_FILE", tmp_path / "tasks.json")
+    t = ts.create_task("summarize my email inbox", "hourly", enabled=True)
+    with ts._LOCK:
+        data = ts._load()
+        data[t["id"]]["last_run"] = (_dt.datetime.now() - _dt.timedelta(hours=2)).isoformat()
+        ts._save(data)
+    calls = {"n": 0}
+    async def runner(task):
+        calls["n"] += 1
+        return {"ok": True, "type": "email_summary"}
+    ran = asyncio.run(ts.run_due_tasks(runner=runner))
+    assert calls["n"] == 1
+    assert ran == [t["id"]]
+
+
+def test_important_goal_blocked_at_scheduler(monkeypatch, tmp_path):
+    """'send an email' is important-tier -> hard-blocked, runner never called."""
+    monkeypatch.setattr(ts, "_TASKS_FILE", tmp_path / "tasks.json")
+    t = ts.create_task("send an email to my boss", "hourly", enabled=True)
+    with ts._LOCK:
+        data = ts._load()
+        data[t["id"]]["last_run"] = (_dt.datetime.now() - _dt.timedelta(hours=2)).isoformat()
+        ts._save(data)
+    calls = {"n": 0}
+    async def runner(task):
+        calls["n"] += 1
+        return {"ok": True}
+    ran = asyncio.run(ts.run_due_tasks(runner=runner))
+    assert ran == []
+    assert calls["n"] == 0
+    with ts._LOCK:
+        result = ts._load()[t["id"]]["result"]
+        assert result.get("blocked") == "scheduler_ceiling"
+
+
+def test_daemon_heartbeat_written(monkeypatch, tmp_path):
+    monkeypatch.setattr(ts.TaskSchedulerDaemon, "_HEARTBEAT_FILE", tmp_path / "heartbeat.json")
+    daemon = ts.TaskSchedulerDaemon(interval_seconds=0.1)
+    daemon._write_heartbeat()
+    assert (tmp_path / "heartbeat.json").exists()

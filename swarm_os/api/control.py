@@ -112,6 +112,16 @@ class GrantRequest(BaseModel):
     tier: str
 
 
+class TaskRequest(BaseModel):
+    goal: str
+    schedule: str = "daily 08:00"
+    enabled: bool = True
+
+
+class TaskToggleRequest(BaseModel):
+    enabled: bool
+
+
 # ---------------------------------------------------------------------------
 # Overview — everything in one fetch
 # ---------------------------------------------------------------------------
@@ -566,3 +576,40 @@ async def control_permissions_grant(req: GrantRequest) -> Dict[str, Any]:
     if not ok:
         raise HTTPException(status_code=400, detail="invalid tier (free/ask/important/approval)")
     return {"ok": True, "target": req.target, "key": req.key, "tier": req.tier}
+
+
+# ---------------------------------------------------------------------------
+# Recurring agent tasks (2026 SOTA). Ceiling + fail-closed on unmapped goals
+# enforced in task_scheduler.run_due_tasks.
+# ---------------------------------------------------------------------------
+
+@router.get("/tasks")
+async def control_tasks() -> Dict[str, Any]:
+    from swarm_os.services import task_scheduler as ts
+    return {"tasks": ts.list_tasks()}
+
+
+@router.post("/tasks")
+async def control_tasks_create(req: TaskRequest) -> Dict[str, Any]:
+    from swarm_os.services import task_scheduler as ts
+    task = ts.create_task(req.goal, req.schedule, req.enabled)
+    return {"ok": True, "task": task}
+
+
+@router.delete("/tasks/{task_id}")
+async def control_tasks_delete(task_id: str) -> Dict[str, Any]:
+    from swarm_os.services import task_scheduler as ts
+    return {"ok": ts.delete_task(task_id)}
+
+
+@router.post("/tasks/{task_id}/toggle")
+async def control_tasks_toggle(task_id: str, req: TaskToggleRequest) -> Dict[str, Any]:
+    from swarm_os.services import task_scheduler as ts
+    return {"ok": ts.set_task_enabled(task_id, req.enabled)}
+
+
+@router.post("/tasks/run")
+async def control_tasks_run() -> Dict[str, Any]:
+    from swarm_os.services import task_scheduler as ts
+    ran = await ts.run_due_tasks()
+    return {"ok": True, "ran": ran}

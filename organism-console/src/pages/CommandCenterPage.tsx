@@ -8,6 +8,7 @@ import EmailPanel from "../components/EmailPanel"
 import BrowserPanel from "../components/BrowserPanel"
 import FilePanel from "../components/FilePanel"
 import WebTaskPanel from "../components/WebTaskPanel"
+import TasksPanel from "../components/TasksPanel"
 
 type LiveEvent = {
   event?: string
@@ -302,6 +303,7 @@ export default function CommandCenterPage() {
         <BrowserPanel backendUrl={backendUrl} />
         <FilePanel backendUrl={backendUrl} />
         <WebTaskPanel backendUrl={backendUrl} />
+        <TasksPanel backendUrl={backendUrl} />
 
         {/* ============ System probes ============ */}
         <Card className="border-white/10 bg-panel">

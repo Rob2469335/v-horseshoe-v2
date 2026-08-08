@@ -328,6 +328,18 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         log.warning(f"Autonomous watch-loop unavailable: {exc}")
 
+    # Recurring agent-task scheduler (2026 SOTA). Runs due scheduled goals
+    # (e.g. 'summarize my inbox every morning') through the existing agent
+    # machinery, hard-blocked by the permission ceiling + fail-closed on unmapped
+    # goals (see task_scheduler.py).
+    try:
+        from swarm_os.services.task_scheduler import TaskSchedulerDaemon
+        _sched = TaskSchedulerDaemon(interval_seconds=60.0)
+        _sched.start()
+        log.info("Recurring task scheduler daemon started")
+    except Exception as exc:
+        log.warning(f"Task scheduler unavailable: {exc}")
+
     try:
         from swarm_os.healing.system_probes import run_system_probes
 
