@@ -70,11 +70,11 @@ class CloudLLMClient:
 
         if stream:
             return CloudLLMClient.stream_generate(url, payload, headers)
-            
-        async with global_httpx_client.post(url, json=payload, headers=headers) as response:
-            response.raise_for_status()
-            data = response.json()
-            return data["choices"][0]["message"]["content"]
+
+        response = await global_httpx_client.post(url, json=payload, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+        return data["choices"][0]["message"]["content"]
 
     @staticmethod
     async def stream_generate(url: str, payload: dict, headers: dict):
