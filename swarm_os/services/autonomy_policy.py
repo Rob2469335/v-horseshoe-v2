@@ -141,8 +141,9 @@ class AutonomyPolicy:
             if any(pattern in p for p in parts):
                 return False
         for allowed in self.repair_allowed_dirs:
+            allowed_path = Path(allowed).resolve()
             try:
-                if str(resolved).startswith(str(Path(allowed).resolve())):
+                if resolved.is_relative_to(allowed_path):
                     return True
             except Exception:
                 continue
