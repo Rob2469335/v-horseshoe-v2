@@ -285,4 +285,3 @@ def index_codebase(root_dir: str, clear: bool = True) -> tuple[int, int]:
         resp.raise_for_status()
             
     return total_files, total_chunks
-

@@ -1,11 +1,11 @@
 {
   "syntax_error": {
-    "t0_calls": 10,
+    "t0_calls": 11,
     "t1_calls": 0,
     "t2_calls": 0,
     "t0_avg_cost": 0.0,
-    "t0_successes": 0,
-    "t0_success_rate": 0.0,
+    "t0_successes": 1,
+    "t0_success_rate": 0.09090909090909091,
     "t1_successes": 0,
     "t1_success_rate": 0.0,
     "t2_successes": 0,
