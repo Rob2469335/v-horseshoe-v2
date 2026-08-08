@@ -242,6 +242,48 @@ def test_security_gate_blocks_dangerous_os_attributes():
             SecurityGate.scan_code(bad)
 
 
+# ── security gate: reflection / builtins / importlib bypass closures ────────
+# These are the confirmed REAL gaps: a banned os/SecurityGate call could be
+# reached without a Name-call or a direct os.attr scan ever matching, because
+# the dangerous name rides in as a string argument or via the builtins dict.
+def test_security_gate_blocks_reflection_on_os():
+    from swarm_os.services.security_gate import SecurityGate, SecurityGateViolation
+    for bad in (
+        "import os\ngetattr(os, 'system')('rm -rf /')",
+        "import os as o\ngetattr(o, 'system')('whoami')",
+        "import os\nsetattr(os, 'system', symlink)('x')",
+        "import os\ndelattr(os, 'nice')",
+    ):
+        with pytest.raises(SecurityGateViolation):
+            SecurityGate.scan_code(bad)
+
+
+def test_security_gate_allows_reflection_on_non_os():
+    from swarm_os.services.security_gate import SecurityGate
+    for safe in (
+        "x = {}\ngetattr(x, 'get', lambda: 1)()",
+        "obj = str()\nsetattr(obj, 'name', 'v')",
+    ):
+        SecurityGate.scan_code(safe), safe
+
+
+def test_security_gate_blocks_importlib_and_builtins_and_sys_modules():
+    from swarm_os.services.security_gate import SecurityGate, SecurityGateViolation
+    for bad in (
+        "import importlib\nimportlib.import_module('os').system('rm -rf /')",
+        "__builtins__['__import__']('os').system('whoami')",
+        "import sys\nsys.modules['os'].system('whoami')",
+    ):
+        with pytest.raises(SecurityGateViolation):
+            SecurityGate.scan_code(bad)
+
+
+def test_security_gate_allows_plain_sys_usage():
+    from swarm_os.services.security_gate import SecurityGate
+    SecurityGate.scan_code("import sys\nprint(sys.argv)")
+    SecurityGate.scan_code("import os\ngetattr(os, 'walk')('.')")
+
+
 @pytest.mark.asyncio
 async def test_sandbox_repl_allows_readonly_os_code():
     # `import os; os.walk('.')` (the debugger's natural file-listing snippet)

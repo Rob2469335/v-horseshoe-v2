@@ -27,6 +27,23 @@ class BannedNodeVisitor(ast.NodeVisitor):
                 self.violations.append(f"Banned built-in call found: '{node.func.id}' at line {node.lineno}")
             elif node.func.id in self._os_func_aliases:
                 self.violations.append(f"Banned os call found: '{node.func.id}' at line {node.lineno}")
+            # Reflection that lifts a dangerous os attribute WITHOUT a Name call
+            # or a direct os.attr scan: `getattr(os, 'system')('rm -rf /')`.
+            # The attr name rides as a string argument, so visit_Attribute
+            # never fires. Block when the target string is a banned os attr, or
+            # is a non-literal (var-driven, unverifiable → fail-closed).
+            elif (
+                node.func.id in ("getattr", "setattr", "delattr")
+                and node.args
+                and isinstance(node.args[0], ast.Name)
+                and node.args[0].id in self._os_names
+                and (
+                    len(node.args) < 2
+                    or not isinstance(node.args[1], ast.Constant)
+                    or node.args[1].value in self.banned_os_attrs
+                )
+            ):
+                self.violations.append(f"Banned reflection on os module: '{node.func.id}' at line {node.lineno}")
         self.generic_visit(node)
 
     def visit_Import(self, node):
@@ -59,6 +76,24 @@ class BannedNodeVisitor(ast.NodeVisitor):
             self.violations.append(f"Banned os call found: 'os.{node.attr}' at line {node.lineno}")
         self.generic_visit(node)
 
+    def visit_Subscript(self, node):
+        # `__builtins__['__import__']('os')` — indexing the builtins dict hands
+        # back __import__ without a Name-call / os-attr scan ever matching. The
+        # `__builtins__` name is never a legit sandbox target.
+        if isinstance(node.value, ast.Name) and node.value.id == "__builtins__":
+            self.violations.append(f"Banned builtins access found: '__builtins__' at line {node.lineno}")
+        # `sys.modules['os'].system('rm -rf /')` — sys.modules yields a live os
+        # module whose .system attr scan never fires (value is a Subscript, not
+        # a Name tracked in _os_names).
+        elif (
+            isinstance(node.value, ast.Attribute)
+            and isinstance(node.value.value, ast.Name)
+            and node.value.value.id == "sys"
+            and node.value.attr == "modules"
+        ):
+            self.violations.append(f"Banned sys.modules access found at line {node.lineno}")
+        self.generic_visit(node)
+
 
 class SecurityGate:
     """Deterministic, immutable AST security gate for mutated code."""
@@ -67,7 +102,7 @@ class SecurityGate:
     # The original list missed dangerous builtin calls and several critical modules
     # that allow for arbitrary execution or network exfiltration.
     BANNED_CALLS = ["exec", "eval", "compile", "__import__", "open"]
-    BANNED_MODULES = ["subprocess", "socket", "ctypes", "pty", "shlex"]
+    BANNED_MODULES = ["subprocess", "socket", "ctypes", "pty", "shlex", "importlib"]
     # os/sys are NOT wholesale-banned: the debugger/coder agents legitimately run
     # `import os; os.walk('.')` / `import sys` in sandbox_repl to explore and test.
     # Only os's dangerous attributes (process exec, file destruction/mutation,
