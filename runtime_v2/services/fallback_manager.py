@@ -40,6 +40,13 @@ _cooldowns: dict[str, dict] = {}
 _cooldown_sync_lock = threading.Lock()
 _COOLDOWN_BASE_S = 30.0
 _MAX_COOLDOWN_S = 600.0
+# Permanent errors (billing/auth) used to pin until = float('inf') — which was
+# a catch-22: the model was never selected again (get_live_fallbacks filters
+# cooled-down models), so record_model_success could never fire to clear it, and
+# it stayed dead until process restart even after a user refilled credits. Cap
+# at a finite window: after 1h the model is retried once; if the user refilled,
+# it succeeds and record_model_success clears the entry, otherwise it re-pins.
+_PERMANENT_COOLDOWN_S = 3600.0
 
 
 # Permanent (non-retryable) failure markers — a model/provider that hits one of
@@ -83,10 +90,13 @@ def record_model_failure(model: str, error: str = "", permanent: bool | None = N
         entry = _cooldowns.setdefault(key, {"failures": 0, "until": 0.0, "last_error": ""})
         entry["failures"] += 1
         if permanent:
-            # Payment/auth failures won't clear on their own — pin at max cooldown
-            # so the provider is skipped until it is explicitly cleared by success.
-            backoff = _MAX_COOLDOWN_S
-            entry["until"] = float('inf')
+            # Payment/auth failures won't clear on their own — pin at a long but
+            # FINITE cooldown (1h). float('inf') was a catch-22: the model is
+            # never re-selected (so success can't fire to clear it) and stays
+            # dead until restart even after a refill. Finite lets it retry after
+            # the window, succeed on a refilled account, and clear itself.
+            backoff = _PERMANENT_COOLDOWN_S
+            entry["until"] = now + _PERMANENT_COOLDOWN_S
         else:
             # Clamp the exponent: 2 ** (failures-1) overflows to a huge int past
             # failures>=1024, which then overflows the float multiplication BEFORE

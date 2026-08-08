@@ -199,6 +199,27 @@ def test_cooldown_keys_are_per_model(monkeypatch):
     fm.record_model_success("openrouter/foo:free")
 
 
+def test_permanent_error_cooldown_is_finite_not_inf():
+    """Catch-22 regression: a permanent (billing/auth) failure must NOT pin a
+    model at until=float('inf'). float('inf') meant the model was never
+    re-selected (get_live_fallbacks filters cooled-down models), so
+    record_model_success could never fire — it stayed dead until restart even
+    after a refill. The fix caps it at a finite window so it retries and can
+    clear itself."""
+    import time
+    from runtime_v2.services import fallback_manager as fm
+    fm.record_model_failure("openrouter/bill:free", "402 Insufficient Balance", permanent=True)
+    try:
+        key = fm._cooldown_key("openrouter/bill:free")
+        entry = fm._cooldowns.get(key)
+        assert entry is not None
+        assert entry["until"] != float('inf')
+        assert entry["until"] > time.time()  # still cooled down now
+        assert entry["until"] <= time.time() + fm._PERMANENT_COOLDOWN_S + 1
+    finally:
+        fm.record_model_success("openrouter/bill:free")
+
+
 # ── security gate scan_code ─────────────────────────────────────────────────
 def test_security_gate_scan_code():
     from swarm_os.services.security_gate import SecurityGate, SecurityGateViolation
