@@ -186,3 +186,19 @@ swarm_os.egg-info/
 
 # runtime healing state
 swarm_os/healing/_strategy_stats.json
+
+# Command Center runtime grants / state (churn constantly, could reveal granted
+# domains/apps; never track even if a future change writes them outside data/)
+data/permission_grants.json
+data/approved_domains.json
+data/tasks.json
+data/checkpoints/
+data/run_snapshots/
+data/evolution/staged/
+**/permission_grants.json
+**/approved_domains.json
+
+# browser screenshots (written to project root by browser tools)
+/browser.png
+/browser_describe.png
+/browser-*.png
