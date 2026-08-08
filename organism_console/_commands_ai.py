@@ -511,3 +511,56 @@ def cmd_chat_search(ctx: CommandContext, args: List[str]) -> None:
                         pass
     else:
         ctx.console.print("[bold red]Chat search failed.[/bold red]")
+
+@registry.register("evolution", "Inspect/approve staged evolution generations. Usage: /evolution [staged|approve <gen>|status]")
+def cmd_evolution(ctx: CommandContext, args: List[str]) -> None:
+    """Evolution staging control (2026: the policy says staged_human_approved and
+    now the code actually enforces it — new generations land in
+    data/evolution/staged/ and become active only on explicit approval here)."""
+    from swarm_os.services.evolution_daemon import list_staged_generations, promote_staged_generation
+
+    action = (args[0].lower() if args else "staged")
+
+    if action == "staged" or action == "list":
+        staged = list_staged_generations()
+        if not staged:
+            ctx.console.print("[yellow]No staged generations. The evolution daemon writes new "
+                              "generations to data/evolution/staged/ when SWARM_EVOLUTION=1.[/yellow]")
+            return
+        table = Table(title="Staged Evolution Generations", box=SIMPLE)
+        table.add_column("Gen")
+        table.add_column("Population")
+        table.add_column("Best Fitness")
+        table.add_column("Elites")
+        for g in staged:
+            table.add_row(str(g["gen"]), str(g["population"]),
+                          f"{g['best_fitness']:.4f}", ", ".join(g.get("elites", [])[:3]))
+        ctx.console.print(table)
+        ctx.console.print("[dim]Approve one with: /evolution approve <gen>[/dim]")
+
+    elif action == "approve":
+        if len(args) < 2:
+            ctx.console.print("[yellow]Usage: /evolution approve <gen>[/yellow]")
+            return
+        gen = args[1]
+        res = promote_staged_generation(gen)
+        if res.get("ok"):
+            ctx.console.print(f"[green]✓ Promoted staged generation {gen} to active "
+                              f"(population {res.get('population')}, best_fitness {res.get('best_fitness')}).[/green]")
+        else:
+            ctx.console.print(f"[bold red]✗ Promotion failed: {res.get('reason')}[/bold red]")
+
+    elif action == "status":
+        from swarm_os.services.evolution_daemon import _load_population, GENOMES_PATH
+        active = _load_population(GENOMES_PATH)
+        staged = list_staged_generations()
+        ctx.console.print(f"[cyan]Active population:[/cyan] {len(active)} genomes"
+                          f"{' (none yet)' if not active else ''}")
+        ctx.console.print(f"[cyan]Staged generations:[/cyan] {len(staged)}")
+        if active:
+            best = max((g.get("fitness", 0.0) for g in active), default=0.0)
+            ctx.console.print(f"[cyan]Active best fitness:[/cyan] {best:.4f}")
+        if staged:
+            ctx.console.print("[dim]Run /evolution staged to inspect them.[/dim]")
+    else:
+        ctx.console.print("[yellow]Usage: /evolution [staged|approve <gen>|status][/yellow]")

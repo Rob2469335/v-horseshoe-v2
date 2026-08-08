@@ -21,18 +21,30 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 GENOMES_PATH = Path("data/evolution/genomes.jsonl")
+STAGED_DIR = Path("data/evolution/staged")
 POPULATION_SIZE = 6
 ELITE_COUNT = 2
 FITNESS_DECAY = 0.85
 GENERATION_TICK = 300.0  # 5 min between generations
 
 
-def _load_population() -> list[dict]:
-    if not GENOMES_PATH.exists():
+def _load_population(path: Path | None = None) -> list[dict]:
+    """Load a population from a genomes file (active by default, or a staged file).
+
+    NOTE (2026-08-07, real bug fixed): the autonomy policy said
+    `evolution.promotion = staged_human_approved` — new generations must be
+    STAGED and approved before they become active — but the code wrote new
+    generations STRAIGHT to the active GENOMES_PATH every tick with no staging
+    and no gate. The policy file described intent the code never implemented:
+    the daemon had been unconditionally auto-promoting this whole time. Fixed
+    here: evolve_one_generation now writes to STAGED_DIR/<gen>.jsonl and leaves
+    the active population untouched until a human approves via promote_staged.
+    """
+    if not path.exists():
         return []
     pop = []
     try:
-        with open(GENOMES_PATH, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -46,11 +58,58 @@ def _load_population() -> list[dict]:
     return pop[-POPULATION_SIZE * 4:]  # bound
 
 
-def _persist_population(pop: list[dict]) -> None:
-    GENOMES_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(GENOMES_PATH, "w", encoding="utf-8") as f:
+def _persist_population(pop: list[dict], path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
         for g in pop[-POPULATION_SIZE:]:
             f.write(json.dumps(g, ensure_ascii=False) + "\n")
+
+
+def list_staged_generations() -> list[dict]:
+    """Return staged generations (newest first) for inspection/approval. Each has
+    {gen, path, best_fitness, elites, population}."""
+    if not STAGED_DIR.exists():
+        return []
+    out = []
+    for p in sorted(STAGED_DIR.glob("gen_*.jsonl"), key=lambda p: p.name):
+        try:
+            pop = _load_population(p)
+            best = max((g.get("fitness", 0.0) for g in pop), default=0.0)
+            out.append({
+                "gen": p.stem.replace("gen_", ""),
+                "path": str(p),
+                "best_fitness": round(best, 4),
+                "elites": [g.get("id") for g in pop[:ELITE_COUNT]],
+                "population": len(pop),
+            })
+        except Exception:
+            continue
+    out.reverse()  # newest first
+    return out
+
+
+def promote_staged_generation(gen: str | int) -> dict:
+    """Approve a staged generation: atomically replace the ACTIVE population
+    with the staged one. This is the ONLY path that changes the active genome
+    policy (human-approval gate, per autonomy_policy.json). Returns a summary."""
+    staged_path = STAGED_DIR / f"gen_{gen}.jsonl"
+    if not staged_path.exists():
+        return {"ok": False, "reason": f"staged generation {gen} not found"}
+    try:
+        staged = _load_population(staged_path)
+        if not staged:
+            return {"ok": False, "reason": f"staged generation {gen} is empty"}
+        # Atomic: write .tmp then os.replace so a crash mid-promotion never
+        # leaves a torn active population.
+        import os
+        GENOMES_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = GENOMES_PATH.with_suffix(".jsonl.tmp")
+        _persist_population(staged, tmp)
+        os.replace(tmp, GENOMES_PATH)
+        return {"ok": True, "gen": str(gen), "population": len(staged),
+                "best_fitness": round(max((g.get("fitness", 0.0) for g in staged), default=0.0), 4)}
+    except Exception as exc:
+        return {"ok": False, "reason": f"promotion failed: {exc}"}
 
 
 def _seed_population() -> list[dict]:
@@ -109,7 +168,7 @@ def get_active_genome(explore: bool = True) -> tuple[str, dict]:
     """Return (genome_id, tool_weights) for the agent loop to evaluate. 
     Uses epsilon-greedy to balance exploitation (best genome) with exploration (random newborn)."""
     try:
-        pop = _load_population()
+        pop = _load_population(GENOMES_PATH)
         if not pop:
             return "", {}
         
@@ -157,7 +216,7 @@ def evolve_one_generation() -> dict:
     """Run one evolution generation on real persisted fitness. Returns a summary
     dict (for logging / tests). Idempotent-safe: never raises."""
     try:
-        pop = _load_population()
+        pop = _load_population(GENOMES_PATH)
         if not pop:
             pop = _seed_population()
 
@@ -185,11 +244,17 @@ def evolve_one_generation() -> dict:
             children.append(_crossover_mutate(a, b, gen))
 
         new_pop = (elites + children)[:POPULATION_SIZE]
-        _persist_population(new_pop)
+        # 2026 (staging fix): write the new generation to the STAGED dir — do NOT
+        # touch the active GENOMES_PATH. It becomes the active tool policy only
+        # when a human approves via promote_staged_generation (the policy's
+        # staged_human_approved, now actually enforced).
+        _staged_path = STAGED_DIR / f"gen_{gen}.jsonl"
+        _persist_population(new_pop, _staged_path)
 
         best = max((g.get("fitness", 0.0) for g in new_pop), default=0.0)
         return {"generation": gen, "population": len(new_pop),
-                "best_fitness": round(best, 4), "elites": [e.get("id") for e in elites]}
+                "best_fitness": round(best, 4), "elites": [e.get("id") for e in elites],
+                "staged": True, "staged_path": str(_staged_path)}
     except Exception as exc:
         log.warning("evolution generation failed: %s", exc)
         return {"generation": -1, "population": 0, "best_fitness": 0.0, "error": str(exc)}
@@ -214,3 +279,4 @@ async def evolution_daemon(interval_seconds: float = GENERATION_TICK, first_dela
         except Exception as exc:
             log.warning("[evolution] daemon tick failed: %s", exc)
         await asyncio.sleep(interval_seconds)
+
