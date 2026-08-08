@@ -26,6 +26,11 @@ export function useSwarmStream(backendUrl: string) {
   useEffect(() => {
     if (!backendUrl) return;
 
+    // Declared before es.onerror so the error handler can clear it: an error
+    // closes the connection for good here, so leaving the flush timer running
+    // would keep a dead 500ms interval alive until unmount.
+    let flushInterval: ReturnType<typeof setInterval> | undefined;
+
     const es = new EventSource(`${backendUrl}/swarm/v10/stream`);
 
     es.onmessage = (event) => {
@@ -41,9 +46,13 @@ export function useSwarmStream(backendUrl: string) {
       console.error("EventSource stream error:", err);
       // Close the connection on error to prevent infinite reconnection loops on 401s or 500s
       es.close();
+      if (flushInterval !== undefined) {
+        clearInterval(flushInterval);
+        flushInterval = undefined;
+      }
     };
 
-    const flushInterval = setInterval(() => {
+    flushInterval = setInterval(() => {
       if (bufferRef.current.length > 0) {
         const batch = [...bufferRef.current];
         bufferRef.current = [];
@@ -77,7 +86,9 @@ export function useSwarmStream(backendUrl: string) {
 
     return () => {
       es.close();
-      clearInterval(flushInterval);
+      if (flushInterval !== undefined) {
+        clearInterval(flushInterval);
+      }
     };
   }, [backendUrl]);
 
