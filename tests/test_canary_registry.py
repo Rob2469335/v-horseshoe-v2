@@ -183,3 +183,27 @@ def test_traceback_attribution_windows_separators(tmp_path):
     assert loop._traceback_attributes(real_tb, "runtime_v2/services/indexer.py")
     assert not loop._traceback_attributes(real_tb, "runtime_v2/services/watch_loop.py")
     assert not loop._traceback_attributes(real_tb, "other_file.py")
+
+
+def test_traceback_attribution_no_sibling_package_false_positive(tmp_path):
+    """A failure in a SIBLING module of the same package must NOT be attributed
+    to the repaired file. The old matcher matched the dotted PACKAGE prefix
+    (e.g. `runtime_v2.services`), so an import frame
+    `from runtime_v2.services import other` in other.py's traceback falsely
+    attributed the failure to indexer.py — and since signal 1 is the
+    authoritative auto-rollback trigger, that reverted the WRONG file. Only the
+    repaired module's own path / dotted MODULE name may match."""
+    loop = wl.WatchLoop(SimpleNamespace(), interval_seconds=0.01)
+    # Sibling module fails; its traceback merely mentions the shared package.
+    tb_sibling = (
+        'E   File "C:\\Users\\rober\\Projects\\v-horseshoe-v2\\runtime_v2\\services\\other.py", line 5\n'
+        '    from runtime_v2.services import helper\n'
+        '    AssertionError\n'
+    )
+    assert not loop._traceback_attributes(tb_sibling, "runtime_v2/services/indexer.py")
+    # Same package, different subpackage.
+    tb_subpkg = 'E     File "C:\\Users\\rober\\Projects\\v-horseshoe-v2\\runtime_v2\\foo\\bar.py", line 1\n    Error\n'
+    assert not loop._traceback_attributes(tb_subpkg, "runtime_v2/services/indexer.py")
+    # The repaired module's OWN dotted name still matches (legit import frame).
+    tb_own = 'E   File "<frozen>", line 1, in <module>\n    import runtime_v2.services.indexer\n'
+    assert loop._traceback_attributes(tb_own, "runtime_v2/services/indexer.py")

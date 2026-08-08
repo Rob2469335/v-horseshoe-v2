@@ -284,14 +284,26 @@ class WatchLoop:
 
     def _traceback_attributes(self, test_output: str, file_rel: str) -> bool:
         """Does the failure name the repaired file (or a module that imports it)?
-        Signal 1's attribution: same module appears in the traceback."""
+        Signal 1's attribution: same module appears in the traceback.
+
+        Match targets for repaired file `runtime_v2/services/indexer.py`:
+          - the normalized path `runtime_v2/services/indexer.py` (matches both
+            forward-slash relative paths and backslash-normalized absolute
+            Windows paths in pytest output)
+          - the dotted MODULE name `runtime_v2.services.indexer` (matches
+            `import`/`from` frames that name the module itself)
+        Deliberately NOT matched: the dotted PACKAGE prefix `runtime_v2.services`.
+        A shorter prefix would false-attribute a failure in ANY sibling module
+        (e.g. an import frame `from runtime_v2.services import other` in
+        `other.py`'s traceback) to the repaired file — and since signal 1 is
+        the authoritative auto-rollback trigger, that would revert the WRONG
+        file. (Live bug found in the 2026 smoke test; unit fixtures only used
+        forward-slash paths and missed the dotted-package collision.)"""
         import re as _re
         out = (test_output or "").replace("\\", "/")
-        base = _re.sub(r"\.py$", "", file_rel).replace("/", ".")
-        mod = _re.sub(r"\.[^.]+$", "", base)
-        return (file_rel.replace("\\", "/") in out
-                or mod in out
-                or base in out)
+        path = file_rel.replace("\\", "/")
+        module = _re.sub(r"\.py$", "", file_rel).replace("/", ".")
+        return path in out or module in out
 
     def _signal2_downstream_breakage(self, file_rel: str) -> bool:
         """Signal 2: does ANY recent failure name a module that imports the
