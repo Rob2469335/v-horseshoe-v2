@@ -14,6 +14,8 @@ export default function BrowserPanel({ backendUrl }: Props) {
   const [a11y, setA11y] = useState<A11yNode[]>([])
   const [status, setStatus] = useState("")
   const [screenshot, setScreenshot] = useState<string>("")
+  const [liveMode, setLiveMode] = useState(false)
+  const [visionDesc, setVisionDesc] = useState("")
   const [typeTarget, setTypeTarget] = useState("")
   const [typeText, setTypeText] = useState("")
 
@@ -69,6 +71,22 @@ export default function BrowserPanel({ backendUrl }: Props) {
     }
   }
 
+  // Live view: auto-refresh the screenshot every 4s so you can WATCH the browser
+  // (and the agent driving it) — the GhostDesk-style live window.
+  useEffect(() => {
+    if (!liveMode) return
+    const timer = window.setInterval(shot, 4000)
+    shot()
+    return () => window.clearInterval(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveMode])
+
+  const describeWithVision = async () => {
+    setVisionDesc("")
+    const r = await act({ operation: "browser_describe" })
+    setVisionDesc(r?.description ?? r?.error ?? "vision unavailable")
+  }
+
   return (
     <Card className="border-white/10 bg-panel">
       <CardHeader className="flex-row items-center justify-between space-y-0">
@@ -81,6 +99,10 @@ export default function BrowserPanel({ backendUrl }: Props) {
             {tabs.length ? `${tabs.length} tab(s)` : "session idle"}
           </Badge>
           <Button size="sm" variant="outline" onClick={refreshState}>Refresh</Button>
+          <Button size="sm" variant={liveMode ? "default" : "outline"} onClick={() => setLiveMode(!liveMode)}>
+            {liveMode ? "Stop live view" : "Live view"}
+          </Button>
+          <Button size="sm" variant="outline" onClick={describeWithVision}>Describe (vision)</Button>
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -128,7 +150,15 @@ export default function BrowserPanel({ backendUrl }: Props) {
           ))}
         </div>
 
-        {screenshot && <img src={screenshot} alt="browser" className="w-full rounded-lg border border-white/10" />}
+        {screenshot && (
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              {liveMode && <Badge className="border-red-400/50 bg-red-400/10 text-red-300">● LIVE</Badge>}
+            </div>
+            <img src={screenshot} alt="browser" className="w-full rounded-lg border border-white/10" />
+          </div>
+        )}
+        {visionDesc && <pre className="max-h-40 overflow-y-auto whitespace-pre-wrap rounded-lg border border-white/10 bg-black/30 p-3 text-xs text-violet-200">{visionDesc}</pre>}
       </CardContent>
     </Card>
   )

@@ -23,6 +23,12 @@ class WebResearchRequest(BaseModel):
     deep_read: int = 3
     synthesize: bool = True
 
+
+class BrowserTaskRequest(BaseModel):
+    goal: str
+    max_steps: int = 12
+    confirm: bool = False
+
 @router.post("/search")
 async def semantic_search(req: QueryRequest):
     """Query Qdrant via the memory pipeline and return reranked results.
@@ -145,6 +151,19 @@ async def web_research(req: WebResearchRequest):
     except Exception as exc:
         log.warning("web-research failed: %s", exc)
         return {"status": "degraded", "results": [], "answer": "", "citations": [], "error": str(exc)}
+
+
+@router.post("/browser-task")
+async def browser_task(req: BrowserTaskRequest):
+    """Perplexity-style agentic browsing: drive the persistent browser toward a
+    goal (fill a form, navigate, do a task). Returns per-step history; critical
+    actions (submit/purchase/login) return approval_requested unless confirmed
+    via /features/browser-task/confirm."""
+    from ..services.browser_task import run_browser_task
+    goal = req.goal.strip()
+    if not goal:
+        raise HTTPException(status_code=400, detail="goal is required")
+    return await run_browser_task(goal, max_steps=req.max_steps, confirm=req.confirm)
 
 
 async def _keyword_fallback(req: QueryRequest) -> list:

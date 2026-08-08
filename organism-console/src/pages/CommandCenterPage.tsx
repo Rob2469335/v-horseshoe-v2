@@ -7,6 +7,7 @@ import { Badge } from "../components/ui/badge"
 import EmailPanel from "../components/EmailPanel"
 import BrowserPanel from "../components/BrowserPanel"
 import FilePanel from "../components/FilePanel"
+import WebTaskPanel from "../components/WebTaskPanel"
 
 type LiveEvent = {
   event?: string
@@ -300,6 +301,7 @@ export default function CommandCenterPage() {
         <EmailPanel backendUrl={backendUrl} />
         <BrowserPanel backendUrl={backendUrl} />
         <FilePanel backendUrl={backendUrl} />
+        <WebTaskPanel backendUrl={backendUrl} />
 
         {/* ============ System probes ============ */}
         <Card className="border-white/10 bg-panel">

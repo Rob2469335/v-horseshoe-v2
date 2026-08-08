@@ -29,6 +29,41 @@ from swarm_os.lib.mcp.web_search import _ssrf_check
 
 logger = logging.getLogger(__name__)
 
+# Secrets redaction (playwright-mcp `--secrets` equivalent): any value in the
+# env vars listed here is scrubbed from browser tool responses so credentials the
+# agent types (or that pages echo back) never reach the model.
+_REDACT_ENV_KEYS = ("PASSWORD", "SECRET", "TOKEN", "API_KEY", "APP_PASSWORD")
+_REDACT_VALUES = None
+
+
+def _redact_values() -> list:
+    global _REDACT_VALUES
+    if _REDACT_VALUES is None:
+        vals = set()
+        for k, v in os.environ.items():
+            if any(s in k.upper() for s in _REDACT_ENV_KEYS) and v and len(v) >= 4:
+                vals.add(v)
+        _REDACT_VALUES = sorted(vals, key=len, reverse=True)
+    return _REDACT_VALUES
+
+
+def _redact(value: Any) -> Any:
+    """Recursively scrub known secrets from a browser result dict/str."""
+    secrets = _redact_values()
+    if not secrets:
+        return value
+    if isinstance(value, str):
+        out = value
+        for s in secrets:
+            if s in out:
+                out = out.replace(s, "[REDACTED]")
+        return out
+    if isinstance(value, list):
+        return [_redact(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _redact(v) for k, v in value.items()}
+    return value
+
 _PROFILE_DIR = Path(os.getenv("ZENITH_BROWSER_PROFILE", "data/browser_profile"))
 
 # A single persistent browser+context shared across calls (module-level lazy).
@@ -133,6 +168,13 @@ async def _find_element(page, role: str, name: str):
 
 
 async def playwright_handler(params: Dict[str, Any], trace_hook=None) -> Dict[str, Any]:
+    """Public entry: runs the browser operation and redacts secrets from the
+    result before returning it to the agent/console (playwright-mcp --secrets)."""
+    result = await _playwright_impl(params, trace_hook)
+    return _redact(result)
+
+
+async def _playwright_impl(params: Dict[str, Any], trace_hook=None) -> Dict[str, Any]:
     operation = params.get("operation", "navigate")
     url = params.get("url", "")
     role = params.get("role")
@@ -216,9 +258,116 @@ async def playwright_handler(params: Dict[str, Any], trace_hook=None) -> Dict[st
             await locator.fill(value or text, timeout=8000)
             return {"ok": True, "typed_into": name or selector}
 
+        elif operation == "browser_fill_form" or operation == "fill_form":
+            """Multi-field form fill. `fields` is a list of {name, value} — each
+            field is resolved by its a11y name (label/placeholder/aria) or raw
+            name attr, filled, then the fill is VERIFIED by reading the value
+            back. This is the 2026 SOTA form-fill primitive (playwright-mcp
+            browser_fill_form): never guess selectors, verify before submit."""
+            fields = params.get("fields") or []
+            if not isinstance(fields, list) or not fields:
+                return {"ok": False, "error": "browser_fill_form needs fields=[{name, value}]"}
+            filled, failed = [], []
+            for f in fields:
+                fname = f.get("name", "")
+                fvalue = f.get("value", "")
+                locator = None
+                for role in ("textbox", "combobox", "searchbox", "textarea"):
+                    locator = await _find_element(page, role, fname)
+                    if locator is not None:
+                        break
+                if locator is None:
+                    locator = await _find_element(page, "textbox", fname)
+                if locator is None:
+                    failed.append({"name": fname, "error": "not found"})
+                    continue
+                try:
+                    await locator.fill(fvalue, timeout=6000)
+                    # Verify the value actually landed.
+                    actual = await locator.input_value() if await locator.count() else ""
+                    if str(actual) == str(fvalue):
+                        filled.append(fname)
+                    else:
+                        failed.append({"name": fname, "error": f"value mismatch: got {actual!r}"})
+                except Exception as exc:
+                    failed.append({"name": fname, "error": str(exc)})
+            return {"ok": not failed, "filled": filled, "failed": failed, "url": page.url}
+
+        elif operation == "browser_verify" or operation == "verify":
+            """Read a field's current value back to confirm a prior fill landed —
+            the deterministic 'did the value stick' check."""
+            if not name and not selector:
+                return {"ok": False, "error": "browser_verify needs name or selector"}
+            locator = None
+            if selector:
+                locator = page.locator(selector)
+            else:
+                for role in ("textbox", "combobox", "searchbox"):
+                    locator = await _find_element(page, role, name)
+                    if locator is not None:
+                        break
+            if locator is None:
+                return {"ok": False, "error": f"field '{name}' not found"}
+            try:
+                actual = await locator.input_value()
+                return {"ok": True, "name": name, "value": actual}
+            except Exception as exc:
+                return {"ok": False, "error": str(exc)}
+
+        elif operation == "browser_find" or operation == "find":
+            """Search the a11y tree for elements matching text (cheaper than a
+            full dump) — playwright-mcp's browser_find."""
+            a11y = await _a11y_snapshot(page)
+            q = str(params.get("query", "") or name or "").lower()
+            hits = [n for n in a11y if q and q in str(n.get("name", "")).lower()]
+            return {"ok": True, "query": q, "count": len(hits), "matches": hits[:30]}
+
+        elif operation == "browser_press_key" or operation == "press":
+            key = params.get("key") or params.get("value") or "Enter"
+            await page.keyboard.press(key)
+            await page.wait_for_load_state("domcontentloaded")
+            return {"ok": True, "pressed": key, "url": page.url}
+
+        elif operation == "browser_wait" or operation == "wait":
+            import asyncio as _asyncio
+            ms = int(params.get("ms", 1500))
+            await _asyncio.sleep(ms / 1000.0)
+            a11y = await _a11y_snapshot(page)
+            return {"ok": True, "waited_ms": ms, "a11y": a11y[:40]}
+
         elif operation == "browser_state":
             tabs = [{"title": (await p.title()) if p else "", "url": p.url} for p in _context.pages]
             return {"ok": True, "tab_count": len(tabs), "tabs": tabs, "profile": str(_PROFILE_DIR)}
+
+        elif operation == "browser_describe" or operation == "describe":
+            """Vision fallback: screenshot the page and ask the local vision model
+            (Qwen3-VL-2B on :8083) to describe it as text. Used when the a11y
+            tree is empty (canvas/custom-rendered apps) — the 2026 OpenClaw
+            pattern (image-model-describes -> text for a text-only agent)."""
+            shot_path = _get_project_root() / "browser_describe.png"
+            await page.screenshot(path=str(shot_path))
+            try:
+                import base64
+                b64 = base64.b64encode(shot_path.read_bytes()).decode()
+                # llama.cpp vision: OpenAI-compatible multimodal message with an
+                # image_url data URI. Requires the vision server (:8083) to be up;
+                # degrades gracefully (ok:False) if not.
+                from swarm_os.infra.llama_client import LlamaClient
+                vision = LlamaClient(base_url="http://127.0.0.1:8083")
+                text = await vision.generate(
+                    model="qwen3-vl",
+                    messages=[{
+                        "role": "user",
+                        "content": [
+                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                            {"type": "text", "text": "Describe what is on this webpage, focusing on interactive elements (buttons, links, inputs) and their visible labels."},
+                        ],
+                    }],
+                )
+                return {"ok": True, "described": True, "description": str(text)[:2000]}
+            except Exception as exc:
+                logger.warning("browser_describe vision unavailable: %s", exc)
+                return {"ok": False, "error": f"vision describe unavailable: {exc}"}
 
         elif operation == "screenshot":
             if url:
