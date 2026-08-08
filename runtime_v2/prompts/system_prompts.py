@@ -170,6 +170,8 @@ _TOOL_DEFINITIONS = {
     "screen": "- action=screen  → action (screenshot|foreground_window|list_windows|cursor_position|mouse_move|left_click|right_click|double_click|scroll|type|key). See the screen; input actions are BLOCKED until human-control mode is lifted (SWARM_SCREEN_AUTONOMOUS=1). Propose the click/type you would do and wait for approval. Screenshot returns a PNG path you can reference.",
     "filesystem": "- action=filesystem  → operation (read|read_all|write|patch|list|grep|glob), path (string or list); optional: content, old, new, pattern. For glob: pattern like '**/*.py'",
     "sandbox_repl": "- action=sandbox_repl  → language (python|powershell|pytest), code. Python: `import os` IS allowed (read/list/walk/path), but destructive os calls (system/remove/rename/chmod), subprocess, sockets, and eval/exec/open are BLOCKED — prefer pathlib + filesystem tools for file work.",
+    "email": "- action=email  → operation (email_list|email_search|email_read|email_draft|email_send), plus args (folder, limit, query, uid, to, subject, body, attachments). Read/search are free. email_draft stages a message and returns a send_token; email_send with confirmed=true sends — NEVER auto-confirm, always wait for human approval of the draft.",
+    "playwright": "- action=playwright  → operation (navigate|browser_a11y|browser_click|browser_type|browser_state|screenshot|extract_text), url. Persistent browser driven by the accessibility tree as TEXT: use browser_a11y to see interactive elements (role+name), browser_click(name=...) / browser_type(name=..., text=...) to act. Logins persist. Screenshots are for verification only.",
     "vscode_automation": "- action=vscode_automation  → command, args",
     "semantic_search": "- action=semantic_search  → query",
     "lsp": "- action=lsp  → operation (diagnostics|hover), file_path; optional: line, character",
@@ -185,14 +187,14 @@ _TOOL_DEFINITIONS = {
 _AGENT_TOOLS = {
     "coordinator": ["delegate", "ask_user", "remember", "deprecate_memory", "final"],
     "planner": ["delegate", "ask_user", "filesystem", "semantic_search", "web_search", "remember", "deprecate_memory", "final"],
-    "researcher": ["filesystem", "semantic_search", "web_search", "web_fetch", "system", "screen", "sandbox_repl", "lsp", "mcp", "todo", "remember", "deprecate_memory", "final"],
+    "researcher": ["filesystem", "semantic_search", "web_search", "web_fetch", "system", "screen", "sandbox_repl", "lsp", "mcp", "email", "playwright", "todo", "remember", "deprecate_memory", "final"],
     "executor": ["delegate", "sandbox_repl", "final"],
-    "coder": ["filesystem", "semantic_search", "web_search", "web_fetch", "sandbox_repl", "lsp", "mcp", "todo", "remember", "deprecate_memory", "final"],
+    "coder": ["filesystem", "semantic_search", "web_search", "web_fetch", "sandbox_repl", "lsp", "mcp", "email", "playwright", "todo", "remember", "deprecate_memory", "final"],
     "tool-runner": ["sandbox_repl", "filesystem", "mcp", "final"],
     "reviewer": ["filesystem", "semantic_search", "sandbox_repl", "lsp", "mcp", "todo", "remember", "deprecate_memory", "final"],
-    "debugger": ["filesystem", "sandbox_repl", "semantic_search", "web_search", "web_fetch", "system", "screen", "lsp", "mcp", "todo", "remember", "deprecate_memory", "final"],
+    "debugger": ["filesystem", "sandbox_repl", "semantic_search", "web_search", "web_fetch", "system", "screen", "lsp", "mcp", "email", "playwright", "todo", "remember", "deprecate_memory", "final"],
     "tool-maker": ["filesystem", "sandbox_repl", "mcp_register", "final"],
-    "code_analyzer": ["filesystem", "web_search", "web_fetch", "system", "screen", "semantic_search", "sandbox_repl", "todo", "final"],
+    "code_analyzer": ["filesystem", "web_search", "web_fetch", "system", "screen", "semantic_search", "sandbox_repl", "email", "playwright", "todo", "final"],
 }
 
 _BASE = (

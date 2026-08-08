@@ -4,6 +4,9 @@ import { useUiStore } from "../state/ui-store"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card"
 import { Button } from "../components/ui/button"
 import { Badge } from "../components/ui/badge"
+import EmailPanel from "../components/EmailPanel"
+import BrowserPanel from "../components/BrowserPanel"
+import FilePanel from "../components/FilePanel"
 
 type LiveEvent = {
   event?: string
@@ -293,6 +296,11 @@ export default function CommandCenterPage() {
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+        {/* ============ Email + Browser + Files (2026 desktop-agent integration) ============ */}
+        <EmailPanel backendUrl={backendUrl} />
+        <BrowserPanel backendUrl={backendUrl} />
+        <FilePanel backendUrl={backendUrl} />
+
         {/* ============ System probes ============ */}
         <Card className="border-white/10 bg-panel">
           <CardHeader>

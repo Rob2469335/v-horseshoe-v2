@@ -52,6 +52,60 @@ class HealRunRequest(BaseModel):
     force: bool = False
 
 
+class EmailListRequest(BaseModel):
+    folder: str = "INBOX"
+    limit: int = 20
+    unread_only: bool = False
+    account: str | None = None
+
+
+class EmailReadRequest(BaseModel):
+    uid: str
+    folder: str = "INBOX"
+    account: str | None = None
+
+
+class EmailSearchRequest(BaseModel):
+    query: str
+    folder: str = "INBOX"
+    limit: int = 20
+    account: str | None = None
+
+
+class EmailDraftRequest(BaseModel):
+    to: str
+    subject: str
+    body: str
+    cc: str = ""
+    attachments: list[str] = []
+    account: str | None = None
+
+
+class EmailSendRequest(BaseModel):
+    send_token: str
+    confirmed: bool = False
+
+
+class BrowserActionRequest(BaseModel):
+    operation: str
+    url: str = ""
+    name: str = ""
+    role: str = ""
+    text: str = ""
+    value: str = ""
+    selector: str = ""
+
+
+class FileReadRequest(BaseModel):
+    path: str
+
+
+class FileWriteRequest(BaseModel):
+    path: str
+    content: str
+    approved: bool = False
+
+
 # ---------------------------------------------------------------------------
 # Overview — everything in one fetch
 # ---------------------------------------------------------------------------
@@ -361,3 +415,129 @@ async def control_agent_model(agent_id: str, req: Dict[str, Any]) -> Dict[str, A
     except Exception:
         log.exception("Failed to reassign model for %s", agent_id)
         raise HTTPException(status_code=500, detail="Failed to reassign model")
+
+
+# ---------------------------------------------------------------------------
+# Email — inbox as a tool (read ops free, send is human-approved)
+# ---------------------------------------------------------------------------
+
+@router.get("/email/status")
+async def control_email_status() -> Dict[str, Any]:
+    from swarm_os.services.email_service import email_config_status
+    return email_config_status()
+
+
+@router.post("/email/list")
+async def control_email_list(req: EmailListRequest) -> Dict[str, Any]:
+    from swarm_os.services.email_service import email_list
+    return await asyncio.to_thread(email_list, req.folder, req.limit, req.unread_only, req.account)
+
+
+@router.post("/email/read")
+async def control_email_read(req: EmailReadRequest) -> Dict[str, Any]:
+    from swarm_os.services.email_service import email_read
+    return await asyncio.to_thread(email_read, req.uid, req.folder, req.account)
+
+
+@router.post("/email/search")
+async def control_email_search(req: EmailSearchRequest) -> Dict[str, Any]:
+    from swarm_os.services.email_service import email_search
+    return await asyncio.to_thread(email_search, req.query, req.folder, req.limit, req.account)
+
+
+@router.post("/email/draft")
+async def control_email_draft(req: EmailDraftRequest) -> Dict[str, Any]:
+    """Stage a message and return a send_token — NOT sent. The UI must present
+    the draft for human approval, then call /control/email/send with confirmed=true."""
+    from swarm_os.services.email_service import email_draft
+    return await asyncio.to_thread(email_draft, req.to, req.subject, req.body, req.cc, req.attachments, req.account)
+
+
+@router.post("/email/send")
+async def control_email_send(req: EmailSendRequest) -> Dict[str, Any]:
+    """Human-approved send. Only proceeds with confirmed=true (the UI's approval
+    confirm step); an unconfirmed token is refused."""
+    from swarm_os.services.email_service import email_send
+    return await asyncio.to_thread(email_send, req.send_token, req.confirmed)
+
+
+# ---------------------------------------------------------------------------
+# Browser — persistent a11y-tree driven session
+# ---------------------------------------------------------------------------
+
+@router.post("/browser/action")
+async def control_browser_action(req: BrowserActionRequest) -> Dict[str, Any]:
+    from swarm_os.lib.mcp.playwright import playwright_handler
+    payload = {k: v for k, v in req.dict().items() if v not in ("", None)}
+    try:
+        result = await asyncio.wait_for(playwright_handler(payload), timeout=120)
+    except asyncio.TimeoutError:
+        result = {"ok": False, "error": "browser operation timed out"}
+    return result
+
+
+@router.get("/browser/state")
+async def control_browser_state() -> Dict[str, Any]:
+    from swarm_os.lib.mcp.playwright import playwright_handler
+    return await asyncio.wait_for(playwright_handler({"operation": "browser_state"}), timeout=30)
+
+
+@router.get("/browser/image")
+async def control_browser_image(name: str) -> FileResponse:
+    """Serve a browser screenshot PNG from the project root (basename only)."""
+    root = os.getcwd()
+    safe = os.path.basename(str(name))
+    path = os.path.join(root, safe)
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail=f"browser image '{safe}' not found")
+    return FileResponse(path, media_type="image/png")
+
+
+# ---------------------------------------------------------------------------
+# Files — read free, write is human-approved
+# ---------------------------------------------------------------------------
+
+def _resolve_project_file(raw: str) -> str:
+    """Resolve a relative path inside the project root; refuse traversal."""
+    root = os.getcwd()
+    joined = os.path.abspath(os.path.join(root, raw))
+    if not joined.startswith(root):
+        raise HTTPException(status_code=400, detail="path escapes project root")
+    return joined
+
+
+@router.get("/file/read")
+async def control_file_read(path: str) -> Dict[str, Any]:
+    """Read a project file (free — read is how the local model Q&A works)."""
+    try:
+        full = _resolve_project_file(path)
+        if not os.path.isfile(full):
+            return {"ok": False, "error": f"not a file: {path}"}
+        with open(full, "r", encoding="utf-8", errors="replace") as f:
+            content = f.read(60000)
+        return {"ok": True, "path": path, "content": content, "bytes": len(content)}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.warning("file read failed for %s: %s", path, exc)
+        return {"ok": False, "error": str(exc)}
+
+
+@router.post("/file/write")
+async def control_file_write(req: FileWriteRequest) -> Dict[str, Any]:
+    """Write a project file — human-approved only. Refuses without approved=true,
+    matching the email-send + destructive-recovery approval pattern."""
+    if not req.approved:
+        return {"ok": False, "approved_required": True,
+                "reason": f"Writing {req.path} requires human approval. Set approved=true to confirm."}
+    try:
+        full = _resolve_project_file(req.path)
+        os.makedirs(os.path.dirname(full), exist_ok=True)
+        with open(full, "w", encoding="utf-8") as f:
+            f.write(req.content)
+        return {"ok": True, "path": req.path, "bytes": len(req.content)}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.warning("file write failed for %s: %s", req.path, exc)
+        return {"ok": False, "error": str(exc)}

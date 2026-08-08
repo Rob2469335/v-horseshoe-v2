@@ -3,6 +3,10 @@
 # Secrets
 .env
 **/.env
+config/email_config.json
+**/email_config.json
+config/.email_tokens/
+**/.email_tokens/
 
 # Python
 .venv/

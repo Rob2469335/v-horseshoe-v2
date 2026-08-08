@@ -1,0 +1,15 @@
+{
+  "accounts": [
+    {
+      "name": "personal",
+      "provider": "gmail",
+      "email": "you@gmail.com",
+      "imap_host": "imap.gmail.com",
+      "imap_port": 993,
+      "smtp_host": "smtp.gmail.com",
+      "smtp_port": 587,
+      "user": "you@gmail.com",
+      "app_password": "YOUR_16_CHAR_APP_PASSWORD"
+    }
+  ]
+}

@@ -286,6 +286,43 @@ async def run(tool_name: str, payload: dict) -> dict:
                     result = await playwright_handler(payload)
             except TimeoutError:
                 result = {"ok": False, "error": "Playwright operation timed out."}
+        elif tool_name in ("email", "email_list", "email_search", "email_read", "email_send", "email_draft"):
+            # 2026 email-as-a-tool. Read ops are un-gated; email_send requires
+            # the approval token from email_draft (human-approved send).
+            from swarm_os.services import email_service
+            op = payload.get("operation") or tool_name
+            try:
+                async with asyncio.timeout(60.0):
+                    if op in ("email_list", "list"):
+                        result = email_service.email_list(
+                            folder=payload.get("folder", "INBOX"),
+                            limit=int(payload.get("limit", 20)),
+                            unread_only=bool(payload.get("unread_only")),
+                            account=payload.get("account"),
+                        )
+                    elif op in ("email_search", "search"):
+                        result = email_service.email_search(
+                            payload.get("query", ""), folder=payload.get("folder", "INBOX"),
+                            limit=int(payload.get("limit", 20)), account=payload.get("account"))
+                    elif op in ("email_read", "read"):
+                        result = email_service.email_read(
+                            payload.get("uid", ""), folder=payload.get("folder", "INBOX"),
+                            account=payload.get("account"))
+                    elif op in ("email_draft", "draft"):
+                        # Stage a sendable draft; returns a send_token that MUST
+                        # be routed through the approval gate before email_send.
+                        result = email_service.email_draft(
+                            to=payload.get("to", ""), subject=payload.get("subject", ""),
+                            body=payload.get("body", ""), cc=payload.get("cc", ""),
+                            attachments=payload.get("attachments") or [], account=payload.get("account"))
+                    elif op in ("email_send", "send"):
+                        # Human-approved send: only proceeds with confirmed=True.
+                        result = email_service.email_send(
+                            payload.get("send_token", ""), confirmed=bool(payload.get("confirmed")))
+                    else:
+                        result = {"ok": False, "error": f"unknown email operation: {op}"}
+            except Exception as exc:
+                result = {"ok": False, "error": f"email operation failed: {exc}"}
         elif tool_name == "mcp_register":
             import json
             config_path = _ROOT / "swarm_config.json"
