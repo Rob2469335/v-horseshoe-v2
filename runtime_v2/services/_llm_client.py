@@ -119,8 +119,10 @@ def get_litellm_model(agent_id: str, fallback_model: str, force_local: bool = Fa
     default_model, backend = get_model(agent_id)
     model = fallback_model if fallback_model else default_model
 
-    # SAFEGUARD: Never allow expensive Claude / Anthropic / Sonnet / Opus models
-    if any(forbidden in model.lower() for forbidden in ("claude", "anthropic", "sonnet", "opus", "gpt-4")):
+    # SAFEGUARD: Never allow expensive Claude / Anthropic / Sonnet / Opus /
+    # OpenAI o-series / GPT-4 class models — including o1/o3 (line 204 routes
+    # them to the paid OpenCode Go tier; this guard must intercept them too).
+    if any(forbidden in model.lower() for forbidden in ("claude", "anthropic", "sonnet", "opus", "gpt-4", "o1", "o3")):
         log.warning(f"Intercepted forbidden expensive model '{model}' -> enforcing DeepSeek V4 Flash ('openai/deepseek-v4-flash')")
         return "openai/deepseek-v4-flash"
 
@@ -432,10 +434,13 @@ async def stream_content(model: str, messages: list, agent_id: str) -> AsyncGene
             response = await litellm.acompletion(**kwargs)
         last_usage = None
         async for chunk in response:
-            if not chunk.choices:
-                continue
+            # Capture usage BEFORE the empty-choices skip: OpenAI-compatible
+            # streams emit the final usage on a standalone chunk with choices=[]
+            # (dropping it would silently hide cost telemetry).
             if getattr(chunk, "usage", None):
                 last_usage = chunk.usage
+            if not chunk.choices:
+                continue
             piece = chunk.choices[0].delta.content or ""
             if piece:
                 yield piece, "content"

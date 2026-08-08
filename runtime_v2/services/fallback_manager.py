@@ -88,7 +88,11 @@ def record_model_failure(model: str, error: str = "", permanent: bool | None = N
             backoff = _MAX_COOLDOWN_S
             entry["until"] = float('inf')
         else:
-            backoff = min(_MAX_COOLDOWN_S, _COOLDOWN_BASE_S * (2 ** (entry["failures"] - 1)))
+            # Clamp the exponent: 2 ** (failures-1) overflows to a huge int past
+            # failures>=1024, which then overflows the float multiplication BEFORE
+            # min() can cap it (a crashed cooldown would break fallback forever).
+            exponent = min(entry["failures"] - 1, 16)
+            backoff = min(_MAX_COOLDOWN_S, _COOLDOWN_BASE_S * (2 ** exponent))
             backoff *= random.uniform(0.75, 1.25)  # ±25% jitter
             entry["until"] = now + backoff
         entry["last_error"] = str(error)[:200]

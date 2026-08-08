@@ -91,7 +91,8 @@ class MemoryBridge:
         if not events:
             if flush_tail and self.session.events:
                 ok = await self._flush()
-                self._reset()
+                if ok:
+                    self._reset()
                 await asyncio.to_thread(self.event_repo.save_state, self.state)
                 return 1 if ok else 0
             return 0
@@ -107,12 +108,12 @@ class MemoryBridge:
             if self._should_flush(event):
                 if await self._flush():
                     flushed += 1
-                self._reset()
+                    self._reset()
 
         if flush_tail and self.session.events:
             if await self._flush():
                 flushed += 1
-            self._reset()
+                self._reset()
 
         self.offset = new_offset
         await asyncio.to_thread(self.event_repo.save_offset, self.offset)

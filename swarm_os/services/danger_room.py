@@ -73,11 +73,13 @@ class DangerRoom:
         if test_targets:
             cmd += [str(t) for t in test_targets]
         try:
+            from swarm_os.services.security_gate import clean_sandbox_env
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 cwd=str(self.sandbox_dir),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
+                env=clean_sandbox_env(),
             )
             try:
                 out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
