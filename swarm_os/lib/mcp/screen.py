@@ -157,6 +157,22 @@ def _spend_action(action: str, kwargs: Dict[str, Any] | None = None) -> Dict[str
                 "SWARM_SCREEN_AUTONOMOUS=1 (or call set_screen_autonomous(true)). "
                 f"Proposed action: '{action}' — describe what you would do and wait for approval."
             )
+        # 2026 per-app OS tier (Anthropic view-only/click-only/full-control):
+        # even in autonomous mode, the FOREGROUND app's tier governs what input is
+        # allowed. keyboard (type/key) needs full-control; clicks/scroll need at
+        # least click-only.
+        tier = _app_tier()
+        if tier == "view-only":
+            return _err(
+                f"PER-APP TIER: foreground app is view-only — '{action}' (input) is blocked. "
+                "Grant a higher tier (click-only/full-control) in data/permission_grants.json "
+                "or /control/permissions to allow it."
+            )
+        if action in ("type", "key") and tier == "click-only":
+            return _err(
+                f"PER-APP TIER: foreground app is click-only — '{action}' (keyboard) is blocked. "
+                "Mouse clicks/scroll are allowed; keyboard needs full-control."
+            )
         now = time.time()
         if _first_input_ts and (now - _first_input_ts) > _RUNAWAY_WINDOW_S:
             _audit({"action": action, "decision": "blocked_runaway", "window_s": _RUNAWAY_WINDOW_S})
@@ -255,6 +271,67 @@ def _window_title(hwnd: int) -> str:
         return win32gui.GetWindowText(hwnd)
     except Exception:
         return ""
+
+
+def _app_name_from_hwnd(hwnd) -> str:
+    """Best-effort app name for a window handle (exe basename). Empty if unknown."""
+    try:
+        import win32process
+        import win32api
+        _, pid = win32process.GetWindowThreadProcessId(hwnd)
+        import win32con
+        proc = win32api.OpenProcess(win32con.PROCESS_QUERY_INFORMATION | win32con.PROCESS_VM_READ, False, pid)
+        try:
+            import win32process as _wp
+            exe = _wp.GetModuleFileNameEx(proc)
+            return exe.split("\\")[-1].lower() if exe else ""
+        finally:
+            win32api.CloseHandle(proc)
+    except Exception:
+        return ""
+
+
+def _app_tier() -> str:
+    """OS approval tier for the FOREGROUND context (2026 SOTA — Anthropic's
+    view-only/click-only/full-control, applied to the CORRECT target).
+
+    The grant target is the ACTIVE TAB's DOMAIN for a browser (a browser is a
+    container of many untrusted contexts — one app, many permission boundaries),
+    and the app's exe name for any other foreground app. Resolved through the SAME
+    permission_tiers lookup as web actions: no parallel permission system. Unknown
+    contexts are fail-closed to 'view-only'."""
+    try:
+        import win32gui
+        hwnd = win32gui.GetForegroundWindow()
+        app = _app_name_from_hwnd(hwnd) if hwnd else ""
+        if not app:
+            return "view-only"
+        try:
+            from swarm_os.services.permission_tiers import tier_for, has_grant
+            # Browser contexts key on the active tab's domain, not the exe.
+            if app in ("chrome.exe", "msedge.exe", "firefox.exe", "brave.exe"):
+                from swarm_os.lib.mcp.playwright import active_domain
+                target = active_domain() or app
+            else:
+                target = app
+            # FAIL-CLOSED: an explicit GRANT on this target is what enables a
+            # tier above view-only. The screen tool's base tier ('approval') must
+            # NOT imply full-control for an un-granted target — an unlisted tab/
+            # app defaults to view-only.
+            if not has_grant(target, "input") and not has_grant(target, "screen"):
+                return "view-only"
+            t = tier_for(target, "screen", "input")
+            if t in ("approval", "important"):
+                return "full-control"
+            if t == "ask":
+                return "click-only"
+            if t == "free":
+                return "view-only"
+            return "view-only"
+        except Exception:
+            return "view-only"
+    except Exception:
+        return "view-only"
 
 
 def foreground_window() -> Dict[str, Any]:

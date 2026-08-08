@@ -141,12 +141,7 @@ async def _a11y_snapshot(page) -> list[dict]:
 
 async def _find_element(page, role: str, name: str):
     """Resolve a locator for an element by a11y name (placeholder/label/value)
-    OR raw name attribute — the two are often different, and matching only one
-    silently fails. Returns a Playwright locator or None.
-
-    Strategy: try get_by_role with the name, then fall back to CSS selectors for
-    the raw name attr / placeholder, so both "click the button named Save" and
-    "type into the input named q" work on real pages."""
+    OR raw name attribute. Returns a Playwright locator or None."""
     if not name:
         return None
     # 1) role+name locator (the accessible-name match).
@@ -165,6 +160,25 @@ async def _find_element(page, role: str, name: str):
         except Exception:
             pass
     return None
+
+
+def active_domain() -> str:
+    """The active tab's domain (sync, best-effort). Used by the screen module to
+    key a browser's OS-input tier on the DOMAIN, not the exe — a browser is one
+    app with many untrusted contexts, so the grant boundary must be the domain."""
+    try:
+        global _context
+        if _context is None:
+            return ""
+        import asyncio as _asyncio
+        pages = _context.pages
+        if not pages:
+            return ""
+        url = pages[-1].url
+        import urllib.parse
+        return urllib.parse.urlparse(url).netloc.lower()
+    except Exception:
+        return ""
 
 
 async def playwright_handler(params: Dict[str, Any], trace_hook=None) -> Dict[str, Any]:

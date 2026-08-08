@@ -106,6 +106,12 @@ class FileWriteRequest(BaseModel):
     approved: bool = False
 
 
+class GrantRequest(BaseModel):
+    target: str
+    key: str
+    tier: str
+
+
 # ---------------------------------------------------------------------------
 # Overview — everything in one fetch
 # ---------------------------------------------------------------------------
@@ -541,3 +547,22 @@ async def control_file_write(req: FileWriteRequest) -> Dict[str, Any]:
     except Exception as exc:
         log.warning("file write failed for %s: %s", req.path, exc)
         return {"ok": False, "error": str(exc)}
+
+
+# ---------------------------------------------------------------------------
+# Permission tiers + per-site/per-app grants (2026 SOTA)
+# ---------------------------------------------------------------------------
+
+@router.get("/permissions")
+async def control_permissions() -> Dict[str, Any]:
+    from swarm_os.services import permission_tiers as pt
+    return {"grants": pt.all_grants(), "tool_tiers": pt._TOOL_TIERS}
+
+
+@router.post("/permissions/grant")
+async def control_permissions_grant(req: GrantRequest) -> Dict[str, Any]:
+    from swarm_os.services import permission_tiers as pt
+    ok = pt.set_grant(req.target, req.key, req.tier)
+    if not ok:
+        raise HTTPException(status_code=400, detail="invalid tier (free/ask/important/approval)")
+    return {"ok": True, "target": req.target, "key": req.key, "tier": req.tier}
