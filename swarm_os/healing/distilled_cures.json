@@ -38,8 +38,8 @@
         "indent",
         "(runtime_v2/services/indexer.py,"
       ],
-      "confidence": 0.8,
-      "count": 1,
+      "confidence": 0.9000000000000001,
+      "count": 3,
       "success_count": 1,
       "failure_count": 0,
       "distilled_at": "2026-08-08T16:39:16.860111+00:00"
