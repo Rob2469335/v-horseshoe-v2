@@ -87,6 +87,21 @@ repo. They never get relaxed.
 - Implement in the documented order (L1→L2→L3→L5→L6, table order); do not
   reorder or jump.
 
+### VERIFICATION CADENCE & STOPPING CONDITION (2026 SOTA evidence)
+- **Verify after every single change — never batch edits then test.** Cadence
+  beats capability on the measured leaderboard (same model, ~16-pt SWE-bench gap
+  between cadenced and not). One edit → run the relevant check → next edit.
+- **Stop only when ALL THREE hold together:** the relevant tests pass AND the
+  diff is small AND the change is explainable in one paragraph. Never stop on
+  any one of them alone; never pile on changes "while I'm here."
+- **Plan before you write.** Plan with read-only tools (read/grep/search) only;
+  do not start mutating during the planning phase. Re-reading the same file with
+  no new signal is a STOP signal, not persistence — escalate or ask.
+- **Express rules as negative constraints, not positive directives.** Research
+  (5,000-run controlled eval) shows effectively every beneficial rule is a
+  negative constraint ("never X") and harmful rules are positive directives
+  ("always X"). Prefer "don't..." phrasing.
+
 ### CONVENTIONS (match the repo)
 - Full day-to-day lint/test loop: `ruff format .` → `ruff check . --fix` →
   `ruff check . --select E9,F` → `pytest`. CI gates on **E9/F only**; the full
