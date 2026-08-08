@@ -70,7 +70,7 @@ def restart_llamacpp(anomaly):
     try:
         script = PROJECT_ROOT / "start-dev.ps1"
         if not script.exists():
-            return {"ok": False, "error": f"start-dev.ps1 not found at {script}"}
+            return {"ok": False, "action": "restart_llamacpp", "error": f"start-dev.ps1 not found at {script}"}
         proc = subprocess.Popen(
             ["powershell", "-ExecutionPolicy", "Bypass", "-File", str(script)],
             cwd=str(PROJECT_ROOT),
@@ -82,13 +82,35 @@ def restart_llamacpp(anomaly):
         except subprocess.TimeoutExpired:
             pass  # still running — restart proceeding
         if proc.poll() is not None and proc.returncode != 0:
-            return {"ok": False, "error": f"restart process exited early with code {proc.returncode}"}
+            return {"ok": False, "action": "restart_llamacpp", "error": f"restart process exited early with code {proc.returncode}"}
         return {"ok": True, "action": "restarted_llamacpp"}
     except Exception as exc:
-        return {"ok": False, "error": str(exc)}
+        return {"ok": False, "action": "restart_llamacpp", "error": str(exc)}
 
 def restart_backend(anomaly):
     try:
+        # RESEARCHED (2026): a process cannot restart ITSELF in-process. This
+        # recovery action is invoked both from the CLI healing watchman
+        # (a separate process — kill + relaunch works there) and, via
+        # HealingService.run_once(), from INSIDE the backend. In the in-process
+        # case the parent still owns :8000, so spawning a child uvicorn is
+        # guaranteed EADDRINUSE — an inevitable no-op that burns a recovery slot.
+        # start-dev.ps1 runs the backend as a PowerShell job with NO supervisor
+        # loop, so there is no external watchdog to lean on either. Best-fit:
+        # detect in-process and refuse fail-closed (governor records the failed
+        # attempt via the action key) instead of spawning a doomed child.
+        import sys as _sys
+        _in_process = any("swarm_os.app.main" in arg for arg in _sys.argv)
+        if _in_process:
+            return {
+                "ok": False,
+                "action": "restart_backend",
+                "error": (
+                    "Refusing in-process backend restart: the backend cannot kill "
+                    "and relaunch itself while owning :8000 (EADDRINUSE). "
+                    "Relaunch via start-dev.ps1 or the CLI."
+                ),
+            }
         # BUG FIX: Don't kill ourselves — skip the calling PID (this IS the backend)
         killed = _find_and_kill("swarm_os.app.main", exclude_pid=os.getpid())
         cmd = [
@@ -108,10 +130,10 @@ def restart_backend(anomaly):
         except subprocess.TimeoutExpired:
             pass  # still running — restart proceeding
         if proc.poll() is not None and proc.returncode != 0:
-            return {"ok": False, "error": f"backend restart exited early with code {proc.returncode}", "killed_pids": killed}
+            return {"ok": False, "action": "restart_backend", "error": f"backend restart exited early with code {proc.returncode}", "killed_pids": killed}
         return {"ok": True, "action": "restarted_backend", "killed_pids": killed}
     except Exception as exc:
-        return {"ok": False, "error": str(exc)}
+        return {"ok": False, "action": "restart_backend", "error": str(exc)}
 
 async def llm_guided_recovery(anomaly):
     """Fallback recovery using GraphRAG Memory and LLM-generated code executed in the DangerRoom."""
@@ -297,8 +319,11 @@ def micro_restart(anomaly, actions: Optional[dict] = None):
             if inspect.iscoroutinefunction(action_fn):
                 return _run_async_action(action_fn, anomaly, target, component)
             result = action_fn(anomaly)
-            if hasattr(result, "__await__"):
-                return _run_async_action(action_fn, anomaly, target, component)
+            if inspect.isawaitable(result):
+                # BUG FIX: await the ALREADY-produced awaitable, not a second
+                # invocation. Previously _run_async_action re-invoked action_fn,
+                # executing the action twice and leaking the first coroutine.
+                return _run_awaitable(result, anomaly, target, component)
             if not isinstance(result, dict):
                 result = {}
             result["action"] = f"micro_restart -> {target}"
@@ -312,6 +337,25 @@ def micro_restart(anomaly, actions: Optional[dict] = None):
 def _run_async_action(action_fn, anomaly, target, component):
     async def _wrapper():
         result = await action_fn(anomaly)
+        if isinstance(result, dict):
+            result["action"] = f"micro_restart -> {target}"
+            result["symptom"] = component
+        return result
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if loop and loop.is_running():
+        return asyncio.ensure_future(_wrapper())
+    return asyncio.run(_wrapper())
+
+def _run_awaitable(awaitable, anomaly, target, component):
+    """Await an already-produced awaitable (from a sync-def action that returned
+    one) without re-invoking the action. Mirrors _run_async_action's loop
+    handling, but consumes the existing coroutine rather than calling the
+    function a second time."""
+    async def _wrapper():
+        result = await awaitable
         if isinstance(result, dict):
             result["action"] = f"micro_restart -> {target}"
             result["symptom"] = component

@@ -47,7 +47,12 @@ class HealingLoop:
         self.state.last_action = decision.get("mode", "unknown")
         self.state.last_heal_time = now
         self.state.last_incident_id = decision.get("incident_id")
-        self.state.consecutive_failures = 0
+        # BUG FIX: do NOT reset consecutive_failures here. The counter is only
+        # reset when the component explicitly reports healthy (no signals above).
+        # Resetting after a decision made a persistent failure re-enter the
+        # "transient_warning" state on every cycle, so repeated/healing loops
+        # never escalated past "warn once, decide on the second sighting" — the
+        # failure counter must keep climbing until the component recovers.
 
         return {
             "status": "healing_decision",
