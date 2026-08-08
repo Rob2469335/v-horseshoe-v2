@@ -893,9 +893,8 @@ class RepairWatchman:
                                 _handle_event_line(self.engine, data)
                             except Exception:
                                 log.exception("Failed to parse event line at offset %d", self._last_position)
-                                self._last_position += len(line.encode("utf-8")) if line else 1
                                 pass
-                    self._last_position = current_size
+                        self._last_position = f.tell()
             except Exception as e:
                 log.warning(f"RepairWatchman iteration failed: {e}")
 
