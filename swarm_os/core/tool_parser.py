@@ -70,6 +70,7 @@ class ToolParser:
                 pass
 
         # Fallback Check 2: strip repeated markdown code-fences and salvage innermost valid JSON object
+        # (advance past the scanned window, not one char, to avoid O(N^2) rescans on pathological input)
         stripped_fences = re.sub(r'```[a-zA-Z]*', '', text).replace('```', '').strip()
         salvage_objs = []
         s_start = stripped_fences.find("{")
@@ -77,7 +78,9 @@ class ToolParser:
             s_brace = 0
             s_instr = False
             s_esc = False
+            s_scan_end = s_start
             for j in range(s_start, len(stripped_fences)):
+                s_scan_end = j
                 ch = stripped_fences[j]
                 if s_esc: s_esc = False; continue
                 if ch == "\\": s_esc = True; continue
@@ -94,7 +97,7 @@ class ToolParser:
                             except Exception:
                                 pass
                             break
-            s_start = stripped_fences.find("{", s_start + 1)
+            s_start = stripped_fences.find("{", s_scan_end + 1)
         if salvage_objs:
             obj = salvage_objs[-1]
             t_name = obj.get("tool", obj.get("tool_name", "")).strip()
