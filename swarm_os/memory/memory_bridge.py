@@ -86,7 +86,11 @@ class MemoryBridge:
         self.policy: Dict[str, Dict[str, float]] = self.state
 
     async def ingest(self, flush_tail: bool = False) -> int:
-        events, new_offset = await asyncio.to_thread(self.event_repo.read_events, self.offset)
+        # Bounded tail read: a fresh/rotated journal (offset 0) could otherwise
+        # load the WHOLE events.jsonl into memory on every boot. Cap to the most
+        # recent events; the offset still advances past everything so nothing is
+        # re-read, and memory stays bounded.
+        events, new_offset = await asyncio.to_thread(self.event_repo.read_events, self.offset, 5000)
 
         if not events:
             if flush_tail and self.session.events:

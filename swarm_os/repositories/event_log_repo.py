@@ -14,7 +14,7 @@ class EventLogRepository:
         self.watermark_path = Path(watermark_path)
         self.state_path = Path(state_path)
 
-    def read_events(self, current_offset: int) -> Tuple[List[Dict[str, Any]], int]:
+    def read_events(self, current_offset: int, max_events: int = 0) -> Tuple[List[Dict[str, Any]], int]:
         if not self.path.exists():
             return [], current_offset
 
@@ -28,12 +28,26 @@ class EventLogRepository:
                 current_offset = 0
 
             f.seek(current_offset)
-            for line in f:
-                try:
-                    events.append(json.loads(line))
-                except Exception:
-                    continue
-            new_offset = f.tell()
+            # OOM guard: bounded tail read. Without a max, a fresh/rotated file
+            # (offset 0) loads the ENTIRE events.jsonl into memory on every boot.
+            # When max_events > 0 we only keep the most recent N, still advancing
+            # the offset past everything so nothing is re-read.
+            if max_events and max_events > 0:
+                seen: List[Dict[str, Any]] = []
+                for line in f:
+                    try:
+                        seen.append(json.loads(line))
+                    except Exception:
+                        continue
+                new_offset = f.tell()
+                events = seen[-max_events:]
+            else:
+                for line in f:
+                    try:
+                        events.append(json.loads(line))
+                    except Exception:
+                        continue
+                new_offset = f.tell()
 
         return events, new_offset
 
@@ -57,6 +71,12 @@ class EventLogRepository:
         except Exception:
             return {}
 
+    def save_state(self, state: Dict[str, Any]) -> None:
+        self.state_path.parent.mkdir(parents=True, exist_ok=True)
+        _atomic_write_text(
+            self.state_path,
+            json.dumps(state, ensure_ascii=False, indent=2),
+        )
 
 
 def _atomic_write_text(path: Path, content: str) -> None:
@@ -67,10 +87,3 @@ def _atomic_write_text(path: Path, content: str) -> None:
     tmp = path.with_name(f"{path.name}.tmp")
     tmp.write_text(content, encoding="utf-8")
     os.replace(tmp, path)
-
-    def save_state(self, state: Dict[str, Any]) -> None:
-        self.state_path.parent.mkdir(parents=True, exist_ok=True)
-        _atomic_write_text(
-            self.state_path,
-            json.dumps(state, ensure_ascii=False, indent=2),
-        )
