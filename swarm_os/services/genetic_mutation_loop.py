@@ -101,8 +101,6 @@ async def run_genetic_mutation(target_file_path: str = str(AGENT_SERVICE_PATH), 
         logger.warning(f"Failed to query MemoryBridge: {e}")
         historical_context = ""
         temperature = 0.7
-    finally:
-        await memory_bridge.close()
     
     if historical_context:
         prompt += f"\n\nHistorical Context of past runs (GraphRAG):\n{historical_context}\nAvoid repeating past mistakes."
@@ -296,6 +294,15 @@ async def run_genetic_mutation(target_file_path: str = str(AGENT_SERVICE_PATH), 
         logger.info(f"Mutation history saved ({len(mutation_history)} entries).")
     except Exception as e:
         logger.warning(f"Failed to save mutation history: {e}")
+
+    # Close the memory bridge LAST — the success/failure recording (memory_bridge
+    # _add/_flush inside the retry loop) must happen before the bridge tears down
+    # its httpx + embedding clients. Closing here (after the loop) instead of in
+    # an early finally avoids a use-after-close on the success/failure paths.
+    try:
+        await memory_bridge.close()
+    except Exception as e:
+        logger.warning(f"Failed to close MemoryBridge: {e}")
 
 if __name__ == "__main__":
     import argparse
