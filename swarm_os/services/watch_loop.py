@@ -286,11 +286,12 @@ class WatchLoop:
         """Does the failure name the repaired file (or a module that imports it)?
         Signal 1's attribution: same module appears in the traceback."""
         import re as _re
+        out = (test_output or "").replace("\\", "/")
         base = _re.sub(r"\.py$", "", file_rel).replace("/", ".")
         mod = _re.sub(r"\.[^.]+$", "", base)
-        return (file_rel.replace("\\", "/") in (test_output or "")
-                or mod in (test_output or "")
-                or base in (test_output or ""))
+        return (file_rel.replace("\\", "/") in out
+                or mod in out
+                or base in out)
 
     def _signal2_downstream_breakage(self, file_rel: str) -> bool:
         """Signal 2: does ANY recent failure name a module that imports the

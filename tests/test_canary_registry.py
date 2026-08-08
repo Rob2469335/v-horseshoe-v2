@@ -156,3 +156,30 @@ def test_traceback_attribution(tmp_path):
     loop = wl.WatchLoop(SimpleNamespace(), interval_seconds=0.01)
     assert loop._traceback_attributes("  File \"swarm_os/api/routes.py\", line 12", "swarm_os/api/routes.py")
     assert not loop._traceback_attributes("  File \"other.py\", line 1", "swarm_os/api/routes.py")
+
+
+def test_traceback_attribution_windows_separators(tmp_path):
+    """Windows pytest output uses absolute backslash paths
+    (C:\\...\\runtime_v2\\services\\indexer.py) while the canary stores the
+    forward-slash relative path — the real `_run_related_tests` traceback shape
+    (verbatim: only absolute Windows File lines, no dotted-module import frame).
+    The matcher must normalize the output separators, not just the needle, or a
+    syntax error whose traceback literally prints the repaired file's path gets
+    mis-routed to HUMAN REVIEW instead of signal-1 auto-rollback (found live in
+    the 2026 autonomy smoke test; unit tests only had forward-slash fixtures)."""
+    loop = wl.WatchLoop(SimpleNamespace(), interval_seconds=0.01)
+    real_tb = (
+        'FFFFFFF                                                                  [100%]\n'
+        '================================== FAILURES ===================================\n'
+        'E     File "C:\\Users\\rober\\Projects\\v-horseshoe-v2\\runtime_v2\\services\\indexer.py", line 22\n'
+        '        TOKEN_BUDGET_CHARS = 1800\n'
+        '    IndentationError: unexpected indent\n'
+        'C:\\Users\\rober\\Projects\\v-horseshoe-v2\\tests\\test_indexer_budget.py:54:   '
+        'File "C:\\Users\\rober\\Projects\\v-horseshoe-v2\\runtime_v2\\services\\indexer.py", line 22\n'
+        '=========================== short test summary info ===========================\n'
+        'FAILED tests/test_indexer_budget.py::test_fit_token_budget_leaves_short_text_unchanged\n'
+        '7 failed in 0.12s\n'
+    )
+    assert loop._traceback_attributes(real_tb, "runtime_v2/services/indexer.py")
+    assert not loop._traceback_attributes(real_tb, "runtime_v2/services/watch_loop.py")
+    assert not loop._traceback_attributes(real_tb, "other_file.py")
