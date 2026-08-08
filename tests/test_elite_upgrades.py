@@ -63,6 +63,12 @@ async def test_web_search_handler_serper(monkeypatch):
 
 @pytest.mark.anyio
 async def test_qdrant_recall_handler():
+    # Clear any lazily cached instances on the singleton to avoid test order pollution
+    if hasattr(registry, "_qdrant"):
+        delattr(registry, "_qdrant")
+    if hasattr(registry, "_embedding"):
+        delattr(registry, "_embedding")
+
     # Mock EmbeddingService and VectorStore
     mock_emb = AsyncMock()
     mock_emb.embed.return_value = [0.1] * 768
