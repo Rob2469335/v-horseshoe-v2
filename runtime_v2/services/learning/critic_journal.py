@@ -1,9 +1,13 @@
 import json
 import logging
+import threading
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 
 log = logging.getLogger(__name__)
+
+_journal_lock = threading.Lock()
 
 
 class CriticJournal:
@@ -13,8 +17,9 @@ class CriticJournal:
     def log(self, data: dict):
         data["ts"] = datetime.now(timezone.utc).isoformat()
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
-        with open(self.path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(data) + "\n")
+        with _journal_lock:
+            with open(self.path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(data) + "\n")
 
     def load(self, limit: int = 200) -> list[dict]:
         """Read back recent journal entries so the critic can seed its weights
@@ -23,7 +28,7 @@ class CriticJournal:
         path = Path(self.path)
         if not path.exists():
             return []
-        entries = []
+        entries = deque(maxlen=limit)
         try:
             with open(path, "r", encoding="utf-8") as f:
                 for line in f:
@@ -37,4 +42,4 @@ class CriticJournal:
         except OSError as exc:
             log.warning("CriticJournal load failed: %s", exc)
             return []
-        return entries[-limit:]
+        return list(entries)

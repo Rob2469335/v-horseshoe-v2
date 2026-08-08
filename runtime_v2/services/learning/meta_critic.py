@@ -14,12 +14,19 @@ class MetaCritic:
 
     @classmethod
     def from_history(cls, entries: list[dict]) -> "MetaCritic":
-        """Seed weights from past journal entries (predicted vs actual), so the
-        critic's learned adjustments survive process restarts instead of resetting
-        to defaults every boot. Replays learn() over the history in chronological
-        order with a small learning rate."""
+        """Seed weights from past journal entries.
+        Restores exact weights if present in the latest entry.
+        Falls back to replaying history for older/test journals."""
         critic = cls()
-        lr = 0.01  # gentle replay — don't let old history dominate fresh signals
+        if not entries:
+            return critic
+            
+        last_entry = entries[-1]
+        if "weights" in last_entry and last_entry["weights"]:
+            critic.weights = last_entry["weights"].copy()
+            return critic
+            
+        lr = 0.05  # match live learning rate
         for entry in entries:
             predicted = entry.get("predicted", 0.5)
             actual = bool(entry.get("actual"))

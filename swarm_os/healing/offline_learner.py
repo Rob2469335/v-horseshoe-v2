@@ -2,7 +2,7 @@ import json
 import asyncio
 import os
 import re
-from collections import defaultdict
+from collections import defaultdict, deque
 from litellm import acompletion
 from runtime_v2.services.memory_core import remember_fact
 
@@ -17,7 +17,7 @@ async def extract_and_inject_rules():
 
     agent_stats = defaultdict(lambda: {"success": 0, "fail": 0})
     tool_stats = defaultdict(lambda: {"success": 0, "fail": 0})
-    recent_failures = []
+    recent_failures = deque(maxlen=20)
     
     with open(event_file, "r", encoding="utf-8") as f:
         for line in f:
@@ -47,9 +47,6 @@ async def extract_and_inject_rules():
                     recent_failures.append(f"Agent {agent} CRASHED: {error}")
             except Exception:
                 continue
-
-    # Keep only the last 20 failures to avoid overwhelming context
-    recent_failures = recent_failures[-20:]
     
     print("[Offline Learner] Aggregating historical statistics...")
     stats_summary = "Historical Performance Summary:\n\n"
