@@ -287,8 +287,7 @@ async def evaluate_health(request: Request) -> dict:
                 if hasattr(detector, "status"):
                     report = detector.status()
                 elif hasattr(detector, "check"):
-                    from swarm_os.healing.failure_detector import run_coro_sync
-                    report = run_coro_sync(detector.check())
+                    report = await detector.check()
                 else:
                     report = {}
                 readiness = report.get("recovery_readiness", report.get("health_score", 100))

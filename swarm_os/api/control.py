@@ -328,7 +328,6 @@ async def control_recover(req: RecoverRequest) -> Dict[str, Any]:
     # Learn from the outcome — persist a grounded reflexion rule on success.
     if result.get("ok"):
         try:
-            from swarm_os.healing.failure_detector import run_coro_sync
             from swarm_os.services.reflection_loop import get_reflection_service
 
             corrections = {
@@ -350,7 +349,7 @@ async def control_recover(req: RecoverRequest) -> Dict[str, Any]:
                     component=f"system:{issue}",
                     confidence=0.75,
                 )
-            run_coro_sync(_store(), timeout=30.0)
+            await _store()
         except Exception as exc:
             log.warning("Failed to store system lesson: %s", exc)
 
