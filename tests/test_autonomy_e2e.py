@@ -23,6 +23,7 @@ Seams that ARE legitimately controlled (per established patterns):
 import asyncio
 import json
 import subprocess
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -393,3 +394,125 @@ def test_seam_isolation_snapshot_ordering(tmp_path, temp_git_repo, monkeypatch):
     assert tracked.get(FIXTURE_REL) == b"USER-EDIT\n", (
         "SEAM-ISOLATION PROOF: capture-after-write was detected — snapshot holds "
         "post-repair bytes (this is the checkpoint-5 regression the suite catches)")
+
+
+# ── HARDER #1: concurrent/racing failures — same-file canary refusal + conflict ─
+def test_concurrent_racing_failures_same_file_refused(tmp_path, temp_git_repo, monkeypatch):
+    """Two real failures land close together on the SAME file. Phase B's same-file
+    canary refusal + Phase A's refuse-not-clobber must hold under real concurrent
+    arrival — NOT just when register_canary is called twice in sequence by a test.
+
+    Assertions:
+    - the FIRST repair registers a canary for the file
+    - the SECOND repair on the SAME file is REFUSED registration (one pending
+      canary per file), so a flagged rollback always knows which snapshot to restore
+    - the second repair's snapshot still exists but the registry holds ONE pending
+      canary, and the two snapshots are distinct (no clobbering)
+    """
+    import swarm_os.services.autonomy_policy as _ap
+    monkeypatch.setattr(_ap, "get_autonomy_policy", lambda **k: SimpleNamespace(daily_budget=50))
+    monkeypatch.chdir(temp_git_repo)
+    target = temp_git_repo / FIXTURE_REL
+    loop = wl.WatchLoop(_make_engine_that_writes(target), interval_seconds=0.01)
+    loop._load_policy()
+
+    # Two failures on the same file arrive back-to-back.
+    def _event(i):
+        return {"event_type": "tool_result", "payload": {
+            "result": {"ok": False, "error": f"File {FIXTURE_REL} not found (run {i})"},
+            "arguments": {"file_path": FIXTURE_REL},
+        }}
+    loop._handle(_event(1))
+    loop._handle(_event(2))
+
+    # Exactly ONE pending canary for the file (the second registration refused).
+    reg = cr.load_registry()
+    pending = [c for c in reg.values() if c.get("file") == FIXTURE_REL and c.get("state") == cr.PENDING]
+    assert len(pending) == 1, f"expected exactly one pending canary for {FIXTURE_REL}, got {len(pending)}"
+
+    # Two distinct snapshots exist (no clobbering of the first by the second).
+    snaps = sorted((tmp_path / "run_snapshots").glob("*.json"))
+    assert len(snaps) >= 2, "expected two snapshots for two repair attempts (no clobber)"
+
+    # The first canary's snapshot is still loadable and holds PRE-repair bytes.
+    first = pending[0]
+    snap = rs.load_run_snapshot(first["snapshot_id"])
+    tracked = (snap.get("snapshot") or {}).get("tracked", {})
+    assert tracked.get(FIXTURE_REL) == b"USER-EDIT\n"
+
+
+def test_concurrent_failure_in_dependency_chain_distinct_snapshots(tmp_path, temp_git_repo, monkeypatch):
+    """Two failures on DIFFERENT files where one is in the other's dependency chain
+    (file A imports file B). Both may repair (not same-file), but each must get its
+    OWN snapshot — a later rollback of A must restore A's pre-state without
+    touching B's, and vice-versa (diff-scoped, refuse-not-clobber)."""
+    import swarm_os.services.autonomy_policy as _ap
+    monkeypatch.setattr(_ap, "get_autonomy_policy", lambda **k: SimpleNamespace(daily_budget=50))
+    monkeypatch.chdir(temp_git_repo)
+    a = temp_git_repo / "runtime_v2/services/a.py"
+    b = temp_git_repo / "runtime_v2/services/b.py"
+    a.write_bytes(b"PRE-A\n")
+    b.write_bytes(b"PRE-B\n")
+    subprocess.run(["git", "add", "-A"], cwd=temp_git_repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "ab"], cwd=temp_git_repo, check=True)
+    a.write_bytes(b"EDIT-A\n")
+    b.write_bytes(b"EDIT-B\n")
+
+    loop = wl.WatchLoop(SimpleNamespace(), interval_seconds=0.01)
+    loop._load_policy()
+    # Snapshot both files (as two repairs would), scope each to its own file.
+    from runtime_v2.services.run_snapshot import build_repair_snapshot, write_run_snapshot, restore_run_snapshot
+    sa = write_run_snapshot(build_repair_snapshot(
+        {"tracked": {"runtime_v2/services/a.py": b"EDIT-A\n"}, "untracked": set(), "untracked_content": {}}, scope=["runtime_v2/services/a.py"]))
+    sb = write_run_snapshot(build_repair_snapshot(
+        {"tracked": {"runtime_v2/services/b.py": b"EDIT-B\n"}, "untracked": set(), "untracked_content": {}}, scope=["runtime_v2/services/b.py"]))
+
+    # Roll back A only -> A restored to EDIT-A, B untouched (still EDIT-B).
+    a.write_bytes(b"POST-A\n")
+    b.write_bytes(b"POST-B\n")
+    restore_run_snapshot(rs.load_run_snapshot(sa), scope=["runtime_v2/services/a.py"], root=temp_git_repo)
+    assert a.read_bytes() == b"EDIT-A\n", "rolling back A must restore A's pre-state"
+    assert b.read_bytes() == b"POST-B\n", "rolling back A must NOT touch B"
+
+    # Roll back B only -> B restored, A stays as restored.
+    restore_run_snapshot(rs.load_run_snapshot(sb), scope=["runtime_v2/services/b.py"], root=temp_git_repo)
+    assert b.read_bytes() == b"EDIT-B\n"
+    assert a.read_bytes() == b"EDIT-A\n", "rolling back B must not disturb A"
+
+
+# ── HARDER #5: budget boundary mid-chain — 50th repairs, 51st stops+flags ────
+def test_budget_boundary_50th_repairs_51st_stops(tmp_path, temp_git_repo, monkeypatch, caplog):
+    """Force the daily budget to 49, land a real failure (50th repairs), then land
+    a second real failure (51st) — it must STOP + FLAG, never queue or silently
+    repair anyway. This is the boundary condition the e2e suite didn't exercise
+    (it tested 'budget available', not 'budget about to run out mid-run')."""
+    import logging
+    import swarm_os.services.autonomy_policy as _ap
+    monkeypatch.setattr(_ap, "get_autonomy_policy", lambda **k: SimpleNamespace(daily_budget=50))
+    monkeypatch.chdir(temp_git_repo)
+    target = temp_git_repo / FIXTURE_REL
+    loop = wl.WatchLoop(_make_engine_that_writes(target), interval_seconds=0.01)
+    loop._load_policy()
+    loop._repair_window_start = time.time()  # start a fresh window
+    loop._repairs_in_window = 49  # the 50th is still allowed
+
+    def _event(i):
+        return {"event_type": "tool_result", "payload": {
+            "result": {"ok": False, "error": f"File {FIXTURE_REL} not found (attempt {i})"},
+            "arguments": {"file_path": FIXTURE_REL},
+        }}
+
+    # 50th: within budget -> repairs, counter goes 49 -> 50.
+    loop._handle(_event(50))
+    assert loop._repairs_in_window == 50, "50th repair must be allowed"
+    assert (tmp_path / "auto_repairs.jsonl").exists(), "50th repair must be audited"
+
+    # 51st: budget exhausted -> stop + flag, NO queue, NO repair.
+    audit_before = len((tmp_path / "auto_repairs.jsonl").read_text(encoding="utf-8").splitlines()) if (tmp_path / "auto_repairs.jsonl").exists() else 0
+    with caplog.at_level(logging.WARNING, logger="WatchLoop"):
+        loop._handle(_event(51))
+    assert loop._repairs_in_window == 50, "51st must NOT increment (no silent repair)"
+    audit_after = len((tmp_path / "auto_repairs.jsonl").read_text(encoding="utf-8").splitlines())
+    assert audit_after == audit_before, "51st must not be audited (no repair happened)"
+    assert any("repair budget exhausted" in r.getMessage() for r in caplog.records), (
+        "51st must log a distinct budget-exhausted WARNING (stop + flag)")
