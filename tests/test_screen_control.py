@@ -23,12 +23,29 @@ from runtime_v2.prompts.system_prompts import build as build_system_prompt
 
 
 @pytest.fixture(autouse=True)
-def _reset_mode():
+def _reset_mode(monkeypatch):
     screen.SCREEN_AUTONOMOUS = False
     screen._screen_action_count = 0
+    # Build 2 per-app OS tier: autonomous mode alone no longer enables input on
+    # an un-granted app (fail-closed view-only). Grant the foreground app a
+    # full-control tier so the human-control/action-cap tests exercise THEIR
+    # gates, not the per-app tier gate (which has its own dedicated test).
+    monkeypatch.setattr(screen, "_app_tier", lambda: "full-control")
     yield
     screen.SCREEN_AUTONOMOUS = False
     screen._screen_action_count = 0
+
+
+def test_per_app_tier_blocks_ungranted_app_even_in_autonomous(monkeypatch):
+    """Build 2 fail-closed: with no grant for the foreground app, input is
+    blocked even in autonomous mode — the per-app tier is NOT implied by the
+    screen tool's approval base tier."""
+    monkeypatch.setattr(screen, "_app_tier", lambda: "view-only")
+    screen.set_screen_autonomous(True)
+    res = screen_handler({"action": "left_click", "x": 0, "y": 0})
+    assert res.get("ok") is False
+    assert "PER-APP TIER" in res.get("error", "")
+    assert "view-only" in res.get("error", "")
 
 
 def test_human_control_blocks_input_by_default():

@@ -23,14 +23,19 @@ def _mock_models(monkeypatch, n_ctx: int):
 
 
 def test_budget_tracks_live_n_ctx(monkeypatch):
+    import runtime_v2.services.indexer as idx
     from runtime_v2.services.indexer import _embed_context_budget_chars
 
+    # The live n_ctx drives the budget, but it is CAPPED at _MAX_BUDGET_CHARS
+    # (a single embed request must stay in the fast CPU regime; gte-modernbert
+    # boots at n_ctx=8192 -> raw formula ~24k chars, too slow per char) and
+    # FLOORED at 1024 (never below a workable chunk).
     _mock_models(monkeypatch, 2048)
-    assert _embed_context_budget_chars() == int(2048 * 3.5 * 0.85)
+    assert _embed_context_budget_chars() == min(int(2048 * 3.5 * 0.85), idx._MAX_BUDGET_CHARS)
     _mock_models(monkeypatch, 512)
     assert _embed_context_budget_chars() == int(512 * 3.5 * 0.85)
     _mock_models(monkeypatch, 100)
-    assert _embed_context_budget_chars() == 512  # floor: never below 512
+    assert _embed_context_budget_chars() == 1024  # floor: never below 1024
     _mock_models(monkeypatch, 0)
     assert _embed_context_budget_chars() == 1800  # fallback on probe failure
 

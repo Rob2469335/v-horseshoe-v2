@@ -170,7 +170,6 @@ def active_domain() -> str:
         global _context
         if _context is None:
             return ""
-        import asyncio as _asyncio
         pages = _context.pages
         if not pages:
             return ""
