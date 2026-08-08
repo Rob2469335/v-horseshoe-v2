@@ -20,28 +20,32 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 def _record_to_agents_md(anomaly: str, script: str):
     """SOTA 2026: Persist autonomous self-healing lessons directly to AGENTS.md
     so that future AI agents (open code / swarm) learn without instruction creep.
-    """
+    Locked with filelock so concurrent recovery paths (CLI watchman thread +
+    backend healing daemon) never race the read-modify-write."""
     try:
+        from filelock import FileLock
         agents_file = PROJECT_ROOT / "AGENTS.md"
         if not agents_file.exists():
             return
-        content = agents_file.read_text(encoding="utf-8")
-        if str(anomaly) in content and "Auto-Heal" in content:
-            return
-        summary = "Executed isolated DangerRoom repair script."
-        for line in script.splitlines():
-            line_s = line.strip().lstrip("#").strip()
-            if line_s and not line_s.startswith("import ") and not line_s.startswith("from "):
-                summary = line_s[:100]
-                break
-        import time
-        date_str = time.strftime("%Y-%m-%d")
-        new_entry = f"- **Auto-Heal ({date_str})**: Resolved anomaly `{anomaly}`. Action: {summary}\n"
-        marker = "## Self-Healing & Self-Learning Fixes\n"
-        if marker in content:
-            content = content.replace(marker, marker + "\n" + new_entry, 1)
-            agents_file.write_text(content, encoding="utf-8")
-            log.info(f"Recorded auto-heal lesson for anomaly '{anomaly}' into AGENTS.md")
+        lock = FileLock(str(agents_file) + ".lock", timeout=5.0)
+        with lock:
+            content = agents_file.read_text(encoding="utf-8")
+            if str(anomaly) in content and "Auto-Heal" in content:
+                return
+            summary = "Executed isolated DangerRoom repair script."
+            for line in script.splitlines():
+                line_s = line.strip().lstrip("#").strip()
+                if line_s and not line_s.startswith("import ") and not line_s.startswith("from "):
+                    summary = line_s[:100]
+                    break
+            import time
+            date_str = time.strftime("%Y-%m-%d")
+            new_entry = f"- **Auto-Heal ({date_str})**: Resolved anomaly `{anomaly}`. Action: {summary}\n"
+            marker = "## Self-Healing & Self-Learning Fixes\n"
+            if marker in content:
+                content = content.replace(marker, marker + "\n" + new_entry, 1)
+                agents_file.write_text(content, encoding="utf-8")
+                log.info(f"Recorded auto-heal lesson for anomaly '{anomaly}' into AGENTS.md")
     except Exception as e:
         log.warning(f"Could not record auto-heal to AGENTS.md: {e}")
 
