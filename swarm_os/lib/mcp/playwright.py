@@ -291,6 +291,31 @@ async def _playwright_impl(params: Dict[str, Any], trace_hook=None) -> Dict[str,
                         failed.append({"name": fname, "error": f"value mismatch: got {actual!r}"})
                 except Exception as exc:
                     failed.append({"name": fname, "error": str(exc)})
+            # 2026 form-fill hardening: after filling, run the form's OWN
+            # constraint-validation API to detect required fields the planner
+            # missed — strictly more reliable than asking the model to eyeball it.
+            try:
+                validity = await page.evaluate("""() => {
+                  const out = [];
+                  document.querySelectorAll('form').forEach((form, fi) => {
+                    if (typeof form.checkValidity === 'function' && !form.checkValidity()) {
+                      form.querySelectorAll('input,select,textarea').forEach((el) => {
+                        if (el.required && !el.value) {
+                          out.push({ form: fi, field: el.getAttribute('name') || el.getAttribute('id') || el.placeholder || '', reason: 'required and empty' });
+                        } else if (el.validity && !el.validity.valid) {
+                          out.push({ form: fi, field: el.getAttribute('name') || el.placeholder || '', reason: el.validationMessage || 'invalid' });
+                        }
+                      });
+                    }
+                  });
+                  return out;
+                }""")
+                if validity and not failed:
+                    return {"ok": False, "filled": filled, "failed": failed,
+                            "incomplete": validity, "url": page.url,
+                            "error": "form has required/invalid fields after fill"}
+            except Exception:
+                pass  # validity check is best-effort
             return {"ok": not failed, "filled": filled, "failed": failed, "url": page.url}
 
         elif operation == "browser_verify" or operation == "verify":

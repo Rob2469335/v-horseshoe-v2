@@ -16,6 +16,7 @@ type TaskResult = {
   steps?: number
   url?: string
   reason?: string
+  message?: string
   pending_action?: string
   pending_params?: Record<string, unknown>
   failed?: Array<{ name: string; error: string }>
@@ -92,6 +93,11 @@ export default function WebTaskPanel({ backendUrl }: Props) {
             </div>
             {result.url && <div className="mt-1 text-xs text-white/40 truncate">{result.url}</div>}
             {result.reason && <div className="mt-1 text-xs">{result.reason}</div>}
+            {result.message && (
+              <div className="mt-2 rounded-lg border border-violet-400/30 bg-violet-400/10 p-2 text-sm text-violet-200">
+                🤝 Agent needs you: {result.message}
+              </div>
+            )}
             {result.failed && result.failed.length > 0 && (
               <div className="mt-2 text-xs text-red-300">
                 {result.failed.map((f, i) => <div key={i}>✗ {f.name}: {f.error}</div>)}

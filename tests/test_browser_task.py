@@ -70,10 +70,11 @@ def test_confirm_executes_critical_action(monkeypatch):
 
 
 def test_loop_detection_stops(monkeypatch):
-    """Repeated identical action+params must stop the loop."""
+    """Repeated identical action 3x (semantic threshold) must stop the loop."""
     _install_mocks(monkeypatch, [
         {"action": "click", "params": {"name": "Search"}, "reason": "try"},
         {"action": "click", "params": {"name": "Search"}, "reason": "try again"},
+        {"action": "click", "params": {"name": "Search"}, "reason": "try once more"},
     ])
     r = asyncio.run(bt.run_browser_task("do the thing"))
     assert r.get("status") == "loop_detected"
@@ -96,3 +97,78 @@ def test_fill_failed_reported(monkeypatch):
     r = asyncio.run(bt.run_browser_task("fill the form"))
     assert r.get("status") == "fill_failed"
     assert r.get("failed")
+
+def test_ask_human_returns_message(monkeypatch):
+    """The agent can initiate a help request (captcha/2FA/consent) mid-flow."""
+    _install_mocks(monkeypatch, [
+        {"action": "ask_human", "params": {"message": "captcha wall encountered"}, "reason": "need help"},
+    ])
+    r = asyncio.run(bt.run_browser_task("log in"))
+    assert r.get("status") == "ask_human"
+    assert "captcha" in r.get("message", "")
+
+
+def test_semantic_loop_detection_reworded_action(monkeypatch):
+    """Reworded type actions must be detected as a loop (token-sorted normalize)."""
+    _install_mocks(monkeypatch, [
+        {"action": "type", "params": {"name": "q", "value": "buy now please"}, "reason": "a"},
+        {"action": "type", "params": {"name": "q", "value": "please buy now"}, "reason": "b"},
+        {"action": "type", "params": {"name": "q", "value": "now buy please"}, "reason": "c"},
+    ])
+    r = asyncio.run(bt.run_browser_task("search buy now"))
+    assert r.get("status") == "loop_detected"
+
+
+def test_loop_tracks_checklist(monkeypatch):
+    """The planner's checklist_update is applied and reflected in history."""
+    _install_mocks(monkeypatch, [
+        {"action": "click", "params": {"name": "Search"}, "reason": "go",
+         "checklist_update": ["[x] open search", "[ ] fill form"]},
+        {"action": "done", "params": {}, "reason": "done", "checklist_update": ["[x] fill form"]},
+    ])
+    r = asyncio.run(bt.run_browser_task("search"))
+    assert r.get("status") == "done"
+    # checklist items tracked internally (not in result), but history preserved
+    assert any(h.get("action") == "click" for h in r.get("history", []))
+
+
+def test_approve_domain_roundtrip(monkeypatch, tmp_path):
+    """Approve a domain, confirm is_domain_approved persists."""
+    monkeypatch.setattr(bt, "_APPROVED_FILE", tmp_path / "approved_domains.json")
+    assert bt.is_domain_approved("https://example.com/form") is False
+    bt.approve_domain("https://example.com/form", remember=True)
+    assert bt.is_domain_approved("https://example.com/other") is True
+    assert bt.is_domain_approved("https://evil.org") is False
+
+
+def test_fill_form_validity_gate_reports_incomplete(monkeypatch):
+    """browser_fill_form's checkValidity gate surfaces incomplete required fields
+    instead of claiming success."""
+    from swarm_os.lib.mcp import playwright as pw
+
+    class _FakeLocator:
+        async def fill(self, value, timeout=0): pass
+        async def input_value(self): return "x"
+        async def count(self): return 1
+
+    class _FakePage:
+        async def evaluate(self, js):
+            return [{"field": "email", "reason": "required and empty"}]
+
+    async def fake_find(page, role, name):
+        return _FakeLocator()
+    monkeypatch.setattr(pw, "_find_element", fake_find)
+
+    class _FakeCtx:
+        pages = [_FakePage()]
+    async def fake_ensure():
+        return None
+    monkeypatch.setattr(pw, "_ensure_browser", fake_ensure)
+    monkeypatch.setattr(pw, "_context", _FakeCtx())
+
+    import asyncio as _asyncio
+    r = _asyncio.run(pw.playwright_handler({"operation": "browser_fill_form",
+                                            "fields": [{"name": "email", "value": "x"}]}))
+    # The form has a required empty field -> ok:False with incomplete reported.
+    assert r.get("ok") is False
+    assert "incomplete" in r or "error" in r
