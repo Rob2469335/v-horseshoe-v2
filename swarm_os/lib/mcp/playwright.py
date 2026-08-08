@@ -67,31 +67,69 @@ async def _ensure_browser():
 
 
 async def _a11y_snapshot(page) -> list[dict]:
-    """Extract the interactive accessibility tree as text (role, name, value)."""
+    """Extract the interactive elements (buttons/links/inputs/selects) as TEXT
+    with their labels — the DOM-equivalent of an accessibility tree.
+
+    NOTE: `page.accessibility.snapshot()` does NOT exist in this Playwright
+    build (the API was removed), so we read the interactive surface from the DOM
+    directly: every button/link/textbox/checkbox/radio/select with its visible
+    label/placeholder/value. This is what modern Playwright-MCP does, and it's
+    the right interface for a text model ("click the button named Save")."""
+    js = """
+    () => {
+      const out = [];
+      const add = (role, el) => {
+        const label =
+          (el.getAttribute('aria-label') || '') ||
+          (el.getAttribute('placeholder') || '') ||
+          (el.getAttribute('value') || '') ||
+          (el.textContent || '').trim().slice(0, 80);
+        const name = (el.getAttribute('name') || '') || '';
+        if (label || name) {
+          out.push({ role, name: label || name, value: el.value || '' });
+        }
+      };
+      document.querySelectorAll('button, [role=button]').forEach(el => add('button', el));
+      document.querySelectorAll('a[href]').forEach(el => add('link', el));
+      document.querySelectorAll('input[type=text], input[type=email], input[type=search], input:not([type]), textarea, [contenteditable=true]').forEach(el => add('textbox', el));
+      document.querySelectorAll('select').forEach(el => add('combobox', el));
+      document.querySelectorAll('input[type=checkbox]').forEach(el => add('checkbox', el));
+      document.querySelectorAll('input[type=radio]').forEach(el => add('radio', el));
+      return out;
+    }
+    """
     try:
-        data = await page.accessibility.snapshot()
+        return await page.evaluate(js)
     except Exception:
         return []
 
-    out = []
 
-    def walk(node, depth=0):
-        if not node:
-            return
-        role = node.get("role", "")
-        name = node.get("name", "")
-        val = node.get("value", "")
-        interactive = role in ("button", "link", "textbox", "combobox", "checkbox", "radio", "menuitem", "tab", "searchbox")
-        if interactive or (name and len(name) < 80):
-            entry = {"role": role, "name": name}
-            if val and role in ("textbox", "combobox", "searchbox"):
-                entry["value"] = val
-            out.append(entry)
-        for child in node.get("children", []):
-            walk(child, depth + 1)
+async def _find_element(page, role: str, name: str):
+    """Resolve a locator for an element by a11y name (placeholder/label/value)
+    OR raw name attribute — the two are often different, and matching only one
+    silently fails. Returns a Playwright locator or None.
 
-    walk(data)
-    return out
+    Strategy: try get_by_role with the name, then fall back to CSS selectors for
+    the raw name attr / placeholder, so both "click the button named Save" and
+    "type into the input named q" work on real pages."""
+    if not name:
+        return None
+    # 1) role+name locator (the accessible-name match).
+    try:
+        loc = page.get_by_role(role, name=name)
+        if await loc.count() > 0:
+            return loc
+    except Exception:
+        pass
+    # 2) CSS: [name=...] (raw attribute) then [placeholder=...] (visible label).
+    for sel in (f'[name="{name}"]', f'[placeholder="{name}"]', f'[aria-label="{name}"]'):
+        try:
+            loc = page.locator(sel)
+            if await loc.count() > 0:
+                return loc
+        except Exception:
+            pass
+    return None
 
 
 async def playwright_handler(params: Dict[str, Any], trace_hook=None) -> Dict[str, Any]:
@@ -151,8 +189,10 @@ async def playwright_handler(params: Dict[str, Any], trace_hook=None) -> Dict[st
             if target is None:
                 return {"ok": False, "error": f"no a11y node named '{name}' found; try browser_a11y first",
                         "available": [n.get("name") for n in a11y[:20]]}
-            # Use role+name locator for a precise click.
-            locator = page.get_by_role(target.get("role", "button"), name=target.get("name", ""))
+            locator = await _find_element(page, target.get("role", "button"), name)
+            if locator is None:
+                return {"ok": False, "error": f"could not resolve click target '{name}'",
+                        "available": [n.get("name") for n in a11y[:20]]}
             await locator.click(timeout=8000)
             await page.wait_for_load_state("domcontentloaded")
             return {"ok": True, "clicked": target.get("name"), "url": page.url}
@@ -160,12 +200,19 @@ async def playwright_handler(params: Dict[str, Any], trace_hook=None) -> Dict[st
         elif operation == "browser_type" or operation == "type":
             if not name and not selector:
                 return {"ok": False, "error": "browser_type needs name or selector"}
+            locator = None
             if selector:
                 locator = page.locator(selector)
-            else:
-                locator = page.get_by_role("textbox", name=name) if name else None
+            elif name:
+                locator = await _find_element(page, "textbox", name)
                 if locator is None:
-                    locator = page.get_by_role("searchbox", name=name)
+                    locator = await _find_element(page, "combobox", name)
+                if locator is None:
+                    locator = await _find_element(page, "searchbox", name)
+            if locator is None:
+                a11y = await _a11y_snapshot(page)
+                return {"ok": False, "error": f"no input named '{name}' found; try browser_a11y first",
+                        "available": [n.get("name") for n in a11y[:20]]}
             await locator.fill(value or text, timeout=8000)
             return {"ok": True, "typed_into": name or selector}
 

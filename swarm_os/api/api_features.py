@@ -16,6 +16,13 @@ class QueryRequest(BaseModel):
     collection: str = "chat_archive"
     top_k: int = 5
 
+
+class WebResearchRequest(BaseModel):
+    query: str
+    max_results: int = 6
+    deep_read: int = 3
+    synthesize: bool = True
+
 @router.post("/search")
 async def semantic_search(req: QueryRequest):
     """Query Qdrant via the memory pipeline and return reranked results.
@@ -57,6 +64,87 @@ async def semantic_search(req: QueryRequest):
             status_code=503,
             detail="Vector search not yet configured. lib/vector modules are empty stubs."
         )
+
+
+@router.post("/web-research")
+async def web_research(req: WebResearchRequest):
+    """Perplexity-style web research: search the live web, deep-read the top
+    results, then synthesize a cited answer via the model.
+
+    Pipeline: web_search_handler (multi-provider: Tavily/Brave/Exa/Serper) ->
+    web_fetch_handler (Crawl4AI deep-read) on the top `deep_read` results ->
+    a synthesis prompt to the analysis-cloud model (deepseek-v4-flash by default)
+    that MUST cite sources as [1][2]... against the fetched list.
+
+    Response: {"status": "ok"|"degraded", "results": [...], "answer": "...",
+               "citations": [{n, title, url}]}
+    """
+    query = req.query.strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="query is required")
+    try:
+        from ..lib.mcp.web_search import web_search_handler, web_fetch_handler
+
+        # 1) Search.
+        search = await web_search_handler({"query": query, "max_results": req.max_results})
+        if not search.get("ok"):
+            return {"status": "degraded", "results": [], "answer": "", "citations": [],
+                    "error": search.get("error", "search failed")}
+        results = search.get("results", [])[:req.max_results]
+
+        # 2) Deep-read the top N (best effort — a fetch failure keeps the snippet).
+        sources = []
+        for i, r in enumerate(results[:req.deep_read]):
+            url = r.get("url", "")
+            text = r.get("snippet", "")
+            if url:
+                try:
+                    fetched = await web_fetch_handler({"url": url, "max_chars": 4000})
+                    if fetched.get("ok"):
+                        text = fetched.get("text") or fetched.get("content") or text
+                except Exception:
+                    pass
+            sources.append({"n": i + 1, "title": r.get("title", ""), "url": url, "text": text[:4000]})
+
+        if not req.synthesize:
+            return {"status": "ok", "results": results, "answer": "", "citations": sources,
+                    "note": "synthesis disabled (synthesize=false)"}
+
+        # 3) Synthesize a cited answer.
+        sources_block = "\n\n".join(
+            f"[{s['n']}] {s['title']} — {s['url']}\n{s['text']}" for s in sources if s.get("text")
+        )
+        prompt = (
+            "You are a web researcher. Answer the user's question using ONLY the sources below. "
+            "Cite each claim with the source number in brackets, e.g. [1]. Be precise and concise. "
+            "If the sources don't contain the answer, say so and note what's missing.\n\n"
+            f"QUESTION: {query}\n\nSOURCES:\n{sources_block}"
+        )
+        answer = ""
+        try:
+            import litellm
+            from ..core.settings import get_settings
+            s = get_settings()
+            model = getattr(s, "analysis_cloud_model", None) or "openai/deepseek-v4-flash"
+            import os
+            base = os.getenv("OPENAI_API_BASE", "https://opencode.ai/zen/go/v1")
+            key = os.getenv("OPENAI_API_KEY", "")
+            resp = await litellm.acompletion(
+                model=model, messages=[{"role": "user", "content": prompt}],
+                api_base=base, api_key=key, custom_llm_provider="openai",
+                max_tokens=800, timeout=120,
+            )
+            answer = resp.choices[0].message.content or ""
+        except Exception as exc:
+            log.warning("web-research synthesis failed: %s", exc)
+
+        return {"status": "ok", "results": results, "answer": answer,
+                "citations": [{k: v for k, v in s.items() if k != "text"} for s in sources] if sources else []}
+    except ImportError:
+        raise HTTPException(status_code=503, detail="web research modules unavailable")
+    except Exception as exc:
+        log.warning("web-research failed: %s", exc)
+        return {"status": "degraded", "results": [], "answer": "", "citations": [], "error": str(exc)}
 
 
 async def _keyword_fallback(req: QueryRequest) -> list:
