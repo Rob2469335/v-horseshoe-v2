@@ -768,7 +768,8 @@ async def swarm_debate(req: DebateRequest, request: Request):
         async def emit(phase: str, message: str, content: str = ""):
             yield f"data: {json.dumps({'phase': phase, 'message': message, 'content': content})}\n\n"
 
-        agent_svc = getattr(request.app.state, "agent_service", None)
+        _runtime = getattr(request.app.state, "runtime", None)
+        agent_svc = getattr(_runtime, "agents", None) if _runtime is not None else None
         if agent_svc is None:
             yield f"data: {json.dumps({'phase': 'error', 'message': 'Agent service unavailable', 'content': ''})}\n\n"
             return
@@ -819,7 +820,8 @@ async def omnidev_run(req: OmniDevRequest, request: Request):
     Returns the coordinator's final response after the agent loop completes.
     """
 
-    agent_svc = getattr(request.app.state, "agent_service", None)
+    _runtime = getattr(request.app.state, "runtime", None)
+    agent_svc = getattr(_runtime, "agents", None) if _runtime is not None else None
     if agent_svc is None:
         raise HTTPException(status_code=503, detail="Agent service unavailable")
 

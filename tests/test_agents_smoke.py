@@ -67,6 +67,103 @@ def test_step_agent_shape(client):
         pytest.skip("LLM backend not running")
     assert r.status_code in (200, 500, 502, 504)
 
+def test_step_forwards_delegation_chain_and_resume():
+    """Non-streaming /step must forward delegation_chain + resume (like the
+    streaming endpoint); silently dropping them would lose the checkpointed-run
+    and compound-goal routing state."""
+    from fastapi import FastAPI
+    from swarm_os.api.agents import router
+
+    captured = {}
+
+    async def fake_stream(agent_id, prompt, history=None, delegation_chain=None, resume=None):
+        captured["chain"] = delegation_chain
+        captured["resume"] = resume
+        yield {"type": "final", "content": "ok"}
+        return
+
+    service = MagicMock()
+    service.step_agent_stream = fake_stream
+    test_app = FastAPI()
+    test_app.include_router(router)
+    test_app.dependency_overrides[__import__(
+        "swarm_os.api.agents", fromlist=["get_agent_service"]
+    ).get_agent_service] = lambda: service
+
+    with TestClient(test_app) as test_client:
+        response = test_client.post(
+            "/agents/coordinator/step",
+            json={"prompt": "ping", "delegation_chain": ["coder", "tool-runner"], "resume": "abc123"},
+        )
+
+    assert response.status_code == 200
+    assert captured["chain"] == ["coder", "tool-runner"]
+    assert captured["resume"] == "abc123"
+
+
+def _features_app_with_runtime_agents(agent_factory):
+    """Build a FastAPI app mounting the /features router with a fake runtime.agents
+    service. Regression for the dead `app.state.agent_service` attribute that
+    made /debate and /omnidev/run always return 'Agent service unavailable'."""
+    from fastapi import FastAPI
+    from swarm_os.api.api_features import router as features_router
+
+    test_app = FastAPI()
+    test_app.include_router(features_router)
+    runtime = MagicMock()
+    runtime.agents = agent_factory()
+    test_app.state.runtime = runtime
+    return test_app
+
+
+def test_omnidev_run_uses_runtime_agents():
+    """/omnidev/run must resolve the agent service from app.state.runtime.agents
+    (the only attribute main.py sets), not the nonexistent app.state.agent_service."""
+    final_content = "task result"
+
+    async def fake_stream(agent_id, task):
+        yield {"type": "final", "content": final_content}
+        return
+
+    test_app = _features_app_with_runtime_agents(lambda: MagicMock(step_agent_stream=fake_stream))
+    with TestClient(test_app) as test_client:
+        response = test_client.post("/features/omnidev/run", json={"task": "do the thing"})
+
+    assert response.status_code == 200
+    assert response.json() == {"result": final_content}
+
+
+def test_omnidev_run_without_agents_returns_503():
+    from fastapi import FastAPI
+    from swarm_os.api.api_features import router as features_router
+
+    test_app = FastAPI()
+    test_app.include_router(features_router)
+    test_app.state.runtime = None
+    with TestClient(test_app) as test_client:
+        response = test_client.post("/features/omnidev/run", json={"task": "x"})
+    assert response.status_code == 503
+
+
+def test_debate_uses_runtime_agents():
+    """/debate must stream phases from app.state.runtime.agents, not the
+    nonexistent app.state.agent_service."""
+    async def fake_stream(agent_id, task):
+        yield {"type": "final", "content": f"[{agent_id}] synthesized"}
+        return
+
+    test_app = _features_app_with_runtime_agents(lambda: MagicMock(step_agent_stream=fake_stream))
+    with TestClient(test_app) as test_client:
+        response = test_client.post("/features/debate", json={"goal": "build a router"})
+
+    assert response.status_code == 200
+    assert "event-stream" in response.headers.get("content-type", "")
+    body = response.text
+    assert "phase" in body
+    assert "done" in body
+    assert "Agent service unavailable" not in body
+
+
 def test_status_endpoint(client):
     r = client.get("/status")
     assert r.status_code == 200

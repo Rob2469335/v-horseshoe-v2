@@ -169,7 +169,10 @@ async def step_agent(agent_id: str, payload: AgentStepPayload, service=Depends(g
         # Use the streaming endpoint for real-time feedback; this endpoint is for quick steps only.
         try:
             async with asyncio.timeout(300):
-                async for chunk in service.step_agent_stream(agent_id, payload.prompt, payload.history or []):
+                async for chunk in service.step_agent_stream(
+                    agent_id, payload.prompt, payload.history or [],
+                    payload.delegation_chain, resume=payload.resume,
+                ):
                     chunks.append(chunk)
         except asyncio.TimeoutError:
             raise HTTPException(status_code=504, detail="Agent step timed out after 300s — use the /stream endpoint for long-running tasks")
