@@ -89,3 +89,38 @@ async def verify_citations_endpoint(req: VerifyCitationsRequest) -> VerifyCitati
 @router.get("/health")
 async def legal_health() -> dict[str, Any]:
     return await verify_health()
+
+
+class AskRequest(BaseModel):
+    question: str = Field(..., min_length=1, max_length=4000, description="Legal question in plain English")
+
+
+@router.post("/ask")
+async def legal_ask(req: AskRequest) -> dict[str, Any]:
+    """M3 vertical slice: intake → research → synthesis, with the corpus-scope
+    marker IN the response and fail-closed jurisdiction gating. The answer is
+    structurally non-final: `corpus_scope` always reflects live ingestion state,
+    so a partial-jurisdiction answer can never be mistaken for complete."""
+    from swarm_os.services.legal.legal_advisor import advise
+    try:
+        res = await advise(req.question)
+    except Exception:
+        log.exception("legal ask failed")
+        raise HTTPException(status_code=500, detail="Legal advisor failed")
+    return {
+        "ok": res.ok,
+        "fail_closed": res.fail_closed,
+        "jurisdiction": res.jurisdiction,
+        "answer": res.answer,
+        "citations": res.citations,
+        "verification": res.verification,
+        "corpus_scope": res.corpus_scope,   # ← the in-band, live marker
+        "message": res.message,
+    }
+
+
+@router.get("/corpus-scope")
+async def legal_corpus_scope() -> dict[str, Any]:
+    """Live ingestion state per jurisdiction — the structural marker source."""
+    from swarm_os.services.legal.legal_advisor import corpus_scope
+    return await corpus_scope()
