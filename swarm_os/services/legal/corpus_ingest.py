@@ -117,6 +117,7 @@ def _row_to_payload(row: dict[str, Any]) -> dict[str, Any]:
         "section_title": title,
         "chapter": str(row.get("chapter") or ""),
         "title_name": str(row.get("title_name") or ""),
+        "title_number": str(row.get("title_number") or ""),
         "display_path": str(row.get("display_path") or ""),
         "act_status": str(row.get("act_status") or ""),
         "content": text,
@@ -125,15 +126,20 @@ def _row_to_payload(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def iter_in_force_rows(parquet_path: Path, jurisdiction: str):
+def iter_in_force_rows(parquet_path: Path, jurisdiction: str, title_filter: str | None = None):
     """Yield (act_id, payload) for every in-force statute section in one file.
-    Uses a generator so we never hold the whole file's rows in memory."""
+    Uses a generator so we never hold the whole file's rows in memory.
+    `title_filter` (e.g. "18") restricts to one USC title — used for a scoped
+    high-value ingest (Title 18 criminal code) without embedding all ~46K
+    federal sections."""
     import pyarrow.parquet as pq
     table = pq.read_table(str(parquet_path))
     for row in table.to_pylist():
         if row.get("act_status") != "in_force":
             continue
         if row.get("document_type") not in (None, "statute"):
+            continue
+        if title_filter and str(row.get("title_number") or "") != title_filter:
             continue
         payload = _row_to_payload(row)
         act_id = payload["act_id"]
@@ -184,10 +190,15 @@ async def _embed(texts: list[str]) -> list[list[float]] | None:
     return None
 
 
-async def ingest_one_file(parquet_path: Path, jurisdiction: str, batch_size: int = 16) -> int:
+async def ingest_one_file(parquet_path: Path, jurisdiction: str, batch_size: int = 16,
+                          title_filter: str | None = None) -> int:
     """Ingest one jurisdiction's in-force sections into Qdrant. Returns the
     number of sections indexed. Re-embedding is idempotent: we delete the
-    jurisdiction's points first, then upsert fresh.
+    jurisdiction's (or title-scoped) points first, then upsert fresh.
+
+    `title_filter` (e.g. "18") restricts both the delete and the ingest to one
+    USC title, so a scoped Title-18 run never wipes the already-ingested
+    federal sections outside that title.
 
     Batches are flushed by TOKEN BUDGET (not fixed count): the embed server's
     physical batch size is 8192 tokens (verified live), so a fixed-count batch
@@ -195,11 +206,15 @@ async def ingest_one_file(parquet_path: Path, jurisdiction: str, batch_size: int
     each batch's tokens (~4 chars/token) and flush before it approaches 8192.
     """
     ensure_collection()
-    # Remove existing points for this jurisdiction so re-runs don't duplicate.
+    # Remove existing points for this jurisdiction (or title) so re-runs don't
+    # duplicate — scoped to the filter so a title-scoped run is additive.
+    delete_filter: dict = {"must": [{"key": "jurisdiction", "match": {"value": jurisdiction}}]}
+    if title_filter:
+        delete_filter["must"].append({"key": "title_number", "match": {"value": title_filter}})
     try:
         requests.post(
             f"{QDRANT_URL}/collections/{COLLECTION}/points/delete",
-            json={"filter": {"must": [{"key": "jurisdiction", "match": {"value": jurisdiction}}]}},
+            json={"filter": delete_filter},
             timeout=60.0,
         )
     except Exception as exc:
@@ -233,7 +248,7 @@ async def ingest_one_file(parquet_path: Path, jurisdiction: str, batch_size: int
         batch_payloads.clear()
         batch_chars = 0
 
-    for point_id, payload in iter_in_force_rows(parquet_path, jurisdiction):
+    for point_id, payload in iter_in_force_rows(parquet_path, jurisdiction, title_filter=title_filter):
         # Embed the citation + title + text so retrieval matches on the section
         # heading and the body, not just one or the other.
         text = f"{payload['citation']} — {payload['section_title']}\n{payload['content']}"
