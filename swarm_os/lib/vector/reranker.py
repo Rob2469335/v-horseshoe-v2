@@ -26,6 +26,14 @@ RERANK_MODEL = "qllama-bge-reranker-v2-m3-latest.gguf"
 # throughput.
 _RERANK_SEM = threading.BoundedSemaphore(2)
 
+# The reranker (like the embedder) rejects requests whose combined token count
+# exceeds llama.cpp's physical batch (`-b 8192`), and on CPU a huge single doc
+# is so slow it ReadTimeouts. Word-choop every document to a budget BEFORE
+# sending (same class of fix as the embedder's _fit_budget). Keep the budget
+# modest: the cross-encoder only needs the citation + title + lead paragraph to
+# score well — the dense search already found the doc on full text.
+_RERANK_BUDGET_CHARS = 3500
+
 _client: httpx.AsyncClient | None = None
 
 
@@ -39,16 +47,41 @@ def _get_client() -> httpx.AsyncClient:
     return _client
 
 
+def _fit_rerank_budget(text: str) -> str:
+    """Word-chopping budget (mirrors the embedder's _fit_budget): never send the
+    reranker a document that could overflow its physical batch or stall CPU
+    inference. Preserves whole words up to the budget. A naive slice is avoided —
+    the caller prepends citation+title, so the semantic lead survives."""
+    if not text or len(text) <= _RERANK_BUDGET_CHARS:
+        return text
+    out: list[str] = []
+    n = 0
+    for w in text.split():
+        if n + len(w) + 1 > _RERANK_BUDGET_CHARS:
+            break
+        out.append(w)
+        n += len(w) + 1
+    return " ".join(out)
+
+
 def _candidate_text(candidate: dict) -> str:
     """Extract the searchable text from a Qdrant candidate result.
 
     Supports both the raw point shape from qdrant_store.search ({id, score,
-    payload}) and the richer memory-pipeline shape (payload.fact / content)."""
+    payload}) and the richer shapes (payload.fact / content / top-level content
+    + citation from the legal retrieval layer)."""
     payload = candidate.get("payload") or {}
     for key in ("fact", "content", "text", "task", "pattern", "correction"):
         val = payload.get(key)
         if isinstance(val, str) and val.strip():
             return val
+    # Legal retrieval candidates carry citation + content at the TOP level
+    # (not nested in payload) — prefer a citation-prefixed lead over a dump of
+    # the whole dict.
+    if isinstance(candidate.get("content"), str) and candidate["content"].strip():
+        citation = candidate.get("citation", "") or ""
+        title = candidate.get("section_title", "") or ""
+        return f"{citation} — {title}\n{candidate['content']}"
     # Fall back to the whole payload, or the raw candidate string if any.
     if payload:
         return str(payload)
@@ -62,8 +95,13 @@ async def rerank(query: str, candidates: list[dict], top_k: int = 5) -> list[dic
     if not candidates:
         return []
     try:
-        texts = [_candidate_text(c) for c in candidates]
-        async with _RERANK_SEM:
+        # Word-choop every candidate so a long statute section can't overflow
+        # the reranker's physical batch (500) or stall CPU inference (ReadTimeout).
+        texts = [_fit_rerank_budget(_candidate_text(c)) for c in candidates]
+        # _RERANK_SEM is a threading.BoundedSemaphore (the HTTP client is
+        # threadsafe/sync-compatible) — must use `with`, not `async with` (the
+        # latter raised TypeError and degraded every rerank to the dense order).
+        with _RERANK_SEM:
             resp = await _get_client().post(
                 f"{RERANK_URL}/v1/rerank",
                 headers={"Authorization": "Bearer llama"},
