@@ -908,6 +908,8 @@ Converted `except:` → `except Exception:` (or specific types) in `swarm_os/cor
 
 ## Self-Healing & Self-Learning Fixes
 
+- **Rule (code_analyzer)**: Failure: The agent attempted to read the file 'x.py' without verifying its existence first, resulting in a "File not found" error during code analy...
+
 - **[ROLLBACK-COMPLETED] (2026-08-08T17:40:08.443265+00:00)**: runtime_v2/services/indexer.py — signal_1 test regression attributable to runtime_v2/services/indexer.py
 
 - **[AUTO-REPAIR] (2026-08-08T17:37:31.587462+00:00)**: runtime_v2\services\indexer.py (tier 0, fixed=True) — error: SyntaxError: unexpected indent (runtime_v2/services/indexer.py, line 22)
