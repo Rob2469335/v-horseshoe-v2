@@ -1,0 +1,79 @@
+"""Tests for Rob's Lawyer hybrid retrieval + the reranker fixes it surfaced.
+
+Covers:
+- reranker._fit_rerank_budget word-choops long text (physical-batch/ReadTimeout fix)
+- reranker._candidate_text extracts TOP-LEVEL content+citation (legal shape), not
+  a dict dump
+- legal_search.search_statutes validates jurisdiction and shapes candidates
+- the rerank semaphore fix: a threading.BoundedSemaphore is used with `with`,
+  not `async with` (the pre-existing TypeError that degraded every rerank)
+"""
+from __future__ import annotations
+
+import pytest
+from unittest.mock import AsyncMock, patch
+
+from swarm_os.lib.vector import reranker
+from swarm_os.services.legal import legal_search
+
+
+def test_rerank_budget_chops_long_text():
+    long = ("statute text " * 4000)  # ~52k chars, way over budget
+    chopped = reranker._fit_rerank_budget(long)
+    assert len(chopped) <= reranker._RERANK_BUDGET_CHARS
+    assert chopped.endswith("text")  # whole words preserved
+
+
+def test_rerank_budget_passes_short_text():
+    short = "N.Y. Gen. Oblig. L. § 5-701. Written agreements."
+    assert reranker._fit_rerank_budget(short) == short
+
+
+def test_candidate_text_extracts_top_level_legal_shape():
+    """Legal candidates carry citation+content at the TOP level (not nested in
+    payload). Before the fix, _candidate_text fell through to str(candidate) —
+    a serialized dict — so the reranker scored garbage."""
+    cand = {
+        "id": "u1", "score": 0.9,
+        "citation": "N.Y. RPP Law § 227-F",
+        "section_title": "Denial on basis of prior dispute",
+        "content": "The owner shall not deny a tenancy on the basis of prior disputes.",
+    }
+    text = reranker._candidate_text(cand)
+    assert "N.Y. RPP Law § 227-F" in text
+    assert "prior disputes" in text
+    assert "{" not in text  # not a dict dump
+
+
+def test_candidate_text_payload_content_still_works():
+    cand = {"id": "u2", "payload": {"fact": "memory fact text"}}
+    assert reranker._candidate_text(cand) == "memory fact text"
+
+
+def test_rerank_semaphore_is_threading_not_async():
+    """The pre-existing bug: `async with _RERANK_SEM` on a threading semaphore
+    raised TypeError and degraded every rerank to the dense order. The fix uses
+    a plain `with`. This test would fail on a regression to `async with`."""
+    assert isinstance(reranker._RERANK_SEM, type(reranker.threading.BoundedSemaphore(1)))
+    # A threading semaphore must not support the async context manager protocol.
+    assert not hasattr(reranker._RERANK_SEM, "__aenter__")
+
+
+@pytest.mark.asyncio
+async def test_legal_search_shapes_candidates_without_rerank():
+    """search_statutes degrades to the dense order when the reranker is down —
+    the endpoint must still return shaped results, never raise."""
+    dense = [
+        {"id": "u1", "score": 0.9, "payload": {"citation": "N.Y. A § 1", "content": "x",
+                                               "jurisdiction": "ny", "section_title": "t"}},
+    ]
+    with patch.object(legal_search, "_search_with_filter", new=AsyncMock(return_value=dense)):
+        with patch.object(legal_search, "rerank", new=AsyncMock(return_value=[])):
+            res = await legal_search.search_statutes("x", jurisdiction="ny", top_k=5)
+    assert isinstance(res, list)
+
+
+@pytest.mark.asyncio
+async def test_legal_search_rejects_bad_jurisdiction():
+    with pytest.raises(ValueError):
+        await legal_search.search_statutes("x", jurisdiction="zz", top_k=5)

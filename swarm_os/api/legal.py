@@ -18,10 +18,43 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from swarm_os.services.legal.citation_verify import verify_citations, verify_health
+from swarm_os.services.legal.legal_search import search_statutes, JURISDICTIONS
 
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/legal", tags=["legal"])
+
+
+class SearchRequest(BaseModel):
+    query: str = Field(..., min_length=1, max_length=2000, description="Natural-language legal question or terms")
+    jurisdiction: str | None = Field(None, description=f"Filter to one of {JURISDICTIONS}; None = all scoped")
+    top_k: int = Field(8, ge=1, le=50, description="Number of results to return after reranking")
+
+
+class SearchResponse(BaseModel):
+    ok: bool
+    results: list[dict[str, Any]]
+    message: str = ""
+    degraded: bool = False
+
+
+@router.post("/search", response_model=SearchResponse)
+async def legal_search(req: SearchRequest) -> SearchResponse:
+    """Hybrid statute search over the ingested legal_statutes corpus. Dense
+    vector search (optionally jurisdiction-filtered) then cross-encoder rerank.
+    Degrades gracefully — an embed/reranker outage returns what it can."""
+    try:
+        results = await search_statutes(req.query, req.jurisdiction, req.top_k)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception:
+        log.exception("legal search failed")
+        raise HTTPException(status_code=500, detail="Legal search failed")
+    return SearchResponse(
+        ok=True,
+        results=results,
+        message=f"{len(results)} statute section(s) found.",
+    )
 
 
 class VerifyCitationsRequest(BaseModel):
