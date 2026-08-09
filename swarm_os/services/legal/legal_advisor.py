@@ -195,11 +195,12 @@ async def advise(question: str) -> AdvisorResult:
 
     # Verification seam: parse the answer's citations, check existence.
     verify = {"checked": False, "fabricated": 0, "ambiguous": 0,
-              "unverified": 0, "unparsed": 0, "score": None}
+              "shape_mismatch": 0, "unverified": 0, "unparsed": 0, "score": None}
     try:
         vres = await verify_citations(answer)
         fabricated = vres.stats.get("fabricated", 0)
         ambiguous = vres.stats.get("ambiguous", 0)
+        shape_mismatch = vres.stats.get("shape_mismatch", 0)
         unverified = vres.stats.get("unverified", 0)
         unparsed = vres.stats.get("unparsed", 0)
         checked = max(1, vres.stats.get("count", 0) or 0, unverified, unparsed)
@@ -207,10 +208,11 @@ async def advise(question: str) -> AdvisorResult:
             "checked": True,
             "fabricated": fabricated,
             "ambiguous": ambiguous,
+            "shape_mismatch": shape_mismatch,
             "unverified": unverified,
             "unparsed": unparsed,
             "score": round(1.0 - (
-                fabricated + ambiguous + unverified + unparsed
+                fabricated + ambiguous + shape_mismatch + unverified + unparsed
             ) / checked, 2),
         }
     except Exception as exc:
@@ -245,7 +247,8 @@ async def advise(question: str) -> AdvisorResult:
     unaligned = verify.get("unaligned", 0)
     unverified = verify.get("unverified", 0)
     unparsed = verify.get("unparsed", 0)
-    if fabricated or unaligned or unverified or unparsed:
+    shape_mismatch = verify.get("shape_mismatch", 0)
+    if fabricated or unaligned or unverified or unparsed or shape_mismatch:
         answer += (
             f"\n\n[VERIFICATION] {fabricated} citation(s) could not be verified "
             f"(fabricated or misaligned), and {unaligned} cited section(s) are not "
@@ -255,6 +258,12 @@ async def advise(question: str) -> AdvisorResult:
             answer += (
                 f"{unverified} case citation(s) could not be externally verified "
                 f"(no CourtListener verdict — offline or no token). "
+            )
+        if shape_mismatch:
+            answer += (
+                f"{shape_mismatch} case citation(s) exist but not as cited "
+                f"(CourtListener normalized a different shape — the citation may "
+                f"be an alteration of a real case). "
             )
         if unparsed:
             answer += (

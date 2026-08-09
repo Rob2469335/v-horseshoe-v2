@@ -64,15 +64,17 @@ _NOT_FOUND_STATUSES = {404, 400, 300}
 
 @dataclass
 class CitationResult:
-    raw: str                 # the citation string as parsed by Eyecite
+    raw: str                 # the citation text as parsed by Eyecite
     kind: str                # FullCaseCitation / FullLawCitation / IdCitation / ...
-    verified: bool           # True if CourtListener returned 200 (exists)
+    verified: bool           # True if CourtListener returned 200 (exists) AND the
+                             #   lookup's normalized shape matches the cited shape
     status: int | None       # CourtListener lookup status (200/404/400/300/429/None)
     error_message: str = ""
     normalized: list[str] = field(default_factory=list)
     case_name: str = ""
     clusters: int = 0
     skipped_reason: str = ""
+    shape_mismatch: bool = False  # 200 but normalized citation differs from ours
 
 
 @dataclass
@@ -347,20 +349,38 @@ async def verify_citations(blob: str, courtlistener_key: str | None = None) -> V
             # Eyecite gives us the matched string; hand it to the API as text.
             lookup = await _lookup_one(client, None, None, None, raw)
             status = lookup.get("status")
-            verified = status == 200
+            normalized = lookup.get("normalized_citations", [])
+            # SHAPE-MATCH CHECK (option-2 hardening): a 200 means "a cluster
+            # exists" — NOT "the citation is correct". A fabricated/alterated
+            # citation that re-points at a real cluster (400 U.S. 79 -> Dutton,
+            # whose real page is 74) comes back 200. So only call it verified
+            # when the API's OWN normalized citation canonically equals the cite
+            # we sent. When the API returns a DIFFERENT shape, that is a
+            # mismatch signal: exists, but not as cited.
+            sent_key = case_citation_key(raw)
+            norm_keys = [case_citation_key(n) for n in normalized if isinstance(n, str)]
+            shape_mismatch = (
+                status == 200
+                and bool(sent_key)
+                and bool(norm_keys)
+                and sent_key not in norm_keys
+            )
+            verified = status == 200 and not shape_mismatch
             results.append(CitationResult(
                 raw=raw,
                 kind=kind,
                 verified=verified,
                 status=status,
                 error_message=lookup.get("error_message", ""),
-                normalized=lookup.get("normalized_citations", []),
+                normalized=normalized,
                 case_name=(lookup.get("clusters") or [{}])[0].get("case_name", ""),
                 clusters=len(lookup.get("clusters") or []),
+                shape_mismatch=shape_mismatch,
             ))
 
     fabricated = [r for r in results if r.status == 404]
     ambiguous = [r for r in results if r.status == 300]
+    shape_mismatched = [r for r in results if r.shape_mismatch]
     unverified = [r for r in results
                   if not r.skipped_reason and r.status not in (200, 404, 300)]
     ok = not fabricated  # fabricated citations are a hard stop; ambiguous are flagged
@@ -369,7 +389,9 @@ async def verify_citations(blob: str, courtlistener_key: str | None = None) -> V
         citations=results,
         message=(
             f"{len(results)} citation(s) parsed; "
-            f"{len(fabricated)} fabricated (blocked), {len(unverified)} unverified "
+            f"{len(fabricated)} fabricated (blocked), "
+            f"{len(shape_mismatched)} shape-mismatched (exists, not as cited), "
+            f"{len(unverified)} unverified "
             f"(no verdict / offline), {unparsed} unparsed (citation-shaped but "
             f"unparseable)."
         ),
@@ -378,6 +400,7 @@ async def verify_citations(blob: str, courtlistener_key: str | None = None) -> V
             "verified": sum(1 for r in results if r.verified),
             "fabricated": len(fabricated),
             "ambiguous": len(ambiguous),
+            "shape_mismatch": len(shape_mismatched),
             "unverified": len(unverified),
             "unparsed": unparsed,
             "skipped": sum(1 for r in results if r.skipped_reason),

@@ -92,6 +92,57 @@ def _run_verify(blob: str, lookup_results: dict) -> VerifyResponse:
     return asyncio.run(_run())
 
 
+@pytest.mark.asyncio
+async def test_verify_citations_200_with_matching_shape_is_verified():
+    """A 200 whose normalized citation canonically equals the cite we sent is a
+    genuine verified-clean result (e.g. real 400 U.S. 74 -> normalized 400 U.S. 74)."""
+    with patch("swarm_os.services.legal.citation_verify._lookup_one",
+               new=AsyncMock(return_value={
+                   "status": 200,
+                   "normalized_citations": ["400 U.S. 74"],
+                   "clusters": [{"case_name": "Dutton v. Evans"}],
+               })):
+        res = await verify_citations("Bush v. Gore, 400 U.S. 74 (2000)")
+    assert res.stats["shape_mismatch"] == 0
+    assert res.stats["verified"] == 1
+    assert res.stats["unverified"] == 0
+
+
+@pytest.mark.asyncio
+async def test_verify_citations_200_with_altered_shape_is_mismatch():
+    """A 200 is NOT 'correct' — it means 'exists'. The M4 fail-open trap: a
+    page-altered cite (400 U.S. 79 vs real 400 U.S. 74) makes the lookup return
+    200 (same cluster) but normalized to the REAL page (74). That mismatch must
+    be surfaced as shape_mismatch / downgrade, NOT verified=clean."""
+    with patch("swarm_os.services.legal.citation_verify._lookup_one",
+               new=AsyncMock(return_value={
+                   "status": 200,
+                   "normalized_citations": ["400 U.S. 74"],
+                   "clusters": [{"case_name": "Dutton v. Evans"}],
+               })):
+        res = await verify_citations("Bush v. Gore, 400 U.S. 79 (2000)")
+    assert res.stats["shape_mismatch"] == 1
+    assert res.stats["verified"] == 0
+    assert res.stats["fabricated"] == 0
+    assert any(c.shape_mismatch and not c.verified for c in res.citations)
+
+
+@pytest.mark.asyncio
+async def test_verify_citations_200_empty_normalized_not_mismatch():
+    """A 200 with no normalized_citations data has no shape to compare — treat
+    as the old behaviour (verified; there's no counter-evidence). Do NOT invent
+    a mismatch we have no evidence for."""
+    with patch("swarm_os.services.legal.citation_verify._lookup_one",
+               new=AsyncMock(return_value={
+                   "status": 200,
+                   "normalized_citations": [],
+                   "clusters": [{"case_name": "Some Case"}],
+               })):
+        res = await verify_citations("Obergefell v. Hodges, 576 U.S. 644 (2015)")
+    assert res.stats["shape_mismatch"] == 0
+    assert res.stats["verified"] == 1
+
+
 # --- M4 statutory-alignment seam ---------------------------------------------
 
 @pytest.mark.parametrize("text,expected", [
