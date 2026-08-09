@@ -222,3 +222,68 @@ def test_witness_matrix_unnamed_fallback_keeps_gap_split(tmp_path: Path):
     wm = content.split("Witness Matrix")[1].split("Objections")[0]
     assert wm.count("| Unnamed Witness |") == 2  # gap split still applies
     assert "Unnamed Witness" in wm
+
+
+def test_counsel_declining_to_object_is_not_an_objection(tmp_path: Path):
+    """Counsel AFFIRMATIVELY declining to object ("I have no objection.") must
+    NOT be logged as an objection — it is the opposite of an objection. Pinned
+    to the real May 7 shapes: p.167 MS. AL-SHABAZZ and p.223 MR. DINNERSTEIN
+    both declined while real objections from MR. FOLLY stay logged. A narration
+    ("there were no objections to") is also not an objection."""
+    text = (
+        _page_block(165, "J5ATDUN1", "", [
+            "MR. CHIUCHIOLO:  These are the self-authenticating exhibits that there were no objections to.",
+            "THE COURT:  Received.",
+        ])
+        + _page_block(167, "J5ATDUN1", "", [
+            "MS. AL-SHABAZZ:  I have no objection.",
+            "THE COURT:  Then the exhibit is received.",
+        ])
+        + _page_block(223, "J5ATDUN1", "", [
+            "MR. FOLLY:  Objection, leading.",
+            "THE COURT:  Overruled.",
+            "MR. DINNERSTEIN:  I have no objection.",
+            "THE COURT:  Proceed.",
+        ])
+    )
+    idx = parse_transcript(text, case="Test", source="test.txt")
+    out_file = tmp_path / "report.md"
+    build_analysis([idx], str(out_file))
+    content = out_file.read_text("utf-8")
+
+    objections_log = content.split("Objections & Rulings Log")[1]
+    # Real objection logged; the two declinations + narration are NOT.
+    assert "Objection** by MR. FOLLY on Page 223" in objections_log
+    assert "I have no objection" not in objections_log
+    assert "MS. AL-SHABAZZ" not in objections_log
+    assert "MR. DINNERSTEIN" not in objections_log
+    assert "there were no objections to" not in objections_log
+
+    chronology = content.split("Chronology")[1]
+    assert "Objection by MR. FOLLY (Page 223)" in chronology
+    assert "Objection by MS. AL-SHABAZZ" not in chronology
+    assert "Objection by MR. DINNERSTEIN" not in chronology
+
+
+def test_negation_inside_real_objection_still_logged(tmp_path: Path):
+    """A real objection whose TEXT happens to contain a negation must NOT be
+    dropped by the declination filter — a dropped objection from a
+    preservation-for-appeal log is worse than the extra row the filter removes.
+    The affirmative objection act ("...I object to the characterization") keeps
+    it logged even though it also says "I have no objection to the exhibit."."""
+    text = _page_block(
+        300, "J5ATDUN1", "",
+        [
+            "MS. AL-SHABAZZ:  Objection. I have no objection to the exhibit itself, but I do object to the characterization.",
+            "THE COURT:  Overruled.",
+        ],
+    )
+    idx = parse_transcript(text, case="Test", source="test.txt")
+    out_file = tmp_path / "report.md"
+    build_analysis([idx], str(out_file))
+    content = out_file.read_text("utf-8")
+
+    objections_log = content.split("Objections & Rulings Log")[1]
+    assert "Objection** by MS. AL-SHABAZZ on Page 300" in objections_log
+    assert "but I do object to the characterization" in objections_log
+    assert "No explicit ruling found nearby" not in objections_log

@@ -4,9 +4,44 @@ import logging
 import re
 from pathlib import Path
 
-from swarm_os.services.legal.transcript_search import TranscriptIndex
+from swarm_os.services.legal.transcript_search import Passage, TranscriptIndex
 
 log = logging.getLogger(__name__)
+
+# Objection-vs-declination discrimination. A passage that MENTIONS "objection"
+# is only an objection if it AFFIRMATIVELY raises one. Counsel DECLINING to
+# object ("I have no objection."), the court noting none was made ("Admitted
+# without objection", "Hearing no objection", "Any objection?"), and counsel
+# narrating that none were made ("...there were no objections to") are the
+# OPPOSITE of an objection and must not be logged as one. Real shapes from the
+# May 7 report (p.165/167/223 declinations vs p.54-103 objections).
+_OBJECTION_DECLINE_RE = re.compile(r"\b(?:no|without|any)\s+objections?\b", re.IGNORECASE)
+# An AFFIRMATIVE objection act — the passage raises an objection even if it
+# ALSO contains a negation ("I have no objection to that exhibit, but I do
+# object to the characterization" IS an objection and must stay). Matches a
+# leading "Objection" token (optionally after a short topic lead like
+# "Relevance.") or an objecting verb phrase ("object to", "I object", ...).
+_OBJECTION_ACT_RE = re.compile(
+    r"^\s*(?:[A-Z][A-Za-z]+\.)?\s*Objection\b"
+    r"|\b(?:I|we|the\s+\w+)\s+object\b"
+    r"|\bobject\s+to\b"
+    r"|\bmove\s+to\s+strike\b",
+    re.IGNORECASE,
+)
+
+
+def _is_objection(p: Passage) -> bool:
+    """True when a passage is an objection actually being raised: not the Court
+    or a witness, mentions "objection", and is not a declination. A declination
+    ("no objection", "without objection", "any objection") only excludes when no
+    affirmative objection act is present in the same passage."""
+    if p.speaker in ("THE COURT", "THE WITNESS"):
+        return False
+    if "OBJECTION" not in p.text.upper():
+        return False
+    if _OBJECTION_ACT_RE.search(p.text):
+        return True
+    return not _OBJECTION_DECLINE_RE.search(p.text)
 
 
 def build_analysis(indices: list[TranscriptIndex], outfile: str) -> str:
@@ -92,7 +127,7 @@ def _build_chronology(idx: TranscriptIndex) -> list[str]:
                 current_exam_atty = examiner
                 events.append(f"- Examination by {current_exam_atty} begins (Page {p.page})")
                 
-        if "OBJECTION" in t_upper and p.speaker not in ("THE COURT", "THE WITNESS"):
+        if _is_objection(p):
             events.append(f"- Objection by {p.speaker} (Page {p.page})")
             
         if p.speaker == "THE COURT":
@@ -214,7 +249,7 @@ def _build_objections_log(idx: TranscriptIndex) -> list[str]:
     for i, p in enumerate(idx.passages):
         t_upper = p.text.upper()
         
-        if "OBJECTION" in t_upper and p.speaker not in ("THE COURT", "THE WITNESS"):
+        if _is_objection(p):
             pending_objections.append((p.speaker, p.page, p.text))
             
         if p.speaker == "THE COURT":
