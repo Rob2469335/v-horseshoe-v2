@@ -245,3 +245,169 @@ flags real rows (miss on the alteration beats a false fabrication signal).
   verified, `142 Ohio St.3d 57` verified, `19 N.E.3d 900` verified.
 - Do NOT commit. Report the diff + the live-probe output. Update AGENTS.md
   "Recent Changes" only after a human accepts the fix.
+
+---
+
+## PROMPT 10 — Build: page-grounded trial-transcript analysis layer
+
+This is a BUILD prompt (not an audit). You are extending the Rob's Lawyer legal
+package with a trial-transcript ANALYSIS layer. It will be audited by a second
+AI afterward — your job is to build it surgically and correctly, then hand it
+over. READ the standing rules below before touching anything.
+
+**IMPORTANT — this prompt OVERRIDES the audit preamble for one rule:** the
+audit preamble says "update AGENTS.md after every change." That does NOT apply
+here. You are building new code for a human to review; **do NOT modify
+AGENTS.md** and **do NOT commit, push, or create PRs.** Report + hand over.
+
+**Context.** `swarm_os/services/legal/transcript_search.py` (already built,
+committed, tested) parses SDNY court-reporter trial transcripts offline into a
+`TranscriptIndex` of `Passage` objects, each with a `speaker`, `page` (printed
+page number), `text`, `kind`, and `flags`. API:
+- `ingest_transcript_file(path, case=, source=) -> TranscriptIndex`
+- `parse_transcript(text, case=, source=) -> TranscriptIndex`
+- `idx.passages` (ordered), `idx.speaker_passages(name)`,
+  `idx.speaker_pages(name)`, `idx.search(query) -> [(page, text)]`,
+  `idx.speakers()`, `idx.flagged()` (known boundary-gap spots).
+Speakers include `THE COURT`, `THE WITNESS`, and attorneys by name
+(`MS. AL-SHABAZZ`, `MR. FOLLY`, ...). Examination blocks are already handled:
+an attorney's `Q.` lines under a `BY <ATTY>:` header are attributed to that
+attorney. Pages are the transcript's own printed page numbers, continuous
+across the trial.
+
+**REAL format spec (from the actual SDNY transcripts in this project — do not
+invent a different layout).** Each page has, in order: a printed page number
+(e.g. `620`), a volume id (`J59TDUN2`), content lines each prefixed with a line
+number (1-25) and blank-line-separated, and a reporter footer. Real examples:
+
+Page 620 (sidebar — multiple attorneys + the judge):
+```
+620
+              J59TDUN2
+
+
+        1             (At sidebar)
+
+        2             THE COURT:  What's the status of the next government
+        3    witness?
+
+        4             MR. FOLLY:  They are en route to the courthouse and
+        5    will be available after lunch.  We would respectfully ask for
+        6    an early lunch break today.
+
+        7             THE COURT:  How much time do you need to deal with
+        8    Mr. Dinnerstein's application in regard to his client?  In
+        9    other words, can I do an hour lunch or do you need more time to
+       10    resolve that?
+
+       11             MS. ROTHMAN:  I think we have to confer with our
+       12    chiefs in our office.  I think it's likely going to be
+       13    difficult to resolve it during the lunch break.
+
+       14             THE COURT:  All right.  It's now 12:30, why don't I
+       15    have them back at 1:45.
+
+       16             MS. AL-SHABAZZ:  Could the government tell us who they
+       17    are calling this afternoon?
+
+       18             THE COURT:  Yes.
+
+       19             MR. FOLLY:  It's Jasmond Cunningham, Ms. White, and
+       20    Peter Kalkanis.
+```
+
+A Q/A examination block (attorney's Q. lines under her BY header, witness A.
+lines, a judge interjection):
+```
+        CROSS-EXAMINATION
+
+        BY MS. AL-SHABAZZ:
+
+        Q.  Good morning, Ms. Nichols.
+
+        A.  Good morning.
+
+        Q.  My name is Ikiesha Al-Shabazz.  I represent Bryan Duncan.
+        I have a few questions.  If I ask you something confusing, let
+        me know and I'll do my best to rephrase it, okay?
+
+        A.  Okay.
+
+        Q.  Can you hear me good?
+
+        A.  Yes.
+
+        Q.  You met Reginald Dewitt in October of 2012, right?
+
+        A.  No, I did not.
+```
+
+**What to build: a new module `swarm_os/services/legal/transcript_analysis.py`**
+that consumes one or more `TranscriptIndex` (one per trial day) and produces
+FACTUAL, PAGE-GROUNDED analysis artifacts. Do NOT modify
+`transcript_search.py` or `case_tracker.py` unless a bug forces it (report
+that separately). Provide a `build_analysis(indices: list[TranscriptIndex],
+outfile: str) -> str` that writes a single markdown report and returns the path.
+
+**Artifacts required (each must cite printed page numbers, never assert legal
+significance):**
+1. **Chronology** — per trial day, the ordered sequence of evidentiary
+   events: witness examinations (who, direct/cross, by which attorney, page
+   range), objections + rulings, sidebars, jury instructions/charges,
+   adjournment. Derived from passages, NOT from memory.
+2. **Witness matrix** — one row per witness who testified: name, the pages
+   where they testified, which attorneys examined them, and a neutral summary
+   of the substance of their testimony (only what appears on cited pages).
+3. **Objections / rulings log** — every objection found (attorney, page,
+   text) and the court's ruling if found nearby (sustained/overruled, page).
+   State the facts. **DO NOT characterize whether the objection was legally
+   correct, whether error was preserved, or whether the ruling was right.**
+4. **Plain-English pass on the Batson challenge** — if the transcript
+   contains a Batson argument (search for "Batson", "peremptory",
+   "pattern of discrimination"), quote the relevant passages with pages and
+   restate in plain language WHAT was argued and WHAT the court did. **State
+   explicitly that whether the challenge was viable/preserved/timely is a
+   question for a qualified person, not this tool.**
+
+**Hard rules (the project's discipline — non-negotiable):**
+- **READ `AGENTS.md` FIRST.** Especially "Standing Building Rules" and "Recent
+  Changes (do NOT re-apply)". Do not redo or contradict anything there.
+- **Surgical only.** One new module + one new test file. Do NOT rewrite,
+  delete, move, or rename existing files. Do NOT touch AGENTS.md. Do NOT
+  commit, push, or create PRs.
+- **Never assert legal significance.** The tool reports WHAT is on a page and
+  WHERE. "This was preserved", "this objection was valid", "this challenge
+  would succeed" are FORBIDDEN as output — instead emit "not assessed; see
+  page N" style flags. The whole point is the TACT "Challenge" step applied to
+  the tool's own output.
+- **Ground everything.** Every artifact line that states a fact must include
+  the printed page number(s) it comes from. No page = no claim.
+- **Robustness:** handle missing data (a day with no objections, an empty
+  index) without crashing. This module is pure and synchronous — keep it that
+  way.
+- **Python conventions:** match the repo (type hints, `from __future__ import
+  annotations`, logging via module `log`, no bare `except:`). Do NOT add
+  dependencies.
+- **Verify-before-assume:** read `transcript_search.py` and confirm the exact
+  `Passage` field names and `TranscriptIndex` methods before coding against
+  them. Do not guess the API.
+
+**Verification.**
+- Unit tests in `tests/test_legal_transcript_analysis.py` using small
+  synthetic transcripts built via `parse_transcript(...)` (mirroring the real
+  SDNY layout above) covering: chronology ordering, witness matrix, objections
+  log with rulings, Batson detection, page-citation presence on every fact
+  line, and a legally-consequential line being emitted as "not assessed"
+  rather than asserted.
+- `.\.venv\Scripts\python.exe -m pytest tests/test_legal_transcript_analysis.py -q`
+  and the existing legal suites still pass.
+- `ruff check swarm_os/services/legal/transcript_analysis.py tests/test_legal_transcript_analysis.py --select E9,F`
+  → clean.
+- If you can, run `build_analysis` over the real transcripts in
+  `C:\Users\rober\OneDrive\Documents\rob court\` (5 corrected .txt files)
+  plus the PDF-extracted `.txt` under
+  `C:\Users\rober\AppData\Local\Temp\opencode\transcripts_pdf\` and show a
+  short excerpt of the report — but do NOT modify or copy those files.
+- **Report back:** the diff (new files only), the test results, the ruff
+  result, and an honest note on anything you could NOT verify. Do NOT update
+  AGENTS.md; do NOT commit.
