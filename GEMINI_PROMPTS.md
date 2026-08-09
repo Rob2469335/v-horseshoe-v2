@@ -174,3 +174,74 @@ Verify:
 - The `turn_budget_exhausted` path — does RepairWatchman act on it?
 - diagnostician `fix_class` routing — prompt_sensitivity vs model_variability
   — correct on both governor and reflection paths?
+
+---
+
+## PROMPT 9 — Fix: citation-verification shape-mismatch discriminator is a no-op
+
+This is a FIX prompt (not an audit). A committed hardening is live-proven wrong;
+implement the correction below.
+
+**Context.** `swarm_os/services/legal/citation_verify.py` has an M5 hardening
+(commit `0edc975`): a CourtListener `200` means "a cluster exists", NOT "the
+citation is correct" — a fabricated/ALTERED cite that re-points at a real
+cluster returns 200 (e.g. `400 U.S. 79` → 200, resolves to *Dutton v. Evans*,
+whose real page is 74). The committed check compares the cite we sent against
+the lookup response's `normalized_citations` to detect this.
+
+**The bug (live-probed, not hypothesized).** The API **echoes the input** in
+`normalized_citations` — it never returns the canonical real citation:
+- sent `400 U.S. 79` → `normalized_citations: ["400 U.S. 79"]`, cluster 108220
+  (*Dutton v. Evans*), whose canonical citations say `400 U.S. 74`.
+- sent `400 U.S. 74` → `normalized_citations: ["400 U.S. 74"]`, same cluster.
+
+So `sent_key not in norm_keys` is NEVER true for the mislead-200 class and
+`shape_mismatch` never fires — the committed check is a silent no-op in
+production. The mocked tests pass only because they feed the API a *different*
+normalized citation than the API actually returns.
+
+**The real discriminator (also live-probed).** The cluster payload carries the
+canonical citations in `clusters[].citations[]` — a list of
+`{volume, reporter, page}` dicts (e.g. `400`/`U.S.`/`74`, plus parallel cites
+`91`/`S. Ct.`/`210`, `27`/`L. Ed. 2d`/`213`). Compare the cite we sent against
+THESE keys:
+- sent `400 U.S. 79` → key `400|us|79` NOT in canonical keys → `shape_mismatch`
+- sent `400 U.S. 74` → key `400|us|74` IS in canonical keys → verified
+
+**Required change (surgical, do NOT rewrite the file).**
+1. In `verify_citations()` (`citation_verify.py` ~line 352-368), replace the
+   `norm_keys` source with canonical keys built from `clusters[].citations[]`
+   (each entry → `case_citation_key(f"{volume} {reporter} {page}")`), keeping
+   the same `sent_key not in canonical_keys` comparison. Keep `normalized`
+   stored on the result (it's informative) but stop treating it as the truth.
+2. Update the three mocked tests in `tests/test_legal_citations.py`
+   (`test_verify_citations_200_with_matching_shape_is_verified`,
+   `test_verify_citations_200_with_altered_shape_is_mismatch`,
+   `test_verify_citations_200_empty_normalized_not_mismatch`): feed
+   `clusters[].citations[]` canonical data (matching shape → verified; altered
+   page → mismatch; no cluster citations → verified-as-before, do not invent a
+   mismatch).
+3. `legal_advisor.py` already consumes `stats.shape_mismatch` and needs no
+   change unless the message text must change.
+
+**Regression watch (do not break real rows).** Probe-verified reporter-series
+shape: `case_citation_key("142 Ohio St.3d 57")` → `142|ohiost3d|57` (the "3d"
+series is part of the reporter string). If the cluster's canonical reporter is
+stored WITHOUT the series ("Ohio St."), a real `142 Ohio St. 3d 57` could be
+falsely flagged `shape_mismatch`. EMPIRICALLY validate against the live API —
+send the real 200-class rows `142 Ohio St.3d 57`, `19 N.E.3d 900`,
+`500 U.S. 444` and confirm they stay `verified` (not mismatch), and that
+`400 U.S. 79` fires `shape_mismatch` while `400 U.S. 74` stays verified.
+Reporter normalization must make "Ohio St.3d" and "Ohio St." (and any series
+token) compare equal when they name the same reporter. If the canonical payload
+cannot disambiguate series reliably, prefer an approach that never falsely
+flags real rows (miss on the alteration beats a false fabrication signal).
+
+**Acceptance gates.**
+- `.\.venv\Scripts\python.exe -m pytest tests/test_legal_citations.py tests/test_legal_advisor.py tests/test_legal_citebench_eval.py -q` → all pass.
+- `ruff check . --select E9,F` → clean.
+- Live-validate the discriminator (single probe, CourtListener free tier is
+  ~50 req/hr): `400 U.S. 79` mismatch, `400 U.S. 74` verified, `500 U.S. 444`
+  verified, `142 Ohio St.3d 57` verified, `19 N.E.3d 900` verified.
+- Do NOT commit. Report the diff + the live-probe output. Update AGENTS.md
+  "Recent Changes" only after a human accepts the fix.

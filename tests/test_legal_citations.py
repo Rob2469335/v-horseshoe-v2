@@ -100,7 +100,7 @@ async def test_verify_citations_200_with_matching_shape_is_verified():
                new=AsyncMock(return_value={
                    "status": 200,
                    "normalized_citations": ["400 U.S. 74"],
-                   "clusters": [{"case_name": "Dutton v. Evans"}],
+                   "clusters": [{"case_name": "Dutton v. Evans", "citations": [{"volume": "400", "reporter": "U.S.", "page": "74"}]}],
                })):
         res = await verify_citations("Bush v. Gore, 400 U.S. 74 (2000)")
     assert res.stats["shape_mismatch"] == 0
@@ -118,7 +118,7 @@ async def test_verify_citations_200_with_altered_shape_is_mismatch():
                new=AsyncMock(return_value={
                    "status": 200,
                    "normalized_citations": ["400 U.S. 74"],
-                   "clusters": [{"case_name": "Dutton v. Evans"}],
+                   "clusters": [{"case_name": "Dutton v. Evans", "citations": [{"volume": "400", "reporter": "U.S.", "page": "74"}]}],
                })):
         res = await verify_citations("Bush v. Gore, 400 U.S. 79 (2000)")
     assert res.stats["shape_mismatch"] == 1
@@ -188,6 +188,18 @@ def test_case_citation_key_canonical_forms():
     assert case_citation_key("88 So.3d 253") == "88|so3d|253"
     # Cat3 vol/page alterations change the key — detectable offline.
     assert case_citation_key("400 U.S. 79") != case_citation_key("400 U.S. 74")
+
+
+def test_case_citation_key_series_space_normalization():
+    """The CourtListener canonical form spaces the series ('Ohio St. 3d 57')
+    while the passage form does not ('Ohio St.3d 57'). Both must canonicalize
+    to the SAME key — otherwise a real series citation gets a dropped canonical
+    key and a false shape_mismatch (the 2026-08-09 live-probe regression)."""
+    assert case_citation_key("142 Ohio St. 3d 57") == "142|ohiost3d|57"
+    assert case_citation_key("142 Ohio St.3d 57") == "142|ohiost3d|57"
+    # Series stays IN the key: 84 So.3d 661 vs 84 So.2d 661 still differ (Cat3).
+    assert case_citation_key("84 So. 3d 661") == "84|so3d|661"
+    assert case_citation_key("84 So. 3d 661") != case_citation_key("84 So. 2d 661")
 
 
 # --- M4 fail-closed: couldn't-check ≠ clean (L3-trap guard) ------------------

@@ -223,8 +223,13 @@ def _normalize_section(section: Any) -> str:
     s = re.sub(r"[^0-9A-Za-z]+", "-", str(section or "")).strip("-").lower()
     return s
 
+# Reporter continuation segments may start with a digit: the CourtListener
+# canonical form of a series reporter is SPACED ("Ohio St. 3d 57") while the
+# passage form is NOT ("Ohio St.3d 57"). Both must canonicalize to the same
+# key, so a series token (2d/3d/4d...) is an allowed segment start. The series
+# stays IN the key — 84 So.3d 661 vs 84 So.2d 661 still differ (Cat3 signal).
 _CASE_CITE_RE = re.compile(
-    r"^(?:(?P<vol>\d{1,4})\s+)?(?P<rep>[A-Z][A-Za-z0-9.\-]*(?:\s+[A-Z][A-Za-z0-9.\-]*)*)\s+(?P<page>\d{1,5})$"
+    r"^(?:(?P<vol>\d{1,4})\s+)?(?P<rep>[A-Z][A-Za-z0-9.\-]*(?:\s+[A-Za-z0-9][A-Za-z0-9.\-]*)*)\s+(?P<page>\d{1,5})$"
 )
 
 
@@ -354,16 +359,22 @@ async def verify_citations(blob: str, courtlistener_key: str | None = None) -> V
             # exists" — NOT "the citation is correct". A fabricated/alterated
             # citation that re-points at a real cluster (400 U.S. 79 -> Dutton,
             # whose real page is 74) comes back 200. So only call it verified
-            # when the API's OWN normalized citation canonically equals the cite
-            # we sent. When the API returns a DIFFERENT shape, that is a
-            # mismatch signal: exists, but not as cited.
+            # when the cite we sent matches a CANONICAL citation of the matched
+            # cluster (clusters[].citations[] carries the authoritative
+            # vol/reporter/page — live-probed). The API's normalized_citations
+            # is NOT usable here: it echoes the input back verbatim.
             sent_key = case_citation_key(raw)
-            norm_keys = [case_citation_key(n) for n in normalized if isinstance(n, str)]
+            canonical_keys = []
+            for cluster in lookup.get("clusters") or []:
+                for cite in cluster.get("citations", []):
+                    c_key = case_citation_key(f"{cite.get('volume', '')} {cite.get('reporter', '')} {cite.get('page', '')}")
+                    if c_key:
+                        canonical_keys.append(c_key)
             shape_mismatch = (
                 status == 200
                 and bool(sent_key)
-                and bool(norm_keys)
-                and sent_key not in norm_keys
+                and bool(canonical_keys)
+                and sent_key not in canonical_keys
             )
             verified = status == 200 and not shape_mismatch
             results.append(CitationResult(
