@@ -22,6 +22,9 @@ logs/
 **/logs/
 *.log
 *.jsonl
+# Vendored static test fixture (LegalCiteBench Cat3 sample) — tracked despite
+# the *.jsonl rule so tests/test_legal_citebench_eval.py works on a clean checkout.
+!tests/fixtures/cat3_citation_verification_sample.jsonl
 
 # Build / package output
 node_modules/

@@ -194,26 +194,73 @@ async def advise(question: str) -> AdvisorResult:
         )
 
     # Verification seam: parse the answer's citations, check existence.
-    verify = {"checked": False, "fabricated": 0, "ambiguous": 0, "score": None}
+    verify = {"checked": False, "fabricated": 0, "ambiguous": 0,
+              "unverified": 0, "unparsed": 0, "score": None}
     try:
         vres = await verify_citations(answer)
+        fabricated = vres.stats.get("fabricated", 0)
+        ambiguous = vres.stats.get("ambiguous", 0)
+        unverified = vres.stats.get("unverified", 0)
+        unparsed = vres.stats.get("unparsed", 0)
+        checked = max(1, vres.stats.get("count", 0) or 0, unverified, unparsed)
         verify = {
             "checked": True,
-            "fabricated": vres.stats.get("fabricated", 0),
-            "ambiguous": vres.stats.get("ambiguous", 0),
-            "score": round(1.0 - (vres.stats.get("fabricated", 0) / max(1, vres.stats.get("count", 1))), 2),
+            "fabricated": fabricated,
+            "ambiguous": ambiguous,
+            "unverified": unverified,
+            "unparsed": unparsed,
+            "score": round(1.0 - (
+                fabricated + ambiguous + unverified + unparsed
+            ) / checked, 2),
         }
     except Exception as exc:
         log.warning("verification seam failed: %s", exc)
 
-    # FAIL-CLOSED: a fabricated citation downgrades the answer — we surface it,
-    # and if fabrication is present we mark the answer as not-trustworthy.
+    # M4 statutory-alignment seam: every §-cited section in the answer must
+    # exist among the retrieved corpus sections. Eyecite can't do this (it
+    # mangles statutes); alignment is deterministic + offline. An unaligned
+    # cited section is the statutory-fabrication signal.
+    try:
+        from swarm_os.services.legal.citation_verify import align_citations
+        retrieved_cites = [r.get("citation", "") for r in results]
+        align = align_citations(answer, retrieved_cites)
+        verify["alignment"] = {
+            "count": align["count"],
+            "aligned": [a["section"] for a in align["aligned"]],
+            "unaligned": [u["section"] for u in align["unaligned"]],
+        }
+        verify["unaligned"] = len(align["unaligned"])
+    except Exception as exc:
+        log.warning("alignment seam failed: %s", exc)
+        verify.setdefault("alignment", {"count": 0, "aligned": [], "unaligned": []})
+
+    # FAIL-CLOSED: a fabricated OR unaligned citation downgrades the answer —
+    # we surface it, and if fabrication is present we mark the answer as
+    # not-trustworthy. The L3-trap guard closes the "couldn't check" hole: an
+    # UNVERIFIED citation (parsed but no verdict — no CourtListener token /
+    # outage) or an UNPARSED citation-shaped passage (eyecite couldn't parse it)
+    # must be surfaced as "not verified", never silently pass as "0 citation
+    # issues". (score + appended warning, not a silent clean.)
     fabricated = verify.get("fabricated", 0)
-    if fabricated:
+    unaligned = verify.get("unaligned", 0)
+    unverified = verify.get("unverified", 0)
+    unparsed = verify.get("unparsed", 0)
+    if fabricated or unaligned or unverified or unparsed:
         answer += (
             f"\n\n[VERIFICATION] {fabricated} citation(s) could not be verified "
-            f"(fabricated or misaligned). Do not rely on this answer until checked."
+            f"(fabricated or misaligned), and {unaligned} cited section(s) are not "
+            f"present in the retrieved corpus (unaligned). "
         )
+        if unverified:
+            answer += (
+                f"{unverified} case citation(s) could not be externally verified "
+                f"(no CourtListener verdict — offline or no token). "
+            )
+        if unparsed:
+            answer += (
+                f"{unparsed} citation-shaped passage(s) could not be parsed. "
+            )
+        answer += "Do not rely on this answer until checked."
 
     return AdvisorResult(
         ok=True,

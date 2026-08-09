@@ -8,15 +8,19 @@ Two-stage hybrid, grounded in the SOTA research (no LLM guessing in the check):
    statutes, law-journal, supra and id. — broader than the CourtListener API,
    which deliberately skips statutes, id., supra and volume-less citations.
 
-2. EXTERNAL VERIFICATION — CourtListener's Citation Lookup & Verification API
-   (POST /api/rest/v4/citation-lookup/), which exists precisely as "a guardrail
-   to help prevent hallucinated citations". Per-citation status:
-     200 found · 404 not found (fabricated) · 400 bad reporter · 300 ambiguous.
+3. EXTERNAL VERIFICATION — CourtListener's Citation Lookup & Verification API
+   (POST /api/rest/v4/citation-lookup/), which exists precisely as "a
+   guardrail to help prevent hallucinated citations". Per-citation status:
+      200 found · 404 not found (fabricated) · 400 bad reporter · 300 ambiguous.
+   Token-gated (COURTLISTENER_API_TOKEN): without a token, the external leg is
+   skipped and the module reports has_courtlistener_token:false.
 
-3. ALIGNMENT (hybrid) — for 200-found citations, the caller may additionally
-   confirm the proposition is supported by the retrieved span via the existing
-   Qdrant reranker. This module returns the parse+verify result; alignment is
-   the research/synthesis layer's job.
+4. ALIGNMENT (M4) — the statutory leg, `align_citations()`. Eyecite does NOT
+   drive this (it mangles statutes: "N.Y. RPA Law § 235-b" --> "§ 235"; an
+   entire corpus-type check). Every statute-section ID cited in an answer is
+   aligned against the retrieved corpus sections; a cited section that is NOT in
+   the retrieved set is UNALIGNED — the statutory-fabrication signal for a
+   statute corpus without an external token.
 
 This is the primary safety mechanism (LegalCiteBench Cat3/Cat4 analog): a
 fabricated citation is blocked (status 404), an ambiguous one flagged (300).
@@ -26,6 +30,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -130,6 +135,162 @@ def _resolve_to_full(blob: str) -> tuple[list[str], list[str]]:
     return out, kinds
 
 
+# ---------------------------------------------------------------------------
+# STATUTE-ALIGNMENT SEAM (M4)
+#
+# Eyecite does NOT drive this: probe-verified on live text that eyecite mangles
+# statutory citations ("N.Y. RPA Law § 235-b" parses as "§ 235", dropping the
+# "-b"; "N.J.S.A. 46:8-19" is missed entirely; "N.D.C.C. § 12.1-32-06.1(4)"
+# degrades to a bare "§"). The corpus ROB'S LAWYER operates on IS statutes, so
+# the actual fabrication signal for this corpus must come from a deterministic,
+# eyecite-independent extractor of statutory citations + an alignment check:
+# every numbered section cited in an answer must exist among the retrieved
+# sections (or be flaggable).
+# ---------------------------------------------------------------------------
+
+# A statute citation this corpus produces/references looks like:
+#   N.Y. RPA Law § 235-b        N.Y. ABC Law § 105       N.J.S. 46:8-19
+#   N.Y. CPL Law § 200.50       N.Y. FCT Law § 581-202
+# We extract "law section" IDs WITHOUT eyecite — small anchored regexes on the
+# §-signed / N.J.S. / U.S.C. shapes that actually occur in this corpus.
+_SECTION_SIGNED = re.compile(
+    r"\u00a7\s*([0-9]+(?:[-.][0-9A-Za-z]+)*(?:\([0-9A-Za-z]+\))?)"
+)
+_SECTION_NJS = re.compile(
+    r"\bN\.?\s*J\.?\s*S\.?\s*A?\.?\s*\u00a7?\s*([0-9]{1,3}:[0-9]{1,3}(?:-[0-9]+)?)"
+)
+_SECTION_USC = re.compile(r"\b([0-9]{1,3})\s+U\.?\s*S\.?\s*C\.?\s+\u00a7\s+([0-9]+)")
+
+# "Citation-SHAPED text" detectors — a volume-reporter-page shape (531 U.S. 98,
+# 2009 MT 228) or a statute-supplement shape (2012 Supp. 47-501(b)(1)(E)).
+# These are deliberately BROADER than eyecite: an exotic-but-real citation that
+# eyecite cannot parse (900 So. 7d 694, K.S.A. 2012 Supp. ...) still MATCHES the
+# shape — so a passage that LOOKS like it cites law but produced zero citations
+# must surface as "unparsed", never silently pass as "nothing to check".
+_CASE_SHAPED_RE = re.compile(
+    r"\b\d{1,5}\s+[A-Za-z][A-Za-z0-9.\-]*(?:\s+[A-Za-z][A-Za-z0-9.\-]*)*\s+\d{1,5}[A-Za-z0-9.]*\b"
+)
+_STATUTE_SUPP_SHAPED_RE = re.compile(
+    r"\b\d{1,4}\s+Supp\.?\s+\d{1,3}-\d{1,3}[A-Za-z0-9().\-]*"
+)
+
+
+def count_citation_shapes(text: str) -> int:
+    """Deterministic count of citation-shaped spans in `text` — the "did it
+    even LOOK like a citation" bound for the UNPARSED signal (L3-trap guard).
+    Case-shape and statute-supplement-shape are counted separately and summed.
+    This classifier is intentionally loose: it marks text that a legal reader
+    would recognize as citation-bearing, so an exotic-but-real shape that the
+    parsers can't lift is never reported as "0 citations, nothing to check"."""
+    t = text or ""
+    return len(_CASE_SHAPED_RE.findall(t)) + len(_STATUTE_SUPP_SHAPED_RE.findall(t))
+
+
+def extract_statute_sections(text: str) -> list[str]:
+    """Deterministic, eyecite-independent extraction of statute section IDs
+    referenced in `text`. Returns section identifiers as written: e.g.
+    'N.Y. RPA Law \u00a7 235-b' -> ['235-b']; 'N.J.S.A. 46:8-19' -> ['46:8-19'];
+    '42 U.S.C. \u00a7 1983' -> ['1983'].
+
+    Deliberately conservative: this is a DEFENSE seam — missing a hard-to-parse
+    cite just means "not aligned", never that a true cite is called fabricated.
+    """
+    if not text:
+        return []
+    out: list[str] = []
+    # Collect N.J.S.-prefixed spans first so an overlapping bare "§ N" from the
+    # generic §-regex cannot shadow the fuller N.J.S. capture ("N.J.S. § 46:8-19"
+    # must yield '46:8-19', not a stray '46').
+    njs_spans = [m.span() for m in _SECTION_NJS.finditer(text)]
+    for m in _SECTION_SIGNED.finditer(text):
+        if any(m.start() >= a and m.end() <= b for a, b in njs_spans):
+            continue
+        sec = m.group(1).strip()
+        if re.search(r"\d", sec):
+            out.append(sec)
+    for m in _SECTION_NJS.finditer(text):
+        out.append(m.group(1))
+    for m in _SECTION_USC.finditer(text):
+        out.append(m.group(2))
+    return list(dict.fromkeys(out))  # dedupe, preserve order
+
+
+def _normalize_section(section: Any) -> str:
+    """Canonical key for a section id from anywhere (a corpus payload or an
+    answer): lowercase, keep only digits/letters, collapse separators to '-'."""
+    s = re.sub(r"[^0-9A-Za-z]+", "-", str(section or "")).strip("-").lower()
+    return s
+
+_CASE_CITE_RE = re.compile(
+    r"^(?:(?P<vol>\d{1,4})\s+)?(?P<rep>[A-Z][A-Za-z0-9.\-]*(?:\s+[A-Z][A-Za-z0-9.\-]*)*)\s+(?P<page>\d{1,5})$"
+)
+
+
+def case_citation_key(matched_text: str) -> str | None:
+    """Deterministic canonical key for a case-citation matched string, so two
+    textual forms of the same case compare equal and an altered volume/page
+    compares different (the LegalCiteBench Cat3 fake-detection signal).
+
+    '400 U.S. 79' -> '400|u.s.|79'; '2009 MT 228' -> '2009|mt|228'.
+    Returns None when the string isn't volume-reporter-page shaped."""
+    if not matched_text:
+        return None
+    m = _CASE_CITE_RE.fullmatch(matched_text.strip().rstrip(".,"))
+    if not m:
+        return None
+    vol = m.group("vol") or ""
+    rep = re.sub(r"[^a-z0-9]+", "", (m.group("rep") or "").lower())
+    page = m.group("page")
+    if not rep or not page:
+        return None
+    return f"{vol}|{rep}|{page}"
+
+
+def align_citations(answer_text: str, retrieved_sections: list[str]) -> dict[str, Any]:
+    """The M4 citation-alignment seam.
+
+    Deterministic, offline, eyecite-independent. For every statute section ID
+    cited in `answer_text`, check it exists among the `retrieved_sections` (the
+    actual corpus payloads returned for the question). A cited section not in
+    the retrieved set is UNALIGNED — the statutory-fabrication signal this stack
+    can emit without an external case-law token.
+
+    Returns:
+      {
+        "count": no. of distinct cited statute sections,
+        "aligned":   [ {'section', 'normalized'} ... ],
+        "unaligned": [ {'section', 'normalized'} ... ],
+        "normalized_retrieved": sorted canonical keys of the corpus sections,
+      }
+    """
+    corpus_ids: set[str] = set()
+    for s in retrieved_sections:
+        if not isinstance(s, str):
+            continue
+        # Add the bare whole-string only when it's already a section-id-shaped
+        # token (no "Law"/"§" prefix); full citations contribute via the
+        # extractor so no 'n-y-rpa-law-235-b' garbage enters the key set.
+        if re.fullmatch(r"[0-9A-Za-z:.\-]+", s) and re.search(r"[0-9]", s):
+            corpus_ids.add(_normalize_section(s))
+        for sid in extract_statute_sections(s):
+            corpus_ids.add(_normalize_section(sid))
+    corpus_ids.discard("")
+
+    aligned: list[dict[str, Any]] = []
+    unaligned: list[dict[str, Any]] = []
+    for sec in extract_statute_sections(answer_text or ""):
+        n = _normalize_section(sec)
+        rec = {"section": sec, "normalized": n}
+        (aligned if n in corpus_ids else unaligned).append(rec)
+
+    return {
+        "count": len(aligned) + len(unaligned),
+        "aligned": aligned,
+        "unaligned": unaligned,
+        "normalized_retrieved": sorted(corpus_ids),
+    }
+
+
 async def verify_citations(blob: str, courtlistener_key: str | None = None) -> VerifyResponse:
     """Verify every case citation in `blob` against CourtListener.
 
@@ -137,12 +298,32 @@ async def verify_citations(blob: str, courtlistener_key: str | None = None) -> V
     external verification (the API doesn't cover them) — `skipped_reason` is
     set accordingly. A fabricated case citation surfaces as verified=False with
     status 404 — the caller MUST block/downgrade it.
+
+    FAIL-CLOSED over the unknown: a case citation the lookup could NOT produce a
+    verdict for (status None — no token / outage / request failure) is counted
+    in stats["unverified"], and a citation-SHAPED passage that eyecite cannot
+    parse at all is counted in stats["unparsed"]. Neither is "clean": a caller
+    must NOT treat count=0 or verified=0 as "no citation issues" — those are the
+    could-not-check states (stats carry the honest, distinct counts).
     """
+    shapes = count_citation_shapes(blob)
     if not _EYECITE_OK:
-        return VerifyResponse(ok=False, citations=[], stats={"error": "eyecite not installed"})
+        return VerifyResponse(ok=False, citations=[], stats={
+            "error": "eyecite not installed", "unparsed": shapes,
+        })
     strings, kinds = _resolve_to_full(blob)
+    parsed_case_total = sum(1 for k in kinds if k == "FullCaseCitation")
+    unparsed = max(0, shapes - parsed_case_total)
     if not strings:
-        return VerifyResponse(ok=True, citations=[], stats={"count": 0})
+        return VerifyResponse(ok=True, citations=[], stats={
+            "count": 0,
+            "unparsed": unparsed,
+            "unverified": 0,
+            "verified": 0,
+            "fabricated": 0,
+            "ambiguous": 0,
+            "skipped": 0,
+        })
 
     headers = {}
     if courtlistener_key:
@@ -180,19 +361,25 @@ async def verify_citations(blob: str, courtlistener_key: str | None = None) -> V
 
     fabricated = [r for r in results if r.status == 404]
     ambiguous = [r for r in results if r.status == 300]
+    unverified = [r for r in results
+                  if not r.skipped_reason and r.status not in (200, 404, 300)]
     ok = not fabricated  # fabricated citations are a hard stop; ambiguous are flagged
     return VerifyResponse(
         ok=ok,
         citations=results,
         message=(
             f"{len(results)} citation(s) parsed; "
-            f"{len(fabricated)} fabricated (blocked), {len(ambiguous)} ambiguous (flagged)."
+            f"{len(fabricated)} fabricated (blocked), {len(unverified)} unverified "
+            f"(no verdict / offline), {unparsed} unparsed (citation-shaped but "
+            f"unparseable)."
         ),
         stats={
             "count": len(results),
             "verified": sum(1 for r in results if r.verified),
             "fabricated": len(fabricated),
             "ambiguous": len(ambiguous),
+            "unverified": len(unverified),
+            "unparsed": unparsed,
             "skipped": sum(1 for r in results if r.skipped_reason),
         },
     )

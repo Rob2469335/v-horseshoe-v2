@@ -73,3 +73,60 @@ async def test_synthesis_unpacks_content_kind_correctly():
     with patch("runtime_v2.services._llm_client.stream_content", new=fake_stream):
         out = await la._synthesize("q", "ny", [{"citation": "N.Y. GOL § 7-103", "content": "x"}])
     assert out.get("content") == "the answer text"
+
+
+# --- M4 fail-closed: couldn't-check ≠ clean (L3-trap guard) ------------------
+
+@pytest.mark.asyncio
+async def test_advise_downgrades_on_unverified():
+    """A parsed citation with NO verdict (status None — offline/no token) must
+    appear in the [VERIFICATION] warning AND drop the score below 1.0 — it must
+    NOT silently pass as '0 citation issues'."""
+    from swarm_os.services.legal.citation_verify import VerifyResponse
+    scope = {"jurisdictions": {"ny": {"expected": 40102, "ingested": 8000, "pct": 20.0}}} 
+    fake_cites = VerifyResponse(
+        ok=True, citations=[],
+        stats={"count": 1, "verified": 0, "fabricated": 0, "ambiguous": 0,
+               "unverified": 1, "unparsed": 0, "skipped": 0},
+        message="1 unverified",
+    )
+    with patch.object(legal_advisor, "corpus_scope", new=AsyncMock(return_value=scope)), \
+         patch("swarm_os.services.legal.legal_search.search_statutes",
+               new=AsyncMock(return_value=[{"citation": "N.Y. RPA Law § 235-b", "section_title": "t", "jurisdiction": "ny", "content": "x"}])), \
+         patch.object(legal_advisor, "_synthesize",
+                      new=AsyncMock(return_value={"content": "N.Y. RPA Law § 235-b applies."})), \
+         patch("swarm_os.services.legal.citation_verify.verify_citations",
+               new=AsyncMock(return_value=fake_cites)):
+        res = await legal_advisor.advise("my landlord in New York won't return deposit")
+    assert res.ok is True
+    assert "[VERIFICATION]" in res.answer
+    assert "offline" in res.answer.lower() or "verdict" in res.answer.lower()
+    assert res.verification["score"] < 1.0
+
+
+@pytest.mark.asyncio
+async def test_advise_downgrades_on_unparsed():
+    """A citation-shaped passage eyecite couldn't parse (exotic form) must be
+    surfaced as UNPARSED inside the [VERIFICATION] warning — never silently
+    treated as a clean '0 citations' answer."""
+    from swarm_os.services.legal.citation_verify import VerifyResponse
+    scope = {"jurisdictions": {"ny": {"expected": 40102, "ingested": 8000, "pct": 20.0, "complete": False}}}
+    fake_cr = VerifyResponse(
+        ok=True, citations=[],
+        stats={"count": 0, "verified": 0, "fabricated": 0, "ambiguous": 0,
+               "unverified": 0, "unparsed": 1, "skipped": 0},
+        message="1 unparsed",
+    )
+    with patch.object(legal_advisor, "corpus_scope", new=AsyncMock(return_value=scope)), \
+         patch("swarm_os.services.legal.legal_search.search_statutes",
+               new=AsyncMock(return_value=[{"citation": "N.Y. RPA Law § 235-b", "section_title": "t", "content": "x"}])), \
+         patch.object(legal_advisor, "_synthesize",
+                      new=AsyncMock(return_value={"content": "See 900 So. 2d 3."})), \
+         patch("swarm_os.services.legal.citation_verify.verify_citations",
+               new=AsyncMock(return_value=fake_cr)):
+        res = await legal_advisor.advise("my landlord in New York won't return deposit")
+    assert res.ok is True
+    assert "[VERIFICATION]" in res.answer
+    assert "could not be parsed" in res.answer
+    assert res.verification["unparsed"] == 1
+    assert res.verification["score"] < 1.0
