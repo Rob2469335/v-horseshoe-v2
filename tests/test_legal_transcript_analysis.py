@@ -124,3 +124,101 @@ SOUTHERN DISTRICT REPORTERS, P.C.
     assert "THE COURT" in content
     assert "in light of the Batson challenge" in content
     assert "not assessed" in content
+
+
+def _page_block(page: int, vol: str, header: str, lines: list[str]) -> str:
+    """A single SDNY-format page: number + (optional) named page-header +
+    content lines. Used to build named-header fixtures for the matrix tests."""
+    hdr = f"              {vol}" + (f"                 {header}" if header else "") + "\n"
+    body = "".join(f"    {i+1:<4} {ln}\n" for i, ln in enumerate(lines))
+    return f"\n{page}\n{hdr}\n{body}\nSOUTHERN DISTRICT REPORTERS, P.C.\n(212) 805-0300\n"
+
+
+def test_witness_matrix_groups_by_name_across_gaps(tmp_path: Path):
+    """One witness (Mueller) answers, then falls silent for 60+ passages of
+    court colloquy, then answers again — SAME witness, must be ONE matrix row
+    named "Mueller". The old >50-passage gap heuristic split this real
+    transcript shape into ~40 "Unnamed Witness" rows."""
+    filler = ["THE COURT:  Proceed, counsel." for _ in range(55)]
+    text = (
+        _page_block(620, "J5ATDUN1", "Mueller - Cross", [
+            "MS. AL-SHABAZZ:  Did you see the car?",
+            "THE WITNESS:  Yes, I did.",
+            "THE COURT:  Thank you.",
+        ])
+        + _page_block(630, "J5ATDUN1", "Mueller - Cross", filler)
+        + _page_block(631, "J5ATDUN1", "Mueller - Cross", [
+            "MS. AL-SHABAZZ:  What color was it?",
+            "THE WITNESS:  A distinctive blue sedan.",
+            "THE COURT:  Continue.",
+        ])
+    )
+    idx = parse_transcript(text, case="Test", source="test.txt")
+    assert idx.witness_names == {620: "Mueller", 630: "Mueller", 631: "Mueller"}
+    out_file = tmp_path / "report.md"
+    build_analysis([idx], str(out_file))
+    content = out_file.read_text("utf-8")
+
+    wm = content.split("Witness Matrix")[1].split("Objections")[0]
+    # ONE named row spanning both answers — NOT fragmented, NOT unnamed.
+    assert wm.count("| Mueller |") == 1
+    assert "| Mueller | 620-631 |" in wm
+    assert "Unnamed Witness" not in wm
+
+
+def test_witness_matrix_separates_distinct_witnesses_by_name(tmp_path: Path):
+    """A different witness name in the page header starts a NEW matrix row —
+    identity is the page-header name, not silence."""
+    text = (
+        _page_block(620, "J5ATDUN1", "Mueller - Cross", [
+            "MS. AL-SHABAZZ:  Did you see the car?",
+            "THE WITNESS:  Yes, I did.",
+            "THE COURT:  Thank you.",
+        ])
+        + _page_block(640, "J5ATDUN1", "Dewitt - Direct", [
+            "MR. FOLLY:  And then what happened?",
+            "THE WITNESS:  We left the building.",
+            "THE COURT:  Proceed.",
+        ])
+    )
+    idx = parse_transcript(text, case="Test", source="test.txt")
+    assert idx.witness_names == {620: "Mueller", 640: "Dewitt"}
+    out_file = tmp_path / "report.md"
+    build_analysis([idx], str(out_file))
+    content = out_file.read_text("utf-8")
+
+    wm = content.split("Witness Matrix")[1].split("Objections")[0]
+    assert wm.count("| Mueller |") == 1
+    assert wm.count("| Dewitt |") == 1
+    assert "| Mueller | 620-620 |" in wm
+    assert "| Dewitt | 640-640 |" in wm
+    assert "Unnamed Witness" not in wm
+
+
+def test_witness_matrix_unnamed_fallback_keeps_gap_split(tmp_path: Path):
+    """Transcripts with NO page-header names (e.g. the J59TDUN2-only fixtures)
+    fall back to "Unnamed Witness" and the >50-passage gap heuristic — the
+    behavior the comprehensive test pins."""
+    filler = ["THE COURT:  Proceed, counsel." for _ in range(55)]
+    text = (
+        _page_block(620, "J59TDUN2", "", [
+            "MS. AL-SHABAZZ:  Did you see the car?",
+            "THE WITNESS:  Yes, I did.",
+            "THE COURT:  Thank you.",
+        ])
+        + _page_block(630, "J59TDUN2", "", filler)
+        + _page_block(631, "J59TDUN2", "", [
+            "MR. FOLLY:  And then what?",
+            "THE WITNESS:  A blue sedan.",
+            "THE COURT:  Continue.",
+        ])
+    )
+    idx = parse_transcript(text, case="Test", source="test.txt")
+    assert idx.witness_names == {}
+    out_file = tmp_path / "report.md"
+    build_analysis([idx], str(out_file))
+    content = out_file.read_text("utf-8")
+
+    wm = content.split("Witness Matrix")[1].split("Objections")[0]
+    assert wm.count("| Unnamed Witness |") == 2  # gap split still applies
+    assert "Unnamed Witness" in wm

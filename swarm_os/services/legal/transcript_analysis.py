@@ -124,56 +124,85 @@ def _build_chronology(idx: TranscriptIndex) -> list[str]:
 
 
 def _build_witness_matrix(idx: TranscriptIndex) -> list[dict[str, str]]:
+    """Group witness testimony into ONE row PER WITNESS.
+
+    The witness identity comes from the court reporter's page-header name
+    (`idx.witness_names`, harvested from "J5ATDUN1  Mueller - Cross" ->
+    "Mueller"): a page-header name that differs from the current run starts a
+    new witness row, and unnamed pages inside a named run carry the run's name
+    forward (the reporter may omit the header on some pages). Because the name
+    is the identity, a named witness who falls silent for long stretches
+    (sidebars, court colloquy) is NOT fragmented — that was the old gap
+    heuristic's failure mode on real transcripts (one witness split into
+    ~40 rows).
+
+    Fallback for transcripts with NO page-header names (e.g. fixtures): the
+    old >50-passage silence heuristic still separates distinct witnesses, and
+    the name falls back to "Unnamed Witness". Every row keeps the
+    page-grounded "[not assessed; see page N]" contract.
+    """
     witnesses = []
-    in_witness = False
-    pages: set[int] = set()
-    attorneys: set[str] = set()
-    answers: list[str] = []
-    
-    def flush_witness():
-        if not pages: 
+    run_name: str | None = None
+    run_pages: set[int] = set()
+    run_attorneys: set[str] = set()
+    run_answers: list[str] = []
+    run_last_idx = -1
+
+    def flush_run():
+        nonlocal run_name, run_pages, run_attorneys, run_answers
+        if not run_pages:
             return
-        answers.sort(key=len, reverse=True)
-        best_answers = answers[:3]
+        run_answers.sort(key=len, reverse=True)
+        best_answers = run_answers[:3]
         summary_snippets = []
         for ans in best_answers:
             txt = ans.replace('\n', ' ')
             summary_snippets.append(txt[:150] + ("..." if len(txt) > 150 else ""))
-            
-        p_min = min(pages)
+
+        p_min = min(run_pages)
         witnesses.append({
-            "name": "Unnamed Witness",
-            "pages": f"{p_min}-{max(pages)}",
-            "attorneys": ", ".join(sorted(attorneys)),
+            "name": run_name or "Unnamed Witness",
+            "pages": f"{p_min}-{max(run_pages)}",
+            "attorneys": ", ".join(sorted(run_attorneys)),
             "summary": f"Testified regarding: {' | '.join(summary_snippets)} [not assessed; see page {p_min}]" if summary_snippets else f"No substantive testimony extracted [not assessed; see page {p_min}]"
         })
-    
-    last_witness_idx = -1
+        run_name = None
+        run_pages = set()
+        run_attorneys = set()
+        run_answers = []
+
     for i, p in enumerate(idx.passages):
-        if p.speaker == "THE WITNESS":
-            if not in_witness:
-                if last_witness_idx != -1 and i - last_witness_idx > 50:
-                    flush_witness()
-                    pages.clear()
-                    attorneys.clear()
-                    answers.clear()
-                in_witness = True
-                
-            last_witness_idx = i
-            pages.add(p.page)
-            for j in range(i-1, max(-1, i-10), -1):
-                prev = idx.passages[j]
-                if prev.speaker not in ("THE WITNESS", "THE COURT"):
-                    attorneys.add(prev.speaker)
-                    break
-            
-            if len(p.text.split()) > 4:
-                answers.append(p.text)
-        else:
-            if in_witness and i - last_witness_idx > 50:
-                in_witness = False
-                
-    flush_witness()
+        if p.speaker != "THE WITNESS":
+            continue
+
+        page_name = idx.witness_names.get(p.page)
+
+        if run_pages:
+            # A page-header name that differs from the current run = a NEW
+            # witness. Unnamed pages continue the run (carry-forward).
+            if page_name is not None and page_name != run_name:
+                flush_run()
+            # Fallback only for UNNAMED runs: a named witness who falls silent
+            # for >50 passages is NOT a new witness — the header name is the
+            # identity, not silence.
+            elif run_name == "Unnamed Witness" and i - run_last_idx > 50:
+                flush_run()
+
+        if not run_pages:
+            run_name = page_name or "Unnamed Witness"
+
+        for j in range(i-1, max(-1, i-10), -1):
+            prev = idx.passages[j]
+            if prev.speaker not in ("THE WITNESS", "THE COURT"):
+                run_attorneys.add(prev.speaker)
+                break
+
+        run_pages.add(p.page)
+        if len(p.text.split()) > 4:
+            run_answers.append(p.text)
+        run_last_idx = i
+
+    flush_run()
     return witnesses
 
 

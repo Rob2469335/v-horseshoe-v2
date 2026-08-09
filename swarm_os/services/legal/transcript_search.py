@@ -58,6 +58,25 @@ _PAGE_NO_RE = re.compile(r"^\s*(\d{1,4})\s*$")
 # a passage only when a page break splits an utterance, so they must be dropped.
 _VOLUME_ID_RE = re.compile(r"^[Jj]\d+[A-Za-z]+\d+[A-Za-z]*\d*(?:Page)?$")
 _PAGE_HEADER_RE = re.compile(r"^[Jj]\d+[A-Za-z]+\d+[A-Za-z]*\d*(?:Page)?\s+\S.{0,40}$")
+# The witness name printed at the top of each page of testimony, e.g.
+# "J5ATDUN1  Mueller - Cross" -> "Mueller", "J58TDUN1  Dewitt" -> "Dewitt".
+# Exactly ONE name token is captured (this corpus uses single-token names:
+# Nichols, Dewitt, Mueller, Al-Shabazz, ...); the section label ("- Cross",
+# "- Direct", ...) is stripped and never folds into the name. The
+# "J571dun1 - Corrected" shape (dash BEFORE any name) does not match, so it
+# never produces a bogus "Corrected" witness.
+_WITNESS_NAME_RE = re.compile(
+    r"^[Jj]\d+[A-Za-z]+\d+[A-Za-z]*\d*(?:Page)?\s+"
+    r"([A-Z][A-Za-z0-9.'-]*)"
+    r"(?:\s*-\s+.*)?$"
+)
+# Section labels that can never be a witness name (defense-in-depth: a
+# "J591dun1  Direct" style header — a bare section keyword with no name —
+# would otherwise be captured as a bogus witness).
+_SECTION_KEYWORDS = frozenset({
+    "Direct", "Cross", "Redirect", "Recross", "Examination",
+    "Voir", "DirectExamination", "CrossExamination",
+})
 _STAGE_RE = re.compile(r"^\((?:Jury|Witness|Recess|Continued|At sidebar|In open court|In open c)[^)]*\)$", re.I)
 # Examination section headers that are layout, not speech ("CROSS-EXAMINATION",
 # "DIRECT EXAMINATION", "REDIRECT EXAMINATION", "RECROSS EXAMINATION").
@@ -124,6 +143,11 @@ class TranscriptIndex:
     case: str = ""
     source: str = ""
     passages: list[Passage] = field(default_factory=list)
+    # page -> witness name, harvested from each page's header layout line
+    # ("J5ATDUN1  Mueller - Cross" -> {760: "Mueller"}). The court reporter
+    # prints the testifying witness's name at the top of each page of
+    # testimony; this lets the analysis layer group passages by witness.
+    witness_names: dict[int, str] = field(default_factory=dict)
 
     def speaker_passages(self, name: str) -> list[Passage]:
         """Every passage spoken by `name` (case-insensitive substring on the
@@ -223,6 +247,13 @@ def parse_transcript(text: str, case: str = "", source: str = "") -> TranscriptI
             # Page-number and volume-id lines ("502", "J591dun1") and page
             # header lines ("J591dun1  Nichols - Cross") are layout, not speech.
             if _PAGE_NO_RE.match(line) or _VOLUME_ID_RE.match(line) or _PAGE_HEADER_RE.match(line):
+                # A page-header line names the testifying witness ("J5ATDUN1
+                #  Mueller - Cross" -> "Mueller"). Harvest it so the analysis
+                # layer can group passages by witness. The leading page-number/
+                # volume-id lines match nothing, so they leave the map untouched.
+                wm = _WITNESS_NAME_RE.match(line)
+                if wm and page and wm.group(1) not in _SECTION_KEYWORDS:
+                    idx.witness_names[page] = wm.group(1).strip()
                 continue
             # "BY MS. AL-SHABAZZ:" — switches who owns the Q. lines.
             by = _BY_HEADER_RE.match(line)

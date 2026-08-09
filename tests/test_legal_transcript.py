@@ -143,6 +143,41 @@ def test_page_header_line_is_stripped():
     assert any(t == "Did they show you a photograph?" for t in al_shabazz)
 
 
+def test_page_header_witness_name_harvested():
+    """The reporter prints the testifying witness's name at the top of each
+    page of testimony ("J5ATDUN1  Mueller - Cross"). That name must be
+    harvested into idx.witness_names so the analysis layer can group passages
+    by witness — not discarded as mere layout."""
+    real = (
+        "\n760\nJ5ATDUN1                 Mueller - Cross\n\n"
+        "        1             MS. AL-SHABAZZ:  Did they show you a photograph?\n"
+        "        2             THE WITNESS:  Yes, I did.\n"
+        "\n\n" + _FOOTER + "\n"
+        "\n770\nJ5ATDUN1                 Dewitt\n\n"
+        "        1             MR. FOLLY:  And what happened next?\n"
+    )
+    idx = parse_transcript(real, case="US v. Test", source="real-header-names")
+    assert idx.witness_names == {760: "Mueller", 770: "Dewitt"}
+
+
+def test_page_header_witness_name_drops_section_labels():
+    """The witness-name harvest must NOT capture section labels or the
+    "J571dun1 - Corrected" transcript-fix header as a bogus witness."""
+    real = (
+        "\n501\nJ591dun1                 Direct\n\n"
+        "        1             THE COURT:  Please be seated.\n"
+        "\n\n" + _FOOTER + "\n"
+        "\n502\nJ571dun1 - Corrected\n\n"
+        "        1             THE COURT:  Thank you.\n"
+        "\n\n" + _FOOTER + "\n"
+        "\n503\nJ591dun1                 Mueller - Cross\n\n"
+        "        1             THE COURT:  Continue.\n"
+    )
+    idx = parse_transcript(real, case="US v. Test", source="real-header-sections")
+    # Only the genuine witness header (with a name + " - Cross") is harvested.
+    assert idx.witness_names == {503: "Mueller"}
+
+
 def test_bare_name_line_boundary_is_flagged():
     """The known-gap dangerous shape — a bare colon-less speaker-name line
     merged onto the end of another speaker's passage — must be mechanically
