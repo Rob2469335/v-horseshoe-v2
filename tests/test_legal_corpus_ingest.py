@@ -21,7 +21,9 @@ def test_real_nc_schema_maps_to_payload():
     rows = list(corpus_ingest.iter_in_force_rows(NC_PARQUET, "nc"))
     assert rows, "expected at least one in-force NC section"
     point_id, payload = rows[0]
-    assert point_id.startswith("nc:")
+    # Qdrant point ids must be UUIDs (verified live: string ids are rejected 400).
+    import uuid as _uuid
+    assert _uuid.UUID(point_id)
     # The payload fields the retrieval layer needs must all be present.
     for field in ("jurisdiction", "citation", "act_id", "section_number",
                   "section_title", "content", "word_count"):
@@ -53,16 +55,15 @@ def test_in_force_filter_excludes_non_in_force():
     finally:
         Path(fname).unlink(missing_ok=True)
     ids = [pid for pid, _ in rows]
-    assert "xx:a" in ids
-    assert not any("b" in pid for pid in ids)  # repealed dropped
-    assert not any("no-id" in pid for pid in ids)  # missing act_id dropped
+    assert len(ids) == 1  # only the in-force section with an act_id survives
+    import uuid as _uuid
+    assert _uuid.UUID(ids[0])
 
 
-def test_point_id_is_jurisdiction_stable():
-    """Point ids must be jurisdiction-prefixed so re-runs are idempotent and
-    cross-jurisdiction sections never collide."""
-    assert corpus_ingest.iter_in_force_rows is not None
-    # Contract check on the id format via the payload mapper.
+def test_point_id_is_deterministic_uuid():
+    """Point ids must be deterministic UUIDv5s (from act_id) so re-runs are
+    idempotent, cross-jurisdiction sections never collide, and Qdrant accepts
+    them (string ids are rejected with HTTP 400)."""
     p = corpus_ingest._row_to_payload({"state": "ny", "act_id": "STATE_NY_S100",
                                        "citation": "N.Y. Gen. Oblig. L. § 5-701",
                                        "section_title": "t", "text": "x",

@@ -19,9 +19,11 @@ from __future__ import annotations
 
 import logging
 import os
+import uuid
 from pathlib import Path
 from typing import Any
 
+import asyncio
 import httpx
 import requests
 
@@ -37,6 +39,16 @@ EMBED_MODEL = "gte-modernbert-base-Q8_0.gguf"
 SNAPSHOT = "v2026.07"
 OSS_BASE = "https://oss-data-us.vaquill.ai"
 
+# The embed server (llama.cpp `--embedding`) rejects ANY request whose total
+# input exceeds its PHYSICAL batch size (verified live: "input (58418 tokens) is
+# too large to process, increase the physical batch size (current: 8192)").
+# The repo's codebase indexer solved the same class of bug with word-chopping
+# per text. For statutes (full sections can be thousands of tokens) we must
+# BOTH chop each text to a per-text budget AND keep the batch small enough that
+# batch × budget stays under 8192 tokens.
+_EMBED_BATCH_BUDGET_CHARS = 4000   # ~1k tokens per text at ~4 chars/token
+_MAX_BATCH_TOKENS = 8192           # llama.cpp physical batch size (verified)
+
 # Jurisdiction scope: NY, NJ, GA, NC + federal (USC).
 SCOPE_FILES = {
     "ny": "us_ny_statutes.parquet",
@@ -45,6 +57,22 @@ SCOPE_FILES = {
     "nc": "us_nc_statutes.parquet",
     "federal": "us_federal_statutes.parquet",
 }
+
+
+def _fit_budget(text: str) -> str:
+    """Word-chopping budget (mirrors the codebase indexer's _fit_token_budget):
+    never send the embed model a single text that could overflow its context.
+    Preserves whole words up to the budget."""
+    if not text or len(text) <= _EMBED_BATCH_BUDGET_CHARS:
+        return text
+    out: list[str] = []
+    n = 0
+    for w in text.split():
+        if n + len(w) + 1 > _EMBED_BATCH_BUDGET_CHARS:
+            break
+        out.append(w)
+        n += len(w) + 1
+    return " ".join(out)
 
 _embed_client: httpx.AsyncClient | None = None
 
@@ -111,29 +139,61 @@ def iter_in_force_rows(parquet_path: Path, jurisdiction: str):
         act_id = payload["act_id"]
         if not act_id or not payload["content"].strip():
             continue
-        # Prefix the id with the jurisdiction for a stable, non-colliding point id.
-        yield f"{jurisdiction}:{act_id}", payload
+        # Qdrant point IDs must be an unsigned integer or UUID (verified live:
+        # string ids like "nc:STATE_NC_..." are rejected with HTTP 400). Use a
+        # deterministic UUIDv5 from the act_id so re-runs are idempotent and
+        # cross-jurisdiction sections never collide.
+        point_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"openuslaw:{jurisdiction}:{act_id}"))
+        yield point_id, payload
 
 
 async def _embed(texts: list[str]) -> list[list[float]] | None:
-    """Embed a batch via the local gte-modernbert server (:8081)."""
-    try:
-        resp = await _get_embed_client().post(
-            "/embeddings",
-            json={"model": EMBED_MODEL, "input": texts},
-        )
-        resp.raise_for_status()
-        data = resp.json()["data"]
-        return [d["embedding"] for d in sorted(data, key=lambda d: d["index"])]
-    except Exception as exc:
-        log.warning("embed failed for batch of %d: %s", len(texts), exc)
-        return None
+    """Embed a batch via the local gte-modernbert server (:8081).
+
+    Retries once on a transient 5xx — the embed server returns 500 while it is
+    warming up / busy right after Qdrant or llama.cpp comes back, and without a
+    retry the whole batch is silently dropped (the indexer's 'silent-drop' bug
+    class). A 4xx is not retried (it's a real request error).
+    """
+    last_exc: Exception | None = None
+    for attempt in (0, 1):
+        try:
+            # Word-choop every text so an oversized section can't reject the
+            # whole batch (the codebase indexer's proven fix for the same
+            # "input too large" 500).
+            fit_texts = [_fit_budget(t) for t in texts]
+            resp = await _get_embed_client().post(
+                "/embeddings",
+                json={"model": EMBED_MODEL, "input": fit_texts},
+                headers={"Authorization": "Bearer llama"},  # llama.cpp serve --api-key llama
+            )
+            if resp.status_code >= 500:
+                last_exc = RuntimeError(f"embed server {resp.status_code}: {resp.text[:200]}")
+                await asyncio.sleep(1.0 + attempt)
+                continue
+            resp.raise_for_status()
+            data = resp.json()["data"]
+            return [d["embedding"] for d in sorted(data, key=lambda d: d["index"])]
+        except Exception as exc:
+            last_exc = exc
+            if isinstance(exc, httpx.HTTPStatusError) and exc.response is not None \
+                    and exc.response.status_code < 500:
+                break  # 4xx: real error, don't retry
+            await asyncio.sleep(1.0 + attempt)
+    log.warning("embed failed for batch of %d after retries: %s", len(texts), last_exc)
+    return None
 
 
 async def ingest_one_file(parquet_path: Path, jurisdiction: str, batch_size: int = 16) -> int:
     """Ingest one jurisdiction's in-force sections into Qdrant. Returns the
     number of sections indexed. Re-embedding is idempotent: we delete the
-    jurisdiction's points first, then upsert fresh."""
+    jurisdiction's points first, then upsert fresh.
+
+    Batches are flushed by TOKEN BUDGET (not fixed count): the embed server's
+    physical batch size is 8192 tokens (verified live), so a fixed-count batch
+    of long statute sections blows past it and 500s the whole batch. We estimate
+    each batch's tokens (~4 chars/token) and flush before it approaches 8192.
+    """
     ensure_collection()
     # Remove existing points for this jurisdiction so re-runs don't duplicate.
     try:
@@ -148,10 +208,11 @@ async def ingest_one_file(parquet_path: Path, jurisdiction: str, batch_size: int
     batch_texts: list[str] = []
     batch_ids: list[str] = []
     batch_payloads: list[dict[str, Any]] = []
+    batch_chars = 0
     total = 0
 
     async def flush():
-        nonlocal total
+        nonlocal total, batch_chars
         if not batch_ids:
             return
         vectors = await _embed(batch_texts)
@@ -170,15 +231,20 @@ async def ingest_one_file(parquet_path: Path, jurisdiction: str, batch_size: int
         batch_ids.clear()
         batch_texts.clear()
         batch_payloads.clear()
+        batch_chars = 0
 
     for point_id, payload in iter_in_force_rows(parquet_path, jurisdiction):
         # Embed the citation + title + text so retrieval matches on the section
         # heading and the body, not just one or the other.
-        batch_texts.append(
-            f"{payload['citation']} — {payload['section_title']}\n{payload['content']}"
-        )
+        text = f"{payload['citation']} — {payload['section_title']}\n{payload['content']}"
+        # ~4 chars/token; keep a 15% headroom under the 8192 physical batch size.
+        approx_tokens = max(1, len(text) // 4)
+        if batch_ids and batch_chars // 4 + approx_tokens >= int(_MAX_BATCH_TOKENS * 0.85):
+            await flush()
+        batch_texts.append(text)
         batch_ids.append(point_id)
         batch_payloads.append(payload)
+        batch_chars += len(text)
         if len(batch_ids) >= batch_size:
             await flush()
 
@@ -224,3 +290,42 @@ def download_parquet(jurisdictions: list[str] | None = None, out_dir: Path = Pat
                     f.write(chunk)
         result[jur] = dest
     return result
+
+
+def run_ingest_cli() -> None:
+    """CLI entrypoint for the DETACHED background ingestion process.
+
+    Logs every step to data/legal/ingest.log with flush=True so a parent shell
+    teardown never loses progress, and so an operator can tail the file to watch
+    a long (multi-jurisdiction) ingest finish outside any single command window.
+    Writes a completion marker file on success.
+    """
+    import asyncio
+    import logging
+
+    log_dir = Path("./data/legal")
+    log_dir.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+        handlers=[logging.FileHandler(log_dir / "ingest.log", encoding="utf-8")],
+    )
+    # Keep httpx transport logs quiet in the file; we log our own progress.
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+
+    asyncio.run(_ingest_all_cli(log_dir))
+
+
+async def _ingest_all_cli(log_dir: Path) -> None:
+    counts = await ingest_all(log_dir)
+    line = f"INGEST COMPLETE: {counts} total={sum(counts.values())}"
+    log.info(line)
+    (log_dir / "ingest.done").write_text(line + "\n", encoding="utf-8")
+
+
+if __name__ == "__main__":
+    # Module entrypoint for the DETACHED background ingestion process. Launch as
+    # `python -m swarm_os.services.legal.corpus_ingest` — never via `-c`, which
+    # PowerShell's Start-Process -ArgumentList mangles (the silent-death bug).
+    run_ingest_cli()
