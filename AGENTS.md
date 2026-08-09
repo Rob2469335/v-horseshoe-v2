@@ -908,6 +908,10 @@ Converted `except:` → `except Exception:` (or specific types) in `swarm_os/cor
 
 ## Self-Healing & Self-Learning Fixes
 
+- **Rule (code_analyzer)**: Failure: The code_analyzer attempted to read 'x.py' but the file does not exist in the filesystem, causing a File not found failure. | Root cause: ...
+
+- **Rule (code_analyzer)**: Failure: The code_analyzer attempted to read 'x.py' without confirming it exists in the filesystem, causing 'File not found: x.py' and failing the ...
+
 - **Rule (code_analyzer)**: Failure: The agent attempted to read the file 'x.py' without verifying its existence first, resulting in a "File not found" error during code analy...
 
 - **[ROLLBACK-COMPLETED] (2026-08-08T17:40:08.443265+00:00)**: runtime_v2/services/indexer.py — signal_1 test regression attributable to runtime_v2/services/indexer.py
