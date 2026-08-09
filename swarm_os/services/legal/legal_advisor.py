@@ -18,6 +18,14 @@ The core requirement this module enforces STRUCTURALLY (not in comments):
    retrieved sections (each carrying a citation). The citation-verification seam
    (citation_verify.py) is wired in to flag fabricated/misaligned citations; a
    fabricated citation downgrades the answer (verification.score low).
+
+KNOWN LIMITATION (2026-08-09): `_synthesize` passes each retrieved section's
+content to the LLM truncated to 800 chars (`content[:800]`) with no explicit
+truncation marker. The model may synthesize as if it read the whole section
+when it only saw the opening — a grounding-quality risk, NOT data loss (the
+full sections stay stored in Qdrant and remain retrievable via /legal/search).
+If synthesis output is ever audited for grounding, check whether an answer
+over-relies on section openings before trusting it.
 """
 from __future__ import annotations
 

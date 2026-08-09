@@ -18,7 +18,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from swarm_os.services.legal.citation_verify import verify_citations, verify_health
-from swarm_os.services.legal.legal_search import search_statutes, JURISDICTIONS
+from swarm_os.services.legal.legal_search import search_statutes, search_cases, JURISDICTIONS, TIERS
 
 log = logging.getLogger(__name__)
 
@@ -54,6 +54,34 @@ async def legal_search(req: SearchRequest) -> SearchResponse:
         ok=True,
         results=results,
         message=f"{len(results)} statute section(s) found.",
+    )
+
+
+class CaseSearchRequest(BaseModel):
+    query: str = Field(..., min_length=1, max_length=2000, description="Natural-language legal question or case-law terms")
+    tier: int | None = Field(None, description=f"Manifest tier filter: {TIERS} (1 controlling / 2 backbone / 3 context / 4 Batson)")
+    circuit: str | None = Field(None, description='Circuit filter, e.g. "2d" or "scotus"')
+    batson: bool | None = Field(None, description="Filter to the Batson-authority subset (True/False)")
+    top_k: int = Field(8, ge=1, le=50, description="Number of results to return after reranking")
+
+
+@router.post("/cases/search", response_model=SearchResponse)
+async def legal_case_search(req: CaseSearchRequest) -> SearchResponse:
+    """Hybrid case-law search over the ingested `legal_cases` corpus (the
+    curated manifest from 110 F.4th 455 + Batson authorities). Dense vector
+    search with optional tier/circuit/batson filter then cross-encoder rerank.
+    Degrades gracefully — an embed/reranker outage returns what it can."""
+    try:
+        results = await search_cases(req.query, req.tier, req.circuit, req.batson, req.top_k)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception:
+        log.exception("legal case search failed")
+        raise HTTPException(status_code=500, detail="Legal case search failed")
+    return SearchResponse(
+        ok=True,
+        results=results,
+        message=f"{len(results)} case section(s) found.",
     )
 
 
