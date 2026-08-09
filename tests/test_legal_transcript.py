@@ -56,6 +56,21 @@ def test_parses_pages_and_page_numbers():
     assert pages == [499, 502, 506, 533]
 
 
+def test_page_bleed_regression():
+    """A page's FINAL speaker line must keep that page's number, not inherit
+    the next page's — the parser must attribute by where the passage STARTED,
+    not by the page of the NEXT block (which lazily flushes the prior buffer).
+    Real shape: p.499's last line is a speaker line; p.502 starts a new section."""
+    idx = parse_transcript(SAMPLE, case="US v. Test")
+    court = idx.speaker_passages("THE COURT")
+    seated = [p for p in court if p.text == "Please be seated."]
+    assert seated and seated[0].page == 499
+    # The 502 block's own speaker line must be on 502, not pulled back to 499.
+    greeting = [p for p in idx.speaker_passages("AL-SHABAZZ")
+                if p.text == "Good morning, Ms. Nichols."]
+    assert greeting and greeting[0].page == 502
+
+
 def test_speaker_passages_include_q_lines_under_by_header():
     """The core requirement: AL-SHABAZZ's Q. lines under her BY header are
     attributed to her — a naive 'MS. AL-SHABAZZ:' grep would miss them."""

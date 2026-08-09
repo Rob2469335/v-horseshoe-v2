@@ -230,7 +230,16 @@ def parse_transcript(text: str, case: str = "", source: str = "") -> TranscriptI
             if page:
                 break
         if page:
-            current_page = page
+            # NOTE: `current_page` is deliberately NOT advanced here. A passage
+            # is flushed lazily — only when the NEXT speaker/stage/section line
+            # arrives, which may be in the following page's block. Advancing
+            # current_page at this block top would stamp the previous page's
+            # trailing passage with the NEXT page's number (every page's final
+            # line bleeds one page forward — a pre-existing bug that silently
+            # misdated the page anchors across all artifacts). The speaker/Q/A
+            # branches below set `current_page` from `page` when the passage
+            # BEGINS, which is the correct attribution point (a page-break-split
+            # utterance belongs to the page where it started).
             first_page_found = True
         elif not first_page_found:
             # Leading header block (court caption, appearances) precedes the
