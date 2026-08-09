@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
 from swarm_os.services.legal.transcript_search import TranscriptIndex
@@ -67,42 +68,54 @@ def build_analysis(indices: list[TranscriptIndex], outfile: str) -> str:
 def _build_chronology(idx: TranscriptIndex) -> list[str]:
     events = []
     current_exam_atty = None
-    exam_start_page = None
+    last_witness_page = None
     
-    for i in range(len(idx.passages)):
-        p1 = idx.passages[i]
-        p2 = idx.passages[i+1] if i + 1 < len(idx.passages) else None
-        t_upper = p1.text.upper()
+    ruling_re = re.compile(r"\b(OVERRULED|SUSTAINED|ALLOW IT|YOU CAN ANSWER|DENIED|GRANTED|STRIKE THAT)\b")
+    
+    for i, p in enumerate(idx.passages):
+        t_upper = p.text.upper()
         
-        # Detect examination by tracking attorney questions followed by witness answers.
-        # This bypasses the need for the explicitly parsed 'CROSS-EXAMINATION' headers
-        # which transcript_search strips as layout.
-        if p2 and p2.speaker == "THE WITNESS" and p1.speaker not in ("THE COURT", "THE WITNESS"):
-            if current_exam_atty != p1.speaker:
+        if p.speaker == "THE WITNESS":
+            last_witness_page = p.page
+            examiner = None
+            for j in range(i-1, max(-1, i-10), -1):
+                prev_p = idx.passages[j]
+                if prev_p.speaker not in ("THE WITNESS", "THE COURT"):
+                    examiner = prev_p.speaker
+                    break
+                elif prev_p.speaker == "THE WITNESS":
+                    break
+            
+            if examiner and current_exam_atty != examiner:
                 if current_exam_atty is not None:
-                    events.append(f"- Examination by {current_exam_atty} ends (Page {p1.page})")
-                current_exam_atty = p1.speaker
-                exam_start_page = p1.page
-                events.append(f"- Examination by {current_exam_atty} begins (Page {exam_start_page})")
+                    events.append(f"- Examination by {current_exam_atty} ends (Page {last_witness_page})")
+                current_exam_atty = examiner
+                events.append(f"- Examination by {current_exam_atty} begins (Page {p.page})")
+                
+        if "OBJECTION" in t_upper and p.speaker not in ("THE COURT", "THE WITNESS"):
+            events.append(f"- Objection by {p.speaker} (Page {p.page})")
+            
+        if p.speaker == "THE COURT":
+            for r_match in ruling_re.finditer(t_upper):
+                r = r_match.group(1).title()
+                if r in ("Allow It", "You Can Answer"): 
+                    r = "Overruled (Allowed)"
+                elif r == "Strike That": 
+                    r = "Sustained (Stricken)"
+                events.append(f"- Ruling: {r} by THE COURT (Page {p.page})")
+                
+            if "CHARGE THE JURY" in t_upper or "CHARGE TO THE JURY" in t_upper or "INSTRUCT THE JURY" in t_upper:
+                events.append(f"- Jury Instructions / Charge (Page {p.page})")
+                
+        if "SIDEBAR" in t_upper and p.speaker not in ("THE WITNESS",):
+            events.append(f"- Sidebar mentioned by {p.speaker} (Page {p.page})")
+            
+        if ("ADJOURN" in t_upper or "RECESS" in t_upper) and p.speaker not in ("THE WITNESS",):
+            events.append(f"- Adjournment/Recess mentioned by {p.speaker} (Page {p.page})")
 
-        if "OBJECTION" in t_upper:
-            events.append(f"- Objection by {p1.speaker} (Page {p1.page})")
-        if "OVERRULED" in t_upper or "SUSTAINED" in t_upper:
-            r = "Overruled" if "OVERRULED" in t_upper else "Sustained"
-            events.append(f"- Ruling: {r} by {p1.speaker} (Page {p1.page})")
-        if "SIDEBAR" in t_upper:
-            events.append(f"- Sidebar mentioned by {p1.speaker} (Page {p1.page})")
-        if "JURY INSTRUCTION" in t_upper or "CHARGE" in t_upper:
-            if p1.speaker == "THE COURT":
-                events.append(f"- Jury Instructions / Charge (Page {p1.page})")
-        if "ADJOURN" in t_upper or "RECESS" in t_upper:
-            events.append(f"- Adjournment/Recess mentioned by {p1.speaker} (Page {p1.page})")
-
-    # Flush dangling examination
-    if current_exam_atty and idx.passages:
-        events.append(f"- Examination by {current_exam_atty} ends (Page {idx.passages[-1].page})")
+    if current_exam_atty and last_witness_page:
+        events.append(f"- Examination by {current_exam_atty} ends (Page {last_witness_page})")
         
-    # Deduplicate events that are logged multiple times for the same logical occurrence
     res = []
     for e in events:
         if not res or res[-1] != e:
@@ -115,85 +128,124 @@ def _build_witness_matrix(idx: TranscriptIndex) -> list[dict[str, str]]:
     in_witness = False
     pages: set[int] = set()
     attorneys: set[str] = set()
-    summary_snippets: list[str] = []
+    answers: list[str] = []
     
-    for i, p in enumerate(idx.passages):
-        if p.speaker == "THE WITNESS":
-            in_witness = True
-            pages.add(p.page)
-            if i > 0 and idx.passages[i-1].speaker not in ("THE WITNESS", "THE COURT"):
-                attorneys.add(idx.passages[i-1].speaker)
-            if len(summary_snippets) < 3 and len(p.text.split()) > 5:
-                # Basic string truncation for neutrality, avoiding LLM analysis.
-                txt = p.text.replace('\n', ' ')
-                summary_snippets.append(txt[:100] + ("..." if len(txt) > 100 else ""))
-        else:
-            if in_witness and p.speaker not in ("THE WITNESS", "THE COURT") and (i+1 < len(idx.passages) and idx.passages[i+1].speaker != "THE WITNESS"):
-                p_min = min(pages) if pages else 0
-                witnesses.append({
-                    "name": "Unnamed Witness",
-                    "pages": f"{p_min}-{max(pages)}" if pages else "",
-                    "attorneys": ", ".join(sorted(attorneys)),
-                    "summary": f"Testified regarding: {' | '.join(summary_snippets)} [not assessed; see page {p_min}]"
-                })
-                in_witness = False
-                pages = set()
-                attorneys = set()
-                summary_snippets = []
-                
-    if in_witness:
-        p_min = min(pages) if pages else 0
+    def flush_witness():
+        if not pages: 
+            return
+        answers.sort(key=len, reverse=True)
+        best_answers = answers[:3]
+        summary_snippets = []
+        for ans in best_answers:
+            txt = ans.replace('\n', ' ')
+            summary_snippets.append(txt[:150] + ("..." if len(txt) > 150 else ""))
+            
+        p_min = min(pages)
         witnesses.append({
             "name": "Unnamed Witness",
-            "pages": f"{p_min}-{max(pages)}" if pages else "",
+            "pages": f"{p_min}-{max(pages)}",
             "attorneys": ", ".join(sorted(attorneys)),
-            "summary": f"Testified regarding: {' | '.join(summary_snippets)} [not assessed; see page {p_min}]"
+            "summary": f"Testified regarding: {' | '.join(summary_snippets)} [not assessed; see page {p_min}]" if summary_snippets else f"No substantive testimony extracted [not assessed; see page {p_min}]"
         })
-        
+    
+    last_witness_idx = -1
+    for i, p in enumerate(idx.passages):
+        if p.speaker == "THE WITNESS":
+            if not in_witness:
+                if last_witness_idx != -1 and i - last_witness_idx > 50:
+                    flush_witness()
+                    pages.clear()
+                    attorneys.clear()
+                    answers.clear()
+                in_witness = True
+                
+            last_witness_idx = i
+            pages.add(p.page)
+            for j in range(i-1, max(-1, i-10), -1):
+                prev = idx.passages[j]
+                if prev.speaker not in ("THE WITNESS", "THE COURT"):
+                    attorneys.add(prev.speaker)
+                    break
+            
+            if len(p.text.split()) > 4:
+                answers.append(p.text)
+        else:
+            if in_witness and i - last_witness_idx > 50:
+                in_witness = False
+                
+    flush_witness()
     return witnesses
 
 
 def _build_objections_log(idx: TranscriptIndex) -> list[str]:
     logs = []
+    pending_objections = []
+    ruling_re = re.compile(r"\b(OVERRULED|SUSTAINED|ALLOW IT|YOU CAN ANSWER|DENIED|GRANTED|STRIKE THAT)\b")
+    
     for i, p in enumerate(idx.passages):
         t_upper = p.text.upper()
-        if "OBJECTION" in t_upper:
-            ruling = "No explicit ruling found nearby"
-            # Look ahead a few passages for the court's ruling
-            for j in range(i+1, min(i+6, len(idx.passages))):
-                fp = idx.passages[j]
-                if fp.speaker == "THE COURT":
-                    if "OVERRULED" in fp.text.upper():
-                        ruling = f"Overruled (Page {fp.page})"
-                        break
-                    elif "SUSTAINED" in fp.text.upper():
-                        ruling = f"Sustained (Page {fp.page})"
-                        break
+        
+        if "OBJECTION" in t_upper and p.speaker not in ("THE COURT", "THE WITNESS"):
+            pending_objections.append((p.speaker, p.page, p.text))
             
-            txt = p.text.replace('\n', ' ')
-            logs.append(f"- **Objection** by {p.speaker} on Page {p.page}: \"{txt}\" -> **Ruling**: {ruling} [not assessed; see page {p.page}]")
+        if p.speaker == "THE COURT":
+            rulings = []
+            for r_match in ruling_re.finditer(t_upper):
+                r = r_match.group(1).title()
+                if r in ("Allow It", "You Can Answer"):
+                    r = "Overruled (Allowed)"
+                elif r == "Strike That":
+                    r = "Sustained (Stricken)"
+                rulings.append(r)
+                
+            if rulings and pending_objections:
+                r_combined = " / ".join(rulings)
+                for obj_speaker, obj_page, obj_text in pending_objections:
+                    txt = obj_text.replace('\n', ' ')
+                    logs.append(f"- **Objection** by {obj_speaker} on Page {obj_page}: \"{txt}\" -> **Ruling**: {r_combined} (Page {p.page}) [not assessed; see page {p.page}]")
+                pending_objections.clear()
+                    
+    for obj_speaker, obj_page, obj_text in pending_objections:
+        txt = obj_text.replace('\n', ' ')
+        logs.append(f"- **Objection** by {obj_speaker} on Page {obj_page}: \"{txt}\" -> **Ruling**: No explicit ruling found nearby [not assessed; see page {obj_page}]")
+        
     return logs
 
 
 def _build_batson_pass(idx: TranscriptIndex) -> str:
+    # Batson doctrine mentions: "the Batson challenge", "peremptory strikes",
+    # "pattern of discrimination". A person named "Mr. Batson" is NOT a
+    # challenge — require a doctrine noun after "batson", or the peremptory/
+    # pattern phrases. THE COURT is included (the Court acknowledging a real
+    # challenge is the most on-point passage); THE WITNESS is excluded (a
+    # witness never raises a challenge).
     batson_passages = []
+    batson_re = re.compile(
+        r"\bbatson\s+(?:challenge|motion|objection|claim|argument|violation|error|issue)\b"
+        r"|\bperemptory\b|\bpattern of discrimination\b",
+        re.IGNORECASE,
+    )
+
     for p in idx.passages:
-        txt = p.text.lower()
-        if "batson" in txt or "peremptory" in txt or "pattern of discrimination" in txt:
+        if p.speaker == "THE WITNESS":
+            continue
+
+        if batson_re.search(p.text):
             batson_passages.append(p)
-            
+
     if not batson_passages:
         return "No Batson challenge detected.\n"
-        
+
     out = []
-    out.append("A Batson challenge involves an objection to the use of peremptory strikes on the basis of race or other protected classes.")
-    out.append("The transcript contains the following relevant argument:\n")
-    
+    out.append("The passages below mention the Batson doctrine, peremptory strikes, or a")
+    out.append("pattern of discrimination during jury selection:\n")
+
     for p in batson_passages:
         txt = p.text.replace('\n', ' ')
         out.append(f"- **{p.speaker}** (Page {p.page}): \"{txt}\"")
-        
-    out.append("\n**Plain-Language Summary**: The passages above show an argument regarding jury selection strikes.")
-    out.append(f"Whether the challenge was viable, preserved, or timely is a question for a qualified person, not this tool. [not assessed; see page {batson_passages[0].page}]")
-    
+
+    out.append("\n**Plain-Language Summary**: The passages above reference jury-selection")
+    out.append("strikes or the Batson doctrine. Whether a viable challenge was made, preserved,")
+    out.append(f"or ruled upon is a question for a qualified person, not this tool. [not assessed; see page {batson_passages[0].page}]")
+
     return "\n".join(out)
