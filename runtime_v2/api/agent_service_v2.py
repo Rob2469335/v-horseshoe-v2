@@ -792,7 +792,20 @@ class AgentServiceV2:
             # 300s must be >= _STEP_TIMEOUT (180s) so the step-level budget in
             # stream_runner is the binding constraint, not this outer wrapper.
             async with asyncio.timeout(300.0):
-                return await get_tool_decision(model, messages, agent_id, allowed_tools=allowed_tools)
+                decision = await get_tool_decision(model, messages, agent_id, allowed_tools=allowed_tools)
+            # CIRCUIT-BREAKER BYPASS FIX: get_tool_decision swallows LLM failures
+            # internally and returns a fallback dict {"action": "final",
+            # "ok": False, "system_failure": ...} instead of raising. If we pass
+            # that dict up, the loop's `except` around _get_decision NEVER fires
+            # and consecutive_errors never increments — the breaker (which hands
+            # off to the debugger to heal a down backend after 3 failures) is
+            # bypassed, and every run just ends with a failed final. Raise here so
+            # the decision failure travels the same exception path as a real LLM
+            # error: counted, retried, and after 3 the debugger heals the backend.
+            if isinstance(decision, dict) and decision.get("ok") is False:
+                reason = decision.get("system_failure") or "decision_failed"
+                raise RuntimeError(f"LLM decision failed ({reason}): {str(decision.get('response', ''))[:200]}")
+            return decision
         except asyncio.TimeoutError:
             log.warning("[%s] LLM timeout >300s", agent_id)
             raise
