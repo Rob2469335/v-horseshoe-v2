@@ -296,6 +296,10 @@ class AgentServiceV2:
             "description": c.get("description", ""), "model_role": c.get("model_role", "fast"), "config": c}
     def remove_agent(self, agent_id: str) -> None: self._agents.pop(agent_id, None)
 
+    async def run_tool(self, agent_id: str, tool_name: str, payload: dict) -> dict:
+        from runtime_v2.services.tool_executor import run
+        return await run(tool_name, payload)
+
     # -----------------------------------------------------------------------
     # Helpers: record performance metrics & memory after completion
     # -----------------------------------------------------------------------
