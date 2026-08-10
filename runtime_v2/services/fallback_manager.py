@@ -25,14 +25,17 @@ _refresh_lock = asyncio.Lock()
 _http_client: httpx.AsyncClient | None = None
 
 
-def get_http_client() -> httpx.AsyncClient:
+_client_lock = asyncio.Lock()
+
+async def get_http_client() -> httpx.AsyncClient:
     global _http_client
-    if _http_client is None or _http_client.is_closed:
-        _http_client = httpx.AsyncClient(
-            timeout=httpx.Timeout(connect=5.0, read=30.0, write=30.0, pool=10.0),
-            limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
-            verify=settings.ssl_verify,
-        )
+    async with _client_lock:
+        if _http_client is None or _http_client.is_closed:
+            _http_client = httpx.AsyncClient(
+                timeout=httpx.Timeout(connect=5.0, read=30.0, write=30.0, pool=10.0),
+                limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
+                verify=settings.ssl_verify,
+            )
     return _http_client
 
 # Outcome-driven cooldowns (upgrade: skip a failing model BEFORE the call, not after).
@@ -178,7 +181,7 @@ def _is_cooldown_active(key: str) -> bool:
 async def _fetch_openrouter_models() -> list[dict]:
     models = []
     try:
-        client = get_http_client()
+        client = await get_http_client()
         resp = await client.get("https://openrouter.ai/api/v1/models")
         resp.raise_for_status()
         data = resp.json().get("data", [])
@@ -236,7 +239,7 @@ async def _fetch_groq_models() -> list[dict]:
     if not api_key:
         return models
     try:
-        client = get_http_client()
+        client = await get_http_client()
         headers = {"Authorization": f"Bearer {api_key}"}
         resp = await client.get("https://api.groq.com/openai/v1/models", headers=headers)
         resp.raise_for_status()
@@ -262,7 +265,7 @@ async def _fetch_nvidia_models() -> list[dict]:
         return models
     os.environ.setdefault("NVIDIA_NIM_API_KEY", api_key)
     try:
-        client = get_http_client()
+        client = await get_http_client()
         headers = {"Authorization": f"Bearer {api_key}"}
         resp = await client.get("https://integrate.api.nvidia.com/v1/models", headers=headers)
         resp.raise_for_status()
@@ -289,7 +292,7 @@ async def _fetch_gemini_models() -> list[dict]:
     if not api_key:
         return models
     try:
-        client = get_http_client()
+        client = await get_http_client()
         headers = {"x-goog-api-key": api_key}
         resp = await client.get("https://generativelanguage.googleapis.com/v1beta/models", headers=headers)
         resp.raise_for_status()
@@ -417,7 +420,7 @@ def _get_ling_flash_fallback() -> list[dict]:
 async def _fetch_llama_models() -> list[dict]:
     models = []
     try:
-        client = get_http_client()
+        client = await get_http_client()
         resp = await client.get("http://127.0.0.1:8080/v1/models", headers={"Authorization": "Bearer llama"})
         if resp.status_code == 200:
             data = resp.json().get("data", [])
