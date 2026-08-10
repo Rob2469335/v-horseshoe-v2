@@ -873,9 +873,13 @@ class AgentServiceV2:
             state.handler_status = "DONE"
             return
 
-        # Verify-after-change: reject a final call once when a code file was edited
-        # but never tested, forcing the agent to run sandbox_repl before reporting done.
-        if state.pending_verify and not state._verify_final_rejected:
+        # Verify-after-change: reject a final call when a code file was edited
+        # but never tested, forcing the agent to run sandbox_repl before reporting
+        # done. Rejects on EVERY final while pending_verify stays set (the
+        # MAX_TURNS loop bounds the rejection); only a SUCCESSFUL sandbox_repl
+        # clears pending_verify (below). A one-shot latch (reject once, then let
+        # a second final through) let the agent skip testing after a single nudge.
+        if state.pending_verify:
             state._verify_final_rejected = True
             state.handler_status = "CONTINUE"
             log.warning("[%s] Rejected final: pending code verification.", agent_id)

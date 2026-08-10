@@ -97,7 +97,10 @@ async def test_todo_injected_into_trimmed_messages():
 
 
 @pytest.mark.asyncio
-async def test_pending_verify_blocks_final_once():
+async def test_pending_verify_blocks_every_final_until_verified():
+    """The verify-after-change guard must reject a final on EVERY attempt while
+    pending_verify stays set — a one-shot latch let a second final sail through
+    and the agent could skip testing its edited code after a single nudge."""
     service = AgentServiceV2()
     state = _CallState()
     state.pending_verify = True
@@ -110,15 +113,23 @@ async def test_pending_verify_blocks_final_once():
         pass
     assert state.handler_status == "CONTINUE"
     assert any("sandbox_repl" in m.get("content", "") for m in messages)
-    # Second call goes through (already rejected once)
-    state.pending_verify = True
-    state._verify_final_rejected = True
+    # A SECOND final is STILL rejected while pending_verify is set.
     gen2 = service._handle_final(
         {"action": "final", "response": "done"}, "coder", "m", "p",
         messages, 0.0, "task", True, state)
     events2 = [e async for e in gen2]
-    assert state.handler_status != "CONTINUE"
-    assert any(e.get("type") == "final" for e in events2)
+    assert state.handler_status == "CONTINUE"
+    assert not any(e.get("type") == "final" for e in events2)
+    assert any("sandbox_repl" in m.get("content", "") for m in messages)
+    # Only a SUCCESSFUL sandbox_repl clears pending_verify and re-enables final.
+    state.pending_verify = False
+    state._verify_final_rejected = False
+    gen3 = service._handle_final(
+        {"action": "final", "response": "verified"}, "coder", "m", "p",
+        messages, 0.0, "task", True, state)
+    events3 = [e async for e in gen3]
+    assert state.handler_status == "DONE"
+    assert any(e.get("type") == "final" for e in events3)
 
 
 @pytest.mark.asyncio
