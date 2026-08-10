@@ -547,6 +547,7 @@ class Orchestrator:
         max_steps = 5
         handled_tool_keys: set[str] = set()  # Track handled tool calls to detect repeats
         accumulated_text = ""
+        stream_failed = False  # set by the exception branch; gates bandit success
 
         try:
             for step in range(max_steps):
@@ -661,6 +662,7 @@ class Orchestrator:
                         break
                 except Exception as exc:
                     log.exception("[Orchestrator] Streaming failed with error")
+                    stream_failed = True
                     yield f"\n[Stream Error: {exc}]", chosen_model, trace_id
                     break
         finally:
@@ -694,6 +696,17 @@ class Orchestrator:
                 }
             )
         )
+
+        # Record the SUCCESS in the bandit. Before this, stream_generate only
+        # fed record_failure (on exceptions) — a model that succeeds only via
+        # the streaming path kept successes at 0 while total_requests climbed,
+        # the same one-sided blindness generate() had before its own fix
+        # (strategy.py scores success_rate = successes / total_requests).
+        if not stream_failed:
+            try:
+                self.router.record_success(model=chosen_model, latency_ms=duration_ms)
+            except Exception as exc:
+                log.debug("Failed to record success: %s", exc)
 
         await _release_generation_slot(_dedup_hash)
 

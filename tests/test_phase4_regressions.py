@@ -159,3 +159,56 @@ async def test_stream_generate_releases_slot_when_abandoned():
     assert stored_hash not in orch_mod._active_generations, (
         "generation slot leaked: hash still registered after the stream was abandoned"
     )
+
+
+async def test_stream_generate_records_success_and_recovers_standing():
+    """A successfully-completed stream_generate must feed the bandit's
+    record_success. Before this fix, the streaming path ONLY recorded failures
+    (exception branch); a model whose only callers used stream_generate kept
+    successes at 0 while total_requests climbed -- one-sided blindness
+    strategy.py scores as a 0.0 success_rate with no recovery path."""
+
+    async def fake_stream(model, messages):
+        yield "hello"
+        yield " world"
+
+    orch = MagicMock()
+    orch.llm = MagicMock()
+    orch.llm.stream_generate = fake_stream
+    orch.token_manager = AsyncMock()
+    orch.token_manager.is_exhausted = AsyncMock(return_value=False)
+    orch.token_manager.add_usage = AsyncMock()
+    orch.token_manager.get_usage = AsyncMock(return_value=0)
+    orch._get_memory_context = AsyncMock(return_value="")
+    orch.mcp = MagicMock()
+    orch.mcp.get_tools_schema = MagicMock(return_value=[])
+    orch.trace = MagicMock()
+    orch.trace.new_trace_id = MagicMock(return_value="t3")
+    orch.router = MagicMock()
+    orch.router.route_model = AsyncMock(return_value=MagicMock(model="qwen3.5-4b", reason="r"))
+    orch.router.record_success = MagicMock()
+    orch._fetch_installed_models = AsyncMock(return_value=["qwen3.5-4b"])
+    orch._detect_provider = MagicMock(return_value="llama")
+    orch.events = MagicMock()
+    from swarm_os.core.orchestrator import Orchestrator as RealOrchestrator
+    real = RealOrchestrator.__new__(RealOrchestrator)
+    real.__dict__.update(orch.__dict__)
+    real._infer_task_role = MagicMock(return_value="reasoning")
+    real._parse_tool_call = MagicMock(return_value=None)
+    real.trace.add = MagicMock()
+
+    # Simulate a prior failure so a recovery is observable.
+    real.router.record_failure = MagicMock()
+
+    gen = real.stream_generate(None, messages=[{"role": "user", "content": "hello"}])
+    chunks = [c async for c in gen]
+    text = "".join(c for c, _m, _t in chunks)
+
+    assert text == "hello world"
+    # The success reached the bandit with the model that actually ran.
+    real.router.record_success.assert_called_once()
+    call_kwargs = real.router.record_success.call_args.kwargs
+    assert call_kwargs.get("model") == "qwen3.5-4b", (
+        f"record_success recorded the wrong model: {call_kwargs}"
+    )
+    assert call_kwargs.get("latency_ms", 0) > 0, "record_success needs a real latency"
