@@ -64,8 +64,13 @@ _MAX_COOLDOWN_S = 600.0
 #     merely happen to appear inside a longer number.
 #   - TEXT phrases ("payment", "invalid api key", ...) stay substring-matched.
 _NUMERIC_PERMANENT_STATUS = (401, 402, 403, 404)
+# The status token must NOT be immediately followed by "ms" (a millisecond
+# measure) — "timeout after 404 ms" contains the digits but no HTTP status,
+# while "request failed after 404ms with status 404" still flags on its real
+# standalone 404. Excluding the whole string on "ms" (a substring check) was
+# too broad: it masked a genuine 404 that merely co-occurred with timing info.
 _NUMERIC_PERMANENT_RE = re.compile(
-    r"\b(?:%s)\b" % "|".join(str(c) for c in _NUMERIC_PERMANENT_STATUS)
+    r"\b(?:%s)\b(?!\s*ms\b)" % "|".join(str(c) for c in _NUMERIC_PERMANENT_STATUS)
 )
 _TEXT_PERMANENT_MARKERS = (
     "payment", "insufficient credits", "no credits", "billing",

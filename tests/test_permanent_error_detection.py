@@ -14,8 +14,26 @@ def test_transient_error_containing_401_digits_is_not_permanent():
 
 
 def test_genuine_404_not_found_is_permanent():
+    assert is_permanent_error("404") is True
+    assert is_permanent_error("HTTP 404") is True
+    assert is_permanent_error("status code 404") is True
     assert is_permanent_error("404 Not Found") is True
     assert is_permanent_error("status 404: no such model") is True
+
+
+def test_genuine_404_with_timing_info_still_permanent():
+    """A genuine 404 that merely CO-OCCURS with timing info must stay a
+    permanent error. A substring "ms" exclusion was too broad and masked this:
+    the standalone 404 here is a real status, not a millisecond measure."""
+    assert is_permanent_error("request failed after 404ms with status 404") is True
+
+
+def test_ms_following_digits_is_not_an_http_status():
+    """The numeric status token must not be immediately followed by 'ms' (a
+    millisecond measure). 'timeout after 404 ms' contains the digits but no
+    HTTP status."""
+    assert is_permanent_error("timed out after 404ms") is False
+    assert is_permanent_error("timeout after 404 ms") is False
 
 
 def test_genuine_auth_and_billing_still_permanent():
