@@ -215,7 +215,7 @@ def test_permanent_error_pins_until_manual_clear():
         # Still cooled down (never auto-recovers).
         assert fm.is_model_cooled_down("openrouter/bill:free") is True
     finally:
-        fm.record_model_success("openrouter/bill:free")
+        fm.clear_model_cooldown("openrouter/bill:free")
 
 
 def test_clear_model_cooldown_is_scoped_to_one_model():
@@ -240,7 +240,46 @@ def test_clear_model_cooldown_is_scoped_to_one_model():
         assert fm.clear_model_cooldown("openrouter/never-existed:free") is False
     finally:
         fm.record_model_success("openrouter/a:free")
-        fm.record_model_success("openrouter/bill:free")
+        fm.clear_model_cooldown("openrouter/bill:free")
+
+
+def test_success_does_not_clear_permanent_pin():
+    """A permanent billing pin (until=inf) must SURVIVE a concurrent success —
+    record_model_success clears transient cooldowns only. An in-flight request
+    that succeeds after a 402 pin was written must not silently un-pin the
+    doomed provider (the fail-closed billing contract), or the chain starts
+    retrying a broken key and the billing problem disappears. Only the manual,
+    model-scoped clear_model_cooldown lifts a permanent pin."""
+    from runtime_v2.services import fallback_manager as fm
+    fm.record_model_failure("openrouter/billpin:free", "402 Insufficient Balance", permanent=True)
+    try:
+        assert fm.is_model_cooled_down("openrouter/billpin:free") is True
+        # A success arriving after the pin must NOT clear it.
+        fm.record_model_success("openrouter/billpin:free")
+        assert fm.is_model_cooled_down("openrouter/billpin:free") is True, (
+            "permanent billing pin was cleared by a success — the fail-closed "
+            "billing contract is broken"
+        )
+        entry = fm._cooldowns.get(fm._cooldown_key("openrouter/billpin:free"))
+        assert entry is not None and entry["until"] == float('inf')
+        # The manual clear is still the only exit.
+        assert fm.clear_model_cooldown("openrouter/billpin:free") is True
+        assert not fm.is_model_cooled_down("openrouter/billpin:free")
+    finally:
+        fm.clear_model_cooldown("openrouter/billpin:free")
+
+
+def test_success_clears_transient_cooldown():
+    """A NON-permanent (finite-window) cooldown IS cleared by success — that
+    behavior is unchanged; only the permanent pin is protected."""
+    from runtime_v2.services import fallback_manager as fm
+    fm.record_model_failure("openrouter/transient:free", "boom")
+    try:
+        assert fm.is_model_cooled_down("openrouter/transient:free") is True
+        fm.record_model_success("openrouter/transient:free")
+        assert not fm.is_model_cooled_down("openrouter/transient:free")
+    finally:
+        fm.record_model_success("openrouter/transient:free")
 
 
 # ── security gate scan_code ─────────────────────────────────────────────────

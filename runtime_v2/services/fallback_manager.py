@@ -138,11 +138,25 @@ def is_model_cooled_down(model: str) -> bool:
 
 
 def record_model_success(model: str) -> None:
-    """Called on a clean generation — clears any cooldown so the model can be used again."""
+    """Called on a clean generation — clears any cooldown so the model can be used again.
+
+    NEVER clears a PERMANENT pin (`until == inf`, set on billing/auth 401/402/403
+    by record_model_failure). A permanent pin encodes "do not auto-retry until a
+    human tops up and clears it via clear_model_cooldown" — an in-flight request
+    that happened to succeed before the pin was written (or a stale success
+    event racing the failure) must not silently un-pin a doomed provider, or the
+    billing problem disappears and the chain starts retrying the broken key.
+    Only a transient (finite-window) cooldown is cleared on success."""
     key = _cooldown_key(model)
     if not key:
         return
     with _cooldowns_lock_sync():
+        entry = _cooldowns.get(key)
+        if entry is None:
+            return
+        if entry.get("until") == float("inf"):
+            log.debug("Success NOT clearing permanent pin for %s (requires clear_model_cooldown)", key)
+            return
         _cooldowns.pop(key, None)
 
 

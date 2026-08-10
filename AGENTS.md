@@ -709,7 +709,7 @@ Dependency pairing: React 19 ↔ `@react-three/fiber` ^9.5 / `@react-three/drei`
 
 - **Cloud fallback chain reordered + OpenCode paid API added**: `runtime_v2/services/fallback_manager.py` — the fallback chain had local llama.cpp first (wrong — defeats cloud-first design). Reordered: Groq free → NVIDIA free → Gemini free → OpenRouter free (depleted credits, last) → **OpenCode paid** (`deepseek-chat` via `$OPENAI_API_KEY`/`$OPENAI_API_BASE`) → local qwen3.5-4b last. `_llm_client.py` `build_kwargs` routes `openai/gpt-*`, `openai/o1-*`, `openai/o3-*`, and `openai/deepseek-*` to the OpenCode API. `stream_runner.py` fallback filter uses `_is_local_model()`.
 
-- **DeepSeek direct is now the PRIMARY cloud fallback**: `runtime_v2/services/fallback_manager.py` — new `_get_deepseek_direct_fallback()` returns `deepseek/deepseek-v4-flash` (litellm's native `deepseek/` provider → `api.deepseek.com/v1`, keyed by `DEEPSEEK_API_KEY`; verified via `get_llm_provider`) whenever the key is set, and it is prepended ahead of the Groq/NVIDIA/Gemini/OpenRouter/OpenCode chain. Cheapest path ($0.14/M input miss, **$0.0028/M cache-hit input**, $0.28/M output). `build_kwargs` needs no change — litellm natively routes `deepseek/*`. Also added `"insufficient balance"` to `_PERMANENT_ERROR_MARKERS` (the direct 402 body reads `"Insufficient Balance"`, which did not match `"insufficient credits"`), so a billing-402 pins the model at max cooldown and `get_live_fallbacks()` skips it until a top-up + `record_model_success` clears it. No-op (returns `[]`) when the key is absent. `stream_runner.py`/`_llm_client.py` cloud filters already include it (`deepseek/*` is not `openai/`-local).
+- **DeepSeek direct is now the PRIMARY cloud fallback**: `runtime_v2/services/fallback_manager.py` — new `_get_deepseek_direct_fallback()` returns `deepseek/deepseek-v4-flash` (litellm's native `deepseek/` provider → `api.deepseek.com/v1`, keyed by `DEEPSEEK_API_KEY`; verified via `get_llm_provider`) whenever the key is set, and it is prepended ahead of the Groq/NVIDIA/Gemini/OpenRouter/OpenCode chain. Cheapest path ($0.14/M input miss, **$0.0028/M cache-hit input**, $0.28/M output). `build_kwargs` needs no change — litellm natively routes `deepseek/*`. Also added `"insufficient balance"` to `_PERMANENT_ERROR_MARKERS` (the direct 402 body reads `"Insufficient Balance"`, which did not match `"insufficient credits"`), so a billing-402 pins the model at max cooldown (`until == inf`, permanent) and `get_live_fallbacks()` skips it until a human tops up and clears the pin via the manual, model-scoped `clear_model_cooldown` — `record_model_success` clears transient cooldowns ONLY and never lifts a permanent pin. No-op (returns `[]`) when the key is absent. `stream_runner.py`/`_llm_client.py` cloud filters already include it (`deepseek/*` is not `openai/`-local).
 
 - **NVIDIA free tier now leads the cloud chain (#1) with deepseek-v4-flash**: `runtime_v2/services/fallback_manager.py` — the NVIDIA NIM free API (keyed by `NVIDIA_API_KEY`) hosts `deepseek-ai/deepseek-v4-flash`, so the chain order is now **NVIDIA free v4flash → DeepSeek direct → Groq → Gemini → OpenRouter → OpenCode → local**. NVIDIA models sort with `deepseek` first and `flash` before `pro`/`coder`, so the free flash model leads the NVIDIA batch. Cost: NVIDIA free tier = $0 (added to `usage_log.py` pricing table); DeepSeek direct stays #2 at $0.0028/M cache-hit input.
 
@@ -940,6 +940,20 @@ Converted `except:` → `except Exception:` (or specific types) in `swarm_os/cor
 ---
 
 ## Self-Healing & Self-Learning Fixes
+
+- **Rule (code_analyzer)**: Failure: The code_analyzer attempted to read the file 'x.py' without first verifying that it exists in the filesystem, causing a "File not found" e...
+
+- **Rule (code_analyzer)**: Failure: The code_analyzer attempted to read file 'x.py' but the file did not exist in the filesystem, causing a "File not found" error. The agent'...
+
+- **Rule (code_analyzer)**: Failure: The code_analyzer attempted to read the file at 'x.py' without first confirming it exists, and the operation failed with "File not found: ...
+
+- **Rule (code_analyzer)**: Failure: The code_analyzer attempted to read 'x.py' directly and failed because the file does not exist in the filesystem. | Root cause: The agent ...
+
+- **Rule (code_analyzer)**: Failure: The code_analyzer agent attempted to read the file 'x.py' during an audit of the codebase filesystem, but the file did not exist at that p...
+
+- **Rule (code_analyzer)**: Failure: The code_analyzer attempted to read a file at path 'x.py' without first confirming that the path exists in the auditing codebase filesyste...
+
+- **Rule (code_analyzer)**: Failure: The code_analyzer attempted to read file 'x.py' without first verifying its existence, and the operation failed because the file was not f...
 
 - **Rule (code_analyzer)**: Failure: The code_analyzer attempted to read the file at path 'x.py' during a filesystem audit, but the operation failed because no such file exist...
 
