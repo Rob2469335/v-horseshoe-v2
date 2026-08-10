@@ -176,6 +176,8 @@ async def test_verify_citations_null_volume_canonical_not_shape_mismatch():
     ("N.Y. FCT Law § 581-202", ["581-202"]),
     ("N.Y. EDN Law § 3014-A", ["3014-A"]),
     ("Mass. Gen. Laws ch. 1, § 2", ["2"]),
+    ("N.Y. RPA Law § 235-b(1)(a)", ["235-b(1)(a)"]),
+    ("N.Y. CPL Law § 200.50(3)(b)", ["200.50(3)(b)"]),
 ])
 def test_extract_statute_sections_captures_eyecite_breaks(text, expected):
     """These forms are exactly the ones eyecite M3 mis-parsed (§235-b -> §235,

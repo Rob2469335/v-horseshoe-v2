@@ -156,7 +156,7 @@ def _resolve_to_full(blob: str) -> tuple[list[str], list[str]]:
 # We extract "law section" IDs WITHOUT eyecite — small anchored regexes on the
 # §-signed / N.J.S. / U.S.C. shapes that actually occur in this corpus.
 _SECTION_SIGNED = re.compile(
-    r"\u00a7\s*([0-9]+(?:[-.][0-9A-Za-z]+)*(?:\([0-9A-Za-z]+\))?)"
+    r"\u00a7\s*([0-9]+(?:[-.][0-9A-Za-z]+)*(?:\([0-9A-Za-z]+\))*)"
 )
 _SECTION_NJS = re.compile(
     r"\bN\.?\s*J\.?\s*S\.?\s*A?\.?\s*\u00a7?\s*([0-9]{1,3}:[0-9]{1,3}(?:-[0-9]+)?)"
