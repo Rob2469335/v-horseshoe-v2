@@ -148,7 +148,7 @@ async def test_verify_citations_200_empty_normalized_not_mismatch():
 @pytest.mark.parametrize("text,expected", [
     ("N.Y. RPA Law § 235-b", ["235-b"]),
     ("N.J.S.A. 46:8-19", ["46:8-19"]),
-    ("42 U.S.C. § 1983", ["1983"]),
+    ("42 U.S.C. § 1983", ["42-1983"]),
     ("N.Y. CPL Law § 200.50", ["200.50"]),
     ("N.Y. FCT Law § 581-202", ["581-202"]),
     ("N.Y. EDN Law § 3014-A", ["3014-A"]),
@@ -158,6 +158,35 @@ def test_extract_statute_sections_captures_eyecite_breaks(text, expected):
     """These forms are exactly the ones eyecite M3 mis-parsed (§235-b -> §235,
     46:8-19 missed); the deterministic extractor must survive them."""
     assert extract_statute_sections(text) == expected
+
+
+def test_extract_statute_sections_keeps_usc_title_in_key():
+    """M4 statutory-alignment defense: the U.S.C. Title must stay in the section
+    key. '18 U.S.C. § 1983' and '42 U.S.C. § 1983' are DIFFERENT laws — if the
+    alignment seam strips the Title, a hallucinated Title (18 vs 42) falsely
+    flags as aligned. Both must extract to distinct title-qualified keys."""
+    assert extract_statute_sections("18 U.S.C. § 1983") == ["18-1983"]
+    assert extract_statute_sections("42 U.S.C. § 1983") == ["42-1983"]
+    assert extract_statute_sections("18 U.S.C. § 1983") != extract_statute_sections("42 U.S.C. § 1983")
+
+
+def test_align_citations_wrong_title_is_unaligned():
+    """A cited statute whose Title differs from the retrieved corpus section is
+    UNALIGNED (the statutory-fabrication signal), never aligned just because the
+    section number matches."""
+    res = align_citations(
+        "The claim arises under 18 U.S.C. § 1983.",
+        retrieved_sections=["42 U.S.C. § 1983"],
+    )
+    assert res["count"] == 1
+    assert res["aligned"] == []
+    unaligned = [u["section"] for u in res["unaligned"]]
+    assert unaligned == ["18-1983"]
+    # The matching Title aligns normally.
+    ok = align_citations("The claim arises under 42 U.S.C. § 1983.",
+                         retrieved_sections=["42 U.S.C. § 1983"])
+    assert ok["unaligned"] == []
+    assert [a["normalized"] for a in ok["aligned"]] == ["42-1983"]
 
 
 def test_extract_statute_sections_dedups_order_preserved():

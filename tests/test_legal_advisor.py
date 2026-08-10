@@ -203,3 +203,60 @@ async def test_advise_score_not_negative_when_unverified_and_unparsed_coexist():
     assert "could not be externally verified" in res.answer
     assert "could not be parsed" in res.answer
     assert 0.0 <= res.verification["score"] <= 1.0
+
+
+@pytest.mark.asyncio
+async def test_advise_score_downgrades_on_unaligned_statute():
+    """A cited statute NOT present in the retrieved corpus is the statutory-
+    fabrication signal and MUST drop the verification score below 1.0 (fail-
+    closed contract: 'advise() drops the score below 1.0 on ANY of
+    fabricated/unaligned/unverified/unparsed'). The old flow computed the score
+    BEFORE the alignment seam and never recomputed it, so a fabricated statute
+    left score=1.0 whenever no case citation was present to trip it."""
+    scope = {"jurisdictions": {"ny": {"expected": 40102, "ingested": 8000, "pct": 20.0, "complete": False}}}
+    # Answer cites N.Y. RPA Law § 999-C, but the retrieved corpus only has 235-b.
+    fabricated_statute = "The lease claim arises under N.Y. RPA Law § 999-C."
+    from swarm_os.services.legal.citation_verify import VerifyResponse
+    with patch.object(legal_advisor, "corpus_scope", new=AsyncMock(return_value=scope)), \
+         patch("swarm_os.services.legal.legal_search.search_statutes",
+               new=AsyncMock(return_value=[{"citation": "N.Y. RPA Law § 235-b", "section_title": "t", "content": "x"}])), \
+         patch.object(legal_advisor, "_synthesize",
+                      new=AsyncMock(return_value={"content": fabricated_statute})), \
+         patch("swarm_os.services.legal.citation_verify.verify_citations",
+               new=AsyncMock(return_value=VerifyResponse(
+                   ok=True, citations=[], message="0 citations parsed",
+                   stats={"count": 0, "verified": 0, "fabricated": 0, "ambiguous": 0,
+                          "unverified": 0, "unparsed": 0, "skipped": 0}))):
+        res = await legal_advisor.advise("my landlord in New York won't return deposit")
+    assert res.ok is True
+    assert res.verification["unaligned"] == 1
+    assert "[VERIFICATION]" in res.answer
+    assert "unaligned" in res.answer
+    assert res.verification["score"] < 1.0, (
+        "a fabricated statute (unaligned) must downgrade the verification score, "
+        "not leave it at 1.0"
+    )
+
+
+@pytest.mark.asyncio
+async def test_advise_score_stays_1_0_when_all_aligned():
+    """Control for the unaligned test: a cited statute that IS in the retrieved
+    corpus must NOT downgrade the score — the alignment seam must not penalize
+    legitimately-grounded citations."""
+    scope = {"jurisdictions": {"ny": {"expected": 40102, "ingested": 8000, "pct": 20.0, "complete": False}}}
+    grounded_statute = "The lease claim arises under N.Y. RPA Law § 235-b."
+    from swarm_os.services.legal.citation_verify import VerifyResponse
+    with patch.object(legal_advisor, "corpus_scope", new=AsyncMock(return_value=scope)), \
+         patch("swarm_os.services.legal.legal_search.search_statutes",
+               new=AsyncMock(return_value=[{"citation": "N.Y. RPA Law § 235-b", "section_title": "t", "content": "x"}])), \
+         patch.object(legal_advisor, "_synthesize",
+                      new=AsyncMock(return_value={"content": grounded_statute})), \
+         patch("swarm_os.services.legal.citation_verify.verify_citations",
+               new=AsyncMock(return_value=VerifyResponse(
+                   ok=True, citations=[], message="0 citations parsed",
+                   stats={"count": 0, "verified": 0, "fabricated": 0, "ambiguous": 0,
+                          "unverified": 0, "unparsed": 0, "skipped": 0}))):
+        res = await legal_advisor.advise("my landlord in New York won't return deposit")
+    assert res.ok is True
+    assert res.verification["unaligned"] == 0
+    assert res.verification["score"] == 1.0

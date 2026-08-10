@@ -192,7 +192,12 @@ def extract_statute_sections(text: str) -> list[str]:
     """Deterministic, eyecite-independent extraction of statute section IDs
     referenced in `text`. Returns section identifiers as written: e.g.
     'N.Y. RPA Law \u00a7 235-b' -> ['235-b']; 'N.J.S.A. 46:8-19' -> ['46:8-19'];
-    '42 U.S.C. \u00a7 1983' -> ['1983'].
+    '42 U.S.C. \u00a7 1983' -> ['42-1983'].
+
+    The U.S.C. Title is KEPT IN the key (M4-fix): '18 U.S.C. \u00a7 1983' and
+    '42 U.S.C. \u00a7 1983' are DIFFERENT laws, and the alignment seam must
+    never treat a hallucinated Title as aligned just because the section number
+    collides. A §-signed cite with no Title stays section-only.
 
     Deliberately conservative: this is a DEFENSE seam — missing a hard-to-parse
     cite just means "not aligned", never that a true cite is called fabricated.
@@ -200,12 +205,16 @@ def extract_statute_sections(text: str) -> list[str]:
     if not text:
         return []
     out: list[str] = []
-    # Collect N.J.S.-prefixed spans first so an overlapping bare "§ N" from the
-    # generic §-regex cannot shadow the fuller N.J.S. capture ("N.J.S. § 46:8-19"
-    # must yield '46:8-19', not a stray '46').
+    # Collect N.J.S.- and U.S.C.-prefixed spans first so an overlapping bare
+    # "§ N" from the generic §-regex cannot shadow the fuller captures
+    # ("N.J.S. § 46:8-19" must yield '46:8-19', not a stray '46'; "18 U.S.C.
+    # § 1983" must yield the title-qualified '18-1983', never a stray '1983').
     njs_spans = [m.span() for m in _SECTION_NJS.finditer(text)]
+    usc_spans = [m.span() for m in _SECTION_USC.finditer(text)]
     for m in _SECTION_SIGNED.finditer(text):
         if any(m.start() >= a and m.end() <= b for a, b in njs_spans):
+            continue
+        if any(m.start() >= a and m.end() <= b for a, b in usc_spans):
             continue
         sec = m.group(1).strip()
         if re.search(r"\d", sec):
@@ -213,7 +222,8 @@ def extract_statute_sections(text: str) -> list[str]:
     for m in _SECTION_NJS.finditer(text):
         out.append(m.group(1))
     for m in _SECTION_USC.finditer(text):
-        out.append(m.group(2))
+        # Title-qualified key — a hallucinated Title (18 vs 42) must NOT align.
+        out.append(f"{m.group(1)}-{m.group(2)}")
     return list(dict.fromkeys(out))  # dedupe, preserve order
 
 

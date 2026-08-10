@@ -246,6 +246,21 @@ async def advise(question: str) -> AdvisorResult:
             "unaligned": [u["section"] for u in align["unaligned"]],
         }
         verify["unaligned"] = len(align["unaligned"])
+        # Recompute the score so a statutory MISALIGNMENT also downgrades it —
+        # the fail-closed contract (advise() drops the score below 1.0 on ANY of
+        # fabricated/unaligned/unverified/unparsed). The first pass above ran
+        # before alignment, so `unaligned` was silently missing from the
+        # numerator and a fabricated statute left the score at 1.0 whenever no
+        # case citation was present. Denominator stays `checked` (every
+        # citation-shaped passage examined); `unaligned` joins the numerator
+        # exactly like the other failure signals.
+        if verify.get("checked"):
+            penalties = (
+                verify["fabricated"] + verify["ambiguous"] + verify["shape_mismatch"]
+                + verify["unverified"] + verify["unparsed"] + verify["unaligned"]
+            )
+            checked = max(1, (vres.stats.get("count", 0) or 0) + unparsed)
+            verify["score"] = round(1.0 - penalties / checked, 2)
     except Exception as exc:
         log.warning("alignment seam failed: %s", exc)
         verify.setdefault("alignment", {"count": 0, "aligned": [], "unaligned": []})
