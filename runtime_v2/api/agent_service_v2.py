@@ -149,7 +149,7 @@ _OBSERVATION_ANSWER_RE = re.compile(r'"answer"\s*:\s*"([^"]*)"')
 def _answer_from_history(messages: list) -> str | None:
     """Return the user's typed answer if the history is a post-ask_user
     continuation; otherwise None."""
-    for m in messages:
+    for m in reversed(messages):
         if m.get("role") != "user":
             continue
         content = str(m.get("content", ""))
