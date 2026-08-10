@@ -75,6 +75,14 @@ def _fit_budget(text: str) -> str:
     return " ".join(out)
 
 _embed_client: httpx.AsyncClient | None = None
+_qdrant_client: httpx.AsyncClient | None = None
+
+
+def _get_qdrant_client() -> httpx.AsyncClient:
+    global _qdrant_client
+    if _qdrant_client is None or _qdrant_client.is_closed:
+        _qdrant_client = httpx.AsyncClient(base_url=QDRANT_URL, timeout=120.0)
+    return _qdrant_client
 
 
 def _get_embed_client() -> httpx.AsyncClient:
@@ -88,18 +96,18 @@ def parquet_url(state: str) -> str:
     return f"{OSS_BASE}/{SNAPSHOT}/{SCOPE_FILES[state]}"
 
 
-def ensure_collection() -> None:
+async def ensure_collection() -> None:
     """Create the legal_statutes collection if it doesn't exist."""
-    existing = requests.get(f"{QDRANT_URL}/collections", timeout=10.0).json()
+    client = _get_qdrant_client()
+    existing = (await client.get("/collections")).json()
     names = {c["name"] for c in existing.get("result", {}).get("collections", [])}
     if COLLECTION in names:
         return
-    resp = requests.put(
-        f"{QDRANT_URL}/collections/{COLLECTION}",
+    resp = await client.put(
+        f"/collections/{COLLECTION}",
         json={
             "vectors": {"size": VECTOR_SIZE, "distance": "Cosine"},
         },
-        timeout=30.0,
     )
     resp.raise_for_status()
 
@@ -126,14 +134,16 @@ def _row_to_payload(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def iter_in_force_rows(parquet_path: Path, jurisdiction: str, title_filter: str | None = None):
-    """Yield (act_id, payload) for every in-force statute section in one file.
-    Uses a generator so we never hold the whole file's rows in memory.
+async def iter_in_force_rows(parquet_path: Path, jurisdiction: str, title_filter: str | None = None):
+    """Async generator of (act_id, payload) for every in-force statute section in
+    one file. Never holds the whole file's rows in memory (bounded batches) and
+    never blocks the event loop: pq.read_table (a full disk read of the parquet)
+    runs in a thread.
     `title_filter` (e.g. "18") restricts to one USC title — used for a scoped
     high-value ingest (Title 18 criminal code) without embedding all ~46K
     federal sections."""
     import pyarrow.parquet as pq
-    table = pq.read_table(str(parquet_path))
+    table = await asyncio.to_thread(pq.read_table, str(parquet_path))
     for batch in table.to_batches(max_chunksize=1024):
         for row in batch.to_pylist():
             if row.get("act_status") != "in_force":
@@ -206,17 +216,16 @@ async def ingest_one_file(parquet_path: Path, jurisdiction: str, batch_size: int
     of long statute sections blows past it and 500s the whole batch. We estimate
     each batch's tokens (~4 chars/token) and flush before it approaches 8192.
     """
-    ensure_collection()
+    await ensure_collection()
     # Remove existing points for this jurisdiction (or title) so re-runs don't
     # duplicate — scoped to the filter so a title-scoped run is additive.
     delete_filter: dict = {"must": [{"key": "jurisdiction", "match": {"value": jurisdiction}}]}
     if title_filter:
         delete_filter["must"].append({"key": "title_number", "match": {"value": title_filter}})
     try:
-        requests.post(
-            f"{QDRANT_URL}/collections/{COLLECTION}/points/delete",
+        await _get_qdrant_client().post(
+            f"/collections/{COLLECTION}/points/delete",
             json={"filter": delete_filter},
-            timeout=60.0,
         )
     except Exception as exc:
         log.warning("delete existing %s points failed: %s", jurisdiction, exc)
@@ -237,10 +246,9 @@ async def ingest_one_file(parquet_path: Path, jurisdiction: str, batch_size: int
                 {"id": bid, "vector": vec, "payload": payload}
                 for bid, vec, payload in zip(batch_ids, vectors, batch_payloads)
             ]
-            resp = requests.put(
-                f"{QDRANT_URL}/collections/{COLLECTION}/points",
+            resp = await _get_qdrant_client().put(
+                f"/collections/{COLLECTION}/points",
                 json={"points": points},
-                timeout=120.0,
             )
             resp.raise_for_status()
             total += len(points)
@@ -249,7 +257,7 @@ async def ingest_one_file(parquet_path: Path, jurisdiction: str, batch_size: int
         batch_payloads.clear()
         batch_chars = 0
 
-    for point_id, payload in iter_in_force_rows(parquet_path, jurisdiction, title_filter=title_filter):
+    async for point_id, payload in iter_in_force_rows(parquet_path, jurisdiction, title_filter=title_filter):
         # Embed the citation + title + text so retrieval matches on the section
         # heading and the body, not just one or the other.
         text = f"{payload['citation']} — {payload['section_title']}\n{payload['content']}"

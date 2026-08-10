@@ -16,9 +16,10 @@ NC_PARQUET = Path(r"C:\Users\rober\AppData\Local\Temp\opencode\us_nc_statutes.pa
 
 
 @pytest.mark.skipif(not NC_PARQUET.exists(), reason="real NC parquet not present (offline dev machine)")
-def test_real_nc_schema_maps_to_payload():
+@pytest.mark.asyncio
+async def test_real_nc_schema_maps_to_payload():
     """The verified 24-column schema maps to the retrieval payload correctly."""
-    rows = list(corpus_ingest.iter_in_force_rows(NC_PARQUET, "nc"))
+    rows = [r async for r in corpus_ingest.iter_in_force_rows(NC_PARQUET, "nc")]
     assert rows, "expected at least one in-force NC section"
     point_id, payload = rows[0]
     # Qdrant point ids must be UUIDs (verified live: string ids are rejected 400).
@@ -33,7 +34,8 @@ def test_real_nc_schema_maps_to_payload():
     assert payload["act_status"] == "in_force"
 
 
-def test_in_force_filter_excludes_non_in_force():
+@pytest.mark.asyncio
+async def test_in_force_filter_excludes_non_in_force():
     """Rows that aren't in_force must be dropped by the generator."""
     fake_rows = [
         {"act_status": "in_force", "document_type": "statute", "act_id": "a",
@@ -51,7 +53,7 @@ def test_in_force_filter_excludes_non_in_force():
         pq.write_table(table, f.name)
         fname = f.name
     try:
-        rows = list(corpus_ingest.iter_in_force_rows(Path(fname), "xx"))
+        rows = [r async for r in corpus_ingest.iter_in_force_rows(Path(fname), "xx")]
     finally:
         Path(fname).unlink(missing_ok=True)
     ids = [pid for pid, _ in rows]
@@ -110,7 +112,8 @@ class _FakeTable:
         return batches
 
 
-def test_iter_in_force_rows_reads_bounded_batches(monkeypatch):
+@pytest.mark.asyncio
+async def test_iter_in_force_rows_reads_bounded_batches(monkeypatch):
     """The generator must pull rows through to_batches(max_chunksize=1024),
     never materialize the whole table as one Python list. A table whose
     whole-table to_pylist() raises proves the bounded path is the only path."""
@@ -122,7 +125,7 @@ def test_iter_in_force_rows_reads_bounded_batches(monkeypatch):
     fake_table = _FakeTable(fake_rows)
     import pyarrow.parquet as pq
     monkeypatch.setattr(pq, "read_table", lambda _path: fake_table)
-    rows = list(corpus_ingest.iter_in_force_rows(Path("whatever.parquet"), "xx"))
+    rows = [r async for r in corpus_ingest.iter_in_force_rows(Path("whatever.parquet"), "xx")]
     assert len(rows) == 2500
     # Each in-memory chunk is bounded to the documented 1024 rows so a large
     # parquet never balloons into one giant Python list of dicts.
