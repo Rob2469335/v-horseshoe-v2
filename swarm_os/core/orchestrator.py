@@ -436,6 +436,17 @@ class Orchestrator:
         )
 
         await _release_generation_slot(_dedup_hash)
+
+        # Record the SUCCESS in the bandit — without this the model's
+        # successes counter never advances (record_failure at the except above
+        # is the only other call), so total_requests climbs while successes
+        # stays 0 and a model that failed ONCE can never recover its standing
+        # (strategy.py scores success_rate = successes / total_requests).
+        try:
+            self.router.record_success(model=chosen_model, latency_ms=duration_ms)
+        except Exception as exc:
+            log.debug("Failed to record success: %s", exc)
+
         return final_result, chosen_model
 
 

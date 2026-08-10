@@ -27,6 +27,48 @@ def orch():
 # BUG #1: Duplicate slash-command loop detection
 # ─────────────────────────────────────────────────────────
 
+# ─────────────────────────────────────────────────────────
+# BUG #3: Successful generations never feed the bandit (router.record_success
+# was never called — only record_failure — so total_requests climbed while
+# successes stayed 0, and a model that failed once could never recover its
+# standing: strategy.py scores success_rate = successes / total_requests)
+# ─────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_generate_records_success_and_recovers_model_standing(orch):
+    """A successful generation must advance the router's successes counter so
+    a model that previously failed can recover its standing (real effect:
+    success_rate moves off 0.0, not just 'record_success was called')."""
+
+    orch.llm.generate = AsyncMock(return_value="Plain text success response")
+    orch.critic.evaluate_step = MagicMock(
+        return_value=MagicMock(accepted=True, reason="ok")
+    )
+
+    # Simulate a prior failure on the model: failures=1, total=1, success_rate=0.0
+    orch.router.record_failure(model="qwen3.5-4b", cooldown_seconds=0.0)
+    before = orch.router.get_state("qwen3.5-4b")
+    assert before.successes == 0
+    assert before.total_requests == 1
+
+    result, model = await orch.generate(model="qwen3.5-4b", prompt="hello")
+
+    assert result == "Plain text success response"
+    after = orch.router.get_state("qwen3.5-4b")
+    # The fix: this success actually advanced the bandit state
+    assert after.successes == 1, (
+        f"record_success did not advance successes: {after.successes}"
+    )
+    assert after.total_requests == 2
+    success_rate = after.successes / after.total_requests
+    assert success_rate == 0.5, (
+        f"success_rate did not recover from 0.0: {success_rate}"
+    )
+    # Cooldown from the prior failure must have been cleared by the success
+    import time as _time
+    assert after.cooldown_until <= _time.time()
+
+
 @pytest.mark.asyncio
 async def test_slash_command_not_repeated(orch):
     """If the model emits the same slash command JSON every turn,
