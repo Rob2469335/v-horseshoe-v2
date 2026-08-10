@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import time
 from typing import Any, Iterable
 
@@ -11,6 +12,12 @@ class Router:
         self.profiles = {p.name: p for p in profiles} if profiles else {}
         self.default_role = default_role
         self.cooldown_multiplier = cooldown_multiplier
+        # Guards the shared ModelState scratch fields that the strategy mutates
+        # from the to_thread worker (last_penalty/last_score pair-write) against
+        # concurrent route_model calls. record_success/record_failure run on the
+        # event loop and touch disjoint counters; the pair-write in
+        # _score_candidate is the torn-write hazard.
+        self._state_lock = threading.Lock()
         self.states: dict[str, ModelState] = {}
         for profile in self.profiles.values():
             self.states[profile.name] = ModelState(name=profile.name, role=profile.role)

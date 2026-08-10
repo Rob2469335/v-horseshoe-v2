@@ -63,8 +63,9 @@ class DefaultStrategy(RoutingStrategy):
         meta: dict = {}
 
         if state.cooldown_until > now:
-            state.last_penalty = 1e9
-            state.last_score = -1e9
+            with router._state_lock:
+                state.last_penalty = 1e9
+                state.last_score = -1e9
             return -1e9, "cooldown", {"cooldown": True}
 
         score = 0.0
@@ -142,8 +143,9 @@ class DefaultStrategy(RoutingStrategy):
             score += recency_bonus
             reasons.append("recent_success")
 
-        state.last_penalty = failure_penalty + latency_penalty
-        state.last_score = score
+        with router._state_lock:
+            state.last_penalty = failure_penalty + latency_penalty
+            state.last_score = score
         meta.update({
             "score": score,
             "failure_penalty": failure_penalty,
