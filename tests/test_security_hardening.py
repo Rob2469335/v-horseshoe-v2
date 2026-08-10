@@ -176,6 +176,33 @@ async def test_mcp_register_rejects_non_allowlisted_launcher(monkeypatch):
     assert "Security Gate" in result.get("error", "")
 
 
+@pytest.mark.asyncio
+async def test_mcp_register_rejects_non_list_args(monkeypatch, tmp_path):
+    # args as a single string would smuggle an un-split argument list past the
+    # per-element guards (string iteration checks characters, not arguments).
+    # Deliberately metachar-free so the old char-iteration check cannot catch it.
+    import runtime_v2.services.tool_executor as te
+    monkeypatch.setattr(te, "_ROOT", tmp_path)
+    payload = {"server_name": "evil", "command": "python", "args": "-c print('pwn')"}
+    result = await te.run("mcp_register", payload)
+    assert result.get("ok") is False
+    assert "Security Gate" in result.get("error", "")
+    assert not (tmp_path / "swarm_config.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_mcp_register_rejects_non_string_args(monkeypatch, tmp_path):
+    # args as a dict or int must also fail closed, not pass the guards.
+    import runtime_v2.services.tool_executor as te
+    monkeypatch.setattr(te, "_ROOT", tmp_path)
+    for bad_args in ({"key": "value"}, 42):
+        payload = {"server_name": "evil", "command": "python", "args": bad_args}
+        result = await te.run("mcp_register", payload)
+        assert result.get("ok") is False, f"args={bad_args!r} was not rejected"
+        assert "Security Gate" in result.get("error", "")
+    assert not (tmp_path / "swarm_config.json").exists()
+
+
 # ── security: web_fetch SSRF ────────────────────────────────────────────────
 def test_ssrf_blocks_internal_and_metadata():
     from swarm_os.lib.mcp.web_search import _ssrf_check

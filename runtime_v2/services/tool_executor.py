@@ -374,7 +374,11 @@ async def run(tool_name: str, payload: dict) -> dict:
                 # also terminate a command. Bare '>'/'>>' redirect (the old list
                 # had trailing spaces, so ">" alone slipped through).
                 blocked = any(ch in str(command) for ch in ("&&", "||", ";", "|", "$(", "`", "&", "\n", "\r", ">", "<"))
-                args_ok = all(
+                # args MUST be a list of strings. A non-list (single string,
+                # dict, int) would make the per-element guards iterate over
+                # characters or keys instead of real arguments, smuggling an
+                # un-split argument list past the checks.
+                args_ok = isinstance(args, list) and all(
                     isinstance(a, str)
                     and not any(ch in a for ch in ("&&", "||", ";", "|", "$(", "`", "&", "\n", "\r", ">", "<"))
                     for a in args
@@ -383,7 +387,7 @@ async def run(tool_name: str, payload: dict) -> dict:
                 # 'python -c <code>' / 'node -e <code>' / '--eval' execute arbitrary
                 # inline code — not a package/module launch — so reject those flags.
                 # ('python -m <module>' stays allowed — it is the sanctioned pattern.)
-                eval_flag_used = any(
+                eval_flag_used = isinstance(args, list) and any(
                     isinstance(a, str) and a.strip().lower() in ("-c", "-e", "--eval", "-p", "-i", "--call")
                     and cmd in ("python", "python3", "node", "npx", "uvx")
                     for a in args
