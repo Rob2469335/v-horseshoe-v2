@@ -1456,7 +1456,9 @@ class AgentServiceV2:
                     "resolved_model": resolved_model,
                     "initial_messages_len": initial_messages_len,
                 }
-                write_checkpoint(ckpt["checkpoint_id"], ckpt)
+                # Blocking file I/O (FileLock acquire + write_text + os.replace)
+                # must not stall the single-threaded event loop — offload it.
+                await asyncio.to_thread(write_checkpoint, ckpt["checkpoint_id"], ckpt)
             except Exception as ckpt_err:
                 log.debug("[%s] checkpoint write skipped: %s", agent_id, ckpt_err)
             # --- Context window trim ---
