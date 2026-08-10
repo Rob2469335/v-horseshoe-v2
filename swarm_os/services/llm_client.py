@@ -90,7 +90,8 @@ class CloudLLMClient:
                     delta = data["choices"][0].get("delta", {})
                     if "content" in delta:
                         yield delta["content"]
-                except Exception:
+                except Exception as e:
+                    log.warning("JSON decode failed in fallback parser: %s", e)
                     continue
 import time
 import random
@@ -124,7 +125,8 @@ class SwarmBrainClient:
                 continue
             try:
                 evt = json.loads(chunk)
-            except Exception:
+            except Exception as e:
+                log.warning("Failed to parse tool chunk: %s", e)
                 continue
 
             choices = evt.get("choices", [])

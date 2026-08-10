@@ -24,15 +24,15 @@ class SystemService:
             try:
                 r = await _http_client.get("http://127.0.0.1:8080/v1/models", headers={"Authorization": "Bearer llama"}, timeout=1.0)
                 llm_ok = r.status_code == 200
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug("LLM health check failed: %s", e)
                 
             qdrant_ok = False
             try:
                 r = await _http_client.get("http://127.0.0.1:6333/", timeout=1.0)
                 qdrant_ok = r.status_code == 200
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug("Qdrant health check failed: %s", e)
 
             healing = getattr(runtime, "healing", None)
             report = await healing.status() if hasattr(healing, "status") else {}
@@ -63,7 +63,8 @@ class SystemService:
         try:
             r = await _http_client.get("http://127.0.0.1:8080/v1/models", headers={"Authorization": "Bearer llama"}, timeout=15.0)
             return r.status_code == 200
-        except Exception:
+        except Exception as e:
+            log.debug("check_llm_reachable failed: %s", e)
             return False
 
     check_ollama_reachable = check_llm_reachable  # Backward compatibility alias

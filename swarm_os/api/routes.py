@@ -407,7 +407,8 @@ async def timeline(window_minutes: int = 60, runtime: Any = Depends(runtime_dep)
                     buckets[bucket]["partial_count"] += 1
                 elif outcome == "fail":
                     buckets[bucket]["fail_count"] += 1
-            except Exception:
+            except Exception as e:
+                log.warning("Failed to fetch ollama models: %s", e)
                 continue
 
     all_ev = await _safe_events(runtime)
@@ -429,7 +430,8 @@ async def timeline(window_minutes: int = 60, runtime: Any = Depends(runtime_dep)
                 buckets[bucket]["partial_count"] += 1
             elif outcome == "fail":
                 buckets[bucket]["fail_count"] += 1
-        except Exception:
+        except Exception as e:
+            log.warning("Failed to process timeline event: %s", e)
             continue
 
     points = [TimelinePointResponse(bucket=bucket, **values) for bucket, values in sorted(buckets.items())]
@@ -578,7 +580,8 @@ async def get_router_stats(orch: Any = Depends(get_orchestrator), runtime: Any =
                 else:
                     status_counts["unknown"] += 1
                 total += 1
-            except Exception:
+            except Exception as e:
+                log.warning("Failed to parse tool success response: %s", e)
                 continue
 
         most_used = model_counts.most_common(1)[0][0] if model_counts else "none"
@@ -656,7 +659,8 @@ async def get_critic_stats(orch: Any = Depends(get_orchestrator), runtime: Any =
                     rejected += 1
                 elif outcome == "partial":
                     partial += 1
-            except Exception:
+            except Exception as e:
+                log.warning("Failed to format trace step: %s", e)
                 continue
 
         grand_total = accepted + rejected + partial

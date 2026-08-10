@@ -108,8 +108,8 @@ async def web_research(req: WebResearchRequest):
                     fetched = await web_fetch_handler({"url": url, "max_chars": 4000})
                     if fetched.get("ok"):
                         text = fetched.get("text") or fetched.get("content") or text
-                except Exception:
-                    pass
+                except Exception as e:
+                    log.warning("web_fetch_handler failed for %s: %s", url, e)
             sources.append({"n": i + 1, "title": r.get("title", ""), "url": url, "text": text[:4000]})
 
         if not req.synthesize:
@@ -212,9 +212,9 @@ async def _keyword_fallback(req: QueryRequest) -> list:
                     scored.append((score, {"id": getattr(p, "id", None), "score": float(score), "payload": payload}))
             scored.sort(key=lambda x: -x[0])
             results.extend(item for _, item in scored[: req.top_k - len(results)])
-    except Exception:
+    except Exception as e:
+        log.warning("Qdrant fallback search failed, continuing to local docs: %s", e)
         # Do not return early — fallback to local-file search below on any collection-level error
-        pass
     finally:
         try:
             await client.close()
@@ -239,9 +239,9 @@ async def _keyword_fallback(req: QueryRequest) -> list:
         results = await asyncio.to_thread(local_docs_search, repo_root, tokens, req.top_k)
         if results:
             return results
-    except Exception:
+    except Exception as e:
+        log.warning("Local docs fallback search failed: %s", e)
         # If helper fails for any reason, fall through to return []
-        pass
 
     return results[: req.top_k]
 

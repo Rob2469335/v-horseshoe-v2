@@ -1,5 +1,8 @@
 import re
 import json
+import logging
+
+log = logging.getLogger(__name__)
 
 class ToolParser:
     @staticmethod
@@ -31,8 +34,8 @@ class ToolParser:
                     if ("command" in obj and isinstance(_cmd_val, str)
                         and _cmd_val.strip() in _CLI_ONLY):
                         return "command", json.dumps({"command": _cmd_val.strip()})
-            except Exception:
-                pass
+            except json.JSONDecodeError as e:
+                log.debug("Pattern C JSON decode failed: %s", e)
                 
         # Check Pattern D: markdown json block
         match_md = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', text, re.DOTALL)
@@ -44,8 +47,8 @@ class ToolParser:
                         return obj["tool"].strip(), json.dumps(obj.get("params", {}))
                     if "tool_name" in obj and isinstance(obj["tool_name"], str):
                         return obj["tool_name"].strip(), json.dumps(obj.get("params", {}))
-            except Exception:
-                pass
+            except json.JSONDecodeError as e:
+                log.debug("Pattern D JSON decode failed: %s", e)
 
         # Check Pattern E: just a tool name in tags
         match_tool_only = re.search(r'<tool>([^<]+)</tool>', text)
@@ -66,8 +69,8 @@ class ToolParser:
                 if isinstance(obj, dict):
                     params = obj.get("params", {})
                     return t_name.strip(), json.dumps(params)
-            except Exception:
-                pass
+            except json.JSONDecodeError as e:
+                log.debug("Fallback 1 JSON decode failed: %s", e)
 
         # Fallback Check 2: strip repeated markdown code-fences and salvage innermost valid JSON object
         # (advance past the scanned window, not one char, to avoid O(N^2) rescans on pathological input)
@@ -94,8 +97,8 @@ class ToolParser:
                                 obj = json.loads(stripped_fences[s_start:j + 1], strict=False)
                                 if isinstance(obj, dict) and ("tool" in obj or "tool_name" in obj):
                                     salvage_objs.append(obj)
-                            except Exception:
-                                pass
+                            except json.JSONDecodeError as e:
+                                log.debug("Fallback 2 JSON decode failed: %s", e)
                             break
             s_start = stripped_fences.find("{", s_scan_end + 1)
         if salvage_objs:

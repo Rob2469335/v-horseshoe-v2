@@ -95,8 +95,8 @@ def _ensure_dirs() -> None:
     for p in (_EVENTS_FILE, _HEARTBEAT_FILE, _AUDIT_FILE):
         try:
             p.parent.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Failed to create dir for %s: %s", p, exc)
 
 
 class WatchLoop:
@@ -131,8 +131,8 @@ class WatchLoop:
             try:
                 if _EVENTS_FILE.exists():
                     self._last_position = _EVENTS_FILE.stat().st_size
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("Failed to stat events file: %s", exc)
         self._running = True
         self._check_stale_heartbeat()
         asyncio.create_task(self._watch())
@@ -398,7 +398,8 @@ class WatchLoop:
                         return
                     try:
                         data = json.loads(line)
-                    except Exception:
+                    except Exception as exc:
+                        log.debug("Failed to parse event line: %s", exc)
                         continue
                     await asyncio.to_thread(self._handle, data)
         except Exception as exc:
@@ -473,7 +474,8 @@ class WatchLoop:
             root = _P.cwd()
             try:
                 file_rel = str(_P(file_path).resolve().relative_to(root.resolve())).replace("\\", "/")
-            except Exception:
+            except Exception as exc:
+                log.debug("Failed to resolve relative path for canary: %s", exc)
                 file_rel = str(file_path)
             ok, msg = register_canary(file_rel, snapshot_id, policy=self._policy)
             if not ok:
@@ -497,7 +499,8 @@ class WatchLoop:
             if file_path:
                 try:
                     scope = [str(_P(file_path).resolve().relative_to(root.resolve())).replace("\\", "/")]
-                except Exception:
+                except Exception as exc:
+                    log.debug("Failed to resolve relative path for snapshot: %s", exc)
                     scope = [str(file_path)]
             snap = build_repair_snapshot(snapshot_worktree(root), scope=scope)
             return write_run_snapshot(snap)
