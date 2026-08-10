@@ -167,41 +167,99 @@ async def test_generate_releases_slot_when_cancelled():
     """asyncio.CancelledError inherits BaseException, so generate()'s generic
     except Exception never fired on a cancelled request — the generation slot
     stayed registered for the full 300s TTL and identical retries were wrongly
-    suppressed as duplicates. The explicit CancelledError clause must release
-    it. (Mirrors the stream_generate try/finally fix for the non-stream path.)"""
+    suppressed as duplicates. A single finally owns the release for the WHOLE
+    post-acquire body (routing preamble + loop + epilogue), so a cancellation
+    in ANY window releases it. (Mirrors the stream_generate try/finally fix for
+    the non-stream path.)"""
     import swarm_os.core.orchestrator as orch_mod
+    from swarm_os.core.orchestrator import Orchestrator as RealOrchestrator
 
-    async def cancelling_generate(model, messages):
-        raise asyncio.CancelledError("client disconnected")
+    def build_real(cancel_at):
+        """Build an Orchestrator whose call chain cancels at the named window."""
+        orch = MagicMock()
+        orch.llm = MagicMock()
+        orch.llm.generate = AsyncMock(side_effect=asyncio.CancelledError("cancel loop"))
+        orch.token_manager = AsyncMock()
+        orch.token_manager.check_budget = AsyncMock()
+        orch.token_manager.add_usage = AsyncMock()
+        orch.router = MagicMock()
+        orch.router.route_model = AsyncMock(return_value=MagicMock(model="qwen3.5-4b", reason="r"))
+        orch.router.record_failure = MagicMock()
+        orch._fetch_installed_models = AsyncMock(return_value=["qwen3.5-4b"])
+        orch._detect_provider = MagicMock(return_value="llama")
+        orch.events = MagicMock()
+        orch.trace = MagicMock()
+        orch.bridge = MagicMock()
+        orch.bridge.get_memory_context = AsyncMock(return_value="")
+        orch.mcp = MagicMock()
+        orch.mcp.get_tools_schema = MagicMock(return_value=[])
+        if cancel_at == "routing":
+            orch._fetch_installed_models = AsyncMock(
+                side_effect=asyncio.CancelledError("cancel routing"))
+        real = RealOrchestrator.__new__(RealOrchestrator)
+        real.__dict__.update(orch.__dict__)
+        real._infer_task_role = MagicMock(return_value="reasoning")
+        return real
+
+    for window in ("routing", "loop"):
+        orch_mod._active_generations.clear()
+        assert not orch_mod._active_generations
+        real = build_real(window)
+        with pytest.raises(asyncio.CancelledError):
+            await real.generate(None, messages=[{"role": "user", "content": f"cancel {window}"}])
+        assert not orch_mod._active_generations, (
+            f"generation slot leaked after {window}-window cancellation"
+        )
+
+
+@pytest.mark.asyncio
+async def test_generate_releases_slot_when_cancelled_in_epilogue():
+    """A cancellation in the POST-LOOP epilogue (the asyncio.to_thread on
+    events.append) must also release — the finally wraps the whole body, not
+    just the loop."""
+    import swarm_os.core.orchestrator as orch_mod
+    from swarm_os.core.orchestrator import Orchestrator as RealOrchestrator
 
     orch = MagicMock()
     orch.llm = MagicMock()
-    orch.llm.generate = cancelling_generate
+    orch.llm.generate = AsyncMock(return_value="plain final answer")
     orch.token_manager = AsyncMock()
     orch.token_manager.check_budget = AsyncMock()
     orch.token_manager.add_usage = AsyncMock()
+    orch._fetch_installed_models = AsyncMock(return_value=["qwen3.5-4b"])
+    orch._detect_provider = MagicMock(return_value="llama")
+    orch._parse_tool_call = MagicMock(return_value=None)
+    orch.events = MagicMock()
     orch.router = MagicMock()
     orch.router.route_model = AsyncMock(return_value=MagicMock(model="qwen3.5-4b", reason="r"))
     orch.router.record_failure = MagicMock()
-    orch._fetch_installed_models = AsyncMock(return_value=["qwen3.5-4b"])
-    orch._detect_provider = MagicMock(return_value="llama")
-    orch.events = MagicMock()
+    orch.router.record_success = MagicMock()
     orch.trace = MagicMock()
     orch.bridge = MagicMock()
     orch.bridge.get_memory_context = AsyncMock(return_value="")
     orch.mcp = MagicMock()
     orch.mcp.get_tools_schema = MagicMock(return_value=[])
-    from swarm_os.core.orchestrator import Orchestrator as RealOrchestrator
     real = RealOrchestrator.__new__(RealOrchestrator)
     real.__dict__.update(orch.__dict__)
     real._infer_task_role = MagicMock(return_value="reasoning")
 
-    assert not orch_mod._active_generations, "suite must start with empty slot registry"
-    with pytest.raises(asyncio.CancelledError):
-        await real.generate(None, messages=[{"role": "user", "content": "cancel me"}])
-    assert not orch_mod._active_generations, (
-        "generation slot leaked: hash still registered after generate() was cancelled"
-    )
+    orig_to_thread = orch_mod.asyncio.to_thread
+    counter = {"n": 0}
+
+    async def fake_to_thread(fn, *a, **k):
+        counter["n"] += 1
+        if counter["n"] == 1:
+            raise asyncio.CancelledError("cancel epilogue")
+        return await orig_to_thread(fn, *a, **k)
+
+    orch_mod.asyncio.to_thread = fake_to_thread
+    orch_mod._active_generations.clear()
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await real.generate(None, messages=[{"role": "user", "content": "cancel epilogue"}])
+        assert not orch_mod._active_generations, "slot leaked after epilogue cancellation"
+    finally:
+        orch_mod.asyncio.to_thread = orig_to_thread
 
 
 @pytest.mark.asyncio

@@ -240,220 +240,210 @@ class Orchestrator:
             log.warning("[Orchestrator] Duplicate generation blocked (hash=%s). A generation with identical messages is already running.", _dedup_hash)
             return "Duplicate generation suppressed — an identical request is already in progress.", model
 
-        target_role = self._infer_task_role(messages)
-        installed_candidates = await self._fetch_installed_models()
-
-        if model and model.strip():
-            candidates = [model.strip()]
-        else:
-            candidates = installed_candidates
-
-        route_decision = await self.router.route_model(
-            candidates=candidates,
-            role=target_role,
-            allow_fallback=True,
-        )
-
-        chosen_model = route_decision.model or "qwen3.5-4b"
-
-        self.trace.add(
-            trace_id=trace_id,
-            step_id="generate",
-            phase="router",
-            actor="orchestrator",
-            action="route_model",
-            status="selected",
-            model=chosen_model,
-            summary=getattr(route_decision, "reason", "routed"),
-            metadata={
-                "target_role": target_role,
-                "fallback_mode": getattr(route_decision, "fallback", False),
-                "strategy": getattr(route_decision, "strategy", "default"),
-                "router_metadata": dict(getattr(route_decision, "metadata", {})) if getattr(route_decision, "metadata", None) else {},
-            },
-        )
-
-        # Detect provider for the chosen model
-        provider = self._detect_provider(chosen_model)
-        log.info(f"[Orchestrator] generate() provider={provider} for model={chosen_model}")
-
-        # If the provider is cloud but no API key is available, fall back to a local model
-        if provider in ("openrouter", "nvidia") and not _os.environ.get(
-            "OPENROUTER_API_KEY" if provider == "openrouter" else "NVIDIA_API_KEY", ""
-        ).strip():
-            log.info(f"[Orchestrator] No API key for {provider}, falling back to local model")
-            chosen_model = "qwen3.5-4b"
-            provider = "llama"
-
-        max_steps = 5
-        final_result = ""
-        handled_tool_keys: set[str] = set()  # Track handled tool calls to detect repeats
-
-        for step in range(max_steps):
-            try:
-                # Token budget check
-                await self.token_manager.check_budget()
-
-                log.info(f"[Orchestrator] generate() Turn {step + 1}/{max_steps} starting with model={chosen_model} provider={provider}")
-
-                # Dispatch to the correct provider
-                if provider in ("openrouter", "nvidia"):
-                    result = await self._cloud_generate(model=chosen_model, messages=messages, provider=provider, stream=False)
-                else:
-                    result = await self.llm.generate(model=chosen_model, messages=messages)
-
-                log.info(f"[Orchestrator] generate() Turn result: {result!r}")
-                
-                # Update tokens used
-                await self.token_manager.add_usage(result)
-
-                tool_info = self._parse_tool_call(result)
-                if not tool_info:
-                    final_result = result
-                    log.info("[Orchestrator] Plain-text response received. Exiting loop.")
-                    break
-                if tool_info:
-                    tool_name, params_str = tool_info
-                    # Build a dedup key from tool name + params
-                    dedup_key = f"{tool_name}:{params_str}"
-
-                    if dedup_key in handled_tool_keys:
-                        # This exact tool call was already handled — stop looping
-                        log.info(f"[Orchestrator] DUPLICATE tool call detected: {tool_name}. Breaking loop.")
-                        final_result = "Duplicate tool call detected. Stopping loop."
-                        break
-
-                    log.info(f"[Orchestrator] Intercepted tool call in generate(): {tool_name} with params: {params_str}")
-                    try:
-                        params = json.loads(params_str)
-                    except Exception as e:
-                        log.warning(f"[Orchestrator] Failed to parse tool params JSON: {e}")
-                        messages.append({"role": "assistant", "content": result})
-                        messages.append({
-                            "role": "user",
-                            "content": f"Critic Feedback: The tool execution failed because the JSON parameters could not be parsed: {e}. Please correct the parameters and call the tool again."
-                        })
-                        continue
-                    
-                    # Execute tool
-                    log.info(f"[Orchestrator] Executing tool {tool_name}...")
-                    if tool_name == "command":
-                        observation = {
-                            "ok": True,
-                            "kind": "command",
-                            "command": params.get("command"),
-                            "confidence": params.get("confidence"),
-                            "handled": True,
-                            "status": "completed",
-                            "result": f"Slash command {params.get('command')} was intercepted and handled by the orchestrator.",
-                            "next_step": "Continue the assistant response using this command result. Do not call the same slash command again unless the user explicitly asks to rerun it.",
-                            "note": "Slash command intercepted by orchestrator compatibility shim.",
-                        }
-                    else:
-                        observation = await self.mcp.call(tool_name, params)
-                    log.info(f"[Orchestrator] Tool execution result: {observation}")
-
-                    # Mark this tool call as handled
-                    handled_tool_keys.add(dedup_key)
-                    
-                    obs_str = json.dumps(observation)
-                    if len(obs_str) > 2000:
-                        obs_str = obs_str[:2000] + "... [Truncated for context limit]"
-                    
-                    # Critic evaluation
-                    critic_res = self.critic.evaluate_step(observation, expected_kind="tool")
-                    if not critic_res.accepted:
-                        log.warning(f"[Orchestrator] Critic rejected tool execution: {critic_res.reason}")
-                        # Cleanup failed thought from active context window
-                        if len(messages) > 1 and messages[-1].get("role") == "user" and "Critic Feedback" in messages[-1].get("content", ""):
-                            messages.pop()
-                            messages.pop()
-                        
-                        messages.append({"role": "assistant", "content": result})
-                        messages.append({
-                            "role": "user",
-                            "content": f"Critic Feedback: The tool execution returned an error or was rejected: {critic_res.reason}. Please correct the parameters and call the tool again."
-                        })
-                        continue
-
-                    # For handled slash commands, return immediately instead of continuing
-                    # The command shim is a terminal action — no need to re-prompt the model
-                    if tool_name == "command":
-                        log.info("[Orchestrator] Slash command handled. Returning immediately.")
-                        final_result = observation.get("result", result)
-                        messages.append({"role": "assistant", "content": result})
-                        messages.append({"role": "user", "content": f"TOOL OBSERVATION:\n{obs_str}\n\nContinue with the next assistant response."})
-                        await _release_generation_slot(_dedup_hash)
-                        return final_result, model
-                    else:
-                        # Tool succeeded — append observation and let model continue
-                        messages.append({"role": "assistant", "content": result})
-                        messages.append({"role": "user", "content": f"TOOL OBSERVATION:\n{obs_str}\n\nContinue with the next step."})
-                        continue
-            except ValueError as e:
-                if "budget exceeded" in str(e).lower():
-                    log.warning(f"[Orchestrator] Token budget exceeded: {e}")
-                else:
-                    self.router.record_failure(model=chosen_model, cooldown_seconds=60.0)
-                    log.exception("Generation failed with ValueError")
-                await _release_generation_slot(_dedup_hash)
-                raise
-            except asyncio.CancelledError:
-                # CancelledError inherits BaseException — the generic except above
-                # never fires, so without this explicit clause an abandoned
-                # generate() would leak the generation slot for the full 300s
-                # TTL (deduping identical retries as "already running"). Release
-                # is idempotent (pop + TTL prune), so this is safe on every path.
-                log.debug("[Orchestrator] generate() cancelled; releasing generation slot")
-                await _release_generation_slot(_dedup_hash)
-                raise
-            except Exception:
-                self.router.record_failure(model=chosen_model, cooldown_seconds=60.0)
-                log.exception("Generation failed")
-                await _release_generation_slot(_dedup_hash)
-                raise
-
-        # If we exhausted all steps without a final result, use what we have
-        if not final_result:
-            final_result = "[System: Generation completed without a final response after maximum steps.]"
-
-        duration_ms = (time.time() * 1000.0) - start_ms
-        self.trace.add(
-            trace_id=trace_id,
-            step_id="generate",
-            phase="generator",
-            actor="orchestrator",
-            action="generate",
-            status="completed",
-            duration_ms=duration_ms,
-            model=chosen_model,
-            summary="Generation completed"
-        )
-
-        # Emit to the live SSE event bus so the organism dashboard's swarm feed updates.
-        from swarm_os.core.event_bus import event_bus
-        event_bus.emit("GENERATION_COMPLETED", trace_id, {
-            "model": chosen_model,
-            "duration_ms": duration_ms,
-            "summary": "Generation completed",
-        })
-
-        await asyncio.to_thread(
-            self.events.append,
-            EventEnvelope.create(
-                event_type="generation_completed",
-                source="orchestrator",
-                payload={
-                    "model": chosen_model,
-                    "task_id": trace_id,
-                    "elapsed": duration_ms,
-                    "status": "completed",
-                    "content": final_result,
-                }
+        try:
+            target_role = self._infer_task_role(messages)
+            installed_candidates = await self._fetch_installed_models()
+    
+            if model and model.strip():
+                candidates = [model.strip()]
+            else:
+                candidates = installed_candidates
+    
+            route_decision = await self.router.route_model(
+                candidates=candidates,
+                role=target_role,
+                allow_fallback=True,
             )
-        )
-
-        await _release_generation_slot(_dedup_hash)
+    
+            chosen_model = route_decision.model or "qwen3.5-4b"
+    
+            self.trace.add(
+                trace_id=trace_id,
+                step_id="generate",
+                phase="router",
+                actor="orchestrator",
+                action="route_model",
+                status="selected",
+                model=chosen_model,
+                summary=getattr(route_decision, "reason", "routed"),
+                metadata={
+                    "target_role": target_role,
+                    "fallback_mode": getattr(route_decision, "fallback", False),
+                    "strategy": getattr(route_decision, "strategy", "default"),
+                    "router_metadata": dict(getattr(route_decision, "metadata", {})) if getattr(route_decision, "metadata", None) else {},
+                },
+            )
+    
+            # Detect provider for the chosen model
+            provider = self._detect_provider(chosen_model)
+            log.info(f"[Orchestrator] generate() provider={provider} for model={chosen_model}")
+    
+            # If the provider is cloud but no API key is available, fall back to a local model
+            if provider in ("openrouter", "nvidia") and not _os.environ.get(
+                "OPENROUTER_API_KEY" if provider == "openrouter" else "NVIDIA_API_KEY", ""
+            ).strip():
+                log.info(f"[Orchestrator] No API key for {provider}, falling back to local model")
+                chosen_model = "qwen3.5-4b"
+                provider = "llama"
+    
+            max_steps = 5
+            final_result = ""
+            handled_tool_keys: set[str] = set()  # Track handled tool calls to detect repeats
+    
+            for step in range(max_steps):
+                try:
+                    # Token budget check
+                    await self.token_manager.check_budget()
+    
+                    log.info(f"[Orchestrator] generate() Turn {step + 1}/{max_steps} starting with model={chosen_model} provider={provider}")
+    
+                    # Dispatch to the correct provider
+                    if provider in ("openrouter", "nvidia"):
+                        result = await self._cloud_generate(model=chosen_model, messages=messages, provider=provider, stream=False)
+                    else:
+                        result = await self.llm.generate(model=chosen_model, messages=messages)
+    
+                    log.info(f"[Orchestrator] generate() Turn result: {result!r}")
+                    
+                    # Update tokens used
+                    await self.token_manager.add_usage(result)
+    
+                    tool_info = self._parse_tool_call(result)
+                    if not tool_info:
+                        final_result = result
+                        log.info("[Orchestrator] Plain-text response received. Exiting loop.")
+                        break
+                    if tool_info:
+                        tool_name, params_str = tool_info
+                        # Build a dedup key from tool name + params
+                        dedup_key = f"{tool_name}:{params_str}"
+    
+                        if dedup_key in handled_tool_keys:
+                            # This exact tool call was already handled — stop looping
+                            log.info(f"[Orchestrator] DUPLICATE tool call detected: {tool_name}. Breaking loop.")
+                            final_result = "Duplicate tool call detected. Stopping loop."
+                            break
+    
+                        log.info(f"[Orchestrator] Intercepted tool call in generate(): {tool_name} with params: {params_str}")
+                        try:
+                            params = json.loads(params_str)
+                        except Exception as e:
+                            log.warning(f"[Orchestrator] Failed to parse tool params JSON: {e}")
+                            messages.append({"role": "assistant", "content": result})
+                            messages.append({
+                                "role": "user",
+                                "content": f"Critic Feedback: The tool execution failed because the JSON parameters could not be parsed: {e}. Please correct the parameters and call the tool again."
+                            })
+                            continue
+                        
+                        # Execute tool
+                        log.info(f"[Orchestrator] Executing tool {tool_name}...")
+                        if tool_name == "command":
+                            observation = {
+                                "ok": True,
+                                "kind": "command",
+                                "command": params.get("command"),
+                                "confidence": params.get("confidence"),
+                                "handled": True,
+                                "status": "completed",
+                                "result": f"Slash command {params.get('command')} was intercepted and handled by the orchestrator.",
+                                "next_step": "Continue the assistant response using this command result. Do not call the same slash command again unless the user explicitly asks to rerun it.",
+                                "note": "Slash command intercepted by orchestrator compatibility shim.",
+                            }
+                        else:
+                            observation = await self.mcp.call(tool_name, params)
+                        log.info(f"[Orchestrator] Tool execution result: {observation}")
+    
+                        # Mark this tool call as handled
+                        handled_tool_keys.add(dedup_key)
+                        
+                        obs_str = json.dumps(observation)
+                        if len(obs_str) > 2000:
+                            obs_str = obs_str[:2000] + "... [Truncated for context limit]"
+                        
+                        # Critic evaluation
+                        critic_res = self.critic.evaluate_step(observation, expected_kind="tool")
+                        if not critic_res.accepted:
+                            log.warning(f"[Orchestrator] Critic rejected tool execution: {critic_res.reason}")
+                            # Cleanup failed thought from active context window
+                            if len(messages) > 1 and messages[-1].get("role") == "user" and "Critic Feedback" in messages[-1].get("content", ""):
+                                messages.pop()
+                                messages.pop()
+                            
+                            messages.append({"role": "assistant", "content": result})
+                            messages.append({
+                                "role": "user",
+                                "content": f"Critic Feedback: The tool execution returned an error or was rejected: {critic_res.reason}. Please correct the parameters and call the tool again."
+                            })
+                            continue
+    
+                        # For handled slash commands, return immediately instead of continuing
+                        # The command shim is a terminal action — no need to re-prompt the model
+                        if tool_name == "command":
+                            log.info("[Orchestrator] Slash command handled. Returning immediately.")
+                            final_result = observation.get("result", result)
+                            messages.append({"role": "assistant", "content": result})
+                            messages.append({"role": "user", "content": f"TOOL OBSERVATION:\n{obs_str}\n\nContinue with the next assistant response."})
+                            return final_result, model
+                        else:
+                            # Tool succeeded — append observation and let model continue
+                            messages.append({"role": "assistant", "content": result})
+                            messages.append({"role": "user", "content": f"TOOL OBSERVATION:\n{obs_str}\n\nContinue with the next step."})
+                            continue
+                except ValueError as e:
+                    if "budget exceeded" in str(e).lower():
+                        log.warning(f"[Orchestrator] Token budget exceeded: {e}")
+                    else:
+                        self.router.record_failure(model=chosen_model, cooldown_seconds=60.0)
+                        log.exception("Generation failed with ValueError")
+                    raise
+                except Exception:
+                    self.router.record_failure(model=chosen_model, cooldown_seconds=60.0)
+                    log.exception("Generation failed")
+                    raise
+    
+            # If we exhausted all steps without a final result, use what we have
+            if not final_result:
+                final_result = "[System: Generation completed without a final response after maximum steps.]"
+    
+            duration_ms = (time.time() * 1000.0) - start_ms
+            self.trace.add(
+                trace_id=trace_id,
+                step_id="generate",
+                phase="generator",
+                actor="orchestrator",
+                action="generate",
+                status="completed",
+                duration_ms=duration_ms,
+                model=chosen_model,
+                summary="Generation completed"
+            )
+    
+            # Emit to the live SSE event bus so the organism dashboard's swarm feed updates.
+            from swarm_os.core.event_bus import event_bus
+            event_bus.emit("GENERATION_COMPLETED", trace_id, {
+                "model": chosen_model,
+                "duration_ms": duration_ms,
+                "summary": "Generation completed",
+            })
+    
+            await asyncio.to_thread(
+                self.events.append,
+                EventEnvelope.create(
+                    event_type="generation_completed",
+                    source="orchestrator",
+                    payload={
+                        "model": chosen_model,
+                        "task_id": trace_id,
+                        "elapsed": duration_ms,
+                        "status": "completed",
+                        "content": final_result,
+                    }
+                )
+            )
+    
+        finally:
+            await _release_generation_slot(_dedup_hash)
 
         # Record the SUCCESS in the bandit — without this the model's
         # successes counter never advances (record_failure at the except above
