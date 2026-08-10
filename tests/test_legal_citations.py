@@ -260,6 +260,30 @@ async def test_verify_citations_reports_unparsed_for_exotic_cite():
 
 
 @pytest.mark.asyncio
+async def test_unparsed_not_overcounted_for_parsed_non_case_citations():
+    """`unparsed` is 'citation-SHAPED but eyecite could NOT parse AT ALL'. A span
+    eyecite DID parse — as a non-case kind (FullLawCitation / IdCitation /
+    SupraCitation) — must NOT be counted unparsed. The old formula subtracted
+    only FullCaseCitation kinds, so a parsed statute was double-counted: 2 shapes
+    (case-shape + statute-supp-shape) minus 1 parsed case = 1 unparsed even when
+    the statute was lifted fine. Patching the parser to return exactly one parsed
+    statute must yield unparsed = shapes - 1, never shapes."""
+    from swarm_os.services.legal.citation_verify import count_citation_shapes
+
+    blob = "See K.S.A. 2012 Supp. 47-501(b)(1)(E) and Bush v. Gore, 531 U.S. 98 (2000)."
+    shapes = count_citation_shapes(blob)
+    assert shapes >= 2
+    with patch("swarm_os.services.legal.citation_verify._resolve_to_full",
+               return_value=(["K.S.A. 2012 Supp. 47-501(b)(1)(E)", "531 U.S. 98"],
+                             ["FullLawCitation", "FullCaseCitation"])):
+        res = await verify_citations(blob)
+    assert res.stats["unparsed"] == shapes - 2, (
+        "the two successfully-parsed citations (statute + case) must be subtracted "
+        "from the shape count; got unparsed=%s for shapes=%s" % (res.stats["unparsed"], shapes)
+    )
+
+
+@pytest.mark.asyncio
 async def test_verify_citations_outage_counts_unverified_not_clean():
     """A case citation whose lookup yields NO verdict (status None — outage /
     no token) is UNVERIFIED. fabricated=0 counts it as unknown, unverified=1

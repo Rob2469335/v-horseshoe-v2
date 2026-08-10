@@ -329,8 +329,14 @@ async def verify_citations(blob: str, courtlistener_key: str | None = None) -> V
             "error": "eyecite not installed", "unparsed": shapes,
         })
     strings, kinds = _resolve_to_full(blob)
-    parsed_case_total = sum(1 for k in kinds if k == "FullCaseCitation")
-    unparsed = max(0, shapes - parsed_case_total)
+    # `unparsed` = citation-SHAPED passages eyecite could not parse AT ALL.
+    # Every successfully-parsed citation (of ANY kind — FullCaseCitation,
+    # FullLawCitation, IdCitation, SupraCitation, ...) represents a shape that
+    # WAS parsed, so it must be subtracted from the shape count. Subtracting
+    # only FullCaseCitation kinds over-counted: a statute shape eyecite lifted
+    # as FullLawCitation (or an id./supra resolved to a full cite) was wrongly
+    # reported "unparsed" even though the parser handled it.
+    unparsed = max(0, shapes - len(strings))
     if not strings:
         return VerifyResponse(ok=True, citations=[], stats={
             "count": 0,
