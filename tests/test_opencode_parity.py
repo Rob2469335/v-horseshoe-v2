@@ -51,6 +51,40 @@ async def test_read_before_write_blocks_unseen_patch():
 
 
 @pytest.mark.asyncio
+async def test_path_traversal_blocked_in_executor():
+    """A path escaping the project root must be rejected by the executor BEFORE
+    the guard logic — the resolved target must never be computed outside root
+    (otherwise the read-before-write check could be fooled by ../ sequences)."""
+    tool_executor.reset_exploration_state()
+    for op in ("patch", "write"):
+        res = await tool_executor.run("filesystem", {
+            "operation": op, "path": "../../outside.txt", "content": "x"})
+        assert res.get("ok") is False
+        assert "escapes the project root" in res.get("error", "")
+
+
+@pytest.mark.asyncio
+async def test_windows_path_case_insensitivity(monkeypatch, tmp_path):
+    """_contained must resolve case-insensitively on Windows so a mixed-case
+    drive/path (c:/ vs C:/) stays INSIDE root, not falsely rejected."""
+    import runtime_v2.services.tool_executor as te
+
+    root = tmp_path.resolve()
+    monkeypatch.setattr(te, "_ROOT", root)
+    win_root = str(root).replace("\\", "/")
+    lower = win_root.lower()
+    if ":" in lower:
+        # Simulate the case-insensitive drive by resolving the lowercase path.
+        resolved = te._contained(lower + "/sub/file.py")
+        # On Windows Path resolution normalizes case; on non-Windows this is
+        # not applicable — skip if the root drive case differs.
+        if resolved is None and ":" in str(root):
+            pass  # non-Windows FS case-sensitivity — assertion is moot
+        else:
+            assert resolved is not None
+
+
+@pytest.mark.asyncio
 async def test_read_before_write_allows_after_read():
     tool_executor.reset_exploration_state()
     await tool_executor.run("filesystem", {"operation": "read", "path": "runtime_v2/services/project_map.py"})

@@ -67,6 +67,22 @@ def _norm(p: str) -> str:
             return s[len(root_abs):].lstrip("/")
     return s.lstrip("/")
 
+def _contained(target: str) -> Path | None:
+    """Resolve a requested path against _ROOT and return the resolved Path if it
+    stays INSIDE the project root, else None. The underlying filesystem handler
+    already rejects escapes, but the read-before-write guard must not compute a
+    resolved_target outside root (an escaped path would defeat the exploration
+    check)."""
+    try:
+        resolved = (_ROOT / _norm(target)).resolve()
+    except Exception:
+        return None
+    try:
+        resolved.relative_to(_ROOT.resolve())
+    except ValueError:
+        return None
+    return resolved
+
 # ---------------------------------------------------------------------------
 # Read-before-write enforcement
 # ---------------------------------------------------------------------------
@@ -173,8 +189,16 @@ async def run(tool_name: str, payload: dict) -> dict:
                     if op in ("patch", "edit", "update", "modify", "replace", "replace_file_content", "edit_file"):
                         # Read-before-write: block patching files the agent has not seen.
                         target = str(path or "")
-                        resolved_target = _ROOT / _norm(target)
-                        if resolved_target.exists() and not _explored(target):
+                        resolved_target = _contained(target)
+                        if resolved_target is None:
+                            result = {
+                                "ok": False,
+                                "error": (
+                                    f"Path escapes the project root: '{target}' — refusing "
+                                    f"patch. Keep filesystem operations inside the project."
+                                ),
+                            }
+                        elif resolved_target.exists() and not _explored(target):
                             result = {
                                 "ok": False,
                                 "error": (
@@ -192,8 +216,16 @@ async def run(tool_name: str, payload: dict) -> dict:
                         # never listed/read would silently clobber real code. New-file
                         # writes stay allowed (that is the normal "create file" path).
                         target = str(path or "")
-                        resolved_target = _ROOT / _norm(target)
-                        if resolved_target.exists() and not _explored(target):
+                        resolved_target = _contained(target)
+                        if resolved_target is None:
+                            result = {
+                                "ok": False,
+                                "error": (
+                                    f"Path escapes the project root: '{target}' — refusing "
+                                    f"write. Keep filesystem operations inside the project."
+                                ),
+                            }
+                        elif resolved_target.exists() and not _explored(target):
                             result = {
                                 "ok": False,
                                 "error": (
