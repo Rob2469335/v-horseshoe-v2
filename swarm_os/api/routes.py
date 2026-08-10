@@ -385,7 +385,10 @@ async def timeline(window_minutes: int = 60, runtime: Any = Depends(runtime_dep)
         from swarm_os.repositories.event_log_repo import EventLogRepository
         repo = EventLogRepository(event_log_path=events_path)
         try:
-            events, _ = await asyncio.to_thread(repo.read_events, 0)
+            # STA-2: bound the read to the most recent 500 events so a huge
+            # events.jsonl is never materialized into a list on every /timeline
+            # poll (the endpoint already filters by window_minutes).
+            events, _ = await asyncio.to_thread(repo.read_events, 0, 500)
         except Exception as exc:
             log.warning(f"Failed to read events for timeline: {exc}")
             events = []
