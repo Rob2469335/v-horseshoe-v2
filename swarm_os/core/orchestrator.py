@@ -398,6 +398,15 @@ class Orchestrator:
                     log.exception("Generation failed with ValueError")
                 await _release_generation_slot(_dedup_hash)
                 raise
+            except asyncio.CancelledError:
+                # CancelledError inherits BaseException — the generic except above
+                # never fires, so without this explicit clause an abandoned
+                # generate() would leak the generation slot for the full 300s
+                # TTL (deduping identical retries as "already running"). Release
+                # is idempotent (pop + TTL prune), so this is safe on every path.
+                log.debug("[Orchestrator] generate() cancelled; releasing generation slot")
+                await _release_generation_slot(_dedup_hash)
+                raise
             except Exception:
                 self.router.record_failure(model=chosen_model, cooldown_seconds=60.0)
                 log.exception("Generation failed")

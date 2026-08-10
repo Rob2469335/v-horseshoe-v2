@@ -8,6 +8,7 @@
   with generate)
 """
 from __future__ import annotations
+import asyncio
 import json
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -161,6 +162,49 @@ async def test_stream_generate_releases_slot_when_abandoned():
     )
 
 
+@pytest.mark.asyncio
+async def test_generate_releases_slot_when_cancelled():
+    """asyncio.CancelledError inherits BaseException, so generate()'s generic
+    except Exception never fired on a cancelled request — the generation slot
+    stayed registered for the full 300s TTL and identical retries were wrongly
+    suppressed as duplicates. The explicit CancelledError clause must release
+    it. (Mirrors the stream_generate try/finally fix for the non-stream path.)"""
+    import swarm_os.core.orchestrator as orch_mod
+
+    async def cancelling_generate(model, messages):
+        raise asyncio.CancelledError("client disconnected")
+
+    orch = MagicMock()
+    orch.llm = MagicMock()
+    orch.llm.generate = cancelling_generate
+    orch.token_manager = AsyncMock()
+    orch.token_manager.check_budget = AsyncMock()
+    orch.token_manager.add_usage = AsyncMock()
+    orch.router = MagicMock()
+    orch.router.route_model = AsyncMock(return_value=MagicMock(model="qwen3.5-4b", reason="r"))
+    orch.router.record_failure = MagicMock()
+    orch._fetch_installed_models = AsyncMock(return_value=["qwen3.5-4b"])
+    orch._detect_provider = MagicMock(return_value="llama")
+    orch.events = MagicMock()
+    orch.trace = MagicMock()
+    orch.bridge = MagicMock()
+    orch.bridge.get_memory_context = AsyncMock(return_value="")
+    orch.mcp = MagicMock()
+    orch.mcp.get_tools_schema = MagicMock(return_value=[])
+    from swarm_os.core.orchestrator import Orchestrator as RealOrchestrator
+    real = RealOrchestrator.__new__(RealOrchestrator)
+    real.__dict__.update(orch.__dict__)
+    real._infer_task_role = MagicMock(return_value="reasoning")
+
+    assert not orch_mod._active_generations, "suite must start with empty slot registry"
+    with pytest.raises(asyncio.CancelledError):
+        await real.generate(None, messages=[{"role": "user", "content": "cancel me"}])
+    assert not orch_mod._active_generations, (
+        "generation slot leaked: hash still registered after generate() was cancelled"
+    )
+
+
+@pytest.mark.asyncio
 async def test_stream_generate_records_success_and_recovers_standing():
     """A successfully-completed stream_generate must feed the bandit's
     record_success. Before this fix, the streaming path ONLY recorded failures
