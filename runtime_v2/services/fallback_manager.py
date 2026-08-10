@@ -3,6 +3,7 @@ import random
 import logging
 import asyncio
 import os
+import re
 import threading
 import httpx
 from swarm_os.config.settings import settings
@@ -46,9 +47,21 @@ _MAX_COOLDOWN_S = 600.0
 # these will never recover by retrying the same request, so we jump straight to
 # the max cooldown instead of burning the retry budget (retry research: only
 # retry transient failures — timeouts/429/5xx; never 400/401/402/403/404).
-_PERMANENT_ERROR_MARKERS = (
-    "402", "payment", "insufficient credits", "no credits", "billing",
-    "requires more credits", "insufficient balance", "401", "403", "404",
+#
+# Two marker classes, matched differently:
+#   - STATUS CODES are matched as STANDALONE tokens (word boundaries). Substring
+#     matching was false-positive: "connection timeout after 4040ms" contained
+#     the substring "404" and was misclassified as a permanent 404-not-found.
+#     \b404\b distinguishes the string "404" AS AN HTTP status from digits that
+#     merely happen to appear inside a longer number.
+#   - TEXT phrases ("payment", "invalid api key", ...) stay substring-matched.
+_NUMERIC_PERMANENT_STATUS = (401, 402, 403, 404)
+_NUMERIC_PERMANENT_RE = re.compile(
+    r"\b(?:%s)\b" % "|".join(str(c) for c in _NUMERIC_PERMANENT_STATUS)
+)
+_TEXT_PERMANENT_MARKERS = (
+    "payment", "insufficient credits", "no credits", "billing",
+    "requires more credits", "insufficient balance",
     "invalid api key", "auth", "forbidden", "not found",
 )
 
@@ -56,9 +69,16 @@ _PERMANENT_ERROR_MARKERS = (
 def is_permanent_error(error: str) -> bool:
     """True if the error string indicates a failure that retrying cannot fix
     (billing/auth/forbidden/missing resource). Callers should fail fast to
-    fallback rather than re-issue the identical doomed request."""
+    fallback rather than re-issue the identical doomed request.
+
+    Numeric status codes are matched as standalone tokens (\b401\b) so a
+    transient error whose text merely CONTAINS those digits ("timeout after
+    4040ms") is not falsely pinned as permanent; text phrases match as
+    substrings."""
     err = str(error or "").lower()
-    return any(marker in err for marker in _PERMANENT_ERROR_MARKERS)
+    if _NUMERIC_PERMANENT_RE.search(err):
+        return True
+    return any(marker in err for marker in _TEXT_PERMANENT_MARKERS)
 
 
 def _cooldown_key(model: str) -> str:
