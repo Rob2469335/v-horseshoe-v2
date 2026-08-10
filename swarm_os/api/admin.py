@@ -229,7 +229,7 @@ async def run_heal_cycle(request: Request) -> dict:
 
 
 @router.get("/changes")
-def workspace_changes(max_diff_chars: int = 6000) -> dict:
+async def workspace_changes(max_diff_chars: int = 6000) -> dict:
     """Live diff review of uncommitted workspace changes (drives the web console panel).
 
     Returns {stat: [{path, added, deleted}], diff: <unified text, capped>}. No
@@ -237,27 +237,51 @@ def workspace_changes(max_diff_chars: int = 6000) -> dict:
     safe to expose; bounded timeout; degrades to an empty payload outside a
     git work tree.
     """
+    import asyncio
     root = Path(__file__).resolve().parent.parent.parent
     try:
-        stat_res = subprocess.run(
-            ["git", "diff", "HEAD", "--stat"], capture_output=True, text=True,
-            encoding="utf-8", errors="replace", cwd=root, timeout=10,
+        stat_proc = await asyncio.create_subprocess_exec(
+            "git", "diff", "HEAD", "--stat",
+            cwd=str(root),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
         )
-        if stat_res.returncode != 0:
+        try:
+            async with asyncio.timeout(10.0):
+                stat_out, stat_err = await stat_proc.communicate()
+        except TimeoutError:
+            stat_proc.kill()
+            await stat_proc.wait()
+            return {"stat": [], "diff": "", "truncated": False, "is_git": False, "error": "git stat timeout"}
+            
+        if stat_proc.returncode != 0:
+            err_text = stat_err.decode("utf-8", errors="replace").strip() if stat_err else "not a git work tree"
             return {"stat": [], "diff": "", "truncated": False, "is_git": False,
-                    "error": (stat_res.stderr or "not a git work tree").strip()}
+                    "error": err_text}
+                    
         stat_lines = []
-        for line in (stat_res.stdout or "").splitlines():
+        for line in (stat_out.decode("utf-8", errors="replace") or "").splitlines():
             m = re.match(r"\s*(.+?)\s*\|\s*(\d+)\s+[+-]+", line)
             if m:
                 stat_lines.append({"path": m.group(1).strip(), "lines": int(m.group(2))})
             elif line.strip():
                 continue
-        detail_res = subprocess.run(
-            ["git", "diff", "HEAD"], capture_output=True, text=True,
-            encoding="utf-8", errors="replace", cwd=root, timeout=10,
+                
+        detail_proc = await asyncio.create_subprocess_exec(
+            "git", "diff", "HEAD",
+            cwd=str(root),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
         )
-        diff_text = detail_res.stdout or ""
+        try:
+            async with asyncio.timeout(10.0):
+                detail_out, _ = await detail_proc.communicate()
+        except TimeoutError:
+            detail_proc.kill()
+            await detail_proc.wait()
+            return {"stat": stat_lines, "diff": "", "truncated": False, "is_git": True, "error": "git diff timeout"}
+            
+        diff_text = detail_out.decode("utf-8", errors="replace") or ""
         truncated = len(diff_text) > max_diff_chars
         return {
             "stat": stat_lines,
