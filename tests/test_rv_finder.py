@@ -221,3 +221,32 @@ class TestAnalysisBasics:
         _build_analysis(lst, budget=30000)
         tip = lst.analysis["negotiation_tip"] or ""
         assert "start negotiation" in tip
+
+
+@pytest.mark.asyncio
+async def test_rv_parser_blocks_ssrf_targets(monkeypatch):
+    """The rv_finder HTTP client must refuse to fetch private/loopback/metadata
+    addresses (SSRF) — a listing URL or a redirect landing on the swarm's own
+    loopback services (Qdrant/llama.cpp/backend) must not be reachable."""
+    import httpx
+    from swarm_os.services.rv_finder import parsers
+
+    fetched = []
+
+    class _FakeResp:
+        status_code = 200
+        text = "ok"
+
+    async def fake_get(url, **kwargs):
+        fetched.append(str(url))
+        return _FakeResp()
+
+    monkeypatch.setattr(parsers._get_http(), "get", fake_get)
+
+    # Direct loopback fetch is refused before any request.
+    assert await parsers._fetch_text("http://127.0.0.1:6333/collections") is None
+    assert fetched == []
+
+    # A public URL still fetches.
+    assert await parsers._fetch_text("https://example.com/rv") == "ok"
+    assert fetched == ["https://example.com/rv"]

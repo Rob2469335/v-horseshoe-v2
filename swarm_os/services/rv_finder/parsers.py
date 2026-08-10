@@ -38,16 +38,32 @@ _HTTP_CLIENT: httpx.AsyncClient | None = None
 def _get_http() -> httpx.AsyncClient:
     global _HTTP_CLIENT
     if _HTTP_CLIENT is None or _HTTP_CLIENT.is_closed:
+        # SSRF defense: redirects are re-checked on every hop (the swarm's own
+        # loopback services — Qdrant/llama.cpp/backend — must never be reached
+        # by a fetched listing URL or a redirect off it). Mirrors the web_fetch
+        # guard in swarm_os/lib/mcp/web_search.py.
+        from swarm_os.lib.mcp.web_search import _ssrf_redirect_hook
         _HTTP_CLIENT = httpx.AsyncClient(
             timeout=httpx.Timeout(connect=8.0, read=45.0, write=20.0, pool=12.0),
             headers=BROWSER_HEADERS,
             follow_redirects=True,
+            event_hooks={"response": [_ssrf_redirect_hook]},
         )
     return _HTTP_CLIENT
 
 
+def _assert_public_url(url: str) -> None:
+    """Pre-flight SSRF check: refuse to fetch a URL pointing at loopback/private/
+    link-local/reserved addresses (or hostnames resolving to them)."""
+    from swarm_os.lib.mcp.web_search import _ssrf_check
+    blocked = _ssrf_check(url)
+    if blocked:
+        raise ValueError(f"SSRF blocked: {blocked}")
+
+
 async def _fetch_text(url: str) -> str | None:
     try:
+        _assert_public_url(url)
         r = await _get_http().get(url)
         if r.status_code < 400:
             return r.text
