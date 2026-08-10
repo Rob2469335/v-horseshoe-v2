@@ -161,6 +161,41 @@ def test_ingest_one_case_empty_text_no_upsert():
     mput.assert_not_called()
 
 
+def test_ingest_one_case_embed_failure_raises_not_skips():
+    """A failed embed batch must NOT be silently skipped (which returned a
+    partial `total` and let the caller mark the case `done` — the truncated
+    corpus was never re-fetched). It now raises, so the manifest loop records
+    `error` and a later run retries the whole case."""
+    entry = {"cite": "999 F.3d 888", "name": "Test v. Cases",
+             "court": "U.S. Court of Appeals", "circuit": "9th", "year": 2020,
+             "issues": [], "tier": 1, "batson": False}
+    # One paragraph longer than the 3000-char chunk budget -> word-chopped into
+    # 2+ chunks; batch_size=1 makes each chunk its own batch so _embed is called
+    # at least twice (the flaky embed fails on the second call).
+    text = "The Equal Protection Clause forbids discrimination. " * 180
+
+    def fake_put(url, json=None, timeout=None):
+        return MagicMock(raise_for_status=lambda: None)
+
+    # _embed returns None (embed server failure after retries) on the SECOND
+    # batch — with >1 batch, the partial-skip path would return a
+    # nonzero-but-incomplete total if it were still `continue`ing.
+    call_count = {"n": 0}
+
+    async def flaky_embed(texts):
+        call_count["n"] += 1
+        if call_count["n"] >= 2:
+            return None
+        return [[0.1] * 768 for _ in texts]
+
+    with patch.object(case_corpus, "_embed", new=flaky_embed):
+        with patch.object(case_corpus.requests, "post"):
+            with patch.object(case_corpus.requests, "put", side_effect=fake_put):
+                with patch.object(case_corpus, "ensure_cases_collection", return_value=None):
+                    with pytest.raises(RuntimeError, match="embed failed for 999 F.3d 888"):
+                        __import__("asyncio").run(case_corpus.ingest_one_case(entry, text, batch_size=1))
+
+
 # ---------------------------------------------------------------------------
 # RETRIEVAL
 # ---------------------------------------------------------------------------

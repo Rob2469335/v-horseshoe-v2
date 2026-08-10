@@ -604,8 +604,14 @@ async def ingest_one_case(entry: _CASE, text: str, batch_size: int = 16) -> int:
         embed_texts = [_chunk_embed_text(entry, c) for c in batch]
         vectors = await _embed(embed_texts)
         if not vectors or len(vectors) != len(batch):
-            log.warning("embed failed for %s batch at %d — skipping", cite, start)
-            continue
+            # Fail-closed: a partial embed must NOT be silently marked `done`.
+            # Raise so the caller records `error` and a later run retries the
+            # whole case — a `continue` here shipped a truncated corpus under a
+            # `done` status (the case was never re-fetched).
+            raise RuntimeError(
+                f"embed failed for {cite} batch at {start} "
+                f"(got {len(vectors) if vectors else 0}/{len(batch)} vectors)"
+            )
         points = []
         for i, (chunk, vec) in enumerate(zip(batch, vectors)):
             payload = dict(header)
