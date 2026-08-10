@@ -144,12 +144,12 @@ _INSTRUCTION_PATTERN_RE = re.compile(
 _INSTRUCTION_LOG_CAP = 200
 
 
-def _sanitize_string(text: str) -> str:
+def _sanitize_string(text: str, html_escape: bool = True) -> str:
     if not isinstance(text, str) or not text:
         return text
     had_tag = bool(_HTML_TAG_RE.search(text))
     had_instr = bool(_INSTRUCTION_PATTERN_RE.search(text))
-    if had_tag:
+    if had_tag and html_escape:
         text = _HTML_TAG_RE.sub(lambda m: html.escape(m.group(0)), text)
     if had_instr:
         # SECURITY HARDENING: redact the imperative directive text itself so the
@@ -162,14 +162,21 @@ def _sanitize_string(text: str) -> str:
     return text
 
 
-def _sanitize_tool_output(obj):
+def _sanitize_tool_output(obj, html_escape: bool = True):
     if isinstance(obj, str):
-        return _sanitize_string(obj)
+        return _sanitize_string(obj, html_escape=html_escape)
     if isinstance(obj, dict):
-        return {k: _sanitize_tool_output(v) for k, v in obj.items()}
+        return {k: _sanitize_tool_output(v, html_escape=html_escape) for k, v in obj.items()}
     if isinstance(obj, list):
-        return [_sanitize_tool_output(v) for v in obj]
+        return [_sanitize_tool_output(v, html_escape=html_escape) for v in obj]
     return obj
+
+
+# File-READ actions: their content is code/data the agent must see verbatim
+# (JSX `<Component>`, generics `<T>`, HTML files). HTML-escaping those angle
+# brackets corrupts what the agent reads. The prompt-injection REDACTION still
+# applies unconditionally — only the angle-bracket escaping is skipped.
+_NO_HTML_ESCAPE_ACTIONS = frozenset({"read", "read_file", "read_all", "cat"})
 
 async def run(tool_name: str, payload: dict) -> dict:
     try:
@@ -514,10 +521,13 @@ async def run(tool_name: str, payload: dict) -> dict:
         # systemshardening computer-use guidance). A malicious web page / file /
         # tool output can smuggle prompt-injection instructions in. Neutralize:
         #   1. HTML-like tags are escaped so `<system>`/`[SYSTEM]` in data can't
-        #      masquerade as directives in the rendered context.
+        #      masquerade as directives in the rendered context — EXCEPT for
+        #      file-read outputs, where angle brackets are real code/data the
+        #      agent must see verbatim (JSX/generics/HTML files).
         #   2. Instruction-like imperative lines are flagged (monitor, not block)
-        #      so operators can see injection attempts.
-        result = _sanitize_tool_output(result)
+        #      so operators can see injection attempts. This ALWAYS applies.
+        html_escape = not (tool_name == "filesystem" and operation in _NO_HTML_ESCAPE_ACTIONS)
+        result = _sanitize_tool_output(result, html_escape=html_escape)
 
         return result
     except Exception as exc:
