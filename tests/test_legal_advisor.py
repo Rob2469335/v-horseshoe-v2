@@ -260,3 +260,34 @@ async def test_advise_score_stays_1_0_when_all_aligned():
     assert res.ok is True
     assert res.verification["unaligned"] == 0
     assert res.verification["score"] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_advise_score_never_negative_when_multiple_unaligned():
+    """A score can never go NEGATIVE: the M4 recompute put `unaligned` in the
+    penalties numerator but not in the `checked` denominator, so with no case
+    citations (count=0) and no unparseable shapes (unparsed=0) but TWO cited
+    statutes absent from the corpus, penalties=2 / checked=1 produced score
+    -1.0. Every numerator term must have a denominator slot."""
+    scope = {"jurisdictions": {"ny": {"expected": 40102, "ingested": 8000, "pct": 20.0, "complete": False}}}
+    fabricated_statutes = "The lease claim arises under N.Y. RPA Law § 999-C and N.Y. RPA Law § 888-D."
+    from swarm_os.services.legal.citation_verify import VerifyResponse
+    with patch.object(legal_advisor, "corpus_scope", new=AsyncMock(return_value=scope)), \
+         patch("swarm_os.services.legal.legal_search.search_statutes",
+               new=AsyncMock(return_value=[{"citation": "N.Y. RPA Law § 235-b", "section_title": "t", "content": "x"}])), \
+         patch.object(legal_advisor, "_synthesize",
+                      new=AsyncMock(return_value={"content": fabricated_statutes})), \
+         patch("swarm_os.services.legal.citation_verify.verify_citations",
+               new=AsyncMock(return_value=VerifyResponse(
+                   ok=True, citations=[], message="0 citations parsed",
+                   stats={"count": 0, "verified": 0, "fabricated": 0, "ambiguous": 0,
+                          "unverified": 0, "unparsed": 0, "skipped": 0}))):
+        res = await legal_advisor.advise("my landlord in New York won't return deposit")
+    assert res.ok is True
+    assert res.verification["unaligned"] == 2
+    assert res.verification["score"] is not None
+    assert 0.0 <= res.verification["score"] < 1.0, (
+        "two unaligned statutes with zero case citations must downgrade the score "
+        "but never send it negative: got "
+        f"{res.verification['score']}"
+    )

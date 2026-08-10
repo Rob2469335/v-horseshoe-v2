@@ -259,7 +259,12 @@ async def advise(question: str) -> AdvisorResult:
                 verify["fabricated"] + verify["ambiguous"] + verify["shape_mismatch"]
                 + verify["unverified"] + verify["unparsed"] + verify["unaligned"]
             )
-            checked = max(1, (vres.stats.get("count", 0) or 0) + unparsed)
+            # Every examined citation gets a denominator slot so the score can
+            # never go negative: count covers the case-lookup set, unparsed the
+            # citation-shaped-but-unparseable passages, and unaligned the cited
+            # statute sections absent from the corpus — each contributes to
+            # penalties and each must appear in checked.
+            checked = max(1, (vres.stats.get("count", 0) or 0) + unparsed + verify["unaligned"])
             verify["score"] = round(1.0 - penalties / checked, 2)
     except Exception as exc:
         log.warning("alignment seam failed: %s", exc)
