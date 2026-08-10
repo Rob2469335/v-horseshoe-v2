@@ -159,3 +159,47 @@ async def test_advise_downgrades_on_shape_mismatch():
     assert "not as cited" in res.answer
     assert res.verification["shape_mismatch"] == 1
     assert res.verification["score"] < 1.0
+
+
+# --- #8 score denominator regression: negative score on unverified+unparsed ---
+
+@pytest.mark.asyncio
+async def test_advise_score_not_negative_when_unverified_and_unparsed_coexist():
+    """A REAL multi-failure document that trips BOTH the unverified path (a case
+    citation whose lookup yields no verdict) AND the unparsed path (a
+    citation-shaped passage eyecite cannot parse) must produce a score in [0, 1]
+    — never negative. The old denominator `max(1, count, unverified, unparsed)`
+    undercounted: unverified is a SUBSET of count, so max() added nothing there,
+    while unparsed is genuinely EXTRA (those passages never entered count). With
+    count=1/unverified=1/unparsed=1 the numerator (2) exceeded checked (1) and
+    the score went to -1.0. The denominator must be the real total examined:
+    count + unparsed.
+
+    Built from a real document through the real verify_citations path (only the
+    external _lookup_one network leg is stubbed, the established seam) — not a
+    hand-built VerifyResponse:
+      - "Obergefell v. Hodges, 576 U.S. 644 (2015)"  -> FullCaseCitation -> lookup
+        returns status None -> unverified=1 (no token/outage, not fabricated)
+      - "900 So. 7d 694"  -> citation-SHAPED (Cat3 miss form) but eyecite cannot
+        parse it -> unparsed=1 (the L3-trap guard)
+    """
+    scope = {"jurisdictions": {"ny": {"expected": 40102, "ingested": 8000, "pct": 20.0, "complete": False}}}
+    real_doc = (
+        "Obergefell v. Hodges, 576 U.S. 644 (2015) controls here, "
+        "and the rule in 900 So. 7d 694 also applies."
+    )
+    with patch.object(legal_advisor, "corpus_scope", new=AsyncMock(return_value=scope)), \
+         patch("swarm_os.services.legal.legal_search.search_statutes",
+               new=AsyncMock(return_value=[{"citation": "N.Y. RPA Law § 235-b", "section_title": "t", "content": "x"}])), \
+         patch.object(legal_advisor, "_synthesize",
+                      new=AsyncMock(return_value={"content": real_doc})), \
+         patch("swarm_os.services.legal.citation_verify._lookup_one",
+               new=AsyncMock(return_value={"status": None, "error_message": "request failed"})):
+        res = await legal_advisor.advise("my landlord in New York won't return deposit")
+    assert res.ok is True
+    assert res.verification["unverified"] == 1
+    assert res.verification["unparsed"] == 1
+    assert "[VERIFICATION]" in res.answer
+    assert "could not be externally verified" in res.answer
+    assert "could not be parsed" in res.answer
+    assert 0.0 <= res.verification["score"] <= 1.0

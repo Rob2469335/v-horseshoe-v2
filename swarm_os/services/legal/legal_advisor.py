@@ -211,7 +211,13 @@ async def advise(question: str) -> AdvisorResult:
         shape_mismatch = vres.stats.get("shape_mismatch", 0)
         unverified = vres.stats.get("unverified", 0)
         unparsed = vres.stats.get("unparsed", 0)
-        checked = max(1, vres.stats.get("count", 0) or 0, unverified, unparsed)
+        # Denominator = the REAL total examined. count covers everything that
+        # entered the lookup loop (verified/fabricated/ambiguous/shape_mismatch/
+        # unverified are all subsets of it); unparsed is EXTRA — citation-shaped
+        # passages eyecite could not parse never entered count. max() here
+        # undercounted (unverified was double-included and unparsed could push
+        # the numerator past checked, producing a NEGATIVE score). Sum them.
+        checked = max(1, (vres.stats.get("count", 0) or 0) + unparsed)
         verify = {
             "checked": True,
             "fabricated": fabricated,
