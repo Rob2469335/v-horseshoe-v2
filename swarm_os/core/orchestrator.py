@@ -173,7 +173,8 @@ class Orchestrator:
                 _cached_models = [m.get("id") for m in data.get("data", []) if m.get("id")]
                 _models_cache_time = time.time()
                 return _cached_models
-            except Exception:
+            except Exception as e:
+                log.warning("Failed to fetch installed models: %s", e)
                 return _cached_models or ["qwen3.5-4b"]
 
     def _parse_tool_call(self, text: str) -> tuple[str, str] | None:
@@ -389,6 +390,14 @@ class Orchestrator:
                         messages.append({"role": "assistant", "content": result})
                         messages.append({"role": "user", "content": f"TOOL OBSERVATION:\n{obs_str}\n\nContinue with the next step."})
                         continue
+            except ValueError as e:
+                if "budget exceeded" in str(e).lower():
+                    log.warning(f"[Orchestrator] Token budget exceeded: {e}")
+                else:
+                    self.router.record_failure(model=chosen_model, cooldown_seconds=60.0)
+                    log.exception("Generation failed with ValueError")
+                await _release_generation_slot(_dedup_hash)
+                raise
             except Exception:
                 self.router.record_failure(model=chosen_model, cooldown_seconds=60.0)
                 log.exception("Generation failed")

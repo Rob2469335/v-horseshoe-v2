@@ -82,8 +82,9 @@ class DangerRoom:
                 env=clean_sandbox_env(),
             )
             try:
-                out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-            except asyncio.TimeoutError:
+                async with asyncio.timeout(timeout):
+                    out, _ = await proc.communicate()
+            except TimeoutError:
                 proc.kill()
                 await proc.wait()
                 return {"exit_code": -1, "ok": False,

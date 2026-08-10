@@ -7,6 +7,7 @@ class EvolvingCritic:
         # Seed weights from persisted history so the critic's learned adjustments
         # survive restarts (previously the journal was write-only — weights reset
         # to defaults every boot and the 'evolution' was lost on restart).
+        self._bg_tasks = set()
         try:
             self.critic = MetaCritic.from_history(self.journal.load(limit=200))
         except Exception:
@@ -28,7 +29,13 @@ class EvolvingCritic:
             import asyncio
             loop = asyncio.get_running_loop()
             future = loop.run_in_executor(None, self.journal.log, data)
-            future.add_done_callback(lambda f: f.exception() if not f.cancelled() else None)
+            self._bg_tasks.add(future)
+            future.add_done_callback(self._bg_tasks.discard)
+            def _log_exc(f):
+                if not f.cancelled() and f.exception():
+                    import logging
+                    logging.getLogger(__name__).warning("Journal log failed: %s", f.exception())
+            future.add_done_callback(_log_exc)
         except RuntimeError:
             self.journal.log(data)
 
