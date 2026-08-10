@@ -202,8 +202,20 @@ async def run_genetic_mutation(target_file_path: str = str(AGENT_SERVICE_PATH), 
 
                 logger.info("Running real test suite against sandboxed mutation...")
                 from swarm_os.services.security_gate import clean_sandbox_env
+                # EVO-3: run the tests RELATED to the MUTATED file (never a
+                # hardcoded suite that may not exercise the change). Default to
+                # the agent-service suite when nothing matches (that is the
+                # historical behavior and remains correct for the default
+                # agent_service_v2.py target).
+                related = _find_related_test_files(str(rel_path))
+                test_targets = [
+                    "tests/" + str(Path(t).relative_to(ROOT_DIR)).replace("\\", "/")
+                    for t in related
+                ]
+                if not test_targets:
+                    test_targets = ["tests/test_agentic_loop.py"]
                 test_proc = await asyncio.create_subprocess_exec(
-                    "python", "-m", "pytest", "tests/test_agentic_loop.py", "-v",
+                    "python", "-m", "pytest", *test_targets, "-v",
                     cwd=str(sandbox.sandbox_dir),
                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
                     env=clean_sandbox_env(),
@@ -311,6 +323,39 @@ if __name__ == "__main__":
     parser.add_argument("--func", type=str, default="get_agent", help="Target function name")
     args = parser.parse_args()
     asyncio.run(run_genetic_mutation(args.file, args.func))
+
+
+def _find_related_test_files(file_path: str) -> list[str]:
+    """Locate test files that exercise a changed module (by name, then content
+    scan). Mirrors agent_service_v2._find_related_tests so the mutation loop's
+    validation runs the RIGHT tests for the mutated file — never a hardcoded
+    suite for an unrelated target. Returns [] on any error (caller falls back
+    to a default suite)."""
+    import glob as _glob
+    try:
+        base = Path(file_path).stem
+        mod = str(file_path).replace("\\", "/").replace(".py", "")
+        out: list[str] = []
+        for t in sorted(_glob.glob(str(ROOT_DIR / "tests" / "test_*.py"))):
+            tname = Path(t).name
+            if base in tname or tname.replace("test_", "").replace(".py", "") in base:
+                out.append(t)
+                if len(out) >= 3:
+                    break
+        if not out:
+            for t in sorted(_glob.glob(str(ROOT_DIR / "tests" / "test_*.py"))):
+                try:
+                    head = Path(t).read_text(encoding="utf-8", errors="ignore")[:4000]
+                except Exception:
+                    continue
+                if base in head or mod.split("/")[-1] in head:
+                    out.append(t)
+                    if len(out) >= 3:
+                        break
+        return out
+    except Exception as e:
+        logger.warning("related-test discovery failed: %s", e)
+        return []
 
 
 def approve_pending_mutation(metadata_path: str) -> dict:
