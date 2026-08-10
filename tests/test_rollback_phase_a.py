@@ -16,7 +16,9 @@ import json
 import pytest
 
 from runtime_v2.services import run_snapshot as rs
+from runtime_v2.services import canary_registry as cr
 from swarm_os.repositories.mutation_repo import MutationRepository
+from swarm_os.services import watch_loop as wl
 
 
 @pytest.fixture(autouse=True)
@@ -33,6 +35,16 @@ def global_subprocess_mock():
 @pytest.fixture(autouse=True)
 def _isolate_snapshot_dir(monkeypatch, tmp_path):
     monkeypatch.setattr(rs, "_SNAPSHOT_DIR", tmp_path / "run_snapshots")
+    # The rollback tests drive WatchLoop._handle_tool_result with a real
+    # pkg/bug.py + routes.py failure payload; without isolating the CANARY
+    # registry too, each run registers a canary in the PRODUCTION
+    # data/events/canary_pending.json (the running backend daemon then
+    # evaluates and clears it, which is why a pending one was blocking
+    # re-registration). Every other watch-loop path (_EVENTS_FILE/_AUDIT_FILE/
+    # _AGENTS_MD/_CANARY_HUMAN_REVIEW_FILE) is already tmp-isolated per-test;
+    # _REGISTRY_FILE is the one that leaked.
+    monkeypatch.setattr(cr, "_REGISTRY_FILE", tmp_path / "canary_pending.json")
+    monkeypatch.setattr(wl, "_CANARY_HUMAN_REVIEW_FILE", tmp_path / "human_review.jsonl")
     return tmp_path
 
 
