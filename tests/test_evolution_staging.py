@@ -114,3 +114,41 @@ def test_get_active_genome_reads_active_not_staged(tmp_path, monkeypatch):
     # get_active_genome sorts by fitness; both active genomes have 0.5, returns
     # the first (genome_0). It must NOT be a staged child (generation 0 ids only).
     assert gid in ("genome_0", "genome_1")
+
+
+def test_evolve_increments_gen_from_staged_not_active(tmp_path, monkeypatch):
+    """EVO-1: the next generation number must come from what is ALREADY STAGED,
+    not the active population. The active pop stays at its last APPROVED
+    generation while a staged one awaits approval — deriving from the active pop
+    would re-stage the same gen number and clobber the staged-but-unapproved
+    generation. Here gen_5 is staged and pending; evolve must stage gen_6."""
+    _seed_active(tmp_path, fitness=0.5)
+    monkeypatch.setattr(ev, "_score_genome", lambda g: g.get("fitness", 0.5))
+    ev.STAGED_DIR.mkdir(parents=True, exist_ok=True)
+    # A pending staged generation (active pop still at generation 0).
+    pending = [
+        {"id": "g5a", "tool_genes": {"web_search": 0.8}, "fitness": 0.7, "generation": 5},
+        {"id": "g5b", "tool_genes": {"web_search": 0.6}, "fitness": 0.6, "generation": 5},
+    ]
+    ev._persist_population(pending, ev.STAGED_DIR / "gen_5.jsonl")
+
+    summary = ev.evolve_one_generation()
+    assert summary["generation"] == 6
+    # gen_5 is NOT overwritten — its bytes are untouched.
+    assert (ev.STAGED_DIR / "gen_5.jsonl").exists()
+    assert (ev.STAGED_DIR / "gen_6.jsonl").exists()
+
+
+def test_evolve_ignores_malformed_staged_files(tmp_path, monkeypatch):
+    """EVO-1: a malformed staged filename (not gen_<int>.jsonl) must be ignored
+    in the gen-number calculation, never raise, and never be deleted."""
+    _seed_active(tmp_path, fitness=0.5)
+    monkeypatch.setattr(ev, "_score_genome", lambda g: g.get("fitness", 0.5))
+    ev.STAGED_DIR.mkdir(parents=True, exist_ok=True)
+    (ev.STAGED_DIR / "gen_NOTANUMBER.jsonl").write_text("{}", encoding="utf-8")
+    (ev.STAGED_DIR / "gen_3.jsonl").write_text("{}\n", encoding="utf-8")
+
+    summary = ev.evolve_one_generation()
+    assert summary["generation"] == 4
+    # The malformed file is preserved (never deleted).
+    assert (ev.STAGED_DIR / "gen_NOTANUMBER.jsonl").exists()

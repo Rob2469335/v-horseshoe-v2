@@ -226,7 +226,19 @@ def evolve_one_generation() -> dict:
 
         # Sort desc; decay fitness so old elites fade.
         pop.sort(key=lambda g: -g["fitness"])
-        gen = max((g.get("generation", 0) for g in pop), default=0) + 1
+        # EVO-1: derive the next generation number from what is ALREADY STAGED,
+        # not the active population. The active pop stays at its last APPROVED
+        # generation while a staged one awaits human approval — deriving from
+        # the active pop would re-stage the same gen number and clobber the
+        # staged-but-unapproved generation. Malformed staged filenames are
+        # ignored (never raise, never delete).
+        staged_gens: list[int] = []
+        for p in STAGED_DIR.glob("gen_*.jsonl"):
+            try:
+                staged_gens.append(int(p.stem.split("_")[1]))
+            except (IndexError, ValueError):
+                log.warning(f"Malformed staged file ignored in gen calc: {p}")
+        gen = max(staged_gens, default=0) + 1
 
         # Elitism: keep top ELITE_COUNT unchanged.
         elites = pop[:ELITE_COUNT]
