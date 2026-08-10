@@ -134,23 +134,24 @@ def iter_in_force_rows(parquet_path: Path, jurisdiction: str, title_filter: str 
     federal sections."""
     import pyarrow.parquet as pq
     table = pq.read_table(str(parquet_path))
-    for row in table.to_pylist():
-        if row.get("act_status") != "in_force":
-            continue
-        if row.get("document_type") not in (None, "statute"):
-            continue
-        if title_filter and str(row.get("title_number") or "") != title_filter:
-            continue
-        payload = _row_to_payload(row)
-        act_id = payload["act_id"]
-        if not act_id or not payload["content"].strip():
-            continue
-        # Qdrant point IDs must be an unsigned integer or UUID (verified live:
-        # string ids like "nc:STATE_NC_..." are rejected with HTTP 400). Use a
-        # deterministic UUIDv5 from the act_id so re-runs are idempotent and
-        # cross-jurisdiction sections never collide.
-        point_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"openuslaw:{jurisdiction}:{act_id}"))
-        yield point_id, payload
+    for batch in table.to_batches(max_chunksize=1024):
+        for row in batch.to_pylist():
+            if row.get("act_status") != "in_force":
+                continue
+            if row.get("document_type") not in (None, "statute"):
+                continue
+            if title_filter and str(row.get("title_number") or "") != title_filter:
+                continue
+            payload = _row_to_payload(row)
+            act_id = payload["act_id"]
+            if not act_id or not payload["content"].strip():
+                continue
+            # Qdrant point IDs must be an unsigned integer or UUID (verified live:
+            # string ids like "nc:STATE_NC_..." are rejected with HTTP 400). Use a
+            # deterministic UUIDv5 from the act_id so re-runs are idempotent and
+            # cross-jurisdiction sections never collide.
+            point_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"openuslaw:{jurisdiction}:{act_id}"))
+            yield point_id, payload
 
 
 async def _embed(texts: list[str]) -> list[list[float]] | None:

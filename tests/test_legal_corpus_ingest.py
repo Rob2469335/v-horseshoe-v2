@@ -76,3 +76,55 @@ def test_parquet_url_and_scope():
     """The scoped jurisdictions map to the verified snapshot manifest files."""
     assert corpus_ingest.parquet_url("ny").endswith("/v2026.07/us_ny_statutes.parquet")
     assert set(corpus_ingest.SCOPE_FILES) == {"ny", "nj", "ga", "nc", "federal"}
+
+
+class _BoundedBatch:
+    """Mimics pyarrow.RecordBatch.to_pylist() for one bounded chunk."""
+
+    def __init__(self, rows):
+        self.rows = rows
+
+    def to_pylist(self):
+        return self.rows
+
+
+class _FakeTable:
+    """A pyarrow.Table stand-in that REFUSES the unbounded whole-table
+    to_pylist() and serves bounded chunks via to_batches(max_chunksize=...)."""
+
+    def __init__(self, rows):
+        self.rows = rows
+        self.requested_chunksize = None
+
+    def to_pylist(self):
+        raise AssertionError(
+            "unbounded whole-table to_pylist() called — "
+            "iter_in_force_rows must read bounded batches"
+        )
+
+    def to_batches(self, max_chunksize=None):
+        self.requested_chunksize = max_chunksize
+        batches = []
+        for i in range(0, len(self.rows), max_chunksize or len(self.rows)):
+            batches.append(_BoundedBatch(self.rows[i:i + max_chunksize]))
+        return batches
+
+
+def test_iter_in_force_rows_reads_bounded_batches(monkeypatch):
+    """The generator must pull rows through to_batches(max_chunksize=1024),
+    never materialize the whole table as one Python list. A table whose
+    whole-table to_pylist() raises proves the bounded path is the only path."""
+    fake_rows = [
+        {"act_status": "in_force", "document_type": "statute", "act_id": f"s{i}",
+         "citation": f"C{i}", "section_title": "t", "text": "hello", "word_count": 1}
+        for i in range(2500)
+    ]
+    fake_table = _FakeTable(fake_rows)
+    import pyarrow.parquet as pq
+    monkeypatch.setattr(pq, "read_table", lambda _path: fake_table)
+    rows = list(corpus_ingest.iter_in_force_rows(Path("whatever.parquet"), "xx"))
+    assert len(rows) == 2500
+    # Each in-memory chunk is bounded to the documented 1024 rows so a large
+    # parquet never balloons into one giant Python list of dicts.
+    assert fake_table.requested_chunksize == 1024
+    assert not any(len(b.rows) > 1024 for b in fake_table.to_batches(max_chunksize=1024))
