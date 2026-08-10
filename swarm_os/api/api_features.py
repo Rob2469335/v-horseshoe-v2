@@ -191,27 +191,35 @@ async def _keyword_fallback(req: QueryRequest) -> list:
             if len(results) >= req.top_k:
                 break
             try:
-                scroll = await client.scroll(
-                    collection_name=collection,
-                    limit=200,
-                    with_payload=True,
-                )
+                next_offset = None
+                while True:
+                    scroll = await client.scroll(
+                        collection_name=collection,
+                        offset=next_offset,
+                        limit=200,
+                        with_payload=True,
+                    )
+                    points = scroll[0] if isinstance(scroll, tuple) else getattr(scroll, "points", scroll)
+                    scored = []
+                    for p in points or []:
+                        pid = str(getattr(p, "id", ""))
+                        if pid and pid in seen_ids:
+                            continue
+                        payload = getattr(p, "payload", None) or {}
+                        haystack = " ".join(str(v) for v in payload.values()).lower()
+                        score = sum(1 for t in tokens if t in haystack)
+                        if score:
+                            seen_ids.add(pid)
+                            scored.append((score, {"id": getattr(p, "id", None), "score": float(score), "payload": payload}))
+                    scored.sort(key=lambda x: -x[0])
+                    results.extend(item for _, item in scored[: req.top_k - len(results)])
+                    if len(results) >= req.top_k:
+                        break
+                    next_offset = scroll[1] if isinstance(scroll, tuple) else getattr(scroll, "next_page_offset", None)
+                    if not next_offset:
+                        break
             except Exception:
                 continue  # collection missing / unreadable — try next
-            points = scroll[0] if isinstance(scroll, tuple) else getattr(scroll, "points", scroll)
-            scored = []
-            for p in points or []:
-                pid = str(getattr(p, "id", ""))
-                if pid and pid in seen_ids:
-                    continue
-                payload = getattr(p, "payload", None) or {}
-                haystack = " ".join(str(v) for v in payload.values()).lower()
-                score = sum(1 for t in tokens if t in haystack)
-                if score:
-                    seen_ids.add(pid)
-                    scored.append((score, {"id": getattr(p, "id", None), "score": float(score), "payload": payload}))
-            scored.sort(key=lambda x: -x[0])
-            results.extend(item for _, item in scored[: req.top_k - len(results)])
     except Exception as e:
         log.warning("Qdrant fallback search failed, continuing to local docs: %s", e)
         # Do not return early — fallback to local-file search below on any collection-level error
