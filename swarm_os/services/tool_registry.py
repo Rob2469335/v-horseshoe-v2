@@ -183,6 +183,11 @@ class SemanticToolRegistry:
         self.client = AsyncQdrantClient(url=qdrant_url)
         self.collection = collection_name
         self.embedder = EmbeddingService()
+        # Serializes _wait_init so a failed first init (Qdrant briefly down)
+        # can't be re-entered by two concurrent callers running _init_registry
+        # twice (two create_collection races). Created here so it's bound even
+        # when constructed outside a running loop.
+        self._init_lock = asyncio.Lock()
         try:
             loop = asyncio.get_running_loop()
             self._init_task = loop.create_task(self._init_registry())
@@ -191,13 +196,14 @@ class SemanticToolRegistry:
         self._ensured = False
 
     async def _wait_init(self):
-        if self._init_task:
-            success = await self._init_task
-            self._init_task = None
-            if success:
-                self._ensured = True
-        if not self._ensured:
-            self._ensured = await self._init_registry()
+        async with self._init_lock:
+            if self._init_task:
+                success = await self._init_task
+                self._init_task = None
+                if success:
+                    self._ensured = True
+            if not self._ensured:
+                self._ensured = await self._init_registry()
 
     async def _init_registry(self) -> bool:
         self.initialized = False

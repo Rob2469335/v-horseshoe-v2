@@ -29,6 +29,7 @@ def mock_registry():
         registry = SemanticToolRegistry(qdrant_url="http://mock:1234")
         return registry, mock_client
 
+
 @pytest.mark.asyncio
 async def test_discover_tools(mock_registry):
     registry, mock_client = mock_registry
@@ -85,3 +86,34 @@ async def test_update_tool_pheromone_bounds(mock_registry):
     await registry.update_tool_pheromone("web_search", success=False, decay=0.05)
     call_args = mock_client.set_payload.call_args_list[1][1]
     assert call_args["payload"]["pheromone_level"] == 0.1  # min 0.1
+
+
+@pytest.mark.asyncio
+async def test_concurrent_init_runs_registry_init_once():
+    """INT-4: when the first _init_registry fails (Qdrant briefly down), two
+    concurrent _wait_init callers must NOT both re-run _init_registry (which
+    would race two create_collection calls). The _init_lock serializes them."""
+    import asyncio
+    from swarm_os.services.tool_registry import SemanticToolRegistry
+
+    calls = {"n": 0}
+
+    async def flaky_init():
+        calls["n"] += 1
+        await asyncio.sleep(0.01)
+        return True
+
+    reg = object.__new__(SemanticToolRegistry)
+    reg._init_lock = asyncio.Lock()
+    reg._init_task = None
+    reg._ensured = False
+    reg._init_registry = flaky_init
+
+    async def caller():
+        await reg._wait_init()
+        return "ok"
+
+    await asyncio.gather(caller(), caller())
+    assert calls["n"] == 1, (
+        f"_init_registry must run exactly once under concurrency, ran {calls['n']}"
+    )
