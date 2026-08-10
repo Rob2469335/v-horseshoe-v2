@@ -208,3 +208,63 @@ async def test_past_mistake_warning_injected_into_tool_decision_prompt():
     assert "[PAST-MISTAKE WARNING]" in system_text, "warning must be injected into the system prompt"
     assert "Before reading a file, use filesystem operation=list or glob" in system_text
     assert "Do NOT guess file paths" in system_text
+
+
+@pytest.mark.asyncio
+async def test_malformed_json_retry_uses_json_repair_prompt():
+    """The malformed-JSON retry prompt must reuse the canonical JSON_REPAIR_PROMPT
+    (no markdown / no code fences / no XML tags / action key), not a weaker
+    hand-built variant. The empty-XML-tag output makes extract_json raise, driving
+    the retry branch."""
+    import runtime_v2.services.stream_runner as SR
+
+    captured = []
+
+    class FakeMsg:
+        content = '{"action": "final", "response": "ok"}'
+
+    class FakeChoice:
+        message = FakeMsg()
+
+    class FakeResp:
+        choices = [FakeChoice()]
+
+    async def fake_complete(model, messages, fallbacks):
+        captured.append(messages)
+        if len(captured) == 1:
+            return type("R", (), {"choices": [type("C", (), {"message": type("M", (), {"content": "<tool_call></tool_call>"})()})()]})()
+        return FakeResp()
+
+    async def fake_live_fallbacks(mode="auto"):
+        return []
+
+    class FakeReflectionService:
+        async def check_for_past_mistakes(self, task_context):
+            return ""
+
+        async def store_reflexion(self, **kwargs):
+            return None
+
+    with patch.object(SR, "complete_for_tool_decision", side_effect=fake_complete), \
+         patch("runtime_v2.services._semantic_decision_cache.get_semantic_cached_decision",
+               new=None), \
+         patch("runtime_v2.services.memory_core.get_relevant_memories", return_value=""), \
+         patch("swarm_os.services.reflection_loop.get_reflection_service",
+               return_value=FakeReflectionService()), \
+         patch("runtime_v2.services.fallback_manager.get_live_fallbacks",
+               side_effect=fake_live_fallbacks):
+        result = await SR.get_tool_decision(
+            model="qwen3.5-4b",
+            messages=[{"role": "user", "content": "analyze the codebase"}],
+            agent_id="coder",
+            allowed_tools=["filesystem", "final"],
+        )
+
+    assert result is not None
+    assert len(captured) == 2, "malformed output must trigger exactly one retry"
+    retry_messages = captured[1]
+    retry_prompt = "\n".join(str(m.get("content", "")) for m in retry_messages if m.get("role") == "user")
+    assert "exactly one valid JSON object" in retry_prompt
+    assert "No code fences" in retry_prompt
+    assert "DO NOT use XML tags" in retry_prompt
+    assert "Use an 'action' key" in retry_prompt

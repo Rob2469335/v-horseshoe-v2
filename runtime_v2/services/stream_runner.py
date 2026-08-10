@@ -22,7 +22,7 @@ from runtime_v2.services._llm_parser import (
     extract_json,
     normalize_model_json,
 )
-from runtime_v2.services._llm_prompts import build_tool_decision_system
+from runtime_v2.services._llm_prompts import JSON_REPAIR_PROMPT, build_tool_decision_system
 from runtime_v2.services._llm_client import (
     bootstrap_ssl,
     get_routing_mode,
@@ -250,7 +250,7 @@ async def get_tool_decision(
                     f"Do NOT emit truncated/malformed JSON for agent '{agent_id}'.",
                 )
                 if empty_retry < MAX_EMPTY_RETRIES:
-                    base_messages = base_messages + [{"role": "user", "content": f"SYSTEM RECOVERY: Your JSON was malformed or truncated. Output ONLY a valid JSON object. Allowed actions: {', '.join(allowed)}. Example: {{\"action\":\"filesystem\",\"operation\":\"list\",\"path\":\".\"}}"}]
+                    base_messages = base_messages + [{"role": "user", "content": f"SYSTEM RECOVERY: {JSON_REPAIR_PROMPT} Allowed actions: {', '.join(allowed)}. Example: {{\"action\":\"filesystem\",\"operation\":\"list\",\"path\":\".\"}}"}]
                     continue
                 return {"action": "final", "ok": False, "system_failure": "malformed_json", "response": f"[SYSTEM: {agent_id} produced malformed JSON after {MAX_EMPTY_RETRIES+1} attempts. Check context length.]"}
 
