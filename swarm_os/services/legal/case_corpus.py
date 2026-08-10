@@ -40,8 +40,14 @@ COLLECTION = "legal_cases"
 VECTOR_SIZE = 768  # gte-modernbert (same as legal_statutes / codebase_index)
 EMBED_MODEL = "gte-modernbert-base-Q8_0.gguf"
 
-# CourtListener v4 opinions endpoint. `cite` is a supported lookup filter; the
-# response is paginated `{count, results: [...]}`.
+# CourtListener v4 Citation Lookup & Verification API. The opinions endpoint has
+# NO cite filter (400 "Unknown filter parameters" on ?cite=) — the verifiable
+# path is: POST citation-lookup with text={cite} -> cluster id -> opinions by
+# cluster. This mirrors the citation_verify.py seam.
+CITATION_LOOKUP_URL = os.getenv(
+    "COURTLISTENER_CITATION_URL",
+    "https://www.courtlistener.com/api/rest/v4/citation-lookup/",
+)
 OPINIONS_URL = os.getenv(
     "COURTLISTENER_OPINIONS_URL",
     "https://www.courtlistener.com/api/rest/v4/opinions/",
@@ -57,6 +63,27 @@ STATE_FILE = Path("data/legal/cases_ingest.json")
 
 # Rate limit: max seconds to sleep honoring Retry-After before giving up the run.
 _MAX_RETRY_AFTER = 3600
+
+# CourtListener free-tier steady-state budget is ~5 requests/min (verified live
+# 2026-08-10: 5 successes then 429 "Expected available in 56 seconds"). Every
+# case costs 2 requests (citation-lookup + opinions-by-cluster). Enforcing a
+# >=12.5s gap between API requests keeps the run under the budget so it never
+# relies on repeated Retry-After sleeps mid-manifest.
+_API_MIN_GAP_S = 12.5
+
+# Last API request timestamp (for _pace_api) — module-level so the CLI loop and
+# any other caller share one gate.
+_LAST_API_TS: float = 0.0
+
+
+async def _pace_api() -> None:
+    """Sleep so at least _API_MIN_GAP_S elapses since the last API request."""
+    global _LAST_API_TS
+    elapsed = asyncio.get_event_loop().time() - _LAST_API_TS
+    gap = _API_MIN_GAP_S - elapsed
+    if gap > 0:
+        await asyncio.sleep(gap)
+    _LAST_API_TS = asyncio.get_event_loop().time()
 
 
 # ---------------------------------------------------------------------------
@@ -406,28 +433,39 @@ def _headers() -> dict[str, str]:
 async def _get_opinion_text(client: httpx.AsyncClient, cite: str) -> dict[str, Any]:
     """GET one opinion by cite from CourtListener. Returns
     {"text": str, "case_name": str} on success, or {"error": <code>}:
-      "not_found"  — 200 but no results for this cite
+      "not_found"  — lookup/cluster produced no result for this cite
       "no_text"    — result exists but neither plain_text nor html_with_citations
       "throttled"  — 429 with Retry-After beyond _MAX_RETRY_AFTER (stop the run)
       "http:<code>"— other failure (caller records error and continues)
-    Never raises."""
-    resp = await client.get(
-        OPINIONS_URL,
-        params={"cite": cite, "format": "json"},
+    Never raises.
+
+    The opinions endpoint has NO cite filter (verified live 2026-08-10: ?cite=
+    returns 400 "Unknown filter parameters" for every case). The verifiable
+    path is the two-step seam shared with citation_verify.py:
+      1. POST citation-lookup with data={"text": cite} -> first result's
+         cluster id (200/300 = found; 404 = fabricated; 400 = bad reporter).
+      2. GET opinions?cluster=<id> -> plain_text (html_with_citations fallback).
+    Both legs can 429; the API's budget is ~5 req/min (verified live), so on a
+    bounded Retry-After we sleep and re-issue, and _pace_api keeps the steady
+    state under the budget."""
+    await _pace_api()
+    resp = await client.post(
+        CITATION_LOOKUP_URL,
+        data={"text": cite},
         timeout=30.0,
     )
     if resp.status_code == 429:
         retry_after = int(resp.headers.get("Retry-After") or 0)
         if 0 < retry_after <= _MAX_RETRY_AFTER:
-            log.warning("429 for %s — Retry-After %ss", cite, retry_after)
+            log.warning("429 lookup for %s — Retry-After %ss", cite, retry_after)
             await asyncio.sleep(retry_after)
-            resp = await client.get(
-                OPINIONS_URL,
-                params={"cite": cite, "format": "json"},
+            resp = await client.post(
+                CITATION_LOOKUP_URL,
+                data={"text": cite},
                 timeout=30.0,
             )
         else:
-            log.warning("429 for %s — Retry-After %ss too long, stopping run", cite, retry_after)
+            log.warning("429 lookup for %s — Retry-After %ss too long, stopping run", cite, retry_after)
             return {"error": "throttled", "retry_after": retry_after}
     if resp.status_code != 200:
         return {"error": f"http:{resp.status_code}"}
@@ -435,17 +473,55 @@ async def _get_opinion_text(client: httpx.AsyncClient, cite: str) -> dict[str, A
         body = resp.json()
     except Exception:
         return {"error": "bad-json"}
-    results = (body or {}).get("results") or []
-    if not results:
+    if not isinstance(body, list) or not body:
         return {"error": "not_found"}
-    item = results[0]
+    item = body[0]
+    # 200/300 = found; 404 = fabricated; 400 = bad reporter.
+    if item.get("status") in (404, 400):
+        return {"error": "not_found"}
+    clusters = (item or {}).get("clusters") or []
+    if not clusters:
+        return {"error": "not_found"}
+    cluster_id = clusters[0].get("id")
+    case_name = (clusters[0].get("case_name") or "").strip()
+    if not cluster_id:
+        return {"error": "not_found"}
+
+    await _pace_api()
+    opin = await client.get(
+        OPINIONS_URL,
+        params={"cluster": cluster_id, "format": "json"},
+        timeout=30.0,
+    )
+    if opin.status_code == 429:
+        retry_after = int(opin.headers.get("Retry-After") or 0)
+        if 0 < retry_after <= _MAX_RETRY_AFTER:
+            log.warning("429 opinion for %s — Retry-After %ss", cite, retry_after)
+            await asyncio.sleep(retry_after)
+            opin = await client.get(
+                OPINIONS_URL,
+                params={"cluster": cluster_id, "format": "json"},
+                timeout=30.0,
+            )
+        else:
+            log.warning("429 opinion for %s — Retry-After %ss too long, stopping run", cite, retry_after)
+            return {"error": "throttled", "retry_after": retry_after}
+    if opin.status_code != 200:
+        return {"error": f"http:{opin.status_code}"}
+    try:
+        oresults = (opin.json() or {}).get("results") or []
+    except Exception:
+        return {"error": "bad-json"}
+    if not oresults:
+        return {"error": "not_found"}
+    item = oresults[0]
     text = (item.get("plain_text") or "").strip()
     if not text:
         text = _html_to_text(item.get("html_with_citations") or "")
     if not text:
         return {"error": "no_text"}
-    case_name = item.get("cluster") and "" or ""
-    # The opinions endpoint doesn't carry case_name directly; the manifest does.
+    # The opinions endpoint doesn't carry case_name directly; prefer the
+    # manifest's name, but report the lookup cluster's name when present.
     return {"text": text, "case_name": case_name}
 
 
