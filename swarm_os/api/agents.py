@@ -25,6 +25,9 @@ class AgentStepPayload(BaseModel):
     resume: str | None = None
 
 class ToolCallPayload(BaseModel):
+    # payload defaults to None (a caller may POST just {tool_name} with no args).
+    # Normalized to {} before dispatch so a None never reaches run_tool and trips
+    # AttributeError-style tool crashes — empty payload is a valid "no args" call.
     payload: Dict[str, Any] | None = None
 
 class ModelOverridePayload(BaseModel):
@@ -222,7 +225,8 @@ async def step_agent_stream(agent_id: str, payload: AgentStepPayload, request: R
 @router.post("/agents/{agent_id}/tools/{tool_name}")
 async def call_agent_tool(agent_id: str, tool_name: str, payload: ToolCallPayload, service=Depends(get_agent_service)):
     try:
-        return await service.run_tool(agent_id, tool_name, payload.payload)
+        tool_payload = payload.payload if isinstance(payload.payload, dict) else {}
+        return await service.run_tool(agent_id, tool_name, tool_payload)
     except KeyError:
         logger.warning("Agent tool call on unknown agent: %s", agent_id)
         raise HTTPException(status_code=404, detail=f"Unknown agent '{agent_id}'")

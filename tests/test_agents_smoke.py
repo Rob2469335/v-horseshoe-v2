@@ -67,6 +67,35 @@ def test_step_agent_shape(client):
         pytest.skip("LLM backend not running")
     assert r.status_code in (200, 500, 502, 504)
 
+def test_call_agent_tool_null_payload_normalized_to_empty_dict():
+    """A POST to /agents/{id}/tools/{tool} with NO payload body must dispatch
+    {} to run_tool, never raw None (None would AttributeError inside
+    tool_executor.run's payload.get). Revert-proof: old call_agent_tool passed
+    payload.payload straight through, so this test fails on the removed guard."""
+    from fastapi import FastAPI
+    from swarm_os.api.agents import router
+
+    captured = {}
+
+    async def fake_run_tool(agent_id, tool_name, payload):
+        captured["payload"] = payload
+        return {"ok": True}
+
+    service = MagicMock()
+    service.run_tool = fake_run_tool
+    test_app = FastAPI()
+    test_app.include_router(router)
+    test_app.dependency_overrides[__import__(
+        "swarm_os.api.agents", fromlist=["get_agent_service"]
+    ).get_agent_service] = lambda: service
+
+    with TestClient(test_app) as test_client:
+        response = test_client.post("/agents/tooluser/tools/lsp", json={})
+
+    assert response.status_code == 200
+    assert captured["payload"] == {}
+
+
 def test_step_forwards_delegation_chain_and_resume():
     """Non-streaming /step must forward delegation_chain + resume (like the
     streaming endpoint); silently dropping them would lose the checkpointed-run
