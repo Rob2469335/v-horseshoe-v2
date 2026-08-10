@@ -143,6 +143,29 @@ async def test_verify_citations_200_empty_normalized_not_mismatch():
     assert res.stats["verified"] == 1
 
 
+@pytest.mark.asyncio
+async def test_verify_citations_null_volume_canonical_not_shape_mismatch():
+    """CourtListener emits `volume: null` on some cluster canonical citations.
+    The shape-match comparison built the candidate key via an f-string
+    ('None  U.S. 644'), which the key parser misreads as a genuine string
+    ('None U.S. 74' -> '|noneus|74') — a garbage key that never equals the real
+    sent key, so a REAL citation (576 U.S. 644) was flagged shape-mismatched.
+    A canonical citation missing any of vol/reporter/page has no comparable
+    shape; it must be skipped, not fed through the key parser."""
+    with patch("swarm_os.services.legal.citation_verify._lookup_one",
+               new=AsyncMock(return_value={
+                   "status": 200,
+                   "normalized_citations": ["576 U.S. 644"],
+                   "clusters": [{
+                       "case_name": "Obergefell v. Hodges",
+                       "citations": [{"volume": None, "reporter": "U.S.", "page": "644"}],
+                   }],
+               })):
+        res = await verify_citations("Obergefell v. Hodges, 576 U.S. 644 (2015)")
+    assert res.stats["shape_mismatch"] == 0
+    assert res.stats["verified"] == 1
+
+
 # --- M4 statutory-alignment seam ---------------------------------------------
 
 @pytest.mark.parametrize("text,expected", [

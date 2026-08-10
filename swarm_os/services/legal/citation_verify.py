@@ -383,7 +383,17 @@ async def verify_citations(blob: str, courtlistener_key: str | None = None) -> V
             canonical_keys = []
             for cluster in lookup.get("clusters") or []:
                 for cite in cluster.get("citations", []):
-                    c_key = case_citation_key(f"{cite.get('volume', '')} {cite.get('reporter', '')} {cite.get('page', '')}")
+                    # CourtListener emits null/missing volume on some canonical
+                    # entries; a missing part renders 'None  U.S. 74' which the
+                    # key parser misreads as a real vol/reporter/page string
+                    # ('None U.S. 74' -> '|noneus|74') — a garbage key that
+                    # would never match the sent key, false-flagging a REAL
+                    # citation as shape-mismatched. Only compare canonical
+                    # citations that carry all three parts.
+                    vol, rep, page = cite.get("volume"), cite.get("reporter"), cite.get("page")
+                    if not (vol and rep and page):
+                        continue
+                    c_key = case_citation_key(f"{vol} {rep} {page}")
                     if c_key:
                         canonical_keys.append(c_key)
             shape_mismatch = (
