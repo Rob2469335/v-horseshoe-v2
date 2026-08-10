@@ -113,3 +113,37 @@ async def test_concurrent_scoring_never_tears_last_penalty_score_pair():
     assert state.last_score > 0
 
 
+def test_strategy_tolerates_none_and_missing_metadata_fields():
+    """The metadata bonus fields (priority/tg128/pp512) must tolerate explicit
+    None values AND keys missing entirely — a partial metadata dict from a
+    shared_model_registry profile (or a hand-built one) must not crash routing.
+    Pre-fix float(None) raised TypeError."""
+    strategy = DefaultStrategy()
+    router = Router(
+        profiles=[
+            ModelProfile(
+                name="none-fields", role="fast", max_tokens=32000,
+                metadata={"priority": None, "tg128": None, "pp512": None},
+            ),
+            ModelProfile(
+                name="missing-fields", role="fast", max_tokens=32000,
+                metadata={"some_unrelated_key": "x"},
+            ),
+            ModelProfile(
+                name="no-metadata", role="fast", max_tokens=32000,
+            ),
+            ModelProfile(
+                name="non-dict-metadata", role="fast", max_tokens=32000,
+                metadata=None,
+            ),
+        ],
+        default_role="reasoning",
+    )
+    for name in ("none-fields", "missing-fields", "no-metadata", "non-dict-metadata"):
+        decision = strategy.select_model(
+            router=router, candidates=[name], role="fast", allow_fallback=True
+        )
+        assert decision.model == name
+        assert decision.fallback is False
+
+

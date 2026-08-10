@@ -104,12 +104,12 @@ class DefaultStrategy(RoutingStrategy):
                 score += 10.0
 
             if isinstance(profile.metadata, dict):
-                priority = float(profile.metadata.get("priority", 0.0))
+                priority = float(profile.metadata.get("priority") or 0.0)
                 score += priority
                 
                 # Apply Thermal Benchmark Speed Bonuses
-                tg128 = float(profile.metadata.get("tg128", 0.0))
-                pp512 = float(profile.metadata.get("pp512", 0.0))
+                tg128 = float(profile.metadata.get("tg128") or 0.0)
+                pp512 = float(profile.metadata.get("pp512") or 0.0)
                 if tg128 > 0:
                     speed_bonus = tg128 * 2.0
                     score += speed_bonus
