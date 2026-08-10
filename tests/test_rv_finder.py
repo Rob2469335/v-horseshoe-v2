@@ -228,7 +228,6 @@ async def test_rv_parser_blocks_ssrf_targets(monkeypatch):
     """The rv_finder HTTP client must refuse to fetch private/loopback/metadata
     addresses (SSRF) — a listing URL or a redirect landing on the swarm's own
     loopback services (Qdrant/llama.cpp/backend) must not be reachable."""
-    import httpx
     from swarm_os.services.rv_finder import parsers
 
     fetched = []

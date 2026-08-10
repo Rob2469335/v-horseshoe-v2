@@ -47,7 +47,6 @@ def test_timeline_reads_bounded_events(monkeypatch, client):
     max (500) so a huge events.jsonl is never materialized on every poll."""
     import json
     from pathlib import Path
-    import swarm_os.api.routes as routes_mod
     from swarm_os.repositories.event_log_repo import EventLogRepository
 
     events_path = Path("data/events/events.jsonl")
