@@ -63,8 +63,8 @@ async def _safe_ollama_models(runtime: Any) -> list[str]:
                         if ".gguf" in mid or "\\" in mid or "/" in mid:
                             mid = mid.replace("\\", "/").split("/")[-1].replace(".gguf", "")
                         models.add(mid)
-        except Exception:
-            pass
+        except Exception as exc:
+            log.warning("Failed checking port %s: %s", port, exc)
             
     # Check all llama.cpp ports — ONLY report models actually being served
     await asyncio.gather(
@@ -122,8 +122,8 @@ async def status(runtime: Any = Depends(runtime_dep)):
                 continue
             count = (await vs.client.count(c.name)).count
             total_qdrant_points += count
-    except Exception:
-        pass
+    except Exception as exc:
+        log.warning("Failed counting Qdrant points: %s", exc)
 
     # BUG FIX: primary_vision_model must be the ACTUAL vision model (moondream),
     # not the first installed/generation model (qwen3.5-4b).
@@ -143,7 +143,7 @@ async def status(runtime: Any = Depends(runtime_dep)):
         vision_models_installed=vision_models or installed_models,
         installed_model_count=len(installed_models),
         installed_models=installed_models,
-        primary_vision_model=vision_models[0] if vision_models else (installed_models[0] if installed_models else None),
+        primary_vision_model=vision_models[0] if vision_models else None,
     )
 
 @router.get("/readyz")
