@@ -106,3 +106,56 @@ async def test_stream_generate_dedups_concurrent_identical():
         assert chunks and "Duplicate generation suppressed" in chunks[0][0]
         # The slot was NOT released for the suppressed (never-started) run.
         acq.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_stream_generate_releases_slot_when_abandoned():
+    """An abandoned stream (client disconnect mid-iteration -> GeneratorExit at
+    a yield) must release the shared generation slot. Before the try/finally
+    wrap, every yield in stream_generate skipped the trailing release, so the
+    dedup hash stayed in _active_generations for the full 300s TTL and any
+    identical re-request was wrongly suppressed as a duplicate."""
+    import swarm_os.core.orchestrator as orch_mod
+
+    async def fake_stream(model, messages):
+        yield "hello"
+        yield " world"
+        yield " done"
+
+    orch = MagicMock()
+    orch.llm = MagicMock()
+    orch.llm.stream_generate = fake_stream
+    orch.token_manager = AsyncMock()
+    orch.token_manager.is_exhausted = AsyncMock(return_value=False)
+    orch.token_manager.add_usage = AsyncMock()
+    orch.token_manager.get_usage = AsyncMock(return_value=0)
+    orch._get_memory_context = AsyncMock(return_value="")
+    orch.mcp = MagicMock()
+    orch.mcp.get_tools_schema = MagicMock(return_value=[])
+    orch.trace = MagicMock()
+    orch.trace.new_trace_id = MagicMock(return_value="t2")
+    orch.router = MagicMock()
+    orch.router.route_model = AsyncMock(return_value=MagicMock(model="qwen3.5-4b", reason="r"))
+    orch._fetch_installed_models = AsyncMock(return_value=["qwen3.5-4b"])
+    orch._detect_provider = MagicMock(return_value="llama")
+    orch.events = MagicMock()
+    from swarm_os.core.orchestrator import Orchestrator as RealOrchestrator
+    real = RealOrchestrator.__new__(RealOrchestrator)
+    real.__dict__.update(orch.__dict__)
+    real._infer_task_role = MagicMock(return_value="reasoning")
+    real._parse_tool_call = MagicMock(return_value=None)
+    real.trace.add = MagicMock()
+
+    # Use the REAL acquire/release (not mocked) so the leak is observable.
+    assert not orch_mod._active_generations, "suite must start with empty slot registry"
+    gen = real.stream_generate(None, messages=[{"role": "user", "content": "abandon me"}])
+    agen = gen.__aiter__()
+    await agen.__anext__()
+    # The stream IS in-flight and holding a slot now.
+    assert len(orch_mod._active_generations) == 1, "stream should hold the generation slot"
+    stored_hash = next(iter(orch_mod._active_generations))
+    # Client disconnects: abandon the stream without draining it.
+    await gen.aclose()
+    assert stored_hash not in orch_mod._active_generations, (
+        "generation slot leaked: hash still registered after the stream was abandoned"
+    )

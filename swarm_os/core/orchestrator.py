@@ -539,120 +539,123 @@ class Orchestrator:
         handled_tool_keys: set[str] = set()  # Track handled tool calls to detect repeats
         accumulated_text = ""
 
-        for step in range(max_steps):
-            # Token budget check
-            if await self.token_manager.is_exhausted():
-                yield f"\n[Error: Token budget exceeded ({await self.token_manager.get_usage()} used)]", chosen_model, trace_id
-                break
+        try:
+            for step in range(max_steps):
+                # Token budget check
+                if await self.token_manager.is_exhausted():
+                    yield f"\n[Error: Token budget exceeded ({await self.token_manager.get_usage()} used)]", chosen_model, trace_id
+                    break
 
-            log.info(f"[Orchestrator] stream_generate() Turn {step + 1}/{max_steps} starting with model={chosen_model} provider={provider}")
-            accumulated_text = ""
-            try:
-                # Dispatch to the correct provider
-                if provider in ("openrouter", "nvidia"):
-                    stream_gen = await self._cloud_generate(model=chosen_model, messages=messages, provider=provider, stream=True)
-                    async for chunk in stream_gen:
-                        accumulated_text += chunk
-                        yield chunk, chosen_model, trace_id
-                else:
-                    async for chunk in self.llm.stream_generate(model=chosen_model, messages=messages):
-                        accumulated_text += chunk
-                        yield chunk, chosen_model, trace_id
-                
-                # Update tokens used
-                await self.token_manager.add_usage(accumulated_text)
-
-                tool_info = self._parse_tool_call(accumulated_text)
-                if tool_info:
-                    tool_name, params_str = tool_info
-                    dedup_key = f"{tool_name}:{params_str}"
-
-                    if dedup_key in handled_tool_keys:
-                        log.info(f"[Orchestrator] DUPLICATE tool call detected in stream: {tool_name}. Breaking loop.")
-                        yield "\n[System: Duplicate tool call detected. Stopping loop.]\n", chosen_model, trace_id
-                        break
-
-                    log.info(f"[Orchestrator] Intercepted tool call in stream_generate(): {tool_name} with params: {params_str}")
-                    try:
-                        params = json.loads(params_str)
-                    except Exception as e:
-                        log.warning(f"[Orchestrator] Failed to parse tool params JSON: {e}")
-                        obs_text = f"\n[Critic Rejection: Invalid JSON parameters: {e}. Requesting self-correction...]\n"
-                        yield obs_text, chosen_model, trace_id
-                        
-                        messages.append({"role": "assistant", "content": accumulated_text})
-                        messages.append({
-                            "role": "user",
-                            "content": f"Critic Feedback: The tool execution failed because the JSON parameters could not be parsed: {e}. Please correct the parameters and call the tool again."
-                        })
-                        continue
-                    
-                    # Execute tool
-                    log.info(f"[Orchestrator] Executing tool {tool_name}...")
-                    if tool_name == "command":
-                        observation = {
-                            "ok": True,
-                            "kind": "command",
-                            "command": params.get("command"),
-                            "confidence": params.get("confidence"),
-                            "handled": True,
-                            "status": "completed",
-                            "result": f"Slash command {params.get('command')} was intercepted and handled by the orchestrator.",
-                            "next_step": "Continue the assistant response using this command result. Do not call the same slash command again unless the user explicitly asks to rerun it.",
-                            "note": "Slash command intercepted by orchestrator compatibility shim.",
-                        }
+                log.info(f"[Orchestrator] stream_generate() Turn {step + 1}/{max_steps} starting with model={chosen_model} provider={provider}")
+                accumulated_text = ""
+                try:
+                    # Dispatch to the correct provider
+                    if provider in ("openrouter", "nvidia"):
+                        stream_gen = await self._cloud_generate(model=chosen_model, messages=messages, provider=provider, stream=True)
+                        async for chunk in stream_gen:
+                            accumulated_text += chunk
+                            yield chunk, chosen_model, trace_id
                     else:
-                        observation = await self.mcp.call(tool_name, params)
-                    log.info(f"[Orchestrator] Tool execution result: {observation}")
+                        async for chunk in self.llm.stream_generate(model=chosen_model, messages=messages):
+                            accumulated_text += chunk
+                            yield chunk, chosen_model, trace_id
 
-                    # Mark this tool call as handled
-                    handled_tool_keys.add(dedup_key)
-                    
-                    obs_str = json.dumps(observation)
-                    if len(obs_str) > 2000:
-                        obs_str = obs_str[:2000] + "... [Truncated for context limit]"
-                    
-                    # Critic evaluation
-                    critic_res = self.critic.evaluate_step(observation, expected_kind="tool")
-                    if not critic_res.accepted:
-                        log.warning(f"[Orchestrator] Critic rejected tool execution: {critic_res.reason}")
-                        obs_text = f"\n[Critic Rejection: {critic_res.reason}. Requesting self-correction...]\n"
-                        yield obs_text, chosen_model, trace_id
-                        
-                        if len(messages) > 1 and messages[-1].get("role") == "user" and "Critic Feedback" in messages[-1].get("content", ""):
-                            messages.pop()
-                            messages.pop()
-                        
-                        messages.append({"role": "assistant", "content": accumulated_text})
-                        messages.append({
-                            "role": "user",
-                            "content": f"Critic Feedback: The tool execution returned an error or was rejected: {critic_res.reason}. Please correct the parameters and call the tool again."
-                        })
-                        continue
+                    # Update tokens used
+                    await self.token_manager.add_usage(accumulated_text)
 
-                    # For handled slash commands, break immediately — the shim is terminal
-                    if tool_name == "command":
-                        log.info("[Orchestrator] Slash command handled in stream. Continuing.")
+                    tool_info = self._parse_tool_call(accumulated_text)
+                    if tool_info:
+                        tool_name, params_str = tool_info
+                        dedup_key = f"{tool_name}:{params_str}"
+
+                        if dedup_key in handled_tool_keys:
+                            log.info(f"[Orchestrator] DUPLICATE tool call detected in stream: {tool_name}. Breaking loop.")
+                            yield "\n[System: Duplicate tool call detected. Stopping loop.]\n", chosen_model, trace_id
+                            break
+
+                        log.info(f"[Orchestrator] Intercepted tool call in stream_generate(): {tool_name} with params: {params_str}")
+                        try:
+                            params = json.loads(params_str)
+                        except Exception as e:
+                            log.warning(f"[Orchestrator] Failed to parse tool params JSON: {e}")
+                            obs_text = f"\n[Critic Rejection: Invalid JSON parameters: {e}. Requesting self-correction...]\n"
+                            yield obs_text, chosen_model, trace_id
+
+                            messages.append({"role": "assistant", "content": accumulated_text})
+                            messages.append({
+                                "role": "user",
+                                "content": f"Critic Feedback: The tool execution failed because the JSON parameters could not be parsed: {e}. Please correct the parameters and call the tool again."
+                            })
+                            continue
+
+                        # Execute tool
+                        log.info(f"[Orchestrator] Executing tool {tool_name}...")
+                        if tool_name == "command":
+                            observation = {
+                                "ok": True,
+                                "kind": "command",
+                                "command": params.get("command"),
+                                "confidence": params.get("confidence"),
+                                "handled": True,
+                                "status": "completed",
+                                "result": f"Slash command {params.get('command')} was intercepted and handled by the orchestrator.",
+                                "next_step": "Continue the assistant response using this command result. Do not call the same slash command again unless the user explicitly asks to rerun it.",
+                                "note": "Slash command intercepted by orchestrator compatibility shim.",
+                            }
+                        else:
+                            observation = await self.mcp.call(tool_name, params)
+                        log.info(f"[Orchestrator] Tool execution result: {observation}")
+
+                        # Mark this tool call as handled
+                        handled_tool_keys.add(dedup_key)
+
+                        obs_str = json.dumps(observation)
+                        if len(obs_str) > 2000:
+                            obs_str = obs_str[:2000] + "... [Truncated for context limit]"
+
+                        # Critic evaluation
+                        critic_res = self.critic.evaluate_step(observation, expected_kind="tool")
+                        if not critic_res.accepted:
+                            log.warning(f"[Orchestrator] Critic rejected tool execution: {critic_res.reason}")
+                            obs_text = f"\n[Critic Rejection: {critic_res.reason}. Requesting self-correction...]\n"
+                            yield obs_text, chosen_model, trace_id
+
+                            if len(messages) > 1 and messages[-1].get("role") == "user" and "Critic Feedback" in messages[-1].get("content", ""):
+                                messages.pop()
+                                messages.pop()
+
+                            messages.append({"role": "assistant", "content": accumulated_text})
+                            messages.append({
+                                "role": "user",
+                                "content": f"Critic Feedback: The tool execution returned an error or was rejected: {critic_res.reason}. Please correct the parameters and call the tool again."
+                            })
+                            continue
+
+                        # For handled slash commands, break immediately — the shim is terminal
+                        if tool_name == "command":
+                            log.info("[Orchestrator] Slash command handled in stream. Continuing.")
+                            obs_text = f"\n[Observation: {obs_str}]\n"
+                            yield obs_text, chosen_model, trace_id
+                            messages.append({"role": "assistant", "content": accumulated_text})
+                            messages.append({"role": "user", "content": f"TOOL OBSERVATION:\n{obs_str}\n\nContinue with the next assistant response."})
+                            break
+                        # Yield observation back to the stream so the client receives it
                         obs_text = f"\n[Observation: {obs_str}]\n"
                         yield obs_text, chosen_model, trace_id
+
+                        # Inject back into history for non-command tools
                         messages.append({"role": "assistant", "content": accumulated_text})
                         messages.append({"role": "user", "content": f"TOOL OBSERVATION:\n{obs_str}\n\nContinue with the next assistant response."})
+                        continue
+                    else:
+                        log.info("[Orchestrator] Final stream result received. Exiting loop.")
                         break
-                    # Yield observation back to the stream so the client receives it
-                    obs_text = f"\n[Observation: {obs_str}]\n"
-                    yield obs_text, chosen_model, trace_id
-                    
-                    # Inject back into history for non-command tools
-                    messages.append({"role": "assistant", "content": accumulated_text})
-                    messages.append({"role": "user", "content": f"TOOL OBSERVATION:\n{obs_str}\n\nContinue with the next assistant response."})
-                    continue
-                else:
-                    log.info("[Orchestrator] Final stream result received. Exiting loop.")
+                except Exception as exc:
+                    log.exception("[Orchestrator] Streaming failed with error")
+                    yield f"\n[Stream Error: {exc}]", chosen_model, trace_id
                     break
-            except Exception as exc:
-                log.exception("[Orchestrator] Streaming failed with error")
-                yield f"\n[Stream Error: {exc}]", chosen_model, trace_id
-                break
+        finally:
+            await _release_generation_slot(_dedup_hash)
 
         duration_ms = (time.time() * 1000.0) - start_ms
         log.info("[Orchestrator] Stream completed successfully. Duration: %.2f ms", duration_ms)
