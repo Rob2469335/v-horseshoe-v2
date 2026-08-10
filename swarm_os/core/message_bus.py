@@ -18,6 +18,7 @@ class MessageBus:
         self._queue = asyncio.Queue()
         self._running = False
         self._task: asyncio.Task | None = None
+        self._pending_tasks: set[asyncio.Task] = set()
 
     def subscribe(self, topic: str, handler: Callable[[Event], Coroutine[Any, Any, None]]):
         if topic not in self._subscribers:
@@ -44,6 +45,12 @@ class MessageBus:
                 await self._task
             except asyncio.CancelledError:
                 pass
+        # Fire-and-forget handler tasks from the fan-out loop
+        for t in list(self._pending_tasks):
+            t.cancel()
+        if self._pending_tasks:
+            await asyncio.gather(*self._pending_tasks, return_exceptions=True)
+            self._pending_tasks.clear()
         log.info("[MessageBus] Stopped processing loop")
 
     async def _process_events(self):
@@ -57,12 +64,14 @@ class MessageBus:
                     self._queue.task_done()
                     continue
 
-                # Run handlers concurrently
+                # Run handlers concurrently WITHOUT blocking the loop: a slow
+                # subscriber must not head-of-line-block events on other topics
+                # (previously `await asyncio.gather(*tasks)` held the next
+                # queue.get() until the slowest handler finished).
                 tasks = []
                 for handler in handlers:
                     tasks.append(asyncio.create_task(self._safe_execute(handler, event)))
-                
-                await asyncio.gather(*tasks)
+                self._pending_tasks.update(tasks)
                 self._queue.task_done()
             except asyncio.CancelledError:
                 break
@@ -74,5 +83,7 @@ class MessageBus:
             await handler(event)
         except Exception as e:
             log.exception(f"[MessageBus] Error in handler for '{event.topic}': {e}")
+        finally:
+            self._pending_tasks.discard(asyncio.current_task())
 
 global_bus = MessageBus()
