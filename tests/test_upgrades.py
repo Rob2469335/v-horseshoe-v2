@@ -1,4 +1,5 @@
 from __future__ import annotations
+import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
@@ -203,3 +204,39 @@ async def test_memory_consolidation():
     consolidated_run = [r for r in info if r.payload.get("consolidated")][0]
     assert consolidated_run.payload["summary"] == "Unified task runs successfully completed."
     assert consolidated_run.payload["event_count"] == 9
+
+
+@pytest.mark.asyncio
+async def test_close_cancels_pending_bg_tasks(tmp_path):
+    """MemoryBridge.close() must cancel pending _spawn() graph tasks.
+
+    The fire-and-forget graph writes are tracked in `_bg_tasks` so they aren't
+    GC'd mid-flight. Before the fix, close() tore down the httpx/embedding
+    clients without cancelling those tasks — a pending graph write could run
+    against closed clients, and Python warned 'Task was destroyed but it is
+    pending' on shutdown. close() now cancels + awaits the pending tasks first."""
+    from swarm_os.memory.memory_bridge import MemoryBridge
+
+    bridge = MemoryBridge(
+        event_log_path=tmp_path / "events.jsonl",
+        vector_store=MagicMock(),
+        embedding_svc=MagicMock(),
+    )
+    bridge.event_repo.save_state = MagicMock()
+    bridge.http = AsyncMock()
+    bridge.http.aclose = AsyncMock()
+    bridge.emb = AsyncMock()
+    bridge.emb.aclose = AsyncMock()
+
+    started = asyncio.Event()
+
+    async def never_ends():
+        started.set()
+        await asyncio.Event().wait()
+
+    task = bridge._spawn(never_ends())
+    assert task is not None
+    await started.wait()
+
+    await bridge.close()
+    assert task.cancelled(), "close() must cancel pending _bg_tasks"

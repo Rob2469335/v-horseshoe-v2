@@ -752,6 +752,16 @@ class MemoryBridge:
                 logger.exception("GraphRAG clustering failed: %s", exc)
 
     async def close(self) -> None:
+        # Cancel pending fire-and-forget graph tasks BEFORE tearing down clients
+        # (the _spawn() done-callbacks discard from _bg_tasks as they finish, so
+        # snapshot the set first). Without this, a spawned graph write could run
+        # against a closed httpx/embedding client — and the interpreter would see
+        # "Task was destroyed but it is pending" warnings on shutdown.
+        pending = list(self._bg_tasks)
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
         await asyncio.to_thread(self.event_repo.save_state, self.state)
         await self.http.aclose()
         if self.emb is not None:
