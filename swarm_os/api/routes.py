@@ -693,6 +693,33 @@ async def get_critic_stats(orch: Any = Depends(get_orchestrator), runtime: Any =
             "error": "critic stats unavailable",
         }
 
+def _memory_timestamp(payload: dict) -> float:
+    """Sortable float from a memory payload's timestamp, never raising.
+
+    Memory writers are inconsistent: memory_core/reflection_loop store
+    `time.time()` floats, api_features stores ISO-8601 strings, and payloads
+    can carry an explicit null timestamp (e.g. `valid_until: None`). A bare
+    `float(x.get("timestamp", 0))` crashed the /memories sort on any None or
+    ISO string; degrade all unparseable shapes to 0.0 (sort to the bottom)."""
+    raw = payload.get("timestamp")
+    if raw is None:
+        return 0.0
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    if isinstance(raw, str):
+        text = raw.strip()
+        try:
+            return float(text)
+        except (TypeError, ValueError):
+            pass
+        try:
+            from datetime import datetime
+            return datetime.fromisoformat(text).timestamp()
+        except (TypeError, ValueError):
+            return 0.0
+    return 0.0
+
+
 @router.get("/memories")
 async def get_memories():
     """Retrieve all learned memories from Qdrant, omitting the codebase chunks."""
@@ -720,7 +747,7 @@ async def get_memories():
                 payloads = [p.payload for p in points if p.payload]
                 # Sort descending by timestamp (newest first).
                 # Use a default of 0 for payloads without a timestamp to keep them at the bottom.
-                payloads.sort(key=lambda x: float(x.get("timestamp", 0)), reverse=True)
+                payloads.sort(key=_memory_timestamp, reverse=True)
                 memories_by_category[name] = payloads
                 
         return {"status": "success", "data": memories_by_category}
