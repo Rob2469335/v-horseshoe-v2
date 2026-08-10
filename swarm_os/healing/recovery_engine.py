@@ -261,7 +261,9 @@ Enclose the script in a ```python block.
                         "script": script
                     })
                     await memory_bridge._flush()
-                    _record_to_agents_md(str(anomaly), script)
+                    # _record_to_agents_md takes a blocking FileLock + writes
+                    # AGENTS.md — run it off the event loop.
+                    await asyncio.to_thread(_record_to_agents_md, str(anomaly), script)
                     return {"ok": True, "action": "llm_guided_recovery", "output": proc.stdout}
                 else:
                     messages.append({"role": "user", "content": f"Script failed with output:\n{proc.stderr}\nPlease fix it."})
@@ -407,6 +409,14 @@ class RecoveryEngine:
 
         action = self.actions.get(root_cause, llm_guided_recovery)  # fallback to llm_guided_recovery
         if callable(action):
-            result = action(anomaly)
+            # The registered actions are SYNC functions (restart_llamacpp /
+            # restart_backend call subprocess.Popen().wait(timeout=2.0); a few
+            # are async (llm_guided_recovery). The sync ones block the event
+            # loop for up to ~2s each, so dispatch them off-loop via to_thread.
+            import inspect
+            if inspect.iscoroutinefunction(action):
+                result = await action(anomaly)
+            else:
+                result = await asyncio.to_thread(action, anomaly)
             return result if not hasattr(result, "__await__") else await result
         return {"ok": False, "reason": f"no recovery action for {root_cause}"}

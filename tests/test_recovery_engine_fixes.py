@@ -12,6 +12,8 @@ Covers the Phase 3 fixes:
 from __future__ import annotations
 import sys
 
+import pytest
+
 
 def test_restart_backend_refuses_in_process(monkeypatch):
     """When the calling process IS the backend (sys.argv contains
@@ -97,3 +99,26 @@ def test_micro_restart_async_action_runs_once():
     assert calls["n"] == 1
     assert result.get("ok") is True
     assert "micro_restart" in result.get("action", "")
+
+
+@pytest.mark.asyncio
+async def test_recover_dispatches_sync_action_off_loop(monkeypatch):
+    """CON-5: a SYNC recovery action (restart_llamacpp / restart_backend, which
+    subprocess.Popen().wait() up to 2s) must be dispatched via asyncio.to_thread
+    so it never blocks the event loop."""
+    import threading
+    from swarm_os.healing.recovery_engine import RecoveryEngine
+
+    ran_in = {}
+
+    def blocking_sync_action(anomaly):
+        ran_in["thread"] = threading.get_ident()
+        return {"ok": True, "action": "sync_done"}
+
+    engine = RecoveryEngine(actions={"llamacpp": blocking_sync_action})
+    main_thread = threading.get_ident()
+    result = await engine.recover({"component": "llamacpp"})
+    assert result.get("ok") is True
+    assert result.get("action") == "sync_done"
+    # The sync action must have run on a worker thread, not the event-loop thread.
+    assert ran_in["thread"] != main_thread
