@@ -71,7 +71,25 @@ class DangerRoom:
         import sys as _sys
         cmd = [_sys.executable, "-m", "pytest", "-q", "--tb=line"]
         if test_targets:
-            cmd += [str(t) for t in test_targets]
+            validated: List[str] = []
+            for t in test_targets:
+                raw = str(t)
+                # A flag-like target (--junitxml=..., -x, -q) would be parsed by
+                # pytest as a CLI option, not a file — an injected pytest flag
+                # can make the sandbox test run behave arbitrarily (e.g. write
+                # outside the sandbox). Reject rather than pass through.
+                if raw.startswith("-"):
+                    logger.warning("[DangerRoom] Rejected flag-like test target: %s", t)
+                    continue
+                p = Path(raw)
+                try:
+                    p.resolve().relative_to(self.sandbox_dir.resolve())
+                except ValueError:
+                    logger.warning("[DangerRoom] Rejected test target outside sandbox: %s", t)
+                    continue
+                validated.append(raw)
+            if validated:
+                cmd += ["--"] + validated
         try:
             from swarm_os.services.security_gate import clean_sandbox_env
             proc = await asyncio.create_subprocess_exec(
@@ -89,6 +107,14 @@ class DangerRoom:
                 await proc.wait()
                 return {"exit_code": -1, "ok": False,
                         "output": f"test run timed out after {timeout}s (sandbox)"}
+            finally:
+                # CancelledError inherits BaseException — the except TimeoutError
+                # above never fires on a task cancellation, so without a finally
+                # an abandoned test subprocess would be orphaned (still running
+                # pytest inside the sandbox). Kill any proc we did not finish.
+                if proc.returncode is None:
+                    proc.kill()
+                    await proc.wait()
             text = out.decode("utf-8", errors="replace")
             return {
                 "exit_code": proc.returncode,
