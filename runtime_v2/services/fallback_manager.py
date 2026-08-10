@@ -17,6 +17,11 @@ log = logging.getLogger(__name__)
 _CACHE_TTL = 1800
 _last_fetch_time = 0
 _cached_fallbacks = []
+# Which routing mode the cache currently holds. The local_only fetch produces a
+# DIFFERENT chain (llama only) than auto/cloud_allowed (full cloud chain); a
+# single time-TTL key would let one mode's cache serve the other for the whole
+# 30-min window. The mode is part of the cache identity: reuse requires a match.
+_cached_mode: str | None = None
 _cached_stats = {"deepseek_direct": 0, "openrouter": 0, "groq": 0, "gemini": 0, "nvidia": 0, "llama": 0, "ollama": 0, "total": 0}
 _refresh_lock = asyncio.Lock()
 
@@ -450,14 +455,14 @@ async def _fetch_llama_models() -> list[dict]:
     return models
 
 async def refresh_fallbacks_if_needed(mode: str = "auto"):
-    global _last_fetch_time, _cached_fallbacks, _cached_stats
+    global _last_fetch_time, _cached_fallbacks, _cached_stats, _cached_mode
 
     current_time = time.time()
-    if current_time - _last_fetch_time < _CACHE_TTL and _cached_fallbacks:
+    if current_time - _last_fetch_time < _CACHE_TTL and _cached_fallbacks and _cached_mode == mode:
         return
 
     async with _refresh_lock:
-        if time.time() - _last_fetch_time < _CACHE_TTL and _cached_fallbacks:
+        if time.time() - _last_fetch_time < _CACHE_TTL and _cached_fallbacks and _cached_mode == mode:
             return
             
         log.debug("Refreshing fallback arrays (30-min TTL expired)...")
@@ -563,6 +568,7 @@ async def refresh_fallbacks_if_needed(mode: str = "auto"):
             "total": len(all_fallbacks),
         }
         _last_fetch_time = current_time
+        _cached_mode = mode
 
 
 async def get_live_fallbacks(mode: str = "auto") -> list[dict]:

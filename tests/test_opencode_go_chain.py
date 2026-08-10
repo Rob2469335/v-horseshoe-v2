@@ -12,9 +12,11 @@ from runtime_v2.services import fallback_manager as fm
 def reset_chain_cache():
     fm._cached_fallbacks = []
     fm._last_fetch_time = 0
+    fm._cached_mode = None
     yield
     fm._cached_fallbacks = []
     fm._last_fetch_time = 0
+    fm._cached_mode = None
 
 
 def test_opencode_zen_free_lead_then_go_paid(monkeypatch):
@@ -97,6 +99,57 @@ def test_chain_leads_with_free_flash_zen_go_paid(monkeypatch):
     # DeepSeek direct (paid api.deepseek.com) is the LAST cloud entry.
     assert "deepseek/deepseek-v4-flash" in models
     assert models.index("deepseek/deepseek-v4-flash") > models.index("openai/deepseek-v4-flash")
+
+
+def test_cache_is_keyed_by_routing_mode(monkeypatch):
+    """A cache populated for one routing mode must never serve another mode.
+
+    local_only produces a llama-only chain; auto/cloud_allowed produce the full
+    cloud chain. Before the fix the cache was keyed only on a time TTL, so
+    whichever mode refreshed first served the OTHER mode for the whole 30-min
+    window (a `/local` session could be handed the cloud chain and vice-versa).
+    """
+    import time
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("OPENAI_API_BASE", "https://opencode.ai/zen/go/v1")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-ds")
+
+    # Simulate a fresh, already-populated local_only cache (llama-only chain).
+    fm._cached_fallbacks = [{"model": "qwen3.5-4b"}]
+    fm._last_fetch_time = time.time()
+    fm._cached_mode = "local_only"
+
+    # An `auto` refresh must NOT reuse that local_only cache — it must refetch
+    # the full cloud chain. Prove it by the mocked fetchers being invoked.
+    fetch_calls = {"auto": 0}
+
+    async def _auto_fetch(*_args, **_kwargs):
+        fetch_calls["auto"] += 1
+        return [{"model": "nvidia_nim/deepseek-ai/deepseek-v4-flash", "context_length": 8192, "pricing": "API", "provider": "NVIDIA"}]
+
+    async def _empty_fetch(*_args, **_kwargs):
+        return []
+
+    monkeypatch.setattr(fm, "_fetch_nvidia_models", _auto_fetch)
+    for name in ("_fetch_openrouter_models", "_fetch_groq_models", "_fetch_gemini_models", "_fetch_llama_models"):
+        monkeypatch.setattr(fm, name, _empty_fetch)
+
+    async def _run():
+        await fm.refresh_fallbacks_if_needed(mode="auto")
+        return list(fm._cached_fallbacks)
+
+    models = asyncio.run(_run())
+    assert fetch_calls["auto"] == 1, "auto mode must refetch, not reuse the local_only cache"
+    assert fm._cached_mode == "auto"
+    assert any("nvidia" in m["model"] for m in models), "cache must now hold the cloud chain, not llama-only"
+
+    # A second `auto` refresh within TTL with the SAME mode reuses the cache.
+    async def _run2():
+        await fm.refresh_fallbacks_if_needed(mode="auto")
+
+    asyncio.run(_run2())
+    assert fetch_calls["auto"] == 1, "same-mode refresh within TTL must reuse the cache"
 
 
 def test_fallbacks_scoped_to_own_endpoint_no_cross_provider_leak():
