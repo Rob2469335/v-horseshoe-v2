@@ -103,6 +103,7 @@ def build_analysis(indices: list[TranscriptIndex], outfile: str) -> str:
 def _build_chronology(idx: TranscriptIndex) -> list[str]:
     events = []
     current_exam_atty = None
+    current_witness = None
     last_witness_page = None
     
     ruling_re = re.compile(r"\b(OVERRULED|SUSTAINED|ALLOW IT|YOU CAN ANSWER|DENIED|GRANTED|STRIKE THAT)\b")
@@ -126,6 +127,22 @@ def _build_chronology(idx: TranscriptIndex) -> list[str]:
                     events.append(f"- Examination by {current_exam_atty} ends (Page {last_witness_page})")
                 current_exam_atty = examiner
                 events.append(f"- Examination by {current_exam_atty} begins (Page {p.page})")
+                # A new examining attorney always starts a fresh witness identity
+                # (the witness identity is tracked per-examiner: without a header
+                # name we cannot tell if a NEW witness took the stand).
+                current_witness = None
+
+            # Witness transition: the court reporter's page-header name is the
+            # witness identity. A SAME-ATTORNEY second witness (direct of witness
+            # A, then direct of witness B by the same attorney) never changes
+            # `current_exam_atty`, so the attorney-keyed logic above would miss
+            # the transition. Detect it via the header name and log it.
+            page_name = idx.witness_names.get(p.page)
+            if page_name and current_witness != page_name:
+                if current_witness is not None:
+                    events.append(f"- {current_witness}'s testimony ends (Page {last_witness_page})")
+                current_witness = page_name
+                events.append(f"- {current_witness} testifies (Page {p.page})")
                 
         if _is_objection(p):
             events.append(f"- Objection by {p.speaker} (Page {p.page})")

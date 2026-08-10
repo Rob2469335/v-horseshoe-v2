@@ -287,3 +287,38 @@ def test_negation_inside_real_objection_still_logged(tmp_path: Path):
     assert "Objection** by MS. AL-SHABAZZ on Page 300" in objections_log
     assert "but I do object to the characterization" in objections_log
     assert "No explicit ruling found nearby" not in objections_log
+
+
+def test_chronology_logs_same_attorney_witness_transition(tmp_path: Path):
+    """A SAME-ATTORNEY second witness must still log a witness transition in
+    the chronology. The old _build_chronology keyed solely on the examining
+    attorney changing (`current_exam_atty != examiner`), so sequential direct
+    examinations by the SAME attorney (MS. AL-SHABAZZ questions Mueller, then
+    questions Dewitt) produced NO "begins" line for the second witness — a
+    preservation artifact. The page-header witness identity (idx.witness_names)
+    is the discriminator, exactly as in the witness matrix."""
+    text = (
+        _page_block(620, "J5ATDUN1", "Mueller - Cross", [
+            "MS. AL-SHABAZZ:  Did you see the car?",
+            "THE WITNESS:  Yes, I did.",
+            "THE COURT:  Thank you.",
+        ])
+        + _page_block(640, "J5ATDUN1", "Dewitt - Direct", [
+            "MS. AL-SHABAZZ:  And then what happened?",
+            "THE WITNESS:  We left the building.",
+            "THE COURT:  Proceed.",
+        ])
+    )
+    idx = parse_transcript(text, case="Test", source="test.txt")
+    assert idx.witness_names == {620: "Mueller", 640: "Dewitt"}
+    out_file = tmp_path / "report.md"
+    build_analysis([idx], str(out_file))
+    content = out_file.read_text("utf-8")
+
+    chronology = content.split("Chronology")[1]
+    # Same attorney both times — the attorney-change key alone would log ONE
+    # "begins". The witness-name key must add the transition.
+    assert chronology.count("Examination by MS. AL-SHABAZZ begins") == 1
+    assert "Mueller testifies (Page 620)" in chronology
+    assert "Dewitt testifies (Page 640)" in chronology
+    assert "Mueller's testimony ends (Page 640)" in chronology
