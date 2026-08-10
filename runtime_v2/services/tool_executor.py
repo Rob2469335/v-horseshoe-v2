@@ -1,5 +1,6 @@
 """Routes tool calls to MCP handlers."""
 import asyncio
+import contextvars
 import html
 import logging
 import re
@@ -23,8 +24,38 @@ async def get_mcp_manager():
                 await _mcp_manager.start()
     return _mcp_manager
 
-_filesystem_read_cache = {}
+_filesystem_read_cache_var: contextvars.ContextVar = contextvars.ContextVar(
+    "_filesystem_read_cache", default=None
+)
+_explored_paths_var: contextvars.ContextVar = contextvars.ContextVar(
+    "_explored_paths", default=None
+)
 
+
+def _get_read_cache() -> dict:
+    v = _filesystem_read_cache_var.get()
+    if v is None:
+        v = {}
+        _filesystem_read_cache_var.set(v)
+    return v
+
+
+def _get_explored() -> set:
+    v = _explored_paths_var.get()
+    if v is None:
+        v = set()
+        _explored_paths_var.set(v)
+    return v
+
+
+def reset_exploration_state() -> None:
+    """Give the current task/context a fresh, empty exploration scope.
+
+    Each asyncio task carries its own copy of the contextvars, so resetting here
+    only affects the calling run — a concurrent step_agent_stream in another task
+    keeps its own exploration state."""
+    _explored_paths_var.set(set())
+    _filesystem_read_cache_var.set({})
 
 def _norm(p: str) -> str:
     s = str(p).replace("\\", "/")
@@ -43,7 +74,6 @@ def _norm(p: str) -> str:
 # (via list/read/grep/glob) before it may overwrite/patch it. This stops the
 # model from patching paths it hallucinated — the exact failure mode seen when
 # code_analyzer guessed `runtime_v2/core/agent_service_v2.py`.
-_explored_paths: set = set()
 
 
 def _explored(requested: str) -> bool:
@@ -51,7 +81,7 @@ def _explored(requested: str) -> bool:
     parts = _norm(requested).split("/")
     for i in range(len(parts), 0, -1):
         prefix = "/".join(parts[:i])
-        if prefix in _explored_paths:
+        if prefix in _get_explored():
             return True
     return False
 
@@ -59,7 +89,7 @@ def _explored(requested: str) -> bool:
 def _mark_explored(paths):
     for p in paths:
         if p:
-            _explored_paths.add(_norm(p))
+            _get_explored().add(_norm(p))
 
 
 def _record_fs_exploration(operation: str, result: dict, requested: str):
@@ -132,8 +162,8 @@ async def run(tool_name: str, payload: dict) -> dict:
             path = payload.get("path")
             cache_key = f"{operation}:{path}"
             
-            if operation == "read" and cache_key in _filesystem_read_cache:
-                result = {"ok": True, "result": _filesystem_read_cache[cache_key]}
+            if operation == "read" and cache_key in _get_read_cache():
+                result = {"ok": True, "result": _get_read_cache()[cache_key]}
             else:
                 from swarm_os.lib.mcp.filesystem import filesystem_handler
                 import inspect
@@ -181,13 +211,13 @@ async def run(tool_name: str, payload: dict) -> dict:
                         async with asyncio.timeout(180.0):
                             result = await res_obj if inspect.isawaitable(res_obj) else res_obj
                     if operation == "read" and result.get("ok"):
-                        _filesystem_read_cache[cache_key] = result.get("result")
+                        _get_read_cache()[cache_key] = result.get("result")
                     # Invalidate any cached read of a file that was just written/
                     # patched, so the next read returns fresh content, not stale.
                     if op in ("write", "write_file", "create", "create_file", "patch", "edit", "update", "modify", "replace", "replace_file_content", "edit_file"):
-                        for ck in list(_filesystem_read_cache.keys()):
+                        for ck in list(_get_read_cache().keys()):
                             if ck.startswith(f"read:{path}") or ck == f"read:{path}":
-                                _filesystem_read_cache.pop(ck, None)
+                                _get_read_cache().pop(ck, None)
                     _record_fs_exploration(op, result, str(path or ""))
                 except TimeoutError:
                     result = {"ok": False, "error": "Filesystem operation timed out."}

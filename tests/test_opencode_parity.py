@@ -42,7 +42,7 @@ async def test_glob_finds_real_paths():
 
 @pytest.mark.asyncio
 async def test_read_before_write_blocks_unseen_patch():
-    tool_executor._explored_paths.clear()
+    tool_executor.reset_exploration_state()
     res = await tool_executor.run("filesystem", {
         "operation": "patch", "path": "runtime_v2/services/project_map.py",
         "old": "zzz", "new": "yyy"})
@@ -52,7 +52,7 @@ async def test_read_before_write_blocks_unseen_patch():
 
 @pytest.mark.asyncio
 async def test_read_before_write_allows_after_read():
-    tool_executor._explored_paths.clear()
+    tool_executor.reset_exploration_state()
     await tool_executor.run("filesystem", {"operation": "read", "path": "runtime_v2/services/project_map.py"})
     res = await tool_executor.run("filesystem", {
         "operation": "patch", "path": "runtime_v2/services/project_map.py",
@@ -63,7 +63,7 @@ async def test_read_before_write_allows_after_read():
 
 @pytest.mark.asyncio
 async def test_glob_marks_paths_explored():
-    tool_executor._explored_paths.clear()
+    tool_executor.reset_exploration_state()
     await tool_executor.run("filesystem", {
         "operation": "glob", "path": "runtime_v2", "pattern": "**/project_map.py"})
     res = await tool_executor.run("filesystem", {
@@ -966,3 +966,61 @@ async def test_l1_legitimate_semantic_search_only_final_passes():
     events = [e async for e in gen]
     assert state.handler_status != "CONTINUE"
     assert any(e.get("type") == "final" for e in events)
+
+
+
+
+
+
+@pytest.mark.asyncio
+async def test_concurrent_streams_keep_own_exploration_state(monkeypatch):
+    """#11 — two concurrent step_agent_stream runs shared module-global
+    _explored_paths/_filesystem_read_cache via snapshot/clear/restore, so the
+    runs raced: whichever entry cleared the shared set wiped the other's
+    in-flight exploration, and the read-before-write guard then wrongly blocked
+    paths the surviving run had actually explored. The exploration state is now
+    task-local (contextvars), so each run's view is its own.
+
+    Deterministic interleaving: run_a marks src/a.py then waits; run_b starts
+    AFTER run_a's mark (so under the old shared-global code its entry-clear
+    wipes src/a.py), marks src/b.py, pauses mid-flight via a yield, and only
+    resumes once run_a has checked its own path. run_a's check must see its own
+    mark survive the concurrent run_b."""
+    import runtime_v2.services.tool_executor as _te
+    from runtime_v2.api.agent_service_v2 import AgentServiceV2
+
+    a_marked = asyncio.Event()
+    b_started = asyncio.Event()
+    a_checked = asyncio.Event()
+    results: dict = {}
+
+    async def fake_inner(self, agent_id, prompt, history=None,
+                         delegation_chain=None, research_discharged=False, resume=None):
+        if agent_id == "run_a":
+            _te._mark_explored(["src/a.py"])
+            a_marked.set()
+            await b_started.wait()
+            results["a_sees_own"] = _te._explored("src/a.py")
+            a_checked.set()
+        else:
+            await a_marked.wait()
+            _te._mark_explored(["src/b.py"])
+            b_started.set()
+            yield {"agent": agent_id, "phase": "paused"}
+            await a_checked.wait()
+            results["b_sees_own"] = _te._explored("src/b.py")
+        yield {"agent": agent_id, "done": True}
+
+    monkeypatch.setattr(AgentServiceV2, "_step_agent_stream_inner", fake_inner)
+    svc = AgentServiceV2()
+
+    async def drive(agent_id):
+        async for _chunk in svc.step_agent_stream(agent_id, "goal"):
+            pass
+
+    await asyncio.gather(drive("run_a"), drive("run_b"))
+
+    # Each run's own exploration must survive the concurrent run (old code
+    # cleared the shared set at run_b's entry, so run_a lost its mark).
+    assert results.get("a_sees_own") is True
+    assert results.get("b_sees_own") is True

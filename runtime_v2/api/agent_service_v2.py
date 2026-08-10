@@ -1303,25 +1303,16 @@ class AgentServiceV2:
     ) -> AsyncGenerator[dict, None]:
         try:
             import runtime_v2.services.tool_executor as _te
-            _explored_snapshot = set(_te._explored_paths)
-            _cache_snapshot = dict(_te._filesystem_read_cache)
-            _te._explored_paths.clear()
-            _te._filesystem_read_cache.clear()
+            # Give THIS run a fresh exploration scope. The read-before-write
+            # guard state is task-local (contextvars) so a concurrent
+            # step_agent_stream in another task is never cleared/restored by
+            # this run finishing.
+            _te.reset_exploration_state()
         except Exception:
             _te = None
-            _explored_snapshot = set()
-            _cache_snapshot = {}
 
-        try:
-            async for chunk in self._step_agent_stream_inner(agent_id, prompt, history, delegation_chain, research_discharged, resume=resume):
-                yield chunk
-        finally:
-            try:
-                if _te is not None:
-                    _te._explored_paths = _explored_snapshot
-                    _te._filesystem_read_cache = _cache_snapshot
-            except Exception as restore_err:
-                log.debug("[%s] failed to restore shared exploration state: %s", agent_id, restore_err)
+        async for chunk in self._step_agent_stream_inner(agent_id, prompt, history, delegation_chain, research_discharged, resume=resume):
+            yield chunk
 
     async def _step_agent_stream_inner(
         self, agent_id: str, prompt: str,
