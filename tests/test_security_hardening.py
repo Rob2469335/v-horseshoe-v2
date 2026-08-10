@@ -544,3 +544,127 @@ async def test_sandbox_repl_powershell_guard_still_fires_after_l6(monkeypatch):
     r = await SandboxReplHandler().execute({"language": "powershell", "command": "Remove-Item C:\\x -Recurse"})
     assert r.get("ok") is False
     assert "Security Gate" in r.get("stderr", "")
+
+
+def test_security_gate_blocks_builtins_exec():
+    """The builtins namespace must not smuggle banned calls past the gate:
+    `import builtins; builtins.exec(...)` and `getattr(builtins, 'exec')` and
+    `__builtins__.exec(...)` all resolve the exec builtin under an Attribute
+    (never a Name call), escaping the original visit_Call scan."""
+    from swarm_os.services.security_gate import SecurityGate, SecurityGateViolation
+    cases = [
+        "import builtins; builtins.exec('import subprocess')",
+        "import builtins; getattr(builtins, 'exec')('import subprocess')",
+        "import builtins as b; b.eval('x')",
+        "__builtins__.exec('print(1)')",
+        "__builtins__['__import__']('os')",
+    ]
+    for code in cases:
+        try:
+            SecurityGate.scan_code(code)
+        except SecurityGateViolation:
+            continue
+        raise AssertionError(f"builtins bypass not blocked: {code}")
+
+
+def test_security_gate_object_method_named_exec_not_blocked():
+    """A harmless attribute READ/call on a NON-builtins object (e.g. a duck-typed
+    method named 'exec') must NOT trigger the gate — the fix targets the
+    builtins namespace only, not every `.exec` in the codebase."""
+    from swarm_os.services.security_gate import SecurityGate
+    SecurityGate.scan_code("x = obj.exec")
+    SecurityGate.scan_code("result = my_object.exec(argument)")
+
+
+@pytest.mark.asyncio
+async def test_dangerroom_rejects_pytest_flags(monkeypatch):
+    """A flag-like test target (--junitxml=..., -x, -k) must be rejected before
+    it reaches pytest — passing it through would let an injected flag write
+    outside the sandbox or alter the test run. Only sandbox-contained paths
+    pass."""
+    from swarm_os.services.danger_room import DangerRoom
+
+    tmp_path = None
+    captured_cmd = {}
+
+    class _FakeProc:
+        returncode = 0
+
+        async def communicate(self):
+            return b"", b""
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        captured_cmd["cmd"] = cmd
+        return _FakeProc()
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", fake_create_subprocess_exec)
+    import tempfile
+    from pathlib import Path
+    tmp_path = Path(tempfile.mkdtemp())
+    try:
+        dr = DangerRoom(tmp_path)
+        dr.is_active = True
+        dr.sandbox_dir = tmp_path
+        res = await dr.run_tests(test_targets=[
+            "--junitxml=/tmp/pwned.xml",          # flag -> rejected
+            "-x",                                 # flag -> rejected
+            str(tmp_path / "tests" / "test_a.py"),  # inside sandbox -> kept
+        ])
+        assert res["ok"] is True
+        cmd = captured_cmd["cmd"]
+        assert "--junitxml=/tmp/pwned.xml" not in cmd
+        assert "-x" not in cmd
+        assert str(tmp_path / "tests" / "test_a.py") in cmd
+        assert "--" in cmd  # separator: remaining args are files, not options
+    finally:
+        import shutil
+        shutil.rmtree(tmp_path, ignore_errors=True)
+
+
+@pytest.mark.asyncio
+async def test_dangerroom_kills_proc_on_cancel(monkeypatch):
+    """asyncio.CancelledError inherits BaseException, so the except TimeoutError
+    branch never fires on a cancelled task — the subprocess must still be killed
+    by a finally block, else an abandoned test run leaks a pytest process inside
+    the sandbox."""
+    from swarm_os.services.danger_room import DangerRoom
+    import tempfile
+    from pathlib import Path
+    tmp_path = Path(tempfile.mkdtemp())
+    try:
+        dr = DangerRoom(tmp_path)
+        dr.is_active = True
+        dr.sandbox_dir = tmp_path
+
+        class _CancellingProc:
+            def __init__(self):
+                self.returncode = None
+                self.killed = False
+
+            async def communicate(self):
+                raise asyncio.CancelledError("test cancellation")
+
+            def kill(self):
+                self.killed = True
+
+            async def wait(self):
+                return None
+
+        created = []
+
+        async def fake_create_subprocess_exec(*cmd, **kwargs):
+            p = _CancellingProc()
+            created.append(p)
+            return p
+
+        monkeypatch.setattr("asyncio.create_subprocess_exec", fake_create_subprocess_exec)
+        target = tmp_path / "tests" / "test_a.py"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+        with pytest.raises(asyncio.CancelledError):
+            await dr.run_tests(test_targets=[str(target)])
+        assert created, "subprocess must have been created"
+        assert created[0].killed is True
+    finally:
+        import shutil
+        shutil.rmtree(tmp_path, ignore_errors=True)

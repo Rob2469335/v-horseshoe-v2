@@ -74,6 +74,18 @@ class BannedNodeVisitor(ast.NodeVisitor):
             and node.attr in self.banned_os_attrs
         ):
             self.violations.append(f"Banned os call found: 'os.{node.attr}' at line {node.lineno}")
+        elif (
+            isinstance(node.value, ast.Name)
+            and node.value.id == "__builtins__"
+            and node.attr in self.banned_calls
+        ):
+            # `__builtins__.exec(...)` — attribute access into the builtins
+            # namespace escapes the Name-call scan (the func is an Attribute,
+            # not a Name). Mirrors the existing __builtins__[...] subscript
+            # block below: __builtins__ is never a legitimate sandbox target.
+            self.violations.append(
+                f"Banned builtins attribute call found: '__builtins__.{node.attr}' at line {node.lineno}"
+            )
         self.generic_visit(node)
 
     def visit_Subscript(self, node):
@@ -102,7 +114,12 @@ class SecurityGate:
     # The original list missed dangerous builtin calls and several critical modules
     # that allow for arbitrary execution or network exfiltration.
     BANNED_CALLS = ["exec", "eval", "compile", "__import__", "open"]
-    BANNED_MODULES = ["subprocess", "socket", "ctypes", "pty", "shlex", "importlib"]
+    # builtins is banned wholesale: `import builtins; builtins.exec(...)` and
+    # `getattr(builtins, 'exec')` otherwise smuggle every banned call back in
+    # under a module-name Attribute (the Name-call scan never fires). The
+    # already-special-cased __builtins__ attribute/subscript access stays
+    # blocked independently (see visit_Attribute/visit_Subscript).
+    BANNED_MODULES = ["subprocess", "socket", "ctypes", "pty", "shlex", "importlib", "builtins"]
     # os/sys are NOT wholesale-banned: the debugger/coder agents legitimately run
     # `import os; os.walk('.')` / `import sys` in sandbox_repl to explore and test.
     # Only os's dangerous attributes (process exec, file destruction/mutation,
