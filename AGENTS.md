@@ -443,6 +443,8 @@ Dependency pairing: React 19 ↔ `@react-three/fiber` ^9.5 / `@react-three/drei`
 
 ## Recent Changes (do NOT re-apply)
 
+- **Research-only compound goal fabricated an edit phase for coder (`aff05f9`, 2026-08-10)**: a live `/goal` run — "analyze my codebase for bugs and search internet for improvements and upgrades" — failed every attempt with `turn_budget_exhausted` (code_analyzer + coder both burned MAX_TURNS). Root cause traced to `_split_compound_goal`: the single sentence matched RESEARCH (research=True) but not IMPLEMENT, then the fallback `if not implementation: implementation = research` COPIED the entire research text into the implementation slot. The executor's phase-2 then handed coder the full vague goal, which it explored for 8 turns without editing — the fix-intent guard correctly rejected the edit-free final, but the budget was already spent. Fix: (1) the splitter no longer fabricates an implementation phase from research text (research-only goals return an EMPTY implementation part); (2) the executor's phase-2 coder delegation is gated on `impl_part` non-empty — with no implementation-intent sentence, research IS the deliverable and no edit task is forced. Revert-proof tests: research-only compound no longer delegates to coder after research returns; a real "implement the upgrades" compound still does; the splitter returns empty implementation for research-only and non-empty for implement goals. 85 passed across the touched suites; ruff E9/F clean.
+
 - **Production-grade audit round — 12 of 20 findings implemented, 6 refuted (2026-08-10, commits `60439f7`→`f48c5e4`, in order)**: the "Final Production-Grade Audit" plan was verified finding-by-finding against LIVE code before any edit — the plan is DATA, not policy, and 6 of its 20 claims were refuted/deferred against the actual source (see below). Each implemented fix is one logical `FIX:` commit with a revert-proof regression test (verified via temporary source revert → test FAILS pre-fix → PASSES post-fix):
   - **SEC-1 (`60439f7`)**: `import builtins; builtins.exec(...)`, `getattr(builtins, 'exec')`, and `__builtins__.exec(...)` all resolved a banned call through an Attribute (never a Name), escaping the sandbox gate's `visit_Call` scan. `builtins` is now wholesale-banned at import + `__builtins__` attribute access to a banned call is blocked (mirroring the existing `__builtins__[...]` subscript block). The gate targets ONLY the builtins namespace — a duck-typed method named `exec` on a normal object still passes (the plan's broad "any `.exec` attr call" check would have false-positived; corrected). Revert-proof tests cover all four bypass shapes + the no-false-positive case.
   - **SEC-2 (`78b6366`)**: `DangerRoom.run_tests` appended `test_targets` to the pytest command verbatim — an injected `--junitxml=`/`-x` flag could make the sandbox run write outside the sandbox. Flag-like targets now rejected, non-sandbox paths rejected via containment, remaining targets separated with `--`. Revert-proof test drives flag + outside-sandbox + inside-sandbox targets.
@@ -992,6 +994,10 @@ Converted `except:` → `except Exception:` (or specific types) in `swarm_os/cor
 ---
 
 ## Self-Healing & Self-Learning Fixes
+
+- **Rule (code_analyzer)**: Failure: The code_analyzer attempted to read the file 'x.py' directly from the filesystem, but the file did not exist, causing the action to fail. ...
+
+- **[AUTO-REPAIR] (2026-08-10T23:30:37.933268+00:00)**: pkg\bug.py (tier 0, fixed=True) — error: boom
 
 - **Rule (code_analyzer)**: Failure: The code_analyzer attempted to read the file 'x.py' without first confirming it exists in the audit codebase, and the filesystem returned ...
 
