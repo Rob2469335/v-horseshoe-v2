@@ -531,6 +531,25 @@ def test_code_analyzer_is_read_only_no_sandbox_repl():
     assert "sandbox_repl" in _AGENT_TOOLS["coder"]
 
 
+def test_code_analyzer_prompt_synthesizes_researcher_findings():
+    """code_analyzer's prompt previously DEMANDED it do its own web_search
+    ('Searching the internet is a REQUIRED step'). In the compound-goal flow the
+    researcher already did web research (research_discharged=True), so the model
+    skipped web_search, had no 'what I searched' to report per the old STEP 4,
+    and hallucinated 'Internet search: Not performed' — even though 17KB of
+    researcher findings sat in its final-decision prompt. The prompt must now
+    tell it to synthesize the 'researcher responded:' findings block when
+    present, and never claim the internet wasn't searched."""
+    from runtime_v2.prompts.system_prompts import _ROLE_RULES
+    prompt = _ROLE_RULES["code_analyzer"]
+    assert "researcher responded" in prompt, (
+        "code_analyzer prompt must reference the researcher findings block"
+    )
+    assert "USE those findings" in prompt
+    assert "do NOT claim the internet was not searched" in prompt
+    assert "MUST synthesize the researcher's web results" in prompt
+
+
 def test_researcher_task_is_web_research_only():
     """The researcher on a compound "analyze codebase + search internet" goal
     must be handed ONLY the web-research portion — NOT the codebase-analysis
