@@ -914,8 +914,11 @@ async def test_executor_compound_goal_skips_coder_when_no_impl_phase():
         1,  # after research returned (turn 1+)
         state=state,
     )
-    assert decision["action"] != "delegate"
-    assert decision.get("target_agent") != "coder"
+    # The analysis half is delegated to code_analyzer (read-only), NOT coder
+    # (there is no edit intent). Coder must NOT be forced an edit task.
+    assert decision["target_agent"] != "coder"
+    assert decision["action"] == "delegate"
+    assert decision["target_agent"] == "code_analyzer"
 
 
 @pytest.mark.asyncio
@@ -1171,6 +1174,57 @@ async def test_research_discharged_reaches_code_analyzer():
     assert captured[-1] == ("code_analyzer", True)
 
 
+@pytest.mark.asyncio
+async def test_executor_delegates_code_analyzer_after_research_when_no_impl():
+    """After research returns on a research-only compound goal with CODEBASE-
+    ANALYSIS intent ("analyze my codebase for bugs AND search internet"), the
+    executor must delegate the analysis phase to code_analyzer — otherwise it
+    falls through to the LLM, which produced a "please provide the codebase
+    path" placeholder instead of analyzing the real files (observed live).
+    impl_part is empty (no edit intent) but _CODEEBASE_ANALYSIS_RE matches."""
+    from runtime_v2.api.agent_service_v2 import AgentServiceV2, _CallState
+    service = AgentServiceV2()
+    service._agents = {"researcher": {}, "code_analyzer": {}, "coder": {}}
+    service._call_llm = AsyncMock(return_value={"action": "final", "response": "placeholder"})
+    state = _CallState()
+    state._executor_research_delegated = True
+    state._executor_impl_delegated = False
+    decision = await service._get_decision(
+        "executor", "m",
+        [{"role": "user", "content": "hi"}],
+        ["delegate", "final", "filesystem"],
+        "analyze my codebase for bugs and search internet for improvements and upgrades",
+        1,
+        state,
+    )
+    assert decision["action"] == "delegate"
+    assert decision["target_agent"] == "code_analyzer"
+
+
+@pytest.mark.asyncio
+async def test_executor_no_analysis_delegate_for_pure_web_goal():
+    """A PURE web-research goal (no codebase-analysis intent) must NOT be
+    delegated to code_analyzer after research — there is nothing to analyze.
+    The executor falls through to the LLM."""
+    from runtime_v2.api.agent_service_v2 import AgentServiceV2, _CallState
+    service = AgentServiceV2()
+    service._agents = {"researcher": {}, "code_analyzer": {}}
+    service._call_llm = AsyncMock(return_value={"action": "final", "response": "x"})
+    state = _CallState()
+    state._executor_research_delegated = True
+    state._executor_impl_delegated = False
+    decision = await service._get_decision(
+        "executor", "m",
+        [{"role": "user", "content": "hi"}],
+        ["delegate", "final", "filesystem"],
+        "search the internet for the latest python version",
+        1,
+        state,
+    )
+    assert decision["action"] != "delegate"
+    assert decision.get("target_agent") != "code_analyzer"
+
+
 def test_natural_phrasing_compound_goal_routes_to_executor():
     """COMPOUND-GOAL DECOMPOSITION (2026-08-06, finding #5): the naturally-phrased
     /upgrade variant — 'analyze my codebase for bugs and search internet for
@@ -1355,3 +1409,60 @@ async def test_concurrent_streams_keep_own_exploration_state(monkeypatch):
     # cleared the shared set at run_b's entry, so run_a lost its mark).
     assert results.get("a_sees_own") is True
     assert results.get("b_sees_own") is True
+
+def test_context_trim_preserves_initial_messages():
+    """The context window trim must preserve the initial_messages (the user's
+    task + any delegated findings from child_history) instead of blindly keeping
+    the last `budget` messages. Otherwise a 4-step tool warmup (8 new messages)
+    pushes the inherited researcher findings out of the window and the model
+    hallucinates "Internet search: Not performed". Pure unit test — no real
+    filesystem I/O, no full agent stream."""
+    from runtime_v2.api.agent_service_v2 import _trim_context_messages
+
+    findings = {"role": "user",
+                "content": "TOOL RESULT (delegate)\nresearcher responded: <web findings>"}
+    goal = {"role": "user", "content": "analyze the codebase"}
+    sys_msg = {"role": "system", "content": "system"}
+    # initial_messages = the task + the inherited researcher findings (2 non-sys)
+    messages = [sys_msg, goal, findings]
+    initial_messages_len = len(messages)  # 3 — everything before the warmup
+
+    # A 4-step tool warmup = 8 NEW messages (4 tool calls + 4 results). With a
+    # budget of 8, the OLD trim (last-8) would drop the 2 initial non-sys
+    # messages (goal + findings); the fix preserves them.
+    warmup_msgs = []
+    for i in range(4):
+        warmup_msgs.append({"role": "assistant", "content": f'{{"action": "filesystem", "op": "read{i}"}}'})
+        warmup_msgs.append({"role": "user", "content": f"TOOL RESULT: file{i} content"})
+    full = messages + warmup_msgs  # 11 total
+
+    trimmed = _trim_context_messages(full, initial_messages_len, budget=8)
+    joined = "\n".join(str(m.get("content", "")) for m in trimmed)
+    assert "researcher responded: <web findings>" in joined, (
+        "the inherited researcher findings must survive the context trim"
+    )
+    assert "analyze the codebase" in joined, "the user's task must survive"
+    # The 8 new warmup messages are windowed to budget=8 (all kept here).
+    assert len([m for m in trimmed if m.get("role") != "system"]) == 2 + 8
+    # System message is prepended.
+    assert trimmed[0] == sys_msg
+
+
+def test_context_trim_windows_only_new_messages():
+    """When the new tool-turn messages exceed the budget, ONLY the new messages
+    are windowed — the initial task + findings are never dropped regardless of
+    how many turns follow."""
+    from runtime_v2.api.agent_service_v2 import _trim_context_messages
+
+    findings = {"role": "user", "content": "researcher responded: <web findings>"}
+    messages = [findings]
+    initial_messages_len = 1
+    # 30 new messages — far over an 8 budget.
+    new_msgs = [{"role": "user", "content": f"new {i}"} for i in range(30)]
+    trimmed = _trim_context_messages(messages + new_msgs, initial_messages_len, budget=8)
+    joined = "\n".join(str(m.get("content", "")) for m in trimmed)
+    assert "researcher responded: <web findings>" in joined
+    assert "new 29" in joined  # newest kept
+    assert "new 0" not in joined  # oldest new dropped
+    assert len(trimmed) == 1 + 8
+
