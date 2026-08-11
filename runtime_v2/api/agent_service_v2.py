@@ -157,7 +157,15 @@ _CODEEBASE_ANALYSIS_RE = re.compile(
     r"(analy[sz]e|audit|scan|inspect|review|find|identify|look (?:for|at))"
     r"\s+(?:the\s+)?(?:entire\s+)?(?:my\s+|our\s+|the\s+|your\s+)?"
     r"(?:codebase|code\s+base|code|project|repo(?:sitory)?|source)"
-    r"|(?:find|identify|look\s+for)\s+(?:bugs?|issues?|problems?|vulnerabilities?)",
+    r"|(?:find|identify|look\s+for)\s+(?:bugs?|issues?|problems?|vulnerabilities?)"
+    # A dangling codebase-analysis fragment like "for bugs" (left after stripping
+    # "analyze my codebase") still re-imports the find-bugs intent — the LLM sees
+    # "for bugs" and browses the filesystem to hunt bugs. Strip the bare
+    # bug/issue reference too, so the researcher task is unambiguously web-only.
+    r"|for\s+(?:bugs?|issues?|problems?|vulnerabilities?|security\s+issues?)\b"
+    # "find bugs in the codebase" leaves a dangling "in the codebase" after the
+    # verb+bug phrase is removed — strip a trailing "in the codebase" residue.
+    r"|\bin\s+(?:the\s+)?(?:codebase|code\s+base)\b",
     re.IGNORECASE,
 )
 
@@ -171,6 +179,10 @@ def _research_only_task(goal: str) -> str:
     cleaned goal when nothing is stripped."""
     text = _clean_search_query(goal)
     stripped = _CODEEBASE_ANALYSIS_RE.sub("", text)
+    # Stripping "analyze my codebase for bugs" leaves a dangling "and search..."
+    # — drop a leading conjunction so the task reads "search the internet for
+    # improvements and upgrades", not "and search the internet...".
+    stripped = re.sub(r"^\s*(?:and|to|then|also)\s+", "", stripped)
     stripped = re.sub(r"\s{2,}", " ", stripped).strip(" ,;:.")
     if len(stripped) < 12:
         # Stripping removed nearly everything — keep the original (safer than
@@ -1173,6 +1185,15 @@ class AgentServiceV2:
             content_str = str(m.get("content", ""))
             if m.get("role") == "assistant" and "delegate" in content_str: continue
             if m.get("role") == "user" and "TOOL RESULT (delegate)" in content_str: continue
+            # RESEARCHER IS WEB-ONLY: when the executor delegates the web-research
+            # phase to researcher, do NOT pass the original compound goal in
+            # history — the model sees "analyze my codebase" in context and
+            # browses the filesystem on top of web research, exhausting MAX_TURNS
+            # (the observed turn_budget_exhausted). The web-only task is already
+            # the researcher's prompt; the history should not re-introduce the
+            # codebase-analysis half.
+            if agent_id == "executor" and target == "researcher":
+                continue
             child_history.append(m)
 
         if agent_id == "executor" and target == "researcher":

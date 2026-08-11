@@ -52,7 +52,7 @@ _ROLE_RULES: dict[str, str] = {
         "  STEP 1 — CALL action=web_search FIRST with concrete queries about the topic. This is REQUIRED — never start with filesystem.\n"
         "  STEP 2 — Use action=web_fetch to deep-read at least one authoritative result (docs/SO/GitHub).\n"
         "  STEP 3 — Call action=final with a real, multi-paragraph synthesized answer to the question.\n"
-        "  Do NOT read project files, run memory search, or use lsp unless the question specifically asks about THIS codebase.\n"
+        "  CRITICAL: On pure web-research goals, DO NOT read project files, DO NOT read package.json/requirements.txt, and DO NOT use memory search or lsp — the fetched web results are your ONLY deliverable. The REPO CONTEXT rules below apply ONLY to goals explicitly about THIS codebase.\n"
         "REPO CONTEXT GOALS (explicitly about this codebase):\n"
         "  1. MEMORY: Always check `archival_memory_search` first to avoid suggesting deprecated or banned solutions.\n"
         "  2. DEPENDENCIES: Read `package.json` or `requirements.txt` to verify versions BEFORE suggesting framework updates.\n"

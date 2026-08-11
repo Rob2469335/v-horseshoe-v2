@@ -546,9 +546,20 @@ def test_researcher_task_is_web_research_only():
     assert "search internet" in low, "the web-research part must survive"
     assert "codebase" not in low, "researcher must not be told to analyze the codebase"
     assert "analyze" not in low, "the analyze verb must be stripped from researcher's task"
+    # The dangling "for bugs" fragment (left after stripping "analyze my
+    # codebase") was the ACTUAL leak: the LLM saw "for bugs" and browsed the
+    # filesystem to hunt bugs. It must be stripped so the task is web-only.
+    assert "for bugs" not in low, "the dangling 'for bugs' fragment must be stripped"
+    assert not low.startswith("and "), "no leading conjunction after stripping"
     # A pure web goal is passed through unchanged.
     pure = _research_only_task("search the internet for the latest python version")
     assert "search the internet" in pure
+    # "find bugs in the codebase" leaves no "in the codebase" residue either.
+    find_bugs = _research_only_task(
+        "find bugs in the codebase and search for SOTA ai agent frameworks"
+    )
+    assert "codebase" not in find_bugs.lower()
+    assert "search" in find_bugs.lower()
 
 
 @pytest.mark.asyncio
