@@ -194,7 +194,12 @@ _AGENT_TOOLS = {
     "reviewer": ["filesystem", "semantic_search", "sandbox_repl", "lsp", "mcp", "todo", "remember", "deprecate_memory", "final"],
     "debugger": ["filesystem", "sandbox_repl", "semantic_search", "web_search", "web_fetch", "system", "screen", "lsp", "mcp", "email", "playwright", "todo", "remember", "deprecate_memory", "final"],
     "tool-maker": ["filesystem", "sandbox_repl", "mcp_register", "final"],
-    "code_analyzer": ["filesystem", "web_search", "web_fetch", "system", "screen", "semantic_search", "sandbox_repl", "email", "playwright", "todo", "final"],
+    # code_analyzer is a READ-ONLY analysis agent (find bugs, audit, research).
+    # sandbox_repl is an edit/verify tool — giving it to code_analyzer let the
+    # model burn turns calling sandbox_repl on a pure research goal (observed:
+    # 4 consecutive sandbox_repl calls then turn_budget_exhausted on "analyze
+    # my codebase and search internet"). Analysis needs read/search/web only.
+    "code_analyzer": ["filesystem", "web_search", "web_fetch", "system", "screen", "semantic_search", "email", "playwright", "todo", "final"],
 }
 
 _BASE = (

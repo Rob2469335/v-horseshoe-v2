@@ -513,6 +513,24 @@ async def test_web_fetch_injected_after_web_search_on_internet_goal():
     assert service._call_llm.called
 
 
+def test_code_analyzer_is_read_only_no_sandbox_repl():
+    """code_analyzer is a READ-ONLY analysis agent — it must NOT have
+    sandbox_repl in its allowed tools. On a pure research goal ("analyze my
+    codebase and search internet") the model burned turns calling sandbox_repl
+    (4 consecutive calls, then turn_budget_exhausted) before ever finalizing.
+    Analysis needs read/search/web only; coder (the edit agent) keeps the
+    verify-after-edit tool."""
+    from runtime_v2.prompts.system_prompts import _AGENT_TOOLS
+    assert "sandbox_repl" not in _AGENT_TOOLS["code_analyzer"], (
+        "code_analyzer must be read-only (no sandbox_repl)"
+    )
+    assert "web_search" in _AGENT_TOOLS["code_analyzer"]
+    assert "web_fetch" in _AGENT_TOOLS["code_analyzer"]
+    assert "filesystem" in _AGENT_TOOLS["code_analyzer"]
+    # coder (the edit agent) still needs sandbox_repl for verify-after-edit.
+    assert "sandbox_repl" in _AGENT_TOOLS["coder"]
+
+
 @pytest.mark.asyncio
 async def test_web_fetch_result_not_truncated_to_tool_cap(monkeypatch):
     """A web_fetch deep-read must NOT be truncated to MAX_RESULT_CHARS (1200).
