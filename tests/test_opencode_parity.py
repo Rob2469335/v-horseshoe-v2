@@ -531,6 +531,26 @@ def test_code_analyzer_is_read_only_no_sandbox_repl():
     assert "sandbox_repl" in _AGENT_TOOLS["coder"]
 
 
+def test_researcher_task_is_web_research_only():
+    """The researcher on a compound "analyze codebase + search internet" goal
+    must be handed ONLY the web-research portion — NOT the codebase-analysis
+    half. Handing researcher the full goal made it browse the filesystem (5
+    reads) on top of web_search and exhaust MAX_TURNS before finalizing (the
+    observed turn_budget_exhausted). The exact failing goal must strip the
+    analyze/audit/codebase intent so researcher does pure web research."""
+    from runtime_v2.api.agent_service_v2 import _research_only_task
+    out = _research_only_task(
+        "analyze my codebase for bugs and search internet for improvements and upgrades"
+    )
+    low = out.lower()
+    assert "search internet" in low, "the web-research part must survive"
+    assert "codebase" not in low, "researcher must not be told to analyze the codebase"
+    assert "analyze" not in low, "the analyze verb must be stripped from researcher's task"
+    # A pure web goal is passed through unchanged.
+    pure = _research_only_task("search the internet for the latest python version")
+    assert "search the internet" in pure
+
+
 @pytest.mark.asyncio
 async def test_web_fetch_result_not_truncated_to_tool_cap(monkeypatch):
     """A web_fetch deep-read must NOT be truncated to MAX_RESULT_CHARS (1200).

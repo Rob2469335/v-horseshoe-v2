@@ -146,6 +146,39 @@ def _split_compound_goal(goal: str):
     return research, implementation
 
 
+# Phrase patterns in a compound goal that are CODEBASE-ANALYSIS intent, NOT web
+# research. When the executor hands the research phase to the `researcher`
+# agent, these must be stripped out — researcher's role is PURE WEB research
+# (its own prompt says "Do NOT read project files... unless the question
+# specifically asks about THIS codebase"). Handing researcher the full
+# "analyze my codebase AND search internet" task made it browse the filesystem
+# (5 reads) on top of web_search, exhausting MAX_TURNS before finalizing.
+_CODEEBASE_ANALYSIS_RE = re.compile(
+    r"(analy[sz]e|audit|scan|inspect|review|find|identify|look (?:for|at))"
+    r"\s+(?:the\s+)?(?:entire\s+)?(?:my\s+|our\s+|the\s+|your\s+)?"
+    r"(?:codebase|code\s+base|code|project|repo(?:sitory)?|source)"
+    r"|(?:find|identify|look\s+for)\s+(?:bugs?|issues?|problems?|vulnerabilities?)",
+    re.IGNORECASE,
+)
+
+
+def _research_only_task(goal: str) -> str:
+    """Extract JUST the web-research portion of a compound goal for the
+    `researcher` agent. Strips codebase-analysis phrases (analyze/audit/scan/
+    inspect/review/find + codebase/code/project) so researcher does not browse
+    the filesystem — it deep-reads the web and returns, and the codebase
+    analysis is delegated to code_analyzer separately. Falls back to the
+    cleaned goal when nothing is stripped."""
+    text = _clean_search_query(goal)
+    stripped = _CODEEBASE_ANALYSIS_RE.sub("", text)
+    stripped = re.sub(r"\s{2,}", " ", stripped).strip(" ,;:.")
+    if len(stripped) < 12:
+        # Stripping removed nearly everything — keep the original (safer than
+        # sending an empty task).
+        return text
+    return stripped
+
+
 # The CLI (organism_console/ui/live_stream.py) feeds a user's typed answer to an
 # `ask_user` back as a user message beginning with `Observation:` containing
 # {"answer": "<text>"}. These helpers detect that continuation turn.
@@ -745,9 +778,15 @@ class AgentServiceV2:
             query = (prompt or "").strip()
             if query and bool(_INTERNET_GOAL_RE.search(query)):
                 research_part, _impl_part = _split_compound_goal(query)
-                log.info("[executor] compound goal — fast-start turn %d → delegate researcher (research phase only)", turn)
+                # RESEARCHER IS WEB-ONLY: strip the codebase-analysis half so
+                # researcher does NOT browse the filesystem (observed: it read 5
+                # files + web_search, then turn_budget_exhausted on a compound
+                # "analyze codebase + search internet" goal). The codebase
+                # analysis is delegated to code_analyzer in a later step.
+                researcher_task = _research_only_task(research_part or query)
+                log.info("[executor] compound goal — fast-start turn %d → delegate researcher (web-research only)", turn)
                 return {"action": "delegate", "target_agent": "researcher",
-                        "task": research_part or _clean_search_query(query)}
+                        "task": researcher_task}
 
         # EXECUTOR PHASE-2 CHAINING: once the research delegation has returned,
         # deterministically hand the IMPLEMENTATION phase to coder — the executor
