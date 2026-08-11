@@ -1184,7 +1184,6 @@ class AgentServiceV2:
             if m.get("role") == "system": continue
             content_str = str(m.get("content", ""))
             if m.get("role") == "assistant" and "delegate" in content_str: continue
-            if m.get("role") == "user" and "TOOL RESULT (delegate)" in content_str: continue
             # RESEARCHER IS WEB-ONLY: when the executor delegates the web-research
             # phase to researcher, do NOT pass the original compound goal in
             # history — the model sees "analyze my codebase" in context and
@@ -1193,6 +1192,19 @@ class AgentServiceV2:
             # the researcher's prompt; the history should not re-introduce the
             # codebase-analysis half.
             if agent_id == "executor" and target == "researcher":
+                continue
+            # DOWNSTREAM RESEARCH INHERITANCE: when the executor delegates the
+            # ANALYSIS phase to code_analyzer AFTER the researcher already did
+            # web research, the "TOOL RESULT (delegate)\nresearcher responded:
+            # {findings}" message MUST be passed down — otherwise code_analyzer
+            # synthesizes its final from codebase reads alone and hallucinates
+            # the web portion ("Internet search: Not performed", "Python 3.12+").
+            # The blanket delegate-result strip below exists for CIRCULAR
+            # delegation (re-using a target's earlier answer); it must not
+            # discard genuine upstream findings for a NEW downstream agent.
+            if m.get("role") == "user" and "TOOL RESULT (delegate)" in content_str:
+                if agent_id == "executor" and target not in ("researcher", "executor"):
+                    child_history.append(m)
                 continue
             child_history.append(m)
 
@@ -1203,9 +1215,11 @@ class AgentServiceV2:
         # phase to coder AFTER the researcher already did web_search + web_fetch, pass
         # research_discharged=True so coder's final is not re-forced through the
         # internet-goal guards (research was done upstream — re-searching the same
-        # handful of URLs burns turns and cloud calls for nothing).
+        # handful of URLs burns turns and cloud calls for nothing). Same for
+        # code_analyzer: it inherits the researcher's findings in history, so it
+        # must not be forced to re-web_search.
         child_research_discharged = research_discharged
-        if agent_id == "executor" and target == "coder" and state._executor_research_delegated:
+        if agent_id == "executor" and target in ("coder", "code_analyzer") and state._executor_research_delegated:
             child_research_discharged = True
 
         async for chunk in self.step_agent_stream(target, task, history=child_history, delegation_chain=chain + [target], research_discharged=child_research_discharged):

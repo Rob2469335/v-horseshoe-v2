@@ -1076,6 +1076,82 @@ async def test_research_discharged_reaches_child_coder_via_handle_delegate():
     assert captured2 == [("coder", False)]
 
 
+@pytest.mark.asyncio
+async def test_researcher_findings_inherited_by_code_analyzer():
+    """After the researcher does web research, the executor delegates the ANALYSIS
+    phase to code_analyzer — code_analyzer MUST inherit the researcher's findings
+    ("TOOL RESULT (delegate)\nresearcher responded: ..."). Otherwise it synthesizes
+    its final from codebase reads alone and hallucinates the web portion
+    ("Internet search: Not performed", "Python 3.12+" on a 3.14 project). The
+    blanket delegate-result strip (for circular-delegation) must NOT discard
+    genuine upstream findings for a NEW downstream agent."""
+    from runtime_v2.api.agent_service_v2 import AgentServiceV2, _CallState
+    service = AgentServiceV2()
+    service._agents = {"researcher": {}, "code_analyzer": {}}
+    captured: list[tuple[str, list]] = []
+
+    async def fake_child_stream(agent: str, task: str, **kwargs):
+        captured.append((agent, list(kwargs.get("history", []))))
+        yield {"agent_id": agent, "type": "final", "content": "analysis done",
+               "model": "m", "provider": "p"}
+
+    service.step_agent_stream = fake_child_stream
+    state = _CallState()
+    goal = ("analyze my codebase for bugs and search internet for improvements and upgrades")
+    messages: list = []
+
+    # Phase 1: executor delegates the WEB-RESEARCH half to researcher.
+    async for _ in service._handle_delegate(
+            {"action": "delegate", "target_agent": "researcher", "task": "search internet for upgrades"},
+            "executor", ["executor"], "m", "p", messages, goal, 0.0, state):
+        pass
+    assert state._executor_research_delegated is True
+
+    # Phase 2: executor delegates the ANALYSIS phase to code_analyzer. The
+    # researcher's findings must be in code_analyzer's child_history.
+    async for _ in service._handle_delegate(
+            {"action": "delegate", "target_agent": "code_analyzer", "task": goal},
+            "executor", ["executor"], "m", "p", messages, goal, 0.0, state):
+        pass
+    agent, history = captured[-1]
+    assert agent == "code_analyzer"
+    joined = " ".join(str(m.get("content", "")) for m in history)
+    assert "TOOL RESULT (delegate)" in joined, (
+        "code_analyzer must inherit the researcher's findings in history"
+    )
+    assert "researcher responded" in joined
+
+
+@pytest.mark.asyncio
+async def test_research_discharged_reaches_code_analyzer():
+    """code_analyzer, like coder, must receive research_discharged=True when the
+    executor delegates it AFTER research — so its final is not re-forced through
+    the internet-goal web_search/web_fetch guards (it inherits the findings)."""
+    from runtime_v2.api.agent_service_v2 import AgentServiceV2, _CallState
+    service = AgentServiceV2()
+    service._agents = {"researcher": {}, "code_analyzer": {}}
+    captured: list[tuple[str, bool]] = []
+
+    async def fake_child_stream(agent: str, task: str, **kwargs):
+        captured.append((agent, kwargs.get("research_discharged", False)))
+        yield {"agent_id": agent, "type": "final", "content": "done",
+               "model": "m", "provider": "p"}
+
+    service.step_agent_stream = fake_child_stream
+    state = _CallState()
+    goal = ("analyze my codebase for bugs and search internet for improvements and upgrades")
+    messages: list = []
+    async for _ in service._handle_delegate(
+            {"action": "delegate", "target_agent": "researcher", "task": "search internet"},
+            "executor", ["executor"], "m", "p", messages, goal, 0.0, state):
+        pass
+    async for _ in service._handle_delegate(
+            {"action": "delegate", "target_agent": "code_analyzer", "task": goal},
+            "executor", ["executor"], "m", "p", messages, goal, 0.0, state):
+        pass
+    assert captured[-1] == ("code_analyzer", True)
+
+
 def test_natural_phrasing_compound_goal_routes_to_executor():
     """COMPOUND-GOAL DECOMPOSITION (2026-08-06, finding #5): the naturally-phrased
     /upgrade variant — 'analyze my codebase for bugs and search internet for
