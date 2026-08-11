@@ -1272,8 +1272,18 @@ class AgentServiceV2:
                 state._verify_final_rejected = False
 
         _result_str = json.dumps(result, ensure_ascii=False)
-        if len(_result_str) > MAX_RESULT_CHARS:
-            _result_str = _result_str[:MAX_RESULT_CHARS] + f"... [TRUNCATED: {len(_result_str)} total chars. Use targeted reads for details.]"
+        # Web fetch/search results get a MUCH larger budget than generic tool
+        # output. The whole point of web_fetch is to deep-read a page (up to
+        # 20KB fetched); capping it at MAX_RESULT_CHARS (1200) threw away the
+        # fetched body, so the analysis agent saw only a sliver and produced
+        # "Internet search: Not performed" even after web_fetch succeeded (it
+        # genuinely had nothing to summarize). Filesystem listings stay at the
+        # small cap (path lists). Uses the same 20000 default the fetcher caps
+        # at, so no double-truncation loss beyond the fetch itself.
+        _WEB_RESULT_CHARS = 20000
+        _cap = _WEB_RESULT_CHARS if action in ("web_fetch", "web_search") else MAX_RESULT_CHARS
+        if len(_result_str) > _cap:
+            _result_str = _result_str[:_cap] + f"... [TRUNCATED: {len(_result_str)} total chars. Use targeted reads for details.]"
         state.tool_result_str = _result_str
 
         messages.append({"role": "assistant", "content": json.dumps({"action": action, **tool_payload}, ensure_ascii=False)})

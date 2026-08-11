@@ -514,6 +514,64 @@ async def test_web_fetch_injected_after_web_search_on_internet_goal():
 
 
 @pytest.mark.asyncio
+async def test_web_fetch_result_not_truncated_to_tool_cap(monkeypatch):
+    """A web_fetch deep-read must NOT be truncated to MAX_RESULT_CHARS (1200).
+    The fetcher returns up to 20KB of page markdown; capping it at 1200 threw
+    away the fetched body, so the analysis agent produced "Internet search: Not
+    performed" even after web_fetch succeeded — it had nothing to summarize.
+    Web results get the 20000 budget; filesystem listings stay at 1200."""
+    from runtime_v2.api.agent_service_v2 import AgentServiceV2, _CallState
+    from runtime_v2.api._agent_config import MAX_RESULT_CHARS
+
+    service = AgentServiceV2()
+
+    big_fetch = {"ok": True, "url": "https://example.com/article", "title": "T",
+                 "content": "X" * 5000}  # 5KB of fetched page body
+
+    async def fake_run_tool(tool_name, payload):
+        return big_fetch
+
+    monkeypatch.setattr("runtime_v2.services.tool_executor.run", fake_run_tool)
+    state = _CallState()
+    messages = []
+    _, _ = await service._handle_tool(
+        {"action": "web_fetch", "url": "https://example.com/article"},
+        "code_analyzer", messages, False, 3, 0, state,
+    )
+    assert len(state.tool_result_str) > MAX_RESULT_CHARS, (
+        "web_fetch content must survive past the generic 1200-char tool cap"
+    )
+    assert "X" * 3000 in state.tool_result_str, "the fetched body must be present"
+    # The content reached the message history the LLM sees.
+    joined = " ".join(m.get("content", "") for m in messages)
+    assert "X" * 3000 in joined
+
+
+@pytest.mark.asyncio
+async def test_filesystem_listing_still_capped_at_tool_budget(monkeypatch):
+    """Non-web tool results keep the small MAX_RESULT_CHARS cap — the larger
+    budget is reserved for web_fetch/web_search deep-reads."""
+    from runtime_v2.api.agent_service_v2 import AgentServiceV2, _CallState
+    from runtime_v2.api._agent_config import MAX_RESULT_CHARS
+
+    service = AgentServiceV2()
+
+    async def fake_run_tool(tool_name, payload):
+        return {"ok": True, "result": "\n".join(f"file_{i}.py" for i in range(5000))}
+
+    monkeypatch.setattr("runtime_v2.services.tool_executor.run", fake_run_tool)
+    state = _CallState()
+    messages = []
+    _, _ = await service._handle_tool(
+        {"action": "filesystem", "operation": "list", "path": "."},
+        "code_analyzer", messages, False, 3, 0, state,
+    )
+    assert len(state.tool_result_str) <= MAX_RESULT_CHARS + 100, (
+        "filesystem listings must stay capped at MAX_RESULT_CHARS"
+    )
+
+
+@pytest.mark.asyncio
 async def test_executor_delegates_research_phase_then_impl_phase():
     """COMPOUND-GOAL DECOMPOSITION (2026-08-06): the /upgrade compound goal
     ('research + analyze + implement') must be split into two deterministic
