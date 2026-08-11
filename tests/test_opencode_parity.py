@@ -590,9 +590,16 @@ async def test_split_compound_goal_phases():
     assert "implement" not in r
     assert "implement upgrades" in i
     assert "web_search" not in i
-    # Single-phase goals degrade gracefully (both parts non-empty).
+    # Single-phase goals: a RESEARCH-ONLY goal must NOT fabricate an implementation
+    # phase out of the research text — handing coder the full vague goal made it
+    # explore for MAX_TURNS without editing (turn_budget_exhausted in /goal).
     r2, i2 = _split_compound_goal("search the internet for the latest python version")
-    assert r2 and i2
+    assert r2
+    assert not i2  # empty implementation = no edit phase to delegate
+    # An IMPLEMENT-ONLY goal keeps a non-empty research (analysis is part of it).
+    r3, i3 = _split_compound_goal("find bugs in the codebase and fix them")
+    assert r3
+    assert i3
 
 
 @pytest.mark.asyncio
@@ -758,6 +765,55 @@ async def test_executor_compound_goal_delegates_researcher_first():
         0,
     )
     assert service._call_llm.called
+
+
+@pytest.mark.asyncio
+async def test_executor_compound_goal_skips_coder_when_no_impl_phase():
+    """A compound goal with NO implementation-intent sentence is research-only —
+    after the researcher returns, the executor must NOT delegate an edit task to
+    coder (handing it the full vague goal made it explore for MAX_TURNS without
+    editing → turn_budget_exhausted). The research IS the deliverable."""
+    from runtime_v2.api.agent_service_v2 import AgentServiceV2, _CallState
+    service = AgentServiceV2()
+    service._call_llm = AsyncMock(return_value={"action": "final", "response": "findings"})
+    service._agents = {"executor": {}}
+    state = _CallState()
+    state._executor_research_delegated = True  # researcher already ran
+    state._executor_impl_delegated = False
+    decision = await service._get_decision(
+        "executor", "m",
+        [{"role": "user", "content": "hi"}],
+        ["delegate", "sandbox_repl", "final"],
+        "analyze my codebase for bugs and search internet for improvements and upgrades",
+        1,  # after research returned (turn 1+)
+        state=state,
+    )
+    assert decision["action"] != "delegate"
+    assert decision.get("target_agent") != "coder"
+
+
+@pytest.mark.asyncio
+async def test_executor_compound_goal_still_delegates_coder_when_impl_phase():
+    """A compound goal WITH an explicit implementation sentence still hands the
+    implementation phase to coder after research returns — the fix applies ONLY
+    to research-only compounds, not real edit goals."""
+    from runtime_v2.api.agent_service_v2 import AgentServiceV2, _CallState
+    service = AgentServiceV2()
+    service._call_llm = AsyncMock(return_value={"action": "final", "response": "x"})
+    service._agents = {"executor": {}}
+    state = _CallState()
+    state._executor_research_delegated = True
+    state._executor_impl_delegated = False
+    decision = await service._get_decision(
+        "executor", "m",
+        [{"role": "user", "content": "hi"}],
+        ["delegate", "sandbox_repl", "final"],
+        "search for SOTA agent upgrades via web. analyze the codebase and implement the upgrades.",
+        1,
+        state=state,
+    )
+    assert decision["action"] == "delegate"
+    assert decision["target_agent"] == "coder"
 
 
 @pytest.mark.asyncio

@@ -135,8 +135,14 @@ def _split_compound_goal(goal: str):
     implementation = " ".join(implement_parts).strip()
     if not research:
         research = text if not implementation else implementation
-    if not implementation:
-        implementation = research
+    # NOTE: NO fallback that copies `research` into `implementation`. A goal with
+    # no implementation-intent sentence (e.g. "analyze my codebase for bugs and
+    # search internet for improvements") is RESEARCH-ONLY — fabricating an
+    # implementation phase out of the research text hands coder the full vague
+    # goal, which it explores for MAX_TURNS without ever editing (the observed
+    # turn_budget_exhausted in the /goal loop). An empty implementation part
+    # tells the executor there is no edit phase to delegate; research is the
+    # deliverable.
     return research, implementation
 
 
@@ -748,13 +754,20 @@ class AgentServiceV2:
         # LLM has been observed re-looping (re-delegating/asking) instead of
         # delegating the code work. The goal was split at turn 0, so coder gets
         # only the implement portion, scoped to its own MAX_TURNS budget.
+        # GUARD: if the goal had NO implementation-intent sentence (research-only
+        # compound like "analyze + search internet"), impl_part is empty — there
+        # is no edit phase to delegate. Handing coder the full vague goal made it
+        # explore for MAX_TURNS without editing (turn_budget_exhausted). In that
+        # case the research IS the deliverable; let the LLM executor finalize
+        # rather than force an edit task that doesn't exist.
         if agent_id == "executor" and state._executor_research_delegated and not state._executor_impl_delegated:
             query = (prompt or "").strip()
             _r_part, impl_part = _split_compound_goal(query)
-            state._executor_impl_delegated = True
-            log.info("[executor] research returned — delegating implementation phase → coder")
-            return {"action": "delegate", "target_agent": "coder",
-                    "task": impl_part or query or "implement the researched upgrades"}
+            if impl_part:
+                state._executor_impl_delegated = True
+                log.info("[executor] research returned — delegating implementation phase → coder")
+                return {"action": "delegate", "target_agent": "coder",
+                        "task": impl_part}
 
         if fast is not None:
             return fast
