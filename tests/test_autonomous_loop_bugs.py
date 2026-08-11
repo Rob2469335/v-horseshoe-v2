@@ -149,6 +149,45 @@ class TestBug1ReadOnlyDetection:
             )
         assert all(r is True for r in results), f"Non-deterministic: {results}"
 
+    def test_analyze_and_search_goal_takes_readonly_path(self):
+        """The exact goal that failed the /goal loop — "analyze my codebase for
+        bugs and search internet for improvements and upgrades" — must take the
+        READ-ONLY path (single tool call via stream_prompt) instead of the
+        fix-verification loop that demands file changes and fails with
+        "No file changes detected". The old `and not is_multi_step` clause
+        misclassified every multi-step research goal (analyze/search/review)
+        because the multi-step keywords overlap the read-only keywords."""
+        state = MagicMock()
+        state.entry_agent = "coordinator"
+        state.active_agent = "coordinator"
+        state.delegation_chain = []
+        state.history = []
+        state.save = MagicMock()
+        cmd_ctx = MagicMock()
+        cmd_ctx.state = state
+        cmd_ctx.console = MagicMock()
+
+        called = {}
+        import organism_console.loops.autonomous as au
+
+        def _fake_stream_prompt(s, agent, goal, history):
+            called["stream"] = True
+
+        with patch.object(au, "stream_prompt", _fake_stream_prompt):
+            au.run_autonomous_goal_loop(
+                "analyze my codebase for bugs and search internet for improvements and upgrades",
+                cmd_ctx,
+            )
+        assert called.get("stream") is True, (
+            "read-only goal must run via stream_prompt (single tool call) — it "
+            "was forced into the fix-verification loop instead"
+        )
+        # It must NOT have gone down the verification-loop path (which would
+        # print the 'Autonomous Verification Loop' rule).
+        assert not any(
+            "Verification Loop" in str(c.return_value) for c in cmd_ctx.console.print.call_args_list
+        ), "read-only goal must skip the fix-verification loop"
+
 
 # ---------------------------------------------------------------------------
 # Bug #2: Verification loop fails read-only-style goals unconditionally

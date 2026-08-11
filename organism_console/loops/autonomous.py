@@ -312,17 +312,6 @@ def run_autonomous_goal_loop(goal: str, cmd_ctx):
         "alter",
         "adjust",
     ]
-    MULTI_STEP_KEYWORDS = [
-        "analyze",
-        "analyse",
-        "inspect",
-        "search",
-        "compare",
-        "upgrade",
-        "review",
-        "audit",
-        "scan",
-    ]
 
     goal_lower = goal.lower()
     has_read_only = any(
@@ -332,11 +321,17 @@ def run_autonomous_goal_loop(goal: str, cmd_ctx):
     has_write = any(
         re.search(r"\b" + re.escape(kw) + r"\b", goal_lower) for kw in WRITE_KEYWORDS
     )
-    is_multi_step = any(
-        re.search(r"\b" + re.escape(kw) + r"\b", goal_lower)
-        for kw in MULTI_STEP_KEYWORDS
-    )
-    is_readonly = has_read_only and not has_write and not is_multi_step
+    # A goal is READ-ONLY when it asks for research/analysis and has NO write
+    # intent — regardless of whether it's multi-step. "analyze the codebase and
+    # search the internet for improvements" is a research task whose deliverable
+    # is a REPORT, not file changes. The old `and not is_multi_step` clause was
+    # wrong: the multi-step keywords (analyze/search/review/audit/scan/inspect)
+    # overlap the read-only keywords, so every multi-step research goal was
+    # forced into the fix-verification loop, which demands file changes and
+    # failed with "No file changes detected". Write intent (fix/implement/
+    # patch/write/edit/...) is the ONLY thing that moves a goal into the
+    # fix pipeline — and that is already captured by has_write below.
+    is_readonly = has_read_only and not has_write
 
     if is_readonly:
         console.print(
