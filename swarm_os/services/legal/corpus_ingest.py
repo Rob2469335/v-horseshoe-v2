@@ -128,10 +128,96 @@ def _row_to_payload(row: dict[str, Any]) -> dict[str, Any]:
         "title_number": str(row.get("title_number") or ""),
         "display_path": str(row.get("display_path") or ""),
         "act_status": str(row.get("act_status") or ""),
+        # STATUTE CURRENCY (rec 10): every point carries which OpenUSLaw snapshot
+        # it came from + the section's status in that snapshot. OpenUSLaw is "a
+        # dated snapshot, not a live feed" (quarterly cadence) — so the advisor
+        # can answer "as of WHAT law?" and a later snapshot diff can flag a
+        # section that flips in_force -> repealed. act_status also gates ingest
+        # (only in_force sections enter), but the stored value keeps the truth.
+        "snapshot": SNAPSHOT,
         "content": text,
         "word_count": int(row.get("word_count") or 0),
         "source_url": str(row.get("source_url") or ""),
+        "context": "",
     }
+
+
+# Contextual retrieval (Anthropic 2024, "Introducing Contextual Retrieval"):
+# prepend a short "situate this chunk in its document" string to the EMBED TEXT
+# so a bare section ("the tenant shall be entitled...") is retrievable for a
+# question that never names the section ("what notice must a landlord give?").
+# Two modes:
+#   - METADATA (default): deterministic context built from the payload's own
+#     citation/hierarchy fields — free, offline, zero LLM calls. The embed
+#     server already receives "citation — title", this adds the jurisdiction +
+#     act/chapter framing so the embedding knows WHO the speaker is.
+#   - LLM-ASSISTED: `SWARM_LEGAL_CONTEXT_LLM=1` — one short stream_content call
+#     per section through the local 0.8B summarizer (:8084) or DeepSeek, the
+#     Anthropic template ("This is a statute section from..."). Expensive for a
+#     full corpus (~115K sections) — the metadata mode is the default.
+_CONTEXT_TEMPLATE = (
+    "Statute section from {jurisdiction_upper} law. "
+    "Citation: {citation}. Section {section_number} ({section_title}) of {act_title}. "
+    "Part of {chapter_path}. This section defines rules for {section_topic}."
+)
+
+
+def build_context(payload: dict[str, Any]) -> str:
+    """Deterministic metadata-based context for a statute section — the offline
+    'contextual retrieval' upgrade. Threads the jurisdiction/act/chapter framing
+    that a bare section chunk lacks, so dense retrieval can match a question
+    that describes the topic without naming the section."""
+    jur = payload.get("jurisdiction", "")
+    jur_upper = {"ny": "New York", "nj": "New Jersey", "ga": "Georgia",
+                 "nc": "North Carolina", "federal": "Federal (U.S. Code)"}.get(jur, jur.upper())
+    act_title = payload.get("title_name") or payload.get("title_number") or "law"
+    chapter_path = payload.get("display_path") or payload.get("chapter") or ""
+    topic = (payload.get("section_title") or payload.get("section_number") or "this area").strip()
+    return _CONTEXT_TEMPLATE.format(
+        jurisdiction_upper=jur_upper,
+        citation=payload.get("citation", ""),
+        section_number=payload.get("section_number", ""),
+        section_title=payload.get("section_title", ""),
+        act_title=act_title,
+        chapter_path=chapter_path,
+        section_topic=topic,
+    )
+
+
+async def build_context_llm(payload: dict[str, Any], section_text: str) -> str:
+    """LLM-assisted contextual context (SWARM_LEGAL_CONTEXT_LLM=1): a short
+    'situate this section' string via the local 0.8B summarizer. Falls back to
+    the deterministic build_context on any failure (never raises)."""
+    try:
+        from runtime_v2.services import _llm_client as llm
+        system = (
+            "You situate a statute section within its governing law. In <context> "
+            "write 2-3 sentences: what jurisdiction, what act/chapter, and what "
+            "subject the section governs — WITHOUT quoting the section text."
+        )
+        snippet = (section_text or "")[:600]
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": (
+                f"Jurisdiction: {payload.get('jurisdiction', '')}\n"
+                f"Citation: {payload.get('citation', '')}\n"
+                f"Title/act: {payload.get('title_name', '')} {payload.get('title_number', '')}\n"
+                f"Chapter: {payload.get('chapter', '')}\n"
+                f"Section text:\n<chunk>\n{snippet}\n</chunk>"
+            )},
+        ]
+        model = llm._analysis_cloud_model() if llm._analysis_cloud_enabled() else "qwen3.5-4b"
+        parts: list[str] = []
+        async for chunk, kind in llm.stream_content(model, messages, agent_id="legal_context"):
+            if kind == "content":
+                parts.append(chunk or "")
+        ctx = "".join(parts).strip()
+        if ctx:
+            return f"This is a statute section from {payload.get('jurisdiction', '').upper()} law. {ctx}"
+    except Exception as exc:
+        log.debug("LLM context failed for %s, using metadata: %s",
+                  payload.get("citation", ""), exc)
+    return build_context(payload)
 
 
 async def iter_in_force_rows(parquet_path: Path, jurisdiction: str, title_filter: str | None = None):
@@ -202,7 +288,7 @@ async def _embed(texts: list[str]) -> list[list[float]] | None:
 
 
 async def ingest_one_file(parquet_path: Path, jurisdiction: str, batch_size: int = 16,
-                          title_filter: str | None = None) -> int:
+                          title_filter: str | None = None, contextualize: bool = True) -> int:
     """Ingest one jurisdiction's in-force sections into Qdrant. Returns the
     number of sections indexed. Re-embedding is idempotent: we delete the
     jurisdiction's (or title-scoped) points first, then upsert fresh.
@@ -210,6 +296,10 @@ async def ingest_one_file(parquet_path: Path, jurisdiction: str, batch_size: int
     `title_filter` (e.g. "18") restricts both the delete and the ingest to one
     USC title, so a scoped Title-18 run never wipes the already-ingested
     federal sections outside that title.
+
+    `contextualize` (default True) prepends the metadata-based context string to
+    the embed text AND stores it in the payload — the offline contextual-
+    retrieval upgrade. Set SWARM_LEGAL_CONTEXT_LLM=1 for LLM-assisted context.
 
     Batches are flushed by TOKEN BUDGET (not fixed count): the embed server's
     physical batch size is 8192 tokens (verified live), so a fixed-count batch
@@ -258,9 +348,21 @@ async def ingest_one_file(parquet_path: Path, jurisdiction: str, batch_size: int
         batch_chars = 0
 
     async for point_id, payload in iter_in_force_rows(parquet_path, jurisdiction, title_filter=title_filter):
-        # Embed the citation + title + text so retrieval matches on the section
-        # heading and the body, not just one or the other.
-        text = f"{payload['citation']} — {payload['section_title']}\n{payload['content']}"
+        # CONTEXTUAL RETRIEVAL: situate the section before embedding so a bare
+        # chunk is retrievable for a topic-described question. The context is
+        # ALSO stored in the payload (retrieval can surface it) and prepended
+        # to the embed text (so the embedding carries it).
+        if contextualize:
+            if os.getenv("SWARM_LEGAL_CONTEXT_LLM") == "1":
+                context = await build_context_llm(payload, payload["content"])
+            else:
+                context = build_context(payload)
+            payload["context"] = context
+        else:
+            payload["context"] = ""
+        # Embed the context + citation + title + text so retrieval matches on the
+        # section heading and the body, not just one or the other.
+        text = f"{payload['context']}\n{payload['citation']} — {payload['section_title']}\n{payload['content']}"
         # ~4 chars/token; keep a 15% headroom under the 8192 physical batch size.
         approx_tokens = max(1, len(text) // 4)
         if batch_ids and batch_chars // 4 + approx_tokens >= int(_MAX_BATCH_TOKENS * 0.85):
@@ -276,11 +378,13 @@ async def ingest_one_file(parquet_path: Path, jurisdiction: str, batch_size: int
     return total
 
 
-async def ingest_all(parquet_dir: Path, jurisdictions: list[str] | None = None) -> dict[str, int]:
+async def ingest_all(parquet_dir: Path, jurisdictions: list[str] | None = None,
+                     contextualize: bool = True) -> dict[str, int]:
     """Ingest the scoped jurisdictions. `jurisdictions` defaults to the full
     SCOPE_FILES set. Files must already be downloaded into `parquet_dir` (we do
     NOT download here — the download is a separate step so the corpus is
-    auditable and re-runnable offline)."""
+    auditable and re-runnable offline). `contextualize` (default True) enables
+    the contextual-retrieval embed (context prepended to the embed text)."""
     targets = jurisdictions or list(SCOPE_FILES)
     result: dict[str, int] = {}
     for jur in targets:
@@ -289,9 +393,60 @@ async def ingest_all(parquet_dir: Path, jurisdictions: list[str] | None = None) 
             log.warning("missing parquet for %s: %s", jur, f)
             result[jur] = 0
             continue
-        result[jur] = await ingest_one_file(f, jur)
+        result[jur] = await ingest_one_file(f, jur, contextualize=contextualize)
         log.info("indexed %s: %d sections", jur, result[jur])
     return result
+
+
+async def backfill_payloads(batch_size: int = 2000) -> dict[str, Any]:
+    """Backfill the `snapshot` payload field onto EXISTING statute points WITHOUT
+    re-embedding (rec 10 statute-currency fix).
+
+    The corpus was ingested before the snapshot-stamping upgrade, so every
+    point lacks `snapshot` — making `corpus_scope` report an empty snapshot and
+    `law_as_of` fall to "unknown". `set_payload` stamps the shared SNAPSHOT on a
+    batch of point ids WITHOUT touching vectors — O(n) payload updates, fast for
+    ~115K points, idempotent.
+
+    NOTE: this does NOT backfill the `context` field used for contextual-
+    retrieval embeddings. Contextual retrieval only matters at EMBED time — a
+    payload-only `context` backfill would not change retrieval (the vectors were
+    computed without it). That upgrade requires a full re-ingest
+    (`ingest_all`, hours) and is intentionally NOT part of this fix.
+
+    Returns {"updated": n, "jurisdictions": {jur: count}}.
+    """
+    from swarm_os.lib.vector.qdrant_store import QDRANT_URL
+    from qdrant_client import AsyncQdrantClient
+    client = AsyncQdrantClient(url=QDRANT_URL)
+    updated = 0
+    by_jur: dict[str, int] = {}
+    offset: Any = None
+    try:
+        while True:
+            resp = await client.scroll(COLLECTION, limit=batch_size, with_payload=True,
+                                       offset=offset)
+            points = resp[0]
+            ids: list[Any] = []
+            for point in points:
+                payload = dict(point.payload or {})
+                if payload.get("snapshot"):
+                    continue  # already currency-stamped
+                ids.append(point.id)
+                updated += 1
+                by_jur[payload.get("jurisdiction", "?")] = by_jur.get(payload.get("jurisdiction", "?"), 0) + 1
+            if ids:
+                await client.set_payload(
+                    collection_name=COLLECTION,
+                    payload={"snapshot": SNAPSHOT},
+                    points=ids,
+                )
+            if resp[1] is None:
+                break
+            offset = resp[1]
+    finally:
+        await client.close()
+    return {"updated": updated, "jurisdictions": by_jur}
 
 
 def download_parquet(jurisdictions: list[str] | None = None, out_dir: Path = Path("./data/legal")) -> dict[str, Path]:

@@ -131,3 +131,47 @@ async def test_iter_in_force_rows_reads_bounded_batches(monkeypatch):
     # parquet never balloons into one giant Python list of dicts.
     assert fake_table.requested_chunksize == 1024
     assert not any(len(b.rows) > 1024 for b in fake_table.to_batches(max_chunksize=1024))
+
+
+# --- Contextual retrieval (M8) ------------------------------------------------
+
+def test_build_context_metadata_frames_section():
+    """build_context must produce a deterministic 'situate this section' string
+    from the payload metadata — jurisdiction + citation + act/chapter framing —
+    so a bare section chunk is retrievable for a topic-described question."""
+    payload = {
+        "jurisdiction": "ny", "citation": "N.Y. RPA Law § 235-b",
+        "section_number": "235-b", "section_title": "Recovery of possession",
+        "title_name": "Real Property Actions and Proceedings Law",
+        "chapter": "RPA Law", "display_path": "NY/RPA/235-b",
+    }
+    ctx = corpus_ingest.build_context(payload)
+    assert "New York" in ctx, "jurisdiction name must be in the context"
+    assert "235-b" in ctx, "section id must be in the context"
+    assert "Real Property Actions" in ctx, "act title must be in the context"
+
+
+def test_build_context_handles_missing_metadata():
+    """build_context must not raise on a sparse payload (missing fields -> sane
+    fallbacks), and must still name the jurisdiction."""
+    ctx = corpus_ingest.build_context({"jurisdiction": "nj"})
+    assert "New Jersey" in ctx
+    assert ctx.strip(), "context must be non-empty even with no other fields"
+
+
+@pytest.mark.asyncio
+async def test_build_context_llm_falls_back_to_metadata_on_failure():
+    """The LLM-assisted contextualizer must never raise: on any LLM failure it
+    falls back to the deterministic metadata context (offline-safe)."""
+    import swarm_os.services.legal.corpus_ingest as ci
+
+    async def broken_stream(model, messages, agent_id):
+        raise RuntimeError("llm down")
+        yield  # pragma: no cover - makes this an async generator that raises
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("runtime_v2.services._llm_client.stream_content", broken_stream)
+        ctx = await ci.build_context_llm(
+            {"jurisdiction": "ny", "citation": "N.Y. RPA Law § 235-b"}, "some text")
+    assert "New York" in ctx
+    assert "235-b" in ctx
