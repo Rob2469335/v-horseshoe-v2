@@ -522,7 +522,16 @@ async def _get_opinion_text(client: httpx.AsyncClient, cite: str) -> dict[str, A
         return {"error": "no_text"}
     # The opinions endpoint doesn't carry case_name directly; prefer the
     # manifest's name, but report the lookup cluster's name when present.
-    return {"text": text, "case_name": case_name}
+    # CITATION-GRAPH SEAM (rec 9, CourtListener verified): the opinion object
+    # carries `opinions_cited` — an authorities table of opinions THIS case
+    # cites (backward edges). Forward-citing cases come from the dedicated
+    # /opinions-cited/ edge API (cited_opinion=<id>, field `depth`). Both feed
+    # the offline cite-follow graph; capture the backward edges here.
+    opinions_cited = []
+    for oc in (item.get("opinions_cited") or []):
+        if isinstance(oc, dict) and oc.get("id"):
+            opinions_cited.append({"id": oc["id"]})
+    return {"text": text, "case_name": case_name, "opinions_cited": opinions_cited}
 
 
 # ---------------------------------------------------------------------------
@@ -567,10 +576,13 @@ async def _embed(texts: list[str]) -> list[list[float]] | None:
     return None
 
 
-async def ingest_one_case(entry: _CASE, text: str, batch_size: int = 16) -> int:
+async def ingest_one_case(entry: _CASE, text: str, batch_size: int = 16,
+                          opinions_cited: list[dict] | None = None) -> int:
     """Chunk + embed + upsert one case's full opinion into legal_cases.
     Idempotent: deletes the cite's existing points first (scoped to this cite,
-    so re-runs never duplicate and never touch other cases). Returns chunk count."""
+    so re-runs never duplicate and never touch other cases). Returns chunk count.
+    `opinions_cited` (CourtListener authorities table) is stored in every chunk
+    payload so the citation graph can be built offline without a re-fetch."""
     ensure_cases_collection()
     cite = entry["cite"]
     # Remove existing points for this cite (idempotent re-run, additive to others).
@@ -597,6 +609,9 @@ async def ingest_one_case(entry: _CASE, text: str, batch_size: int = 16) -> int:
         "batson": bool(entry.get("batson")),
         "jurisdiction": "case",
         "source": "courtlistener",
+        # Backward citation edges (CourtListener authorities table) — enables
+        # the offline cite-follow graph without a re-fetch.
+        "opinions_cited": [int(o["id"]) for o in (opinions_cited or []) if o.get("id")],
     }
     total = 0
     for start in range(0, len(chunks), batch_size):
@@ -679,7 +694,7 @@ async def _ingest_manifest_cli() -> dict[str, Any]:
                 _save_state(state)
                 continue
             try:
-                n = await ingest_one_case(entry, got["text"])
+                n = await ingest_one_case(entry, got["text"], opinions_cited=got.get("opinions_cited"))
             except Exception as exc:
                 log.warning("ingest failed for %s: %s", cite, exc)
                 state[cite] = {"status": "error", "detail": str(exc)[:200]}

@@ -75,6 +75,36 @@ class CitationResult:
     clusters: int = 0
     skipped_reason: str = ""
     shape_mismatch: bool = False  # 200 but normalized citation differs from ours
+    match_class: str = ""    # M6 3-class verdict: "exact" / "minor" / "major" /
+                             #   "" (not a 200 match — fabricated/unverified/skipped)
+
+
+# M6 3-class comparison: after a 200 (the cite maps to a real cluster), the sent
+# key is compared against the cluster's canonical citation keys. "major" = a
+# different volume or reporter (the cite points at the right case but the wrong
+# series — e.g. So.2d vs So.3d — a substantive alteration); "minor" = the same
+# volume+reporter with a different page (e.g. 400 U.S. 74 vs 400 U.S. 79 — an
+# alteration of the SAME case, a lesser-but-real professional risk); "exact" =
+# the sent key IS one of the cluster's canonical keys.
+def classify_match(sent_key: str | None, canonical_keys: list[str]) -> str:
+    """Classify a 200-match into exact/minor/major. Returns "" when there is no
+    sent key or no canonical key to compare (not a 200-match)."""
+    if not sent_key or not canonical_keys:
+        return ""
+    if sent_key in canonical_keys:
+        return "exact"
+    parts = sent_key.split("|")
+    if len(parts) < 3:
+        return "major"
+    vol, rep, page = parts[0], parts[1], parts[2]
+    for ck in canonical_keys:
+        cparts = ck.split("|")
+        if len(cparts) < 3:
+            continue
+        cvol, crep, cpage = cparts[0], cparts[1], cparts[2]
+        if cvol == vol and crep == rep and cpage != page:
+            return "minor"
+    return "major"
 
 
 @dataclass
@@ -263,6 +293,107 @@ def case_citation_key(matched_text: str) -> str | None:
     return f"{vol}|{rep}|{page}"
 
 
+def extract_case_citations(text: str) -> list[str]:
+    """Deterministic extraction of case-citation matched strings from `text`.
+
+    Uses Eyecite's FullCaseCitation results (id./supra already resolved to full
+    forms by get_citations). When Eyecite is unavailable (or returns nothing for
+    an exotic-but-real form), falls back to the loose `_CASE_SHAPED_RE` detector
+    — the same "citation-SHAPED" philosophy as count_citation_shapes, so a
+    real-but-unparseable cite is still surfaced for the alignment check rather
+    than silently vanishing. Returns deduped matched strings."""
+    if not text:
+        return []
+    out: list[str] = []
+    if _EYECITE_OK:
+        try:
+            from eyecite.models import FullCaseCitation
+            for c in get_citations(text):
+                if isinstance(c, FullCaseCitation):
+                    out.append(getattr(c, "matched_text", lambda: "")() or "")
+        except Exception as exc:
+            log.warning("eyecite case extraction failed: %s", exc)
+    if not out:
+        out = _CASE_SHAPED_RE.findall(text or "")
+    seen: set[str] = set()
+    clean: list[str] = []
+    for s in out:
+        s = (s or "").strip().rstrip(".,")
+        if s and s not in seen:
+            seen.add(s)
+            clean.append(s)
+    return clean
+
+
+def align_case_citations(answer_text: str,
+                         retrieved_case_cites: list[str],
+                         corpus_case_cites: list[str] | None = None) -> dict[str, Any]:
+    """The M6 CASE-LAW alignment seam — the case-law analog of align_citations.
+
+    A case citation in the answer is canonical-keyed (case_citation_key) and
+    compared against two sets:
+      - `retrieved_case_cites`  : the case chunks actually returned for the
+        question (the grounding contract — the answer should draw from these).
+      - `corpus_case_cites`     : the full curated manifest (defaults to
+        case_corpus.CASE_MANIFEST). Distinguishes "real authority we just
+        didn't retrieve top-k" from "not in our corpus at all".
+
+    Three-way classification (fail-closed but HONEST — never flags a real
+    curated authority as fabricated just because it wasn't in the top-k):
+      - "aligned"   : key present in the retrieved set (grounded in what we showed)
+      - "in_corpus" : key NOT retrieved but present in the full corpus (real
+        authority, just not top-k) — surfaced as a note, NOT a fabrication signal
+      - "unaligned" : key not present anywhere in the corpus (out-of-corpus or
+        fabricated) — the case-law fabrication signal
+
+    Returns:
+      {
+        "count": distinct cited case citations,
+        "aligned":   [{'cite', 'key'} ...],
+        "in_corpus": [{'cite', 'key'} ...],
+        "unaligned": [{'cite', 'key'} ...],
+      }
+    """
+    if corpus_case_cites is None:
+        try:
+            from swarm_os.services.legal.case_corpus import CASE_MANIFEST
+            corpus_case_cites = [c["cite"] for c in CASE_MANIFEST]
+        except Exception:
+            corpus_case_cites = []
+    corpus_keys: set[str] = set()
+    for c in corpus_case_cites or []:
+        k = case_citation_key(str(c))
+        if k:
+            corpus_keys.add(k)
+    retrieved_keys: set[str] = set()
+    for c in retrieved_case_cites or []:
+        k = case_citation_key(str(c))
+        if k:
+            retrieved_keys.add(k)
+
+    aligned: list[dict[str, Any]] = []
+    in_corpus: list[dict[str, Any]] = []
+    unaligned: list[dict[str, Any]] = []
+    for cite in extract_case_citations(answer_text or ""):
+        k = case_citation_key(cite)
+        if not k:
+            continue  # not case-shaped; leave to the statute alignment / shapes
+        rec = {"cite": cite, "key": k}
+        if k in retrieved_keys:
+            aligned.append(rec)
+        elif k in corpus_keys:
+            in_corpus.append(rec)
+        else:
+            unaligned.append(rec)
+
+    return {
+        "count": len(aligned) + len(in_corpus) + len(unaligned),
+        "aligned": aligned,
+        "in_corpus": in_corpus,
+        "unaligned": unaligned,
+    }
+
+
 def align_citations(answer_text: str, retrieved_sections: list[str]) -> dict[str, Any]:
     """The M4 citation-alignment seam.
 
@@ -403,6 +534,7 @@ async def verify_citations(blob: str, courtlistener_key: str | None = None) -> V
                 and sent_key not in canonical_keys
             )
             verified = status == 200 and not shape_mismatch
+            match_class = classify_match(sent_key, canonical_keys)
             results.append(CitationResult(
                 raw=raw,
                 kind=kind,
@@ -413,6 +545,7 @@ async def verify_citations(blob: str, courtlistener_key: str | None = None) -> V
                 case_name=(lookup.get("clusters") or [{}])[0].get("case_name", ""),
                 clusters=len(lookup.get("clusters") or []),
                 shape_mismatch=shape_mismatch,
+                match_class=match_class,
             ))
 
     fabricated = [r for r in results if r.status == 404]
@@ -421,6 +554,24 @@ async def verify_citations(blob: str, courtlistener_key: str | None = None) -> V
     unverified = [r for r in results
                   if not r.skipped_reason and r.status not in (200, 404, 300)]
     ok = not fabricated  # fabricated citations are a hard stop; ambiguous are flagged
+    # Coverage-aware split of "unverified" (M6, "Citation Grounding Measures the
+    # Oracle"): a parsed case citation with status None is UNVERIFIED — but WHY?
+    #   - no token configured  -> "no coverage" (we cannot check at all)
+    #   - a request/network error -> "lookup_failed" (transient, retryable)
+    #   - a 429 rate limit       -> "throttled" (retryable, back off)
+    # A caller that sees "unverified — no coverage" knows it's the tool's limit;
+    # "unverified — lookup_failed" is a transient it can retry.
+    unverified_no_coverage = 0
+    unverified_lookup_failed = 0
+    unverified_throttled = 0
+    for r in unverified:
+        msg = (r.error_message or "").lower()
+        if r.status == 429 or "throttl" in msg or "rate limit" in msg:
+            unverified_throttled += 1
+        elif "no token" in msg or "auth" in msg or "token" in msg:
+            unverified_no_coverage += 1
+        else:
+            unverified_lookup_failed += 1
     return VerifyResponse(
         ok=ok,
         citations=results,
@@ -435,10 +586,18 @@ async def verify_citations(blob: str, courtlistener_key: str | None = None) -> V
         stats={
             "count": len(results),
             "verified": sum(1 for r in results if r.verified),
+            "match_classes": {
+                "exact": sum(1 for r in results if r.match_class == "exact"),
+                "minor": sum(1 for r in results if r.match_class == "minor"),
+                "major": sum(1 for r in results if r.match_class == "major"),
+            },
             "fabricated": len(fabricated),
             "ambiguous": len(ambiguous),
             "shape_mismatch": len(shape_mismatched),
             "unverified": len(unverified),
+            "unverified_no_coverage": unverified_no_coverage,
+            "unverified_lookup_failed": unverified_lookup_failed,
+            "unverified_throttled": unverified_throttled,
             "unparsed": unparsed,
             "skipped": sum(1 for r in results if r.skipped_reason),
         },

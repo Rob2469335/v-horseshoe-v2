@@ -310,11 +310,167 @@ async def test_unparsed_not_overcounted_for_parsed_non_case_citations():
 
 @pytest.mark.asyncio
 async def test_verify_citations_outage_counts_unverified_not_clean():
-    """A case citation whose lookup yields NO verdict (status None — outage /
+    """A case citation whose lookup yields NO verdict (status None - outage /
     no token) is UNVERIFIED. fabricated=0 counts it as unknown, unverified=1
-    surfaces it — the old silent 'verified=0, fabricated=0' pass."""
+    surfaces it - the old silent 'verified=0, fabricated=0' pass."""
     with patch("swarm_os.services.legal.citation_verify._lookup_one",
                new=AsyncMock(return_value={"status": None, "error_message": "request failed"})):
         res = await verify_citations("Obergefell v. Hodges, 576 U.S. 644 (2015)")
     assert res.stats["unverified"] >= 1
     assert res.stats["fabricated"] == 0
+
+
+# --- M6 case-law alignment seam (align_case_citations) ------------------------
+
+def test_align_case_citations_three_way_classification():
+    """align_case_citations must classify a cited case three ways:
+    aligned (retrieved), in_corpus (curated but not retrieved top-k), and
+    unaligned (absent from the whole manifest = fabrication signal)."""
+    from swarm_os.services.legal.citation_verify import align_case_citations
+    retrieved = ["252 F.3d 238"]
+    corpus = ["252 F.3d 238", "669 F.3d 112", "507 U.S. 725"]
+
+    # 1. Cited case IS one of the retrieved chunks -> aligned.
+    r = align_case_citations(
+        "See United States v. Simeonov, 252 F.3d 238 (2d Cir. 2001).",
+        retrieved, corpus)
+    assert r["count"] == 1
+    assert len(r["aligned"]) == 1 and r["aligned"][0]["cite"] == "252 F.3d 238"
+    assert not r["in_corpus"] and not r["unaligned"]
+
+    # 2. Cited case in the manifest but NOT in the retrieved top-k -> in_corpus,
+    #    NOT flagged as fabricated (honest: it's a real authority, just not top-k).
+    r2 = align_case_citations(
+        "See United States v. Hsu, 669 F.3d 112 (2d Cir. 2012).",
+        retrieved, corpus)
+    assert r2["count"] == 1
+    assert len(r2["in_corpus"]) == 1 and r2["in_corpus"][0]["cite"] == "669 F.3d 112"
+    assert not r2["unaligned"], "a curated manifest case must never be flagged fabricated"
+
+    # 3. Cited case absent from the WHOLE manifest -> unaligned (fabrication).
+    r3 = align_case_citations("See 999 F.3d 123 (2d Cir. 2020).", retrieved, corpus)
+    assert r3["count"] == 1
+    assert len(r3["unaligned"]) == 1 and r3["unaligned"][0]["cite"] == "999 F.3d 123"
+    assert not r3["aligned"] and not r3["in_corpus"]
+
+
+def test_align_case_citations_defaults_to_curated_manifest():
+    """With no corpus arg, align_case_citations must default to the REAL
+    case_corpus.CASE_MANIFEST — a genuinely cited Rainford authority is
+    in_corpus, and 999 F.3d 123 (not in the manifest) is unaligned."""
+    from swarm_os.services.legal.citation_verify import align_case_citations
+    r = align_case_citations("See United States v. Polouizzi, 564 F.3d 142.", ["252 F.3d 238"])
+    assert r["count"] == 1
+    assert len(r["in_corpus"]) == 1, "Polouizzi is in the Rainford manifest"
+    r2 = align_case_citations("See 999 F.3d 123.", ["252 F.3d 238"])
+    assert r2["count"] == 1 and len(r2["unaligned"]) == 1
+
+
+def test_extract_case_citations_dedupes_and_strips():
+    from swarm_os.services.legal.citation_verify import extract_case_citations
+    out = extract_case_citations(
+        "Smith v. Jones, 400 U.S. 79 (2010), and 400 U.S. 79, plus 252 F.3d 238."
+    )
+    assert out.count("400 U.S. 79") == 1  # deduped
+    assert "252 F.3d 238" in out
+    assert all(not c.endswith((".,", ",")) for c in out)
+
+
+# --- M6 3-class match classification (exact / minor / major) ------------------
+
+def test_classify_match_exact():
+    from swarm_os.services.legal.citation_verify import classify_match
+    assert classify_match("400|u.s.|79", ["400|u.s.|79", "400|u.s.|74"]) == "exact"
+
+
+def test_classify_match_minor_same_case_different_page():
+    """Same volume+reporter, different page = an alteration of the SAME case
+    (400 U.S. 79 sent, cluster canonicalized to 400 U.S. 74) — a lesser but
+    real professional risk, classified 'minor' not 'major'."""
+    from swarm_os.services.legal.citation_verify import classify_match
+    assert classify_match("400|u.s.|79", ["400|u.s.|74"]) == "minor"
+
+
+def test_classify_match_major_different_reporter():
+    """Different reporter (or volume) = the cite points at the right area but
+    the WRONG series — a substantive alteration, classified 'major'."""
+    from swarm_os.services.legal.citation_verify import classify_match
+    assert classify_match("84|so3d|661", ["84|so2d|661"]) == "major"
+    assert classify_match("500|u.s.|352", ["400|u.s.|352"]) == "major"
+
+
+def test_classify_match_empty_without_keys():
+    from swarm_os.services.legal.citation_verify import classify_match
+    assert classify_match(None, ["400|u.s.|79"]) == ""
+    assert classify_match("400|u.s.|79", []) == ""
+
+
+@pytest.mark.asyncio
+async def test_verify_citations_reports_match_classes():
+    """A 200-exact citation must surface match_class=exact AND appear in the
+    stats match_classes.exact bucket. Drives the REAL verify_citations path with
+    only the network leg stubbed (the established seam)."""
+    from swarm_os.services.legal.citation_verify import verify_citations
+    with patch("swarm_os.services.legal.citation_verify._lookup_one",
+               new=AsyncMock(return_value={
+                   "status": 200,
+                   "clusters": [{"case_name": "Obergefell v. Hodges",
+                                 "citations": [
+                                     {"volume": "576", "reporter": "U.S.", "page": "644"}]}],
+               })):
+        res = await verify_citations("Obergefell v. Hodges, 576 U.S. 644 (2015)")
+    assert res.citations[0].match_class == "exact"
+    assert res.citations[0].verified is True
+    assert res.stats["match_classes"]["exact"] == 1
+
+
+@pytest.mark.asyncio
+async def test_verify_citations_reports_minor_page_alteration():
+    """Same case, altered page: 400 U.S. 79 sent, cluster canonicalizes to
+    400 U.S. 74 (the real Dutton page). 200-but-not-as-cited -> minor, NOT
+    verified, NOT a hard block (the M5 '200 is exists, not correct' hardening,
+    now with the 3-class label)."""
+    from swarm_os.services.legal.citation_verify import verify_citations
+    with patch("swarm_os.services.legal.citation_verify._lookup_one",
+               new=AsyncMock(return_value={
+                   "status": 200,
+                   "clusters": [{"case_name": "Dutton v. Evans",
+                                 "citations": [
+                                     {"volume": "400", "reporter": "U.S.", "page": "74"}]}],
+               })):
+        res = await verify_citations("Dutton v. Evans, 400 U.S. 79 (1970)")
+    assert res.citations[0].match_class == "minor"
+    assert res.citations[0].verified is False
+    assert res.citations[0].shape_mismatch is True
+    assert res.stats["match_classes"]["minor"] == 1
+
+
+# --- M6 coverage-aware unverified split ---------------------------------------
+
+@pytest.mark.asyncio
+async def test_verify_citations_splits_unverified_coverage_aware():
+    """'unverified' is split by WHY: no-token (no coverage) vs network/request
+    failure (lookup_failed) vs 429 (throttled). The split tells a caller whether
+    'unverified' is the tool's limit (no coverage) or a retryable transient."""
+    from swarm_os.services.legal.citation_verify import verify_citations
+    with patch("swarm_os.services.legal.citation_verify._lookup_one",
+               new=AsyncMock(return_value={
+                   "status": None, "error_message": "no token configured"})):
+        res = await verify_citations("Smith v. Jones, 400 U.S. 79 (2010)")
+    assert res.stats["unverified"] == 1
+    assert res.stats["unverified_no_coverage"] == 1
+    assert res.stats["unverified_lookup_failed"] == 0
+
+    with patch("swarm_os.services.legal.citation_verify._lookup_one",
+               new=AsyncMock(return_value={
+                   "status": 429, "error_message": "Request was throttled. Rate limit exceeded"})):
+        res = await verify_citations("Smith v. Jones, 400 U.S. 79 (2010)")
+    assert res.stats["unverified"] == 1
+    assert res.stats["unverified_throttled"] == 1
+
+    with patch("swarm_os.services.legal.citation_verify._lookup_one",
+               new=AsyncMock(return_value={
+                   "status": None, "error_message": "request failed: ConnectionError"})):
+        res = await verify_citations("Smith v. Jones, 400 U.S. 79 (2010)")
+    assert res.stats["unverified"] == 1
+    assert res.stats["unverified_lookup_failed"] == 1
