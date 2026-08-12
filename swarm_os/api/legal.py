@@ -152,3 +152,208 @@ async def legal_corpus_scope() -> dict[str, Any]:
     """Live ingestion state per jurisdiction — the structural marker source."""
     from swarm_os.services.legal.legal_advisor import corpus_scope
     return await corpus_scope()
+
+
+class BriefCheckRequest(BaseModel):
+    argument: str = Field(..., min_length=1, max_length=60000,
+                          description="The Argument section text of a brief/motion to check")
+    retrieved_statutes: list[str] = Field(default_factory=list,
+                                          description="Statute citations retrieved for this matter")
+    retrieved_cases: list[str] = Field(default_factory=list,
+                                       description="Case citations retrieved for this matter")
+    source_by_cite: dict[str, str] = Field(default_factory=dict,
+                                           description="{citation_key: source_content} for the fidelity pass")
+    word_count: int | None = Field(default=None,
+                                   description="Exact word count (for FRAP 32) if the caller counted it")
+
+
+@router.post("/brief/check")
+async def legal_brief_check(req: BriefCheckRequest) -> dict[str, Any]:
+    """Post-generation brief checker (the conjunctive-deliverable guard the
+    Harvey Legal Agent Benchmark shows models miss ~80% of the time). Parses the
+    Argument, flags assertions lacking a citation, aligns every citation against
+    the retrieved corpora (M4 statutes + M6 cases), runs the LegalCiteTrust
+    fidelity pass (each citation supports its sentence), and checks FRAP 32
+    type-volume + certificate. `ok: false` means fix before filing."""
+    from swarm_os.services.legal.brief_draft import (
+        check_brief, render_check, check_frap32, check_fidelity,
+    )
+    try:
+        check = check_brief(req.argument, req.retrieved_statutes, req.retrieved_cases)
+        fidelity = check_fidelity(req.argument, req.source_by_cite)
+        frap32 = check_frap32({"text": req.argument, "word_count": req.word_count} if req.word_count else req.argument)
+    except Exception:
+        log.exception("brief check failed")
+        raise HTTPException(status_code=500, detail="Brief check failed")
+    overall_ok = check["ok"] and fidelity["rate"] == 1.0 and frap32["ok"]
+    return {
+        "ok": overall_ok,
+        "assertions": check["assertions"],
+        "uncited_assertions": check["uncited_assertions"],
+        "uncited_count": check["uncited_count"],
+        "unaligned_statutes": check["unaligned_statutes"],
+        "unaligned_cases": check["unaligned_cases"],
+        "fidelity": fidelity,
+        "frap32": frap32,
+        "summary": render_check(check) + "\n" + _render_fidelity(fidelity) + "\n" + _render_frap32(frap32),
+    }
+
+
+def _render_fidelity(fidelity: dict) -> str:
+    if not fidelity.get("checked"):
+        return "Fidelity: no citable assertions to check."
+    return (f"Fidelity: {len(fidelity['unsupporting'])} unsupported citation(s) "
+            f"({fidelity['rate']:.0%} supporting)")
+
+
+def _render_frap32(f: dict) -> str:
+    return (f"FRAP 32: {f['words']}/{f['limit']} words"
+            f" ({'OVER' if f['over'] else 'OK'}), certificate "
+            f"{'present' if f['has_certificate'] else 'MISSING'}")
+
+
+
+class BriefSkeletonRequest(BaseModel):
+    issues: list[str] = Field(default_factory=list,
+                              description="The discrete issues the Argument will address")
+
+
+@router.post("/brief/skeleton")
+async def legal_brief_skeleton(req: BriefSkeletonRequest) -> dict[str, Any]:
+    """The 2d Cir. brief skeleton (FRAP 28 + L.R. 28.1) as a machine-checkable
+    outline — structure-first drafting so the conjunctive deliverable isn't
+    missed (the benchmark-identified failure mode)."""
+    from swarm_os.services.legal.brief_draft import draft_skeleton
+    return {"sections": draft_skeleton(req.issues)}
+
+
+class DeepResearchRequest(BaseModel):
+    question: str = Field(..., min_length=1, max_length=2000,
+                          description="The legal question to research")
+    jurisdiction: str | None = Field(default=None,
+                                     description="Optional jurisdiction override (ny/nj/ga/nc/federal)")
+    web: bool = Field(default=True,
+                      description="Enable live web research (LII/Oyez/GovInfo/CourtListener via web_fetch)")
+    max_fetches: int = Field(default=3, ge=0, le=5,
+                             description="Max authoritative URLs to deep-fetch")
+
+
+@router.post("/deep-research")
+async def legal_deep_research(req: DeepResearchRequest) -> dict[str, Any]:
+    """The AI criminal-defense attorney deep-research mode: persona-conditioned
+    multi-source research (local statute+case corpora + live web: LII/Oyez/
+    GovInfo/CourtListener + the citation-graph authorities) with temporal
+    grounding and the fail-closed citation-verification seam. `web=false`
+    forces corpus-only (offline-safe)."""
+    from swarm_os.services.legal.deep_research import deep_research
+    try:
+        res = await deep_research(req.question, jurisdiction=req.jurisdiction,
+                                  web=req.web, max_fetches=req.max_fetches)
+    except Exception:
+        log.exception("deep research failed")
+        raise HTTPException(status_code=500, detail="Deep research failed")
+    return {
+        "ok": res.ok,
+        "jurisdiction": res.jurisdiction,
+        "answer": res.answer,
+        "issue": res.issue,
+        "sources": res.sources,
+        "web_sources": res.web_sources,
+        "verification": res.verification,
+        "corpus_scope": res.corpus_scope,
+        "law_as_of": res.law_as_of,
+        "message": res.message,
+    }
+
+
+class CitatorRequest(BaseModel):
+    refresh: bool = Field(default=False,
+                          description="Re-poll authorities already in state")
+    max_authorities: int | None = Field(default=None,
+                                        description="Cap how many authorities to poll this run")
+
+
+@router.post("/citator")
+async def legal_citator(req: CitatorRequest) -> dict[str, Any]:
+    """The 'Still Good Law?' forward-citing monitor (the Shepard's/KeyCite alert
+    replacement). Polls the manifest authorities' forward-citing cases via
+    CourtListener `/opinions-cited/`, classifies treatment with the existing
+    taxonomy, and returns adverse-treatment ALERTS (the candor obligation)."""
+    from swarm_os.services.legal.citator import poll_authority, render_citator_report
+    from swarm_os.services.legal.case_corpus import CASE_MANIFEST
+    try:
+        report = await poll_authority(CASE_MANIFEST, max_authorities=req.max_authorities,
+                                      refresh=req.refresh)
+    except Exception:
+        log.exception("citator poll failed")
+        raise HTTPException(status_code=500, detail="Citator poll failed")
+    return {
+        "ok": report.ok,
+        "alerts": report.alerts,
+        "authorities": report.authorities,
+        "message": report.message,
+        "markdown": render_citator_report(report),
+    }
+
+
+class DocketRequest(BaseModel):
+    docket_number: str = Field(..., min_length=1, description="The RECAP docket number")
+
+
+@router.post("/docket")
+async def legal_docket(req: DocketRequest) -> dict[str, Any]:
+    """The RECAP docket + FRAP deadline ledger: pulls the docket's entries and
+    computes FRAP 4(b)/31(a) deadlines with the weekday rule."""
+    from swarm_os.services.legal.docket import fetch_docket, render_docket_ledger
+    try:
+        ledger = await fetch_docket(req.docket_number)
+    except Exception:
+        log.exception("docket fetch failed")
+        raise HTTPException(status_code=500, detail="Docket fetch failed")
+    return {
+        "docket_number": ledger.docket_number,
+        "case_name": ledger.case_name,
+        "error": ledger.error,
+        "triggers": [{"kind": t.kind, "date": t.date.isoformat() if t.date else None}
+                     for t in ledger.triggers],
+        "deadlines": [{"label": d.label, "due": d.due.isoformat() if d.due else None,
+                       "days_remaining": d.days_remaining, "rule": d.rule, "trigger": d.trigger}
+                      for d in ledger.deadlines],
+        "markdown": render_docket_ledger(ledger),
+    }
+
+
+class MootRequest(BaseModel):
+    judges: list[str] = Field(default_factory=list,
+                              description="Panel judge names (e.g. ['Walker', 'Raggi'])")
+    issues: list[dict[str, str]] = Field(default_factory=list,
+                                         description="[{issue, outline}] the argument's issues")
+    argument_by_issue: dict[str, str] = Field(default_factory=dict,
+                                              description="issue -> counsel's argument text")
+    authorities: list[str] = Field(default_factory=list,
+                                   description="Authorities relied on")
+    fetch_profiles: bool = Field(default=True,
+                                 description="Fetch judge profiles from CourtListener")
+
+
+@router.post("/moot")
+async def legal_moot(req: MootRequest) -> dict[str, Any]:
+    """The AI moot-court oral-argument prep: per-judge profiles from their prior
+    opinions + a simulated bench that questions each issue from that judge's
+    recorded concerns."""
+    from swarm_os.services.legal.moot import run_bench, render_bench
+    try:
+        session = await run_bench(req.judges, req.issues, req.argument_by_issue,
+                                  req.authorities, fetch_profiles=req.fetch_profiles)
+    except Exception:
+        log.exception("moot bench failed")
+        raise HTTPException(status_code=500, detail="Moot bench failed")
+    return {
+        "ok": session.ok,
+        "judges": [{"name": p.name, "topics": p.topics, "error": p.error}
+                   for p in session.judges],
+        "questions": [{"judge": q.judge, "issue": q.issue, "question": q.question}
+                      for q in session.questions],
+        "message": session.message,
+        "markdown": render_bench(session),
+    }
