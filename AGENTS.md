@@ -443,7 +443,14 @@ Dependency pairing: React 19 ↔ `@react-three/fiber` ^9.5 / `@react-three/drei`
 
 ## Recent Changes (do NOT re-apply)
 
-- **Research-only compound goal fabricated an edit phase for coder (`aff05f9`, 2026-08-10)**: a live `/goal` run — "analyze my codebase for bugs and search internet for improvements and upgrades" — failed every attempt with `turn_budget_exhausted` (code_analyzer + coder both burned MAX_TURNS). Root cause traced to `_split_compound_goal`: the single sentence matched RESEARCH (research=True) but not IMPLEMENT, then the fallback `if not implementation: implementation = research` COPIED the entire research text into the implementation slot. The executor's phase-2 then handed coder the full vague goal, which it explored for 8 turns without editing — the fix-intent guard correctly rejected the edit-free final, but the budget was already spent. Fix: (1) the splitter no longer fabricates an implementation phase from research text (research-only goals return an EMPTY implementation part); (2) the executor's phase-2 coder delegation is gated on `impl_part` non-empty — with no implementation-intent sentence, research IS the deliverable and no edit task is forced. Revert-proof tests: research-only compound no longer delegates to coder after research returns; a real "implement the upgrades" compound still does; the splitter returns empty implementation for research-only and non-empty for implement goals. 85 passed across the touched suites; ruff E9/F clean.
+- **SOTA legal build — six feature commits + the table-vs-reality lesson (2026-08-11, `2103e51`→`75bd64c`, in order)**: after a verified 2026 legal-AI audit (LegalCiteBench, LegalSearch-R1, LegalCiteTrust, PLawBench, MLEB — all confirmed live) concluded the stack was at the practical SOTA for its constraints (single appeal, self-hosted, no commercial license), six remaining gaps were built and committed ONE FEATURE PER COMMIT, each referencing the real-world regression shape its test is pinned to. **The commit-standard of the round: three separate hand-walks (real data through the real production path, not synthetic strings) found three separate REAL bugs that the summary table would have shipped — each is a case where the system would have confidently produced WRONG output:**
+  - **Citator `2103e51`** — forward-citing "still good law" monitor (Shepard's/KeyCite-alert replacement on free CourtListener `/opinions-cited/`): `poll_authority()` resolves each manifest authority's opinion id, fetches forward cites, classifies treatment via the taxonomy, persists durably, surfaces adverse alerts. Hand-walk bug: `citing_sentence_for()` returned only the first-mention sentence, losing the dispositional verb in the split (`"overruled Swain. In Batson v. Kentucky, 476 U.S. 79 (1986), we held that..."` split at `"Swain. In"`), and the taxonomy was missing `we held/we concluded` as followed-signals — both real shapes (FOLLOWED / DISTINGUISHED) previously classified NEUTRAL. Fixed + regression tests pinned to the actual stored-corpus text.
+  - **Docket `dcf4858`** — RECAP docket + FRAP deadline ledger (deterministic calendar math: FRAP 4(b)(1)(A) criminal NOA 14 days, 31(a)(1) appellant 40 days after record filed / appellee 30 / reply 21, FRAP 26(a) weekday rule). RULE TEXT cited from LII (fetched live) — the initial 30-day/44-day/14,000-word versions were WRONG and corrected. Hand-walk bug: `fetch_docket` looked for `docket_entries` on the dockets object, but CourtListener v4 returns it as `None` there — the feature was silently INERT, computing deadlines against data never fetched. Now resolves the docket id then fetches from the dedicated `/docket-entries/?docket=<id>` endpoint. Regression test pins the real `docket_entries: None` shape.
+  - **Moot `4a3920c`** — simulated bench (per-judge profiles + DeepSeek-as-judge hardest-question generation). Hand-walk bug + DESIGN DECISION worth preserving: `fetch_judge_profile` fetched the 20 most RECENT opinions in the whole database and treated them as the judge's — presenting fabricated insight about a judge who never said it would be worse than no feature. CourtListener v4 returns `panel`/`author` as null on the opinions AND clusters endpoints (verified live), so attribution cannot be reliably sourced. The function now FAILS CLOSED: an opinion whose panel/author can't be confirmed to name the judge is skipped, and if none attribute it returns `no_attributed_opinions` and the bench uses honest GENERIC-judge questions. **Do NOT "fix" this by removing the safety check — when the data can't be verified, the honest answer is "I don't know," not a confident guess (the same principle as L1/L3/citation-verification).**
+  - **Retrieval eval `68f49e0`** — MLEB-style recall@K + MRR over a golden set (the GTE embedder + BGE reranker had zero legal-domain numbers; this proves/finds retrieval leaks). Live run: cases recall@5 = 1.0, statutes 0.0 mid-re-ingest.
+  - **Brief checker `75bd64c`** — FRAP 32 type-volume lint (13,000 principal / 6,500 reply per 32(a)(7)(B), NOT the initial wrong 14,000) + LegalCiteTrust fidelity pass. Hand-walk bug: `check_fidelity` only checked parseable citations, so a FABRICATED holding about a real case referenced by NAME (`"United States v. Moseley held that the defendant's flight... proved consciousness of guilt"` — Moseley is about loss methodology) sailed through as rate 1.0. Now resolves name-only references; regression test pins checked 2 / unsupporting 1 / rate 0.5.
+  - **Known honest limitations (NOT silently wrong)**: the exact Rainford docket number isn't reliably retrievable, so the docket ledger's trigger extraction is verified against real API entry shapes but not the actual appeal's entries; live judge attribution for moot profiles is not reliably sourceable from the current free CourtListener API shape (fail-closed to generic). Verdict from the audit, in writing: the stack is at the practical SOTA for its constraints — ahead of commercial tools on citation-integrity engineering (E/F/A seams = what LegalCiteTrust says the field needs), deterministic transcript fidelity, temporal grounding, and fail-closed evaluation; behind only on corpus breadth (unreplicable open-data limitation).
+
 
 - **Production-grade audit round — 12 of 20 findings implemented, 6 refuted (2026-08-10, commits `60439f7`→`f48c5e4`, in order)**: the "Final Production-Grade Audit" plan was verified finding-by-finding against LIVE code before any edit — the plan is DATA, not policy, and 6 of its 20 claims were refuted/deferred against the actual source (see below). Each implemented fix is one logical `FIX:` commit with a revert-proof regression test (verified via temporary source revert → test FAILS pre-fix → PASSES post-fix):
   - **SEC-1 (`60439f7`)**: `import builtins; builtins.exec(...)`, `getattr(builtins, 'exec')`, and `__builtins__.exec(...)` all resolved a banned call through an Attribute (never a Name), escaping the sandbox gate's `visit_Call` scan. `builtins` is now wholesale-banned at import + `__builtins__` attribute access to a banned call is blocked (mirroring the existing `__builtins__[...]` subscript block). The gate targets ONLY the builtins namespace — a duck-typed method named `exec` on a normal object still passes (the plan's broad "any `.exec` attr call" check would have false-positived; corrected). Revert-proof tests cover all four bypass shapes + the no-false-positive case.
@@ -994,6 +1001,76 @@ Converted `except:` → `except Exception:` (or specific types) in `swarm_os/cor
 ---
 
 ## Self-Healing & Self-Learning Fixes
+
+- **Rule (code_analyzer)**: Failure: The code_analyzer agent attempted to read file 'x.py' without first verifying its existence, resulting in a "File not found" error. The ac...
+
+- **Rule (code_analyzer)**: Failure: The code_analyzer agent attempted to read a file at path 'x.py' without first verifying that the file exists in the filesystem, and the op...
+
+- **Rule (code_analyzer)**: Failure: The code_analyzer attempted to read a file at path 'x.py' without first verifying that the file exists in the filesystem, causing a File n...
+
+- **Rule (code_analyzer)**: Failure: The code_analyzer attempted to read file 'x.py' without first verifying it existed in the filesystem, and the operation failed with "File ...
+
+- **Rule (code_analyzer)**: Failure: The code_analyzer attempted to read file 'x.py' without verifying it exists, resulting in a "File not found" error that halted the audit. ...
+
+- **Rule (code_analyzer)**: Failure: The code_analyzer attempted to read the file 'x.py' without first verifying its existence in the codebase filesystem. The operation failed...
+
+- **Rule (code_analyzer)**: Failure: The code_analyzer attempted to read file x.py without first verifying its existence, resulting in a "File not found" error. | Root cause: ...
+
+- **Rule (code_analyzer)**: Failure: The code_analyzer attempted to read the file 'x.py' and failed because the file does not exist on the filesystem. | Root cause: The agent ...
+
+- **[AUTO-REPAIR] (2026-08-11T05:11:20.888314+00:00)**: None (tier 2, fixed=False) — error: Unknown system action ''. Available: disk_analyzer, event_log_query, installed_apps, net_connections, process_list, regi
+
+- **Rule (code_analyzer)**: Failure: The code_analyzer attempted to read file 'x.py' without first verifying it existed in the filesystem, causing File not found: x.py. The ag...
+
+- **Rule (code_analyzer)**: Failure: The code_analyzer attempted to read the file at path 'x.py', but the file did not exist on the filesystem, causing the operation to fail. ...
+
+- **[AUTO-REPAIR] (2026-08-11T02:50:15.803970+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-08-11T02:50:13.674878+00:00)**: None (tier None, fixed=False) — error: Unknown operation: tree
+
+- **[AUTO-REPAIR] (2026-08-11T02:49:42.184762+00:00)**: None (tier None, fixed=False) — error: Unknown operation: read_directory
+
+- **Rule (code_analyzer)**: Failure: The code_analyzer attempted to read 'x.py' without first verifying its existence, and the filesystem returned "File not found: x.py", caus...
+
+- **[AUTO-REPAIR] (2026-08-11T01:39:06.596697+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-08-11T01:38:27.340073+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 16
+
+
+
+- **[AUTO-REPAIR] (2026-08-11T01:36:48.052739+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-08-11T01:33:29.539831+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-08-11T01:23:18.772149+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: DENY: Syntax Error in supplied code: unexpected character after line continuation chara
+
+- **[AUTO-REPAIR] (2026-08-11T01:23:17.157537+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-08-11T01:23:15.217474+00:00)**: None (tier None, fixed=False) — error: Unknown operation: read_directory
+
+- **Rule (planner)**: Tool 'filesystem' failed (Unknown operation: read_directory). Check the tool contract in _TOOL_DEFINITIONS and verify parameters before retrying.
+
+- **Rule (code_analyzer)**: Failure: The agent attempted to read the file 'x.py' without first verifying its existence, resulting in a "File not found" failure. The operation ...
+
+- **[AUTO-REPAIR] (2026-08-11T01:11:12.039443+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: DENY: Syntax Error in supplied code: unexpected character after line continuation chara
+
+- **[AUTO-REPAIR] (2026-08-11T01:11:10.432379+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-08-11T01:11:08.378507+00:00)**: None (tier None, fixed=False) — error: Unknown operation: read_directory
+
+- **[AUTO-REPAIR] (2026-08-11T01:11:04.560783+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: DENY: Syntax Error in supplied code: unexpected character after line continuation chara
+
+- **[AUTO-REPAIR] (2026-08-11T01:11:02.604653+00:00)**: None (tier 2, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-08-11T01:11:00.545605+00:00)**: None (tier 2, fixed=False) — error: Unknown operation: read_directory
+
+- **Rule (researcher)**: Prefer completing the goal with the FEWEST tool calls. For compound goals needing both codebase reads and web research, interleave them — do not sp...
+
+- **Rule (researcher)**: Prefer completing the goal with the FEWEST tool calls. If a compound goal requires both codebase reads and web research, interleave them — do not s...
+
+- **[AUTO-REPAIR] (2026-08-11T01:05:23.465469+00:00)**: None (tier 2, fixed=False) — error: Unknown operation: read_directory
+
+- **Rule (code_analyzer)**: Failure: The code_analyzer agent attempted to analyze the auditing codebase filesystem but failed due to a "File not found: x.py" error when trying...
 
 - **Rule (code_analyzer)**: Failure: The code_analyzer attempted to read the file 'x.py' directly from the filesystem, but the file did not exist, causing the action to fail. ...
 
