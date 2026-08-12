@@ -497,7 +497,14 @@ def run_ingest_cli() -> None:
 
 
 async def _ingest_all_cli(log_dir: Path) -> None:
-    counts = await ingest_all(log_dir)
+    # Optional jurisdiction scope via INGEST_JURISDICTIONS (comma-separated) so
+    # a re-run can target one jurisdiction (e.g. "ny") without re-doing the
+    # already-completed ones. Unset = full scope.
+    jurisdictions: list[str] | None = None
+    env_scope = os.getenv("INGEST_JURISDICTIONS", "")
+    if env_scope:
+        jurisdictions = [j.strip() for j in env_scope.split(",") if j.strip()]
+    counts = await ingest_all(log_dir, jurisdictions=jurisdictions)
     line = f"INGEST COMPLETE: {counts} total={sum(counts.values())}"
     log.info(line)
     (log_dir / "ingest.done").write_text(line + "\n", encoding="utf-8")
