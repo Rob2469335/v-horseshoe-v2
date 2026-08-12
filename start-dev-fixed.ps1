@@ -109,18 +109,6 @@ $llamaEmbJob = Start-Job -ScriptBlock { param($r); Set-Location $r; & .\bin\llam
 $llamaRerankJob = Start-Job -ScriptBlock { param($r); Set-Location $r; & .\bin\llama.exe serve -m "C:\Users\rober\models\gte-reranker-modernbert-base-Q8_0.gguf" --reranking --pooling rank -b 8192 -ub 8192 --api-key "llama" --cors-origins "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000" --port 8082 -t 2 2>&1 } -ArgumentList $root
 $llamaVisJob = Start-Job -ScriptBlock { param($r); Set-Location $r; & .\bin\llama.exe serve -m "C:\Users\rober\models\Qwen3VL-2B-Instruct-Q4_K_M.gguf" --mmproj "C:\Users\rober\models\mmproj-Qwen3VL-2B-Instruct-F16.gguf" --image-min-tokens 1024 -c 16384 --api-key "llama" --cors-origins "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000" --port 8083 -t 2 2>&1 } -ArgumentList $root
 
-# SLM content/injection guard on :8001 (ON by default; opt out with SWARM_SLM_GUARD=0). A dedicated
-# server that flags instruction-like tool output the keyword regex misses. It is
-# It runs by default (opt out with SWARM_SLM_GUARD=0) since 2026-08-12; it costs ~0.5 GB
-# RAM for a sixth llama.cpp server. Serves the real
-# Sentinel-v2 (embedding + classification head; NOT a chat model) in embeddings mode;
-# slm_guard.py does embedding @ cls_head.pt.T -> softmax for the verdict.
-$llamaGuardJob = $null
-if ($env:SWARM_SLM_GUARD -ne "0") {
-    $llamaGuardJob = Start-Job -ScriptBlock { param($r); Set-Location $r; & .\bin\llama.exe serve -m "$r\sentinel-v2\prompt-injection-jailbreak-sentinel-v2.Q5_K_S.gguf" --embeddings --pooling last --embd-normalize -1 -c 4096 -t 1 -tb 2 -b 512 -ub 256 -np 1 --timeout 60 --api-key "llama" --port 8001 2>&1 } -ArgumentList $root
-}
-
-
 Start-Sleep -Seconds 8
 Write-Host "llama.cpp microservices ✔" -ForegroundColor Green
 
@@ -258,8 +246,6 @@ try {
         Receive-Job $llamaEmbJob   | ForEach-Object { Write-Host "[llama-emb]    $_" -ForegroundColor DarkGreen }
         Receive-Job $llamaRerankJob | ForEach-Object { Write-Host "[llama-rank]   $_" -ForegroundColor DarkGreen }
         Receive-Job $llamaVisJob   | ForEach-Object { Write-Host "[llama-vis]    $_" -ForegroundColor DarkGreen }
-        if ($llamaGuardJob) { Receive-Job $llamaGuardJob | ForEach-Object { Write-Host "[llama-guard]  $_" -ForegroundColor DarkGreen } }
-
         Receive-Job $backendJob  | ForEach-Object { Write-Host "[backend]  $_" -ForegroundColor DarkCyan }
         Receive-Job $frontendJob | ForEach-Object { Write-Host "[frontend] $_" -ForegroundColor DarkYellow }
         Receive-Job $whisperJob  | ForEach-Object { Write-Host "[whisper]  $_" -ForegroundColor DarkMagenta }
@@ -270,8 +256,6 @@ try {
     Write-Host "`nShutting down..." -ForegroundColor Red
     Stop-Job  $llamaGenJob, $llamaEmbJob, $llamaRerankJob, $llamaVisJob, $backendJob, $frontendJob, $whisperJob, $listenerJob -ErrorAction SilentlyContinue
     Remove-Job $llamaGenJob, $llamaEmbJob, $llamaRerankJob, $llamaVisJob, $backendJob, $frontendJob, $whisperJob, $listenerJob -ErrorAction SilentlyContinue
-    if ($llamaGuardJob) { Stop-Job $llamaGuardJob -ErrorAction SilentlyContinue; Remove-Job $llamaGuardJob -ErrorAction SilentlyContinue }
-
     foreach ($svc in @("llama","qdrant","node","python")) {
         Get-Process -Name $svc -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     }

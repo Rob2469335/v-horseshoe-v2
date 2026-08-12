@@ -197,28 +197,6 @@ def _sanitize_tool_output(obj, html_escape: bool = True):
 # applies unconditionally — only the angle-bracket escaping is skipped.
 _NO_HTML_ESCAPE_ACTIONS = frozenset({"read", "read_file", "read_all", "cat"})
 
-# Tools whose output is EXTERNAL/UNTRUSTED content — the only place a real
-# prompt-injection payload can enter (web pages, search results, file reads,
-# browser/email/MCP/REPL output). The SLM guard runs only on these; internal
-# state tools (system/screen/memory/lsp/...) are self-generated and trusted.
-_UNTRUSTED_CONTENT_TOOLS = frozenset(
-    {
-        "web_fetch",
-        "web_search",
-        "filesystem",
-        "playwright",
-        "email",
-        "email_list",
-        "email_search",
-        "email_read",
-        "email_send",
-        "email_draft",
-        "mcp",
-        "semantic_search",
-        "sandbox_repl",
-    }
-)
-
 
 async def run(tool_name: str, payload: dict) -> dict:
     try:
@@ -704,28 +682,6 @@ async def run(tool_name: str, payload: dict) -> dict:
             tool_name == "filesystem" and operation in _NO_HTML_ESCAPE_ACTIONS
         )
         result = _sanitize_tool_output(result, html_escape=html_escape)
-
-        # SLM guard (SWARM_SLM_GUARD=1, fail-open): a Sentinel-v2 classifier on
-        # :8001 adds a semantic flag for instruction-like tool output the regex
-        # pattern above cannot enumerate (~0.22% keyword recall on obfuscated
-        # injections vs F1 0.905 for a Qwen3-0.6B-class classifier — RAPIDS et
-        # al. 2026). A MALICIOUS verdict appends a corrective hint for the
-        # agent, never blocks or removes content; any outage degrades to a no-op.
-        #
-        # Scoped to UNTRUSTED-CONTENT tools only (external data that can carry a
-        # real prompt-injection payload: web pages, search results, file reads,
-        # browser/email/MCP/REPL output). Internal state tools (system, screen,
-        # memory, lsp, ...) produce self-generated/trusted text — the 0.6B
-        # classifier false-positives on their status/diff/path shapes, so we do
-        # not run it there (measured 2026-08-12).
-        if tool_name in _UNTRUSTED_CONTENT_TOOLS:
-            try:
-                from swarm_os.services.slm_guard import check_tool_output
-
-                guard_out = await check_tool_output(result)
-                result = guard_out["obj"]
-            except Exception as exc:
-                log.debug("SLM guard check skipped (fail-open): %s", exc)
 
         return result
     except Exception as exc:

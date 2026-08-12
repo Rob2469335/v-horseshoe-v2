@@ -101,16 +101,6 @@ def global_system_probe_mock():
 
 
 @pytest.fixture(autouse=True)
-def global_slm_guard_off(monkeypatch):
-    """The SLM guard is ON by default in the app (since 2026-08-12). Force it
-    OFF for the whole test suite so no test accidentally hits the live :8001
-    Sentinel-v2 server. The guard's own tests (tests/test_slm_guard.py) set
-    SWARM_SLM_GUARD explicitly where they exercise the seam.
-    """
-    monkeypatch.setenv("SWARM_SLM_GUARD", "0")
-
-
-@pytest.fixture(autouse=True)
 def global_subprocess_mock():
     # Prevent tests from spawning actual background servers (like uvicorn or ollama)
     # which leads to PytestUnhandledThreadExceptionWarning and zombie processes.
