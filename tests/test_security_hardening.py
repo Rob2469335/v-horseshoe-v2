@@ -14,6 +14,8 @@ import sys
 
 import pytest
 
+from tests.conftest import run_approved
+
 
 @pytest.fixture(autouse=True)
 def global_subprocess_mock(request):
@@ -162,7 +164,7 @@ def test_screen_reset_blocked_in_human_mode(monkeypatch):
 async def test_mcp_register_rejects_shell_metachars(monkeypatch):
     from runtime_v2.services.tool_executor import run
     payload = {"server_name": "evil", "command": "python -c 'import os' && rm -rf /", "args": []}
-    result = await run("mcp_register", payload)
+    result = await run_approved(run, "mcp_register", payload)
     assert result.get("ok") is False
     assert "Security Gate" in result.get("error", "")
 
@@ -171,7 +173,7 @@ async def test_mcp_register_rejects_shell_metachars(monkeypatch):
 async def test_mcp_register_rejects_non_allowlisted_launcher(monkeypatch):
     from runtime_v2.services.tool_executor import run
     payload = {"server_name": "evil", "command": "powershell -c whoami", "args": []}
-    result = await run("mcp_register", payload)
+    result = await run_approved(run, "mcp_register", payload)
     assert result.get("ok") is False
     assert "Security Gate" in result.get("error", "")
 
@@ -184,7 +186,7 @@ async def test_mcp_register_rejects_non_list_args(monkeypatch, tmp_path):
     import runtime_v2.services.tool_executor as te
     monkeypatch.setattr(te, "_ROOT", tmp_path)
     payload = {"server_name": "evil", "command": "python", "args": "-c print('pwn')"}
-    result = await te.run("mcp_register", payload)
+    result = await run_approved(te.run, "mcp_register", payload)
     assert result.get("ok") is False
     assert "Security Gate" in result.get("error", "")
     assert not (tmp_path / "swarm_config.json").exists()
@@ -197,7 +199,7 @@ async def test_mcp_register_rejects_non_string_args(monkeypatch, tmp_path):
     monkeypatch.setattr(te, "_ROOT", tmp_path)
     for bad_args in ({"key": "value"}, 42):
         payload = {"server_name": "evil", "command": "python", "args": bad_args}
-        result = await te.run("mcp_register", payload)
+        result = await run_approved(te.run, "mcp_register", payload)
         assert result.get("ok") is False, f"args={bad_args!r} was not rejected"
         assert "Security Gate" in result.get("error", "")
     assert not (tmp_path / "swarm_config.json").exists()

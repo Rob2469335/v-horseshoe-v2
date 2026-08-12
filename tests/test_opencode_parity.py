@@ -20,6 +20,7 @@ from runtime_v2.api._agent_routing import (
     fast_route_coordinator,
     _RESEARCHER_FIRST_TURNS,
 )
+from tests.conftest import run_approved
 
 
 def test_project_map_parses_module_layout():
@@ -53,7 +54,8 @@ async def test_glob_finds_real_paths():
 @pytest.mark.asyncio
 async def test_read_before_write_blocks_unseen_patch():
     tool_executor.reset_exploration_state()
-    res = await tool_executor.run(
+    res = await run_approved(
+        tool_executor.run,
         "filesystem",
         {
             "operation": "patch",
@@ -73,8 +75,10 @@ async def test_path_traversal_blocked_in_executor():
     (otherwise the read-before-write check could be fooled by ../ sequences)."""
     tool_executor.reset_exploration_state()
     for op in ("patch", "write"):
-        res = await tool_executor.run(
-            "filesystem", {"operation": op, "path": "../../outside.txt", "content": "x"}
+        res = await run_approved(
+            tool_executor.run,
+            "filesystem",
+            {"operation": op, "path": "../../outside.txt", "content": "x"},
         )
         assert res.get("ok") is False
         assert "escapes the project root" in res.get("error", "")
@@ -764,7 +768,7 @@ async def test_web_fetch_result_not_truncated_to_tool_cap(monkeypatch):
         "content": "X" * 5000,
     }  # 5KB of fetched page body
 
-    async def fake_run_tool(tool_name, payload):
+    async def fake_run_tool(tool_name, payload, *, auth=None):
         return big_fetch
 
     monkeypatch.setattr("runtime_v2.services.tool_executor.run", fake_run_tool)

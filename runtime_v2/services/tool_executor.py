@@ -7,6 +7,13 @@ import logging
 import re
 from pathlib import Path
 
+from swarm_os.services.approval_registry import (
+    ALLOW,
+    DENY,
+    agent_tool_policy,
+    get_registry,
+)
+
 log = logging.getLogger(__name__)
 import os
 
@@ -198,7 +205,132 @@ def _sanitize_tool_output(obj, html_escape: bool = True):
 _NO_HTML_ESCAPE_ACTIONS = frozenset({"read", "read_file", "read_all", "cat"})
 
 
-async def run(tool_name: str, payload: dict) -> dict:
+async def run(
+    tool_name: str,
+    payload: dict,
+    *,
+    auth: dict | None = None,
+) -> dict:
+    """Execute a tool, applying PRE-ACTION AUTHORIZATION first (single
+    enforcement point — Design A, 2026-08-12).
+
+    `auth` is an optional approval context:
+      - None: full gate applies (v1: always non-auto — CONFIRM/ALWAYS_CONFIRM
+        both require human approval).
+      - {"approved_pending_id": <id>, "tool": <tool>, "payload": <payload>}:
+        an already-approved pending action; the payload is re-verified by
+        digest before dispatch (never trusts a caller-supplied replacement).
+    """
+    try:
+        policy = agent_tool_policy(tool_name, payload.get("operation")
+                                   or payload.get("action"))
+        if policy == ALLOW:
+            return await _dispatch(tool_name, payload)
+        if policy == DENY:
+            return {
+                "ok": False,
+                "error": (
+                    f"Authorization DENIED: tool '{tool_name}' / action "
+                    f"'{payload.get('operation') or payload.get('action')}' is "
+                    f"not classified for agent execution (fail-closed)."
+                ),
+                "authorization": "DENY",
+            }
+
+        # CONFIRM / ALWAYS_CONFIRM: require an approved pending action whose
+        # stored payload EXACTLY matches this one (digest-verified).
+        approved = (auth or {}).get("approved_pending_id")
+        if approved:
+            consumed = get_registry().consume(
+                approved,
+                expected_tool=tool_name,
+                expected_payload=payload,
+            )
+            if consumed is not None:
+                return await _dispatch(tool_name, payload)
+            return {
+                "ok": False,
+                "error": (
+                    "Authorization DENIED: pending approval no longer valid "
+                    "(expired, already used, or payload mismatch)."
+                ),
+                "authorization": "DENY",
+            }
+
+        # No approval yet -> create the pending action and do NOT dispatch.
+        # The exact payload is stored; the approval turn cannot substitute a
+        # different payload (digest is verified at consume time).
+        pending = get_registry().create(
+            agent_id=(auth or {}).get("agent_id", ""),
+            turn=(auth or {}).get("turn", 0),
+            tool=tool_name,
+            action=payload.get("operation") or payload.get("action"),
+            payload=payload,
+        )
+        return {
+            "ok": False,
+            "status": "confirmation_required",
+            "authorization": policy,
+            "pending_id": pending["pending_id"],
+            "tool": tool_name,
+            "action": payload.get("operation") or payload.get("action"),
+            "expires_in_s": 300,
+            "preview": {
+                "tool": tool_name,
+                "action": payload.get("operation") or payload.get("action"),
+                "path": payload.get("path"),
+                "url": payload.get("url"),
+                "language": payload.get("language"),
+            },
+            "result": {
+                "error": (
+                    f"Authorization required for {tool_name} "
+                    f"({payload.get('operation') or payload.get('action')}). "
+                    f"Awaiting human approval (pending_id={pending['pending_id'][:8]}...)."
+                )
+            },
+        }
+    except Exception as exc:
+        log.exception("Tool %s failed", tool_name)
+        return {"ok": False, "error": _sanitize_string(str(exc))}
+
+
+def peek_pending(pending_id: str) -> dict | None:
+    """Return the public pending-action record (for rendering the approval
+    request) without consuming it. None if unknown/expired/consumed."""
+    return get_registry().peek(pending_id)
+
+
+def deny_pending(pending_id: str) -> bool:
+    """Discard a pending action without executing it. True if found."""
+    return get_registry().deny(pending_id)
+
+
+async def execute_approved(pending_id: str) -> dict:
+    """Execute the STORED payload of an approved pending action.
+
+    The pending action's exact stored payload (tool + arguments) is dispatched —
+    the approving caller cannot substitute a different payload. Returns the tool
+    result, or a DENY result if the pending action is unknown/expired/consumed.
+    """
+    rec = get_registry().consume_any(pending_id)
+    if rec is None:
+        return {
+            "ok": False,
+            "error": (
+                "Authorization DENIED: pending approval no longer valid "
+                "(expired or already used)."
+            ),
+            "authorization": "DENY",
+        }
+    return await _dispatch(rec["tool"], rec["payload"])
+
+
+def pending_stats() -> dict:
+    return get_registry().stats()
+
+
+async def _dispatch(tool_name: str, payload: dict) -> dict:
     try:
         if tool_name == "filesystem":
             operation = payload.get("operation")

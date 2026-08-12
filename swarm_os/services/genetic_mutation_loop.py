@@ -340,7 +340,7 @@ def _find_related_test_files(file_path: str) -> list[str]:
             tname = Path(t).name
             if base in tname or tname.replace("test_", "").replace(".py", "") in base:
                 out.append(t)
-                if len(out) >= 3:
+                if len(out) >= 6:
                     break
         if not out:
             for t in sorted(_glob.glob(str(ROOT_DIR / "tests" / "test_*.py"))):
@@ -350,7 +350,7 @@ def _find_related_test_files(file_path: str) -> list[str]:
                     continue
                 if base in head or mod.split("/")[-1] in head:
                     out.append(t)
-                    if len(out) >= 3:
+                    if len(out) >= 6:
                         break
         return out
     except Exception as e:

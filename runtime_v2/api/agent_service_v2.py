@@ -225,6 +225,32 @@ def _answer_from_history(messages: list) -> str | None:
     return None
 
 
+# The CLI feeds an approval decision back as:
+#   Observation: {"approval": {"pending_id": "...", "approved": true|false}}
+_OBSERVATION_APPROVAL_RE = re.compile(
+    r'"approval"\s*:\s*\{[^}]*"pending_id"\s*:\s*"([^"]+)"[^}]*"approved"\s*:\s*(true|false)\s*[^}]*\}'
+)
+
+
+def _approval_from_history(messages: list) -> dict | None:
+    """Return {"pending_id": str, "approved": bool} if the history carries an
+    approval Observation; otherwise None. Used by the deterministic
+    approval-resolution hook (the approval decision is a CODE decision, never
+    left to the LLM)."""
+    for m in reversed(messages):
+        if m.get("role") != "user":
+            continue
+        content = str(m.get("content", ""))
+        if content.strip().startswith("Observation:"):
+            match = _OBSERVATION_APPROVAL_RE.search(content)
+            if match:
+                return {
+                    "pending_id": match.group(1),
+                    "approved": match.group(2) == "true",
+                }
+    return None
+
+
 def _original_goal(messages: list) -> str:
     """The first real (non-Observation) user message — the goal the coordinator
     asked about before the ask_user continuation."""
@@ -1755,7 +1781,11 @@ class AgentServiceV2:
         state.tool_action = action
         state.tool_payload = tool_payload
         try:
-            result = await run_tool(action, tool_payload)
+            result = await run_tool(
+                action,
+                tool_payload,
+                auth={"agent_id": agent_id, "turn": turn},
+            )
         except Exception as exc:
             log.exception(
                 "[%s] Tool %s execution raised unhandled exception: %s",
@@ -1767,6 +1797,34 @@ class AgentServiceV2:
         if not isinstance(result, dict):
             result = {"ok": True, "result": result}
         log.info("[%s] %s ok=%s", agent_id, action, result.get("ok"))
+
+        # PRE-ACTION AUTHORIZATION: a confirmation_required result means the
+        # tool did NOT execute and is awaiting human approval. Record the audit
+        # event and signal the caller (CLI) to render the approval request; do
+        # NOT treat it as a tool failure, and do NOT feed a fake failure to the
+        # reflexion loop.
+        if result.get("status") == "confirmation_required":
+            state.tool_success = False
+            state.tool_result = result
+            state._tool_attempts += 1
+            try:
+                self._record_event(
+                    "authorization",
+                    agent_id,
+                    {
+                        "verdict": result.get("authorization", "CONFIRM"),
+                        "tool": action,
+                        "action": result.get("action"),
+                        "pending_id": result.get("pending_id"),
+                        "agent_id": agent_id,
+                        "turn": turn,
+                        "preview": result.get("preview"),
+                    },
+                )
+            except Exception as _e:
+                log.warning("authorization audit event failed: %s", _e)
+            return consecutive_errors, _fetched_content
+
         state.tool_success = result.get("ok", False)
         state.tool_result = result
         state._tool_attempts += 1
@@ -2203,6 +2261,63 @@ class AgentServiceV2:
                 trimmed_messages = trimmed_messages + [
                     {"role": "user", "content": todos_block}
                 ]
+
+            # --- PRE-ACTION AUTHORIZATION: deterministic approval resolution ---
+            # If the history carries an approval Observation (the CLI's approve/
+            # deny answer), resolve it HERE as a CODE decision — never let the
+            # LLM decide whether an approval executes. The stored payload is
+            # dispatched via execute_approved (digest-trust-anchored).
+            approval = _approval_from_history(trimmed_messages)
+            if approval is not None:
+                pending_id = approval["pending_id"]
+                if approval["approved"]:
+                    from runtime_v2.services.tool_executor import (
+                        execute_approved,
+                    )
+
+                    approved_result = await execute_approved(pending_id)
+                else:
+                    from runtime_v2.services.tool_executor import deny_pending
+
+                    approved_result = {
+                        "ok": False,
+                        "error": "Approval DENIED by user.",
+                        "authorization": "DENY",
+                    }
+                    deny_pending(pending_id)
+                try:
+                    self._record_event(
+                        "authorization",
+                        agent_id,
+                        {
+                            "verdict": "APPROVED" if approval["approved"] else "DENIED",
+                            "pending_id": pending_id,
+                            "agent_id": agent_id,
+                            "turn": turn,
+                        },
+                    )
+                except Exception as _e:
+                    log.warning("authorization audit event failed: %s", _e)
+                yield {
+                    "agent_id": agent_id,
+                    "type": "approval_result",
+                    "pending_id": pending_id,
+                    "approved": approval["approved"],
+                    "result": approved_result,
+                }
+                # Feed the outcome back to the agent as a tool result so it can
+                # continue normally.
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            f"TOOL RESULT (approved {pending_id[:8]}...):\n"
+                            f"{json.dumps(approved_result, ensure_ascii=False)}\n\n"
+                            "Continue."
+                        ),
+                    }
+                )
+                continue
 
             # --- Get decision (fast-route, warmup, or LLM) ---
             try:
@@ -2691,6 +2806,34 @@ class AgentServiceV2:
                 consecutive_errors,
                 state,
             )
+
+            # PRE-ACTION AUTHORIZATION: a confirmation_required tool result means
+            # the tool did NOT execute. Yield an approval_request event carrying
+            # the pending_id so the CLI can render an approve/deny prompt; pause
+            # the turn (the CLI re-calls with the Observation answer).
+            if state.tool_result and state.tool_result.get("status") == "confirmation_required":
+                yield {
+                    "agent_id": agent_id,
+                    "type": "approval_request",
+                    "tool": action,
+                    "action": state.tool_result.get("action"),
+                    "pending_id": state.tool_result.get("pending_id"),
+                    "preview": state.tool_result.get("preview"),
+                    "authorization": state.tool_result.get("authorization"),
+                }
+                yield {
+                    "agent_id": agent_id,
+                    "content": (
+                        f"Approval required for {action} "
+                        f"({state.tool_result.get('action')}). "
+                        f"Waiting for human approval (pending_id="
+                        f"{str(state.tool_result.get('pending_id'))[:8]}...)."
+                    ),
+                    "model": model,
+                }
+                self._record_success(model, start_time)
+                return
+
             adjusted_weights = self.learning_critic.score(
                 success=state.tool_success, confidence=0.8
             )

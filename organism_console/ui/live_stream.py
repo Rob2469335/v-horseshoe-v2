@@ -100,6 +100,7 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
 
         _stream_errored = False
         _ask_user_triggered = False
+        _approval_triggered = False
 
         with Live(console=ctx.console, refresh_per_second=15) as live:
             def safe_print(*args, **kwargs):
@@ -359,6 +360,84 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                         _ask_user_triggered = True
                         break
 
+                    if chunk_type == "approval_request":
+                        # PRE-ACTION AUTHORIZATION (Design A): a tool call needs
+                        # human approval. Render an approve/deny prompt and feed
+                        # the decision back as an Observation so the agent loop
+                        # resolves it deterministically (code path, not LLM).
+                        ctx.last_stream_status = "completed"
+                        pending_id = chunk.get("pending_id", "")
+                        preview = chunk.get("preview") or {}
+                        tool = preview.get("tool") or chunk.get("tool", "?")
+                        action = preview.get("action") or chunk.get("action", "?")
+                        path = preview.get("path") or preview.get("url") or ""
+                        auth_tier = chunk.get("authorization", "CONFIRM")
+
+                        if getattr(ctx, "toasts_enabled", True):
+                            from organism_console.notifications import notify
+
+                            notify(
+                                "Approval required",
+                                f"{tool} ({action}) needs your approval",
+                            )
+
+                        live.stop()
+                        ctx.console.print()
+
+                        preview_lines = [
+                            f"**{tool}** · **{action}**"
+                        ]
+                        if path:
+                            preview_lines.append(f"`{path}`")
+                        if auth_tier:
+                            preview_lines.append(f"*tier: {auth_tier}*")
+                        ctx.console.print(
+                            Panel(
+                                Markdown("\n\n".join(preview_lines)),
+                                title="🛡️ [bold yellow]Approval Required[/bold yellow]",
+                                border_style="yellow",
+                                padding=(1, 2),
+                            )
+                        )
+
+                        from organism_console.renderer import INPUT_LOCK
+                        from rich.prompt import Prompt
+
+                        with INPUT_LOCK:
+                            answer = Prompt.ask(
+                                "[bold yellow]Approve this action?[/bold yellow]",
+                                choices=["yes", "no"],
+                                default="no",
+                            )
+                        approved = str(answer).strip().lower() in ("yes", "y")
+
+                        new_history = list(history)
+                        if prompt:
+                            new_history.append({"role": "user", "content": prompt})
+                        new_history.append({"role": "assistant", "content": full_content})
+                        new_history.append(
+                            {
+                                "role": "user",
+                                "content": (
+                                    "Observation: "
+                                    + json.dumps(
+                                        {
+                                            "approval": {
+                                                "pending_id": pending_id,
+                                                "approved": approved,
+                                            }
+                                        }
+                                    )
+                                ),
+                            }
+                        )
+
+                        history = new_history
+                        prompt = ""
+                        agent_id = chunk.get("agent_id", agent_id)
+                        _approval_triggered = True
+                        break
+
             except Exception as e:
                 log.exception("Streaming exception")
                 safe_print(f"[bold red]Stream failed:[/bold red] {e}")
@@ -372,7 +451,7 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                 if resp is not None:
                     await resp.aclose()
 
-        if _ask_user_triggered:
+        if _ask_user_triggered or _approval_triggered:
             continue
 
         if full_content and full_content.strip():

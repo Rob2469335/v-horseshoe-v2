@@ -110,3 +110,19 @@ def global_subprocess_mock():
         mock_popen.return_value.pid = 99999
         yield mock_popen
 
+
+async def run_approved(tool_executor_run, tool_name: str, payload: dict) -> dict:
+    """Drive a tool through the pre-action authorization gate to its real
+    implementation: call run() (creates a pending action), then execute the
+    STORED payload via execute_approved (digest-trust-anchored). Mirrors the
+    CLI approve flow. Tests that exercise the tool HANDLER (path guards, SSRF,
+    arg checks) call this instead of bypassing the gate.
+    """
+    first = await tool_executor_run(tool_name, payload)
+    if first.get("status") != "confirmation_required":
+        return first  # ALLOW/DENY path — nothing to approve
+    pending_id = first["pending_id"]
+    from runtime_v2.services.tool_executor import execute_approved
+
+    return await execute_approved(pending_id)
+
