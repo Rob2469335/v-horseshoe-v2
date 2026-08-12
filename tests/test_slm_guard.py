@@ -175,3 +175,34 @@ async def test_run_seam_fail_open_on_guard_error(monkeypatch):
     )
     assert res.get("ok") is True
     assert "AGENTS.md" in str(res)
+
+
+@pytest.mark.asyncio
+async def test_run_seam_guard_scoped_to_untrusted_tools(monkeypatch):
+    """The guard runs ONLY on untrusted-content tools. An internal state tool
+    (system) must NOT invoke it — the 0.6B classifier false-positives on
+    status/diff/path shapes, so we skip those (measured 2026-08-12)."""
+    import runtime_v2.services.tool_executor as te
+
+    monkeypatch.setenv("SWARM_SLM_GUARD", "1")
+    calls = []
+
+    async def fake_check(obj):
+        calls.append(obj)
+        return {"obj": obj, "flagged": True}
+
+    monkeypatch.setattr("swarm_os.services.slm_guard.check_tool_output", fake_check)
+
+    # A system (system_intel) call returning a status JSON must NOT be guarded.
+    def fake_system(payload):
+        return {"ok": True, "result": '{"ready": true, "models": ["qwen3.5-4b"]}'}
+
+    monkeypatch.setattr("runtime_v2.services.system_intel.system_handler", fake_system)
+    res = await te.run("system", {"operation": "process_list", "sort": "cpu", "top": 5})
+    assert calls == []  # guard never invoked
+    assert res.get("ok") is True
+
+    # An untrusted-content tool (web_fetch returning a page) MUST be guarded.
+    res2 = await te.run("web_fetch", {"url": "https://example.com/"})
+    assert len(calls) == 1
+    assert res2.get("ok") is True
