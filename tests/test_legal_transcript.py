@@ -212,3 +212,70 @@ def test_bare_name_line_boundary_is_flagged():
     # The bare line is flagged on the passage it merged into (THE COURT's).
     court = [p for p in flagged if p.speaker == "THE COURT"]
     assert court and "Ms. Al-Shabazz" in court[0].text
+
+
+# --- BLT lesson (2311.09693): verbatim transcript lookup is DETERMINISTIC -----
+# The BLT paper found public LLMs are poor at "look up the text at line N of a
+# deposition". Our transcript parser does this deterministically (never the
+# LLM). These tests PIN that guarantee: exact line lookup, line-number-column
+# stripping, and page attribution — so a quote in a motion is structurally
+# traceable to the source page.
+
+def test_blt_exact_line_lookup_is_deterministic():
+    """'Look up the text at line N' must be a deterministic string op — the same
+    input always yields the same exact quote, with the line-number column
+    stripped and the page attributed correctly."""
+    body = (
+        "1    MS. AL-SHABAZZ:  You met Reginald Dewitt in October of 2012, right?\n"
+        "2    A.  No, I did not.\n"
+        "3    THE COURT:  All right.\n"
+    )
+    idx = parse_transcript(_page(503, body), case="US v. Test", source="blt")
+    # The exact quote text must survive verbatim (no line-number prefix).
+    hits = idx.search("You met Reginald Dewitt")
+    assert hits, "the verbatim question text must be findable"
+    page, text = hits[0]
+    assert page == 503, "the quote must be attributed to its source page"
+    assert "1" != text[:1], "the line-number column must be stripped from the quote"
+    assert "You met Reginald Dewitt in October of 2012, right?" in text
+    # Deterministic: searching again returns the identical quote.
+    assert idx.search("You met Reginald Dewitt")[0] == (page, text)
+
+
+def test_blt_verbatim_quote_not_truncated_or_normalized():
+    """The verbatim lookup must NOT normalize whitespace/quotes — a motion quote
+    must match the transcript byte-for-byte after only the line-number column
+    strip (BLT: models collapse/spell-correct verbatim text)."""
+    exact = "No, I did not."
+    body = (
+        "1    MS. AL-SHABAZZ:  Did you meet him?\n"
+        "2    A.  " + exact + "\n"
+    )
+    idx = parse_transcript(_page(507, body), case="US v. Test", source="blt2")
+    page, text = idx.search(exact)[0]
+    assert exact in text
+    assert text.strip() == exact, (
+        "the answer text must be the verbatim quote, not an LLM paraphrase"
+    )
+
+
+def test_blt_search_scoped_to_correct_page_not_page_bleed():
+    """BLT page attribution: the same phrase on two different pages must return
+    BOTH page anchors (the page-bleed fix — a passage belongs to the page where
+    it STARTED, never inherited from the next page's block)."""
+    p1 = (
+        "1    THE COURT:  Please be seated.\n"
+        "2    MR. FOLLY:  Yes, your Honor.\n"
+    )
+    p2 = (
+        "1    THE COURT:  All right.  Thank you.\n"
+    )
+    idx = parse_transcript(_page(499, p1) + _page(502, p2), case="US v. Test", source="blt3")
+    pages = {p for p, _ in idx.search("All right")}
+    assert 502 in pages
+    # "Please be seated" was on page 499 — never re-stamped 502.
+    assert idx.search("Please be seated")[0][0] == 499
+    # The speaker label itself is not the search text; the SPOKEN text is.
+    assert idx.search("THE COURT") == [], (
+        "search matches passage TEXT, not the speaker label"
+    )
