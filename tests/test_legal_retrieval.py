@@ -77,3 +77,53 @@ async def test_legal_search_shapes_candidates_without_rerank():
 async def test_legal_search_rejects_bad_jurisdiction():
     with pytest.raises(ValueError):
         await legal_search.search_statutes("x", jurisdiction="zz", top_k=5)
+
+
+# --- hybrid dense+lexical RRF wiring (rec 2) ----------------------------------
+
+@pytest.mark.asyncio
+async def test_search_statutes_uses_hybrid_fuse_when_enabled():
+    """search_statutes must fuse the dense order with the lexical (BM25-style)
+    order via _hybrid_fuse before reranking — verify the seam is actually hit."""
+    dense = [
+        {"id": "u1", "score": 0.5, "payload": {"citation": "N.Y. RPA Law § 235-b",
+                                               "content": "tenant notice", "jurisdiction": "ny",
+                                               "section_title": "t"}},
+        {"id": "u2", "score": 0.4, "payload": {"citation": "N.Y. RPA Law § 999",
+                                               "content": "unrelated tax", "jurisdiction": "ny",
+                                               "section_title": "t"}},
+    ]
+    with patch.object(legal_search, "_search_with_filter", new=AsyncMock(return_value=dense)):
+        with patch.object(legal_search, "_hybrid_fuse", new=AsyncMock(return_value=dense)) as fuse_mock:
+            with patch.object(legal_search, "rerank", new=AsyncMock(return_value=[])):
+                await legal_search.search_statutes("tenant notice 235-b", jurisdiction="ny", top_k=2)
+    assert fuse_mock.await_count == 1, "hybrid fuse must be invoked on the dense candidates"
+
+
+@pytest.mark.asyncio
+async def test_search_statutes_hybrid_degrades_to_dense_on_failure():
+    """A _hybrid_fuse failure must not raise — search_statutes returns the dense
+    order (graceful degradation, the standing contract)."""
+    dense = [{"id": "u1", "score": 0.9, "payload": {"content": "x", "jurisdiction": "ny"}}]
+    with patch.object(legal_search, "_search_with_filter", new=AsyncMock(return_value=dense)):
+        with patch.object(legal_search, "_hybrid_fuse",
+                          new=AsyncMock(side_effect=RuntimeError("boom"))):
+            with patch.object(legal_search, "rerank", new=AsyncMock(return_value=[])):
+                res = await legal_search.search_statutes("x", jurisdiction="ny", top_k=5)
+    assert isinstance(res, list)
+
+
+@pytest.mark.asyncio
+async def test_search_cases_uses_hybrid_fuse_when_enabled():
+    """The case-leg search must fuse dense + lexical too (exact cite recall for
+    case authorities)."""
+    dense = [
+        {"id": "c1", "score": 0.6, "payload": {"cite": "252 F.3d 238",
+                                               "content": "substitute counsel", "tier": 1,
+                                               "circuit": "2d", "batson": False, "case_name": "Simeonov"}},
+    ]
+    with patch.object(legal_search, "_search_cases_with_filter", new=AsyncMock(return_value=dense)):
+        with patch.object(legal_search, "_hybrid_fuse", new=AsyncMock(return_value=dense)) as fuse_mock:
+            with patch.object(legal_search, "rerank", new=AsyncMock(return_value=[])):
+                await legal_search.search_cases("substitute counsel 252 F.3d", top_k=2)
+    assert fuse_mock.await_count == 1
