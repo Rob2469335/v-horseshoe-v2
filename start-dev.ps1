@@ -148,14 +148,14 @@ $llamaVisJob = Start-Job -ScriptBlock { param($r); Set-Location $r; & .\bin\llam
 # 0.8B summarization server (dedicated to memory consolidation/distiller — fast, lightweight, keeps the main 4B slot free)
 $llamaSummJob = Start-Job -ScriptBlock { param($r); Set-Location $r; & .\bin\llama.exe serve -m "C:\Users\rober\models\Qwen3.5-0.8B.Q4_K_M.gguf" --alias "qwen3.5-0.8b" -c 8192 -t 1 -tb 2 -b 512 -ub 256 -np 1 --timeout 120 --api-key "llama" --cors-origins "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000" --port 8084 2>&1 } -ArgumentList $root
 
-# SLM content/injection guard on :8001 (OPT-IN: set SWARM_SLM_GUARD=1). A dedicated
+# SLM content/injection guard on :8001 (ON by default; opt out with SWARM_SLM_GUARD=0). A dedicated
 # server that flags instruction-like tool output the keyword regex misses. It is
-# NOT started by default — the guard is fail-open, but a sixth llama.cpp server costs
-# ~0.5-1 GB RAM, so it only launches when explicitly requested. Serves the real
+# It runs by default (opt out with SWARM_SLM_GUARD=0) since 2026-08-12; it costs ~0.5 GB
+# RAM for a sixth llama.cpp server. Serves the real
 # Sentinel-v2 (embedding + classification head; NOT a chat model) in embeddings mode;
 # slm_guard.py does embedding @ cls_head.pt.T -> softmax for the verdict.
 $llamaGuardJob = $null
-if ($env:SWARM_SLM_GUARD -eq "1") {
+if ($env:SWARM_SLM_GUARD -ne "0") {
     $llamaGuardJob = Start-Job -ScriptBlock { param($r); Set-Location $r; & .\bin\llama.exe serve -m "$r\sentinel-v2\prompt-injection-jailbreak-sentinel-v2.Q5_K_S.gguf" --embeddings --pooling last --embd-normalize -1 -c 4096 -t 1 -tb 2 -b 512 -ub 256 -np 1 --timeout 60 --api-key "llama" --port 8001 2>&1 } -ArgumentList $root
 }
 

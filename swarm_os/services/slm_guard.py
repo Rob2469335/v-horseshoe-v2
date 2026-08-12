@@ -30,9 +30,9 @@ The verdict is `softmax(embedding @ head.T)`, exactly the README's seam
 DEPLOYMENT: an OpenAI-compatible llama.cpp server on :8001 in embeddings mode
 (`--embeddings --pooling last --embd-normalize -1`) serving the Sentinel-v2
 GGUF; the classifier head is loaded once from `sentinel-v2/cls_head.pt` (torch
-`weights_only=True`). Enabled ONLY by SWARM_SLM_GUARD=1 (default off -> no
-behavior change). Server URL / head path overridable via SWARM_SLM_GUARD_URL /
-SWARM_SLM_GUARD_HEAD.
+`weights_only=True`). ON by default (opt out with SWARM_SLM_GUARD=0) since
+2026-08-12 — the guard is verified and scoped to untrusted-content tools.
+Server URL / head path overridable via SWARM_SLM_GUARD_URL / SWARM_SLM_GUARD_HEAD.
 
 FAIL-OPEN CONTRACT: never raises, never blocks. Any server error, timeout, or
 embedding/head failure degrades to "benign" (object unchanged). A malicious
@@ -153,7 +153,9 @@ def get_guard() -> _Guard:
 
 
 def enabled() -> bool:
-    return os.getenv("SWARM_SLM_GUARD", "0") == "1"
+    # ON by default since 2026-08-12 (verified: scoped to untrusted tools,
+    # fail-open). Opt out with SWARM_SLM_GUARD=0.
+    return os.getenv("SWARM_SLM_GUARD", "1") != "0"
 
 
 async def check_tool_output(obj: Any, max_calls: int = _MAX_CALLS) -> dict:

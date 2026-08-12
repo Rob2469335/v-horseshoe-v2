@@ -100,6 +100,13 @@ async def test_is_malicious_fail_open_on_bad_dim(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_enabled_defaults_on_when_env_unset(monkeypatch):
+    """The guard is ON by default (opt-out via SWARM_SLM_GUARD=0)."""
+    monkeypatch.delenv("SWARM_SLM_GUARD", raising=False)
+    assert enabled() is True
+
+
+@pytest.mark.anyio
 async def test_check_tool_output_disabled_is_noop(monkeypatch):
     monkeypatch.setenv("SWARM_SLM_GUARD", "0")
     assert enabled() is False
