@@ -1,8 +1,10 @@
 """LLM client configuration and API call wrappers for tool decisions."""
+
 import os
 import re
 import ssl
 import logging
+import threading
 from typing import AsyncGenerator
 
 import litellm
@@ -56,13 +58,18 @@ def _cloud_response_format(litellm_model: str) -> dict:
         if base and "opencode.ai" in base:
             return {"type": "json_object"}
         from litellm import supports_response_schema
+
         if supports_response_schema(litellm_model):
             return {
                 "type": "json_schema",
-                "json_schema": {"name": "tool_decision", "schema": TOOL_DECISION_JSON_SCHEMA, "strict": True},
+                "json_schema": {
+                    "name": "tool_decision",
+                    "schema": TOOL_DECISION_JSON_SCHEMA,
+                    "strict": True,
+                },
             }
-    except Exception:
-        pass
+    except Exception as exc:
+        log.debug("[_cloud_response_format] supports_response_schema raised: %s", exc)
     return {"type": "json_object"}
 
 
@@ -74,6 +81,7 @@ def bootstrap_ssl():
         pass
     try:
         import certifi
+
         os.environ["SSL_CERT_FILE"] = certifi.where()
         os.environ["REQUESTS_CA_BUNDLE"] = certifi.where()
     except ImportError:
@@ -91,7 +99,14 @@ def bootstrap_ssl():
 # executor is included because it now orchestrates compound goals (chaining
 # researcher -> coder -> tool-runner); the local 4B cannot follow a multi-agent
 # chain reliably.
-_ANALYSIS_CLOUD_AGENTS = ("code_analyzer", "reviewer", "researcher", "coder", "debugger", "executor")
+_ANALYSIS_CLOUD_AGENTS = (
+    "code_analyzer",
+    "reviewer",
+    "researcher",
+    "coder",
+    "debugger",
+    "executor",
+)
 
 
 def _analysis_cloud_model() -> str:
@@ -115,15 +130,22 @@ def get_routing_mode() -> str:
     return mode
 
 
-def get_litellm_model(agent_id: str, fallback_model: str, force_local: bool = False) -> str:
+def get_litellm_model(
+    agent_id: str, fallback_model: str, force_local: bool = False
+) -> str:
     default_model, backend = get_model(agent_id)
     model = fallback_model if fallback_model else default_model
 
     # SAFEGUARD: Never allow expensive Claude / Anthropic / Sonnet / Opus /
     # OpenAI o-series / GPT-4 class models — including o1/o3 (line 204 routes
     # them to the paid OpenCode Go tier; this guard must intercept them too).
-    if any(forbidden in model.lower() for forbidden in ("claude", "anthropic", "sonnet", "opus", "gpt-4", "o1", "o3")):
-        log.warning(f"Intercepted forbidden expensive model '{model}' -> enforcing DeepSeek V4 Flash ('openai/deepseek-v4-flash')")
+    if any(
+        forbidden in model.lower()
+        for forbidden in ("claude", "anthropic", "sonnet", "opus", "gpt-4", "o1", "o3")
+    ):
+        log.warning(
+            f"Intercepted forbidden expensive model '{model}' -> enforcing DeepSeek V4 Flash ('openai/deepseek-v4-flash')"
+        )
         return "openai/deepseek-v4-flash"
 
     # UPGRADE: route heavy analysis/research work to a fast cloud model when a
@@ -134,14 +156,21 @@ def get_litellm_model(agent_id: str, fallback_model: str, force_local: bool = Fa
     # every decision re-selects the same doomed provider and burns the retry budget.
     # force_local=True (billing-402 degrade path) skips this branch entirely so the
     # caller can force the run onto the local llama.cpp model.
-    if not force_local and agent_id in _ANALYSIS_CLOUD_AGENTS and _analysis_cloud_enabled():
+    if (
+        not force_local
+        and agent_id in _ANALYSIS_CLOUD_AGENTS
+        and _analysis_cloud_enabled()
+    ):
         # UPGRADE (Item #8): win-rate-gated online routing — keep the cloud hop
         # only while the tracked success rate is healthy; repeated failures decay
         # back to local. Defaults to the legacy behavior unless enabled.
         try:
             from runtime_v2.services.online_routing import cloud_allowed_for_agent
+
             if not cloud_allowed_for_agent(agent_id):
-                log.info("[routing] %s: win-rate gated analysis off cloud → local", agent_id)
+                log.info(
+                    "[routing] %s: win-rate gated analysis off cloud → local", agent_id
+                )
                 cloud_model = None
             else:
                 cloud_model = _analysis_cloud_model()
@@ -150,8 +179,13 @@ def get_litellm_model(agent_id: str, fallback_model: str, force_local: bool = Fa
         if cloud_model is not None:
             try:
                 from runtime_v2.services.fallback_manager import is_model_cooled_down
+
                 if is_model_cooled_down(cloud_model):
-                    log.info("[routing] %s -> cloud analysis model %s in cooldown, falling back to local", agent_id, cloud_model)
+                    log.info(
+                        "[routing] %s -> cloud analysis model %s in cooldown, falling back to local",
+                        agent_id,
+                        cloud_model,
+                    )
                     cloud_model = None
             except Exception:
                 pass
@@ -166,11 +200,17 @@ def get_litellm_model(agent_id: str, fallback_model: str, force_local: bool = Fa
         model_name = model.split("/", 1)[1]
         return f"openai/{model_name}"
 
-    if "/" in model and not model.startswith("llama") and backend not in ("llama", "local"):
+    if (
+        "/" in model
+        and not model.startswith("llama")
+        and backend not in ("llama", "local")
+    ):
         return model
 
     if backend in ("llama", "local", "router") or model.startswith("llama/"):
-        model_name = model.replace("llama/", "") if model.startswith("llama/") else model
+        model_name = (
+            model.replace("llama/", "") if model.startswith("llama/") else model
+        )
         return f"openai/{model_name}"
 
     if backend == "openrouter":
@@ -202,10 +242,23 @@ def _endpoint_for(litellm_model: str) -> tuple[str, str, str]:
             # OpenCode Zen FREE tier — $0 deepseek-v4-flash etc. litellm would
             # send "zen/deepseek-v4-flash" as the model id; rewrite it to the
             # plain id the endpoint expects.
-            return os.getenv("OPENCODE_ZEN_BASE", "https://opencode.ai/zen/v1"), os.getenv("OPENAI_API_KEY", ""), f"openai/{name.split('/', 1)[1]}"
-        if name.startswith("gpt") or name.startswith("o1") or name.startswith("o3") or "deepseek" in name:
+            return (
+                os.getenv("OPENCODE_ZEN_BASE", "https://opencode.ai/zen/v1"),
+                os.getenv("OPENAI_API_KEY", ""),
+                f"openai/{name.split('/', 1)[1]}",
+            )
+        if (
+            name.startswith("gpt")
+            or name.startswith("o1")
+            or name.startswith("o3")
+            or "deepseek" in name
+        ):
             # OpenCode Go PAID tier / OpenAI paid API — use env vars set in start-dev.ps1
-            return os.getenv("OPENAI_API_BASE", "https://opencode.ai/zen/go/v1"), os.getenv("OPENAI_API_KEY", ""), litellm_model
+            return (
+                os.getenv("OPENAI_API_BASE", "https://opencode.ai/zen/go/v1"),
+                os.getenv("OPENAI_API_KEY", ""),
+                litellm_model,
+            )
         return "http://127.0.0.1:8080/v1", "llama", litellm_model
     return None, None, litellm_model
 
@@ -223,9 +276,14 @@ def _fallback_entry(model_id: str) -> dict:
 
 
 def build_kwargs(litellm_model: str, extra: dict, fallbacks: list) -> dict:
-    kwargs = {"model": litellm_model,
-              "fallbacks": [_fallback_entry(f) if isinstance(f, str) else f for f in (fallbacks or [])],
-              "timeout": 600.0, **extra}
+    kwargs = {
+        "model": litellm_model,
+        "fallbacks": [
+            _fallback_entry(f) if isinstance(f, str) else f for f in (fallbacks or [])
+        ],
+        "timeout": 600.0,
+        **extra,
+    }
     base, key, eff = _endpoint_for(litellm_model)
     if base:
         kwargs["api_base"] = base
@@ -246,7 +304,7 @@ def build_kwargs(litellm_model: str, extra: dict, fallbacks: list) -> dict:
 # health-checked failover, cooldowns and retries. We build the model_list from
 # the same get_live_fallbacks() chain so ordering/priorities are preserved.
 _router: object | None = None
-_router_lock = __import__("threading").Lock()
+_router_lock = threading.Lock()
 _router_model_list: list = []
 
 
@@ -285,7 +343,10 @@ def build_router(primary_model: str, fallback_models: list) -> object:
             _router_model_list = model_list
             return _router
         except Exception as exc:
-            log.warning("litellm Router construction failed (%s) — using legacy acompletion", exc)
+            log.warning(
+                "litellm Router construction failed (%s) — using legacy acompletion",
+                exc,
+            )
             _router = None
             return None
 
@@ -299,13 +360,16 @@ def inject_system_prompt(messages: list, system: str) -> list:
     return [{"role": "system", "content": system}] + messages
 
 
-async def complete_for_tool_decision(litellm_model: str, messages: list, fallbacks: list):
+async def complete_for_tool_decision(
+    litellm_model: str, messages: list, fallbacks: list
+):
     # BUG FIX: "openai/..." is a shared prefix for local llama.cpp AND the OpenCode
     # Zen/Go cloud endpoints. Using startswith("openai/") misclassified the primary
     # cloud model (openai/deepseek-v4-flash) as LOCAL — sending llama.cpp-only
     # params (id_slot/n_predict/cache_prompt) and grammar response_format to the
     # OpenCode endpoint. Classify via _is_local_model() (matches the fallback split).
     from runtime_v2.services.fallback_manager import _is_local_model
+
     is_cloud = not _is_local_model(litellm_model)
     # Local tool decisions need enough room for thought + JSON action + params.
     # 250 tokens caused truncated JSON (missing closing braces/fields) → retry loops.
@@ -321,6 +385,7 @@ async def complete_for_tool_decision(litellm_model: str, messages: list, fallbac
         resp = await litellm.acompletion(**kwargs)
         try:
             from runtime_v2.services.usage_log import record_response
+
             record_response(resp, litellm_model, source="tool_decision")
         except Exception as usage_err:  # noqa: BLE001
             log.debug("usage log skipped: %s", usage_err)
@@ -338,9 +403,12 @@ async def complete_for_tool_decision(litellm_model: str, messages: list, fallbac
             kwargs["max_tokens"] = max_tokens
             kwargs["max_retries"] = 0
             kwargs["timeout"] = 300.0
-            resp = await router.acompletion(model=litellm_model, messages=messages, **kwargs)
+            resp = await router.acompletion(
+                model=litellm_model, messages=messages, **kwargs
+            )
             try:
                 from runtime_v2.services.usage_log import record_response
+
                 record_response(resp, litellm_model, source="tool_decision")
             except Exception as usage_err:  # noqa: BLE001
                 log.debug("usage log skipped: %s", usage_err)
@@ -389,18 +457,25 @@ async def complete_for_tool_decision(litellm_model: str, messages: list, fallbac
             clamped = max(128, affordable - 128)
             log.warning(
                 "Cloud model %s capped at %d tokens (balance-limited) — retrying with max_tokens=%d",
-                litellm_model, affordable, clamped,
+                litellm_model,
+                affordable,
+                clamped,
             )
             return await _call_router(extra, clamped)
         raise
 
 
-async def stream_content(model: str, messages: list, agent_id: str) -> AsyncGenerator[tuple[str, str], None]:
+async def stream_content(
+    model: str, messages: list, agent_id: str
+) -> AsyncGenerator[tuple[str, str], None]:
     litellm_model = get_litellm_model(agent_id, model)
     routing_mode = get_routing_mode()
     from runtime_v2.services.fallback_manager import get_live_fallbacks, _is_local_model
+
     raw_fallbacks = await get_live_fallbacks(mode=routing_mode)
-    fallbacks = [f["model"] for f in raw_fallbacks if not _is_local_model(f["model"])][:4]
+    fallbacks = [f["model"] for f in raw_fallbacks if not _is_local_model(f["model"])][
+        :4
+    ]
 
     extra = {
         "messages": messages,
@@ -421,6 +496,7 @@ async def stream_content(model: str, messages: list, agent_id: str) -> AsyncGene
         # across the live cloud chain) when available; fall back to the legacy
         # acompletion path otherwise.
         from runtime_v2.services.fallback_manager import _is_local_model as _isl
+
         is_cloud = not _isl(litellm_model)
         response = None
         if is_cloud:
@@ -429,7 +505,9 @@ async def stream_content(model: str, messages: list, agent_id: str) -> AsyncGene
                 stream_kwargs = dict(extra)
                 stream_kwargs["max_retries"] = 0
                 stream_kwargs["timeout"] = 900.0
-                response = await router.acompletion(model=litellm_model, **stream_kwargs)
+                response = await router.acompletion(
+                    model=litellm_model, **stream_kwargs
+                )
         if response is None:
             response = await litellm.acompletion(**kwargs)
         last_usage = None
@@ -446,8 +524,14 @@ async def stream_content(model: str, messages: list, agent_id: str) -> AsyncGene
                 yield piece, "content"
         try:
             from runtime_v2.services.usage_log import record_response
+
             if last_usage is not None:
-                record_response({"usage": last_usage}, litellm_model, source="stream_content", agent_id=agent_id)
+                record_response(
+                    {"usage": last_usage},
+                    litellm_model,
+                    source="stream_content",
+                    agent_id=agent_id,
+                )
         except Exception as usage_err:  # noqa: BLE001
             log.debug("usage log skipped: %s", usage_err)
     except Exception as exc:
