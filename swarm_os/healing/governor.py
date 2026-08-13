@@ -64,8 +64,8 @@ class Governor:
                     log.warning("Failed to persist failure record for incident %s: %s", incident_id, e)
                     pass
                 return decision
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Governor decide() early-return failed: %s", exc)
 
         decision = {"incident_id": incident_id, "hypotheses": hypotheses}
 
@@ -82,8 +82,8 @@ class Governor:
                     if pol.get("action") == "require_approval":
                         decision["mode"] = "approval_required"
                         return decision
-        except Exception:
-            pass
+        except Exception as exc:
+            log.warning("Governor policy-engine consultation failed: %s", exc)
 
         # confidence thresholds, may be overridden per strategy
         approval_threshold = 0.5

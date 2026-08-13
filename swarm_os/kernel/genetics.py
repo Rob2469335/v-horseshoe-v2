@@ -6,9 +6,12 @@ import random
 import json
 import ast
 import asyncio
+import logging
 from dataclasses import asdict, dataclass, field
 from typing import Dict, List, Optional, Protocol
 from litellm import acompletion
+
+log = logging.getLogger(__name__)
 
 MCP_TOOL_REGISTRY: List[str] = [
     "web_search",
@@ -292,8 +295,8 @@ async def llm_guided_mutate(genome: Genome, trace_context: str, memory_bridge=No
     if memory_bridge:
         try:
             historical_context = await memory_bridge.get_memory_context(trace_context)
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Failed to fetch mutation memory context: %s", exc)
 
     history_section = f"\n\nHistorical Context of past runs (GraphRAG):\n{historical_context}\nAvoid repeating past mistakes." if historical_context else ""
 
