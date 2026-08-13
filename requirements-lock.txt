@@ -24,7 +24,6 @@ dill==0.4.1
 distro==1.9.0
 docstring-to-markdown==0.17
 fastapi==0.139.0
-faster-whisper==1.2.1
 fastuuid==0.14.0
 filelock==3.29.4
 flake8==7.3.0

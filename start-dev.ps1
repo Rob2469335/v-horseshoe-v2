@@ -244,39 +244,11 @@ for ($i = 0; $i -lt 20; $i++) {
 }
 Write-Host "Frontend ✔  http://127.0.0.1:5173" -ForegroundColor Green
 
-# STEP 6 - Whisper Server (background job)
-Write-Host "`n[STEP 6] Starting Whisper Server..." -ForegroundColor Yellow
-$whisperJob = Start-Job -ScriptBlock {
-    param($r)
-    Set-Location $r
-    $pythonPath = if (Test-Path "$r\.venv\Scripts\python.exe") { "$r\.venv\Scripts\python.exe" } else { "python" }
-    & $pythonPath whisper_server.py 2>&1
-} -ArgumentList $root
-
-for ($i = 0; $i -lt 30; $i++) {
-    try { Invoke-RestMethod "http://127.0.0.1:8001/docs" | Out-Null; break } catch { Start-Sleep 1 }
-}
-Write-Host "Whisper Server ✔  http://127.0.0.1:8001" -ForegroundColor Green
-
-# STEP 7 - Ambient Listener (background job)
-Write-Host "`n[STEP 7] Starting Ambient Listener..." -ForegroundColor Yellow
-$listenerJob = Start-Job -ScriptBlock {
-    param($r)
-    Set-Location $r
-    $pythonPath = if (Test-Path "$r\.venv\Scripts\python.exe") { "$r\.venv\Scripts\python.exe" } else { "python" }
-    & $pythonPath ambient_listener.py 2>&1
-} -ArgumentList $root
-
-Start-Sleep -Seconds 5
-Write-Host "Ambient Listener ✔" -ForegroundColor Green
-
 Write-Host "`n=== All services up — streaming logs (Ctrl+C to stop) ===" -ForegroundColor Cyan
 Write-Host "Backend:   http://127.0.0.1:8000" -ForegroundColor Gray
 Write-Host "Qdrant:    http://127.0.0.1:6333" -ForegroundColor Gray
 Write-Host "llama.cpp: http://127.0.0.1:8080" -ForegroundColor Gray
 Write-Host "Frontend:  http://127.0.0.1:5173" -ForegroundColor Gray
-Write-Host "Whisper:   http://127.0.0.1:8001" -ForegroundColor Gray
-Write-Host "Listener:  Active" -ForegroundColor Gray
 Write-Host ""
 
 try {
@@ -288,14 +260,12 @@ try {
         Receive-Job $llamaSummJob  | ForEach-Object { Write-Host "[llama-summ]   $_" -ForegroundColor DarkGreen }
         Receive-Job $backendJob  | ForEach-Object { Write-Host "[backend]  $_" -ForegroundColor DarkCyan }
         Receive-Job $frontendJob | ForEach-Object { Write-Host "[frontend] $_" -ForegroundColor DarkYellow }
-        Receive-Job $whisperJob  | ForEach-Object { Write-Host "[whisper]  $_" -ForegroundColor DarkMagenta }
-        Receive-Job $listenerJob | ForEach-Object { Write-Host "[listener] $_" -ForegroundColor DarkYellow }
         Start-Sleep -Milliseconds 300
     }
 } finally {
     Write-Host "`nShutting down..." -ForegroundColor Red
-    Stop-Job  $llamaGenJob, $llamaEmbJob, $llamaRerankJob, $llamaVisJob, $llamaSummJob, $backendJob, $frontendJob, $whisperJob, $listenerJob -ErrorAction SilentlyContinue
-    Remove-Job $llamaGenJob, $llamaEmbJob, $llamaRerankJob, $llamaVisJob, $llamaSummJob, $backendJob, $frontendJob, $whisperJob, $listenerJob -ErrorAction SilentlyContinue
+    Stop-Job  $llamaGenJob, $llamaEmbJob, $llamaRerankJob, $llamaVisJob, $llamaSummJob, $backendJob, $frontendJob -ErrorAction SilentlyContinue
+    Remove-Job $llamaGenJob, $llamaEmbJob, $llamaRerankJob, $llamaVisJob, $llamaSummJob, $backendJob, $frontendJob -ErrorAction SilentlyContinue
     foreach ($svc in @("llama","qdrant","node","python")) {
         Get-Process -Name $svc -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     }
