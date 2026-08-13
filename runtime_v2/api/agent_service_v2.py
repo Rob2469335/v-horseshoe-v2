@@ -291,13 +291,7 @@ def _trim_context_messages(
 # Bounded dedup cache for reflexion lessons (agent, action, error) -> last store
 # time. Prevents identical repeated failures from spamming ReflexionMemory.
 _failure_lessons_seen: dict = {}
-_failure_lessons_seen_lock: asyncio.Lock | None = None
-
-def _get_lessons_lock() -> asyncio.Lock:
-    global _failure_lessons_seen_lock
-    if _failure_lessons_seen_lock is None:
-        _failure_lessons_seen_lock = asyncio.Lock()
-    return _failure_lessons_seen_lock
+_failure_lessons_seen_lock: asyncio.Lock = asyncio.Lock()
 
 
 @dataclass
@@ -742,7 +736,7 @@ class AgentServiceV2:
             # would otherwise spam the reflexion store with duplicate points.
             key = (agent_id, action, str(error)[:200])
             now = time.time()
-            async with _get_lessons_lock():
+            async with _failure_lessons_seen_lock:
                 if key in _failure_lessons_seen:
                     if now - _failure_lessons_seen[key] < 300:
                         return
