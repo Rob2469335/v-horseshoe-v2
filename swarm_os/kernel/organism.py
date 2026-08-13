@@ -143,8 +143,12 @@ class Organism:
                     for tool in tools_used:
                         asyncio.run(registry.update_tool_pheromone(tool, success=success))
 
-                asyncio.run(asyncio.wait_for(asyncio.to_thread(_flush), timeout=2.0))
-            except asyncio.TimeoutError:
+                async def _flush_with_timeout() -> None:
+                    async with asyncio.timeout(2.0):
+                        await asyncio.to_thread(_flush)
+
+                asyncio.run(_flush_with_timeout())
+            except TimeoutError:
                 log.debug("pheromone update timed out org=%s", self.id)
             except Exception as e:
                 log.debug("Pheromone update failed: %s", e)

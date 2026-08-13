@@ -485,8 +485,9 @@ async def control_browser_action(req: BrowserActionRequest) -> Dict[str, Any]:
     from swarm_os.lib.mcp.playwright import playwright_handler
     payload = {k: v for k, v in req.dict().items() if v not in ("", None)}
     try:
-        result = await asyncio.wait_for(playwright_handler(payload), timeout=120)
-    except asyncio.TimeoutError:
+        async with asyncio.timeout(120):
+            result = await playwright_handler(payload)
+    except TimeoutError:
         result = {"ok": False, "error": "browser operation timed out"}
     return result
 
@@ -494,7 +495,8 @@ async def control_browser_action(req: BrowserActionRequest) -> Dict[str, Any]:
 @router.get("/browser/state")
 async def control_browser_state() -> Dict[str, Any]:
     from swarm_os.lib.mcp.playwright import playwright_handler
-    return await asyncio.wait_for(playwright_handler({"operation": "browser_state"}), timeout=30)
+    async with asyncio.timeout(30):
+        return await playwright_handler({"operation": "browser_state"})
 
 
 @router.get("/browser/image")
