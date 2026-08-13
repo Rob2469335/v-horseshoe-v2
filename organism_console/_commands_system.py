@@ -44,6 +44,19 @@ def cmd_model(ctx: CommandContext, args: List[str]) -> None:
     ctx.console.print(f"[green]✓ Active model set to[/green] [bold green]{model_name}[/bold green]")
 
 
+@registry.register("picker", "Launch the interactive model picker TUI")
+def cmd_picker(ctx: CommandContext, args: List[str]) -> None:
+    try:
+        from organism_console.ui.picker import launch_picker
+    except ImportError:
+        ctx.console.print(
+            "[yellow]Model picker TUI requires 'textual' (pip install textual). "
+            "Falling back: use /model set <name> or /model to view.[/yellow]"
+        )
+        return
+    launch_picker(ctx)
+
+
 @registry.register("agent", "Switch the active agent. Usage: /agent <name> (or /agent list)")
 def cmd_agent(ctx: CommandContext, args: List[str]) -> None:
     if not args:

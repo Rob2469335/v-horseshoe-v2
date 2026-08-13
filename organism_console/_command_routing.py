@@ -22,17 +22,17 @@ def route_natural_language_keywords(raw: str) -> tuple[Optional[str], list[str]]
     if clean in ("clear", "reset", "clear history", "reset context", "start over"):
         return "clear", []
     if clean in ("learn", "learn from history", "run learning", "offline learn"):
-        return "learn", []
+        return "heal", ["lessons"]
     if clean in ("autofix", "auto fix", "fix yourself", "fix bugs", "heal bugs", "fix all", "repair all", "repair everything"):
-        return "autofix", []
+        return "heal", ["run"]
     if clean in ("cures", "repair knowledge", "known fixes", "what can you fix"):
-        return "cures", []
+        return "heal", ["lessons"]
     if clean in ("repair stats", "repair statistics", "heal stats", "self heal stats"):
-        return "repair-stats", []
+        return "heal", ["stats"]
     if clean in ("model", "models", "picker"):
         return "picker", []
     if clean in ("perf", "performance"):
-        return "perf", []
+        return "benchmark", []
     if clean in ("exit", "quit", "bye", "close", "shutdown"):
         return "exit", []
     if clean in ("tokens", "token usage", "cost", "how many tokens"):
