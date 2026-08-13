@@ -72,6 +72,30 @@ def _account(name: str | None = None) -> dict | None:
     return accounts[0]
 
 
+def _uses_gmail_api(acc: dict) -> bool:
+    """True when the account opts into the Gmail REST API transport
+    (HTTPS:443, OAuth token) instead of SMTP/IMAP. IMAP/SMTP stays the default."""
+    return str(acc.get("transport", "")).lower() == "gmail_api"
+
+
+def _uses_gmail_browser(acc: dict) -> bool:
+    """True when the account opts into the browser-profile transport
+    (HTTPS:443 only, persistent Playwright profile session) instead of SMTP/IMAP."""
+    return str(acc.get("transport", "")).lower() == "gmail_browser"
+
+
+def _gmail_transport(acc: dict):
+    """Lazy import of the Gmail API transport (avoids a hard import cycle)."""
+    from swarm_os.services import gmail_api
+    return gmail_api
+
+
+def _gmail_browser_transport(acc: dict):
+    """Lazy import of the Gmail browser-profile transport."""
+    from swarm_os.services import gmail_browser
+    return gmail_browser
+
+
 def _decode_header_value(raw) -> str:
     parts = decode_header(raw or "")
     out = []
@@ -143,6 +167,10 @@ def email_list(folder: str = "INBOX", limit: int = 20, unread_only: bool = False
         acc = _account(account)
         if not acc:
             return {"ok": False, "error": "email not configured (config/email_config.json missing)"}
+        if _uses_gmail_api(acc):
+            return _gmail_transport(acc).gmail_list(acc, folder=folder, limit=limit, unread_only=unread_only)
+        if _uses_gmail_browser(acc):
+            return _gmail_browser_transport(acc).gmail_browser_list(acc, folder=folder or "INBOX", limit=limit, unread_only=unread_only)
         conn = _get_imap(acc)
         try:
             conn.select(folder)
@@ -176,6 +204,10 @@ def email_read(uid: str, folder: str = "INBOX", account: str | None = None) -> d
         acc = _account(account)
         if not acc:
             return {"ok": False, "error": "email not configured"}
+        if _uses_gmail_api(acc):
+            return _gmail_transport(acc).gmail_read(acc, uid=uid, folder=folder)
+        if _uses_gmail_browser(acc):
+            return _gmail_browser_transport(acc).gmail_browser_read(acc, uid=uid, folder=folder or "INBOX")
         conn = _get_imap(acc)
         try:
             conn.select(folder)
@@ -201,6 +233,10 @@ def email_search(query: str, folder: str = "INBOX", limit: int = 20, account: st
         acc = _account(account)
         if not acc:
             return {"ok": False, "error": "email not configured"}
+        if _uses_gmail_api(acc):
+            return _gmail_transport(acc).gmail_search(acc, query=query, folder=folder, limit=limit)
+        if _uses_gmail_browser(acc):
+            return _gmail_browser_transport(acc).gmail_browser_search(acc, query=query, folder=folder or "INBOX", limit=limit)
         conn = _get_imap(acc)
         try:
             conn.select(folder)
@@ -295,6 +331,10 @@ def email_send(send_token: str, confirmed: bool = False) -> dict:
         if not acc:
             return {"ok": False, "error": "email not configured"}
         msg = _build_message(draft["to"], draft["subject"], draft["body"], draft["cc"], draft["attachments"])
+        if _uses_gmail_api(acc):
+            return _gmail_transport(acc).gmail_send_mime(acc, msg.as_bytes())
+        if _uses_gmail_browser(acc):
+            return _gmail_browser_transport(acc).gmail_browser_send(acc, draft["to"], draft["subject"], draft["body"])
         smtp_host = acc.get("smtp_host") or acc.get("host")
         smtp_port = int(acc.get("smtp_port", 587))
         smtp_user = acc.get("user") or acc.get("email")
@@ -314,4 +354,12 @@ def email_config_status(account: str | None = None) -> dict:
     acc = _account(account)
     if not acc:
         return {"configured": False, "reason": "config/email_config.json missing or has no accounts"}
-    return {"configured": True, "account": acc.get("name") or acc.get("email"), "provider_hint": acc.get("provider", "imap")}
+    if _uses_gmail_browser(acc):
+        return {"configured": True, "account": acc.get("name") or acc.get("email"),
+                "provider_hint": acc.get("provider", "gmail_browser"), "transport": "gmail_browser"}
+    if _uses_gmail_api(acc):
+        return {"configured": True, "account": acc.get("name") or acc.get("email"),
+                "provider_hint": acc.get("provider", "gmail"), "transport": "gmail_api"}
+    transport = "imap"
+    return {"configured": True, "account": acc.get("name") or acc.get("email"),
+            "provider_hint": acc.get("provider", "imap"), "transport": transport}

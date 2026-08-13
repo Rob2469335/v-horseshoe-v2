@@ -10,6 +10,24 @@
       "smtp_port": 587,
       "user": "you@gmail.com",
       "app_password": "YOUR_16_CHAR_APP_PASSWORD"
+    },
+    {
+      "name": "personal-gmail-api",
+      "provider": "gmail",
+      "email": "you@gmail.com",
+      "transport": "gmail_api",
+      "oauth2_client_id": "YOUR_CLIENT_ID.apps.googleusercontent.com",
+      "oauth2_client_secret": "YOUR_CLIENT_SECRET",
+      "oauth2_auth_url": "https://accounts.google.com/o/oauth2/v2/auth",
+      "oauth2_token_url": "https://oauth2.googleapis.com/token",
+      "oauth2_scopes": "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send",
+      "oauth2_redirect_port": 3000
+    },
+    {
+      "name": "personal-gmail-browser",
+      "provider": "gmail",
+      "email": "you@gmail.com",
+      "transport": "gmail_browser"
     }
   ]
 }
