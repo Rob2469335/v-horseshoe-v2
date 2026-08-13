@@ -95,9 +95,10 @@ async def web_research(req: WebResearchRequest):
         from ..lib.mcp.web_search import web_search_handler, web_fetch_handler
 
         # 1) Search.
-        search = await web_search_handler(
-            {"query": query, "max_results": req.max_results}
-        )
+        async with asyncio.timeout(30.0):
+            search = await web_search_handler(
+                {"query": query, "max_results": req.max_results}
+            )
         if not search.get("ok"):
             return {
                 "status": "degraded",
@@ -115,7 +116,8 @@ async def web_research(req: WebResearchRequest):
             text = r.get("snippet", "")
             if url:
                 try:
-                    fetched = await web_fetch_handler({"url": url, "max_chars": 4000})
+                    async with asyncio.timeout(30.0):
+                        fetched = await web_fetch_handler({"url": url, "max_chars": 4000})
                     if fetched.get("ok"):
                         text = fetched.get("text") or fetched.get("content") or text
                 except Exception as e:
@@ -238,12 +240,13 @@ async def _keyword_fallback(req: QueryRequest) -> list:
             try:
                 next_offset = None
                 while True:
-                    scroll = await client.scroll(
-                        collection_name=collection,
-                        offset=next_offset,
-                        limit=200,
-                        with_payload=True,
-                    )
+                    async with asyncio.timeout(30.0):
+                        scroll = await client.scroll(
+                            collection_name=collection,
+                            offset=next_offset,
+                            limit=200,
+                            with_payload=True,
+                        )
                     points = (
                         scroll[0]
                         if isinstance(scroll, tuple)
