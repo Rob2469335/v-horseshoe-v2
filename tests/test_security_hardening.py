@@ -670,3 +670,24 @@ async def test_dangerroom_kills_proc_on_cancel(monkeypatch):
     finally:
         import shutil
         shutil.rmtree(tmp_path, ignore_errors=True)
+
+
+def test_swarm_config_mcp_servers_are_valid():
+    """The shipped swarm_config.json MCP registrations must always parse and use
+    known-safe launchers (npx/node/python/uvx) with no shell metacharacters in
+    args — a malformed entry would break external-MCP tool loading at startup,
+    and a non-allowlisted launcher would be rejected by mcp_register anyway."""
+    import json
+    from pathlib import Path
+
+    cfg = json.loads(Path("swarm_config.json").read_text(encoding="utf-8"))
+    servers = cfg["mcp_servers"]
+    assert servers, "swarm_config.json must register at least one MCP server"
+    allowed = ("npx", "node", "python", "python3", "uvx")
+    meta = ("&&", "||", ";", "|", "$(", "`", "&", "\n", "\r", ">", "<")
+    for name, s in servers.items():
+        assert s.get("command"), f"server {name} missing command"
+        assert s["command"].strip().lower() in allowed, f"{name}: launcher {s['command']}"
+        args = s.get("args", [])
+        assert isinstance(args, list) and all(isinstance(a, str) for a in args), f"{name}: args must be list[str]"
+        assert not any(ch in "".join(args) for ch in meta), f"{name}: metachar in args"

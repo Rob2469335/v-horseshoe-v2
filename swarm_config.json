@@ -13,6 +13,10 @@
     "context7": {
       "command": "npx",
       "args": ["-y", "@upstash/context7-mcp"]
+    },
+    "duckdb": {
+      "command": "uvx",
+      "args": ["mcp-server-duckdb", "--db-path", "C:\\Users\\rober\\Projects\\v-horseshoe-v2\\data\\analytics.duckdb"]
     }
   }
 }
