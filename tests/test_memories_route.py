@@ -60,3 +60,32 @@ async def test_memories_handles_missing_and_garbage_timestamps():
         result = await get_memories()
     order = [p["fact"] for p in result["data"]["agent_memory"]]
     assert order == ["num_new", "garbage", "missing"]
+
+
+def test_memory_timestamp_except_handlers_are_parenthesized():
+    """The `except TypeError, ValueError:` comma form was a formatter-sweep
+    regression (routes.py:926/:932). It still parses as a tuple on Python 3.14
+    (so the /memories tests pass either way), but it is non-portable and
+    non-idiomatic. Pin the AST to the parenthesized tuple so a future sweep
+    that strips the parens fails loudly instead of passing on 3.14's tolerance."""
+    import ast
+
+    src = open("swarm_os/api/routes.py", encoding="utf-8").read()
+    tree = ast.parse(src)
+    comma_forms = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ExceptHandler) and node.type is not None:
+            if (
+                isinstance(node.type, ast.Tuple)
+                and any(isinstance(e, ast.Name) for e in node.type.elts)
+                and node.type.elts
+            ):
+                # A parenthesized tuple: ast keeps elts regardless of parens,
+                # so detect the SOURCE text of the handler type to prove parens.
+                lineno = node.lineno
+                lines = src.splitlines()
+                handler_line = lines[lineno - 1].strip()
+                if handler_line.startswith("except"):
+                    comma_forms.append(handler_line)
+    offenders = [l for l in comma_forms if ", " in l and not l.startswith("except (")]
+    assert offenders == [], f"comma-form except handlers present: {offenders}"
