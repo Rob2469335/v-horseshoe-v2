@@ -91,7 +91,8 @@ Format your output as a simple list of rules, one per line. No markdown formatti
                 _kwargs["api_key"] = _key
         else:
             _kwargs.update(api_base="http://127.0.0.1:8080/v1", api_key="llama", custom_llm_provider="openai")
-        response = await acompletion(**_kwargs)
+        async with asyncio.timeout(90.0):
+            response = await acompletion(**_kwargs)
         rules_text = response.choices[0].message.content.strip()
     except Exception as e:
         print(f"[Offline Learner] LLM failed: {e}")
