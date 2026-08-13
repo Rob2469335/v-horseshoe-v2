@@ -187,17 +187,37 @@ def cmd_quota(ctx: CommandContext, args: List[str]) -> None:
 def cmd_tokens(ctx: CommandContext, args: List[str]) -> None:
     input_tokens = ctx.state.total_input_tokens
     output_tokens = ctx.state.total_output_tokens
-    input_cost = (input_tokens / 1000) * 0.0015
-    output_cost = (output_tokens / 1000) * 0.0060
-    total_cost = input_cost + output_cost
     table = Table(box=SIMPLE, header_style="bold cyan")
     table.add_column("Type", style="bold yellow")
     table.add_column("Count", style="white")
-    table.add_column("Est. Cost ($)", style="green")
-    table.add_row("Input Tokens", f"{input_tokens:,}", f"${input_cost:.5f}")
-    table.add_row("Output Tokens", f"{output_tokens:,}", f"${output_cost:.5f}")
-    table.add_row("Total Session", f"{input_tokens + output_tokens:,}", f"${total_cost:.5f}")
+    table.add_row("Input Tokens", f"{input_tokens:,}")
+    table.add_row("Output Tokens", f"{output_tokens:,}")
+    table.add_row("Total Session", f"{input_tokens + output_tokens:,}")
     ctx.console.print(Panel(table, title="[bold cyan]Token & Cost Tracking[/bold cyan]", border_style="cyan"))
+    # Real persisted cost from usage_log (per-model pricing), not hardcoded
+    # rates. Falls back to a note when no usage data has been recorded yet.
+    try:
+        from runtime_v2.services.usage_log import usage_report
+        report = usage_report(days=30)
+    except Exception:
+        report = None
+    if report and report.get("rows"):
+        cost_table = Table(box=SIMPLE, header_style="bold cyan")
+        cost_table.add_column("Model", style="bold yellow")
+        cost_table.add_column("Calls", style="white")
+        cost_table.add_column("Cost ($)", style="green")
+        for model, m in sorted(report.get("per_model", {}).items()):
+            cost_table.add_row(model, str(m.get("calls", 0)), f"${m.get('cost') or 0:.4f}")
+        cost_table.add_row(
+            "[bold]Total (known)[/bold]",
+            str(report.get("rows", 0)),
+            f"${report.get('known_cost') or 0:.4f}",
+        )
+        ctx.console.print(Panel(cost_table, title="[bold green]Real Usage Cost (30d)[/bold green]", border_style="green"))
+        if report.get("unknown_cost"):
+            ctx.console.print(f"[dim]Plus ${report['unknown_cost']:.4f} of unmetered traffic (models without a price table entry).[/dim]")
+    else:
+        ctx.console.print("[dim]No persisted usage data yet — cost appears here once LLM calls are recorded in data/usage/usage.jsonl.[/dim]")
     from organism_console.token_tracker import get_status_segment
     tracker_status = get_status_segment()
     if tracker_status:
