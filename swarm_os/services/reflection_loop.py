@@ -8,10 +8,26 @@ import re
 from pathlib import Path
 from litellm import acompletion
 from qdrant_client import AsyncQdrantClient
-from qdrant_client.models import PointStruct, VectorParams, Distance, Filter, FieldCondition, MatchValue
+from qdrant_client.models import (
+    PointStruct,
+    VectorParams,
+    Distance,
+    Filter,
+    FieldCondition,
+    MatchValue,
+)
 from swarm_os.services.embedding_service import EmbeddingService
 
 logger = logging.getLogger("ReflectionLoop")
+
+_point_locks: dict[str, asyncio.Lock] = {}
+
+
+def _get_point_lock(point_id: str) -> asyncio.Lock:
+    if point_id not in _point_locks:
+        _point_locks[point_id] = asyncio.Lock()
+    return _point_locks[point_id]
+
 
 ROOT_DIR = Path(__file__).parent.parent.parent.resolve()
 DIARY_PATH = ROOT_DIR / "swarm_os" / "logs" / "organism_diary.jsonl"
@@ -24,6 +40,7 @@ CLOUD_MODEL = "openai/deepseek-v4-flash"
 DISTILLER_MAX_TOKENS_CLOUD = 300
 DISTILLER_MAX_TOKENS_LOCAL = 512
 
+
 def _corrections_similar(a: str, b: str, threshold: float = 0.5) -> bool:
     """Content-based test of whether two reflexion corrections say the SAME thing
     (2026 L5: judge repeat-vs-conflict on the fact's content, not on the key
@@ -34,9 +51,37 @@ def _corrections_similar(a: str, b: str, threshold: float = 0.5) -> bool:
     `threshold` of the smaller set's meaningful words appears in the other. Either
     side empty is treated as same (no substance to contradict)."""
     import re as _re
-    _STOP = {"the", "a", "an", "to", "of", "for", "on", "in", "with", "and",
-             "or", "is", "are", "be", "do", "not", "you", "your", "it", "its",
-             "use", "using", "file", "files", "first", "then", "before", "so"}
+
+    _STOP = {
+        "the",
+        "a",
+        "an",
+        "to",
+        "of",
+        "for",
+        "on",
+        "in",
+        "with",
+        "and",
+        "or",
+        "is",
+        "are",
+        "be",
+        "do",
+        "not",
+        "you",
+        "your",
+        "it",
+        "its",
+        "use",
+        "using",
+        "file",
+        "files",
+        "first",
+        "then",
+        "before",
+        "so",
+    }
     # Negation is a STRONG conflict signal: "never web_search" vs "web_search for
     # every goal" share tokens but direct the agent opposite ways. If a negation
     # marker appears on exactly ONE side, treat as a conflict regardless of the
@@ -47,9 +92,14 @@ def _corrections_similar(a: str, b: str, threshold: float = 0.5) -> bool:
     b_neg = bool(_NEG.search(str(b or "").lower()))
     if a_neg != b_neg:
         return False  # one side forbids, the other commands -> conflicting
+
     def _words(s):
-        return {w for w in _re.findall(r"[a-z0-9]+", str(s or "").lower())
-                if len(w) > 2 and w not in _STOP}
+        return {
+            w
+            for w in _re.findall(r"[a-z0-9]+", str(s or "").lower())
+            if len(w) > 2 and w not in _STOP
+        }
+
     wa, wb = _words(a), _words(b)
     if not wa or not wb:
         return True  # nothing substantive -> ambiguous, treat as same (reinforce)
@@ -59,6 +109,7 @@ def _corrections_similar(a: str, b: str, threshold: float = 0.5) -> bool:
 
 _RULE_SAME = "same"
 _RULE_CONFLICT = "conflict"
+
 
 def _classify_rule(existing: dict | None, correction: str) -> str:
     """Classify a reflector write as same-fact (reinforce) or conflict (overwrite)
@@ -91,9 +142,13 @@ def _record_rule_to_agents_md(component: str, correction: str, confidence: float
         if marker in content:
             content = content.replace(marker, marker + "\n" + new_entry, 1)
             agents_file.write_text(content, encoding="utf-8")
-            logger.info("Recorded high-confidence ASPO rule to AGENTS.md for component '%s'", component)
+            logger.info(
+                "Recorded high-confidence ASPO rule to AGENTS.md for component '%s'",
+                component,
+            )
     except Exception as e:
         logger.warning("Could not record ASPO rule to AGENTS.md: %s", e)
+
 
 # Structured reflection template (per Reflexion best practices). Free-form rules
 # are worthless; rules must reference the concrete failure and a do-not-repeat.
@@ -157,7 +212,11 @@ def _auto_scope(confidence: float, failure_reason: str) -> str:
 
 
 class ReflectionService:
-    def __init__(self, qdrant_url: str = "http://127.0.0.1:6333", collection_name: str = "ReflexionMemory"):
+    def __init__(
+        self,
+        qdrant_url: str = "http://127.0.0.1:6333",
+        collection_name: str = "ReflexionMemory",
+    ):
         self.client = AsyncQdrantClient(url=qdrant_url)
         self.collection = collection_name
         self.embedder = EmbeddingService()
@@ -184,14 +243,16 @@ class ReflectionService:
             if not any(c.name == self.collection for c in collections):
                 await self.client.create_collection(
                     collection_name=self.collection,
-                    vectors_config=VectorParams(size=768, distance=Distance.COSINE)
+                    vectors_config=VectorParams(size=768, distance=Distance.COSINE),
                 )
             return True
         except Exception as e:
             logger.error("Failed to init ReflexionMemory: %s", e)
             return False
 
-    async def check_for_past_mistakes(self, task_context: str, threshold: float = 0.75, max_chars: int = 700) -> str:
+    async def check_for_past_mistakes(
+        self, task_context: str, threshold: float = 0.75, max_chars: int = 700
+    ) -> str:
         """Ranked retrieval with recency+confidence decay (top-k, not single hit).
         score = similarity · decay(age) · confidence; returns the single best rule.
 
@@ -217,9 +278,17 @@ class ReflectionService:
                     query=embedding,
                     limit=5,
                     score_threshold=threshold,
-                    query_filter=Filter(must=[FieldCondition(key="scope", match=MatchValue(value="shared"))]),
+                    query_filter=Filter(
+                        must=[
+                            FieldCondition(
+                                key="scope", match=MatchValue(value="shared")
+                            )
+                        ]
+                    ),
                 )
-                shared_results = list(getattr(shared_response, "points", shared_response))
+                shared_results = list(
+                    getattr(shared_response, "points", shared_response)
+                )
                 seen_ids = set()
                 merged = []
                 for r in results + shared_results:
@@ -248,20 +317,27 @@ class ReflectionService:
                             "id": getattr(r, "id", None),
                             "payload": r.payload or {},
                             "_dense": r.score or 0.0,
-                            "_age": now - float((r.payload or {}).get("timestamp", now)),
+                            "_age": now
+                            - float((r.payload or {}).get("timestamp", now)),
                         }
                         for r in results
                     ]
                     from runtime_v2.services.memory_core import rerank_memories
-                    rr = await asyncio.to_thread(rerank_memories, task_context, [
-                        {"payload": c["payload"], "id": c["id"]} for c in candidates
-                    ])
+
+                    rr = await asyncio.to_thread(
+                        rerank_memories,
+                        task_context,
+                        [{"payload": c["payload"], "id": c["id"]} for c in candidates],
+                    )
                     for item in rr:
                         cid = item.get("id")
                         if cid is not None:
                             reranked_by_score[cid] = float(item.get("score", 0.0))
                 except Exception as _rerank_err:
-                    logger.debug("Rerank of past-mistake candidates failed; using dense scores: %s", _rerank_err)
+                    logger.debug(
+                        "Rerank of past-mistake candidates failed; using dense scores: %s",
+                        _rerank_err,
+                    )
 
                 best = None
                 best_rank = -1.0
@@ -298,9 +374,17 @@ class ReflectionService:
             logger.warning("Failed to check ReflexionMemory: %s", e)
         return ""
 
-    async def store_reflexion(self, task: str, action: str, failure_reason: str, correction: str,
-                              component: str = "unknown", confidence: float = 0.7,
-                              do_not_repeat: str = "", scope: str | None = None):
+    async def store_reflexion(
+        self,
+        task: str,
+        action: str,
+        failure_reason: str,
+        correction: str,
+        component: str = "unknown",
+        confidence: float = 0.7,
+        do_not_repeat: str = "",
+        scope: str | None = None,
+    ):
         """Persist a reflexion rule. scope defaults to 'agent' and is auto-assigned
         via _auto_scope() when not given (confident + generic failure => 'shared')."""
         await self._wait_init()
@@ -312,7 +396,9 @@ class ReflectionService:
             # a repeated failure overwrites the prior rule instead of flooding
             # the collection with near-duplicate points (observed: 60 copies of
             # "File not found: x.py" crowded out specific per-task lessons).
-            point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{component}|{failure_reason}"))
+            point_id = str(
+                uuid.uuid5(uuid.NAMESPACE_DNS, f"{component}|{failure_reason}")
+            )
             # 2026 L5 (trust-gated consolidation): a repeated failure must
             # REINFORCE the stored rule, not flat-overwrite it. Read the existing
             # point; if present, bump its count and raise confidence (capped) so a
@@ -321,131 +407,154 @@ class ReflectionService:
             # correction is retained (longer/more-specific wins).
             existing = None
             retrieve_failed = False
-            try:
-                resp = await self.client.retrieve(
-                    collection_name=self.collection,
-                    ids=[point_id],
-                    with_payload=True,
-                    with_vectors=False,
-                )
-                if resp:
-                    existing = resp[0].payload or {}
-            except Exception as exc:
-                # 2026 L5 (trust-gated consolidation): a GENUINE retrieve failure
-                # (DB/vector-store timeout, corrupt payload) is NOT the same as "no
-                # prior record exists". The old behavior silently degraded both to
-                # existing=None — a flaky retrieve would misclassify a real
-                # CONFLICT as a brand-new first-write (silently discarding history,
-                # exactly what L5 forbids) and stop confidence from accumulating for
-                # reasons unrelated to the fact. Now it's logged loudly and the
-                # write is FLAGGED so the failure is observable, not folded into the
-                # happy-path default.
-                retrieve_failed = True
-                logger.warning(
-                    "Reflexion retrieve FAILED for (component=%s, reason=%s): %s — "
-                    "treating as unclassified first-write (history not consulted)",
-                    component, failure_reason, exc,
-                )
-                existing = None
+            async with _get_point_lock(point_id):
+                try:
+                    resp = await self.client.retrieve(
+                        collection_name=self.collection,
+                        ids=[point_id],
+                        with_payload=True,
+                        with_vectors=False,
+                    )
+                    if resp:
+                        existing = resp[0].payload or {}
+                except Exception as exc:
+                    # 2026 L5 (trust-gated consolidation): a GENUINE retrieve failure
+                    # (DB/vector-store timeout, corrupt payload) is NOT the same as "no
+                    # prior record exists". The old behavior silently degraded both to
+                    # existing=None — a flaky retrieve would misclassify a real
+                    # CONFLICT as a brand-new first-write (silently discarding history,
+                    # exactly what L5 forbids) and stop confidence from accumulating for
+                    # reasons unrelated to the fact. Now it's logged loudly and the
+                    # write is FLAGGED so the failure is observable, not folded into the
+                    # happy-path default.
+                    retrieve_failed = True
+                    logger.warning(
+                        "Reflexion retrieve FAILED for (component=%s, reason=%s): %s — "
+                        "treating as unclassified first-write (history not consulted)",
+                        component,
+                        failure_reason,
+                        exc,
+                    )
+                    existing = None
 
-            # 2026 L5 (trust-gated consolidation): judge a write as SAME-FACT
-            # (reinforce: bump count + confidence) vs CONFLICT (overwrite + log)
-            # based on the CORRECTION CONTENT, not on the key having been written
-            # before. Same precedence discipline as the L2 classifier: a repeated
-            # write with DIFFERENT advice is a conflict (never always-reinforce),
-            # an identical/rephrased repeat is same-fact (never always-overwrite).
-            verdict = _classify_rule(existing, correction)
-            count = int(existing.get("count", 1) or 1) if existing else 1
-            prev_conf = float(existing.get("confidence", confidence) or confidence) if existing else confidence
-            if verdict == _RULE_CONFLICT:
-                # A genuinely different correction for the same failure_reason: the
-                # old content is SUPERSEDED (overwrite with the new) and the
-                # conflict is logged, not silently discarded. Count carries over as
-                # recurrence evidence; confidence for the new content is modest.
-                if existing and existing.get("correction") not in (None, "", correction):
-                    logger.info(
-                        "Reflexion CONFLICT for (component=%s, reason=%s): overwriting "
-                        "prior rule %r with new rule %r",
-                        component, failure_reason,
-                        str(existing.get("correction"))[:60], str(correction)[:60],
-                    )
-                best_conf = max(confidence, prev_conf * 0.5)
-                scope = existing.get("scope", scope) if existing else scope
-            else:
-                # SAME FACT: reinforce — a true repeat (existing point) increments
-                # count and raises confidence (capped) so a recurring failure
-                # accumulates evidence and becomes load-bearing, while a first
-                # write stays at count=1 / tentative. Keep the more specific
-                # (longer) correction.
-                if existing:
-                    count = count + 1
-                    best_conf = min(0.98, prev_conf + 0.08)
+                # 2026 L5 (trust-gated consolidation): judge a write as SAME-FACT
+                # (reinforce: bump count + confidence) vs CONFLICT (overwrite + log)
+                # based on the CORRECTION CONTENT, not on the key having been written
+                # before. Same precedence discipline as the L2 classifier: a repeated
+                # write with DIFFERENT advice is a conflict (never always-reinforce),
+                # an identical/rephrased repeat is same-fact (never always-overwrite).
+                verdict = _classify_rule(existing, correction)
+                count = int(existing.get("count", 1) or 1) if existing else 1
+                prev_conf = (
+                    float(existing.get("confidence", confidence) or confidence)
+                    if existing
+                    else confidence
+                )
+                if verdict == _RULE_CONFLICT:
+                    # A genuinely different correction for the same failure_reason: the
+                    # old content is SUPERSEDED (overwrite with the new) and the
+                    # conflict is logged, not silently discarded. Count carries over as
+                    # recurrence evidence; confidence for the new content is modest.
+                    if existing and existing.get("correction") not in (
+                        None,
+                        "",
+                        correction,
+                    ):
+                        logger.info(
+                            "Reflexion CONFLICT for (component=%s, reason=%s): overwriting "
+                            "prior rule %r with new rule %r",
+                            component,
+                            failure_reason,
+                            str(existing.get("correction"))[:60],
+                            str(correction)[:60],
+                        )
+                    best_conf = max(confidence, prev_conf * 0.5)
+                    scope = existing.get("scope", scope) if existing else scope
                 else:
-                    count = 1
-                    best_conf = prev_conf
-                if existing and existing.get("correction") and len(str(existing.get("correction"))) > len(correction or ""):
-                    correction = existing.get("correction")
-                if existing and existing.get("do_not_repeat"):
-                    do_not_repeat = existing.get("do_not_repeat")
-                best_conf = max(best_conf, confidence)
-            await self.client.upsert(
-                collection_name=self.collection,
-                points=[
-                    PointStruct(
-                        id=point_id,
-                        vector=embedding,
-                        payload={
-                            "task": task,
-                            "action": action,
-                            "failure_reason": failure_reason,
-                            "correction": correction,
-                            "do_not_repeat": do_not_repeat,
-                            "component": component,
-                            "scope": scope,
-                            "timestamp": time.time(),
-                            "confidence": best_conf,
-                            "count": count,
-                            "retrieve_failed": retrieve_failed,
-                        }
-                    )
-                ],
-                wait=True
-            )
-            await asyncio.to_thread(_record_rule_to_agents_md, component, correction, best_conf)
+                    # SAME FACT: reinforce — a true repeat (existing point) increments
+                    # count and raises confidence (capped) so a recurring failure
+                    # accumulates evidence and becomes load-bearing, while a first
+                    # write stays at count=1 / tentative. Keep the more specific
+                    # (longer) correction.
+                    if existing:
+                        count = count + 1
+                        best_conf = min(0.98, prev_conf + 0.08)
+                    else:
+                        count = 1
+                        best_conf = prev_conf
+                    if (
+                        existing
+                        and existing.get("correction")
+                        and len(str(existing.get("correction"))) > len(correction or "")
+                    ):
+                        correction = existing.get("correction")
+                    if existing and existing.get("do_not_repeat"):
+                        do_not_repeat = existing.get("do_not_repeat")
+                    best_conf = max(best_conf, confidence)
+                await self.client.upsert(
+                    collection_name=self.collection,
+                    points=[
+                        PointStruct(
+                            id=point_id,
+                            vector=embedding,
+                            payload={
+                                "task": task,
+                                "action": action,
+                                "failure_reason": failure_reason,
+                                "correction": correction,
+                                "do_not_repeat": do_not_repeat,
+                                "component": component,
+                                "scope": scope,
+                                "timestamp": time.time(),
+                                "confidence": best_conf,
+                                "count": count,
+                                "retrieve_failed": retrieve_failed,
+                            },
+                        )
+                    ],
+                    wait=True,
+                )
+                await asyncio.to_thread(
+                    _record_rule_to_agents_md, component, correction, best_conf
+                )
         except Exception as e:
             logger.error("Failed to store reflexion: %s", e)
 
+
 _service = None
+
+
 def get_reflection_service() -> ReflectionService:
     global _service
     if _service is None:
         _service = ReflectionService()
     return _service
 
+
 def get_latest_failure(filepath: Path) -> dict | None:
     chunk_size = 4096
-    with open(filepath, 'rb') as f:
+    with open(filepath, "rb") as f:
         f.seek(0, os.SEEK_END)
         file_size = f.tell()
         position = file_size
-        buffer = b''
-        
+        buffer = b""
+
         while position > 0:
             read_size = min(chunk_size, position)
             position -= read_size
             f.seek(position)
             chunk = f.read(read_size)
             buffer = chunk + buffer
-            
-            lines = buffer.split(b'\n')
+
+            lines = buffer.split(b"\n")
             if position > 0:
                 buffer = lines.pop(0)
-            
+
             for line in reversed(lines):
                 if not line.strip():
                     continue
                 try:
-                    entry = json.loads(line.decode('utf-8'))
+                    entry = json.loads(line.decode("utf-8"))
                     err = entry.get("error")
                     if err is not None and err != "" and str(err).lower() != "null":
                         # Prefer REAL agent failures (entries carrying a component or
@@ -456,38 +565,43 @@ def get_latest_failure(filepath: Path) -> dict | None:
                         # those produced the 137 component:"unknown" noise rules that
                         # swamped ReflexionMemory. Real agent tool failures carry a
                         # component (agent_id) — those are what the distiller should learn from.
-                        is_agent_failure = bool(entry.get("component") or entry.get("agent"))
+                        is_agent_failure = bool(
+                            entry.get("component") or entry.get("agent")
+                        )
                         if is_agent_failure:
                             return entry
-                except Exception:
+                except Exception as exc:
+                    logger.debug("Failed to parse diary line: %s", exc)
                     pass
     # No agent-tagged failure found — fall back to the raw last error so the
     # distiller still has SOMETHING rather than silently skipping.
-    with open(filepath, 'rb') as f:
+    with open(filepath, "rb") as f:
         f.seek(0, os.SEEK_END)
         file_size = f.tell()
         position = file_size
-        buffer = b''
+        buffer = b""
         while position > 0:
             read_size = min(chunk_size, position)
             position -= read_size
             f.seek(position)
             chunk = f.read(read_size)
             buffer = chunk + buffer
-            lines = buffer.split(b'\n')
+            lines = buffer.split(b"\n")
             if position > 0:
                 buffer = lines.pop(0)
             for line in reversed(lines):
                 if not line.strip():
                     continue
                 try:
-                    entry = json.loads(line.decode('utf-8'))
+                    entry = json.loads(line.decode("utf-8"))
                     err = entry.get("error")
                     if err is not None and err != "" and str(err).lower() != "null":
                         return entry
-                except Exception:
+                except Exception as exc:
+                    logger.debug("Failed to parse fallback diary line: %s", exc)
                     pass
     return None
+
 
 async def _distill(distiller_content: str, fix_class: str | None = None) -> str:
     """Run the distiller LLM call. Cloud DeepSeek V4 flash first (fast, no
@@ -501,7 +615,9 @@ async def _distill(distiller_content: str, fix_class: str | None = None) -> str:
     running distillation (fail-open)."""
 
     if fix_class == "model_variability":
-        logger.info("Skipping LLM distillation for model_variability failure (not diagnosable)")
+        logger.info(
+            "Skipping LLM distillation for model_variability failure (not diagnosable)"
+        )
         return ""
 
     attempts = []
@@ -512,55 +628,67 @@ async def _distill(distiller_content: str, fix_class: str | None = None) -> str:
     if os.environ.get("OPENAI_API_KEY"):
         api_base = os.getenv("OPENAI_API_BASE", "https://api.opencode.go/v1")
         api_key = os.environ["OPENAI_API_KEY"]
-        attempts.append({
-            "model": "deepseek-v4-flash",
-            "messages": [{"role": "user", "content": distiller_content}],
-            "api_base": api_base,
-            "api_key": api_key,
-            "custom_llm_provider": "openai",
-            "max_tokens": DISTILLER_MAX_TOKENS_CLOUD,
-            "timeout": 90.0,
-        })
+        attempts.append(
+            {
+                "model": "deepseek-v4-flash",
+                "messages": [{"role": "user", "content": distiller_content}],
+                "api_base": api_base,
+                "api_key": api_key,
+                "custom_llm_provider": "openai",
+                "max_tokens": DISTILLER_MAX_TOKENS_CLOUD,
+                "timeout": 90.0,
+            }
+        )
     if os.environ.get("OPENROUTER_API_KEY"):
-        attempts.append({
-            "model": CLOUD_MODEL,
-            "messages": [{"role": "user", "content": distiller_content}],
-            "max_tokens": DISTILLER_MAX_TOKENS_CLOUD,
-            "timeout": 90.0,
-        })
+        attempts.append(
+            {
+                "model": CLOUD_MODEL,
+                "messages": [{"role": "user", "content": distiller_content}],
+                "max_tokens": DISTILLER_MAX_TOKENS_CLOUD,
+                "timeout": 90.0,
+            }
+        )
     if os.environ.get("GROQ_API_KEY"):
-        attempts.append({
-            "model": "groq/llama-3.3-70b-versatile",
-            "messages": [{"role": "user", "content": distiller_content}],
-            "max_tokens": DISTILLER_MAX_TOKENS_CLOUD,
-            "timeout": 90.0,
-        })
+        attempts.append(
+            {
+                "model": "groq/llama-3.3-70b-versatile",
+                "messages": [{"role": "user", "content": distiller_content}],
+                "max_tokens": DISTILLER_MAX_TOKENS_CLOUD,
+                "timeout": 90.0,
+            }
+        )
     if os.environ.get("NVIDIA_API_KEY"):
-        attempts.append({
-            "model": "nvidia_nim/meta/llama-3.1-70b-instruct",
-            "messages": [{"role": "user", "content": distiller_content}],
-            "max_tokens": DISTILLER_MAX_TOKENS_CLOUD,
-            "timeout": 90.0,
-        })
+        attempts.append(
+            {
+                "model": "nvidia_nim/meta/llama-3.1-70b-instruct",
+                "messages": [{"role": "user", "content": distiller_content}],
+                "max_tokens": DISTILLER_MAX_TOKENS_CLOUD,
+                "timeout": 90.0,
+            }
+        )
     if os.environ.get("GEMINI_API_KEY"):
-        attempts.append({
-            "model": "gemini/gemini-2.0-flash",
-            "messages": [{"role": "user", "content": distiller_content}],
-            "max_tokens": DISTILLER_MAX_TOKENS_CLOUD,
-            "timeout": 90.0,
-        })
-    attempts.append({
-        "model": "qwen3.5-0.8b",
-        "messages": [
-            {"role": "system", "content": "/no_think\n\n"},
-            {"role": "user", "content": distiller_content},
-        ],
-        "api_base": "http://127.0.0.1:8084/v1",
-        "api_key": "llama",
-        "custom_llm_provider": "openai",
-        "max_tokens": DISTILLER_MAX_TOKENS_LOCAL,
-        "timeout": 120.0,
-    })
+        attempts.append(
+            {
+                "model": "gemini/gemini-2.0-flash",
+                "messages": [{"role": "user", "content": distiller_content}],
+                "max_tokens": DISTILLER_MAX_TOKENS_CLOUD,
+                "timeout": 90.0,
+            }
+        )
+    attempts.append(
+        {
+            "model": "qwen3.5-0.8b",
+            "messages": [
+                {"role": "system", "content": "/no_think\n\n"},
+                {"role": "user", "content": distiller_content},
+            ],
+            "api_base": "http://127.0.0.1:8084/v1",
+            "api_key": "llama",
+            "custom_llm_provider": "openai",
+            "max_tokens": DISTILLER_MAX_TOKENS_LOCAL,
+            "timeout": 120.0,
+        }
+    )
 
     last_exc = None
     for cfg in attempts:
@@ -571,6 +699,7 @@ async def _distill(distiller_content: str, fix_class: str | None = None) -> str:
             if content.strip():
                 try:
                     from runtime_v2.services.usage_log import record_response
+
                     record_response(res, cfg.get("model", ""), source="distill")
                 except Exception as usage_err:  # noqa: BLE001
                     logger.debug("usage log skipped: %s", usage_err)
@@ -583,11 +712,16 @@ async def _distill(distiller_content: str, fix_class: str | None = None) -> str:
             # Retry cloud models with fewer tokens on 402 credit exhaustion
             if "can only afford" in msg and cfg.get("max_tokens", 0) > 128:
                 import re
+
                 match = re.search(r"can only afford (\d+)", msg)
                 if match:
                     affordable = int(match.group(1))
                     clamped = max(128, min(affordable - 64, 512))
-                    logger.warning("Distiller retrying %s with max_tokens=%d", cfg["model"], clamped)
+                    logger.warning(
+                        "Distiller retrying %s with max_tokens=%d",
+                        cfg["model"],
+                        clamped,
+                    )
                     cfg_copy = dict(cfg)
                     cfg_copy["max_tokens"] = clamped
                     try:
@@ -596,15 +730,24 @@ async def _distill(distiller_content: str, fix_class: str | None = None) -> str:
                         content = res.choices[0].message.content or ""
                         if content.strip():
                             try:
-                                from runtime_v2.services.usage_log import record_response
-                                record_response(res, cfg.get("model", ""), source="distill_retry")
+                                from runtime_v2.services.usage_log import (
+                                    record_response,
+                                )
+
+                                record_response(
+                                    res, cfg.get("model", ""), source="distill_retry"
+                                )
                             except Exception as usage_err:  # noqa: BLE001
                                 logger.debug("usage log skipped: %s", usage_err)
                             return content
                     except Exception as exc:
                         # BUG FIX: was silently swallowing the 402 token-reduction
                         # retry failure with no log. Now debug-logged.
-                        logger.debug("402 retry with fewer tokens failed for %s: %s", cfg["model"], exc)
+                        logger.debug(
+                            "402 retry with fewer tokens failed for %s: %s",
+                            cfg["model"],
+                            exc,
+                        )
             # 402 = OpenRouter credit exhaustion — fall through to local qwen3.5-4b.
             # With the MTP 4B at ~15 t/s (vs old 5 t/s) the local fallback is viable.
     if last_exc:
@@ -618,20 +761,25 @@ async def run_reflection():
     except FileNotFoundError:
         logger.info("No organism diary found. Skipping reflection.")
         return
-    
+
     if not latest_failure:
         logger.info("No failures detected in diary.")
         return
-        
+
     task_desc = latest_failure.get("task", "Unknown Task")
     content = latest_failure.get("content_preview", "")
     error_msg = latest_failure.get("error")
-    component = str(latest_failure.get("component") or latest_failure.get("agent") or "unknown")
+    component = str(
+        latest_failure.get("component") or latest_failure.get("agent") or "unknown"
+    )
     fix_class = latest_failure.get("fix_class")
     if fix_class is None:
         try:
             from swarm_os.healing.diagnostician import Diagnostician
-            hypotheses = Diagnostician().diagnose({"detail": error_msg or "", "component": component})
+
+            hypotheses = Diagnostician().diagnose(
+                {"detail": error_msg or "", "component": component}
+            )
             if hypotheses:
                 fix_class = hypotheses[0].get("fix_class")
         except Exception as exc:
@@ -640,9 +788,14 @@ async def run_reflection():
             logger.debug("Diagnostician failed during reflection: %s", exc)
 
     logger.info(f"Distilling failure: {error_msg}")
-    
-    distiller_content = DISTILLER_PROMPT.format(task_description=task_desc, component=component, content_preview=content, error_message=error_msg)
-    
+
+    distiller_content = DISTILLER_PROMPT.format(
+        task_description=task_desc,
+        component=component,
+        content_preview=content,
+        error_message=error_msg,
+    )
+
     try:
         rule_full = await _distill(distiller_content, fix_class=fix_class)
 
@@ -670,7 +823,9 @@ async def run_reflection():
 
         if not correction:
             legacy = re.search(r"<new_rule>(.*?)</new_rule>", rule_full, re.DOTALL)
-            correction = legacy.group(1).strip() if legacy else (rule_full or "").strip()[:500]
+            correction = (
+                legacy.group(1).strip() if legacy else (rule_full or "").strip()[:500]
+            )
         if not correction:
             logger.warning("No rule generated by distiller.")
             return
@@ -678,11 +833,14 @@ async def run_reflection():
         logger.info(f"Distilled new rule: {correction}")
 
         svc = get_reflection_service()
-        await svc.store_reflexion(task_desc, content, error_msg, correction, component=component)
+        await svc.store_reflexion(
+            task_desc, content, error_msg, correction, component=component
+        )
         logger.info("Successfully saved reflexion rule to Qdrant ReflexionMemory.")
-        
+
     except Exception as e:
         logger.error(f"Distiller phase failed: {e}")
+
 
 if __name__ == "__main__":
     asyncio.run(run_reflection())
