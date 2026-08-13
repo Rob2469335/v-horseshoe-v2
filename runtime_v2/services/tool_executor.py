@@ -486,31 +486,48 @@ async def _dispatch(tool_name: str, payload: dict) -> dict:
 
             query = payload.get("query", "")
             limit = int(payload.get("limit", 5))
-            text_result = await asyncio.to_thread(semantic_search, query, limit)
-            result = {"ok": True, "result": text_result}
+            try:
+                async with asyncio.timeout(30.0):
+                    text_result = await asyncio.to_thread(semantic_search, query, limit)
+            except TimeoutError:
+                result = {"ok": False, "error": "Semantic search timed out."}
+            else:
+                result = {"ok": True, "result": text_result}
         elif tool_name == "remember":
             from runtime_v2.services.memory_core import remember_fact
 
             fact = payload.get("fact", "")
             category = payload.get("category", "general")
-            success = await asyncio.to_thread(remember_fact, fact, category)
-            if success:
-                result = {"ok": True, "result": f"Successfully remembered: {fact}"}
+            try:
+                async with asyncio.timeout(30.0):
+                    success = await asyncio.to_thread(remember_fact, fact, category)
+            except TimeoutError:
+                success = False
+                result = {"ok": False, "error": "Memory store timed out."}
             else:
-                result = {"ok": False, "error": "Failed to store memory in Qdrant."}
+                if success:
+                    result = {"ok": True, "result": f"Successfully remembered: {fact}"}
+                else:
+                    result = {"ok": False, "error": "Failed to store memory in Qdrant."}
         elif tool_name == "deprecate_memory":
             from runtime_v2.services.memory_core import deprecate_memory
 
             point_id = payload.get("point_id", "")
             category = payload.get("category", "general")
-            success = await asyncio.to_thread(deprecate_memory, point_id, category)
-            if success:
-                result = {
-                    "ok": True,
-                    "result": f"Successfully deprecated memory ID: {point_id}",
-                }
+            try:
+                async with asyncio.timeout(30.0):
+                    success = await asyncio.to_thread(deprecate_memory, point_id, category)
+            except TimeoutError:
+                success = False
+                result = {"ok": False, "error": "Memory deprecate timed out."}
             else:
-                result = {"ok": False, "error": "Failed to deprecate memory in Qdrant."}
+                if success:
+                    result = {
+                        "ok": True,
+                        "result": f"Successfully deprecated memory ID: {point_id}",
+                    }
+                else:
+                    result = {"ok": False, "error": "Failed to deprecate memory in Qdrant."}
         elif tool_name == "sandbox_repl":
             from swarm_os.capabilities.sandbox_repl import SandboxReplHandler
             import inspect
