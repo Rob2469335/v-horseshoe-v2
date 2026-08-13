@@ -16,14 +16,7 @@ from qdrant_client import models
 logger = logging.getLogger(__name__)
 
 _shared_client: AsyncQdrantClient | None = None
-_collection_lock: asyncio.Lock | None = None
-
-
-def _get_collection_lock() -> asyncio.Lock:
-    global _collection_lock
-    if _collection_lock is None:
-        _collection_lock = asyncio.Lock()
-    return _collection_lock
+_collection_lock: asyncio.Lock = asyncio.Lock()
 
 
 class VectorStore:
@@ -88,7 +81,7 @@ class VectorStore:
         max_attempts = 5
         for attempt in range(max_attempts):
             try:
-                async with _get_collection_lock():
+                async with _collection_lock:
                     if not await self.client.collection_exists(self.collection_name):
                         await self.client.create_collection(
                             collection_name=self.collection_name,
