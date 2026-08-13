@@ -17,6 +17,17 @@
     "duckdb": {
       "command": "uvx",
       "args": ["mcp-server-duckdb", "--db-path", "C:\\Users\\rober\\Projects\\v-horseshoe-v2\\data\\analytics.duckdb"]
+    },
+    "semgrep": {
+      "command": "uvx",
+      "args": ["semgrep-mcp", "-t", "stdio"]
+    },
+    "github": {
+      "command": "C:\\Users\\rober\\Projects\\v-horseshoe-v2\\bin\\mcp\\github\\github-mcp-server.exe",
+      "args": ["stdio"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": ""
+      }
     }
   }
 }
