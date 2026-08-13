@@ -1779,6 +1779,9 @@ class AgentServiceV2:
                 action,
                 tool_payload,
                 auth={"agent_id": agent_id, "turn": turn},
+                trace_hook=lambda etype, epayload: self._record_event(
+                    "tool_trace", agent_id, {"tool": action, "type": etype, **epayload}
+                ),
             )
         except Exception as exc:
             log.exception(

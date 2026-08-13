@@ -768,7 +768,7 @@ async def test_web_fetch_result_not_truncated_to_tool_cap(monkeypatch):
         "content": "X" * 5000,
     }  # 5KB of fetched page body
 
-    async def fake_run_tool(tool_name, payload, *, auth=None):
+    async def fake_run_tool(tool_name, payload, *, auth=None, trace_hook=None):
         return big_fetch
 
     monkeypatch.setattr("runtime_v2.services.tool_executor.run", fake_run_tool)
@@ -801,7 +801,7 @@ async def test_filesystem_listing_still_capped_at_tool_budget(monkeypatch):
 
     service = AgentServiceV2()
 
-    async def fake_run_tool(tool_name, payload):
+    async def fake_run_tool(tool_name, payload, *, auth=None, trace_hook=None):
         return {"ok": True, "result": "\n".join(f"file_{i}.py" for i in range(5000))}
 
     monkeypatch.setattr("runtime_v2.services.tool_executor.run", fake_run_tool)

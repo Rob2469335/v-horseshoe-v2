@@ -211,3 +211,28 @@ async def test_git_tool_readonly_dispatch():
     # unknown/state-changing git ops must not be ALLOW
     assert ar.agent_tool_policy("git", "commit") == ar.DENY
     assert ar.agent_tool_policy("git", "reset") == ar.DENY
+
+
+@pytest.mark.asyncio
+async def test_trace_hook_wired_through_dispatch(tmp_path):
+    """The trace_hook seam must be threaded from run() through _dispatch to the
+    handlers that accept it (filesystem/web_search/web_fetch/playwright).
+    Pre-wiring, _dispatch called handlers without the hook so per-tool traces
+    were silently dropped even though the handlers support them."""
+    from runtime_v2.services.tool_executor import run as _run
+    import runtime_v2.services.tool_executor as _te
+
+    target = tmp_path / "probe.txt"
+    target.write_text("hello", encoding="utf-8")
+    traces = []
+    monkeypatch = __import__("pytest").MonkeyPatch()
+    monkeypatch.setattr(_te, "_ROOT", tmp_path)
+    try:
+        await _run(
+            "filesystem",
+            {"operation": "read", "path": "probe.txt"},
+            trace_hook=lambda etype, epayload: traces.append((etype, epayload)),
+        )
+    finally:
+        monkeypatch.undo()
+    assert any(t[0] == "filesystem_read" for t in traces), f"trace_hook not invoked, got {traces}"

@@ -211,6 +211,7 @@ async def run(
     payload: dict,
     *,
     auth: dict | None = None,
+    trace_hook=None,
 ) -> dict:
     """Execute a tool, applying PRE-ACTION AUTHORIZATION first (single
     enforcement point — Design A, 2026-08-12).
@@ -221,12 +222,17 @@ async def run(
       - {"approved_pending_id": <id>, "tool": <tool>, "payload": <payload>}:
         an already-approved pending action; the payload is re-verified by
         digest before dispatch (never trusts a caller-supplied replacement).
+
+    `trace_hook` is an optional callable(event_type, payload) forwarded to
+    handlers that support per-tool tracing (filesystem/web_search/web_fetch/
+    playwright). Defaults to None — callers that do not pass it get identical
+    behavior.
     """
     try:
         policy = agent_tool_policy(tool_name, payload.get("operation")
                                    or payload.get("action"))
         if policy == ALLOW:
-            return await _dispatch(tool_name, payload)
+            return await _dispatch(tool_name, payload, trace_hook=trace_hook)
         if policy == DENY:
             return {
                 "ok": False,
@@ -248,7 +254,7 @@ async def run(
                 expected_payload=payload,
             )
             if consumed is not None:
-                return await _dispatch(tool_name, payload)
+                return await _dispatch(tool_name, payload, trace_hook=trace_hook)
             return {
                 "ok": False,
                 "error": (
@@ -331,7 +337,7 @@ def pending_stats() -> dict:
     return get_registry().stats()
 
 
-async def _dispatch(tool_name: str, payload: dict) -> dict:
+async def _dispatch(tool_name: str, payload: dict, *, trace_hook=None) -> dict:
     try:
         if tool_name == "filesystem":
             operation = payload.get("operation")
@@ -377,7 +383,7 @@ async def _dispatch(tool_name: str, payload: dict) -> dict:
                                 ),
                             }
                         else:
-                            res_obj = filesystem_handler(payload, _ROOT)
+                            res_obj = filesystem_handler(payload, _ROOT, trace_hook=trace_hook)
                             async with asyncio.timeout(180.0):
                                 result = (
                                     await res_obj
@@ -408,7 +414,7 @@ async def _dispatch(tool_name: str, payload: dict) -> dict:
                                 ),
                             }
                         else:
-                            res_obj = filesystem_handler(payload, _ROOT)
+                            res_obj = filesystem_handler(payload, _ROOT, trace_hook=trace_hook)
                             async with asyncio.timeout(180.0):
                                 result = (
                                     await res_obj
@@ -416,7 +422,7 @@ async def _dispatch(tool_name: str, payload: dict) -> dict:
                                     else res_obj
                                 )
                     else:
-                        res_obj = filesystem_handler(payload, _ROOT)
+                        res_obj = filesystem_handler(payload, _ROOT, trace_hook=trace_hook)
                         async with asyncio.timeout(180.0):
                             result = (
                                 await res_obj
@@ -451,7 +457,7 @@ async def _dispatch(tool_name: str, payload: dict) -> dict:
             import inspect
 
             try:
-                res_obj = web_search_handler(payload)
+                res_obj = web_search_handler(payload, trace_hook=trace_hook)
                 async with asyncio.timeout(180.0):
                     result = await res_obj if inspect.isawaitable(res_obj) else res_obj
             except TimeoutError:
@@ -461,7 +467,7 @@ async def _dispatch(tool_name: str, payload: dict) -> dict:
             import inspect
 
             try:
-                res_obj = web_fetch_handler(payload)
+                res_obj = web_fetch_handler(payload, trace_hook=trace_hook)
                 async with asyncio.timeout(120.0):
                     result = await res_obj if inspect.isawaitable(res_obj) else res_obj
             except TimeoutError:
@@ -572,7 +578,7 @@ async def _dispatch(tool_name: str, payload: dict) -> dict:
 
             try:
                 async with asyncio.timeout(180.0):
-                    result = await playwright_handler(payload)
+                    result = await playwright_handler(payload, trace_hook=trace_hook)
             except TimeoutError:
                 result = {"ok": False, "error": "Playwright operation timed out."}
         elif tool_name in (
