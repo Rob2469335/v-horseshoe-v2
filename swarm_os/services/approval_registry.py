@@ -112,6 +112,13 @@ def agent_tool_policy(tool: str, action: str | None = None) -> str:
     if t == "semantic_search":
         return ALLOW
 
+    if t == "git":
+        if a in ("status", "log", "diff", "diff-stat", "show", "branch"):
+            return ALLOW
+        # read-only git tool: any unknown/other operation (including the
+        # state-changing ones the executor doesn't implement) is denied.
+        return DENY if a else ALLOW  # no action = default status read
+
     if t == "screen":
         if a in _SCREEN_READ_OPS:
             return ALLOW

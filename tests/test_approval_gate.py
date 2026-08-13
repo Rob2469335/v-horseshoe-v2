@@ -46,6 +46,14 @@ def test_read_only_ops_are_allow():
     assert ar.agent_tool_policy("screen", "cursor_position") == ar.ALLOW
     assert ar.agent_tool_policy("system", "system_inventory") == ar.ALLOW
     assert ar.agent_tool_policy("system", "process_list") == ar.ALLOW
+    assert ar.agent_tool_policy("git", "status") == ar.ALLOW
+    assert ar.agent_tool_policy("git", "log") == ar.ALLOW
+    assert ar.agent_tool_policy("git", "diff") == ar.ALLOW
+    assert ar.agent_tool_policy("git", "branch") == ar.ALLOW
+    assert ar.agent_tool_policy("git") == ar.ALLOW  # no action = status read
+    assert ar.agent_tool_policy("git", "commit") == ar.DENY
+    assert ar.agent_tool_policy("git", "checkout") == ar.DENY
+    assert ar.agent_tool_policy("git", "reset") == ar.DENY
 
 
 def test_side_effecting_ops_require_confirm():
@@ -186,3 +194,20 @@ async def test_email_send_confirmation_preserved(monkeypatch):
     assert ar.agent_tool_policy("email_send") == ar.ALWAYS_CONFIRM
     first = await run("email_send", {"send_token": "x", "confirmed": False})
     assert first.get("status") == "confirmation_required"
+
+
+@pytest.mark.asyncio
+async def test_git_tool_readonly_dispatch():
+    """The git tool (read-only status/log/diff) is ALLOW-tier and dispatches
+    through the gate to real git output. This pins the tool surface so the
+    agent can ground edits against the working-tree baseline."""
+    from tests.conftest import run_approved
+    from runtime_v2.services.tool_executor import run as te_run
+
+    assert ar.agent_tool_policy("git", "status") == ar.ALLOW
+    result = await run_approved(te_run, "git", {"operation": "status"})
+    assert result.get("ok") is True
+    assert isinstance(result.get("result"), str)
+    # unknown/state-changing git ops must not be ALLOW
+    assert ar.agent_tool_policy("git", "commit") == ar.DENY
+    assert ar.agent_tool_policy("git", "reset") == ar.DENY

@@ -797,6 +797,51 @@ async def _dispatch(tool_name: str, payload: dict) -> dict:
             except Exception:
                 log.exception("MCP tool execution failed: %s.%s", server_name, mcp_tool)
                 result = {"ok": False, "error": "MCP tool execution failed"}
+        elif tool_name == "git":
+            # Read-only git introspection: the agent can see its own working
+            # tree state, history, and diffs without any state-changing
+            # operation (no commit/stage/checkout — those stay in the CLI).
+            operation = str(payload.get("operation", "status")).lower().strip()
+            if operation in ("status", "log", "diff", "diff-stat", "show", "branch"):
+                args = {
+                    "status": ["git", "status", "--short"],
+                    "log": ["git", "log", "--oneline", "-20"],
+                    "diff": ["git", "diff"],
+                    "diff-stat": ["git", "diff", "--stat"],
+                    "show": ["git", "show", "--stat"],
+                    "branch": ["git", "branch", "-vv"],
+                }[operation]
+                try:
+                    proc = await asyncio.create_subprocess_exec(
+                        *args,
+                        cwd=str(_ROOT),
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    try:
+                        async with asyncio.timeout(15.0):
+                            out, err = await proc.communicate()
+                    except TimeoutError:
+                        proc.kill()
+                        await proc.wait()
+                        result = {"ok": False, "error": "git operation timed out."}
+                    else:
+                        if proc.returncode == 0:
+                            result = {
+                                "ok": True,
+                                "result": (out or b"").decode("utf-8", errors="replace"),
+                            }
+                        else:
+                            result = {
+                                "ok": False,
+                                "error": (err or b"").decode("utf-8", errors="replace")
+                                or "git operation failed",
+                            }
+                except Exception:
+                    log.exception("git tool execution failed")
+                    result = {"ok": False, "error": "git tool execution failed"}
+            else:
+                result = {"ok": False, "error": f"Unknown git operation: {operation}"}
         else:
             return {"ok": False, "error": f"Unknown tool: {tool_name}"}
 

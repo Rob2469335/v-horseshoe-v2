@@ -174,6 +174,7 @@ _TOOL_DEFINITIONS = {
     "system": "- action=system  → action (system_inventory|process_list|service_list|net_connections|disk_analyzer|installed_apps|startup_items|registry_query|event_log_query), plus per-action args. Read-only host analysis: hardware/OS/disk/network inventory, running processes/services, open ports, installed apps, startup items, Event Log. NEVER use this to modify the machine.",
     "screen": "- action=screen  → action (screenshot|foreground_window|list_windows|cursor_position|mouse_move|left_click|right_click|double_click|scroll|type|key). See the screen; input actions are BLOCKED until human-control mode is lifted (SWARM_SCREEN_AUTONOMOUS=1). Propose the click/type you would do and wait for approval. Screenshot returns a PNG path you can reference.",
     "filesystem": "- action=filesystem  → operation (read|read_all|write|patch|list|grep|glob), path (string or list); optional: content, old, new, pattern. For glob: pattern like '**/*.py'",
+    "git": "- action=git  → operation (status|log|diff|diff-stat|show|branch). READ-ONLY git introspection: working-tree status, recent history, working-tree diff vs HEAD. Use before editing to ground changes against the baseline; never use for commit/stage/checkout (those are CLI-only).",
     "sandbox_repl": "- action=sandbox_repl  → language (python|powershell|pytest), code. Python: `import os` IS allowed (read/list/walk/path), but destructive os calls (system/remove/rename/chmod), subprocess, sockets, and eval/exec/open are BLOCKED — prefer pathlib + filesystem tools for file work.",
     "email": "- action=email  → operation (email_list|email_search|email_read|email_draft|email_send), plus args (folder, limit, query, uid, to, subject, body, attachments). Read/search are free. email_draft stages a message and returns a send_token; email_send with confirmed=true sends — NEVER auto-confirm, always wait for human approval of the draft.",
     "playwright": "- action=playwright  → operation (navigate|browser_a11y|browser_click|browser_type|browser_fill_form|browser_verify|browser_find|browser_press_key|browser_describe|browser_state|screenshot|extract_text), url/name/text/fields. Persistent browser driven by the accessibility tree as TEXT: browser_a11y shows interactive elements (role+name), browser_fill_form(fields=[{name,value}]) fills + verifies multiple fields, browser_click(name=)/browser_type(name=,text=) act on them, browser_verify reads a field's value back. If browser_a11y returns empty, browser_describe uses the vision model to describe the page. Logins persist. Screenshots are verification only.",
@@ -194,17 +195,17 @@ _AGENT_TOOLS = {
     "planner": ["delegate", "ask_user", "filesystem", "semantic_search", "web_search", "remember", "deprecate_memory", "final"],
     "researcher": ["filesystem", "semantic_search", "web_search", "web_fetch", "system", "screen", "sandbox_repl", "lsp", "mcp", "email", "playwright", "todo", "remember", "deprecate_memory", "final"],
     "executor": ["delegate", "sandbox_repl", "final"],
-    "coder": ["filesystem", "semantic_search", "web_search", "web_fetch", "sandbox_repl", "lsp", "mcp", "email", "playwright", "todo", "remember", "deprecate_memory", "final"],
-    "tool-runner": ["sandbox_repl", "filesystem", "mcp", "final"],
-    "reviewer": ["filesystem", "semantic_search", "sandbox_repl", "lsp", "mcp", "todo", "remember", "deprecate_memory", "final"],
-    "debugger": ["filesystem", "sandbox_repl", "semantic_search", "web_search", "web_fetch", "system", "screen", "lsp", "mcp", "email", "playwright", "todo", "remember", "deprecate_memory", "final"],
+    "coder": ["filesystem", "git", "semantic_search", "web_search", "web_fetch", "sandbox_repl", "lsp", "mcp", "email", "playwright", "todo", "remember", "deprecate_memory", "final"],
+    "tool-runner": ["sandbox_repl", "filesystem", "git", "mcp", "final"],
+    "reviewer": ["filesystem", "git", "semantic_search", "sandbox_repl", "lsp", "mcp", "todo", "remember", "deprecate_memory", "final"],
+    "debugger": ["filesystem", "git", "sandbox_repl", "semantic_search", "web_search", "web_fetch", "system", "screen", "lsp", "mcp", "email", "playwright", "todo", "remember", "deprecate_memory", "final"],
     "tool-maker": ["filesystem", "sandbox_repl", "mcp_register", "final"],
     # code_analyzer is a READ-ONLY analysis agent (find bugs, audit, research).
     # sandbox_repl is an edit/verify tool — giving it to code_analyzer let the
     # model burn turns calling sandbox_repl on a pure research goal (observed:
     # 4 consecutive sandbox_repl calls then turn_budget_exhausted on "analyze
     # my codebase and search internet"). Analysis needs read/search/web only.
-    "code_analyzer": ["filesystem", "web_search", "web_fetch", "system", "screen", "semantic_search", "mcp", "email", "playwright", "todo", "final"],
+    "code_analyzer": ["filesystem", "git", "web_search", "web_fetch", "system", "screen", "semantic_search", "mcp", "email", "playwright", "todo", "final"],
 }
 
 _BASE = (
