@@ -128,7 +128,8 @@ async def run_genetic_mutation(target_file_path: str = str(AGENT_SERVICE_PATH), 
                     _kwargs["api_key"] = _key
             else:
                 _kwargs.update(api_base="http://127.0.0.1:8080/v1", api_key="llama")
-            res = await acompletion(**_kwargs)
+            async with asyncio.timeout(90):
+                res = await acompletion(**_kwargs)
             mutated_code_full = res.choices[0].message.content
             
             match = re.search(r"```(?:python)?(.*?)```", mutated_code_full, re.DOTALL)
@@ -196,7 +197,14 @@ async def run_genetic_mutation(target_file_path: str = str(AGENT_SERVICE_PATH), 
                     cwd=str(sandbox.sandbox_dir),
                     env=clean_sandbox_env(),
                 )
-                _, compile_err = await compile_check.communicate()
+                try:
+                    async with asyncio.timeout(30):
+                        _, compile_err = await compile_check.communicate()
+                except TimeoutError:
+                    compile_check.kill()
+                    raise Exception(
+                        "Mutation compile check timed out after 30 seconds."
+                    )
                 if compile_check.returncode != 0:
                     raise Exception(f"Mutation failed to compile: {compile_err.decode()}")
 
@@ -220,7 +228,14 @@ async def run_genetic_mutation(target_file_path: str = str(AGENT_SERVICE_PATH), 
                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
                     env=clean_sandbox_env(),
                 )
-                test_out, test_err = await test_proc.communicate()
+                try:
+                    async with asyncio.timeout(120):
+                        test_out, test_err = await test_proc.communicate()
+                except TimeoutError:
+                    test_proc.kill()
+                    raise Exception(
+                        "Mutation test suite timed out after 120 seconds."
+                    )
                 if test_proc.returncode != 0:
                     tail_out = test_out.decode()[-2000:]
                     tail_err = test_err.decode()[-1000:]
