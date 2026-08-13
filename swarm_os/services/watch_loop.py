@@ -637,7 +637,19 @@ class WatchLoop:
                 )
 
             try:
-                asyncio.get_running_loop().create_task(_record())
+                # Keep a strong reference to the fire-and-forget reflexion task so
+                # the event loop's GC cannot silently reap it mid-await, and
+                # surface any exception it raises instead of dropping it.
+                _record_task = asyncio.get_running_loop().create_task(_record())
+
+                def _consume(_t: asyncio.Task) -> None:
+                    if not _t.cancelled() and _t.exception():
+                        log.warning(
+                            "WatchLoop: turn-budget reflexion task failed (%s).",
+                            _t.exception(),
+                        )
+
+                _record_task.add_done_callback(_consume)
             except RuntimeError:
                 asyncio.run(_record())
         except Exception as exc:
