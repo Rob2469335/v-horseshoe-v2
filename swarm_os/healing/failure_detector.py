@@ -7,6 +7,7 @@ if TYPE_CHECKING:
 _failure_http_client: "httpx.AsyncClient | None" = None
 _failure_http_client_loop: "asyncio.AbstractEventLoop | None" = None
 
+
 def _get_failure_http_client() -> "httpx.AsyncClient":
     """Pooled client, but bound to the event loop that created it.
 
@@ -17,6 +18,7 @@ def _get_failure_http_client() -> "httpx.AsyncClient":
     signal that made the watchman nag about a healthy Qdrant). Recreate the
     client whenever the running loop differs."""
     import asyncio
+
     global _failure_http_client, _failure_http_client_loop
     try:
         loop = asyncio.get_running_loop()
@@ -24,6 +26,7 @@ def _get_failure_http_client() -> "httpx.AsyncClient":
         loop = None
     if _failure_http_client is None or _failure_http_client_loop is not loop:
         import httpx
+
         _failure_http_client = httpx.AsyncClient(
             timeout=httpx.Timeout(10.0, connect=2.0),
             limits=httpx.Limits(max_keepalive_connections=5, max_connections=20),
@@ -36,9 +39,16 @@ def _get_failure_http_client() -> "httpx.AsyncClient":
 class FailureDetector:
     def __init__(self, backend_url=None, qdrant_url=None, ollama_url=None, probes=None):
         import os
-        self.backend_url = backend_url or os.getenv("ZENITH_BACKEND_URL", "http://127.0.0.1:8000")
-        self.qdrant_url = qdrant_url or os.getenv("ZENITH_QDRANT_URL", "http://127.0.0.1:6333")
-        self.llamacpp_url = ollama_url or os.getenv("ZENITH_LLAMACPP_URL", "http://127.0.0.1:8080/v1")
+
+        self.backend_url = backend_url or os.getenv(
+            "ZENITH_BACKEND_URL", "http://127.0.0.1:8000"
+        )
+        self.qdrant_url = qdrant_url or os.getenv(
+            "ZENITH_QDRANT_URL", "http://127.0.0.1:6333"
+        )
+        self.llamacpp_url = ollama_url or os.getenv(
+            "ZENITH_LLAMACPP_URL", "http://127.0.0.1:8080/v1"
+        )
         self.probes = probes or {}
 
     @staticmethod
@@ -62,6 +72,7 @@ class FailureDetector:
         probe = self.probes.get("qdrant")
         if probe:
             import inspect
+
             return await probe() if inspect.iscoroutinefunction(probe) else probe()
         return await self._http_ok(f"{self.qdrant_url}/collections", timeout=5.0)
 
@@ -69,6 +80,7 @@ class FailureDetector:
         probe = self.probes.get("llamacpp")
         if probe:
             import inspect
+
             return await probe() if inspect.iscoroutinefunction(probe) else probe()
         base = self.llamacpp_url.replace("/v1", "").rstrip("/")
         res = await self._http_ok(f"{base}/health", timeout=10.0)
@@ -81,6 +93,7 @@ class FailureDetector:
         Uses the CLI token_tracker state (avg context usage across sessions)."""
         try:
             import os, json
+
             tracker_path = os.path.join("logs", "token_tracker_state.json")
             if not os.path.exists(tracker_path):
                 return {"ok": True, "detail": "no tracker data"}
@@ -90,7 +103,10 @@ class FailureDetector:
             recent = [v for k, v in data.items() if k.startswith("ctx")] or []
             high = [v for v in recent if isinstance(v, (int, float)) and v > 0.85]
             if high:
-                return {"ok": False, "detail": f"context utilization high ({max(high):.0%})"}
+                return {
+                    "ok": False,
+                    "detail": f"context utilization high ({max(high):.0%})",
+                }
             return {"ok": True, "detail": "context within budget"}
         except Exception as exc:
             return {"ok": True, "detail": f"context check unavailable: {exc}"}
@@ -99,10 +115,14 @@ class FailureDetector:
         """Silent-degradation probe: rising JSON-repair/retry rate signals model trouble."""
         try:
             from runtime_v2.services.fallback_manager import _cooldowns
+
             cooled = {k: v for k, v in _cooldowns.items() if v.get("failures", 0) > 0}
             if cooled:
                 worst = max(cooled.items(), key=lambda kv: kv[1].get("failures", 0))
-                return {"ok": False, "detail": f"{worst[0]} in cooldown ({worst[1]['failures']} failures)"}
+                return {
+                    "ok": False,
+                    "detail": f"{worst[0]} in cooldown ({worst[1]['failures']} failures)",
+                }
             return {"ok": True, "detail": "no models in cooldown"}
         except Exception as exc:
             return {"ok": True, "detail": f"retry check unavailable: {exc}"}
@@ -119,15 +139,27 @@ class FailureDetector:
         # Whole-computer probes (disk/RAM/runaway/temp/event-log). These are
         # read-only and fast; run them synchronously in this call.
         try:
+            import asyncio
             from .system_probes import run_system_probes
-            results.update(run_system_probes())
+
+            system_results = await asyncio.to_thread(run_system_probes)
+            results.update(system_results)
         except Exception as exc:
-            results["system_probes"] = {"ok": True, "detail": {"issue": "system_probes", "available": False, "error": str(exc)}}
+            results["system_probes"] = {
+                "ok": True,
+                "detail": {
+                    "issue": "system_probes",
+                    "available": False,
+                    "error": str(exc),
+                },
+            }
         signals = []
         for component, result in results.items():
             if not result.get("ok", False):
                 signals.append({"component": component, "ok": False, "detail": result})
-        health_score = int(100 * (len(results) - len(signals)) / len(results)) if results else 100
+        health_score = (
+            int(100 * (len(results) - len(signals)) / len(results)) if results else 100
+        )
         return {"health_score": health_score, "signals": signals, "raw": results}
 
     def check_sync(self):
@@ -136,6 +168,7 @@ class FailureDetector:
 
 def run_coro_sync(coro_or_val, timeout: float = 60.0):
     import inspect, asyncio, threading
+
     if not inspect.iscoroutine(coro_or_val):
         return coro_or_val
     try:
