@@ -169,7 +169,18 @@ def _record_verification_reflexion(
             )
 
         try:
-            _asyncio.get_running_loop().create_task(_record())
+            # Keep a strong reference so the event loop's GC cannot silently
+            # reap this fire-and-forget reflexion task mid-await, and surface
+            # any exception it raises instead of dropping it.
+            _record_task = _asyncio.get_running_loop().create_task(_record())
+
+            def _consume(_t: _asyncio.Task) -> None:
+                if not _t.cancelled() and _t.exception() and console is not None:
+                    console.print(
+                        f"[dim]reflexion task failed: {_t.exception()}[/dim]"
+                    )
+
+            _record_task.add_done_callback(_consume)
         except RuntimeError:
             _asyncio.run(_record())
     except Exception as exc:

@@ -958,7 +958,19 @@ def _handle_event_line(engine: Any, data: dict) -> None:
                 )
 
             try:
-                _asyncio.get_running_loop().create_task(_record_turn_reflexion())
+                # Keep a strong reference so the event loop's GC cannot silently
+                # reap this fire-and-forget reflexion task mid-await, and surface
+                # any exception it raises instead of dropping it.
+                _record_task = _asyncio.get_running_loop().create_task(_record_turn_reflexion())
+
+                def _consume(_t: _asyncio.Task) -> None:
+                    if not _t.cancelled() and _t.exception():
+                        log.warning(
+                            "RepairWatchman: turn-budget reflexion task failed (%s).",
+                            _t.exception(),
+                        )
+
+                _record_task.add_done_callback(_consume)
             except RuntimeError:
                 _asyncio.run(_record_turn_reflexion())
         except Exception as tb_err:
