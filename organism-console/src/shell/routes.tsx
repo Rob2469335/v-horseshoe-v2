@@ -14,7 +14,7 @@ import type { NavItem } from "../lib/types"
 
 export const appRoutes: NavItem[] = [
   { key: "command", label: "Command Center", path: "/command", description: "Control the whole machine: probes, healing, screen, models" },
-  { key: "lawyer", label: "Rob's Lawyer", path: "/lawyer", description: "Citation verification for your own legal research" },
+  { key: "lawyer", label: "Rob's Lawyer", path: "/lawyer", description: "Your appeal, your counsel, phone evidence, defense errors, record Q&A" },
   { key: "agent", label: "Agent", path: "/agent", description: "Agent console and execution" },
   { key: "workspace", label: "Workspace", path: "/workspace", description: "Workspace context and files" },
   { key: "organism", label: "Organism", path: "/organism", description: "Swarm and organism view" },
