@@ -5,6 +5,7 @@ import math
 import random
 import json
 import ast
+import asyncio
 from dataclasses import asdict, dataclass, field
 from typing import Dict, List, Optional, Protocol
 from litellm import acompletion
@@ -309,11 +310,12 @@ Example: {{"hallucination_sensitivity": 0.8, "verification_bias": 0.9}}
 Do not include markdown blocks, just raw JSON.
 '''
     try:
-        res = await acompletion(
-            model=MODEL_TIERS["fast"], 
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.7
-        )
+        async with asyncio.timeout(90.0):
+            res = await acompletion(
+                model=MODEL_TIERS["fast"], 
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.7
+            )
         content = res.choices[0].message.content.strip()
         if content.startswith("```json"):
             content = content[7:-3]
@@ -378,11 +380,12 @@ Parent B slice:
 Intelligently splice the best sub-trees from both variants (e.g. combine a speed optimization from A with a memory optimization from B). Ensure the resulting AST is syntactically valid. Output only the raw python code.
 '''
     try:
-        res = await acompletion(
-            model=MODEL_TIERS["fast"], 
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3
-        )
+        async with asyncio.timeout(90.0):
+            res = await acompletion(
+                model=MODEL_TIERS["fast"], 
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3
+            )
         content = res.choices[0].message.content.strip()
         if content.startswith("```python"):
             content = content[9:-3]
