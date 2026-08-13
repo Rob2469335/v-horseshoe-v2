@@ -16,7 +16,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import threading
 from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException, Request
@@ -31,7 +30,7 @@ router = APIRouter(prefix="/control", tags=["control"])
 # (probe scan ~16s, heal status ~18s when infra is down). Warmed at startup.
 _HEAL_CACHE_TTL = 8.0
 _heal_cache: Dict[str, Any] = {"ts": 0.0, "value": {}}
-_heal_cache_lock = threading.Lock()
+_heal_cache_lock = asyncio.Lock()
 
 
 class RecoverRequest(BaseModel):
@@ -154,22 +153,26 @@ async def _screen_state() -> Dict[str, Any]:
 
 
 async def _heal_status() -> Dict[str, Any]:
-    """Cached heal status — never blocks the 10s poll on the ~16s probe scan."""
-    now = asyncio.get_running_loop().time()
-    with _heal_cache_lock:
+    """Cached heal status — never blocks the 10s poll on the ~16s probe scan.
+
+    The whole check -> probe -> write runs under ONE lock hold so a stale cache
+    cannot stampede: a concurrent waiter blocks on the lock, then reads the
+    fresh value written by the first caller instead of re-running the ~16s
+    probe set."""
+    async with _heal_cache_lock:
+        now = asyncio.get_running_loop().time()
         if now - _heal_cache["ts"] < _HEAL_CACHE_TTL and _heal_cache["value"]:
             return _heal_cache["value"]
-    try:
-        from swarm_os.healing.healing_service import HealingService
-        hs = HealingService()
-        value = await hs.status()
-    except Exception:
-        log.exception("Heal status probe failed")
-        value = {"available": False, "error": "heal status unavailable"}
-    with _heal_cache_lock:
+        try:
+            from swarm_os.healing.healing_service import HealingService
+            hs = HealingService()
+            value = await hs.status()
+        except Exception:
+            log.exception("Heal status probe failed")
+            value = {"available": False, "error": "heal status unavailable"}
         _heal_cache["ts"] = now
         _heal_cache["value"] = value
-    return value
+        return value
 
 
 async def _model_surface(runtime: Any) -> Dict[str, Any]:
