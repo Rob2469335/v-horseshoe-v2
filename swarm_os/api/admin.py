@@ -7,7 +7,8 @@ import subprocess
 from pathlib import Path
 from fastapi import APIRouter, Request, BackgroundTasks, HTTPException
 from swarm_os.app.runtime_access import get_runtime_service
-router = APIRouter(prefix='/admin', tags=['admin'])
+
+router = APIRouter(prefix="/admin", tags=["admin"])
 
 
 # lazy import RuntimeGraph removed (fix circular import)
@@ -16,7 +17,6 @@ from swarm_os.repositories.file_snapshot_repository import FileSnapshotRepositor
 from swarm_os.services.simulation_service import SimulationService
 
 log = logging.getLogger(__name__)
-
 
 
 def get_snapshot_repo(request: Request) -> FileSnapshotRepository:
@@ -48,7 +48,8 @@ def _latest_snapshot_payload(request: Request) -> dict:
     if latest:
         try:
             import json
-            with open(latest, 'r', encoding='utf-8') as f:
+
+            with open(latest, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 population = data.get("organisms", [])
                 # BUG FIX: derive generation from the snapshot metadata so the
@@ -143,7 +144,9 @@ def resume_latest(request: Request, background_tasks: BackgroundTasks) -> dict:
     if latest is None:
         raise HTTPException(status_code=404, detail="No snapshots found")
 
-    background_tasks.add_task(_resume_task, get_simulation_service(request), str(latest))
+    background_tasks.add_task(
+        _resume_task, get_simulation_service(request), str(latest)
+    )
     log.info("queued resume from %s", latest)
 
     return {"queued": True, "resume": str(latest)}
@@ -171,6 +174,7 @@ def run_simulation(
 async def admin_replay(request: Request) -> dict:
     """Event replay dashboard data."""
     from swarm_os.api.dependencies import _safe_events
+
     runtime = getattr(request.app.state, "runtime", None)
     events = []
     healing_attempts = 0
@@ -179,20 +183,26 @@ async def admin_replay(request: Request) -> dict:
     if runtime:
         try:
             events = await _safe_events(runtime)
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Failed to fetch events for replay: %s", exc)
         try:
             healing = getattr(runtime, "healing", None)
             if healing:
                 detector = getattr(healing, "detector", None)
                 if detector:
                     # BUG FIX: FailureDetector has no .status() — use check_sync() instead
-                    report = detector.check_sync() if hasattr(detector, "check_sync") else (detector.status() if hasattr(detector, "status") else {})
-                    latest_health_score = report.get("health_score", report.get("recovery_readiness"))
+                    report = (
+                        detector.check_sync()
+                        if hasattr(detector, "check_sync")
+                        else (detector.status() if hasattr(detector, "status") else {})
+                    )
+                    latest_health_score = report.get(
+                        "health_score", report.get("recovery_readiness")
+                    )
                     healing_attempts = report.get("healing_attempts", 0)
                     last_action = report.get("last_action")
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Failed to fetch health report for replay: %s", exc)
     return {
         "event_count": len(events),
         "healing_attempts": healing_attempts,
@@ -212,20 +222,40 @@ async def run_heal_cycle(request: Request) -> dict:
     try:
         healing = getattr(runtime, "healing", None)
         if healing is None:
-            return {"recovery_readiness": 0, "active_anomalies": 0, "last_heal_success": False,
-                    "checks": {}, "error": "healing service not available"}
+            return {
+                "recovery_readiness": 0,
+                "active_anomalies": 0,
+                "last_heal_success": False,
+                "checks": {},
+                "error": "healing service not available",
+            }
         result = await healing.run_once()
-        checks = result.get("checks", {"orchestrator": {"ok": True}, "qdrant": {"ok": True}, "llamacpp": {"ok": True}, "api": {"ok": True}})
+        checks = result.get(
+            "checks",
+            {
+                "orchestrator": {"ok": True},
+                "qdrant": {"ok": True},
+                "llamacpp": {"ok": True},
+                "api": {"ok": True},
+            },
+        )
         return {
-            "recovery_readiness": result.get("recovery_readiness", result.get("health_score", 100)),
+            "recovery_readiness": result.get(
+                "recovery_readiness", result.get("health_score", 100)
+            ),
             "active_anomalies": result.get("active_anomalies", 0),
             "last_heal_success": result.get("success", True),
             "checks": checks,
         }
-    except Exception:
-        log.exception("Heal cycle evaluation failed")
-        return {"recovery_readiness": 0, "active_anomalies": 1, "last_heal_success": False,
-                "checks": {}, "error": "heal cycle evaluation failed"}
+    except Exception as exc:
+        log.exception("Heal cycle evaluation failed: %s", exc)
+        return {
+            "recovery_readiness": 0,
+            "active_anomalies": 1,
+            "last_heal_success": False,
+            "checks": {},
+            "error": "heal cycle evaluation failed",
+        }
 
 
 @router.get("/changes")
@@ -238,10 +268,14 @@ async def workspace_changes(max_diff_chars: int = 6000) -> dict:
     git work tree.
     """
     import asyncio
+
     root = Path(__file__).resolve().parent.parent.parent
     try:
         stat_proc = await asyncio.create_subprocess_exec(
-            "git", "diff", "HEAD", "--stat",
+            "git",
+            "diff",
+            "HEAD",
+            "--stat",
             cwd=str(root),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -252,23 +286,42 @@ async def workspace_changes(max_diff_chars: int = 6000) -> dict:
         except TimeoutError:
             stat_proc.kill()
             await stat_proc.wait()
-            return {"stat": [], "diff": "", "truncated": False, "is_git": False, "error": "git stat timeout"}
-            
+            return {
+                "stat": [],
+                "diff": "",
+                "truncated": False,
+                "is_git": False,
+                "error": "git stat timeout",
+            }
+
         if stat_proc.returncode != 0:
-            err_text = stat_err.decode("utf-8", errors="replace").strip() if stat_err else "not a git work tree"
-            return {"stat": [], "diff": "", "truncated": False, "is_git": False,
-                    "error": err_text}
-                    
+            err_text = (
+                stat_err.decode("utf-8", errors="replace").strip()
+                if stat_err
+                else "not a git work tree"
+            )
+            return {
+                "stat": [],
+                "diff": "",
+                "truncated": False,
+                "is_git": False,
+                "error": err_text,
+            }
+
         stat_lines = []
         for line in (stat_out.decode("utf-8", errors="replace") or "").splitlines():
             m = re.match(r"\s*(.+?)\s*\|\s*(\d+)\s+[+-]+", line)
             if m:
-                stat_lines.append({"path": m.group(1).strip(), "lines": int(m.group(2))})
+                stat_lines.append(
+                    {"path": m.group(1).strip(), "lines": int(m.group(2))}
+                )
             elif line.strip():
                 continue
-                
+
         detail_proc = await asyncio.create_subprocess_exec(
-            "git", "diff", "HEAD",
+            "git",
+            "diff",
+            "HEAD",
             cwd=str(root),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -279,8 +332,14 @@ async def workspace_changes(max_diff_chars: int = 6000) -> dict:
         except TimeoutError:
             detail_proc.kill()
             await detail_proc.wait()
-            return {"stat": stat_lines, "diff": "", "truncated": False, "is_git": True, "error": "git diff timeout"}
-            
+            return {
+                "stat": stat_lines,
+                "diff": "",
+                "truncated": False,
+                "is_git": True,
+                "error": "git diff timeout",
+            }
+
         diff_text = detail_out.decode("utf-8", errors="replace") or ""
         truncated = len(diff_text) > max_diff_chars
         return {
@@ -291,7 +350,13 @@ async def workspace_changes(max_diff_chars: int = 6000) -> dict:
         }
     except Exception as exc:
         log.warning("workspace changes unavailable: %s", exc)
-        return {"stat": [], "diff": "", "truncated": False, "is_git": False, "error": str(exc)}
+        return {
+            "stat": [],
+            "diff": "",
+            "truncated": False,
+            "is_git": False,
+            "error": str(exc),
+        }
 
 
 @router.get("/healing/evaluate")
@@ -302,7 +367,12 @@ async def evaluate_health(request: Request) -> dict:
         raise HTTPException(status_code=503, detail="Runtime not initialised")
     try:
         healing = getattr(runtime, "healing", None)
-        checks = {"orchestrator": {"ok": True}, "qdrant": {"ok": True}, "llamacpp": {"ok": True}, "api": {"ok": True}}
+        checks = {
+            "orchestrator": {"ok": True},
+            "qdrant": {"ok": True},
+            "llamacpp": {"ok": True},
+            "api": {"ok": True},
+        }
         readiness = 100
         anomalies = 0
         if healing:
@@ -314,7 +384,9 @@ async def evaluate_health(request: Request) -> dict:
                     report = await detector.check()
                 else:
                     report = {}
-                readiness = report.get("recovery_readiness", report.get("health_score", 100))
+                readiness = report.get(
+                    "recovery_readiness", report.get("health_score", 100)
+                )
                 anomalies = report.get("active_anomalies", 0)
         return {
             "recovery_readiness": readiness,
@@ -322,15 +394,12 @@ async def evaluate_health(request: Request) -> dict:
             "last_heal_success": anomalies == 0,
             "checks": checks,
         }
-    except Exception:
-        log.exception("Health evaluation failed")
-        return {"recovery_readiness": 0, "active_anomalies": 1, "last_heal_success": False,
-                "checks": {}, "error": "health evaluation failed"}
-
-
-
-
-
-
-
-
+    except Exception as exc:
+        log.exception("Health evaluation failed: %s", exc)
+        return {
+            "recovery_readiness": 0,
+            "active_anomalies": 1,
+            "last_heal_success": False,
+            "checks": {},
+            "error": "health evaluation failed",
+        }

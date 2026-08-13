@@ -2,26 +2,32 @@ import json
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 class EventLogRepository:
     def __init__(
         self,
         event_log_path: Path | str = Path("logs/event_log.jsonl"),
         watermark_path: Path | str = Path("logs/.memory_bridge_offset.json"),
-        state_path: Path | str = Path("logs/.memory_bridge_state.json")
+        state_path: Path | str = Path("logs/.memory_bridge_state.json"),
     ):
         self.path = Path(event_log_path)
         self.watermark_path = Path(watermark_path)
         self.state_path = Path(state_path)
 
-    def read_events(self, current_offset: int, max_events: int = 0) -> Tuple[List[Dict[str, Any]], int]:
+    def read_events(
+        self, current_offset: int, max_events: int = 0
+    ) -> Tuple[List[Dict[str, Any]], int]:
         if not self.path.exists():
             return [], current_offset
 
         events: List[Dict[str, Any]] = []
 
         with self.path.open("r", encoding="utf-8") as f:
-            f.seek(0, 2) # Go to end
+            f.seek(0, 2)  # Go to end
             end_pos = f.tell()
             if current_offset > end_pos:
                 # File was likely truncated/rotated
@@ -37,7 +43,8 @@ class EventLogRepository:
                 for line in f:
                     try:
                         seen.append(json.loads(line))
-                    except Exception:
+                    except Exception as exc:
+                        logger.debug("Failed to parse event log line: %s", exc)
                         continue
                 new_offset = f.tell()
                 events = seen[-max_events:]
@@ -45,7 +52,8 @@ class EventLogRepository:
                 for line in f:
                     try:
                         events.append(json.loads(line))
-                    except Exception:
+                    except Exception as exc:
+                        logger.debug("Failed to parse event log line: %s", exc)
                         continue
                 new_offset = f.tell()
 
@@ -53,7 +61,9 @@ class EventLogRepository:
 
     def load_offset(self) -> int:
         try:
-            return json.loads(self.watermark_path.read_text(encoding="utf-8")).get("offset", 0)
+            return json.loads(self.watermark_path.read_text(encoding="utf-8")).get(
+                "offset", 0
+            )
         except Exception:
             return 0
 

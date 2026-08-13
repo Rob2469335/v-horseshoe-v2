@@ -11,6 +11,7 @@ from .schemas import CreateApprovalRequest, ApprovalDecisionRequest
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/features", tags=["features"])
 
+
 class QueryRequest(BaseModel):
     query: str
     collection: str = "chat_archive"
@@ -28,6 +29,7 @@ class BrowserTaskRequest(BaseModel):
     goal: str
     max_steps: int = 12
     confirm: bool = False
+
 
 @router.post("/search")
 async def semantic_search(req: QueryRequest):
@@ -54,7 +56,7 @@ async def semantic_search(req: QueryRequest):
             if reranker_on:
                 results = await rerank(req.query, candidates, top_k=req.top_k)
             else:
-                results = candidates[:req.top_k]
+                results = candidates[: req.top_k]
             return {"status": "ok", "fallback": False, "results": results}
 
         # Degraded path: vector search returned nothing (embedding service down or
@@ -63,12 +65,13 @@ async def semantic_search(req: QueryRequest):
         try:
             results = await _keyword_fallback(req)
             return {"status": "degraded", "fallback": True, "results": results}
-        except Exception:
+        except Exception as exc:
+            log.debug("Keyword fallback failed: %s", exc)
             return {"status": "degraded", "fallback": True, "results": []}
     except ImportError:
         raise HTTPException(
             status_code=503,
-            detail="Vector search not yet configured. lib/vector modules are empty stubs."
+            detail="Vector search not yet configured. lib/vector modules are empty stubs.",
         )
 
 
@@ -92,15 +95,22 @@ async def web_research(req: WebResearchRequest):
         from ..lib.mcp.web_search import web_search_handler, web_fetch_handler
 
         # 1) Search.
-        search = await web_search_handler({"query": query, "max_results": req.max_results})
+        search = await web_search_handler(
+            {"query": query, "max_results": req.max_results}
+        )
         if not search.get("ok"):
-            return {"status": "degraded", "results": [], "answer": "", "citations": [],
-                    "error": search.get("error", "search failed")}
-        results = search.get("results", [])[:req.max_results]
+            return {
+                "status": "degraded",
+                "results": [],
+                "answer": "",
+                "citations": [],
+                "error": search.get("error", "search failed"),
+            }
+        results = search.get("results", [])[: req.max_results]
 
         # 2) Deep-read the top N (best effort — a fetch failure keeps the snippet).
         sources = []
-        for i, r in enumerate(results[:req.deep_read]):
+        for i, r in enumerate(results[: req.deep_read]):
             url = r.get("url", "")
             text = r.get("snippet", "")
             if url:
@@ -110,15 +120,29 @@ async def web_research(req: WebResearchRequest):
                         text = fetched.get("text") or fetched.get("content") or text
                 except Exception as e:
                     log.warning("web_fetch_handler failed for %s: %s", url, e)
-            sources.append({"n": i + 1, "title": r.get("title", ""), "url": url, "text": text[:4000]})
+            sources.append(
+                {
+                    "n": i + 1,
+                    "title": r.get("title", ""),
+                    "url": url,
+                    "text": text[:4000],
+                }
+            )
 
         if not req.synthesize:
-            return {"status": "ok", "results": results, "answer": "", "citations": sources,
-                    "note": "synthesis disabled (synthesize=false)"}
+            return {
+                "status": "ok",
+                "results": results,
+                "answer": "",
+                "citations": sources,
+                "note": "synthesis disabled (synthesize=false)",
+            }
 
         # 3) Synthesize a cited answer.
         sources_block = "\n\n".join(
-            f"[{s['n']}] {s['title']} — {s['url']}\n{s['text']}" for s in sources if s.get("text")
+            f"[{s['n']}] {s['title']} — {s['url']}\n{s['text']}"
+            for s in sources
+            if s.get("text")
         )
         prompt = (
             "You are a web researcher. Answer the user's question using ONLY the sources below. "
@@ -130,27 +154,47 @@ async def web_research(req: WebResearchRequest):
         try:
             import litellm
             from ..core.settings import get_settings
+
             s = get_settings()
-            model = getattr(s, "analysis_cloud_model", None) or "openai/deepseek-v4-flash"
+            model = (
+                getattr(s, "analysis_cloud_model", None) or "openai/deepseek-v4-flash"
+            )
             import os
+
             base = os.getenv("OPENAI_API_BASE", "https://opencode.ai/zen/go/v1")
             key = os.getenv("OPENAI_API_KEY", "")
             resp = await litellm.acompletion(
-                model=model, messages=[{"role": "user", "content": prompt}],
-                api_base=base, api_key=key, custom_llm_provider="openai",
-                max_tokens=800, timeout=120,
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                api_base=base,
+                api_key=key,
+                custom_llm_provider="openai",
+                max_tokens=800,
+                timeout=120,
             )
             answer = resp.choices[0].message.content or ""
         except Exception as exc:
             log.warning("web-research synthesis failed: %s", exc)
 
-        return {"status": "ok", "results": results, "answer": answer,
-                "citations": [{k: v for k, v in s.items() if k != "text"} for s in sources] if sources else []}
+        return {
+            "status": "ok",
+            "results": results,
+            "answer": answer,
+            "citations": [{k: v for k, v in s.items() if k != "text"} for s in sources]
+            if sources
+            else [],
+        }
     except ImportError:
         raise HTTPException(status_code=503, detail="web research modules unavailable")
     except Exception as exc:
         log.warning("web-research failed: %s", exc)
-        return {"status": "degraded", "results": [], "answer": "", "citations": [], "error": str(exc)}
+        return {
+            "status": "degraded",
+            "results": [],
+            "answer": "",
+            "citations": [],
+            "error": str(exc),
+        }
 
 
 @router.post("/browser-task")
@@ -160,6 +204,7 @@ async def browser_task(req: BrowserTaskRequest):
     actions (submit/purchase/login) return approval_requested unless confirmed
     via /features/browser-task/confirm."""
     from ..services.browser_task import run_browser_task
+
     goal = req.goal.strip()
     if not goal:
         raise HTTPException(status_code=400, detail="goal is required")
@@ -199,7 +244,11 @@ async def _keyword_fallback(req: QueryRequest) -> list:
                         limit=200,
                         with_payload=True,
                     )
-                    points = scroll[0] if isinstance(scroll, tuple) else getattr(scroll, "points", scroll)
+                    points = (
+                        scroll[0]
+                        if isinstance(scroll, tuple)
+                        else getattr(scroll, "points", scroll)
+                    )
                     scored = []
                     for p in points or []:
                         pid = str(getattr(p, "id", ""))
@@ -210,15 +259,31 @@ async def _keyword_fallback(req: QueryRequest) -> list:
                         score = sum(1 for t in tokens if t in haystack)
                         if score:
                             seen_ids.add(pid)
-                            scored.append((score, {"id": getattr(p, "id", None), "score": float(score), "payload": payload}))
+                            scored.append(
+                                (
+                                    score,
+                                    {
+                                        "id": getattr(p, "id", None),
+                                        "score": float(score),
+                                        "payload": payload,
+                                    },
+                                )
+                            )
                     scored.sort(key=lambda x: -x[0])
-                    results.extend(item for _, item in scored[: req.top_k - len(results)])
+                    results.extend(
+                        item for _, item in scored[: req.top_k - len(results)]
+                    )
                     if len(results) >= req.top_k:
                         break
-                    next_offset = scroll[1] if isinstance(scroll, tuple) else getattr(scroll, "next_page_offset", None)
+                    next_offset = (
+                        scroll[1]
+                        if isinstance(scroll, tuple)
+                        else getattr(scroll, "next_page_offset", None)
+                    )
                     if not next_offset:
                         break
-            except Exception:
+            except Exception as exc:
+                log.debug("Fallback collection missing or unreadable: %s", exc)
                 continue  # collection missing / unreadable — try next
     except Exception as e:
         log.warning("Qdrant fallback search failed, continuing to local docs: %s", e)
@@ -240,11 +305,14 @@ async def _keyword_fallback(req: QueryRequest) -> list:
     try:
         from ..api._fallbacks import local_docs_search
         from pathlib import Path
+
         repo_root = Path(__file__).resolve().parents[2]
         # if repo_root seems unexpected in test environments, fall back to cwd
         if not (repo_root / "AGENTS.md").exists():
             repo_root = Path.cwd()
-        results = await asyncio.to_thread(local_docs_search, repo_root, tokens, req.top_k)
+        results = await asyncio.to_thread(
+            local_docs_search, repo_root, tokens, req.top_k
+        )
         if results:
             return results
     except Exception as e:
@@ -253,9 +321,11 @@ async def _keyword_fallback(req: QueryRequest) -> list:
 
     return results[: req.top_k]
 
+
 @router.get("/chat-search")
 async def chat_search_status():
     return {"status": "available", "message": "chat_search handler is available"}
+
 
 @router.post("/chat-search")
 async def chat_search_stream(req: QueryRequest, request: Request):
@@ -264,7 +334,7 @@ async def chat_search_stream(req: QueryRequest, request: Request):
     from .dependencies import get_orchestrator
     from ..capabilities.chat_search import ChatSearchHandler
     from ..capabilities.models import ChatSearchRequest
-    
+
     try:
         handler = ChatSearchHandler()
         search_req = ChatSearchRequest(query=req.query, max_results=10)
@@ -289,7 +359,7 @@ async def chat_search_stream(req: QueryRequest, request: Request):
     )
 
     orch = get_orchestrator(request)
-    
+
     async def sse_generator():
         try:
             async for chunk, _, _ in orch.stream_generate(model=None, prompt=prompt):
@@ -300,12 +370,14 @@ async def chat_search_stream(req: QueryRequest, request: Request):
         except Exception:
             log.exception("stream_generate failed in chat-search")
             yield f"data: {json.dumps({'content': '[Error: stream generation failed]'})}\n\n"
-            
+
     return StreamingResponse(sse_generator(), media_type="text/event-stream")
+
 
 @router.get("/upwork")
 async def upwork_status():
     return {"status": "stub", "message": "upwork_analyzer handler not yet implemented"}
+
 
 @router.post("/upwork")
 async def upwork_stream(req: QueryRequest, request: Request):
@@ -314,12 +386,12 @@ async def upwork_stream(req: QueryRequest, request: Request):
     from .dependencies import get_orchestrator
     from ..capabilities.upwork_analyzer import UpworkAnalyzerHandler
     from ..capabilities.models import UpworkAnalysisRequest
-    
+
     try:
         handler = UpworkAnalyzerHandler()
         analysis_req = UpworkAnalysisRequest(job_description=req.query)
         res = await handler.analyze_job(analysis_req)
-        
+
         context = (
             f"Job Analysis Result:\n"
             f"- Primary Domain: {res.primary_domain}\n"
@@ -344,7 +416,7 @@ async def upwork_stream(req: QueryRequest, request: Request):
     )
 
     orch = get_orchestrator(request)
-    
+
     async def sse_generator():
         try:
             async for chunk, _, _ in orch.stream_generate(model=None, prompt=prompt):
@@ -355,8 +427,9 @@ async def upwork_stream(req: QueryRequest, request: Request):
         except Exception:
             log.exception("stream_generate failed in upwork")
             yield f"data: {json.dumps({'content': '[Error: stream generation failed]'})}\n\n"
-            
+
     return StreamingResponse(sse_generator(), media_type="text/event-stream")
+
 
 @router.get("/vscode")
 async def vscode_status():
@@ -374,6 +447,7 @@ async def vscode_execute(req: VSCodeAutomationRequest):
 
     return await VSCodeAutomationHandler().execute(req)
 
+
 # ---------------------------------------------------------------------------
 # Module-level variables (can be monkeypatched by tests)
 # ---------------------------------------------------------------------------
@@ -386,6 +460,7 @@ approval_execution = None
 learning = None
 research = None
 
+
 def get_approvals_service(request: Request = None):
     global approvals
     if approvals is not None:
@@ -397,8 +472,10 @@ def get_approvals_service(request: Request = None):
         if getattr(request.app.state, "approval_queue", None) is not None:
             return request.app.state.approval_queue
     from swarm_os.adaptation.approval.approval_queue import ApprovalQueue
+
     approvals = ApprovalQueue()
     return approvals
+
 
 def get_metrics_service(request: Request = None):
     global metrics
@@ -411,8 +488,10 @@ def get_metrics_service(request: Request = None):
         if getattr(request.app.state, "healing_metrics", None) is not None:
             return request.app.state.healing_metrics
     from swarm_os.adaptation.observability.healing_metrics import HealingMetrics
+
     metrics = HealingMetrics()
     return metrics
+
 
 def get_audit_service(request: Request = None):
     global audit
@@ -425,8 +504,10 @@ def get_audit_service(request: Request = None):
         if getattr(request.app.state, "healing_audit", None) is not None:
             return request.app.state.healing_audit
     from swarm_os.adaptation.observability.healing_audit import HealingAudit
+
     audit = HealingAudit()
     return audit
+
 
 def get_escalation_service(request: Request = None):
     if request:
@@ -436,7 +517,9 @@ def get_escalation_service(request: Request = None):
         if getattr(request.app.state, "escalation_service", None) is not None:
             return request.app.state.escalation_service
     from swarm_os.adaptation.escalation.escalation_service import EscalationService
+
     return EscalationService()
+
 
 def get_approval_execution_service(request: Request = None):
     global approval_execution
@@ -446,6 +529,7 @@ def get_approval_execution_service(request: Request = None):
         if getattr(request.app.state, "approval_execution_service", None) is not None:
             return request.app.state.approval_execution_service
     from swarm_os.adaptation.approval.approval_execution import ApprovalExecutionService
+
     queue = get_approvals_service(request)
     executor = None
     if request:
@@ -453,6 +537,7 @@ def get_approval_execution_service(request: Request = None):
         executor = getattr(runtime, "executor", None)
     approval_execution = ApprovalExecutionService(queue=queue, executor=executor)
     return approval_execution
+
 
 def get_learning_service(request: Request = None):
     global learning
@@ -465,7 +550,9 @@ def get_learning_service(request: Request = None):
         if getattr(request.app.state, "learning", None) is not None:
             return request.app.state.learning
     from swarm_os.app.services.learning_service import LearningService
+
     return LearningService()
+
 
 def get_policy_engine(request: Request = None):
     global policy
@@ -478,7 +565,9 @@ def get_policy_engine(request: Request = None):
         if getattr(request.app.state, "policy_engine", None) is not None:
             return request.app.state.policy_engine
     from swarm_os.adaptation.policy.policy_engine import RemediationPolicyEngine
+
     return RemediationPolicyEngine()
+
 
 # ---------------------------------------------------------------------------
 # Healing Observability & Approvals Router Endpoints
@@ -488,7 +577,7 @@ def get_healing_status(request: Request):
     met = get_metrics_service(request)
     aud = get_audit_service(request)
     esc_service = get_escalation_service(request)
-    
+
     return {
         "status": "ok",
         "metrics": met.snapshot(),
@@ -496,24 +585,35 @@ def get_healing_status(request: Request):
         "recent_escalations": esc_service.recent(),
     }
 
+
 @router.get("/healing-overview")
 def get_healing_overview(request: Request):
     met = get_metrics_service(request)
     aud = get_audit_service(request)
     appr = get_approvals_service(request)
     esc_service = get_escalation_service(request)
-    
+
     policy_eng = get_policy_engine(request)
 
     all_reqs = appr.list_requests()
-    executed_reqs = [r for r in all_reqs if r.get("status") == "executed" or r.get("executed_at") is not None]
+    executed_reqs = [
+        r
+        for r in all_reqs
+        if r.get("status") == "executed" or r.get("executed_at") is not None
+    ]
 
     return {
         "status": "ok",
         "overview_status": "healthy",
         "summary": {
             "status": "ok",
-            "recent_failures": len([a for a in aud.recent() if not a.get("verification", {}).get("verified", True)]),
+            "recent_failures": len(
+                [
+                    a
+                    for a in aud.recent()
+                    if not a.get("verification", {}).get("verified", True)
+                ]
+            ),
             "active_incidents": len(esc_service.recent()),
         },
         "readiness": 100,
@@ -524,7 +624,7 @@ def get_healing_overview(request: Request):
                 "executed": len(executed_reqs),
                 "pending": len([r for r in all_reqs if r.get("status") == "pending"]),
             },
-            "requests": all_reqs
+            "requests": all_reqs,
         },
         "metrics": met.snapshot(),
         "audit": aud.recent(),
@@ -532,47 +632,50 @@ def get_healing_overview(request: Request):
         "components": {},
         "runbooks": [],
         "policy": {
-            "rules_count": len(policy_eng.list_policies()) if hasattr(policy_eng, "list_policies") else 0,
-            "rules": policy_eng.list_policies() if hasattr(policy_eng, "list_policies") else {}
-        }
+            "rules_count": len(policy_eng.list_policies())
+            if hasattr(policy_eng, "list_policies")
+            else 0,
+            "rules": policy_eng.list_policies()
+            if hasattr(policy_eng, "list_policies")
+            else {},
+        },
     }
+
 
 @router.post("/healing-approvals")
 def create_approval_request(request: Request, payload: CreateApprovalRequest):
     appr = get_approvals_service(request)
-    req = appr.create_request(component=payload.component, action=payload.action, reason=payload.reason)
-    return {
-        "status": "ok",
-        "request": req
-    }
+    req = appr.create_request(
+        component=payload.component, action=payload.action, reason=payload.reason
+    )
+    return {"status": "ok", "request": req}
+
 
 @router.get("/healing-approvals")
 def list_approval_requests(request: Request):
     appr = get_approvals_service(request)
-    return {
-        "status": "ok",
-        "requests": appr.list_requests()
-    }
+    return {"status": "ok", "requests": appr.list_requests()}
+
 
 @router.post("/healing-approvals/{request_id}/approve")
-def approve_request(request: Request, request_id: str, body: ApprovalDecisionRequest = None):
+def approve_request(
+    request: Request, request_id: str, body: ApprovalDecisionRequest = None
+):
     appr = get_approvals_service(request)
     note = (body.note if body else None) or "approved"
     req = appr.decide(request_id=request_id, approved=True, note=note)
-    return {
-        "status": "ok",
-        "request": req
-    }
+    return {"status": "ok", "request": req}
+
 
 @router.post("/healing-approvals/{request_id}/reject")
-def reject_request(request: Request, request_id: str, body: ApprovalDecisionRequest = None):
+def reject_request(
+    request: Request, request_id: str, body: ApprovalDecisionRequest = None
+):
     appr = get_approvals_service(request)
     note = (body.note if body else None) or "rejected"
     req = appr.decide(request_id=request_id, approved=False, note=note)
-    return {
-        "status": "ok",
-        "request": req
-    }
+    return {"status": "ok", "request": req}
+
 
 @router.post("/healing-approvals/{request_id}/execute")
 def execute_approved_request(request: Request, request_id: str):
@@ -582,7 +685,7 @@ def execute_approved_request(request: Request, request_id: str):
         req = res.get("request", {})
         component = req.get("component", "system")
         action = req.get("action", "restart_component")
-        
+
         # Determine verified status using verifier
         verifier = None
         global healing
@@ -592,7 +695,7 @@ def execute_approved_request(request: Request, request_id: str):
             runtime = getattr(request.app.state, "runtime", None)
             if runtime and getattr(runtime, "healing", None) is not None:
                 verifier = getattr(runtime.healing, "verifier", None)
-        
+
         verified = True
         verification_detail = "verified"
         if verifier:
@@ -606,7 +709,7 @@ def execute_approved_request(request: Request, request_id: str):
             except Exception as e:
                 verified = False
                 verification_detail = str(e)
-                
+
         # Record metrics
         met = get_metrics_service(request)
         if met:
@@ -615,43 +718,49 @@ def execute_approved_request(request: Request, request_id: str):
                 action=action,
                 executed=True,
                 verified=verified,
-                escalated=False
+                escalated=False,
             )
-            
+
         # Record audit
         aud = get_audit_service(request)
         if aud:
             from datetime import datetime, timezone
-            aud.record({
-                "component": component,
-                "action": action,
-                "executed": True,
-                "repair": {"status": "success", "detail": "executed"},
-                "verification": {"verified": verified, "detail": verification_detail},
-                "escalated": False,
-                "timestamp": datetime.now(timezone.utc).isoformat()
-            })
-            
+
+            aud.record(
+                {
+                    "component": component,
+                    "action": action,
+                    "executed": True,
+                    "repair": {"status": "success", "detail": "executed"},
+                    "verification": {
+                        "verified": verified,
+                        "detail": verification_detail,
+                    },
+                    "escalated": False,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+
         # Record learning
         learn = get_learning_service(request)
         if learn:
-            learn.record_repair(
-                component=component,
-                action=action,
-                success=verified
-            )
+            learn.record_repair(component=component, action=action, success=verified)
     return res
+
 
 @router.get("/mutation-approvals")
 def list_pending_mutations():
     from swarm_os.repositories.mutation_repo import MutationRepository
+
     repo = MutationRepository()
     mutations = repo.list_pending()
     return {"status": "ok", "mutations": mutations}
 
+
 @router.post("/mutation-approvals/{mutation_id}/approve")
 def approve_mutation(mutation_id: str):
     from swarm_os.repositories.mutation_repo import MutationRepository
+
     repo = MutationRepository()
     try:
         result = repo.approve(mutation_id)
@@ -660,21 +769,22 @@ def approve_mutation(mutation_id: str):
         log.exception("Mutation approve failed")
         return {"status": "error", "error": f"Failed to approve mutation {mutation_id}"}
 
+
 @router.post("/mutation-approvals/{mutation_id}/reject")
 def reject_mutation(mutation_id: str):
     from swarm_os.repositories.mutation_repo import MutationRepository
+
     repo = MutationRepository()
     if repo.reject(mutation_id):
         return {"status": "ok", "rejected": mutation_id}
     return {"status": "error", "error": f"Mutation {mutation_id} not found"}
 
+
 @router.get("/healing-policy")
 def get_healing_policy(request: Request):
     engine = get_policy_engine(request)
-    return {
-        "status": "ok",
-        "policies": engine.list_policies()
-    }
+    return {"status": "ok", "policies": engine.list_policies()}
+
 
 @router.get("/healing-policy/{component}")
 def get_healing_policy_for_component(request: Request, component: str):
@@ -682,26 +792,20 @@ def get_healing_policy_for_component(request: Request, component: str):
     return {
         "status": "ok",
         "component": component,
-        "policy": engine.get_policy(component)
+        "policy": engine.get_policy(component),
     }
+
 
 @router.get("/healing-policy-check")
 def check_healing_policy(
-    request: Request,
-    component: str,
-    action: str,
-    attempt_count: int = 1
+    request: Request, component: str, action: str, attempt_count: int = 1
 ):
     engine = get_policy_engine(request)
     decision = engine.evaluate(
-        component=component,
-        action=action,
-        attempt_count=attempt_count
+        component=component, action=action, attempt_count=attempt_count
     )
-    return {
-        "status": "ok",
-        "decision": decision
-    }
+    return {"status": "ok", "decision": decision}
+
 
 # ---------------------------------------------------------------------------
 # Readiness, Drills, and Runbook Endpoints
@@ -709,26 +813,36 @@ def check_healing_policy(
 def get_readiness_service(request: Request = None):
     from swarm_os.adaptation.readiness.readiness_service import HealingReadinessService
     from swarm_os.adaptation.runbooks.runbook_service import RunbookService
+
     met = get_metrics_service(request)
     aud = get_audit_service(request)
     esc = get_escalation_service(request)
     runbooks = RunbookService()
-    return HealingReadinessService(metrics=met, audit=aud, escalation=esc, runbooks=runbooks)
+    return HealingReadinessService(
+        metrics=met, audit=aud, escalation=esc, runbooks=runbooks
+    )
+
 
 def get_chaos_drill_service():
     from swarm_os.adaptation.drills.chaos_drill_service import ChaosDrillService
+
     return ChaosDrillService()
+
 
 def get_runbook_service():
     from swarm_os.adaptation.runbooks.runbook_service import RunbookService
+
     return RunbookService()
+
 
 def get_incident_summary_service(request: Request = None):
     from swarm_os.adaptation.incident.incident_summary import IncidentSummaryService
+
     met = get_metrics_service(request)
     aud = get_audit_service(request)
     esc = get_escalation_service(request)
     return IncidentSummaryService(metrics=met, audit=aud, escalation=esc)
+
 
 @router.get("/healing-readiness")
 def get_healing_readiness(request: Request):
@@ -736,20 +850,20 @@ def get_healing_readiness(request: Request):
     res = svc.calculate()
     return res
 
+
 @router.get("/healing-drills")
 def get_healing_drills():
     svc = get_chaos_drill_service()
     res = svc.summary()
     return res
 
+
 @router.get("/healing-runbook/{component}")
 def get_healing_runbook(component: str):
     svc = get_runbook_service()
     res = svc.get_runbook(component)
-    return {
-        "status": "ok",
-        **res
-    }
+    return {"status": "ok", **res}
+
 
 @router.get("/healing-incidents")
 def get_healing_incidents(request: Request):
@@ -792,28 +906,75 @@ async def swarm_debate(req: DebateRequest, request: Request):
                 out.append(f"[{agent_id} error: {exc}]")
             return " ".join(out) if out else f"[{agent_id} produced no output]"
 
-        yield "data: " + json.dumps({"phase": "status", "message": f"Planner drafting proposal for: {req.goal}", "content": ""}) + "\n\n"
-        proposal = await run_agent("planner", f"Draft a detailed implementation proposal for: {req.goal}")
+        yield (
+            "data: "
+            + json.dumps(
+                {
+                    "phase": "status",
+                    "message": f"Planner drafting proposal for: {req.goal}",
+                    "content": "",
+                }
+            )
+            + "\n\n"
+        )
+        proposal = await run_agent(
+            "planner", f"Draft a detailed implementation proposal for: {req.goal}"
+        )
         for part in proposal.split(" "):
             yield f"data: {json.dumps({'phase': 'proposal', 'message': 'streaming', 'content': part + ' '})}\n\n"
             await asyncio.sleep(0.01)
 
-        yield "data: " + json.dumps({"phase": "status", "message": "Reviewer critiquing the proposal...", "content": ""}) + "\n\n"
-        critique = await run_agent("reviewer", f"Critique the following proposal strictly, identifying risks and weaknesses:\n\n{proposal}")
+        yield (
+            "data: "
+            + json.dumps(
+                {
+                    "phase": "status",
+                    "message": "Reviewer critiquing the proposal...",
+                    "content": "",
+                }
+            )
+            + "\n\n"
+        )
+        critique = await run_agent(
+            "reviewer",
+            f"Critique the following proposal strictly, identifying risks and weaknesses:\n\n{proposal}",
+        )
         for part in critique.split(" "):
             yield f"data: {json.dumps({'phase': 'critique', 'message': 'streaming', 'content': part + ' '})}\n\n"
             await asyncio.sleep(0.01)
 
-        yield "data: " + json.dumps({"phase": "status", "message": "Coordinator synthesizing final decision...", "content": ""}) + "\n\n"
-        synthesis = await run_agent("coordinator", f"Synthesize the proposal and critique into a final recommended approach:\n\nPROPOSAL:\n{proposal}\n\nCRITIQUE:\n{critique}")
+        yield (
+            "data: "
+            + json.dumps(
+                {
+                    "phase": "status",
+                    "message": "Coordinator synthesizing final decision...",
+                    "content": "",
+                }
+            )
+            + "\n\n"
+        )
+        synthesis = await run_agent(
+            "coordinator",
+            f"Synthesize the proposal and critique into a final recommended approach:\n\nPROPOSAL:\n{proposal}\n\nCRITIQUE:\n{critique}",
+        )
         for part in synthesis.split(" "):
             yield f"data: {json.dumps({'phase': 'synthesis', 'message': 'streaming', 'content': part + ' '})}\n\n"
             await asyncio.sleep(0.01)
 
-        yield "data: " + json.dumps({"phase": "done", "message": "Debate complete.", "content": ""}) + "\n\n"
+        yield (
+            "data: "
+            + json.dumps(
+                {"phase": "done", "message": "Debate complete.", "content": ""}
+            )
+            + "\n\n"
+        )
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream",
-                             headers={"Cache-Control": "no-cache", "Connection": "keep-alive"})
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+    )
 
 
 class OmniDevRequest(BaseModel):
@@ -839,7 +1000,9 @@ async def omnidev_run(req: OmniDevRequest, request: Request):
             if chunk.get("type") == "final":
                 final_content = str(chunk.get("content", ""))
         if not final_content:
-            final_content = "OmniDev completed the task without producing a final response."
+            final_content = (
+                "OmniDev completed the task without producing a final response."
+            )
         return {"result": final_content}
     except Exception:
         log.exception("OmniDev task failed")
