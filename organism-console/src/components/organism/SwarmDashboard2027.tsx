@@ -108,20 +108,29 @@ const RadarChart = ({ backendUrl }: { backendUrl: string }) => {
 
         const distribution: Record<string, number> = routerData.model_distribution || {};
         const agents: AgentType[] = Array.isArray(agentsData) ? agentsData : [];
-
+        // The backend `/agents` response carries `model_role` as a ROLE CATEGORY
+        // ("reasoning"/"fast"/"coding"), not a concrete model name. Distributing
+        // those against model_distribution keys (which are real model names like
+        // "qwen3.5-4b") produced all-zero radar scores. Resolve each agent to its
+        // ACTUAL model: an explicit `model` field wins, otherwise fall back to
+        // "qwen3.5-4b" (the only local generation model per the swarm's model
+        // registry), so the radar plots real routed counts.
         const agentModel: Record<string, string> = {};
         agents.forEach((a) => {
           const role = a.id || a.role || '';
-          const model = (a.model_role || a.model || '').replace('openrouter/', '').split(':')[0];
-          if (role && model) agentModel[role] = model;
+          const model = (a.model || a.model_role || '')
+            .replace('openrouter/', '')
+            .split(':')[0];
+          const resolved = distribution[model] !== undefined ? model : 'qwen3.5-4b';
+          if (role) agentModel[role] = resolved;
         });
 
         const maxCount = Math.max(1, ...Object.values(distribution));
         setScores(prev => {
           const next = { ...prev };
           agentOrder.forEach((id) => {
-            const model = agentModel[id];
-            const count = (model && distribution[model]) || 0;
+            const model = agentModel[id] || 'qwen3.5-4b';
+            const count = distribution[model] || 0;
             next[id] = Math.round((count / maxCount) * 100);
           });
           return next;
@@ -364,9 +373,14 @@ const MetricsWall = ({ backendUrl }: { backendUrl: string }) => {
         const res = await fetch(`${backendUrl}/timeline`);
         if (!res.ok) throw new Error(`Backend responded with ${res.status}`);
         const data = await res.json();
-        const success = data.points?.[data.points.length-1]?.success_count || 0;
-        setMetrics(m => ({ ...m, successRate: Math.min(100, success * 10) }));
-        updateHistory('successRate', Math.min(100, success * 10));
+        // Real success rate: aggregate success over total across all buckets,
+        // not a made-up multiplier of the last bucket's raw count.
+        const points = data.points ?? [];
+        const totalEvents = points.reduce((s: number, p: any) => s + (p.event_count || 0), 0);
+        const totalSuccess = points.reduce((s: number, p: any) => s + (p.success_count || 0), 0);
+        const successRate = totalEvents > 0 ? Math.round((totalSuccess / totalEvents) * 100) : 0;
+        setMetrics(m => ({ ...m, successRate }));
+        updateHistory('successRate', successRate);
       } catch(e) { console.error("Error fetching timeline:", e); }
     };
 
@@ -374,8 +388,10 @@ const MetricsWall = ({ backendUrl }: { backendUrl: string }) => {
       try {
         const res = await fetch(`${backendUrl}/features/healing-readiness`);
         if (res.ok) {
-          setMetrics(m => ({ ...m, healingReadiness: 100 }));
-          updateHistory('healingReadiness', 100);
+          const data = await res.json();
+          const score = typeof data.score === "number" ? Math.round(data.score) : 100;
+          setMetrics(m => ({ ...m, healingReadiness: score }));
+          updateHistory('healingReadiness', score);
         }
       } catch(e) { console.error("Error fetching healing:", e); }
     };

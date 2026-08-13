@@ -8,7 +8,8 @@ import type {
   ToolsCacheResponse,
   TimelineResponse,
   RouterStatsResponse,
-  CriticStatsResponse
+  CriticStatsResponse,
+  HealingReadinessResponse
 } from "./organism-types"
 import {
   getAreaPoints,
@@ -71,15 +72,29 @@ export function useOrganismData() {
     refetchInterval: 30000
   })
 
+  const healingQuery = useQuery({
+    queryKey: ["healing-readiness", backendUrl],
+    queryFn: () => api.getHealingReadiness<HealingReadinessResponse>(backendUrl),
+    retry: 1,
+    refetchInterval: 60000
+  })
+
   const derived = useMemo(() => {
     const capabilities = toolsQuery.data?.capabilities ?? []
     const cacheSize = toolsCacheQuery.data?.cache_size ?? 0
     const cachedKeys = toolsCacheQuery.data?.cached_keys ?? []
-    const eventCount = statusQuery.data?.event_count ?? 0
+    // Distinguish "no data yet / query error" from a real value. When the
+    // status query has not resolved or errored, we must NOT claim a value we
+    // don't have (e.g. "llamacpp offline" or "0 events") — those defaults made
+    // the dashboard show wrong readings while the backend was healthy. We pass
+    // statusKnown=false so components can render an honest "checking…" state.
+    const statusKnown = statusQuery.isSuccess && statusQuery.data !== undefined
+    const eventCount = statusKnown ? (statusQuery.data?.event_count ?? 0) : 0
+    const systemReady = statusKnown ? (statusQuery.data?.ready ?? false) : false
+    const llamacppReady = statusKnown ? (statusQuery.data?.llamacpp_reachable ?? false) : false
+    const installedModels = statusKnown ? (statusQuery.data?.installed_model_count ?? 0) : 0
     const timelinePoints = timelineQuery.data?.points ?? []
     const toolCount = toolsQuery.data?.count ?? 0
-    const systemReady = statusQuery.data?.ready ?? false
-    const llamacppReady = statusQuery.data?.llamacpp_reachable ?? false
 
     const totalTimelineEvents = timelinePoints.reduce((sum, point) => sum + point.event_count, 0)
     const totalTimelineSuccess = timelinePoints.reduce((sum, point) => sum + point.success_count, 0)
@@ -232,11 +247,22 @@ export function useOrganismData() {
       ? rawCriticAcceptRate
       : (totalTimelineEvents > 0 ? successRate : 100)
 
+    // Healing readiness — REAL backend score, never a fabricated 100. When the
+    // query is loading/errored, null so components render an honest "checking…"
+    // state instead of inventing a perfect score.
+    const healingReady =
+      healingQuery.isSuccess && typeof healingQuery.data?.score === "number"
+        ? healingQuery.data.score
+        : null
+    const healingRating = healingQuery.data?.rating ?? null
+
     return {
       capabilities,
       cacheSize,
       cachedKeys,
       eventCount,
+      statusKnown,
+      installedModels,
       timelinePoints,
       toolCount,
       systemReady,
@@ -266,9 +292,13 @@ export function useOrganismData() {
       insights,
       routerStats,
       criticStats,
-      criticAcceptRate
+      criticAcceptRate,
+      healingReady,
+      healingRating,
+      criticKnown: criticQuery.isSuccess,
+      healingKnown: healingQuery.isSuccess && typeof healingQuery.data?.score === "number"
     }
-  }, [statusQuery.data, toolsQuery.data, toolsCacheQuery.data, timelineQuery.data, routerQuery.data, criticQuery.data])
+  }, [statusQuery.data, toolsQuery.data, toolsCacheQuery.data, timelineQuery.data, routerQuery.data, criticQuery.data, healingQuery.data])
 
   const isLoading =
     statusQuery.isLoading || toolsQuery.isLoading || toolsCacheQuery.isLoading || timelineQuery.isLoading

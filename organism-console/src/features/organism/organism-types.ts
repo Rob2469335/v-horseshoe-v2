@@ -99,3 +99,21 @@ export type CriticStatsResponse = {
   error?: string
 }
 
+export type HealingReadinessResponse = {
+  status: string
+  score: number
+  rating: string
+  factors: {
+    verified_failures: number
+    escalations: number
+  }
+  details?: {
+    metrics?: {
+      totals?: Record<string, number>
+      recent?: unknown[]
+    }
+    audit_count?: number
+    escalations?: number
+  }
+}
+

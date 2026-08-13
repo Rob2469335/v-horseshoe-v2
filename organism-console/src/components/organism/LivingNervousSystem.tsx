@@ -16,6 +16,10 @@ interface LiveData {
   cacheSize: number; visionAvailable: boolean
   routerStatus?: string; routerRouted?: number; routerModel?: string
   criticAcceptRate?: number; criticStatus?: string
+  statusKnown?: boolean
+  criticKnown?: boolean
+  healingKnown?: boolean
+  qdrantReachable?: boolean
 }
 interface Props { backendUrl: string; liveData?: LiveData }
 
@@ -27,19 +31,28 @@ const EDGES: [string,string][] = [
 
 function buildNodes(live: LiveData): NodeData[] {
   const W=900,H=520
-  // When there's no data yet, default critic to online/healthy rather than dead-zero
-  const criticHealth = live.criticAcceptRate !== undefined ? live.criticAcceptRate : (live.successRate > 0 ? live.successRate : (live.traceCount === 0 ? 100 : live.successRate))
-  const criticActivity = live.criticStatus === "active" ? Math.max(20, criticHealth) : 20
-  const routerHealth = live.routerStatus === "active" ? 100 : (live.llamacppReachable ? 100 : 40)
-  const routerActivity = live.routerStatus === "active" ? 90 : 30
+  // Honest readings: never fabricate a health number. When the relevant probe
+  // has not resolved yet, report the "checking" state (health 0, activity 0)
+  // rather than a made-up value.
+  const criticHealth = live.criticKnown ? (live.criticAcceptRate ?? 0) : (live.successRate > 0 ? live.successRate : 0)
+  const criticActivity = live.criticKnown && live.criticStatus === "active" ? Math.max(20, criticHealth) : 0
+  const routerHealth = live.routerStatus === "active" ? 100 : 0
+  const routerActivity = live.routerStatus === "active" ? 90 : 0
+  // While status hasn't loaded, don't claim llamacpp is offline (0%) — show an
+  // honest "checking" state instead of a false reading.
+  const llamacppHealth = !live.statusKnown ? 0 : (live.llamacppReachable ? 100 : 0)
+  const llamacppActivity = !live.statusKnown ? 0 : (live.llamacppReachable ? 85 : 0)
+  const llamacppSublabel = !live.statusKnown ? "checking" : `${live.installedModels} models`
+  const healingSublabel = live.healingKnown ? `${live.healingReady}% ready` : "checking"
+  const qdrantSublabel = live.qdrantReachable ? `${live.cacheSize} cached` : "checking"
   
   return [
-    { id:"router", label:"Router", sublabel:live.routerStatus === "active" && typeof live.routerRouted === "number" ? `${live.routerRouted} routed` : "model selector", x:W*0.50, y:H*0.38, radius:38, color:"#7dd3fc", glow:"rgba(125,211,252,0.5)", health:routerHealth, activity:routerActivity, pulseRate:1.8 },
-    { id:"llamacpp", label:"llamacpp", sublabel:`${live.installedModels} models`, x:W*0.78, y:H*0.22, radius:44, color:"#22c55e", glow:"rgba(34,197,94,0.5)", health:live.llamacppReachable?100:0, activity:live.llamacppReachable?85:0, pulseRate:2.2 },
-    { id:"critic", label:"Critic", sublabel:`${criticHealth}% accept`, x:W*0.78, y:H*0.62, radius:34, color:"#f472b6", glow:"rgba(244,114,182,0.5)", health:criticHealth, activity:criticActivity, pulseRate:1.4 },
-    { id:"memory", label:"Memory", sublabel:`${live.eventCount.toLocaleString()} events`, x:W*0.50, y:H*0.74, radius:36, color:"#a78bfa", glow:"rgba(167,139,250,0.5)", health:live.eventCount>0?100:50, activity:live.eventCount>100?80:40, pulseRate:1.0 },
-    { id:"qdrant", label:"Qdrant", sublabel:`${live.cacheSize} cached`, x:W*0.22, y:H*0.62, radius:32, color:"#fb923c", glow:"rgba(251,146,60,0.5)", health:100, activity:live.cacheSize>0?70:30, pulseRate:0.8 },
-    { id:"healer", label:"Healer", sublabel:`${live.healingReady}% ready`, x:W*0.22, y:H*0.22, radius:30, color:"#34d399", glow:"rgba(52,211,153,0.5)", health:live.healingReady, activity:live.healingReady>80?60:20, pulseRate:0.6 },
+    { id:"router", label:"Router", sublabel:live.routerStatus === "active" && typeof live.routerRouted === "number" ? `${live.routerRouted} routed` : "idle", x:W*0.50, y:H*0.38, radius:38, color:"#7dd3fc", glow:"rgba(125,211,252,0.5)", health:routerHealth, activity:routerActivity, pulseRate:1.8 },
+    { id:"llamacpp", label:"llamacpp", sublabel:llamacppSublabel, x:W*0.78, y:H*0.22, radius:44, color:"#22c55e", glow:"rgba(34,197,94,0.5)", health:llamacppHealth, activity:llamacppActivity, pulseRate:2.2 },
+    { id:"critic", label:"Critic", sublabel:live.criticKnown ? `${criticHealth}% accept` : "checking", x:W*0.78, y:H*0.62, radius:34, color:"#f472b6", glow:"rgba(244,114,182,0.5)", health:criticHealth, activity:criticActivity, pulseRate:1.4 },
+    { id:"memory", label:"Memory", sublabel:`${live.eventCount.toLocaleString()} events`, x:W*0.50, y:H*0.74, radius:36, color:"#a78bfa", glow:"rgba(167,139,250,0.5)", health:live.eventCount>0?100:0, activity:live.eventCount>100?80:0, pulseRate:1.0 },
+    { id:"qdrant", label:"Qdrant", sublabel:qdrantSublabel, x:W*0.22, y:H*0.62, radius:32, color:"#fb923c", glow:"rgba(251,146,60,0.5)", health:live.qdrantReachable ? 100 : 0, activity:live.cacheSize>0?70:0, pulseRate:0.8 },
+    { id:"healer", label:"Healer", sublabel:healingSublabel, x:W*0.22, y:H*0.22, radius:30, color:"#34d399", glow:"rgba(52,211,153,0.5)", health:live.healingKnown ? live.healingReady : 0, activity:live.healingReady>80?60:0, pulseRate:0.6 },
   ]
 }
 
@@ -59,7 +72,7 @@ export function LivingNervousSystem({ backendUrl, liveData }: Props) {
   const [nodeDetail, setNodeDetail] = useState<string|null>(null)
   const [loading, setLoading] = useState(false)
 
-  const live: LiveData = liveData ?? { llamacppReachable:false, installedModels:0, eventCount:0, traceCount:0, healingReady:100, successRate:0, cacheSize:0, visionAvailable:false }
+  const live: LiveData = liveData ?? { llamacppReachable:false, installedModels:0, eventCount:0, traceCount:0, healingReady:0, successRate:0, cacheSize:0, visionAvailable:false }
   const nodes = buildNodes(live)
   const getNode = useCallback((id:string)=>nodes.find(n=>n.id===id),[nodes])
 

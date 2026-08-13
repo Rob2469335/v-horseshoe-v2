@@ -45,6 +45,8 @@ export default function OrganismPage() {
     totalTimelineFail,
     successRate,
     failureRate,
+    statusKnown,
+    installedModels,
     visionConfigured,
     visionRuntimeReady,
     timelinePoints,
@@ -55,7 +57,11 @@ export default function OrganismPage() {
     insights,
     routerStats,
     criticStats,
-    criticAcceptRate
+    criticAcceptRate,
+    healingReady,
+    healingRating,
+    criticKnown,
+    healingKnown
   } = useOrganismData();
 
   const { width, height, padding, allEventsLine, successLine, partialLine, failLine, allEventsArea } = chart;
@@ -83,6 +89,11 @@ export default function OrganismPage() {
     cacheSize,
     cachedKeys
   });
+
+  // Qdrant reachability is proven by `/tools/cache` enumerating collections
+  // (its keys carry a `qdrant_` prefix per collection). Absence of keys is not
+  // an offline signal — only a failed/failed-so-far probe is.
+  const qdrantReachable = cachedKeys.some((key) => key.startsWith("qdrant_"));
 
   return (
     <>
@@ -181,11 +192,12 @@ export default function OrganismPage() {
             <LivingNervousSystem
               backendUrl={backendUrl}
               liveData={{
-                llamacppReachable: statusQuery.data?.llamacpp_reachable ?? false,
-                installedModels: statusQuery.data?.installed_model_count ?? 0,
-                eventCount: statusQuery.data?.event_count ?? 0,
+                llamacppReachable: statusKnown ? (statusQuery.data?.llamacpp_reachable ?? false) : false,
+                installedModels: statusKnown ? installedModels : 0,
+                statusKnown,
+                eventCount: eventCount,
                 traceCount: timelinePoints.length,
-                healingReady: 100,
+                healingReady: healingReady ?? 0,
                 successRate: successRate,
                 cacheSize: cacheSize,
                 visionAvailable: visionRuntimeReady,
@@ -194,6 +206,9 @@ export default function OrganismPage() {
                 routerModel: routerStats.active_model,
                 criticAcceptRate: criticAcceptRate,
                 criticStatus: criticStats.status,
+                criticKnown,
+                healingKnown,
+                qdrantReachable,
               }}
             />
           </div>
@@ -201,9 +216,12 @@ export default function OrganismPage() {
           <OrganismNarrator
             backendUrl={backendUrl}
             llamacppReachable={statusQuery.data?.llamacpp_reachable ?? false}
+            statusKnown={statusKnown}
             successRate={successRate}
             eventCount={statusQuery.data?.event_count ?? 0}
-            healingReady={100}
+            healingReady={healingReady ?? 0}
+            healingKnown={healingKnown}
+            healingRating={healingRating}
             traceCount={timelinePoints.length}
           />
 
@@ -211,9 +229,9 @@ export default function OrganismPage() {
             <SubsystemInteractiveCard id="llamacpp" label="llamacpp" color="#22c55e" health={statusQuery.data?.llamacpp_reachable ? 100 : 0} activity={statusQuery.data?.llamacpp_reachable ? 85 : 0} sublabel={`${statusQuery.data?.installed_model_count ?? 0} models`} backendUrl={backendUrl} prompt="You are Llama.cpp. Report your current status in 3 bullet points. Be direct and technical." />
             <SubsystemInteractiveCard id="router" label="Router" color="#7dd3fc" health={routerStats.success_rate} activity={routerStats.status === "active" ? 90 : 30} sublabel={routerStats.status === "active" ? `${routerStats.total_routed} routed · ${routerStats.active_model}` : "idle — awaiting traces"} backendUrl={backendUrl} prompt={`You are the model router. Status: ${routerStats.status}. You have routed ${routerStats.total_routed} traces with ${routerStats.success_rate}% success. Active model: ${routerStats.active_model}. Explain what you are doing right now in 2 sentences.`} />
             <SubsystemInteractiveCard id="critic" label="Critic" color="#f472b6" health={criticAcceptRate} activity={criticStats.total_evaluated > 0 ? criticAcceptRate : 20} sublabel={`${criticAcceptRate}% accept · ${criticStats.verdict}`} backendUrl={backendUrl} prompt={`You are the AI critic evaluator. Status: ${criticStats.status}. Acceptance rate: ${criticAcceptRate}%. You have evaluated ${criticStats.total_evaluated} outputs (${criticStats.accepted} accepted, ${criticStats.rejected} rejected). Verdict: ${criticStats.verdict}. Give a 2-sentence quality assessment.`} />
-            <SubsystemInteractiveCard id="memory" label="Memory" color="#a78bfa" health={statusQuery.data?.event_count ?? 0 > 0 ? 100 : 50} activity={80} sublabel={`${(statusQuery.data?.event_count ?? 0).toLocaleString()} events`} backendUrl={backendUrl} prompt={`You are the memory subsystem. You have stored ${statusQuery.data?.event_count ?? 0} events. Explain what you store and why it matters in 2 sentences.`} />
-            <SubsystemInteractiveCard id="qdrant" label="Qdrant" color="#fb923c" health={100} activity={cacheSize > 0 ? 70 : 30} sublabel={`${cacheSize} cached`} backendUrl={backendUrl} prompt={`You are the Qdrant vector database. You have ${cacheSize} cached vectors. Explain semantic search in 2 sentences.`} />
-            <SubsystemInteractiveCard id="healer" label="Healer" color="#34d399" health={100} activity={60} sublabel="100% ready" backendUrl={backendUrl} prompt="You are the self-healing subsystem. All 4 checks (orchestrator, qdrant, llamacpp, api) are passing. Report your current status and what you are watching for." />
+            <SubsystemInteractiveCard id="memory" label="Memory" color="#a78bfa" health={statusKnown && eventCount > 0 ? 100 : 50} activity={80} sublabel={`${(statusQuery.data?.event_count ?? 0).toLocaleString()} events`} backendUrl={backendUrl} prompt={`You are the memory subsystem. You have stored ${statusQuery.data?.event_count ?? 0} events. Explain what you store and why it matters in 2 sentences.`} />
+            <SubsystemInteractiveCard id="qdrant" label="Qdrant" color="#fb923c" health={qdrantReachable ? 100 : 0} activity={cacheSize > 0 ? 70 : 30} sublabel={qdrantReachable ? `${cacheSize} cached` : "reachability not confirmed"} backendUrl={backendUrl} prompt={`You are the Qdrant vector database. You have ${cacheSize} cached vectors. Explain semantic search in 2 sentences.`} />
+            <SubsystemInteractiveCard id="healer" label="Healer" color="#34d399" health={healingReady ?? 0} activity={healingReady ?? 0} sublabel={healingReady !== null ? `${healingRating ?? "—"} · ${healingReady}%` : "checking…"} backendUrl={backendUrl} prompt={`You are the self-healing subsystem. Your readiness score is ${healingReady ?? "unknown"}% (${healingRating ?? "unknown"}). Report your current status and what you are watching for.`} />
           </div>
 
           <div className="grid grid-cols-[auto_1fr] gap-3 items-start mb-6">
@@ -333,10 +351,12 @@ export default function OrganismPage() {
               swarmV10Feed.map((e, i) => (
                 <div key={i} className="mb-2 text-white/75">
                   <span className="text-purple-400 font-bold">
-                    {e.status ?? "unknown"}
+                    {e.event ?? e.type ?? "event"}
                   </span>
-                  {" | score: "}
-                  {typeof e.score === "number" ? e.score.toFixed(2) : "—"}
+                  {" | "}
+                  {typeof e.payload?.model === "string"
+                    ? `${e.payload.model}${typeof e.payload.duration_ms === "number" ? ` · ${e.payload.duration_ms}ms` : ""}`
+                    : `score: ${typeof e.score === "number" ? e.score.toFixed(2) : "—"}`}
                   {" | branch: "}
                   {e.branch ?? "—"}
                 </div>

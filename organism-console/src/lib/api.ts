@@ -65,6 +65,7 @@ export const api = {
   getAdminGeneration: <T>(baseUrl: string) => fetchJson<T>(baseUrl, appConfig.endpoints.adminGeneration),
   getRouterStats: <T>(baseUrl: string) => fetchJson<T>(baseUrl, appConfig.endpoints.routerStats),
   getCriticStats: <T>(baseUrl: string) => fetchJson<T>(baseUrl, appConfig.endpoints.criticStats),
+  getHealingReadiness: <T>(baseUrl: string) => fetchJson<T>(baseUrl, appConfig.endpoints.healingReadiness),
   getMemories: <T>(baseUrl: string) => fetchJson<T>(baseUrl, appConfig.endpoints.memories),
   getWorkspaceChanges: (baseUrl: string) =>
     fetchJson<import("../components/organism/DiffReviewPanel").WorkspaceChanges>(baseUrl, appConfig.endpoints.workspaceChanges),

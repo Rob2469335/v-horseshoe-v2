@@ -10,15 +10,18 @@ interface NarratorEvent {
 interface Props {
   backendUrl: string
   llamacppReachable: boolean
+  statusKnown: boolean
   successRate: number
   eventCount: number
   healingReady: number
+  healingKnown: boolean
+  healingRating: string | null
   traceCount: number
 }
 
 let _eid = 0
 
-export function OrganismNarrator({ backendUrl, llamacppReachable, successRate, eventCount, healingReady, traceCount }: Props) {
+export function OrganismNarrator({ backendUrl, llamacppReachable, statusKnown, successRate, eventCount, healingReady, healingKnown, healingRating, traceCount }: Props) {
   const [feed, setFeed] = useState<NarratorEvent[]>([])
   const [heartbeat, setHeartbeat] = useState(0)
 
@@ -32,9 +35,10 @@ export function OrganismNarrator({ backendUrl, llamacppReachable, successRate, e
   }, [])
 
   useEffect(() => {
+    if (!statusKnown) return
     if (llamacppReachable) push("✅ Llama.cpp brain connected. Inference engine is live.", "#22c55e")
     else push("⚠️ Llama.cpp brain offline. Generation will fail until reconnected.", "#f87171")
-  }, [llamacppReachable])
+  }, [llamacppReachable, statusKnown])
 
   useEffect(() => {
     if (traceCount > 0) push(`📡 ${traceCount} trace events detected in this session.`, "#7dd3fc")
@@ -45,8 +49,8 @@ export function OrganismNarrator({ backendUrl, llamacppReachable, successRate, e
   }, [successRate])
 
   useEffect(() => {
-    if (healingReady < 80) push(`🔧 Healing readiness dropped to ${healingReady}%. Self-repair may be needed.`, "#f87171")
-  }, [healingReady])
+    if (healingKnown && healingReady < 80) push(`🔧 Healing readiness ${healingReady}%. Self-repair may be needed.`, "#f87171")
+  }, [healingReady, healingKnown])
 
   // Live heartbeat every 30s
   useEffect(() => {
@@ -69,11 +73,11 @@ export function OrganismNarrator({ backendUrl, llamacppReachable, successRate, e
           push(msgs[phase] ?? `📡 ${phase} phase completed on ${model}. Status: ${status}.`, status.includes("accept") || status.includes("success") || status.includes("complet") ? "#22c55e" : "#fbbf24")
         } else {
           const heartbeats = [
-            "💓 Organism heartbeat nominal. All subsystems stable.",
-            `🧬 Memory holding ${eventCount.toLocaleString()} events. Learning loop active.`,
+            "💓 Organism heartbeat nominal.",
+            `🧬 Memory holding ${eventCount.toLocaleString()} events.`,
             "🔄 Router on standby. Ready to route next generation request.",
-            `⚡ ${llamacppReachable ? "Llama.cpp reachable" : "Llama.cpp offline"}. Inference path ${llamacppReachable ? "clear" : "blocked"}.`,
-            "🛡️ Healer watching for anomalies. No intervention needed.",
+            `⚡ ${statusKnown ? (llamacppReachable ? "Llama.cpp reachable" : "Llama.cpp offline") : "Llama.cpp status checking…"}.`,
+            `🛡️ Healing readiness ${healingKnown ? `${healingReady}% (${healingRating ?? "—"})` : "checking…"}.`,
           ]
           push(heartbeats[Math.floor(Math.random() * heartbeats.length)], "#7dd3fc")
         }
@@ -85,7 +89,7 @@ export function OrganismNarrator({ backendUrl, llamacppReachable, successRate, e
     const t = setInterval(beat, 12000)
     beat()
     return () => clearInterval(t)
-  }, [backendUrl, llamacppReachable, eventCount])
+  }, [backendUrl, llamacppReachable, eventCount, statusKnown, healingReady, healingKnown, healingRating])
 
   return (
     <div style={{

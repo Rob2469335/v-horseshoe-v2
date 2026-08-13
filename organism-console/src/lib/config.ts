@@ -15,7 +15,8 @@ export const appConfig = {
     routerStats: "/router",
     criticStats: "/critic",
     memories: "/memories",
-    workspaceChanges: "/admin/changes"
+    workspaceChanges: "/admin/changes",
+    healingReadiness: "/features/healing-readiness"
   },
   requestTimeoutMs: 60000,
   sseEnabled: true

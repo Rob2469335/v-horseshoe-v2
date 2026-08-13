@@ -4,8 +4,7 @@ function getColor(m:string) {
   if (m.includes("vl")||m.includes("moondream")) return "#D4537E"
   if (m.includes("coder")) return "#378ADD"
   if (m.includes("embed")||m.includes("reranker")) return "#94a3b8"
-  if (m.includes("14b")||m.includes("12b")) return "#a78bfa"
-  if (m.includes("3b")) return "#94a3b8"
+  if (m.includes("3.5-4b")||m.includes("deepseek")||m.includes("gpt")) return "#a78bfa"
   return "#7dd3fc"
 }
 function getRole(m:string) {
@@ -13,8 +12,8 @@ function getRole(m:string) {
   if (m.includes("coder")) return "Coding"
   if (m.includes("embed")) return "Embedding"
   if (m.includes("reranker")) return "Reranker"
-  if (m.includes("14b")||m.includes("12b")) return "Reasoning"
-  if (m.includes("3b")) return "Fast"
+  if (m.includes("3.5-4b")) return "Local gen"
+  if (m.includes("deepseek")||m.includes("gpt")) return "Cloud"
   return "Balanced"
 }
 export function ModelPicker({ models, selected, onSelect }: Props) {

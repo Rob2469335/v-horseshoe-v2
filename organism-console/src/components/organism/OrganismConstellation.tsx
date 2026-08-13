@@ -1,6 +1,29 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import ForceGraph2D from 'react-force-graph-2d';
 
+// The swarm's canonical local generation model (per AGENTS.md — qwen3.5-4b is
+// the ONLY local generation model served; heavy reasoning routes to cloud
+// DeepSeek V4 Flash). Persisted genome/snapshot data may reference RETIRED
+// model aliases (qwen3:14b, qwen2.5:7b-instruct, qwen2.5:3b-instruct,
+// qwen-tuned, qwen3-vl:8b, ...) from before the migration. Displaying those
+// stale names as if they were live is inaccurate — map them to the current
+// model so the dashboard shows the truth.
+const CURRENT_GEN_MODEL = 'qwen3.5-4b'
+const RETIRED_MODEL_MARKERS = [
+  '14b', '12b', '35b', '7b', '3b', 'qwen2', 'qwen-tuned', 'qwen3-vl', 'qwen3:',
+]
+
+export function normalizeGenomeModel(model: string | undefined | null): string {
+  const m = (model || '').trim()
+  if (!m) return CURRENT_GEN_MODEL
+  const low = m.toLowerCase()
+  if (low.includes('3.5-4b') || low.includes('3.5_4b') || low.includes('deepseek') || low.includes('v4')) return m
+  if (RETIRED_MODEL_MARKERS.some((marker) => low.includes(marker))) {
+    return CURRENT_GEN_MODEL
+  }
+  return m
+}
+
 export function OrganismConstellation({ population = [] }: { population?: any[] }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const fgRef = useRef<any>();
@@ -29,8 +52,8 @@ export function OrganismConstellation({ population = [] }: { population?: any[] 
     const nodes = population.map((org, index) => ({
       id: org.id || `agent-${index}`,
       name: org.id || `Agent-${index}`,
-      fitness: org.fitness || 0.1,
-      genomeType: org.genome?.model || org.model || 'qwen3.5-4b',
+      fitness: typeof org.fitness === 'number' ? org.fitness : 0,
+      genomeType: normalizeGenomeModel(org.genome?.model || org.model || CURRENT_GEN_MODEL),
       generation: org.genome?.generation || 1
     }));
 
@@ -191,7 +214,7 @@ export function OrganismConstellation({ population = [] }: { population?: any[] 
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px' }}>
             <span style={{ color: '#64748b', textTransform: 'uppercase' }}>Fitness</span>
-            <span style={{ color: 'white' }}>{(hoverNode.fitness * 100).toFixed(1)}%</span>
+            <span style={{ color: 'white' }}>{typeof hoverNode.fitness === 'number' ? hoverNode.fitness.toFixed(3) : '—'}</span>
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px' }}>
             <span style={{ color: '#64748b', textTransform: 'uppercase' }}>Generation</span>
