@@ -392,16 +392,17 @@ async def _playwright_impl(params: Dict[str, Any], trace_hook=None) -> Dict[str,
                 # degrades gracefully (ok:False) if not.
                 from swarm_os.infra.llama_client import LlamaClient
                 vision = LlamaClient(base_url="http://127.0.0.1:8083")
-                text = await vision.generate(
-                    model="qwen3-vl",
-                    messages=[{
-                        "role": "user",
-                        "content": [
-                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
-                            {"type": "text", "text": "Describe what is on this webpage, focusing on interactive elements (buttons, links, inputs) and their visible labels."},
-                        ],
-                    }],
-                )
+                async with asyncio.timeout(60.0):
+                    text = await vision.generate(
+                        model="qwen3-vl",
+                        messages=[{
+                            "role": "user",
+                            "content": [
+                                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                                {"type": "text", "text": "Describe what is on this webpage, focusing on interactive elements (buttons, links, inputs) and their visible labels."},
+                            ],
+                        }],
+                    )
                 return {"ok": True, "described": True, "description": str(text)[:2000]}
             except Exception as exc:
                 logger.warning("browser_describe vision unavailable: %s", exc)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -75,7 +76,8 @@ class ExternalMCPClientManager:
                 session = await self.exit_stack.enter_async_context(
                     ClientSession(read_stream, write_stream)
                 )
-                await session.initialize()
+                async with asyncio.timeout(30.0):
+                    await session.initialize()
                 
                 # Retrieve tools
                 tools_response = await session.list_tools()
@@ -104,7 +106,8 @@ class ExternalMCPClientManager:
             raise KeyError(f"No active session for MCP server: {server_name}")
         
         logger.info(f"Calling external tool '{tool_name}' on server '{server_name}'...")
-        result = await session.call_tool(tool_name, arguments)
+        async with asyncio.timeout(120.0):
+            result = await session.call_tool(tool_name, arguments)
         return result
 
     async def stop(self):
