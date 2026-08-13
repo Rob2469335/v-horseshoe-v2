@@ -1,6 +1,7 @@
 import os
 import uuid
 import requests
+import threading
 from typing import List, Dict, Any, Optional
 
 EMBED_URL = os.getenv("EMBED_URL", os.getenv("LLAMA_URL", os.getenv("OLLAMA_URL", "http://127.0.0.1:8081/v1")))
@@ -33,35 +34,37 @@ def _get_shard_name(category: str) -> str:
     return f"agent_memory_{safe_cat}_v2"
 
 _verified_shards = set()
+_verified_shards_lock = threading.Lock()
 
 def init_memory_qdrant(shard: str = "general") -> bool:
     """Ensure the Qdrant shard collection exists."""
     collection = _get_shard_name(shard)
-    if collection in _verified_shards:
-        return True
-        
-    try:
-        resp = requests.get(f"{QDRANT_URL}/collections/{collection}", timeout=5.0)
-        if resp.status_code == 404:
-            dim = _get_embedding_dimension()
-            create_resp = requests.put(f"{QDRANT_URL}/collections/{collection}", json={
-                "vectors": {
-                    "size": dim,
-                    "distance": "Cosine"
-                }
-            }, timeout=10.0)
-            if create_resp.status_code == 200:
+    with _verified_shards_lock:
+        if collection in _verified_shards:
+            return True
+
+        try:
+            resp = requests.get(f"{QDRANT_URL}/collections/{collection}", timeout=5.0)
+            if resp.status_code == 404:
+                dim = _get_embedding_dimension()
+                create_resp = requests.put(f"{QDRANT_URL}/collections/{collection}", json={
+                    "vectors": {
+                        "size": dim,
+                        "distance": "Cosine"
+                    }
+                }, timeout=10.0)
+                if create_resp.status_code == 200:
+                    _verified_shards.add(collection)
+                    return True
+                return False
+
+            if resp.status_code == 200:
                 _verified_shards.add(collection)
                 return True
             return False
-            
-        if resp.status_code == 200:
-            _verified_shards.add(collection)
-            return True
-        return False
-    except Exception as e:
-        _log.warning("Failed to connect to Qdrant memory core for %s: %s", collection, e)
-        return False
+        except Exception as e:
+            _log.warning("Failed to connect to Qdrant memory core for %s: %s", collection, e)
+            return False
 
 def get_embedding(text: str) -> Optional[List[float]]:
     # Truncate to ~1800 tokens to prevent embedding server batch size limits
@@ -144,7 +147,6 @@ def rerank_memories(query: str, memories: List[Dict[str, Any]]) -> List[Dict[str
     return reranked[:3]  # Keep top 3
 
 import time
-import threading
 import networkx as nx
 import re
 

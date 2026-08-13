@@ -151,3 +151,62 @@ def test_distill_model_variability_still_short_circuits(monkeypatch):
     assert out == ""
     assert called["n"] == 0
 
+
+def test_init_memory_qdrant_no_duplicate_put_under_concurrency(monkeypatch):
+    """TOCTOU regression: concurrent callers missing the verified-shards cache
+    must not all issue a collection PUT (400 'Already Exists' for all but one).
+
+    Pre-fix: the _verified_shards check and the GET+PUT creation sequence ran
+    with no lock, so burst-launched callers raced and each sent its own PUT.
+    Post-fix: one _verified_shards_lock covers check + create, so exactly one
+    PUT fires and the rest read the freshly-verified cache entry."""
+    import threading
+    import runtime_v2.services.memory_core as _mc
+
+    put_calls = {"n": 0}
+    put_lock = threading.Lock()
+    start_gate = threading.Barrier(6)
+
+    class _Resp:
+        status_code = 200
+        def json(self):
+            return {}
+
+    class _Missing:
+        status_code = 404
+
+    monkeypatch.setattr(_mc, "_verified_shards", set())
+    monkeypatch.setattr(_mc, "_verified_shards_lock", threading.Lock(), raising=False)
+    monkeypatch.setattr(_mc, "_get_embedding_dimension", lambda: 768)
+
+    def _fake_get(url, timeout=5.0):
+        # Sleep releases the GIL so concurrent callers genuinely interleave;
+        # pre-fix they all see the empty verified-shards cache and all PUT.
+        import time
+        time.sleep(0.05)
+        return _Missing()
+
+    def _fake_put(url, json, timeout=10.0):
+        with put_lock:
+            put_calls["n"] += 1
+        return _Resp()
+
+    monkeypatch.setattr(_mc.requests, "get", _fake_get)
+    monkeypatch.setattr(_mc.requests, "put", _fake_put)
+
+    results = [None] * 6
+    threads = []
+    for i in range(6):
+        def _run(i=i):
+            start_gate.wait(timeout=5)
+            results[i] = _mc.init_memory_qdrant("test")
+        t = threading.Thread(target=_run)
+        threads.append(t)
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert all(results), f"all callers must succeed, got {results}"
+    assert put_calls["n"] == 1, f"PUT fired {put_calls['n']} times, expected 1"
+    assert "agent_memory_test_v2" in _mc._verified_shards
+
