@@ -104,6 +104,10 @@ def _run_flow(account_name: str, cfg: dict) -> dict | None:
     authorize_url = (f"{auth_url_tpl}?client_id={urllib.parse.quote(client_id)}"
                      f"&redirect_uri={urllib.parse.quote(f'http://127.0.0.1:{redirect_port}/')}"
                      f"&response_type=code&scope={urllib.parse.quote(scopes)}&state={state}")
+    if "accounts.google.com" in auth_url_tpl:
+        # Google only returns a refresh_token with offline access; without it the
+        # 1-hour access token expires and the user must re-consent every time.
+        authorize_url += "&access_type=offline&prompt=consent"
     try:
         webbrowser.open(authorize_url)
     except Exception:
