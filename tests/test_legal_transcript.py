@@ -8,13 +8,30 @@ miss her whole cross-examination.
 """
 from __future__ import annotations
 
-from swarm_os.services.legal.transcript_search import parse_transcript
+from swarm_os.services.legal.transcript_search import parse_transcript, parse_minuscript
 
 _FOOTER = "SOUTHERN DISTRICT REPORTERS, P.C.\n(212) 805-0300"
 
 
 def _page(n: int, body: str) -> str:
     return f"\n{n}\nJ591dun1\n\n{body}\n\n{_FOOTER}\n"
+
+
+def _pdf_page(n: int, body: str) -> str:
+    """pypdf-extracted layout: the page number is printed BEFORE the footer
+    (real shape from the PDF-only trial days, e.g. 5/17/19). After the footer
+    split the page number sits at the END of the previous block, not the head."""
+    return f"{n}\n{_FOOTER}\n{body}\n"
+
+
+def test_footer_phone_never_reaches_passages():
+    """The reporter footer phone line ('(212) 805-0300') is layout, not speech —
+    it must be consumed by the footer split and never leak into a passage (it
+    was leaking into witness-matrix summaries before the regex fix)."""
+    p = _page(499, "1    THE COURT:  Please be seated.\n")
+    idx = parse_transcript(p, case="US v. Test")
+    assert all("805-0300" not in x.text for x in idx.passages)
+    assert all("SOUTHERN DISTRICT REPORTERS" not in x.text for x in idx.passages)
 
 
 SAMPLE = (
@@ -279,3 +296,121 @@ def test_blt_search_scoped_to_correct_page_not_page_bleed():
     assert idx.search("THE COURT") == [], (
         "search matches passage TEXT, not the speaker label"
     )
+
+
+def test_pypdf_extracted_layout_page_before_footer():
+    """pypdf extraction prints the page number BEFORE the reporter footer, so
+    after the footer split the page number sits at the END of the previous
+    block — the parser must harvest it there and apply it to the next block's
+    content (real shape from the PDF-only trial days, 5/17-5/28 2019)."""
+    p1 = _pdf_page(1189, (
+        "UNITED STATES DISTRICT COURT\n"
+        "SOUTHERN DISTRICT OF NEW YORK\n"
+        "THE COURT:  Good morning.\n"
+        "MR. DINNERSTEIN:  Good morning, your Honor.\n"
+    ))
+    p2 = _pdf_page(1190, (
+        "THE COURT:  All right, let's bring the jury in.\n"
+        "MS. ROTHMAN:  Yes, your Honor.\n"
+    ))
+    idx = parse_transcript(p1 + p2, case="US v. Test", source="pdf")
+    pages = {p.page for p in idx.passages}
+    assert pages == {1189, 1190}
+    assert idx.search("bring the jury")[0][0] == 1190
+    assert idx.search("Good morning")[0][0] == 1189
+
+
+def test_summation_section_attributed_to_named_speaker():
+    """The summation section (5/21/19) is CONTINUOUS argument text with NO
+    per-line 'NAME:' prefixes — the speaker comes only from the section header
+    'J5l1dun2  Summation - Mr. Dinnerstein'. The parser must attribute the
+    following text to that speaker (real shape that was previously unparsed)."""
+    txt = (
+        _pdf_page(1668, (
+            "J5l1dun2                 Summation - Mr. Dinnerstein \n"
+            "Someone might have principles. Then there's Kasheem Jones.  That's "
+            "another witness the government put on, no mention of Robert.  I "
+            "submit that Robert Locust has never been a runner.\n"
+        ))
+        + _pdf_page(1669, (
+            "J5l1dun2                 Summation - Mr. Dinnerstein \n"
+            "And finally, the charge: the government must prove each element "
+            "beyond a reasonable doubt.\n"
+        ))
+    )
+    idx = parse_transcript(txt, case="US v. Test", source="summ")
+    summ = [p for p in idx.passages if p.speaker == "MR. DINNERSTEIN"]
+    assert summ, "summation text must be attributed to the named speaker"
+    assert "never been a runner" in " ".join(p.text for p in summ)
+    # page attribution survives across the two summation pages
+    assert {p.page for p in summ} == {1668, 1669}
+
+
+def test_charge_section_attributed_to_court():
+    """The jury Charge section (5/22/19) is continuous instruction text with no
+    'NAME:' prefixes — attributed to THE COURT via the 'J5m1dun1  Charge'
+    header (real shape that was previously unparsed)."""
+    txt = _pdf_page(1780, (
+        "J5m1dun1                 Charge \n"
+        "Ladies and gentlemen, you are the sole and exclusive judges of the "
+        "facts.  You pass on the weight of the evidence.\n"
+    ))
+    idx = parse_transcript(txt, case="US v. Test", source="charge")
+    court = [p for p in idx.passages if p.speaker == "THE COURT"]
+    assert court, "charge text must be attributed to THE COURT"
+    assert "sole and exclusive judges" in " ".join(p.text for p in court)
+
+
+def test_continuous_court_speech_flushes_per_page():
+    """The Court reading preliminary instructions is CONTINUOUS text with no
+    per-line 'NAME:' prefix spanning multiple pages (real shape on 5/7/19,
+    pp.32-40). Each page must get its own THE COURT passage — the page-change
+    flush must preserve the speaker AND stamp the new page number (previously
+    the whole multi-page instruction collapsed onto one page)."""
+    # The real shape: page 31 has the Court speaking (with prefix), then pages
+    # 32+ are continuous un-prefixed instruction text that continues it.
+    lead = _pdf_page(31, (
+        "J571dun1 - Corrected \n"
+        "THE COURT:  All right, I want to give you a few rules that you're "
+        "going to live by over the course of the next few weeks.\n"
+    ))
+    pages = lead + "".join(
+        _pdf_page(32 + i, (
+            f"J571dun1 - Corrected \n"
+            f"{i + 1}   I want to give you a few rules, rule number {i + 1}.  "
+            f"You must follow the law and the evidence.\n"
+        ))
+        for i in range(3)
+    )
+    idx = parse_transcript(pages, case="US v. Test", source="instr")
+    court = [p for p in idx.passages if p.speaker == "THE COURT"]
+    assert len(court) == 4, f"expected 4 passages, got {len(court)}"
+    assert {p.page for p in court} == {31, 32, 33, 34}
+    assert "rule number 1" in " ".join(p.text for p in court)
+    assert "rule number 3" in " ".join(p.text for p in court)
+
+
+def test_minuscript_export_layout():
+    """The Min-U-Script (transcript-agency) export used for the pre-trial /
+    voir-dire day (5/6/19) has NO reporter footer — each content page is one
+    line "J561dun1Page 3 1  <text> 2  <text>...", and a trailing word index is
+    not speech. The parser must extract passages with exact pages and drop the
+    word index."""
+    mus = (
+        "In The Matter Of: UNITED STATES OF AMERICA, V BRYAN DUNCAN\n"
+        "Original File J56TDUNF.txt Min-U-Script with Word Index\n"
+        "J561dun1Page 3 1  THE COURT: You may be seated. 2  MR. FOLLY: Thank you. 3  THE COURT: Next.\n"
+        "J561dun1Page 7 1  JUROR: I don't think so. 2  THE COURT: All right.\n"
+        "ago (4)    12:24;17:9;21:1;    22:19\n"
+        "agree (1)    15:11\n"
+    )
+    idx = parse_minuscript(mus, case="US v. Test", source="mus")
+    pages = {p.page for p in idx.passages}
+    assert pages == {3, 7}
+    assert idx.search("You may be seated")[0][0] == 3
+    assert idx.search("I don't think so")[0][0] == 7
+    # word-index text never becomes a passage
+    assert idx.search("agree") == []
+    # the inline line numbers (2, 3) are stripped from the spoken text
+    texts = " ".join(p.text for p in idx.passages)
+    assert " 2  " not in texts and " 3  " not in texts

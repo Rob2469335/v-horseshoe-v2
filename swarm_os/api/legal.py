@@ -357,3 +357,119 @@ async def legal_moot(req: MootRequest) -> dict[str, Any]:
         "message": session.message,
         "markdown": render_bench(session),
     }
+
+
+# ---------------------------------------------------------------------------
+# Trial analysis — the criminal-defense record layer (your own transcript)
+# ---------------------------------------------------------------------------
+@router.get("/trial/overview")
+async def legal_trial_overview() -> dict[str, Any]:
+    """High-level structure of the defendant's own trial record (all ingested
+    transcript days): days, pages, passage counts."""
+    from swarm_os.services.legal.trial_advisor import _load_indices, trial_overview
+    try:
+        indices = _load_indices()
+        if not indices:
+            return {"ok": False, "error": "No trial transcripts found in data/legal/transcripts. "
+                    "Add your corrected .txt transcript files there first."}
+        return {"ok": True, **trial_overview(indices)}
+    except Exception:
+        log.exception("trial overview failed")
+        raise HTTPException(status_code=500, detail="Trial overview failed")
+
+
+@router.get("/trial/attorneys")
+async def legal_trial_attorneys() -> dict[str, Any]:
+    """Per-attorney profiles across the trial: objections, examinations, key
+    statements, page range — each page-cited from the record."""
+    from swarm_os.services.legal.trial_advisor import (
+        _load_indices, build_attorney_profiles,
+    )
+    try:
+        indices = _load_indices()
+        profiles = build_attorney_profiles(indices)
+        return {
+            "ok": True,
+            "attorneys": [
+                {
+                    "key": p.key,
+                    "name": p.name,
+                    "represents": p.represents,
+                    "word_count": p.word_count,
+                    "page_range": p.page_range,
+                    "objections": p.objections[:80],
+                    "objection_count": len(p.objections),
+                    "examinations": p.examinations[:60],
+                    "examination_count": len(p.examinations),
+                    "key_statements": p.key_statements[:30],
+                }
+                for p in profiles.values()
+            ],
+        }
+    except Exception:
+        log.exception("trial attorneys failed")
+        raise HTTPException(status_code=500, detail="Trial attorney profiles failed")
+
+
+@router.get("/trial/errors")
+async def legal_trial_errors() -> dict[str, Any]:
+    """Record patterns a criminal-defense / post-conviction review would
+    investigate (preserved errors, evidence/chain-of-custody, confrontation,
+    jury selection) — page-cited, framed as questions for qualified counsel."""
+    from swarm_os.services.legal.trial_advisor import (
+        _load_indices, build_error_flags, build_key_events, build_phone_evidence_events,
+    )
+    try:
+        indices = _load_indices()
+        return {
+            "ok": True,
+            "flags": build_error_flags(indices),
+            "key_events": build_key_events(indices),
+            "phone_evidence_events": build_phone_evidence_events(indices),
+            "disclaimer": (
+                "This tool reports WHAT the record shows and WHERE. It does not "
+                "conclude that counsel was ineffective or that the government "
+                "tampered with evidence — those are legal conclusions for a "
+                "qualified attorney. The patterns below are the shapes a federal "
+                "criminal-defense / §2255 review would investigate."
+            ),
+        }
+    except Exception:
+        log.exception("trial errors failed")
+        raise HTTPException(status_code=500, detail="Trial error analysis failed")
+
+
+class TrialSearchRequest(BaseModel):
+    query: str = Field(..., min_length=2, max_length=500,
+                       description="Search text over the trial record")
+    limit: int = Field(20, ge=1, le=100)
+
+
+@router.post("/trial/search")
+async def legal_trial_search(req: TrialSearchRequest) -> dict[str, Any]:
+    """Page-cited search over the defendant's own trial transcript (all days)."""
+    from swarm_os.services.legal.trial_advisor import _load_indices, search_record
+    try:
+        indices = _load_indices()
+        return {"ok": True, "hits": search_record(indices, req.query, req.limit)}
+    except Exception:
+        log.exception("trial search failed")
+        raise HTTPException(status_code=500, detail="Trial search failed")
+
+
+class TrialSpeakerRequest(BaseModel):
+    speaker: str = Field(..., min_length=2, max_length=100,
+                         description="Attorney speaker prefix, e.g. 'MR. DINNERSTEIN'")
+    limit: int = Field(25, ge=1, le=100)
+
+
+@router.post("/trial/speaker")
+async def legal_trial_speaker(req: TrialSpeakerRequest) -> dict[str, Any]:
+    """Every passage spoken by one attorney, page-cited across all days."""
+    from swarm_os.services.legal.trial_advisor import _load_indices, speaker_summary
+    try:
+        indices = _load_indices()
+        return {"ok": True, "passages": speaker_summary(indices, req.speaker, req.limit)}
+    except Exception:
+        log.exception("trial speaker failed")
+        raise HTTPException(status_code=500, detail="Trial speaker lookup failed")

@@ -35,7 +35,9 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-_FOOTER_RE = re.compile(r"SOUTHERN DISTRICT REPORTERS, P\.C\.[^\n]*(?:\n[^\n]*){0,2}")
+_FOOTER_RE = re.compile(
+    r"SOUTHERN DISTRICT REPORTERS, P\.C\.[^\n]*(?:\n\s*\(212\)\s*805-0300\s*)?"
+)
 # A speaker attribution prefix at the start of a line, e.g. "THE COURT:",
 # "MS. AL-SHABAZZ:", "MR. DINNERSTEIN:" (uppercase words/dots/spaces + colon;
 # hyphens allowed for hyphenated names like Al-Shabazz).
@@ -82,6 +84,16 @@ _STAGE_RE = re.compile(r"^\((?:Jury|Witness|Recess|Continued|At sidebar|In open 
 # "DIRECT EXAMINATION", "REDIRECT EXAMINATION", "RECROSS EXAMINATION").
 _SECTION_HEADER_RE = re.compile(
     r"^(?:CROSS|DIRECT|REDIRECT|RECROSS|VOIR DIRE)?[-\s]*(?:EXAMINATION|QUESTIONS BY)\b", re.I
+)
+# Summation / Charge section headers carry the speaker in the header itself,
+# e.g. "J5l1dun2   Summation - Ms. Rothman" or "J5m1dun1  Charge". The body is
+# continuous argument/instruction text with NO per-line "NAME:" prefixes, so we
+# attribute the following text to the named speaker (or THE COURT for a Charge).
+_SUMMATION_HEADER_RE = re.compile(
+    r"^(?:[A-Za-z0-9 ]+\s+)?(Summation|Closing Argument|Charge)\s*-\s*([A-Z][A-Za-z .'-]+?)\s*$", re.I
+)
+_CHARGE_HEADER_RE = re.compile(
+    r"^(?:[A-Za-z0-9 ]+\s+)?Charge\s*$", re.I
 )
 # A bare colon-less line that looks like a speaker reference, e.g. "Ms.
 # Al-Shabazz.", "THE COURT.", "Mr. Folly." — short, capitalized, ends in a
@@ -192,7 +204,7 @@ def parse_transcript(text: str, case: str = "", source: str = "") -> TranscriptI
     current_buf: list[str] = []
     current_flags: list[str] = []
 
-    def flush() -> None:
+    def flush(*, keep_speaker: bool = False) -> None:
         nonlocal current_speaker, current_buf, current_flags
         if current_speaker and current_buf:
             idx.passages.append(Passage(
@@ -201,19 +213,42 @@ def parse_transcript(text: str, case: str = "", source: str = "") -> TranscriptI
                 text=" ".join(current_buf).strip(),
                 flags=list(current_flags),
             ))
-        current_speaker = None
-        current_buf = []
-        current_flags = []
+        if keep_speaker:
+            # Preserve the speaker across a page boundary so CONTINUOUS speech
+            # (the Court reading instructions, a summation) keeps flowing into
+            # the same speaker's passages on the new page.
+            current_buf = []
+            current_flags = []
+        else:
+            current_speaker = None
+            current_buf = []
+            current_flags = []
 
     first_page_found = False
+    pending_tail_page = 0  # pypdf-extracted pages print the page number BEFORE
+    # the footer, so after a footer split it sits at the END of the previous
+    # block. We harvest it from EVERY block (including the caption block) and
+    # apply it to the NEXT block's content.
+    _last_page = 0  # last page whose content was processed (for page-change flush)
     for block in blocks:
+        blines = block.splitlines()
+        # Tail-harvest FIRST (before any first_page_found continue): the page
+        # number is the last non-blank line of this block in pypdf layout, and
+        # it belongs to the NEXT block's content. Harvesting here guarantees the
+        # caption block (block 0, no content) still seeds the first content page.
+        tail_page = 0
+        for line in reversed(blines):
+            tm = _PAGE_NO_RE.match(line)
+            if tm:
+                tail_page = int(tm.group(1))
+                break
+
         # The page number is a standalone integer followed (possibly after
         # blank lines) by a volume-id line ("620\nJ59TDUN2", "1\nJ561dun1") or a
         # page-header line ("501\nJ591dun1  Nichols - Cross"). A leading
         # line-number column (1-25) is never followed by a volume id, so it is
         # not a page.
         page = 0
-        blines = block.splitlines()
         for i, line in enumerate(blines):
             m = _PAGE_NO_RE.match(line)
             if not m:
@@ -229,6 +264,24 @@ def parse_transcript(text: str, case: str = "", source: str = "") -> TranscriptI
                 break
             if page:
                 break
+        if not page and pending_tail_page:
+            # pypdf-extracted layout: the page number was harvested from the
+            # previous block's tail (it sat just before that page's footer), and
+            # THIS block is that page's content. Apply it directly.
+            page = pending_tail_page
+        pending_tail_page = tail_page  # seed the NEXT block's page
+        if page and page != _last_page:
+            # A new page begins. In CONTINUOUS speech (the Court reading
+            # instructions, a summation) there is no "NAME:" prefix line to
+            # trigger a flush at the page boundary — so the previous page's
+            # trailing passage would swallow this page's text and stamp the
+            # prior page's number on it. Flush now so the new page starts a
+            # fresh passage (the page-break utterance belongs to the page where
+            # it BEGAN — same rule as the speaker/Q-A branches).
+            flush(keep_speaker=True)
+            # The new page's continuous speech begins NOW; advance current_page
+            # so passages starting on this page are stamped with THIS page number.
+            current_page = page
         if page:
             # NOTE: `current_page` is deliberately NOT advanced here. A passage
             # is flushed lazily — only when the NEXT speaker/stage/section line
@@ -245,6 +298,8 @@ def parse_transcript(text: str, case: str = "", source: str = "") -> TranscriptI
             # Leading header block (court caption, appearances) precedes the
             # first page marker — skip it rather than emitting page-0 passages.
             continue
+        if page:
+            _last_page = page
 
         for raw in block.splitlines():
             line = _strip_lineno(raw).strip()
@@ -252,6 +307,22 @@ def parse_transcript(text: str, case: str = "", source: str = "") -> TranscriptI
                 continue
             if _STAGE_RE.match(line):
                 flush()
+                continue
+            # Summation / Charge section headers BEFORE the generic page-header
+            # check (which would otherwise swallow "J5l1dun2 Summation - Mr.
+            # Dinnerstein" as a witness header). The body is CONTINUOUS argument/
+            # instruction text with no per-line "NAME:" prefixes; attribute it to
+            # the speaker named in the header, or THE COURT for a Charge.
+            sm = _SUMMATION_HEADER_RE.match(line)
+            if sm:
+                flush()
+                current_speaker = sm.group(2).strip().upper()
+                current_page = page if page else current_page
+                continue
+            if _CHARGE_HEADER_RE.match(line):
+                flush()
+                current_speaker = "THE COURT"
+                current_page = page if page else current_page
                 continue
             # Page-number and volume-id lines ("502", "J591dun1") and page
             # header lines ("J591dun1  Nichols - Cross") are layout, not speech.
@@ -312,7 +383,100 @@ def parse_transcript(text: str, case: str = "", source: str = "") -> TranscriptI
 
 
 def ingest_transcript_file(path: str | Path, case: str = "", source: str = "") -> TranscriptIndex:
-    """Read a transcript text file (UTF-8) and parse it."""
+    """Read a transcript text file (UTF-8) and parse it. Auto-detects the
+    SDNY court-reporter format vs the Min-U-Script (transcript-agency) export."""
     p = Path(path)
-    return parse_transcript(p.read_text(encoding="utf-8", errors="replace"),
-                            case=case or p.stem, source=str(p))
+    text = p.read_text(encoding="utf-8", errors="replace")
+    if "Min-U-Script" in text[:4000] or re.search(r"\bJ\d+[A-Za-z]*\d*(?:VD)?\s*Page\s*\d+", text[:4000]):
+        return parse_minuscript(text, case=case or p.stem, source=str(p))
+    return parse_transcript(text, case=case or p.stem, source=str(p))
+
+
+# Min-U-Script (transcript-agency export) format — e.g. the voir-dire / pre-trial
+# day (5/6/19) which is NOT the SDNY court-reporter layout. Each content "page"
+# is a single line:  "J561dun1Page 3 1  <text> 2  <text> 3  <text> ..." —
+# a page marker (volume-id + "Page N") followed by inline "linenum text" runs.
+# There is NO reporter footer to split on, so page identity comes from the
+# "Page N" marker directly. A trailing word index ("ago (4) 12:24;...") is not
+# speech and is dropped.
+_MINUSCRIPT_PAGE_RE = re.compile(
+    r"^.*?\bJ\d+[A-Za-z]*\d*(?:VD)?(?:\s+(?:[A-Za-z ]+\s*))?Page\s*(\d+)\s+", re.I
+)
+_MINUSCRIPT_LINENO_SPLIT_RE = re.compile(r"(\d{1,2})\s{2,}")
+
+
+def parse_minuscript(text: str, case: str = "", source: str = "") -> TranscriptIndex:
+    """Parse a Min-U-Script transcript-agency export into a TranscriptIndex."""
+    idx = TranscriptIndex(case=case, source=source)
+    current_speaker: str | None = None
+    current_page = 0
+    current_buf: list[str] = []
+    current_flags: list[str] = []
+
+    def flush() -> None:
+        nonlocal current_speaker, current_buf, current_flags
+        if current_speaker and current_buf:
+            idx.passages.append(Passage(
+                speaker=current_speaker,
+                page=current_page,
+                text=" ".join(current_buf).strip(),
+                flags=list(current_flags),
+            ))
+        current_speaker = None
+        current_buf = []
+        current_flags = []
+
+    in_word_index = False
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        # Word index section begins (e.g. "ago (4)    12:24;...") — stop.
+        if re.match(r"^[A-Za-z][A-Za-z .'-]*\(\d+\)\s+\d{1,3}:\d{1,2}", line):
+            in_word_index = True
+        if in_word_index:
+            continue
+        # Page marker line: "J561dun1Page 3 1  <content> 2  <content>..."
+        m = _MINUSCRIPT_PAGE_RE.match(line)
+        if m:
+            flush()
+            current_page = int(m.group(1))
+            # Reconstruct the spoken content: strip the page marker, then split
+            # into (lineno, text) runs. The inline line numbers delimit turns.
+            body = line[m.end():]
+            runs = _MINUSCRIPT_LINENO_SPLIT_RE.split(body)
+            pieces = []
+            for r in runs:
+                if r.strip().isdigit():
+                    continue
+                pieces.append(r)
+            clean = " ".join(pieces)
+
+            # Walk the cleaned text, splitting on speaker prefixes into passages.
+            parts = re.split(
+                r"(?=(?:^|\s)(THE COURT|THE WITNESS|THE REPORTER|THE LAW CLERK|"
+                r"THE DEPUTY CLERK|THE DEFENDANT|JUROR|MR\. [A-Z]+|MS\. [A-Z]+|"
+                r"BY (?:MR\.|MS\.) [A-Z-]+):\s)",
+                clean,
+            )
+            for part in parts:
+                part = part.strip()
+                if not part:
+                    continue
+                sp = _SPEAKER_RE.match(part)
+                if sp:
+                    flush()
+                    current_speaker = sp.group(1).strip()
+                    current_page = current_page
+                    current_buf = [sp.group(2).strip()]
+                    continue
+                if current_speaker:
+                    current_buf.append(part)
+            continue
+        # Non-page line in a Min-U-Script file (caption/continuation) — treat
+        # as continuation text if a speaker is open, else skip.
+        if current_speaker:
+            current_buf.append(line)
+
+    flush()
+    return idx
