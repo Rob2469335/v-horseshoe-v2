@@ -149,8 +149,8 @@ async def _find_element(page, role: str, name: str):
         loc = page.get_by_role(role, name=name)
         if await loc.count() > 0:
             return loc
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("role+name locator probe failed (role=%r name=%r): %s", role, name, exc)
     # 2) CSS: [name=...] (raw attribute) then [placeholder=...] (visible label).
     for sel in (f'[name="{name}"]', f'[placeholder="{name}"]', f'[aria-label="{name}"]'):
         try:

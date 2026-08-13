@@ -186,11 +186,13 @@ def tail_event_log(window_minutes: int = 60, max_events: int = 500) -> list[Dict
                             "source": evt.SourceName,
                             "message": str(evt.StringInserts)[:200] if evt.StringInserts else str(evt.SourceName),
                         })
-                    except Exception:
+                    except Exception as exc:
+                        log.debug("event-log entry skipped: %s", exc)
                         continue
                     if len(events) >= max_events:
                         break
-        except Exception:
+        except Exception as exc:
+            log.warning("event-log read failed for %s: %s", log_name, exc)
             continue
     return events
 
