@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import httpx
 import litellm
@@ -65,7 +66,8 @@ class ChatService:
         local_models = []
         try:
             client = _get_chat_http_client()
-            resp = await client.get("http://127.0.0.1:8080/v1/models", headers={"Authorization": "Bearer llama"})
+            async with asyncio.timeout(10.0):
+                resp = await client.get("http://127.0.0.1:8080/v1/models", headers={"Authorization": "Bearer llama"})
             if resp.status_code == 200:
                 for m in resp.json().get("data", []):
                     name = m["id"].lower()
