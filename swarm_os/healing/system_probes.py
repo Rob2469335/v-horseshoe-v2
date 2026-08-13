@@ -207,19 +207,22 @@ _probe_cache_lock = threading.Lock()
 
 def run_system_probes(force: bool = False) -> Dict[str, Dict[str, Any]]:
     """Run all whole-computer probes. Returns {probe_name: result}.
-    Results are cached for _PROBE_CACHE_TTL seconds (see module note above)."""
+    Results are cached for _PROBE_CACHE_TTL seconds (see module note above).
+    The freshness check, probe execution, and cache write all happen under ONE
+    lock hold so concurrent callers cannot stampede — a waiter blocks on the
+    lock, then reads the fresh cache written by the first caller and returns
+    immediately instead of re-running the full 10-16s probe set."""
     import time as _time
     with _probe_cache_lock:
         now = _time.time()
         if not force and _probe_cache.get("results") and (now - _probe_cache["ts"]) < _PROBE_CACHE_TTL:
             return dict(_probe_cache["results"])
-    results = {}
-    for name, fn in _SYSTEM_PROBES.items():
-        try:
-            results[name] = fn()
-        except Exception as exc:
-            results[name] = {"ok": True, "detail": {"issue": name, "available": False, "error": str(exc)}}
-    with _probe_cache_lock:
+        results = {}
+        for name, fn in _SYSTEM_PROBES.items():
+            try:
+                results[name] = fn()
+            except Exception as exc:
+                results[name] = {"ok": True, "detail": {"issue": name, "available": False, "error": str(exc)}}
         _probe_cache["ts"] = _time.time()
         _probe_cache["results"] = dict(results)
-    return results
+        return results

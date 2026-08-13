@@ -25,6 +25,48 @@ def test_system_probes_all_run():
         assert "detail" in results[name]
 
 
+def test_system_probes_no_cache_stampede():
+    """Concurrent callers with a stale cache must run the probe set exactly once.
+
+    Pre-fix: the freshness check ran under _probe_cache_lock, then released it,
+    then each caller independently ran the full O(n) probe set and wrote back —
+    a pure stampede. Post-fix: one lock hold covers check + run + write, so a
+    waiter blocks on the lock and then reads the fresh cache written by the
+    first caller."""
+    import time as _time
+    import threading
+    import swarm_os.healing.system_probes as sp
+
+    calls = []
+    calls_lock = threading.Lock()
+
+    def fake_probe():
+        with calls_lock:
+            calls.append(1)
+        _time.sleep(0.2)
+        return {"ok": True, "detail": "fake"}
+
+    orig_probes = sp._SYSTEM_PROBES
+    orig_cache = sp._probe_cache
+    try:
+        sp._SYSTEM_PROBES = {"fake": fake_probe}
+        sp._probe_cache = {"ts": 0.0, "results": {}}  # force stale
+        results = [None] * 6
+        threads = []
+        for i in range(6):
+            t = threading.Thread(target=lambda i=i: results.__setitem__(i, run_system_probes()))
+            threads.append(t)
+            t.start()
+        for t in threads:
+            t.join()
+        for r in results:
+            assert r == {"fake": {"ok": True, "detail": "fake"}}
+        assert len(calls) == 1, f"probe ran {len(calls)} times under concurrency, expected 1"
+    finally:
+        sp._SYSTEM_PROBES = orig_probes
+        sp._probe_cache = orig_cache
+
+
 def test_destructive_signal_forces_approval():
     gov = Governor()
     symptom = {"component": "runaway_process", "ok": False,
