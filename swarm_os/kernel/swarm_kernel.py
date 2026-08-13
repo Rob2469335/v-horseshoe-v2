@@ -308,13 +308,11 @@ class SwarmKernel:
         """Synchronous wrapper for step_async."""
         try:
             asyncio.get_running_loop()
-            raise RuntimeError(
-                "step() called from a running event loop; use await step_async() instead."
-            )
-        except RuntimeError as exc:
-            if "running event loop" in str(exc):
-                raise
+        except RuntimeError:
             return asyncio.run(self.step_async(human_scores=human_scores))
+        raise RuntimeError(
+            "step() called from a running event loop; use await step_async() instead."
+        )
 
     def run(self, generations: int = 10) -> List[Dict]:
         """Run the kernel synchronously for a number of generations."""
