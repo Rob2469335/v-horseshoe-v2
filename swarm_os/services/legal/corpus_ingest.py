@@ -336,12 +336,36 @@ async def ingest_one_file(parquet_path: Path, jurisdiction: str, batch_size: int
                 {"id": bid, "vector": vec, "payload": payload}
                 for bid, vec, payload in zip(batch_ids, vectors, batch_payloads)
             ]
-            resp = await _get_qdrant_client().put(
-                f"/collections/{COLLECTION}/points",
-                json={"points": points},
-            )
-            resp.raise_for_status()
-            total += len(points)
+            # Qdrant can drop the connection mid-PUT under load/optimization
+            # (RemoteProtocolError: "Server disconnected without sending a
+            # response" — crashed the NY re-ingest TWICE at this exact line).
+            # The upsert is idempotent (deterministic UUIDv5 point ids), so a
+            # failed PUT can be safely re-sent. Bounded retry on transient
+            # transport errors + 5xx; a 4xx (real request error) propagates
+            # immediately, and a still-failing batch raises (fail-closed).
+            last_exc: Exception | None = None
+            for attempt in (0, 1, 2):
+                try:
+                    resp = await _get_qdrant_client().put(
+                        f"/collections/{COLLECTION}/points",
+                        json={"points": points},
+                    )
+                    if resp.status_code >= 500:
+                        last_exc = RuntimeError(
+                            f"qdrant upsert {resp.status_code}: {resp.text[:200]}")
+                        await asyncio.sleep(1.0 + attempt)
+                        continue
+                    resp.raise_for_status()
+                    total += len(points)
+                    break
+                except httpx.TransportError as exc:
+                    last_exc = exc
+                    await asyncio.sleep(1.0 + attempt)
+            else:
+                log.warning("qdrant upsert failed for batch of %d after retries: %s",
+                            len(points), last_exc)
+                raise RuntimeError(
+                    f"qdrant upsert failed after retries: {last_exc}") from last_exc
         batch_ids.clear()
         batch_texts.clear()
         batch_payloads.clear()

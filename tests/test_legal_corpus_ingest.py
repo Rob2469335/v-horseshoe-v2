@@ -133,7 +133,96 @@ async def test_iter_in_force_rows_reads_bounded_batches(monkeypatch):
     assert not any(len(b.rows) > 1024 for b in fake_table.to_batches(max_chunksize=1024))
 
 
-# --- Contextual retrieval (M8) ------------------------------------------------
+# --- Qdrant PUT retry (2026-08-11) -------------------------------------------
+
+class _FakeResponse:
+    def __init__(self, status_code=200, text=""):
+        self.status_code = status_code
+        self.text = text
+
+    def json(self):
+        return {"result": {"collections": [{"name": "legal_statutes"}]}}
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            import httpx as _h
+            raise _h.HTTPStatusError(
+                f"status {self.status_code}", request=None, response=None)
+
+
+class _FlakyQdrant:
+    """Qdrant client stub that drops the connection (RemoteProtocolError) for the
+    first `fail_puts` PUTs, then succeeds — reproducing the exact NY re-ingest
+    crash shape at corpus_ingest.flush()."""
+
+    def __init__(self, fail_puts=2, fail_all=False):
+        self.fail_puts = fail_puts
+        self.fail_all = fail_all
+        self.put_calls = 0
+
+    async def get(self, *args, **kwargs):
+        return _FakeResponse()
+
+    async def post(self, *args, **kwargs):
+        return _FakeResponse()
+
+    async def put(self, url, **kwargs):
+        self.put_calls += 1
+        if self.fail_all or self.put_calls <= self.fail_puts:
+            import httpx as _h
+            raise _h.RemoteProtocolError(
+                "Server disconnected without sending a response.")
+        return _FakeResponse()
+
+
+@pytest.mark.asyncio
+async def test_flush_retries_qdrant_put_on_transient_disconnect(monkeypatch):
+    """The Qdrant PUT in flush() must retry on a transient transport disconnect
+    (RemoteProtocolError) instead of crashing the ingest. Regression: the NY
+    re-ingest died TWICE at this exact line with "Server disconnected without
+    sending a response"."""
+    import pyarrow.parquet as pq
+
+    fake_rows = [
+        {"act_status": "in_force", "document_type": "statute", "act_id": f"r{i}",
+         "citation": f"C{i}", "section_title": "t", "text": "hello", "word_count": 1}
+        for i in range(40)
+    ]
+    fake_table = _FakeTable(fake_rows)
+    monkeypatch.setattr(pq, "read_table", lambda _path: fake_table)
+    async def fake_embed(texts):
+        return [[0.0] * 768 for _ in texts]
+    monkeypatch.setattr(corpus_ingest, "_embed", fake_embed)
+    flaky = _FlakyQdrant(fail_puts=2)
+    monkeypatch.setattr(corpus_ingest, "_get_qdrant_client", lambda: flaky)
+    total = await corpus_ingest.ingest_one_file(
+        Path("whatever.parquet"), "xx", batch_size=16)
+    # 40 rows at batch 16 -> 3 PUTs (16+16+8); 2 failed + retried, so 5 total.
+    assert total == 40
+    assert flaky.put_calls == 5
+
+
+@pytest.mark.asyncio
+async def test_flush_raises_after_retries_exhausted(monkeypatch):
+    """A PUT that keeps failing must eventually raise (fail-closed), not swallow
+    the batch silently."""
+    import pyarrow.parquet as pq
+
+    fake_rows = [
+        {"act_status": "in_force", "document_type": "statute", "act_id": "s0",
+         "citation": "C0", "section_title": "t", "text": "hello", "word_count": 1}
+    ]
+    fake_table = _FakeTable(fake_rows)
+    monkeypatch.setattr(pq, "read_table", lambda _path: fake_table)
+    async def fake_embed(texts):
+        return [[0.0] * 768 for _ in texts]
+    monkeypatch.setattr(corpus_ingest, "_embed", fake_embed)
+    flaky = _FlakyQdrant(fail_all=True)
+    monkeypatch.setattr(corpus_ingest, "_get_qdrant_client", lambda: flaky)
+    with pytest.raises(RuntimeError, match="after retries"):
+        await corpus_ingest.ingest_one_file(
+            Path("whatever.parquet"), "xx", batch_size=16)
+    assert flaky.put_calls == 3  # initial + 2 retries
 
 def test_build_context_metadata_frames_section():
     """build_context must produce a deterministic 'situate this section' string
