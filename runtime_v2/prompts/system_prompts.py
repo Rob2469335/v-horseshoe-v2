@@ -180,7 +180,7 @@ _TOOL_DEFINITIONS = {
     "vscode_automation": "- action=vscode_automation  → command, args",
     "semantic_search": "- action=semantic_search  → query",
     "lsp": "- action=lsp  → operation (diagnostics|hover), file_path; optional: line, character",
-    "mcp": "- action=mcp  → server, tool, arguments (dict)",
+    "mcp": "- action=mcp  → server, tool, arguments (dict). Registered MCP servers: sqlite (query the repo sqlite db), memory (knowledge-graph memory), context7 (up-to-date library docs), semgrep (SAST security scan of code: semgrep_scan/semgrep_findings/semgrep_scan_with_custom_rule — run before final on any code you wrote/edited), github (repo/PR/issue operations: get_file_contents, create_pull_request, add_issue_comment, create_or_update_file, list_*), s2_scholar (Semantic Scholar: semantic_scholar_search_papers/semantic_scholar_get_paper/semantic_scholar_recommendations — for research). Use these to extend the built-in tools; call action=mcp with the exact server name above.",
     "mcp_register": "- action=mcp_register  → server_name, command, args (list)",
     "remember": "- action=remember  → fact, category",
     "deprecate_memory": "- action=deprecate_memory  → point_id, category",
@@ -204,7 +204,7 @@ _AGENT_TOOLS = {
     # model burn turns calling sandbox_repl on a pure research goal (observed:
     # 4 consecutive sandbox_repl calls then turn_budget_exhausted on "analyze
     # my codebase and search internet"). Analysis needs read/search/web only.
-    "code_analyzer": ["filesystem", "web_search", "web_fetch", "system", "screen", "semantic_search", "email", "playwright", "todo", "final"],
+    "code_analyzer": ["filesystem", "web_search", "web_fetch", "system", "screen", "semantic_search", "mcp", "email", "playwright", "todo", "final"],
 }
 
 _BASE = (
