@@ -24,9 +24,9 @@ _point_locks: dict[str, asyncio.Lock] = {}
 
 
 def _get_point_lock(point_id: str) -> asyncio.Lock:
-    if point_id not in _point_locks:
-        _point_locks[point_id] = asyncio.Lock()
-    return _point_locks[point_id]
+    # setdefault inserts only if absent — atomic, no check-then-assign race
+    # between two concurrent callers for the same point_id.
+    return _point_locks.setdefault(point_id, asyncio.Lock())
 
 
 ROOT_DIR = Path(__file__).parent.parent.parent.resolve()
