@@ -568,3 +568,18 @@ def test_skill_memory_engine_tolerates_missing_fastembed():
 
 
 
+
+
+def test_commit_command_never_stages_dot():
+    """The /commit command must never run git add . — AGENTS.md forbids the
+    bulk-add anti-pattern ('Never git add -A / git add .'). It must stage via
+    explicit git add -- <file> per-file. This pins the source text so a
+    regression back to git add . fails loudly."""
+    import re
+    src = Path("organism_console/_commands_dev.py").read_text(encoding="utf-8")
+    # extract the cmd_commit function body only
+    m = re.search(r"def cmd_commit.*?(?=\n\ndef |\Z)", src, re.S)
+    assert m, "cmd_commit not found"
+    body = m.group(0)
+    assert 'git", "add", "."]' not in body, "cmd_commit uses git add ."
+    assert '"add", "--"' in body, "cmd_commit does not use explicit git add -- <file>"

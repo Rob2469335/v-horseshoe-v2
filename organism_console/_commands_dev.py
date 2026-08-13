@@ -103,15 +103,50 @@ def cmd_commit(ctx: CommandContext, args: List[str]) -> None:
         if resp and resp.status_code == 200:
             commit_msg = resp.json().get("response", "").strip().splitlines()[0]
             ctx.console.print(Panel(commit_msg, title="Generated Commit Message", border_style="green"))
-            from rich.prompt import Confirm
-            if sys.stdin.isatty() and Confirm.ask("[bold yellow]Do you want to stage all changes and commit?[/bold yellow]"):
-                subprocess.run(["git", "add", "."], cwd=project_root)
-                commit_res = subprocess.run(["git", "commit", "-m", commit_msg], capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=project_root)
-                ctx.console.print("[green]✓ git add . executed.[/green]")
-                if commit_res.returncode == 0:
-                    ctx.console.print("[bold green]✓ Successfully committed changes![/bold green]")
-                else:
-                    ctx.console.print(f"[bold red]Failed to commit: {commit_res.stderr or ''}[/bold red]")
+            if not (sys.stdin.isatty()):
+                ctx.console.print("[yellow]Non-interactive: skipping staging (use /commit in a TTY).[/yellow]")
+                return
+            # Per-file staging: git add . is the bulk-add anti-pattern AGENTS.md
+            # forbids. List changed files and stage only the user's selection.
+            changed = subprocess.run(
+                ["git", "status", "--porcelain"],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                cwd=project_root,
+            )
+            paths = []
+            for line in (changed.stdout or "").splitlines():
+                path = line[3:].strip()
+                if path and path not in paths:
+                    paths.append(path)
+            if not paths:
+                ctx.console.print("[yellow]No changes to stage.[/yellow]")
+                return
+            try:
+                from rich.prompt import Prompt
+                selection = Prompt.ask(
+                    "[bold yellow]Files to stage (comma-separated paths, or 'all'):[/bold yellow]",
+                    default="all",
+                )
+            except Exception:
+                return
+            if selection.strip().lower() == "all":
+                stage_paths = paths
+            else:
+                stage_paths = [p.strip().strip("\"'") for p in selection.split(",") if p.strip()]
+            bad = [p for p in stage_paths if p not in paths]
+            if bad:
+                ctx.console.print(f"[bold red]Unknown paths skipped: {bad}[/bold red]")
+            if not stage_paths:
+                ctx.console.print("[yellow]Nothing staged.[/yellow]")
+                return
+            for p in stage_paths:
+                subprocess.run(["git", "add", "--", p], cwd=project_root)
+            ctx.console.print(f"[green]✓ Staged: {stage_paths}[/green]")
+            commit_res = subprocess.run(["git", "commit", "-m", commit_msg], capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=project_root)
+            if commit_res.returncode == 0:
+                ctx.console.print("[bold green]✓ Successfully committed changes![/bold green]")
+            else:
+                ctx.console.print(f"[bold red]Failed to commit: {commit_res.stderr or ''}[/bold red]")
         else:
             ctx.console.print("[bold red]Failed to generate commit message from backend.[/bold red]")
     except Exception as e:
