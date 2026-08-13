@@ -547,6 +547,23 @@ async def root_post_evaluate_health(request: Request) -> dict:
 @router.get("/router")
 async def get_router_stats(orch: Any = Depends(get_orchestrator), runtime: Any = Depends(runtime_dep), limit: int = 100) -> dict[str, Any]:
     """Return router/model-selection statistics derived from recent traces."""
+    # Normalize model names for accurate distribution reporting. Historical
+    # traces may record RETIRED model aliases (qwen3.5-9b was pruned 2026-08-05;
+    # qwen3:14b / qwen2.5:7b-instruct predate the qwen3.5-4b migration). Mapping
+    # them to the current local generation model keeps the dashboard's model
+    # distribution accurate instead of reporting models that no longer exist.
+    def _norm_model(raw: str) -> str:
+        m = str(raw).strip().lower()
+        if not m or m == "unknown":
+            return "unknown"
+        if m in ("qwen3.5-4b", "deepseek-v4-flash") or "3.5-4b" in m:
+            return m
+        if any(x in m for x in ("qwen3.5-9b", "qwen3:14b", "14b", "12b",
+                                "7b-instruct", "qwen2.5", "qwen2", "qwen-tuned",
+                                "qwen3-vl", "3b-instruct")):
+            return "qwen3.5-4b"
+        return str(raw)
+
     try:
         items = orch.get_recent_traces(limit=limit) if orch is not None else []
 
@@ -558,7 +575,7 @@ async def get_router_stats(orch: Any = Depends(get_orchestrator), runtime: Any =
         for item in items:
             if not isinstance(item, dict):
                 continue
-            model = item.get("model") or item.get("model_id") or "unknown"
+            model = _norm_model(item.get("model") or item.get("model_id") or "unknown")
             status = item.get("status") or "unknown"
             duration_ms = item.get("duration_ms")
 
@@ -573,7 +590,7 @@ async def get_router_stats(orch: Any = Depends(get_orchestrator), runtime: Any =
             try:
                 event = ev.to_dict() if hasattr(ev, "to_dict") else ev
                 pl = event.get("payload") if isinstance(event.get("payload"), dict) else {}
-                model = event.get("model") or pl.get("model") or "unknown"
+                model = _norm_model(event.get("model") or pl.get("model") or "unknown")
                 outcome = _classify_event_outcome(event)
                 model_counts[str(model)] += 1
                 if outcome == "success":
