@@ -11,6 +11,7 @@ per-citation status.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -102,7 +103,8 @@ async def verify_citations_endpoint(req: VerifyCitationsRequest) -> VerifyCitati
     CourtListener. Fabricated citations are reported with verified=false (404)
     so the caller can block/downgrade."""
     try:
-        res = await verify_citations(req.text)
+        async with asyncio.timeout(120.0):
+            res = await verify_citations(req.text)
     except Exception:
         log.exception("verify-citations failed")
         raise HTTPException(status_code=500, detail="Citation verification failed")
@@ -282,8 +284,9 @@ async def legal_citator(req: CitatorRequest) -> dict[str, Any]:
     from swarm_os.services.legal.citator import poll_authority, render_citator_report
     from swarm_os.services.legal.case_corpus import CASE_MANIFEST
     try:
-        report = await poll_authority(CASE_MANIFEST, max_authorities=req.max_authorities,
-                                      refresh=req.refresh)
+        async with asyncio.timeout(120.0):
+            report = await poll_authority(CASE_MANIFEST, max_authorities=req.max_authorities,
+                                          refresh=req.refresh)
     except Exception:
         log.exception("citator poll failed")
         raise HTTPException(status_code=500, detail="Citator poll failed")
@@ -306,7 +309,8 @@ async def legal_docket(req: DocketRequest) -> dict[str, Any]:
     computes FRAP 4(b)/31(a) deadlines with the weekday rule."""
     from swarm_os.services.legal.docket import fetch_docket, render_docket_ledger
     try:
-        ledger = await fetch_docket(req.docket_number)
+        async with asyncio.timeout(120.0):
+            ledger = await fetch_docket(req.docket_number)
     except Exception:
         log.exception("docket fetch failed")
         raise HTTPException(status_code=500, detail="Docket fetch failed")
