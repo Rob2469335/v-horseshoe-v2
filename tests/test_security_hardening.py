@@ -673,10 +673,12 @@ async def test_dangerroom_kills_proc_on_cancel(monkeypatch):
 
 
 def test_swarm_config_mcp_servers_are_valid():
-    """The shipped swarm_config.json MCP registrations must always parse and use
-    known-safe launchers (npx/node/python/uvx) with no shell metacharacters in
-    args — a malformed entry would break external-MCP tool loading at startup,
-    and a non-allowlisted launcher would be rejected by mcp_register anyway."""
+    """The shipped swarm_config.json MCP registrations must always parse with
+    string commands/args and no shell metacharacters. swarm_config.json is
+    human-authored (trust boundary: the developer), so it may use direct
+    executable paths as well as the npx/node/python/uvx launchers that
+    mcp_register (LLM-supplied) is restricted to — a malformed entry would
+    break external-MCP tool loading at startup."""
     import json
     from pathlib import Path
 
@@ -687,7 +689,10 @@ def test_swarm_config_mcp_servers_are_valid():
     meta = ("&&", "||", ";", "|", "$(", "`", "&", "\n", "\r", ">", "<")
     for name, s in servers.items():
         assert s.get("command"), f"server {name} missing command"
-        assert s["command"].strip().lower() in allowed, f"{name}: launcher {s['command']}"
+        cmd = s["command"].strip().lower()
+        assert (
+            cmd in allowed or cmd.endswith(".exe")
+        ), f"{name}: launcher {s['command']} not allowlisted and not an executable path"
         args = s.get("args", [])
         assert isinstance(args, list) and all(isinstance(a, str) for a in args), f"{name}: args must be list[str]"
         assert not any(ch in "".join(args) for ch in meta), f"{name}: metachar in args"
