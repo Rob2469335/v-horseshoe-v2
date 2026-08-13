@@ -189,6 +189,7 @@ swarm_os.egg-info/
 
 # runtime healing state
 swarm_os/healing/_strategy_stats.json
+swarm_os/healing/budget_tracker.json
 
 # Command Center runtime grants / state (churn constantly, could reveal granted
 # domains/apps; never track even if a future change writes them outside data/)
