@@ -685,7 +685,7 @@ def test_swarm_config_mcp_servers_are_valid():
     cfg = json.loads(Path("swarm_config.json").read_text(encoding="utf-8"))
     servers = cfg["mcp_servers"]
     assert servers, "swarm_config.json must register at least one MCP server"
-    allowed = ("npx", "node", "python", "python3", "uvx")
+    allowed = ("npx", "node", "python", "python3", "uvx", "semgrep")
     meta = ("&&", "||", ";", "|", "$(", "`", "&", "\n", "\r", ">", "<")
     for name, s in servers.items():
         assert s.get("command"), f"server {name} missing command"
