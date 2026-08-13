@@ -196,7 +196,8 @@ Enclose the script in a ```python block.
                 _kwargs["api_base"] = _base
             if _key:
                 _kwargs["api_key"] = _key
-            res = await acompletion(**_kwargs)
+            async with asyncio.timeout(60):
+                res = await acompletion(**_kwargs)
             script_full = res.choices[0].message.content
             messages.append({"role": "assistant", "content": script_full})
             
