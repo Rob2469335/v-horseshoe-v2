@@ -19,6 +19,7 @@ TWO NON-NEGOTIABLE CONSTRAINTS (spec'd before code):
 3. DAEMON FAILURE = heartbeat + stale-by-recency (visible, not silent), same as
    the watch-loop.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -67,8 +68,14 @@ def list_tasks() -> list[dict]:
 
 
 def create_task(goal: str, schedule: str = "daily 08:00", enabled: bool = True) -> dict:
-    task = {"id": uuid.uuid4().hex[:12], "goal": goal, "schedule": schedule,
-            "enabled": enabled, "last_run": None, "result": None}
+    task = {
+        "id": uuid.uuid4().hex[:12],
+        "goal": goal,
+        "schedule": schedule,
+        "enabled": enabled,
+        "last_run": None,
+        "result": None,
+    }
     with _LOCK:
         data = _load()
         data[task["id"]] = task
@@ -101,7 +108,7 @@ def _parse_daily(schedule: str) -> tuple[int, int] | None:
     if s == "hourly":
         return None
     if s.startswith("daily"):
-        parts = s[len("daily"):].strip().split(":")
+        parts = s[len("daily") :].strip().split(":")
         if len(parts) == 2:
             try:
                 return int(parts[0]), int(parts[1])
@@ -128,12 +135,18 @@ def _is_due(task: dict, now: float = _now()) -> bool:
         return False
     hour, minute = hm
     now_dt = datetime.now()
-    due_today = (now_dt.hour > hour) or (now_dt.hour == hour and now_dt.minute >= minute)
+    due_today = (now_dt.hour > hour) or (
+        now_dt.hour == hour and now_dt.minute >= minute
+    )
     if not due_today:
         return False
     if last_ts > 0:
         last_dt = datetime.fromtimestamp(last_ts)
-        if (last_dt.year, last_dt.month, last_dt.day) == (now_dt.year, now_dt.month, now_dt.day):
+        if (last_dt.year, last_dt.month, last_dt.day) == (
+            now_dt.year,
+            now_dt.month,
+            now_dt.day,
+        ):
             return False
     return True
 
@@ -148,32 +161,85 @@ def _ceiling_gate(goal: str) -> tuple[bool, str]:
     mentioned. Only goals that actually imply sending/transacting/OS-control are
     refused. Returns (allowed, reason)."""
     from swarm_os.services.permission_tiers import is_scheduler_allowed
+
     low = (goal or "").lower()
     # Goal-aware tool mapping: refuse a tool only if the goal plausibly reaches it.
     # OS-control / sandbox are approval-tier and NEVER scheduler-safe, but a goal
     # that doesn't mention OS/sandbox doesn't reach them.
-    os_hint = any(h in low for h in ("install", "run a command", "terminal",
-                                     "powershell", "control my screen", "mouse",
-                                     "keyboard", "open an app", "launch "))
+    os_hint = any(
+        h in low
+        for h in (
+            "install",
+            "run a command",
+            "terminal",
+            "powershell",
+            "control my screen",
+            "mouse",
+            "keyboard",
+            "open an app",
+            "launch ",
+        )
+    )
     if os_hint and not is_scheduler_allowed("", "screen", None):
         return False, "scheduler ceiling: OS/screen control is approval-tier"
-    sandbox_hint = any(h in low for h in ("run code", "execute", "sandbox", "repl",
-                                          "python", "script"))
+    sandbox_hint = any(
+        h in low for h in ("run code", "execute", "sandbox", "repl", "python", "script")
+    )
     if sandbox_hint and not is_scheduler_allowed("", "sandbox_repl", None):
         return False, "scheduler ceiling: sandbox_repl is approval-tier"
     # email: refuse ONLY if the goal implies sending (email_list/read are free).
-    send_hint = any(s in low for s in ("send an email", "send email", "email to",
-                                       "reply to", "email my", "draft an email to"))
+    send_hint = any(
+        s in low
+        for s in (
+            "send an email",
+            "send email",
+            "email to",
+            "reply to",
+            "email my",
+            "draft an email to",
+        )
+    )
     if send_hint and not is_scheduler_allowed("", "email_send", None):
-        return False, "scheduler ceiling: email_send is important (goal implies sending)"
+        return (
+            False,
+            "scheduler ceiling: email_send is important (goal implies sending)",
+        )
     # Keyword scan — defense-in-depth, never the authority.
-    blocked = ("purchase", " buy ", "checkout", " pay ", "transfer", "refund",
-               "delete ", "approve", "confirm ", "login", "log in", "sign in",
-               "password", "payment", "card", "ccv", "cvv", "pin", "credential",
-               "otp", "2fa", "mfa", "bank", "install", "terminal", "powershell",
-               "mouse", "keyboard")
+    blocked = (
+        "purchase",
+        " buy ",
+        "checkout",
+        " pay ",
+        "transfer",
+        "refund",
+        "delete ",
+        "approve",
+        "confirm ",
+        "login",
+        "log in",
+        "sign in",
+        "password",
+        "payment",
+        "card",
+        "ccv",
+        "cvv",
+        "pin",
+        "credential",
+        "otp",
+        "2fa",
+        "mfa",
+        "bank",
+        "install",
+        "terminal",
+        "powershell",
+        "mouse",
+        "keyboard",
+    )
     if any(b in low for b in blocked):
-        return False, f"scheduler ceiling: goal keyword '{next(b for b in blocked if b in low)}' is blocked"
+        return (
+            False,
+            f"scheduler ceiling: goal keyword '{next(b for b in blocked if b in low)}' is blocked",
+        )
     return True, ""
 
 
@@ -192,14 +258,20 @@ async def _default_runner(task: dict) -> dict:
     goal = str(task.get("goal", ""))
     if "email" in goal.lower():
         from swarm_os.services.email_service import email_list
+
         inbox = await asyncio.to_thread(email_list, "INBOX", 10)
         if not inbox.get("ok"):
             return {"ok": False, "error": inbox.get("error", "email list failed")}
         msgs = inbox.get("messages", [])
-        return {"ok": True, "type": "email_summary", "count": len(msgs),
-                "subjects": [m.get("subject", "")[:50] for m in msgs[:5]]}
+        return {
+            "ok": True,
+            "type": "email_summary",
+            "count": len(msgs),
+            "subjects": [m.get("subject", "")[:50] for m in msgs[:5]],
+        }
     # web / search / browser / research -> run_browser_task, bounded.
     from swarm_os.services.browser_task import run_browser_task
+
     return await run_browser_task(goal, max_steps=8)
 
 
@@ -226,13 +298,23 @@ async def run_due_tasks(runner=None) -> list[str]:
             # CEILING FIRST (authority), then known-safe (fail-closed on unmapped).
             allowed, reason = _ceiling_gate(goal)
             if not allowed:
-                _record_result(tid, {"ok": False, "blocked": "scheduler_ceiling", "reason": reason})
+                _record_result(
+                    tid, {"ok": False, "blocked": "scheduler_ceiling", "reason": reason}
+                )
                 log.warning("scheduled task %s BLOCKED: %s", tid, reason)
                 continue
             if not _goal_is_known_safe(goal):
-                _record_result(tid, {"ok": False, "blocked": "unmapped_goal",
-                                     "reason": "goal doesn't match a known-safe pattern; not dispatched (fail-closed)"})
-                log.warning("scheduled task %s REFUSED: unmapped goal (not dispatched)", tid)
+                _record_result(
+                    tid,
+                    {
+                        "ok": False,
+                        "blocked": "unmapped_goal",
+                        "reason": "goal doesn't match a known-safe pattern; not dispatched (fail-closed)",
+                    },
+                )
+                log.warning(
+                    "scheduled task %s REFUSED: unmapped goal (not dispatched)", tid
+                )
                 continue
             result = await runner(task)
             _record_result(tid, result)
@@ -260,12 +342,13 @@ class TaskSchedulerDaemon:
     def __init__(self, interval_seconds: float = 60.0):
         self.interval = interval_seconds
         self._running = False
+        self._loop_task = None
 
     def start(self) -> None:
         if self._running:
             return
         self._running = True
-        asyncio.create_task(self._loop())
+        self._loop_task = asyncio.create_task(self._loop())
 
     async def _loop(self) -> None:
         while self._running:
@@ -280,8 +363,11 @@ class TaskSchedulerDaemon:
         try:
             self._HEARTBEAT_FILE.parent.mkdir(parents=True, exist_ok=True)
             self._HEARTBEAT_FILE.write_text(
-                json.dumps({"last_tick": _now(), "last_tick_iso": datetime.now().isoformat()}),
-                encoding="utf-8")
+                json.dumps(
+                    {"last_tick": _now(), "last_tick_iso": datetime.now().isoformat()}
+                ),
+                encoding="utf-8",
+            )
         except Exception as exc:
             log.debug("task scheduler heartbeat write failed: %s", exc)
 

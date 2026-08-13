@@ -29,6 +29,7 @@ LOCKED DECISIONS (see autonomy_policy.json + AGENTS.md):
      changelog section. Six months later you can tell autonomous commits from
      manual/Flash-assisted ones via git log / AGENTS.md.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -77,7 +78,9 @@ def _audit_write(entry: dict, agents_md_line: str) -> None:
         with lock:
             content = _AGENTS_MD.read_text(encoding="utf-8")
             if _RULES_MARKER in content:
-                content = content.replace(_RULES_MARKER, _RULES_MARKER + "\n" + agents_md_line, 1)
+                content = content.replace(
+                    _RULES_MARKER, _RULES_MARKER + "\n" + agents_md_line, 1
+                )
                 _AGENTS_MD.write_text(content, encoding="utf-8")
     except Exception as exc:
         log.warning("AGENTS.md changelog append failed: %s", exc)
@@ -109,14 +112,18 @@ class WatchLoop:
         self._repairs_in_window = 0
         self._policy = None
         self._canary_tasks: set = set()
+        self._watch_task = None
 
     def _load_policy(self):
         """Load budgets from autonomy_policy.json. None => fail-closed (no auto-repair)."""
         try:
             import swarm_os.services.autonomy_policy as _ap
+
             self._policy = _ap.get_autonomy_policy(reload=True)
         except Exception as exc:
-            log.warning("WatchLoop: policy unavailable (%s); fail-closed: no auto-repair.", exc)
+            log.warning(
+                "WatchLoop: policy unavailable (%s); fail-closed: no auto-repair.", exc
+            )
             self._policy = None
 
     @property
@@ -135,7 +142,7 @@ class WatchLoop:
                 log.debug("Failed to stat events file: %s", exc)
         self._running = True
         self._check_stale_heartbeat()
-        asyncio.create_task(self._watch())
+        self._watch_task = asyncio.create_task(self._watch())
 
     async def stop(self) -> None:
         self._running = False
@@ -155,7 +162,8 @@ class WatchLoop:
                     "WatchLoop: stale heartbeat detected (last tick %s, %.0fs ago) — "
                     "a prior daemon may have hung or died mid-run. Fail-closed: it "
                     "was not repairing. This daemon resumes tailing from end of log.",
-                    hb.get("last_tick_iso", "?"), _now() - last,
+                    hb.get("last_tick_iso", "?"),
+                    _now() - last,
                 )
         except Exception as exc:
             log.warning("WatchLoop: could not read heartbeat (%s).", exc)
@@ -168,12 +176,14 @@ class WatchLoop:
             lock = FileLock(str(_HEARTBEAT_FILE) + ".lock", timeout=5.0)
             with lock:
                 _HEARTBEAT_FILE.write_text(
-                    json.dumps({
-                        "last_tick": _now(),
-                        "last_tick_iso": _iso(),
-                        "offset": self._last_position,
-                        "repairs_today": repairs_today,
-                    }),
+                    json.dumps(
+                        {
+                            "last_tick": _now(),
+                            "last_tick_iso": _iso(),
+                            "offset": self._last_position,
+                            "repairs_today": repairs_today,
+                        }
+                    ),
                     encoding="utf-8",
                 )
         except Exception as exc:
@@ -232,6 +242,7 @@ class WatchLoop:
     def _schedule_due_canaries(self) -> None:
         try:
             from runtime_v2.services.canary_registry import due_canaries
+
             due = due_canaries()
             for c in due:
                 rid = c.get("repair_id")
@@ -239,7 +250,9 @@ class WatchLoop:
                     continue
                 task = asyncio.create_task(self._evaluate_canary(c))
                 self._canary_tasks.add(rid)
-                task.add_done_callback(lambda t, _rid=rid: self._canary_tasks.discard(_rid))
+                task.add_done_callback(
+                    lambda t, _rid=rid: self._canary_tasks.discard(_rid)
+                )
         except Exception as exc:
             log.warning("WatchLoop: canary scheduling failed (%s).", exc)
 
@@ -256,15 +269,30 @@ class WatchLoop:
             # Signal 1: re-run the repaired file's related tests.
             from pathlib import Path
             from organism_console.core.repair_engine import _run_related_tests
+
             fp = Path(file_rel)
-            result = await asyncio.to_thread(_run_related_tests, fp) if fp.suffix == ".py" else None
+            result = (
+                await asyncio.to_thread(_run_related_tests, fp)
+                if fp.suffix == ".py"
+                else None
+            )
             if result is None:
                 # No related tests exist — cannot verify directly. Check signal 2.
                 if self._signal2_downstream_breakage(file_rel):
-                    self._resolve_flag(rid, "flagged", "signal_2 downstream consumer breakage; HUMAN REVIEW",
-                                       snapshot_id, file_rel, human_review=True)
+                    self._resolve_flag(
+                        rid,
+                        "flagged",
+                        "signal_2 downstream consumer breakage; HUMAN REVIEW",
+                        snapshot_id,
+                        file_rel,
+                        human_review=True,
+                    )
                 else:
-                    self._resolve_clear(rid, "cleared", "no related tests and no downstream breakage detected")
+                    self._resolve_clear(
+                        rid,
+                        "cleared",
+                        "no related tests and no downstream breakage detected",
+                    )
                 return
             ok, output = result
             if ok:
@@ -273,14 +301,32 @@ class WatchLoop:
             # Tests failed. Signal 1 is authoritative IF the failure is attributable
             # to the repaired file.
             if self._traceback_attributes(output, file_rel):
-                self._resolve_flag(rid, "flagged", f"signal_1 test regression attributable to {file_rel}",
-                                   snapshot_id, file_rel, human_review=False)
+                self._resolve_flag(
+                    rid,
+                    "flagged",
+                    f"signal_1 test regression attributable to {file_rel}",
+                    snapshot_id,
+                    file_rel,
+                    human_review=False,
+                )
             else:
-                self._resolve_flag(rid, "flagged", f"test regression NOT attributable to {file_rel}; HUMAN REVIEW",
-                                   snapshot_id, file_rel, human_review=True)
+                self._resolve_flag(
+                    rid,
+                    "flagged",
+                    f"test regression NOT attributable to {file_rel}; HUMAN REVIEW",
+                    snapshot_id,
+                    file_rel,
+                    human_review=True,
+                )
         except Exception as exc:
-            log.warning("WatchLoop: canary %s evaluation failed (%s); flagging unverifiable.", rid, exc)
-            self._resolve_unverifiable(rid, f"canary evaluation error: {exc}", snapshot_id, file_rel)
+            log.warning(
+                "WatchLoop: canary %s evaluation failed (%s); flagging unverifiable.",
+                rid,
+                exc,
+            )
+            self._resolve_unverifiable(
+                rid, f"canary evaluation error: {exc}", snapshot_id, file_rel
+            )
 
     def _traceback_attributes(self, test_output: str, file_rel: str) -> bool:
         """Does the failure name the repaired file (or a module that imports it)?
@@ -300,6 +346,7 @@ class WatchLoop:
         file. (Live bug found in the 2026 smoke test; unit fixtures only used
         forward-slash paths and missed the dotted-package collision.)"""
         import re as _re
+
         out = (test_output or "").replace("\\", "/")
         path = file_rel.replace("\\", "/")
         module = _re.sub(r"\.py$", "", file_rel).replace("/", ".")
@@ -315,18 +362,27 @@ class WatchLoop:
     def _resolve_clear(self, rid: str, state: str, detail: str) -> None:
         try:
             from runtime_v2.services.canary_registry import resolve_canary
+
             resolve_canary(rid, state, detail)
             log.info("Canary %s -> %s (%s)", rid, state, detail)
         except Exception as exc:
             log.warning("Canary resolve failed (%s): %s", rid, exc)
 
-    def _resolve_flag(self, rid: str, state: str, detail: str, snapshot_id: str,
-                      file_rel: str, human_review: bool) -> None:
+    def _resolve_flag(
+        self,
+        rid: str,
+        state: str,
+        detail: str,
+        snapshot_id: str,
+        file_rel: str,
+        human_review: bool,
+    ) -> None:
         """Flag a canary. human_review=False (signal 1 authoritative) -> automatic
         diff-scoped rollback. human_review=True (signal 2-only, or un-attributable
         test failure) -> surface for a human, do NOT auto-revert."""
         try:
             from runtime_v2.services.canary_registry import resolve_canary
+
             resolve_canary(rid, state, detail)
             if not human_review and snapshot_id:
                 self._auto_rollback(snapshot_id, file_rel, rid, detail)
@@ -335,34 +391,60 @@ class WatchLoop:
         except Exception as exc:
             log.warning("Canary flag failed (%s): %s", rid, exc)
 
-    def _auto_rollback(self, snapshot_id: str, file_rel: str, rid: str, detail: str) -> None:
+    def _auto_rollback(
+        self, snapshot_id: str, file_rel: str, rid: str, detail: str
+    ) -> None:
         """Signal-1 authoritative: restore the diff-scoped pre-repair snapshot."""
         try:
-            from runtime_v2.services.run_snapshot import load_run_snapshot, restore_run_snapshot
+            from runtime_v2.services.run_snapshot import (
+                load_run_snapshot,
+                restore_run_snapshot,
+            )
+
             snap = load_run_snapshot(snapshot_id)
             if not snap:
-                log.warning("Auto-rollback %s: snapshot %s missing; cannot revert.", rid, snapshot_id)
+                log.warning(
+                    "Auto-rollback %s: snapshot %s missing; cannot revert.",
+                    rid,
+                    snapshot_id,
+                )
                 self._flag_for_human(file_rel, rid, f"{detail} (snapshot missing)", "")
                 return
             result = restore_run_snapshot(snap, scope=snap.get("scope"))
-            entry = {"timestamp": _iso(), "trigger": "rollback", "repair_id": rid,
-                     "file": file_rel, "signal": "signal_1", "restored": result.get("restored", [])}
+            entry = {
+                "timestamp": _iso(),
+                "trigger": "rollback",
+                "repair_id": rid,
+                "file": file_rel,
+                "signal": "signal_1",
+                "restored": result.get("restored", []),
+            }
             line = f"- **[ROLLBACK-COMPLETED] ({entry['timestamp']})**: {file_rel} — {detail}\n"
             _audit_write(entry, line)
             log.warning("Auto-rolled back %s (%s)", file_rel, detail)
         except Exception as exc:
             log.warning("Auto-rollback failed (%s): %s", rid, exc)
 
-    def _flag_for_human(self, file_rel: str, rid: str, detail: str, snapshot_id: str) -> None:
+    def _flag_for_human(
+        self, file_rel: str, rid: str, detail: str, snapshot_id: str
+    ) -> None:
         """Surface a human-review flag where a human will actually see it — the
         audit trail PLUS a dedicated human_review.jsonl the CLI /status reads."""
         try:
             from swarm_os.services.watch_loop import _audit_write, _iso
-            entry = {"timestamp": _iso(), "trigger": "rollback_human_review", "repair_id": rid,
-                     "file": file_rel, "detail": detail, "snapshot_id": snapshot_id}
+
+            entry = {
+                "timestamp": _iso(),
+                "trigger": "rollback_human_review",
+                "repair_id": rid,
+                "file": file_rel,
+                "detail": detail,
+                "snapshot_id": snapshot_id,
+            }
             line = f"- **[CANARY-FLAGGED: human review] ({entry['timestamp']})**: {file_rel} — {detail}\n"
             _audit_write(entry, line)
             import json as _json
+
             f = _CANARY_HUMAN_REVIEW_FILE
             f.parent.mkdir(parents=True, exist_ok=True)
             lock = FileLock(str(f) + ".lock", timeout=5.0)
@@ -373,9 +455,12 @@ class WatchLoop:
         except Exception as exc:
             log.warning("Human-review flag failed (%s): %s", rid, exc)
 
-    def _resolve_unverifiable(self, rid: str, detail: str, snapshot_id: str, file_rel: str) -> None:
+    def _resolve_unverifiable(
+        self, rid: str, detail: str, snapshot_id: str, file_rel: str
+    ) -> None:
         try:
             from runtime_v2.services.canary_registry import resolve_canary
+
             resolve_canary(rid, "unverifiable", detail)
             self._flag_for_human(file_rel, rid, f"UNVERIFIABLE: {detail}", snapshot_id)
         except Exception as exc:
@@ -426,6 +511,7 @@ class WatchLoop:
         if not err or len(err) >= 500:
             return
         import re
+
         payload = data.get("payload") or {}
         args = payload.get("arguments") or {}
         file_path_str = args.get("file_path") or args.get("TargetFile")
@@ -439,7 +525,9 @@ class WatchLoop:
             log.warning(
                 "WatchLoop: repair budget exhausted (window started %.0fs ago, %d repairs) — "
                 "skipping repair for %r, will resume next 24h window. No queueing.",
-                _now() - self._repair_window_start, self._repairs_in_window, err[:80],
+                _now() - self._repair_window_start,
+                self._repairs_in_window,
+                err[:80],
             )
             return
         try:
@@ -471,9 +559,12 @@ class WatchLoop:
         try:
             from pathlib import Path as _P
             from runtime_v2.services.canary_registry import register_canary
+
             root = _P.cwd()
             try:
-                file_rel = str(_P(file_path).resolve().relative_to(root.resolve())).replace("\\", "/")
+                file_rel = str(
+                    _P(file_path).resolve().relative_to(root.resolve())
+                ).replace("\\", "/")
             except Exception as exc:
                 log.debug("Failed to resolve relative path for canary: %s", exc)
                 file_rel = str(file_path)
@@ -492,20 +583,31 @@ class WatchLoop:
         only the `file_path` dispatched on), so intended == actual write scope."""
         try:
             from organism_console._commands_opencode import snapshot_worktree
-            from runtime_v2.services.run_snapshot import build_repair_snapshot, write_run_snapshot
+            from runtime_v2.services.run_snapshot import (
+                build_repair_snapshot,
+                write_run_snapshot,
+            )
             from pathlib import Path as _P
+
             root = _P.cwd()
             scope = []
             if file_path:
                 try:
-                    scope = [str(_P(file_path).resolve().relative_to(root.resolve())).replace("\\", "/")]
+                    scope = [
+                        str(
+                            _P(file_path).resolve().relative_to(root.resolve())
+                        ).replace("\\", "/")
+                    ]
                 except Exception as exc:
                     log.debug("Failed to resolve relative path for snapshot: %s", exc)
                     scope = [str(file_path)]
             snap = build_repair_snapshot(snapshot_worktree(root), scope=scope)
             return write_run_snapshot(snap)
         except Exception as exc:
-            log.warning("WatchLoop: repair snapshot capture failed (%s); repair proceeds without a revert point.", exc)
+            log.warning(
+                "WatchLoop: repair snapshot capture failed (%s); repair proceeds without a revert point.",
+                exc,
+            )
             return ""
 
     def _handle_turn_budget(self, data: dict) -> None:
@@ -516,7 +618,11 @@ class WatchLoop:
             payload = data.get("payload") or {}
             agent_id = payload.get("agent_id") or data.get("source") or "unknown"
             prompt = str(payload.get("prompt") or "")[:150]
-            log.warning("WatchLoop: turn_budget_exhausted for agent %s (prompt: %s)", agent_id, prompt)
+            log.warning(
+                "WatchLoop: turn_budget_exhausted for agent %s (prompt: %s)",
+                agent_id,
+                prompt,
+            )
             from swarm_os.services.reflection_loop import get_reflection_service
 
             async def _record():
