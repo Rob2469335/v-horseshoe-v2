@@ -283,7 +283,7 @@ async def run_due_tasks(runner=None) -> list[str]:
         runner = _default_runner
     due_ids = []
     with _LOCK:
-        data = _load()
+        data = await asyncio.to_thread(_load)
         for tid, task in data.items():
             if _is_due(task, _now()):
                 due_ids.append(tid)
@@ -291,7 +291,7 @@ async def run_due_tasks(runner=None) -> list[str]:
     for tid in due_ids:
         try:
             with _LOCK:
-                task = _load().get(tid)
+                task = (await asyncio.to_thread(_load)).get(tid)
             if not task:
                 continue
             goal = str(task.get("goal", ""))
