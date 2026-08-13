@@ -13,6 +13,7 @@ Elites are COPIED into the next generation (not the same object), so the
 original can compete normally while the copy survives. Population diversity is
 tracked per generation.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -31,16 +32,20 @@ from .selection import SelectionEngine
 
 log = logging.getLogger(__name__)
 
-_CONCURRENCY     = 10
+_CONCURRENCY = 10
 _MAX_LOG_ENTRIES = 200
 
 
-def _make_organism(org_id: str, genome: Genome, task_domain: str = "general", generate_fn=None) -> Organism:
+def _make_organism(
+    org_id: str, genome: Genome, task_domain: str = "general", generate_fn=None
+) -> Organism:
     brain = brain_registry.make("swarm", genome, task_domain, generate_fn=generate_fn)
     return Organism(id=org_id, brain=brain, genome=genome)
 
 
-def _clone_organism(org: Organism, new_id: str, task_domain: str = "general", generate_fn=None) -> Organism:
+def _clone_organism(
+    org: Organism, new_id: str, task_domain: str = "general", generate_fn=None
+) -> Organism:
     """
     Clone an organism for elitism — COPY the genome, don't reuse the object.
     The clone starts with the same genome but fresh fitness history so it
@@ -52,13 +57,15 @@ def _clone_organism(org: Organism, new_id: str, task_domain: str = "general", ge
     # NOTE: copy the dict, don't alias it — the clone records its own evaluations,
     # and sharing the parent's dict would mutate the parent's lifetime history too.
     genome_copy.lifetime_fitness = dict(org.genome.lifetime_fitness)
-    genome_copy.evaluations      = org.genome.evaluations
+    genome_copy.evaluations = org.genome.evaluations
     clone = _make_organism(new_id, genome_copy, task_domain, generate_fn=generate_fn)
     clone.is_elite_clone = True
     return clone
 
 
-async def _act_async(organism: Organism, env_state: dict, sem: asyncio.Semaphore) -> dict:
+async def _act_async(
+    organism: Organism, env_state: dict, sem: asyncio.Semaphore
+) -> dict:
     async with sem:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, organism.act, env_state)
@@ -70,8 +77,10 @@ def _population_diversity(organisms: List[Organism]) -> Dict:
         return {}
 
     def dominant(o):
-        return max(["coding", "research", "upwork"],
-                   key=lambda d: getattr(o.genome, f"{d}_affinity"))
+        return max(
+            ["coding", "research", "upwork"],
+            key=lambda d: getattr(o.genome, f"{d}_affinity"),
+        )
 
     dom_counts = {}
     tiers = []
@@ -84,8 +93,8 @@ def _population_diversity(organisms: List[Organism]) -> Dict:
     n = len(organisms)
     return {
         "domain_distribution": {k: round(v / n, 2) for k, v in dom_counts.items()},
-        "avg_model_tier":      round(avg_tier, 3),
-        "n_unique_dominant":   len(dom_counts),
+        "avg_model_tier": round(avg_tier, 3),
+        "n_unique_dominant": len(dom_counts),
     }
 
 
@@ -94,27 +103,27 @@ class SwarmKernel:
     Main orchestration engine for Swarm OS.
     Handles environment ticking, action evaluation, selection, and breeding of organisms.
     """
+
     def __init__(
         self,
-        organisms:      List[Organism],
-        env:            Environment,
-        snapshot_every: int   = 5,
-        elite_count:    int   = 2,
-        fitness_decay:  float = 0.85,
-        generate_fn     = None,
-        snapshot_repo   = None,
+        organisms: List[Organism],
+        env: Environment,
+        snapshot_every: int = 5,
+        elite_count: int = 2,
+        fitness_decay: float = 0.85,
+        generate_fn=None,
+        snapshot_repo=None,
     ):
-        self.organisms      = organisms
-        self.env            = env
-        self.selector       = SelectionEngine()
-        self.generation     = 0
+        self.organisms = organisms
+        self.env = env
+        self.selector = SelectionEngine()
+        self.generation = 0
         self.snapshot_every = snapshot_every
-        self.elite_count    = elite_count
-        self.fitness_decay  = fitness_decay
+        self.elite_count = elite_count
+        self.fitness_decay = fitness_decay
         self._generation_log: List[Dict] = []
-        self.generate_fn     = generate_fn
-        self.snapshot_repo   = snapshot_repo
-
+        self.generate_fn = generate_fn
+        self.snapshot_repo = snapshot_repo
 
     async def _run_actions(self, env_state: dict) -> list:
         sem = asyncio.Semaphore(_CONCURRENCY)
@@ -126,9 +135,7 @@ class SwarmKernel:
         for o in self.organisms:
             o.fitness *= self.fitness_decay
 
-        parents = self.selector.select(
-            self.organisms, k=max(2, len(self.organisms))
-        )
+        parents = self.selector.select(self.organisms, k=max(2, len(self.organisms)))
 
         children = []
         pairs = list(range(0, len(parents) - 1, 2))
@@ -142,10 +149,10 @@ class SwarmKernel:
             mutate(child_genome)
             child_genome.parent_id = a.id
             child = _make_organism(
-                org_id      = f"g{self.generation}_c{random.randint(0, 9999)}",
-                genome      = child_genome,
-                task_domain = task.domain if task else "general",
-                generate_fn = self.generate_fn,
+                org_id=f"g{self.generation}_c{random.randint(0, 9999)}",
+                genome=child_genome,
+                task_domain=task.domain if task else "general",
+                generate_fn=self.generate_fn,
             )
             children.append(child)
         return children
@@ -170,6 +177,7 @@ class SwarmKernel:
         else:
             try:
                 from swarm_os.snapshot import save_snapshot
+
                 save_snapshot(self.organisms, generation)
             except Exception as e:
                 log.warning("module snapshot failed generation=%d: %s", generation, e)
@@ -180,34 +188,38 @@ class SwarmKernel:
         diversity = _population_diversity(self.organisms)
 
         summary = {
-            "generation":    self.generation,
-            "population":    len(self.organisms),
-            "task_domain":   task.domain   if task else "unknown",
-            "task_id":       task.task_id  if task else "unknown",
-            "task_prompt":   (task.prompt[:80] + "…") if task else "",
+            "generation": self.generation,
+            "population": len(self.organisms),
+            "task_domain": task.domain if task else "unknown",
+            "task_id": task.task_id if task else "unknown",
+            "task_prompt": (task.prompt[:80] + "…") if task else "",
             "children_bred": len(children),
-            "elapsed_s":     round(elapsed, 2),
-            "elite_ids":     list(elite_ids),
-            "diversity":     diversity,
+            "elapsed_s": round(elapsed, 2),
+            "elite_ids": list(elite_ids),
+            "diversity": diversity,
             "top_organisms": [
                 {
-                    "id":           o.id,
-                    "fitness":      round(o.fitness, 4),
-                    "avg_fitness":  round(o.genome.average_fitness, 4),
-                    "model":        getattr(o.genome, "dominant_model", "unknown"),
-                    "tools":        o.genome.active_tools(seed=self.generation),
-                    "generation":   o.genome.generation,
-                    "evaluations":  o.genome.evaluations,
+                    "id": o.id,
+                    "fitness": round(o.fitness, 4),
+                    "avg_fitness": round(o.genome.average_fitness, 4),
+                    "model": getattr(o.genome, "dominant_model", "unknown"),
+                    "tools": o.genome.active_tools(seed=self.generation),
+                    "generation": o.genome.generation,
+                    "evaluations": o.genome.evaluations,
                     "domain_affinities": {
-                        "coding":   round(o.genome.coding_affinity,   3),
+                        "coding": round(o.genome.coding_affinity, 3),
                         "research": round(o.genome.research_affinity, 3),
-                        "upwork":   round(o.genome.upwork_affinity,   3),
+                        "upwork": round(o.genome.upwork_affinity, 3),
                     },
                     "cognition": {
-                        "decomposition":            round(o.genome.cognition.decomposition_bias,        2),
-                        "reflection":               round(o.genome.cognition.reflection_depth,          2),
-                        "verification":             round(o.genome.cognition.verification_bias,         2),
-                        "hallucination_sensitivity":round(o.genome.cognition.hallucination_sensitivity, 2),
+                        "decomposition": round(
+                            o.genome.cognition.decomposition_bias, 2
+                        ),
+                        "reflection": round(o.genome.cognition.reflection_depth, 2),
+                        "verification": round(o.genome.cognition.verification_bias, 2),
+                        "hallucination_sensitivity": round(
+                            o.genome.cognition.hallucination_sensitivity, 2
+                        ),
                     },
                 }
                 for o in top
@@ -220,9 +232,10 @@ class SwarmKernel:
 
         log.info(
             "generation=%d pop=%d top=%s fit=%.4f avg=%.4f diversity=%s elapsed=%.2fs",
-            self.generation, len(self.organisms),
-            top[0].id              if top else "none",
-            top[0].fitness         if top else 0.0,
+            self.generation,
+            len(self.organisms),
+            top[0].id if top else "none",
+            top[0].fitness if top else 0.0,
             top[0].genome.average_fitness if top else 0.0,
             diversity.get("domain_distribution", {}),
             elapsed,
@@ -238,10 +251,16 @@ class SwarmKernel:
 
         self.env.tick()
         task = self.env.current_task
-        log.info("generation=%d domain=%s task_id=%s", self.generation, task.domain if task else "?", task.task_id if task else "?")
+        log.info(
+            "generation=%d domain=%s task_id=%s",
+            self.generation,
+            task.domain if task else "?",
+            task.task_id if task else "?",
+        )
 
         env_state = self.env.state()
-        if task: env_state["task"] = task.prompt
+        if task:
+            env_state["task"] = task.prompt
 
         elites = self.selector.top_organisms(
             [o for o in self.organisms if not getattr(o, "is_elite_clone", False)],
@@ -253,16 +272,20 @@ class SwarmKernel:
         self.env.apply(list(actions))
 
         self.selector.evaluate(
-            self.organisms, self.env,
+            self.organisms,
+            self.env,
             actions=list(actions),
             human_scores=human_scores,
         )
 
         children = self._breed_children(task)
         elite_clones = [
-            _clone_organism(e, f"elite_{e.id}_g{self.generation}",
-                            task.domain if task else "general",
-                            generate_fn=self.generate_fn)
+            _clone_organism(
+                e,
+                f"elite_{e.id}_g{self.generation}",
+                task.domain if task else "general",
+                generate_fn=self.generate_fn,
+            )
             for e in elites
         ]
 
@@ -285,8 +308,12 @@ class SwarmKernel:
         """Synchronous wrapper for step_async."""
         try:
             asyncio.get_running_loop()
-            return self.step_async(human_scores=human_scores)
-        except RuntimeError:
+            raise RuntimeError(
+                "step() called from a running event loop; use await step_async() instead."
+            )
+        except RuntimeError as exc:
+            if "running event loop" in str(exc):
+                raise
             return asyncio.run(self.step_async(human_scores=human_scores))
 
     def run(self, generations: int = 10) -> List[Dict]:
@@ -320,17 +347,17 @@ class SwarmKernel:
         return {
             "generation": self.generation,
             "population": len(self.organisms),
-            "entropy":    round(self.env.entropy, 4),
-            "resources":  self.env.resources,
-            "diversity":  diversity,
+            "entropy": round(self.env.entropy, 4),
+            "resources": self.env.resources,
+            "diversity": diversity,
             "top_organisms": [
                 {
-                    "id":           o.id,
-                    "fitness":      round(o.fitness, 4),
-                    "avg_fitness":  round(o.genome.average_fitness, 4),
-                    "model":        getattr(o.genome, "dominant_model", "unknown"),
-                    "tools":        o.genome.active_tools(seed=self.generation),
-                    "generation":   o.genome.generation,
+                    "id": o.id,
+                    "fitness": round(o.fitness, 4),
+                    "avg_fitness": round(o.genome.average_fitness, 4),
+                    "model": getattr(o.genome, "dominant_model", "unknown"),
+                    "tools": o.genome.active_tools(seed=self.generation),
+                    "generation": o.genome.generation,
                 }
                 for o in top
             ],
