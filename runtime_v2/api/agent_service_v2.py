@@ -2100,7 +2100,11 @@ class AgentServiceV2:
             if _os.environ.get("SWARM_EVOLUTION", "").strip() == "1":
                 from swarm_os.services.evolution_daemon import get_active_genome
 
-                genome_id, genome_weights = get_active_genome(explore=True)
+                # Offloaded: get_active_genome reads genomes.jsonl + fitness.jsonl
+                # synchronously (a blocking disk read on the event loop otherwise).
+                genome_id, genome_weights = await asyncio.to_thread(
+                    get_active_genome, True
+                )
         except Exception:
             pass
 

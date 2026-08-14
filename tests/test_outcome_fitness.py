@@ -214,6 +214,21 @@ def test_structural_verify_detects_parse_and_emptiness(tmp_path):
     assert service._structural_verify("empty.py", repo=tmp_path) is False
 
 
+def test_genome_read_offloaded_to_thread():
+    """The agent loop's per-run genome read (genomes.jsonl + fitness.jsonl,
+    synchronous disk IO) must run via asyncio.to_thread so it never blocks the
+    event loop when SWARM_EVOLUTION=1."""
+    import inspect
+
+    from runtime_v2.api import agent_service_v2 as svc
+
+    src = inspect.getsource(svc.AgentServiceV2._step_agent_stream_inner)
+    assert "asyncio.to_thread(" in src
+    assert "get_active_genome" in src
+    # The old blocking call is gone — the genome read is offloaded to a thread.
+    assert "await asyncio.to_thread(\n                    get_active_genome, True\n                )" in src
+
+
 # ---------------------------------------------------------------------------
 # Agent-loop exit-path outcome audit: every TERMINAL path must feed an outcome
 # to the fitness store (SWARM_EVOLUTION=1), so no failure/success is invisible.
