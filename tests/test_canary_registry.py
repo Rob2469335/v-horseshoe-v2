@@ -13,6 +13,8 @@ The critical behaviors:
 """
 from types import SimpleNamespace
 
+import json
+
 import pytest
 
 from runtime_v2.services import canary_registry as cr
@@ -207,3 +209,89 @@ def test_traceback_attribution_no_sibling_package_false_positive(tmp_path):
     # The repaired module's OWN dotted name still matches (legit import frame).
     tb_own = 'E   File "<frozen>", line 1, in <module>\n    import runtime_v2.services.indexer\n'
     assert loop._traceback_attributes(tb_own, "runtime_v2/services/indexer.py")
+
+
+# ── signal-2 downstream breakage (real implementation, not the stub) ────────
+def _build_signal2_loop(tmp_path, monkeypatch):
+    """WatchLoop with a tiny real project tree + its own event file, so the
+    KnowledgeGraph build and the failure scan are REAL (not mocked)."""
+    (tmp_path / "pkg").mkdir(exist_ok=True)
+    (tmp_path / "pkg" / "__init__.py").write_text("", encoding="utf-8")
+    (tmp_path / "pkg" / "core.py").write_text("x = 1\n", encoding="utf-8")
+    # consumer.py imports core -> a static dependent of pkg.core.
+    (tmp_path / "pkg" / "consumer.py").write_text(
+        "from pkg import core\n\ndef run():\n    return core.x\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(wl, "_PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(wl, "_EVENTS_FILE", tmp_path / "events.jsonl")
+    return wl.WatchLoop(SimpleNamespace(), interval_seconds=0.01)
+
+
+def _write_failure_event(tmp_path, error_text: str):
+    ev_file = tmp_path / "events.jsonl"
+    ev_file.parent.mkdir(parents=True, exist_ok=True)
+    with ev_file.open("a", encoding="utf-8") as f:
+        f.write(
+            json.dumps(
+                {
+                    "event_type": "tool_result",
+                    "payload": {
+                        "result": {"ok": False, "error": error_text},
+                    },
+                }
+            )
+            + "\n"
+        )
+
+
+def test_signal2_detects_dependent_consumer_failure(tmp_path, monkeypatch):
+    """Signal 2 must detect a recent failure naming a STATIC dependent of the
+    repaired file (the whole point of the graph-based downstream check)."""
+    loop = _build_signal2_loop(tmp_path, monkeypatch)
+    _write_failure_event(
+        tmp_path,
+        'E   File "C:/repo/pkg/consumer.py", line 3, in run\n    return core.x\n    AttributeError',
+    )
+    assert loop._signal2_downstream_breakage("pkg/core.py") is True
+
+
+def test_signal2_no_false_positive_for_unrelated_failure(tmp_path, monkeypatch):
+    """A failure naming an unrelated module must NOT trigger signal 2."""
+    loop = _build_signal2_loop(tmp_path, monkeypatch)
+    _write_failure_event(
+        tmp_path,
+        'E   File "C:/repo/other/module.py", line 1\n    NameError',
+    )
+    assert loop._signal2_downstream_breakage("pkg/core.py") is False
+
+
+def test_signal2_fails_open_when_no_dependents(tmp_path, monkeypatch):
+    """A repaired file with no static dependents (or not in the graph) cannot
+    flag signal 2 — it returns False (fail-open), never raises."""
+    loop = _build_signal2_loop(tmp_path, monkeypatch)
+    _write_failure_event(tmp_path, "some failure text")
+    # Leaf module with no importers -> no dependents -> False.
+    assert loop._signal2_downstream_breakage("pkg/consumer.py") is False
+    # Unknown module -> False without raising.
+    assert loop._signal2_downstream_breakage("pkg/ghost.py") is False
+
+
+def test_signal2_ignores_ok_events(tmp_path, monkeypatch):
+    """Only ok:False tool_result events count — a passing event must not
+    trigger signal 2."""
+    loop = _build_signal2_loop(tmp_path, monkeypatch)
+    ev_file = tmp_path / "events.jsonl"
+    ev_file.parent.mkdir(parents=True, exist_ok=True)
+    with ev_file.open("a", encoding="utf-8") as f:
+        f.write(
+            json.dumps(
+                {
+                    "event_type": "tool_result",
+                    "payload": {
+                        "result": {"ok": True, "error": "pkg.consumer fine"},
+                    },
+                }
+            )
+            + "\n"
+        )
+    assert loop._signal2_downstream_breakage("pkg/core.py") is False

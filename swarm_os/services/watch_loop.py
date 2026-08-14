@@ -35,6 +35,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -43,6 +44,7 @@ from filelock import FileLock
 
 log = logging.getLogger("WatchLoop")
 
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _EVENTS_FILE = Path("data/events/events.jsonl")
 _HEARTBEAT_FILE = Path("data/events/watchman_heartbeat.json")
 _AUDIT_FILE = Path("data/events/auto_repairs.jsonl")
@@ -113,6 +115,8 @@ class WatchLoop:
         self._policy = None
         self._canary_tasks: set = set()
         self._watch_task = None
+        self._kg = None
+        self._kg_lock = threading.Lock()
 
     def _load_policy(self):
         """Load budgets from autonomy_policy.json. None => fail-closed (no auto-repair)."""
@@ -356,8 +360,89 @@ class WatchLoop:
         """Signal 2: does ANY recent failure name a module that imports the
         repaired file (via the cached AST KnowledgeGraph)? HUMAN-REVIEW tier — the
         graph has a confirmed dynamic-import blind spot, so this can only raise a
-        flag, never auto-revert."""
-        return False  # signal 2 detection is a stub: see AGENTS.md known-edge note
+        flag, never auto-revert.
+
+        Returns True only when a STATIC dependent module of the repaired file
+        appears in a recent tool_result failure in the event log. Graph build
+        errors and scan errors fail OPEN (return False — signal 2 only adds
+        caution, never removes the direct-test signal 1)."""
+        try:
+            deps = self._dependent_modules(file_rel)
+            if not deps:
+                return False
+            failures = self._recent_tool_result_failures()
+            if not failures:
+                return False
+            haystacks = [f.replace("\\", "/") for f in failures]
+            for dep in deps:
+                # Match the dotted module name (runtime_v2.services.indexer) OR
+                # its path form (runtime_v2/services/indexer.py) as it appears
+                # in a traceback / error message.
+                dotted = dep
+                path_form = dep.replace(".", "/")
+                for h in haystacks:
+                    if dotted in h or path_form in h:
+                        return True
+            return False
+        except Exception as exc:
+            log.warning("WatchLoop: signal-2 check failed (%s); treating as no breakage.", exc)
+            return False
+
+    def _dependent_modules(self, file_rel: str) -> list:
+        """Dotted module names that statically import the repaired file, via the
+        cached AST KnowledgeGraph. Builds the graph once (thread-safe) and
+        resolves the repaired file's module name from its path."""
+        if not file_rel.endswith(".py"):
+            return []
+        module = file_rel.replace("\\", "/")[:-3].replace("/", ".")
+        try:
+            kg = self._ensure_kg()
+            return kg.list_dependents(module, depth=2) or []
+        except Exception as exc:
+            log.debug("WatchLoop: dependent-module lookup failed (%s).", exc)
+            return []
+
+    def _ensure_kg(self):
+        """Build the project AST KnowledgeGraph once, thread-safely."""
+        if self._kg is not None:
+            return self._kg
+        with self._kg_lock:
+            if self._kg is not None:
+                return self._kg
+            from swarm_os.services.knowledge_graph import KnowledgeGraph
+
+            kg = KnowledgeGraph(str(_PROJECT_ROOT))
+            kg.build_graph()
+            self._kg = kg
+            return kg
+
+    def _recent_tool_result_failures(self, limit: int = 200) -> list:
+        """Recent tool_result failure error strings from the event log tail
+        (bounded read — the log grows unbounded, so only the last `limit` lines
+        are scanned). Returns [] on any error (signal 2 fails open)."""
+        if not _EVENTS_FILE.exists():
+            return []
+        try:
+            lines = []
+            with _EVENTS_FILE.open("r", encoding="utf-8", errors="replace") as f:
+                tail = f.readlines()[-limit:]
+            for line in tail:
+                try:
+                    data = json.loads(line)
+                except Exception:
+                    continue
+                if data.get("event_type") != "tool_result":
+                    continue
+                res = (data.get("payload") or {}).get("result") or {}
+                if res.get("ok", False):
+                    continue
+                err = str(res.get("error", "") or "").strip()
+                if err:
+                    lines.append(err)
+            return lines
+        except Exception as exc:
+            log.debug("WatchLoop: event-tail scan failed (%s).", exc)
+            return []
 
     def _resolve_clear(self, rid: str, state: str, detail: str) -> None:
         try:
