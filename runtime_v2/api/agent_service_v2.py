@@ -28,6 +28,14 @@ _FIX_INTENT_RE = re.compile(
 )
 
 
+def _append_diary_line(diary_path, record: dict) -> None:
+    """Append one diary record (runs inside asyncio.to_thread — never on the
+    event loop)."""
+    import json as _json
+    with open(diary_path, "a", encoding="utf-8") as f:
+        f.write(_json.dumps(record, ensure_ascii=False) + "\n")
+
+
 def _is_fix_intent(text: str) -> bool:
     """True when the goal directs the agent to EDIT code (not just research a
     'how to fix' question)."""
@@ -792,8 +800,9 @@ class AgentServiceV2:
                     "error": str(error)[:300],
                     "action": action,
                 }
-                with open(diary_path, "a", encoding="utf-8") as f:
-                    f.write(json.dumps(record, ensure_ascii=False) + "\n")
+                await asyncio.to_thread(
+                    _append_diary_line, diary_path, record
+                )
             except Exception as diary_err:
                 log.debug("[%s] diary write skipped: %s", agent_id, diary_err)
         except Exception as exc:

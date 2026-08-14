@@ -79,11 +79,12 @@ _LAST_API_TS: float = 0.0
 async def _pace_api() -> None:
     """Sleep so at least _API_MIN_GAP_S elapses since the last API request."""
     global _LAST_API_TS
-    elapsed = asyncio.get_event_loop().time() - _LAST_API_TS
+    import time as _time
+    elapsed = _time.monotonic() - _LAST_API_TS
     gap = _API_MIN_GAP_S - elapsed
     if gap > 0:
         await asyncio.sleep(gap)
-    _LAST_API_TS = asyncio.get_event_loop().time()
+    _LAST_API_TS = _time.monotonic()
 
 
 # ---------------------------------------------------------------------------

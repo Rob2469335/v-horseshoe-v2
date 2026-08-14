@@ -107,6 +107,20 @@ async def test_remember_failure_writes_diary_with_component(tmp_path, monkeypatc
     assert picked["component"] == "code_analyzer"
 
 
+def test_remember_failure_diary_append_offloaded_to_thread():
+    """The diary append on every tool failure must run via asyncio.to_thread
+    (never a blocking file open on the agent-loop event loop)."""
+    import inspect
+    import runtime_v2.api.agent_service_v2 as svc
+
+    src = inspect.getsource(svc.AgentServiceV2._remember_failure)
+    assert "asyncio.to_thread(\n                    _append_diary_line, diary_path, record" in src or \
+           ("await asyncio.to_thread(" in src and "_append_diary_line" in src)
+    assert "with open(diary_path" not in src, (
+        "diary write must be offloaded, not a bare open() on the loop"
+    )
+
+
 def test_get_latest_failure_prefers_component_tagged_over_noise(tmp_path):
     """Fix 2: get_latest_failure() must skip genetic-kernel eval noise (no component)
     and return the real agent failure."""
