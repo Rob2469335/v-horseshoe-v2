@@ -213,14 +213,19 @@ def _find_related_tests(file_path: Path) -> List[Path]:
     return related
 
 
-def _run_related_tests(file_path: Path) -> Optional[Tuple[bool, str]]:
+def _run_related_tests(file_path: Path) -> Optional[Dict[str, Any]]:
     """Run the repaired module's own tests. Returns None when no tests exist.
 
     Flake-aware: if the first run fails, the failed tests are re-run once with
     pytest --lf (last-failed). A passing re-run means the failure was a flaky
     test, NOT a broken repair — the repair is treated as sound and reported as
-    `(True, "<flaky> ...")` instead of rolling back a good fix on a transient
-    failure."""
+    `{"ok": True, "flaky": True}` instead of rolling back a good fix on a
+    transient failure. The structured dict (not a string marker) feeds the
+    durable repair record's machine-readable validation_result.
+
+    Returns {"ok": bool, "output": str, "flaky": bool, "initial_result": str,
+             "retry_result": str | None}.
+    """
     related = _find_related_tests(file_path)
     if not related:
         return None
@@ -238,15 +243,21 @@ def _run_related_tests(file_path: Path) -> Optional[Tuple[bool, str]]:
     first_cmd = [sys.executable, "-m", "pytest", *[str(t) for t in related], "-q", "--tb=line"]
     code, out = _run(first_cmd)
     if code == 0:
-        return True, out
+        return {"ok": True, "output": out, "flaky": False,
+                "initial_result": "pass", "retry_result": None}
     if code in (-1, -2):
-        return False, out  # timeout / infra error — not a flake signal
+        return {"ok": False, "output": out, "flaky": False,
+                "initial_result": "error", "retry_result": None}
     # First run failed: re-run only the failed tests. Passing -> flaky, not broken.
     retry_cmd = [sys.executable, "-m", "pytest", "-q", "--tb=line", "--lf", "--no-header"]
     retry_code, retry_out = _run(retry_cmd)
     if retry_code == 0:
-        return True, f"[flaky] first run failed, last-failed re-run passed:\n{out}\n--- re-run ---\n{retry_out}"
-    return False, f"{out}\n--- last-failed re-run ---\n{retry_out}"
+        return {"ok": True, "flaky": True,
+                "initial_result": "fail", "retry_result": "pass",
+                "output": f"[flaky] first run failed, last-failed re-run passed:\n{out}\n--- re-run ---\n{retry_out}"}
+    return {"ok": False, "flaky": False,
+            "initial_result": "fail", "retry_result": "fail",
+            "output": f"{out}\n--- last-failed re-run ---\n{retry_out}"}
 
 def classify_failure(error_text: str) -> Tuple[str, int]:
     error_lower = error_text.lower()
@@ -704,13 +715,19 @@ class TieredRepairOrchestrator:
 
         # Quality gate (R11): run the repaired module's own tests before accepting.
         test_res = _run_related_tests(file_path)
-        if test_res is not None and not test_res[0]:
-            file_path.write_text(original, encoding="utf-8")
-            result["fixed"] = False
-            result["validation_error"] = f"related tests failed: {test_res[1][-500:]}"
-            if self.cmd_ctx:
-                self.cmd_ctx.console.print(f"[red]Related tests failed, reverted: {test_res[1][-200:]}[/red]")
-            return False
+        if test_res is not None:
+            result["test_validation"] = {
+                "initial_result": test_res.get("initial_result"),
+                "retry_result": test_res.get("retry_result"),
+                "flaky": bool(test_res.get("flaky")),
+            }
+            if not test_res.get("ok"):
+                file_path.write_text(original, encoding="utf-8")
+                result["fixed"] = False
+                result["validation_error"] = f"related tests failed: {test_res['output'][-500:]}"
+                if self.cmd_ctx:
+                    self.cmd_ctx.console.print(f"[red]Related tests failed, reverted: {test_res['output'][-200:]}[/red]")
+                return False
 
         return result.get("fixed", False)
 
@@ -916,7 +933,10 @@ class TieredRepairOrchestrator:
                         file_path.read_text(encoding="utf-8", errors="ignore")
                         if file_path and file_path.exists() else original_content
                     )
-                    _final.validation_result = {"outcome": "accepted" if result.get("fixed") else "rejected"}
+                    _final.validation_result = {
+                        "outcome": "accepted" if result.get("fixed") else "rejected",
+                        **(result.get("test_validation") or {}),
+                    }
                     _final.security_result = {"ok": True} if result.get("fixed") else {
                         "ok": False, "reason": result.get("validation_error")}
                     if result.get("fixed"):

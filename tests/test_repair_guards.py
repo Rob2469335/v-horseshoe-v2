@@ -179,9 +179,12 @@ def test_run_related_tests_treats_flaky_pass_as_sound(monkeypatch):
     monkeypatch.setattr(_sp, "run", fake_run)
     monkeypatch.setattr(repair_engine, "_find_related_tests",
                         lambda path: [Path("tests/test_x.py")])
-    ok, out = repair_engine._run_related_tests(Path("swarm_os/services/x.py"))
-    assert ok is True, f"flaky re-run must count as sound: {out}"
-    assert "[flaky]" in out
+    res = repair_engine._run_related_tests(Path("swarm_os/services/x.py"))
+    assert res["ok"] is True, f"flaky re-run must count as sound: {res}"
+    assert res["flaky"] is True, "flake must be a machine-readable field"
+    assert res["initial_result"] == "fail"
+    assert res["retry_result"] == "pass"
+    assert "[flaky]" in res["output"]
     assert len(calls) == 2  # original + last-failed re-run
     assert "--lf" in calls[1]
 
@@ -199,9 +202,11 @@ def test_run_related_tests_flaky_rerun_still_failing_is_broken(monkeypatch):
     monkeypatch.setattr(_sp, "run", fake_run)
     monkeypatch.setattr(repair_engine, "_find_related_tests",
                         lambda path: [Path("tests/test_x.py")])
-    ok, out = repair_engine._run_related_tests(Path("swarm_os/services/x.py"))
-    assert ok is False, "repeated failure must remain broken"
-    assert "last-failed re-run" in out
+    res = repair_engine._run_related_tests(Path("swarm_os/services/x.py"))
+    assert res["ok"] is False, "repeated failure must remain broken"
+    assert res["flaky"] is False, "a repeated failure is NOT flaky"
+    assert res["retry_result"] == "fail"
+    assert "last-failed re-run" in res["output"]
 
 
 class _FakeDate:
@@ -347,7 +352,9 @@ def test_repair_records_durable_state_on_success_and_failure(tmp_path, monkeypat
     monkeypatch.setattr(rs, "_REPAIR_STATE_DIR", tmp_path / "states")
     monkeypatch.setattr(repair_engine, "BREAKER_FILE", tmp_path / "breaker.json")
     monkeypatch.setattr(repair_engine, "_circuit_allows_repair", lambda *a, **k: (True, None))
-    monkeypatch.setattr(repair_engine, "_run_related_tests", lambda *a, **k: (True, "ok"))
+    monkeypatch.setattr(repair_engine, "_run_related_tests",
+                        lambda *a, **k: {"ok": True, "output": "ok", "flaky": False,
+                                         "initial_result": "pass", "retry_result": None})
     monkeypatch.setattr(repair_engine, "_is_repairable_path", lambda p: True)
     for fn in ("save_budget", "load_budget", "append_lesson", "_record_repair_result",
                "save_budget", "load_budget"):
@@ -378,6 +385,30 @@ def test_repair_records_durable_state_on_success_and_failure(tmp_path, monkeypat
     ok_rec = st_load(ok_res["repair_state_id"])
     assert ok_rec.phase == "ACCEPTED", f"successful repair must be ACCEPTED, got {ok_rec.phase}"
     assert ok_rec.next_action == "none"
+    # Machine-readable flake evidence lands in the durable validation result.
+    assert ok_rec.validation_result == {
+        "outcome": "accepted",
+        "initial_result": "pass",
+        "retry_result": None,
+        "flaky": False,
+    }, f"durable validation_result missing structured flake field: {ok_rec.validation_result}"
+
+    # A flaky repair (first run fail, --lf re-run pass) is ACCEPTED and the
+    # durable record carries flaky=True — the exact {initial, retry, flaky,
+    # outcome} shape, not a string marker.
+    monkeypatch.setattr(repair_engine, "_run_related_tests",
+                        lambda *a, **k: {"ok": True, "output": "[flaky] ...", "flaky": True,
+                                         "initial_result": "fail", "retry_result": "pass"})
+    flaky_res = orch.repair("SyntaxError: invalid syntax", file_path=f)
+    assert flaky_res.get("fixed") is True
+    flaky_rec = st_load(flaky_res["repair_state_id"])
+    assert flaky_rec.phase == "ACCEPTED"
+    assert flaky_rec.validation_result == {
+        "outcome": "accepted",
+        "initial_result": "fail",
+        "retry_result": "pass",
+        "flaky": True,
+    }, f"flaky evidence must be structured: {flaky_rec.validation_result}"
 
     # Failure path: no T0 patch found -> REPAIR_FAILED, never ACCEPTED.
     monkeypatch.setattr(repair_engine, "T0PatternRepair",
