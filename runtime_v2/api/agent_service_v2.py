@@ -2078,16 +2078,47 @@ class AgentServiceV2:
         except Exception:
             _te = None
 
-        async for chunk in self._step_agent_stream_inner(
-            agent_id,
-            prompt,
-            history,
-            delegation_chain,
-            research_discharged,
-            resume=resume,
-            allowed_tools_override=allowed_tools_override,
-        ):
-            yield chunk
+        try:
+            async for chunk in self._step_agent_stream_inner(
+                agent_id,
+                prompt,
+                history,
+                delegation_chain,
+                research_discharged,
+                resume=resume,
+                allowed_tools_override=allowed_tools_override,
+            ):
+                yield chunk
+        except GeneratorExit:
+            # Client aborted mid-stream: the run never reached a terminal path,
+            # so its outcome would be invisible to the evolutionary kernel. Feed
+            # a failed outcome (completed=False); the durable checkpoint stays
+            # so a later resume re-runs and feeds its own outcome. Re-raise to
+            # complete the generator close.
+            self._feed_aborted_outcome(agent_id, prompt)
+            raise
+        except BaseException:
+            # An unhandled exception escaped the inner generator (a crash, not a
+            # normal terminal path) — same invisibility. Feed a failed outcome,
+            # then re-raise so the exception still reaches the caller.
+            self._feed_aborted_outcome(agent_id, prompt)
+            raise
+
+    def _feed_aborted_outcome(self, agent_id: str, prompt: str) -> None:
+        """Feed a failed outcome for a run that exited abnormally (client abort /
+        unhandled exception) — the terminal paths never ran, so without this the
+        abort is invisible to evolution/telemetry. Uses a fresh _CallState: an
+        aborted run genuinely has no completion, tool-success, or turns."""
+        try:
+            self._feed_outcome(
+                agent_id,
+                prompt,
+                _CallState(),
+                completed=False,
+                genome_id="",
+            )
+        except Exception as exc:
+            log.debug("[%s] aborted-outcome feed skipped: %s", agent_id, exc)
 
     async def _step_agent_stream_inner(
         self,

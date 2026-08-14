@@ -416,3 +416,63 @@ async def test_coordinator_done_feeds_success(tmp_path, monkeypatch):
     assert recs[-1]["completion"] == 1.0
 
     assert service._structural_verify("nonexistent.py", repo=tmp_path) is False
+
+
+@pytest.mark.asyncio
+async def test_step_agent_stream_abort_feeds_failed_outcome(tmp_path, monkeypatch):
+    """A client abort (GeneratorExit) or unhandled exception escaping the inner
+    generator must still feed a FAILED outcome — otherwise an aborted run is
+    invisible to the evolutionary kernel (the last known exit-path gap). The
+    wrapper must feed completed=False with a fresh state, then re-raise."""
+    from runtime_v2.api.agent_service_v2 import AgentServiceV2
+    from swarm_os.services import outcome_fitness as of
+
+    monkeypatch.setattr(of, "FITNESS_PATH", tmp_path / "fitness.jsonl")
+    monkeypatch.setenv("SWARM_EVOLUTION", "1")
+
+    service = AgentServiceV2()
+
+    # A delegate that aborts: the inner stream raises after the first chunk
+    # (simulating a client disconnect / GeneratorExit mid-run).
+    async def _abort_inner(*args, **kwargs):
+        yield {"type": "content", "content": "started"}
+        raise GeneratorExit()
+
+    service._step_agent_stream_inner = _abort_inner
+    gen = service.step_agent_stream("coder", "implement the fix")
+    with pytest.raises(GeneratorExit):
+        async for chunk in gen:
+            pass
+
+    recs = of.recent_fitness()
+    assert recs, "aborted run must still feed an outcome"
+    assert recs[-1]["completion"] == 0.0, "aborted run must be recorded as failed"
+    assert recs[-1]["agent_id"] == "coder"
+
+
+@pytest.mark.asyncio
+async def test_step_agent_stream_exception_feeds_failed_outcome(tmp_path, monkeypatch):
+    """An unhandled exception escaping the inner generator must also feed a
+    failed outcome (not just client-abort GeneratorExit)."""
+    from runtime_v2.api.agent_service_v2 import AgentServiceV2
+    from swarm_os.services import outcome_fitness as of
+
+    monkeypatch.setattr(of, "FITNESS_PATH", tmp_path / "fitness.jsonl")
+    monkeypatch.setenv("SWARM_EVOLUTION", "1")
+
+    service = AgentServiceV2()
+
+    async def _boom_inner(*args, **kwargs):
+        yield {"type": "content", "content": "started"}
+        raise RuntimeError("boom")
+
+    service._step_agent_stream_inner = _boom_inner
+    gen = service.step_agent_stream("coder", "implement the fix")
+    with pytest.raises(RuntimeError):
+        async for chunk in gen:
+            pass
+
+    recs = of.recent_fitness()
+    assert recs, "crashed run must still feed an outcome"
+    assert recs[-1]["completion"] == 0.0
+    assert recs[-1]["agent_id"] == "coder"
