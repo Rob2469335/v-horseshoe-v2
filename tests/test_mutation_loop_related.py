@@ -1,7 +1,6 @@
 """Tests for the genetic mutation loop's related-test discovery (EVO-3)."""
 from swarm_os.services.genetic_mutation_loop import _find_related_test_files
 
-
 def test_mutation_loop_finds_related_tests_not_hardcoded():
     """EVO-3: the mutation loop must run the tests related to the MUTATED file,
     never a hardcoded suite for an unrelated target. A tool_executor mutation
@@ -29,3 +28,23 @@ def test_mutation_loop_related_tests_tolerate_unknown_file():
     is built at runtime so it cannot appear in any test file's content."""
     unknown = f"swarm_os/services/x{hash('mutation')}_{id(object())}.py"
     assert _find_related_test_files(unknown) == []
+
+
+def test_mutation_loop_sync_writes_offloaded_to_thread():
+    """The async mutation daemon must not block its event loop on sync file
+    writes. The three disk writes (copy2 of the pending mutation, the
+    metadata.json write, and the mutation-history write) must all run through
+    asyncio.to_thread."""
+    import inspect
+
+    import swarm_os.services.genetic_mutation_loop as gml
+
+    src = inspect.getsource(gml.run_genetic_mutation)
+    assert "await asyncio.to_thread(shutil.copy2, sandbox_file, pending_file)" in src
+    assert "metadata.json" in src
+    assert "await asyncio.to_thread(" in src
+    # The history write must be inside a to_thread call, never a bare write_text.
+    history_block = src.split("HISTORY_FILE.parent.mkdir")[1]
+    assert "asyncio.to_thread(" in history_block
+    assert "HISTORY_FILE.write_text(json.dumps" not in history_block
+

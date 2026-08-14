@@ -248,7 +248,7 @@ async def run_genetic_mutation(target_file_path: str = str(AGENT_SERVICE_PATH), 
                 pending_dir.mkdir(parents=True, exist_ok=True)
 
                 pending_file = pending_dir / sandbox_file.name
-                shutil.copy2(sandbox_file, pending_file)
+                await asyncio.to_thread(shutil.copy2, sandbox_file, pending_file)
 
                 metadata = {
                     "event_type": "engine_mutation",
@@ -264,7 +264,11 @@ async def run_genetic_mutation(target_file_path: str = str(AGENT_SERVICE_PATH), 
                     "details": "Mutation passed compile check and real test suite and was stored for approval."
                 }
 
-                (pending_dir / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+                await asyncio.to_thread(
+                    (pending_dir / "metadata.json").write_text,
+                    json.dumps(metadata, indent=2),
+                    encoding="utf-8",
+                )
                 
                 logger.info("Genetic mutation passed compile/test checks and was stored for approval.")
                 
@@ -317,7 +321,11 @@ async def run_genetic_mutation(target_file_path: str = str(AGENT_SERVICE_PATH), 
     # BUG FIX: Persist mutation_history to disk so Extinction Events survive across invocations
     try:
         HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
-        HISTORY_FILE.write_text(json.dumps(mutation_history[-50:]), encoding="utf-8")
+        await asyncio.to_thread(
+            HISTORY_FILE.write_text,
+            json.dumps(mutation_history[-50:]),
+            encoding="utf-8",
+        )
         logger.info(f"Mutation history saved ({len(mutation_history)} entries).")
     except Exception as e:
         logger.warning(f"Failed to save mutation history: {e}")
