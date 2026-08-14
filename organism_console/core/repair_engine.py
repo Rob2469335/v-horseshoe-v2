@@ -268,6 +268,24 @@ def classify_failure(error_text: str) -> Tuple[str, int]:
     return "unknown", 2
 
 
+def _structural_verify_repo(file_path) -> bool:
+    """Minimal non-transcriptional verification of a repaired Python file: it
+    must exist, be non-trivial, and parse (ast.parse). Used when no related test
+    covers the module — a DISCOUNTED gate (0.5), not a free pass."""
+    import ast as _ast
+
+    try:
+        if not file_path or not file_path.exists() or file_path.is_dir():
+            return False
+        src = file_path.read_text(encoding="utf-8", errors="ignore")
+        if not src.strip():
+            return False
+        _ast.parse(src, filename=str(file_path))
+        return True
+    except Exception:
+        return False
+
+
 # PS/MV fix_class (2026 self-healing: diagnose BEFORE patching). Mirrors the
 # Diagnostician in swarm_os/healing (kept local here to avoid a cross-package
 # import from the CLI layer). A failure classified `model_variability` means the
@@ -728,6 +746,29 @@ class TieredRepairOrchestrator:
                 if self.cmd_ctx:
                     self.cmd_ctx.console.print(f"[red]Related tests failed, reverted: {test_res['output'][-200:]}[/red]")
                 return False
+        else:
+            # NO related test covers this module. A repair accepted with zero
+            # verification is a silent risk — run the structural verify (exists +
+            # non-empty + parses) as the DISCOUNTED gate: broken/empty -> revert;
+            # untested-but-sound -> only a discounted 0.5 score, so downstream
+            # consumers (fitness/evolution/canary) see it is UNVERIFIED, never a
+            # sound 1.0. Mirrors agent_service_v2._structural_verify.
+            structural_ok = _structural_verify_repo(file_path)
+            if not structural_ok:
+                file_path.write_text(original, encoding="utf-8")
+                result["fixed"] = False
+                result["validation_error"] = "no related tests AND structural verify failed (empty/broken file)"
+                if self.cmd_ctx:
+                    self.cmd_ctx.console.print(
+                        f"[red]No tests + structural verify failed, reverted: {file_path}[/red]"
+                    )
+                return False
+            result["test_validation"] = {
+                "initial_result": "no_tests_structural_only",
+                "retry_result": None,
+                "flaky": False,
+                "discounted": 0.5,
+            }
 
         return result.get("fixed", False)
 

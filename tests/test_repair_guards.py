@@ -341,6 +341,47 @@ def test_repair_security_gate_reverts_banned_construct(tmp_path, monkeypatch):
     assert ok2 is True, "clean repair must pass the security gate"
 
 
+def test_snapshot_validate_no_tests_broken_file_reverted(tmp_path, monkeypatch):
+    """When NO related test covers the repaired module, the repair must still be
+    structurally verified (exists + non-empty + parses). A broken/empty repair
+    with no test coverage must be REVERTED, never shipped as fixed=True."""
+    monkeypatch.setattr(repair_engine, "_is_repairable_path", lambda p: True)
+    monkeypatch.setattr(repair_engine, "_run_related_tests", lambda *a, **k: None)
+    orch = repair_engine.TieredRepairOrchestrator(cmd_ctx=None)
+    f = tmp_path / "bug.py"
+    original = "x = 1\n"
+    f.write_text(original, encoding="utf-8")
+    result = {"fixed": True}
+    # Repaired content is syntactically BROKEN and untested.
+    f.write_text("def broken(:\n    pass\n", encoding="utf-8")
+    ok = orch._snapshot_and_validate(f, result, original)
+    assert ok is False, "untested + structurally-broken repair must be reverted"
+    assert result["fixed"] is False
+    assert f.read_text(encoding="utf-8") == original
+
+
+def test_snapshot_validate_no_tests_sound_file_discounted(tmp_path, monkeypatch):
+    """When no related test covers a SOUND (parses, non-empty) repair, it is
+    accepted but must carry a DISCOUNTED 0.5 test_validation marker — so
+    downstream fitness/evolution/canary never mistake an UNVERIFIED repair for a
+    tested 1.0."""
+    monkeypatch.setattr(repair_engine, "_is_repairable_path", lambda p: True)
+    monkeypatch.setattr(repair_engine, "_run_related_tests", lambda *a, **k: None)
+    orch = repair_engine.TieredRepairOrchestrator(cmd_ctx=None)
+    f = tmp_path / "bug.py"
+    original = "x = 1\n"
+    f.write_text(original, encoding="utf-8")
+    result = {"fixed": True}
+    f.write_text("def helper(x):\n    return x + 1\n", encoding="utf-8")
+    ok = orch._snapshot_and_validate(f, result, original)
+    assert ok is True, "sound untested repair is accepted (discounted)"
+    tv = result.get("test_validation") or {}
+    assert tv.get("discounted") == 0.5, (
+        "untested repair must carry the 0.5 discounted marker"
+    )
+    assert tv.get("initial_result") == "no_tests_structural_only"
+
+
 def test_repair_records_durable_state_on_success_and_failure(tmp_path, monkeypatch):
     """The repair orchestrator must persist a durable state record: ACCEPTED for
     a fix that passes every gate, REPAIR_FAILED when it does not. The record id
