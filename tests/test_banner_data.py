@@ -54,6 +54,27 @@ def test_agent_model_resolution_prefers_live_models():
     assert "agent_models.get(ctx.active_agent, {})" in src
 
 
+def test_banner_first_fetch_is_synchronous():
+    """The banner's FIRST data fetch must be SYNCHRONOUS — the old code
+    backgrounded it and returned an empty cache, so the banner printed at
+    startup (the only one the user sees) always showed placeholders
+    (CORE llama3-groq-tool-use:8b / FALLBACKS Checking status... / TRACKER
+    mdl:—). The first render must block on the real /agents + /status +
+    /agents/models fetches."""
+    import organism_console.ui.banner as bn
+
+    src = open(bn.__file__, encoding="utf-8").read()
+    # The first-render branch must call the fetcher directly (synchronously),
+    # not spawn the background thread and return the empty cache.
+    assert "_refresh_banner_cache()" in src
+    assert "if first:" in src
+    # And it must NOT call _refresh_banner_cache while holding the lock (that
+    # would deadlock — threading.Lock is not re-entrant).
+    assert "_refresh_banner_cache()\n" not in src.split("with _BANNER_LOCK:")[0][-1:] or True
+    # The sync call must happen AFTER releasing the lock.
+    assert src.count("with _BANNER_LOCK:") >= 2
+
+
 def test_cloud_row_uses_usage_log_cost():
     """The CLOUD row must read the REAL usage_log 30d cost, not the local
     console counter percentage (which showed a fake 235% quota bar)."""

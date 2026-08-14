@@ -47,8 +47,18 @@ def _refresh_banner_cache():
         pass
 
 def get_banner_data() -> dict:
+    # FIRST render: fetch synchronously so the banner never shows placeholder
+    # (None) values on startup — the old code backgrounded the first fetch and
+    # returned an empty cache immediately, so CORE/FALLBACKS/TRACKER were always
+    # stale on the very banner the user sees. Subsequent renders use the
+    # background thread (cheap, non-blocking). NOTE: _refresh_banner_cache takes
+    # _BANNER_LOCK itself, so never call it while holding the lock.
     with _BANNER_LOCK:
-        if time.time() - _BANNER_CACHE["last"] > 5:
+        first = _BANNER_CACHE["last"] == 0
+    if first:
+        _refresh_banner_cache()
+    with _BANNER_LOCK:
+        if not first and time.time() - _BANNER_CACHE["last"] > 5:
             _BANNER_CACHE["last"] = time.time()
             threading.Thread(target=_refresh_banner_cache, daemon=True).start()
         return copy.deepcopy(_BANNER_CACHE)
