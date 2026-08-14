@@ -63,6 +63,40 @@ def test_heartbeat_written_every_tick(monkeypatch, tmp_path):
     assert "offset" in hb
 
 
+# ── never-reviewed-flag GC: wired into the tick (bounded, hourly) ────────────
+def test_tick_invokes_expired_flag_gc(monkeypatch, tmp_path):
+    """The watch-loop tick must periodically GC never-reviewed canary flags
+    (and their snapshots) — the documented open edge that had NO production
+    caller, so flagged snapshots grew forever. The cleanup must run via
+    asyncio.to_thread (bounded scan, never on the loop)."""
+    import asyncio
+    import swarm_os.services.watch_loop as _wl
+
+    _stub_policy(monkeypatch)
+    # The tick early-returns when the events file is absent; create it so the
+    # GC block after the tail is reached.
+    (tmp_path / "events.jsonl").write_text("", encoding="utf-8")
+    loop = _wl.WatchLoop(_make_engine(), interval_seconds=0.01)
+    loop._last_flag_gc = 0.0  # force the hourly gate open
+
+    calls = {"n": 0}
+
+    def _fake_gc(max_age_days=14.0):
+        calls["n"] += 1
+        return 1
+
+    monkeypatch.setattr(
+        "runtime_v2.services.canary_registry.clear_expired_old_flags", _fake_gc
+    )
+    asyncio.run(loop._tick())
+    assert calls["n"] == 1, "tick must invoke clear_expired_old_flags"
+
+    # Throttled: a second tick within the hour must NOT re-run the GC.
+    calls["n"] = 0
+    asyncio.run(loop._tick())
+    assert calls["n"] == 0, "flag GC must be throttled to hourly"
+
+
 def test_stale_heartbeat_detected_by_recency_not_liveness(monkeypatch, tmp_path, caplog):
     """A heartbeat that stopped updating (hang) is stale by recency, NOT by 'the
     process object is gone' — the daemon may still be alive but wedged."""

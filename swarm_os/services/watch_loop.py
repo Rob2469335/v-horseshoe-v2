@@ -117,6 +117,7 @@ class WatchLoop:
         self._watch_task = None
         self._kg = None
         self._kg_lock = threading.Lock()
+        self._last_flag_gc = 0.0
 
     def _load_policy(self):
         """Load budgets from autonomy_policy.json. None => fail-closed (no auto-repair)."""
@@ -633,6 +634,19 @@ class WatchLoop:
         except Exception as exc:
             log.warning("WatchLoop tail failed: %s", exc)
         self._write_heartbeat(self._repairs_in_window)
+        # Stated-open-edge GC: never-reviewed flags (and their snapshots) expire
+        # after 14 days. Bounded scan — run at most hourly so it never competes
+        # with the tail/heartbeat on every tick.
+        if _now() - self._last_flag_gc > 3600:
+            self._last_flag_gc = _now()
+            try:
+                from runtime_v2.services.canary_registry import clear_expired_old_flags
+
+                expired = await asyncio.to_thread(clear_expired_old_flags)
+                if expired:
+                    log.info("WatchLoop: expired %d never-reviewed canary flag(s).", expired)
+            except Exception as exc:
+                log.debug("WatchLoop: flag GC skipped (%s).", exc)
 
     def _handle(self, data: dict) -> None:
         """Same dispatch as _handle_event_line, plus the budget gate + audit trail.
