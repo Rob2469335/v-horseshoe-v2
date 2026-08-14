@@ -179,10 +179,16 @@ Write-Host "Backend ✔  http://127.0.0.1:8000" -ForegroundColor Green
 
 # STEP 4.5 - MCP Servers
 Write-Host "`n[STEP 4.5] Starting MCP Servers..." -ForegroundColor Yellow
-for ($i = 0; $i -lt 20; $i++) {
+$mcpRegistered = $false
+$tools = $null
+for ($i = 0; $i -lt 90; $i++) {
     try {
         $tools = Invoke-RestMethod "http://127.0.0.1:8000/tools"
-        if ($tools.count -gt 0) {
+        # Wait until the MCP servers have actually registered (their tools appear
+        # in /tools with the mcp: prefix). The backend loads them in the BACKGROUND
+        # after boot, so the first poll may only show the ~22 built-in tools.
+        if ($tools.count -gt 0 -and ($tools.capabilities -match "^mcp:") -and $tools.count -gt 22) {
+            $mcpRegistered = $true
             break
         }
         Start-Sleep 1
@@ -190,7 +196,12 @@ for ($i = 0; $i -lt 20; $i++) {
         Start-Sleep 1
     }
 }
-Write-Host "MCP Servers ✔  Registered $($tools.count) tools" -ForegroundColor Green
+if ($mcpRegistered) {
+    $mcpCount = @($tools.capabilities | Where-Object { $_ -match "^mcp:" }).Count
+    Write-Host "MCP Servers ✔  Registered $($tools.count) tools ($mcpCount external MCP)" -ForegroundColor Green
+} else {
+    Write-Host "MCP Servers ⚠  Backend up; external MCP tools not yet registered (built-in: $($tools.count) tools). Check backend logs." -ForegroundColor Yellow
+}
 
 # STEP 5 - Frontend (background job)
 Write-Host "`n[STEP 5] Starting Frontend..." -ForegroundColor Yellow

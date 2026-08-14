@@ -250,9 +250,26 @@ def list_traces(limit: int = 50, orch: Any = Depends(get_orchestrator)):
 async def list_tools(runtime=Depends(runtime_dep)):
     installed_models = await _safe_ollama_models(runtime)
     cap_data = _build_capabilities(installed_models, runtime=runtime)
+    cap_names = list(cap_data["tools"]["names"])
+
+    # Include the LIVE external MCP tools (once loaded by the background startup
+    # task) so the count/banner reflect what the agent can ACTUALLY call via
+    # action=mcp — not just the built-in ~22. Non-spawning: never starts npx/uvx
+    # on a dashboard poll; returns [] while the manager is still initializing.
+    try:
+        from runtime_v2.services.tool_executor import get_loaded_mcp_tools
+
+        mcp_tools = get_loaded_mcp_tools()
+        for t in mcp_tools:
+            name = f"mcp:{t['server']}:{t['name']}"
+            if name not in cap_names:
+                cap_names.append(name)
+    except Exception:
+        pass
+
     return ToolListResponse(
-        capabilities=cap_data["tools"]["names"],
-        count=cap_data["tools"]["count"],
+        capabilities=cap_names,
+        count=len(cap_names),
         vision_configured=cap_data["vision"]["available"],
         vision_runtime_available=cap_data["vision"]["available"],
         vision_tool_exposed=True,

@@ -41,6 +41,21 @@ async def get_mcp_manager():
     return _mcp_manager
 
 
+def get_loaded_mcp_tools() -> list[dict]:
+    """Non-spawning read of the currently-loaded external MCP tools.
+
+    Returns the cached tool dicts ONLY if the MCP manager has already been
+    initialized by the background startup task (`get_mcp_manager`); returns []
+    while init is still in progress or failed. NEVER spawns npx/uvx processes,
+    so it is safe to call from `/tools`, dashboards, and the startup script's
+    health banner without blocking on a cold npm cache."""
+    global _mcp_manager
+    m = _mcp_manager
+    if m is not None and getattr(m, "cached_tools", None):
+        return list(m.cached_tools)
+    return []
+
+
 _filesystem_read_cache_var: contextvars.ContextVar = contextvars.ContextVar(
     "_filesystem_read_cache", default=None
 )
