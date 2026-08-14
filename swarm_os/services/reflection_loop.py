@@ -220,20 +220,23 @@ class ReflectionService:
         self.client = AsyncQdrantClient(url=qdrant_url)
         self.collection = collection_name
         self.embedder = EmbeddingService()
-        try:
-            loop = asyncio.get_running_loop()
-            self._init_task = loop.create_task(self._init_collection())
-        except RuntimeError:
-            self._init_task = None
+        # Cross-loop-safe init: do NOT eagerly bind an _init_collection task to
+        # whatever loop is running at construction. The singleton is shared
+        # across the server lifespan, CLI threads (asyncio.run), the watch-loop
+        # daemon, and healing threads — an eager task created on loop A and
+        # awaited from loop B raises CancelledError (proven: pending cross-loop
+        # await). Init runs lazily on the CALLER's loop via _wait_init, guarded
+        # by an asyncio.Lock so concurrent first-use callers do not double-create.
+        self._init_task = None
         self._ensured = False
+        self._init_lock = asyncio.Lock()
 
     async def _wait_init(self):
-        if self._init_task:
-            success = await self._init_task
-            self._init_task = None
-            if success:
-                self._ensured = True
-        if not self._ensured:
+        if self._ensured:
+            return
+        async with self._init_lock:
+            if self._ensured:
+                return
             self._ensured = await self._init_collection()
 
     async def _init_collection(self) -> bool:

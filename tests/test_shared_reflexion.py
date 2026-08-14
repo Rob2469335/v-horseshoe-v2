@@ -37,6 +37,41 @@ def _make_service() -> tuple[ReflectionService, MagicMock]:
     return service, service.client
 
 
+def test_reflection_service_cross_loop_wait_init():
+    """The shared ReflectionService singleton must be safe to construct on one
+    event loop and USE from another (server lifespan vs CLI thread's asyncio.run
+    vs watch-loop daemon). The old eager `loop.create_task(self._init_collection())`
+    bound the init task to the CONSTRUCTION loop; awaiting it from a second loop
+    raises CancelledError (proven cross-loop task hazard). Init must run on the
+    CALLER's loop instead."""
+    import asyncio
+    from unittest.mock import patch
+
+    # Make the real init SLOW so the eager task created by __init__ on loop A is
+    # still PENDING when asyncio.run tears loop A down (asyncio.run cancels
+    # pending tasks). Under the old eager-task code this cancellation is then
+    # re-awaited on loop B -> CancelledError.
+    async def _slow_init(self):
+        await asyncio.sleep(0.05)
+        self._ensured = True
+
+    # Construct INSIDE a running loop (the server-lifespan path) so the old
+    # __init__ would bind the eager init task to loop A.
+    async def _construct_on_loop_a():
+        return ReflectionService(qdrant_url="http://127.0.0.1:1")
+
+    with patch.object(ReflectionService, "_init_collection", _slow_init):
+        svc = asyncio.run(_construct_on_loop_a())
+
+    async def _use_on_second_loop():
+        await svc._wait_init()
+        return True
+
+    # Must complete without CancelledError / cross-loop error.
+    assert asyncio.run(_use_on_second_loop()) is True
+    assert svc._ensured is True
+
+
 def _point(pid: str, payload: dict, score: float):
     payload = {**payload, "timestamp": payload.get("timestamp", time.time())}
     return SimpleNamespace(id=pid, payload=payload, score=score)
