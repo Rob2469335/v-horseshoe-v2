@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from swarm_os.api import admin
 from swarm_os.api.api_features import router as api_features_router
 from swarm_os.api.legal import router as legal_router
+from swarm_os.api.books import router as books_router
 from swarm_os.api.schemas import (
     ToolListResponse,
     CacheStatusResponse,
@@ -38,6 +39,7 @@ router = APIRouter()
 router.include_router(admin.router, prefix="/api", tags=["admin"])
 router.include_router(api_features_router)
 router.include_router(legal_router)
+router.include_router(books_router)
 
 from swarm_os.api.dependencies import runtime_dep, get_orchestrator, _safe_events
 from swarm_os.services.system_service import SystemService

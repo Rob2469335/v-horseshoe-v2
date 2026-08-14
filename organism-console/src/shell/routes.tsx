@@ -10,11 +10,13 @@ import IntegrationsPage from "../pages/IntegrationsPage"
 import LearnedMemoriesPage from "../pages/LearnedMemoriesPage"
 import CommandCenterPage from "../pages/CommandCenterPage"
 import RobsLawyerPage from "../pages/RobsLawyerPage"
+import BooksPage from "../pages/BooksPage"
 import type { NavItem } from "../lib/types"
 
 export const appRoutes: NavItem[] = [
   { key: "command", label: "Command Center", path: "/command", description: "Control the whole machine: probes, healing, screen, models" },
   { key: "lawyer", label: "Rob's Lawyer", path: "/lawyer", description: "Your appeal, your counsel, phone evidence, defense errors, record Q&A" },
+  { key: "books", label: "Book Library", path: "/books", description: "AI/Data freelancer book knowledge base: digests, search, cross-book Ask" },
   { key: "agent", label: "Agent", path: "/agent", description: "Agent console and execution" },
   { key: "workspace", label: "Workspace", path: "/workspace", description: "Workspace context and files" },
   { key: "organism", label: "Organism", path: "/organism", description: "Swarm and organism view" },
@@ -36,6 +38,7 @@ export const router = createBrowserRouter([
           { index: true, element: <OpsPage /> },
           { path: "command", element: <CommandCenterPage /> },
           { path: "lawyer", element: <RobsLawyerPage /> },
+          { path: "books", element: <BooksPage /> },
           { path: "agent", element: <AgentPage /> },
           { path: "workspace", element: <WorkspacePage /> },
           { path: "organism", element: <OrganismPage /> },
