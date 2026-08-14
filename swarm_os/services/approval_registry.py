@@ -33,6 +33,7 @@ SECURITY PROPERTIES:
   - Fail-closed: unknown tool/action, malformed context, or any registry error
     DENIES.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -42,14 +43,14 @@ import threading
 import time
 from typing import Any
 
-_OPAQUE_ID_BYTES = 16          # 128-bit opaque pending id
-_PENDING_TTL_S = 300.0         # pending approvals expire after 5 minutes
+_OPAQUE_ID_BYTES = 16  # 128-bit opaque pending id
+_PENDING_TTL_S = 300.0  # pending approvals expire after 5 minutes
 
 # Policy verdicts (single authoritative classification for the agent tool path).
-ALLOW = "ALLOW"               # execute immediately, never asks
-CONFIRM = "CONFIRM"           # requires human approval (v1: always)
+ALLOW = "ALLOW"  # execute immediately, never asks
+CONFIRM = "CONFIRM"  # requires human approval (v1: always)
 ALWAYS_CONFIRM = "ALWAYS_CONFIRM"  # requires human approval (v1: always)
-DENY = "DENY"                 # fail-closed: unknown / unclassified -> deny
+DENY = "DENY"  # fail-closed: unknown / unclassified -> deny
 
 
 # ---------------------------------------------------------------------------
@@ -58,37 +59,133 @@ DENY = "DENY"                 # fail-closed: unknown / unclassified -> deny
 # agent read-only ops (e.g. screen cursor_position -> human+confirm). This map
 # is the single source of truth for the AGENT execution boundary.
 # ---------------------------------------------------------------------------
-_READ_ONLY_FS_OPS = frozenset({"read", "read_file", "list", "grep", "glob",
-                               "scan_dir", "scandir", "list_dir", "walk", "cat"})
-_WRITE_FS_OPS = frozenset({"write", "write_file", "create", "create_file",
-                           "patch", "edit", "update", "modify", "replace",
-                           "replace_file_content", "edit_file", "delete",
-                           "remove", "unlink"})
-_PLAYWRIGHT_READ_OPS = frozenset({"navigate", "browser_a11y", "a11y",
-                                  "browser_state", "browser_describe",
-                                  "describe", "screenshot", "extract_text",
-                                  "browser_find", "find", "browser_wait",
-                                  "wait", "verify", "browser_verify"})
-_PLAYWRIGHT_WRITE_OPS = frozenset({"browser_click", "click", "browser_type",
-                                   "type", "browser_fill_form", "fill_form",
-                                   "browser_press_key", "press", "select",
-                                   "scroll"})
-_EMAIL_READ_OPS = frozenset({"email_list", "list", "email_search", "search",
-                             "email_read", "read"})
-_SCREEN_READ_OPS = frozenset({"cursor_position", "screenshot", "foreground_window",
-                              "list_windows"})
-_SCREEN_INPUT_OPS = frozenset({"mouse_move", "left_click", "right_click",
-                               "double_click", "scroll", "type_text", "type",
-                               "key", "mouse", "keyboard"})
+_READ_ONLY_FS_OPS = frozenset(
+    {
+        "read",
+        "read_file",
+        "list",
+        "grep",
+        "glob",
+        "scan_dir",
+        "scandir",
+        "list_dir",
+        "walk",
+        "cat",
+    }
+)
+_WRITE_FS_OPS = frozenset(
+    {
+        "write",
+        "write_file",
+        "create",
+        "create_file",
+        "patch",
+        "edit",
+        "update",
+        "modify",
+        "replace",
+        "replace_file_content",
+        "edit_file",
+        "delete",
+        "remove",
+        "unlink",
+    }
+)
+_PLAYWRIGHT_READ_OPS = frozenset(
+    {
+        "navigate",
+        "browser_a11y",
+        "a11y",
+        "browser_state",
+        "browser_describe",
+        "describe",
+        "screenshot",
+        "extract_text",
+        "browser_find",
+        "find",
+        "browser_wait",
+        "wait",
+        "verify",
+        "browser_verify",
+    }
+)
+_PLAYWRIGHT_WRITE_OPS = frozenset(
+    {
+        "browser_click",
+        "click",
+        "browser_type",
+        "type",
+        "browser_fill_form",
+        "fill_form",
+        "browser_press_key",
+        "press",
+        "select",
+        "scroll",
+    }
+)
+_EMAIL_READ_OPS = frozenset(
+    {
+        "email_list",
+        "list",
+        "email_search",
+        "search",
+        "email_read",
+        "read",
+        "email_thread",
+        "thread",
+        "email_summarize_thread",
+        "summarize_thread",
+        "email_unsubscribe_scan",
+        "unsubscribe_scan",
+        "email_digest",
+        "digest",
+    }
+)
+_SCREEN_READ_OPS = frozenset(
+    {"cursor_position", "screenshot", "foreground_window", "list_windows"}
+)
+_SCREEN_INPUT_OPS = frozenset(
+    {
+        "mouse_move",
+        "left_click",
+        "right_click",
+        "double_click",
+        "scroll",
+        "type_text",
+        "type",
+        "key",
+        "mouse",
+        "keyboard",
+    }
+)
 # system tool: read-only introspection is ALLOW; explicitly privileged ops are
 # ALWAYS_CONFIRM; unknown ops are DENY (fail-closed).
-_SYSTEM_READ_OPS = frozenset({"system_inventory", "process_list", "service_list",
-                              "net_connections", "disk_analyzer", "installed_apps",
-                              "startup_items", "registry_query", "event_log_query",
-                              "inventory"})
-_SYSTEM_PRIVILEGED_OPS = frozenset({"kill", "terminate", "stop_service",
-                                    "start_service", "restart_service",
-                                    "change_settings", "shutdown", "restart"})
+_SYSTEM_READ_OPS = frozenset(
+    {
+        "system_inventory",
+        "process_list",
+        "service_list",
+        "net_connections",
+        "disk_analyzer",
+        "installed_apps",
+        "startup_items",
+        "registry_query",
+        "event_log_query",
+        "inventory",
+    }
+)
+_SYSTEM_PRIVILEGED_OPS = frozenset(
+    {
+        "kill",
+        "terminate",
+        "stop_service",
+        "start_service",
+        "restart_service",
+        "change_settings",
+        "shutdown",
+        "restart",
+    }
+)
 
 
 def agent_tool_policy(tool: str, action: str | None = None) -> str:
@@ -143,13 +240,33 @@ def agent_tool_policy(tool: str, action: str | None = None) -> str:
             return ALWAYS_CONFIRM
         return DENY if a else CONFIRM
 
-    if t in ("email", "email_list", "email_search", "email_read"):
-        # email read/list/search are ALLOW; email_draft is CONFIRM.
+    if t in (
+        "email",
+        "email_list",
+        "email_search",
+        "email_read",
+        "email_thread",
+        "email_summarize_thread",
+        "email_unsubscribe_scan",
+        "email_digest",
+    ):
+        # email reads + LLM-synthesized reads (thread/summarize/unsubscribe-scan/
+        # digest) are ALLOW; anything else falls to CONFIRM.
         if a in _EMAIL_READ_OPS:
             return ALLOW
         return ALLOW if not a else CONFIRM
     if t == "email_draft":
         return CONFIRM
+    if t == "email_reply_draft":
+        return CONFIRM
+    if t == "email_manage":
+        # inbox mutations: mark_read/unread are CONFIRM; delete/archive/move are
+        # destructive-ish -> ALWAYS_CONFIRM; unknown op -> DENY.
+        if a in ("mark_read", "mark_unread"):
+            return CONFIRM
+        if a in ("archive", "move", "delete"):
+            return ALWAYS_CONFIRM
+        return DENY if a else CONFIRM
     if t == "email_send":
         return ALWAYS_CONFIRM
 
@@ -287,7 +404,7 @@ def _arg_digest(payload: Any) -> str:
     so argument order does not change the digest."""
     try:
         canonical = json.dumps(payload, sort_keys=True, default=str)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         canonical = str(payload)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 

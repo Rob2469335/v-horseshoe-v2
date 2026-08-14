@@ -20,6 +20,7 @@ Design notes (reviewer-locked):
   config/.email_tokens/ and auto-refreshed. Requires the Google OAuth client
   (client id/secret) created in Google Cloud Console for a "Desktop app".
 """
+
 from __future__ import annotations
 
 import base64
@@ -35,8 +36,9 @@ _GMAIL_BASE = "https://gmail.googleapis.com/gmail/v1/users/me"
 _MAX_PAGE = 100
 
 
-def _http_request(method: str, url: str, headers: dict | None = None,
-                  body: bytes | None = None) -> dict:
+def _http_request(
+    method: str, url: str, headers: dict | None = None, body: bytes | None = None
+) -> dict:
     """Low-level Gmail API call. Returns parsed JSON; raises RuntimeError with
     a short message on HTTP errors (never raw tracebacks to the agent)."""
     req = urllib.request.Request(url, data=body, method=method)
@@ -57,6 +59,7 @@ def _http_request(method: str, url: str, headers: dict | None = None,
 
 def _bearer_token(acc: dict) -> str | None:
     from swarm_os.services.oauth2_loopback import get_valid_token
+
     return get_valid_token(acc.get("name") or "default", acc)
 
 
@@ -82,7 +85,9 @@ def _decode_b64(data: str | None) -> str:
 def _msg_from_gmail(m: dict, with_body: bool) -> dict:
     """Mirror email_service._parse_msg's output shape from a Gmail API message."""
     payload = m.get("payload", {}) or {}
-    headers = {h.get("name", ""): h.get("value", "") for h in payload.get("headers", [])}
+    headers = {
+        h.get("name", ""): h.get("value", "") for h in payload.get("headers", [])
+    }
     attachments = 0
     body_parts: list[str] = []
 
@@ -108,22 +113,30 @@ def _msg_from_gmail(m: dict, with_body: bool) -> dict:
         "date": headers.get("Date", ""),
         "attachments": attachments,
         "body": "\n".join(body_parts)[:8000] if with_body else "",
+        "message_id": headers.get("Message-ID", ""),
+        "in_reply_to": headers.get("In-Reply-To", ""),
+        "references": headers.get("References", ""),
+        "list_unsubscribe": headers.get("List-Unsubscribe", ""),
     }
 
 
-def gmail_list(acc: dict, folder: str = "INBOX", limit: int = 20,
-               unread_only: bool = False) -> dict:
+def gmail_list(
+    acc: dict, folder: str = "INBOX", limit: int = 20, unread_only: bool = False
+) -> dict:
     """List recent messages (metadata: subject/from/to/date, no body)."""
     token = _bearer_token(acc)
     if not token:
-        return {"ok": False, "error": "Gmail API auth failed (no OAuth token; run the browser consent flow)"}
+        return {
+            "ok": False,
+            "error": "Gmail API auth failed (no OAuth token; run the browser consent flow)",
+        }
     try:
         params = {"maxResults": max(1, min(int(limit), _MAX_PAGE))}
         if unread_only:
             params["q"] = "is:unread"
         url = f"{_GMAIL_BASE}/messages?{urllib.parse.urlencode(params)}"
         data = _http_request("GET", url, _headers(token))
-        ids = [x["id"] for x in data.get("messages", [])][:max(1, int(limit))]
+        ids = [x["id"] for x in data.get("messages", [])][: max(1, int(limit))]
         out = []
         for msg_id in ids:
             m = _fetch(token, msg_id, "metadata")
@@ -156,8 +169,7 @@ def gmail_read(acc: dict, uid: str, folder: str = "INBOX") -> dict:
         return {"ok": False, "error": str(exc)}
 
 
-def gmail_search(acc: dict, query: str, folder: str = "INBOX",
-                 limit: int = 20) -> dict:
+def gmail_search(acc: dict, query: str, folder: str = "INBOX", limit: int = 20) -> dict:
     """Search via Gmail query syntax (e.g. 'from:x subject:y')."""
     token = _bearer_token(acc)
     if not token:
@@ -166,7 +178,7 @@ def gmail_search(acc: dict, query: str, folder: str = "INBOX",
         params = {"maxResults": max(1, min(int(limit), _MAX_PAGE)), "q": query}
         url = f"{_GMAIL_BASE}/messages?{urllib.parse.urlencode(params)}"
         data = _http_request("GET", url, _headers(token))
-        ids = [x["id"] for x in data.get("messages", [])][:max(1, int(limit))]
+        ids = [x["id"] for x in data.get("messages", [])][: max(1, int(limit))]
         out = []
         for msg_id in ids:
             m = _fetch(token, msg_id, "metadata")
@@ -201,5 +213,43 @@ def gmail_send_mime(acc: dict, mime_bytes: bytes) -> dict:
         )
         return {"ok": True, "id": data.get("id"), "thread_id": data.get("threadId")}
     except Exception as exc:
-        log.warning("gmail send failed: %s", exc)
+        log.warning("gmail_send_mime failed: %s", exc)
+        return {"ok": False, "error": str(exc)}
+
+
+def gmail_modify_labels(
+    acc: dict,
+    uid: str,
+    add_labels: list[str] | None = None,
+    remove_labels: list[str] | None = None,
+) -> dict:
+    """Apply label changes to a message (mark read/unread, archive, trash, move).
+
+    add_labels/remove_labels use Gmail label names (UNREAD, INBOX, TRASH, or a
+    user label). Called by email_service.email_manage — the mutation is gated
+    upstream by the permission model."""
+    token = _bearer_token(acc)
+    if not token:
+        return {"ok": False, "error": "Gmail API auth failed (no OAuth token)"}
+    body = json.dumps(
+        {
+            "addLabelIds": add_labels or [],
+            "removeLabelIds": remove_labels or [],
+        }
+    ).encode()
+    try:
+        _http_request(
+            "POST",
+            f"{_GMAIL_BASE}/messages/{urllib.parse.quote(uid)}/modify",
+            {**_headers(token), "Content-Type": "application/json"},
+            body=body,
+        )
+        return {
+            "ok": True,
+            "uid": uid,
+            "add": add_labels or [],
+            "remove": remove_labels or [],
+        }
+    except Exception as exc:
+        log.warning("gmail_modify_labels failed: %s", exc)
         return {"ok": False, "error": str(exc)}

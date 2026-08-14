@@ -244,8 +244,9 @@ async def run(
     behavior.
     """
     try:
-        policy = agent_tool_policy(tool_name, payload.get("operation")
-                                   or payload.get("action"))
+        policy = agent_tool_policy(
+            tool_name, payload.get("operation") or payload.get("action")
+        )
         if policy == ALLOW:
             return await _dispatch(tool_name, payload, trace_hook=trace_hook)
         if policy == DENY:
@@ -400,7 +401,10 @@ async def _dispatch(tool_name: str, payload: dict, *, trace_hook=None) -> dict:
                         else:
                             async with asyncio.timeout(180.0):
                                 result = await asyncio.to_thread(
-                                    filesystem_handler, payload, _ROOT, trace_hook=trace_hook
+                                    filesystem_handler,
+                                    payload,
+                                    _ROOT,
+                                    trace_hook=trace_hook,
                                 )
                     elif op in ("write", "write_file", "create", "create_file"):
                         # Read-before-write: writing over an EXISTING file the agent has
@@ -428,12 +432,18 @@ async def _dispatch(tool_name: str, payload: dict, *, trace_hook=None) -> dict:
                         else:
                             async with asyncio.timeout(180.0):
                                 result = await asyncio.to_thread(
-                                    filesystem_handler, payload, _ROOT, trace_hook=trace_hook
+                                    filesystem_handler,
+                                    payload,
+                                    _ROOT,
+                                    trace_hook=trace_hook,
                                 )
                     else:
                         async with asyncio.timeout(180.0):
                             result = await asyncio.to_thread(
-                                filesystem_handler, payload, _ROOT, trace_hook=trace_hook
+                                filesystem_handler,
+                                payload,
+                                _ROOT,
+                                trace_hook=trace_hook,
                             )
                     if operation == "read" and result.get("ok"):
                         _get_read_cache()[cache_key] = result.get("result")
@@ -529,7 +539,9 @@ async def _dispatch(tool_name: str, payload: dict, *, trace_hook=None) -> dict:
             category = payload.get("category", "general")
             try:
                 async with asyncio.timeout(30.0):
-                    success = await asyncio.to_thread(deprecate_memory, point_id, category)
+                    success = await asyncio.to_thread(
+                        deprecate_memory, point_id, category
+                    )
             except TimeoutError:
                 success = False
                 result = {"ok": False, "error": "Memory deprecate timed out."}
@@ -540,7 +552,10 @@ async def _dispatch(tool_name: str, payload: dict, *, trace_hook=None) -> dict:
                         "result": f"Successfully deprecated memory ID: {point_id}",
                     }
                 else:
-                    result = {"ok": False, "error": "Failed to deprecate memory in Qdrant."}
+                    result = {
+                        "ok": False,
+                        "error": "Failed to deprecate memory in Qdrant.",
+                    }
         elif tool_name == "sandbox_repl":
             from swarm_os.capabilities.sandbox_repl import SandboxReplHandler
             import inspect
@@ -594,9 +609,16 @@ async def _dispatch(tool_name: str, payload: dict, *, trace_hook=None) -> dict:
             "email_read",
             "email_send",
             "email_draft",
+            "email_thread",
+            "email_summarize_thread",
+            "email_unsubscribe_scan",
+            "email_manage",
+            "email_reply_draft",
+            "email_digest",
         ):
             # 2026 email-as-a-tool. Read ops are un-gated; email_send requires
-            # the approval token from email_draft (human-approved send).
+            # the approval token from email_draft (human-approved send); the
+            # mutation ops (email_manage) and LLM-drafted replies are gated.
             from swarm_os.services import email_service
 
             op = payload.get("operation") or tool_name
@@ -622,6 +644,48 @@ async def _dispatch(tool_name: str, payload: dict, *, trace_hook=None) -> dict:
                         result = await asyncio.to_thread(
                             email_service.email_read,
                             payload.get("uid", ""),
+                            folder=payload.get("folder", "INBOX"),
+                            account=payload.get("account"),
+                        )
+                    elif op in ("email_thread", "thread"):
+                        result = await asyncio.to_thread(
+                            email_service.email_thread,
+                            payload.get("uid", ""),
+                            folder=payload.get("folder", "INBOX"),
+                            account=payload.get("account"),
+                        )
+                    elif op in ("email_unsubscribe_scan", "unsubscribe_scan"):
+                        result = await asyncio.to_thread(
+                            email_service.email_unsubscribe_scan,
+                            folder=payload.get("folder", "INBOX"),
+                            limit=int(payload.get("limit", 50)),
+                            account=payload.get("account"),
+                        )
+                    elif op in ("email_manage", "manage"):
+                        result = await asyncio.to_thread(
+                            email_service.email_manage,
+                            payload.get("op", ""),
+                            payload.get("uid", ""),
+                            folder=payload.get("folder", "INBOX"),
+                            target_folder=payload.get("target_folder"),
+                            account=payload.get("account"),
+                        )
+                    elif op in ("email_summarize_thread", "summarize_thread"):
+                        result = await email_service.email_summarize_thread(
+                            payload.get("uid", ""),
+                            folder=payload.get("folder", "INBOX"),
+                            account=payload.get("account"),
+                        )
+                    elif op in ("email_reply_draft", "reply_draft"):
+                        result = await email_service.email_reply_draft(
+                            payload.get("uid", ""),
+                            note=payload.get("note", ""),
+                            folder=payload.get("folder", "INBOX"),
+                            account=payload.get("account"),
+                        )
+                    elif op in ("email_digest", "digest"):
+                        result = await email_service.email_digest(
+                            days=int(payload.get("days", 7)),
                             folder=payload.get("folder", "INBOX"),
                             account=payload.get("account"),
                         )
@@ -846,7 +910,9 @@ async def _dispatch(tool_name: str, payload: dict, *, trace_hook=None) -> dict:
                         if proc.returncode == 0:
                             result = {
                                 "ok": True,
-                                "result": (out or b"").decode("utf-8", errors="replace"),
+                                "result": (out or b"").decode(
+                                    "utf-8", errors="replace"
+                                ),
                             }
                         else:
                             result = {

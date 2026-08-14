@@ -23,6 +23,11 @@ export default function EmailPanel({ backendUrl }: Props) {
   const [draft, setDraft] = useState({ to: "", subject: "", body: "" })
   const [draftResult, setDraftResult] = useState<string>("")
   const [sending, setSending] = useState(false)
+  const [summary, setSummary] = useState<string>("")
+  const [summaryLoading, setSummaryLoading] = useState(false)
+  const [digest, setDigest] = useState<string>("")
+  const [digestLoading, setDigestLoading] = useState(false)
+  const [unsubscribes, setUnsubscribes] = useState<Array<{ uid: string; subject: string; from: string; unsubscribe: Array<{ type: string; target: string }> }>>([])
   const pendingTokenRef = useRef<string | null>(null)
 
   const refresh = useCallback(async () => {
@@ -58,6 +63,69 @@ export default function EmailPanel({ backendUrl }: Props) {
       body: JSON.stringify({ uid: m.id }),
     })).json()
     setSelected({ ...m, body: r.body })
+  }
+
+  const summarizeThread = async () => {
+    if (!selected) return
+    setSummaryLoading(true)
+    setSummary("")
+    try {
+      const r = await (await fetch(`${backendUrl}/control/email/summarize-thread`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ uid: selected.id }),
+      })).json()
+      setSummary(r.summary ?? r.error ?? "no summary")
+    } catch (e: any) {
+      setSummary(`Failed: ${e.message}`)
+    } finally { setSummaryLoading(false) }
+  }
+
+  const replyDraft = async () => {
+    if (!selected) return
+    const r = await (await fetch(`${backendUrl}/control/email/reply-draft`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ uid: selected.id, note: draft.body }),
+    })).json()
+    if (r.ok && r.send_token) {
+      setDraft({ to: r.draft.to, subject: r.draft.subject, body: r.draft.body })
+      setDraftResult("Reply drafted — approval required before send.")
+      pendingTokenRef.current = r.send_token
+    } else {
+      setDraftResult(`Reply draft failed: ${r.error ?? "unknown"}`)
+    }
+  }
+
+  const manage = async (op: string) => {
+    if (!selected) return
+    const r = await (await fetch(`${backendUrl}/control/email/manage`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ op, uid: selected.id }),
+    })).json()
+    setDraftResult(r.ok ? `✓ ${op} ${selected.subject}` : `${op} failed: ${r.error}`)
+    if (r.ok) refresh()
+  }
+
+  const runDigest = async () => {
+    setDigestLoading(true)
+    setDigest("")
+    try {
+      const r = await (await fetch(`${backendUrl}/control/email/digest`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ days: 7 }),
+      })).json()
+      setDigest(r.digest ?? r.error ?? "no digest")
+    } catch (e: any) {
+      setDigest(`Failed: ${e.message}`)
+    } finally { setDigestLoading(false) }
+  }
+
+  const scanUnsubscribes = async () => {
+    const r = await (await fetch(`${backendUrl}/control/email/unsubscribe-scan`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ limit: 50 }),
+    })).json()
+    setUnsubscribes(r.messages ?? [])
+    setDraftResult(r.count ? `Found ${r.count} senders with unsubscribe links.` : "No newsletters detected in recent mail.")
   }
 
   const stageDraft = async () => {
@@ -143,6 +211,53 @@ export default function EmailPanel({ backendUrl }: Props) {
             <div className="mb-1 font-semibold">{selected.subject}</div>
             <div className="mb-2 text-xs text-white/40">From: {selected.from} · {selected.date}</div>
             <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap text-xs text-white/70">{selected.body}</pre>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <Button size="sm" variant="outline" onClick={summarizeThread} disabled={summaryLoading}>
+                {summaryLoading ? "Summarizing…" : "Summarize thread"}
+              </Button>
+              <Button size="sm" variant="outline" onClick={replyDraft}>Draft reply (tone-matched)</Button>
+              <Button size="sm" variant="outline" onClick={() => manage("mark_read")}>Mark read</Button>
+              <Button size="sm" variant="outline" onClick={() => manage("archive")}>Archive</Button>
+              <Button size="sm" variant="destructive" onClick={() => manage("delete")}>Delete</Button>
+            </div>
+            {summary && (
+              <div className="mt-2 rounded-lg border border-violet-400/20 bg-violet-400/5 p-2 text-xs text-violet-200">
+                <div className="mb-1 font-semibold uppercase tracking-wide text-white/40">Thread summary</div>
+                <pre className="whitespace-pre-wrap">{summary}</pre>
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" variant="outline" onClick={runDigest} disabled={digestLoading}>
+            {digestLoading ? "Digesting…" : "Weekly digest"}
+          </Button>
+          <Button size="sm" variant="outline" onClick={scanUnsubscribes}>Scan for newsletters</Button>
+        </div>
+
+        {digest && (
+          <div className="rounded-xl border border-emerald-400/20 bg-emerald-400/5 p-3 text-xs text-emerald-200">
+            <div className="mb-1 font-semibold uppercase tracking-wide text-white/40">Inbox digest</div>
+            <pre className="whitespace-pre-wrap">{digest}</pre>
+          </div>
+        )}
+
+        {unsubscribes.length > 0 && (
+          <div className="rounded-xl border border-white/10 bg-black/20 p-3">
+            <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-white/40">
+              Newsletters — unsubscribe by opening the link (browser) or mailto
+            </div>
+            <ul className="space-y-1 text-xs">
+              {unsubscribes.map((u) => (
+                <li key={u.uid} className="flex items-center justify-between gap-2 text-white/60">
+                  <span className="truncate">{u.subject} — {u.from}</span>
+                  <a href={u.unsubscribe?.[0]?.target} target="_blank" rel="noreferrer" className="shrink-0 text-sky-300 hover:underline">
+                    {u.unsubscribe?.[0]?.type === "mailto" ? "mailto" : "open link"}
+                  </a>
+                </li>
+              ))}
+            </ul>
           </div>
         )}
 

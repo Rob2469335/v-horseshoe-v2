@@ -11,6 +11,7 @@ Safety model mirrors the CLI watchman:
   - destructive issues (kill/clean/restart) require `approved: true` in the body
     (the UI surfaces an approval dialog before calling).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -85,6 +86,45 @@ class EmailSendRequest(BaseModel):
     confirmed: bool = False
 
 
+class EmailThreadRequest(BaseModel):
+    uid: str
+    folder: str = "INBOX"
+    account: str | None = None
+
+
+class EmailUnsubscribeScanRequest(BaseModel):
+    folder: str = "INBOX"
+    limit: int = 50
+    account: str | None = None
+
+
+class EmailManageRequest(BaseModel):
+    op: str
+    uid: str
+    folder: str = "INBOX"
+    target_folder: str | None = None
+    account: str | None = None
+
+
+class EmailSummarizeThreadRequest(BaseModel):
+    uid: str
+    folder: str = "INBOX"
+    account: str | None = None
+
+
+class EmailReplyDraftRequest(BaseModel):
+    uid: str
+    note: str = ""
+    folder: str = "INBOX"
+    account: str | None = None
+
+
+class EmailDigestRequest(BaseModel):
+    days: int = 7
+    folder: str = "INBOX"
+    account: str | None = None
+
+
 class BrowserActionRequest(BaseModel):
     operation: str
     url: str = ""
@@ -125,6 +165,7 @@ class TaskToggleRequest(BaseModel):
 # Overview — everything in one fetch
 # ---------------------------------------------------------------------------
 
+
 async def _screen_state() -> Dict[str, Any]:
     """Read-only screen state (no input actions)."""
     try:
@@ -136,6 +177,7 @@ async def _screen_state() -> Dict[str, Any]:
             foreground_window,
             list_windows,
         )
+
         fg = await asyncio.to_thread(foreground_window)
         cur = await asyncio.to_thread(cursor_position)
         wins = await asyncio.to_thread(list_windows, 8)
@@ -143,9 +185,13 @@ async def _screen_state() -> Dict[str, Any]:
             "autonomous": bool(SCREEN_AUTONOMOUS),
             "action_count": int(_screen_action_count),
             "max_actions": int(_SCREEN_MAX_ACTIONS),
-            "foreground_window": fg.get("result", {}).get("title", "") if fg.get("ok") else "",
+            "foreground_window": fg.get("result", {}).get("title", "")
+            if fg.get("ok")
+            else "",
             "cursor": cur.get("result", {}) if cur.get("ok") else {},
-            "windows": wins.get("result", {}).get("windows", []) if wins.get("ok") else [],
+            "windows": wins.get("result", {}).get("windows", [])
+            if wins.get("ok")
+            else [],
         }
     except Exception:
         log.exception("Screen state probe failed")
@@ -165,6 +211,7 @@ async def _heal_status() -> Dict[str, Any]:
             return _heal_cache["value"]
         try:
             from swarm_os.healing.healing_service import HealingService
+
             hs = HealingService()
             value = await hs.status()
         except Exception:
@@ -180,12 +227,14 @@ async def _model_surface(runtime: Any) -> Dict[str, Any]:
     installed = []
     try:
         from swarm_os.api.routes import _safe_ollama_models
+
         installed = await _safe_ollama_models(runtime)
     except Exception as exc:
         log.warning("Could not list installed models: %s", exc)
     agents = {}
     try:
         from runtime_v2.services.model_registry import AGENT_MODELS
+
         agents = {k: {"model": v[0], "backend": v[1]} for k, v in AGENT_MODELS.items()}
     except Exception as exc:
         log.warning("Could not read agent model mapping: %s", exc)
@@ -199,6 +248,7 @@ async def _resilience() -> Dict[str, Any]:
     try:
         from runtime_v2.services.fallback_manager import _cooldowns, get_fallback_stats
         import time as _time
+
         now = _time.time()
         cooled = []
         with _cooldowns_lock_sync():
@@ -206,21 +256,28 @@ async def _resilience() -> Dict[str, Any]:
         for key, entry in entries:
             remaining = entry.get("until", 0) - now
             if remaining > 0:
-                cooled.append({
-                    "model": key,
-                    "failures": entry.get("failures", 0),
-                    "cooldown_remaining_s": round(max(0, remaining)),
-                    "last_error": entry.get("last_error", "")[:120],
-                })
+                cooled.append(
+                    {
+                        "model": key,
+                        "failures": entry.get("failures", 0),
+                        "cooldown_remaining_s": round(max(0, remaining)),
+                        "last_error": entry.get("last_error", "")[:120],
+                    }
+                )
         cooled.sort(key=lambda c: c["cooldown_remaining_s"], reverse=True)
         return {"models_in_cooldown": cooled, "fallback_stats": get_fallback_stats()}
     except Exception:
         log.exception("Model cooldown surface failed")
-        return {"models_in_cooldown": [], "fallback_stats": {}, "error": "model cooldown status unavailable"}
+        return {
+            "models_in_cooldown": [],
+            "fallback_stats": {},
+            "error": "model cooldown status unavailable",
+        }
 
 
 def _cooldowns_lock_sync():
     from runtime_v2.services.fallback_manager import _cooldown_sync_lock
+
     return _cooldown_sync_lock
 
 
@@ -252,6 +309,7 @@ async def control_overview(request: Request) -> Dict[str, Any]:
     memory_counts: Dict[str, int] = {}
     try:
         from swarm_os.services.vector_store import VectorStore
+
         vs = VectorStore()
         collections = (await vs.client.get_collections()).collections
         for c in collections:
@@ -259,7 +317,9 @@ async def control_overview(request: Request) -> Dict[str, Any]:
                 continue
             try:
                 info = await vs.client.count(collection_name=c.name)
-                memory_counts[c.name] = info.count if hasattr(info, "count") else int(info)
+                memory_counts[c.name] = (
+                    info.count if hasattr(info, "count") else int(info)
+                )
             except Exception:
                 continue
     except Exception as exc:
@@ -288,6 +348,7 @@ async def control_overview(request: Request) -> Dict[str, Any]:
 # Recovery — run a specific system recovery action (approval-gated)
 # ---------------------------------------------------------------------------
 
+
 @router.post("/recover")
 async def control_recover(req: RecoverRequest) -> Dict[str, Any]:
     from swarm_os.healing.system_probes import run_system_probes
@@ -298,7 +359,10 @@ async def control_recover(req: RecoverRequest) -> Dict[str, Any]:
 
     issue = req.issue.strip()
     if issue not in SYSTEM_RECOVERY_ACTIONS:
-        raise HTTPException(status_code=400, detail=f"Unknown issue '{issue}'. Known: {sorted(SYSTEM_RECOVERY_ACTIONS)}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown issue '{issue}'. Known: {sorted(SYSTEM_RECOVERY_ACTIONS)}",
+        )
 
     destructive = issue in DESTRUCTIVE_SYSTEM_ACTIONS
 
@@ -326,7 +390,11 @@ async def control_recover(req: RecoverRequest) -> Dict[str, Any]:
         result = await asyncio.to_thread(SYSTEM_RECOVERY_ACTIONS[issue], anomaly)
     except Exception:
         log.exception("Recovery %s failed", issue)
-        return {"status": "error", "issue": issue, "result": {"ok": False, "error": "recovery action failed"}}
+        return {
+            "status": "error",
+            "issue": issue,
+            "result": {"ok": False, "error": "recovery action failed"},
+        }
 
     # Learn from the outcome — persist a grounded reflexion rule on success.
     if result.get("ok"):
@@ -340,7 +408,10 @@ async def control_recover(req: RecoverRequest) -> Dict[str, Any]:
                 "temp_growth": "Check temp folder growth; remove stale files older than 24h outside protected cache subdirs.",
                 "stopped_service": "Restart the stopped Windows service by its exact service_name from the signal detail.",
             }
-            correction = corrections.get(issue, f"Recurring system issue '{issue}' resolved via {result.get('action')}; re-check before proceeding.")
+            correction = corrections.get(
+                issue,
+                f"Recurring system issue '{issue}' resolved via {result.get('action')}; re-check before proceeding.",
+            )
 
             async def _store():
                 await get_reflection_service().store_reflexion(
@@ -352,16 +423,23 @@ async def control_recover(req: RecoverRequest) -> Dict[str, Any]:
                     component=f"system:{issue}",
                     confidence=0.75,
                 )
+
             await _store()
         except Exception as exc:
             log.warning("Failed to store system lesson: %s", exc)
 
-    return {"status": "executed", "issue": issue, "destructive": destructive, "result": result}
+    return {
+        "status": "executed",
+        "issue": issue,
+        "destructive": destructive,
+        "result": result,
+    }
 
 
 # ---------------------------------------------------------------------------
 # Screen control
 # ---------------------------------------------------------------------------
+
 
 @router.get("/screen")
 async def control_screen_state() -> Dict[str, Any]:
@@ -371,6 +449,7 @@ async def control_screen_state() -> Dict[str, Any]:
 @router.post("/screen/action")
 async def control_screen_action(req: ScreenActionRequest) -> Dict[str, Any]:
     from swarm_os.lib.mcp.screen import screen_handler
+
     payload = {"action": req.action, **req.kwargs}
     result = await asyncio.to_thread(screen_handler, payload)
     return {"status": "executed" if result.get("ok") else "blocked", "result": result}
@@ -379,6 +458,7 @@ async def control_screen_action(req: ScreenActionRequest) -> Dict[str, Any]:
 @router.post("/screen/autonomous")
 async def control_screen_autonomous(req: AutonomousRequest) -> Dict[str, Any]:
     from swarm_os.lib.mcp.screen import set_screen_autonomous
+
     result = await asyncio.to_thread(set_screen_autonomous, req.enabled)
     return {"status": "executed", "result": result}
 
@@ -386,6 +466,7 @@ async def control_screen_autonomous(req: AutonomousRequest) -> Dict[str, Any]:
 @router.post("/screen/reset")
 async def control_screen_reset() -> Dict[str, Any]:
     from swarm_os.lib.mcp.screen import reset_screen_action_count
+
     result = await asyncio.to_thread(reset_screen_action_count)
     return {"status": "executed", "result": result}
 
@@ -393,7 +474,9 @@ async def control_screen_reset() -> Dict[str, Any]:
 @router.get("/screen/image")
 async def control_screen_image(name: str) -> FileResponse:
     """Serve a screenshot PNG from logs/screenshots (basename only)."""
-    root = os.getenv("SWARM_SCREENSHOT_DIR", os.path.join(os.getcwd(), "logs", "screenshots"))
+    root = os.getenv(
+        "SWARM_SCREENSHOT_DIR", os.path.join(os.getcwd(), "logs", "screenshots")
+    )
     safe = os.path.basename(str(name))
     path = os.path.join(root, safe)
     if not os.path.exists(path):
@@ -405,6 +488,7 @@ async def control_screen_image(name: str) -> FileResponse:
 # Healing cycle
 # ---------------------------------------------------------------------------
 
+
 @router.get("/heal")
 async def control_heal_status() -> Dict[str, Any]:
     return await _heal_status()
@@ -413,6 +497,7 @@ async def control_heal_status() -> Dict[str, Any]:
 @router.post("/heal/run")
 async def control_heal_run(req: HealRunRequest) -> Dict[str, Any]:
     from swarm_os.healing.healing_service import HealingService
+
     hs = HealingService()
     result = await hs.run_once()
     result["force"] = req.force
@@ -427,9 +512,15 @@ async def control_agent_model(agent_id: str, req: Dict[str, Any]) -> Dict[str, A
         raise HTTPException(status_code=400, detail="model_name is required")
     try:
         from runtime_v2.services.model_registry import AGENT_MODELS, save_overrides
+
         AGENT_MODELS[agent_id] = (model_name, backend)
         save_overrides()
-        return {"status": "ok", "agent_id": agent_id, "model": model_name, "backend": backend}
+        return {
+            "status": "ok",
+            "agent_id": agent_id,
+            "model": model_name,
+            "backend": backend,
+        }
     except Exception:
         log.exception("Failed to reassign model for %s", agent_id)
         raise HTTPException(status_code=500, detail="Failed to reassign model")
@@ -439,28 +530,37 @@ async def control_agent_model(agent_id: str, req: Dict[str, Any]) -> Dict[str, A
 # Email — inbox as a tool (read ops free, send is human-approved)
 # ---------------------------------------------------------------------------
 
+
 @router.get("/email/status")
 async def control_email_status() -> Dict[str, Any]:
     from swarm_os.services.email_service import email_config_status
+
     return email_config_status()
 
 
 @router.post("/email/list")
 async def control_email_list(req: EmailListRequest) -> Dict[str, Any]:
     from swarm_os.services.email_service import email_list
-    return await asyncio.to_thread(email_list, req.folder, req.limit, req.unread_only, req.account)
+
+    return await asyncio.to_thread(
+        email_list, req.folder, req.limit, req.unread_only, req.account
+    )
 
 
 @router.post("/email/read")
 async def control_email_read(req: EmailReadRequest) -> Dict[str, Any]:
     from swarm_os.services.email_service import email_read
+
     return await asyncio.to_thread(email_read, req.uid, req.folder, req.account)
 
 
 @router.post("/email/search")
 async def control_email_search(req: EmailSearchRequest) -> Dict[str, Any]:
     from swarm_os.services.email_service import email_search
-    return await asyncio.to_thread(email_search, req.query, req.folder, req.limit, req.account)
+
+    return await asyncio.to_thread(
+        email_search, req.query, req.folder, req.limit, req.account
+    )
 
 
 @router.post("/email/draft")
@@ -468,7 +568,10 @@ async def control_email_draft(req: EmailDraftRequest) -> Dict[str, Any]:
     """Stage a message and return a send_token — NOT sent. The UI must present
     the draft for human approval, then call /control/email/send with confirmed=true."""
     from swarm_os.services.email_service import email_draft
-    return await asyncio.to_thread(email_draft, req.to, req.subject, req.body, req.cc, req.attachments, req.account)
+
+    return await asyncio.to_thread(
+        email_draft, req.to, req.subject, req.body, req.cc, req.attachments, req.account
+    )
 
 
 @router.post("/email/send")
@@ -476,16 +579,84 @@ async def control_email_send(req: EmailSendRequest) -> Dict[str, Any]:
     """Human-approved send. Only proceeds with confirmed=true (the UI's approval
     confirm step); an unconfirmed token is refused."""
     from swarm_os.services.email_service import email_send
+
     return await asyncio.to_thread(email_send, req.send_token, req.confirmed)
+
+
+@router.post("/email/thread")
+async def control_email_thread(req: EmailThreadRequest) -> Dict[str, Any]:
+    """Return all messages in the same thread as uid (grouped by normalized
+    subject + sender domain, ordered by date)."""
+    from swarm_os.services.email_service import email_thread
+
+    return await asyncio.to_thread(email_thread, req.uid, req.folder, req.account)
+
+
+@router.post("/email/summarize-thread")
+async def control_email_summarize_thread(
+    req: EmailSummarizeThreadRequest,
+) -> Dict[str, Any]:
+    """LLM summary of a whole thread: conversation, each participant's ask,
+    action items, deadlines."""
+    from swarm_os.services.email_service import email_summarize_thread
+
+    return await email_summarize_thread(req.uid, folder=req.folder, account=req.account)
+
+
+@router.post("/email/unsubscribe-scan")
+async def control_email_unsubscribe_scan(
+    req: EmailUnsubscribeScanRequest,
+) -> Dict[str, Any]:
+    """Scan recent mail for List-Unsubscribe headers and report the mechanisms
+    (newsletter management parity)."""
+    from swarm_os.services.email_service import email_unsubscribe_scan
+
+    return await asyncio.to_thread(
+        email_unsubscribe_scan, req.folder, req.limit, req.account
+    )
+
+
+@router.post("/email/manage")
+async def control_email_manage(req: EmailManageRequest) -> Dict[str, Any]:
+    """Inbox mutations: mark_read, mark_unread, archive, move, delete. Destructive
+    ops (archive/move/delete) require approval upstream (the console gates them)."""
+    from swarm_os.services.email_service import email_manage
+
+    return await asyncio.to_thread(
+        email_manage, req.op, req.uid, req.folder, req.target_folder, req.account
+    )
+
+
+@router.post("/email/reply-draft")
+async def control_email_reply_draft(req: EmailReplyDraftRequest) -> Dict[str, Any]:
+    """Draft a tone-matched reply to a message (reads the thread, matches the
+    sender's tone). Returns a draft + send_token — sending still requires the
+    human approval gate (email_send with confirmed=true)."""
+    from swarm_os.services.email_service import email_reply_draft
+
+    return await email_reply_draft(
+        req.uid, note=req.note, folder=req.folder, account=req.account
+    )
+
+
+@router.post("/email/digest")
+async def control_email_digest(req: EmailDigestRequest) -> Dict[str, Any]:
+    """Weekly/daily inbox digest: summarize recent mail into action items,
+    newsletters, FYIs, and urgent items. Runnable on a schedule."""
+    from swarm_os.services.email_service import email_digest
+
+    return await email_digest(days=req.days, folder=req.folder, account=req.account)
 
 
 # ---------------------------------------------------------------------------
 # Browser — persistent a11y-tree driven session
 # ---------------------------------------------------------------------------
 
+
 @router.post("/browser/action")
 async def control_browser_action(req: BrowserActionRequest) -> Dict[str, Any]:
     from swarm_os.lib.mcp.playwright import playwright_handler
+
     payload = {k: v for k, v in req.dict().items() if v not in ("", None)}
     try:
         async with asyncio.timeout(120):
@@ -498,6 +669,7 @@ async def control_browser_action(req: BrowserActionRequest) -> Dict[str, Any]:
 @router.get("/browser/state")
 async def control_browser_state() -> Dict[str, Any]:
     from swarm_os.lib.mcp.playwright import playwright_handler
+
     async with asyncio.timeout(30):
         return await playwright_handler({"operation": "browser_state"})
 
@@ -516,6 +688,7 @@ async def control_browser_image(name: str) -> FileResponse:
 # ---------------------------------------------------------------------------
 # Files — read free, write is human-approved
 # ---------------------------------------------------------------------------
+
 
 def _resolve_project_file(raw: str) -> str:
     """Resolve a relative path inside the project root; refuse traversal."""
@@ -548,8 +721,11 @@ async def control_file_write(req: FileWriteRequest) -> Dict[str, Any]:
     """Write a project file — human-approved only. Refuses without approved=true,
     matching the email-send + destructive-recovery approval pattern."""
     if not req.approved:
-        return {"ok": False, "approved_required": True,
-                "reason": f"Writing {req.path} requires human approval. Set approved=true to confirm."}
+        return {
+            "ok": False,
+            "approved_required": True,
+            "reason": f"Writing {req.path} requires human approval. Set approved=true to confirm.",
+        }
     try:
         full = _resolve_project_file(req.path)
         os.makedirs(os.path.dirname(full), exist_ok=True)
@@ -567,18 +743,23 @@ async def control_file_write(req: FileWriteRequest) -> Dict[str, Any]:
 # Permission tiers + per-site/per-app grants (2026 SOTA)
 # ---------------------------------------------------------------------------
 
+
 @router.get("/permissions")
 async def control_permissions() -> Dict[str, Any]:
     from swarm_os.services import permission_tiers as pt
+
     return {"grants": pt.all_grants(), "tool_tiers": pt._TOOL_TIERS}
 
 
 @router.post("/permissions/grant")
 async def control_permissions_grant(req: GrantRequest) -> Dict[str, Any]:
     from swarm_os.services import permission_tiers as pt
+
     ok = pt.set_grant(req.target, req.key, req.tier)
     if not ok:
-        raise HTTPException(status_code=400, detail="invalid tier (free/ask/important/approval)")
+        raise HTTPException(
+            status_code=400, detail="invalid tier (free/ask/important/approval)"
+        )
     return {"ok": True, "target": req.target, "key": req.key, "tier": req.tier}
 
 
@@ -587,15 +768,18 @@ async def control_permissions_grant(req: GrantRequest) -> Dict[str, Any]:
 # enforced in task_scheduler.run_due_tasks.
 # ---------------------------------------------------------------------------
 
+
 @router.get("/tasks")
 async def control_tasks() -> Dict[str, Any]:
     from swarm_os.services import task_scheduler as ts
+
     return {"tasks": ts.list_tasks()}
 
 
 @router.post("/tasks")
 async def control_tasks_create(req: TaskRequest) -> Dict[str, Any]:
     from swarm_os.services import task_scheduler as ts
+
     task = ts.create_task(req.goal, req.schedule, req.enabled)
     return {"ok": True, "task": task}
 
@@ -603,17 +787,20 @@ async def control_tasks_create(req: TaskRequest) -> Dict[str, Any]:
 @router.delete("/tasks/{task_id}")
 async def control_tasks_delete(task_id: str) -> Dict[str, Any]:
     from swarm_os.services import task_scheduler as ts
+
     return {"ok": ts.delete_task(task_id)}
 
 
 @router.post("/tasks/{task_id}/toggle")
 async def control_tasks_toggle(task_id: str, req: TaskToggleRequest) -> Dict[str, Any]:
     from swarm_os.services import task_scheduler as ts
+
     return {"ok": ts.set_task_enabled(task_id, req.enabled)}
 
 
 @router.post("/tasks/run")
 async def control_tasks_run() -> Dict[str, Any]:
     from swarm_os.services import task_scheduler as ts
+
     ran = await ts.run_due_tasks()
     return {"ok": True, "ran": ran}

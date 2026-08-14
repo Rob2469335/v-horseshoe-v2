@@ -33,6 +33,7 @@ data/permission_grants.json: {"gmail.com": {"send": "important"}, ...}. The same
 target field unifies web + OS, so a browser's screen-input tier resolves by the
 ACTIVE TAB's domain, not the app name — one grant model, no parallel system.
 """
+
 from __future__ import annotations
 
 import json
@@ -43,33 +44,127 @@ GRANTS_FILE = Path("data/permission_grants.json")
 
 # tool -> base tier (falls back to the action-class default)
 _TOOL_TIERS = {
-    "read": "free", "glob": "free", "grep": "free", "search": "free",
-    "write": "ask", "patch": "ask", "web_search": "free", "web_fetch": "ask",
-    "email_list": "free", "email_search": "free", "email_read": "free",
-    "email_draft": "ask", "email_send": "important",
-    "playwright": "ask", "filesystem": "ask",
-    "sandbox_repl": "approval", "system": "approval", "screen": "approval",
+    "read": "free",
+    "glob": "free",
+    "grep": "free",
+    "search": "free",
+    "write": "ask",
+    "patch": "ask",
+    "web_search": "free",
+    "web_fetch": "ask",
+    "email_list": "free",
+    "email_search": "free",
+    "email_read": "free",
+    "email_thread": "free",
+    "email_summarize_thread": "free",
+    "email_unsubscribe_scan": "free",
+    "email_digest": "free",
+    "email_draft": "ask",
+    "email_reply_draft": "ask",
+    "email_manage": "important",
+    "email_send": "important",
+    "playwright": "ask",
+    "filesystem": "ask",
+    "sandbox_repl": "approval",
+    "system": "approval",
+    "screen": "approval",
     "terminal": "approval",
 }
 
 # Keyword -> risk tier (an action is classified by the FIRST matching group).
-_IMPORTANT_TERMS = ("send", "delete", "purchase", "submit", "checkout", "pay",
-                    "settings_change", "approve", "confirm", "transfer", "refund")
-_APPROVAL_TERMS = ("system", "screen", "sandbox_repl", "terminal", "powershell",
-                   "mouse", "keyboard", "key", "input", "click", "scroll")
-_ASK_TERMS = ("write", "patch", "type", "click", "navigate", "fill", "select",
-              "press", "draft")
+_IMPORTANT_TERMS = (
+    "send",
+    "delete",
+    "purchase",
+    "submit",
+    "checkout",
+    "pay",
+    "settings_change",
+    "approve",
+    "confirm",
+    "transfer",
+    "refund",
+)
+_APPROVAL_TERMS = (
+    "system",
+    "screen",
+    "sandbox_repl",
+    "terminal",
+    "powershell",
+    "mouse",
+    "keyboard",
+    "key",
+    "input",
+    "click",
+    "scroll",
+)
+_ASK_TERMS = (
+    "write",
+    "patch",
+    "type",
+    "click",
+    "navigate",
+    "fill",
+    "select",
+    "press",
+    "draft",
+)
 
 # Keyword -> channel. The KNOWN human-channel cases (login/password/payment entry).
-_HUMAN_TERMS = ("login", "password", "passwd", "secret", "payment", "card",
-                "ccv", "cvv", "pin", "credential", "takeover", "otp", "2fa",
-                "mfa", "bank", "signin", "sign-in")
+_HUMAN_TERMS = (
+    "login",
+    "password",
+    "passwd",
+    "secret",
+    "payment",
+    "card",
+    "ccv",
+    "cvv",
+    "pin",
+    "credential",
+    "takeover",
+    "otp",
+    "2fa",
+    "mfa",
+    "bank",
+    "signin",
+    "sign-in",
+)
 # Actions explicitly known to be agent-safe -> channel "agent".
-_AGENT_TERMS = ("read", "glob", "grep", "list", "search", "navigate", "a11y",
-                "screenshot", "state", "status", "describe", "verify", "find",
-                "fill", "type", "click", "press", "select", "scroll", "wait",
-                "email_list", "email_search", "email_read", "email_draft",
-                "web_search", "web_fetch", "filesystem_read", "extract_text")
+_AGENT_TERMS = (
+    "read",
+    "glob",
+    "grep",
+    "list",
+    "search",
+    "navigate",
+    "a11y",
+    "screenshot",
+    "state",
+    "status",
+    "describe",
+    "verify",
+    "find",
+    "fill",
+    "type",
+    "click",
+    "press",
+    "select",
+    "scroll",
+    "wait",
+    "email_list",
+    "email_search",
+    "email_read",
+    "email_draft",
+    "email_thread",
+    "email_summarize_thread",
+    "email_unsubscribe_scan",
+    "email_digest",
+    "web_search",
+    "web_fetch",
+    "filesystem_read",
+    "extract_text",
+)
 
 _lock = threading.Lock()
 _grants_cache = None
@@ -187,7 +282,9 @@ def set_grant(target: str, key: str, value: str) -> bool:
     return True
 
 
-def needs_confirmation(target: str, tool: str, action: str | None = None, auto_mode: bool = False) -> bool:
+def needs_confirmation(
+    target: str, tool: str, action: str | None = None, auto_mode: bool = False
+) -> bool:
     """True if this (target, tool, action) needs a human confirmation NOW.
     important/approval ALWAYS confirm (even in auto mode); free never; ask
     confirms unless auto_mode. A human-channel action always confirms."""
