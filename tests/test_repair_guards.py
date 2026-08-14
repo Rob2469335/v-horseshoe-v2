@@ -336,4 +336,58 @@ def test_repair_security_gate_reverts_banned_construct(tmp_path, monkeypatch):
     assert ok2 is True, "clean repair must pass the security gate"
 
 
+def test_repair_records_durable_state_on_success_and_failure(tmp_path, monkeypatch):
+    """The repair orchestrator must persist a durable state record: ACCEPTED for
+    a fix that passes every gate, REPAIR_FAILED when it does not. The record id
+    threads onto the result so the watch-loop audit can link to it. A repair
+    that does not fix is NEVER ACCEPTED."""
+    import organism_console.core.repair_state as rs
+    from organism_console.core.repair_state import load as st_load
+
+    monkeypatch.setattr(rs, "_REPAIR_STATE_DIR", tmp_path / "states")
+    monkeypatch.setattr(repair_engine, "BREAKER_FILE", tmp_path / "breaker.json")
+    monkeypatch.setattr(repair_engine, "_circuit_allows_repair", lambda *a, **k: (True, None))
+    monkeypatch.setattr(repair_engine, "_run_related_tests", lambda *a, **k: (True, "ok"))
+    monkeypatch.setattr(repair_engine, "_is_repairable_path", lambda p: True)
+    for fn in ("save_budget", "load_budget", "append_lesson", "_record_repair_result",
+               "save_budget", "load_budget"):
+        monkeypatch.setattr(repair_engine, fn, lambda *a, **k: ({} if fn == "load_budget" else None))
+
+    class FakeT0:
+        @staticmethod
+        def try_repair(err, path):
+            path.write_text("def helper():\n    return 1\n", encoding="utf-8")
+            return "wrote helper()"
+
+    class _FakeCtx:
+        class S:
+            active_agent = "coder"
+        state = S()
+
+        def __init__(self):
+            from types import SimpleNamespace
+            self.console = SimpleNamespace(print=lambda *a, **k: None)
+
+    monkeypatch.setattr(repair_engine, "T0PatternRepair", FakeT0)
+    orch = repair_engine.TieredRepairOrchestrator(cmd_ctx=_FakeCtx())
+    f = tmp_path / "bug.py"
+    f.write_text("x = 1\n", encoding="utf-8")
+    ok_res = orch.repair("SyntaxError: invalid syntax", file_path=f)
+    assert ok_res.get("fixed") is True
+    assert ok_res.get("repair_state_id")
+    ok_rec = st_load(ok_res["repair_state_id"])
+    assert ok_rec.phase == "ACCEPTED", f"successful repair must be ACCEPTED, got {ok_rec.phase}"
+    assert ok_rec.next_action == "none"
+
+    # Failure path: no T0 patch found -> REPAIR_FAILED, never ACCEPTED.
+    monkeypatch.setattr(repair_engine, "T0PatternRepair",
+                        type("F", (), {"try_repair": staticmethod(lambda *a, **k: None)}))
+    fail_res = orch.repair("SyntaxError: invalid syntax", file_path=f)
+    assert fail_res.get("fixed") is False
+    assert fail_res.get("repair_state_id")
+    fail_rec = st_load(fail_res["repair_state_id"])
+    assert fail_rec.phase == "REPAIR_FAILED", f"failed repair must be REPAIR_FAILED, got {fail_rec.phase}"
+    assert fail_rec.phase != "ACCEPTED"
+
+
 

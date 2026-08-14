@@ -1,5 +1,6 @@
 import json
 import ast
+import hashlib
 import os
 import re
 import subprocess
@@ -11,6 +12,10 @@ from typing import Optional, Dict, Any, List, Tuple
 
 import logging
 log = logging.getLogger("zenith_cli")
+
+
+def _sha256(text: str) -> str:
+    return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
 
 FAILURE_TAXONOMY = {
     "import_resolution": {"patterns": [r"importerror", r"modulenotfounderror", r"no module named"], "tier": 0},
@@ -737,6 +742,27 @@ class TieredRepairOrchestrator:
                 self.cmd_ctx.console.print(f"[yellow]⚕ {breaker_reason} — skipping repair.[/yellow]")
             return result
 
+        # Durable orchestrator state (2026 P0): create an authoritative record so
+        # a crash/timeout/cancel mid-repair is recoverable and a partially
+        # applied patch can never be confused with an accepted one.
+        from organism_console.core.repair_state import (
+            create_record,
+            transition as _st,
+        )
+        try:
+            _rec = create_record(
+                file_path=file_path if file_path is not None else Path(""),
+                error_text=error_text,
+                failure_type=failure_type,
+                baseline_revision=_sha256(original_content),
+            )
+            _rec_id = _rec.repair_id
+            _rec = _st(_rec, "INSPECTING")
+        except Exception as _rec_exc:
+            log.warning("Durable repair-state init failed (%s): %s", error_text[:80], _rec_exc)
+            _rec = None
+            _rec_id = None
+
         result = {
             "error": error_text[:500],
             "failure_type": failure_type,
@@ -876,6 +902,51 @@ class TieredRepairOrchestrator:
 
         if not result.get("skipped"):
             _record_repair_result(result["fixed"])
+
+        # Finalize the durable orchestrator record with the authoritative
+        # outcome. Only a fix that passed every gate reaches ACCEPTED; anything
+        # else is REPAIR_FAILED (never accepted). The record id threads into the
+        # result so the watch-loop audit can link to it.
+        if _rec is not None:
+            try:
+                from organism_console.core.repair_state import load as _st_load, transition as _st_t
+                _final = _st_load(_rec_id)
+                if _final is not None:
+                    _final.candidate_revision = _sha256(
+                        file_path.read_text(encoding="utf-8", errors="ignore")
+                        if file_path and file_path.exists() else original_content
+                    )
+                    _final.validation_result = {"outcome": "accepted" if result.get("fixed") else "rejected"}
+                    _final.security_result = {"ok": True} if result.get("fixed") else {
+                        "ok": False, "reason": result.get("validation_error")}
+                    if result.get("fixed"):
+                        # Walk the durable record through the full legal path to
+                        # ACCEPTED (the actual work already happened in the tier
+                        # loop; this records the authoritative evidence).
+                        for _p in ("DIAGNOSING", "PATCHING", "VALIDATING",
+                                   "SECURITY_CHECK", "EVIDENCE_CAPTURE"):
+                            try:
+                                _final = _st_t(_final, _p)
+                            except Exception:
+                                pass
+                        try:
+                            _final = _st_t(_final, "ACCEPTED")
+                        except Exception:
+                            pass
+                        _final.next_action = "none"
+                    else:
+                        _final.last_error = result.get("validation_error") or "repair did not fix the failure"
+                        try:
+                            _final = _st_t(_final, "REPAIR_FAILED")
+                        except Exception:
+                            pass
+                        _final.next_action = "abort"
+                    from organism_console.core.repair_state import persist as _st_p
+                    _st_p(_final)
+                result["repair_state_id"] = _rec_id
+            except Exception as _final_exc:
+                log.warning("Durable repair-state finalize failed: %s", _final_exc)
+                result["repair_state_id"] = _rec_id
 
         return result
 
