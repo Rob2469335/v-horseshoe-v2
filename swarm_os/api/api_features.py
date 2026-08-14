@@ -25,6 +25,14 @@ class WebResearchRequest(BaseModel):
     synthesize: bool = True
 
 
+class DeepResearchRequest(BaseModel):
+    goal: str
+    max_sub_questions: int = 5
+    max_iterations: int = 2
+    max_results_per_unit: int = 5
+    follow_up_budget: int = 3
+
+
 class BrowserTaskRequest(BaseModel):
     goal: str
     max_steps: int = 12
@@ -117,7 +125,9 @@ async def web_research(req: WebResearchRequest):
             if url:
                 try:
                     async with asyncio.timeout(30.0):
-                        fetched = await web_fetch_handler({"url": url, "max_chars": 4000})
+                        fetched = await web_fetch_handler(
+                            {"url": url, "max_chars": 4000}
+                        )
                     if fetched.get("ok"):
                         text = fetched.get("text") or fetched.get("content") or text
                 except Exception as e:
@@ -197,6 +207,29 @@ async def web_research(req: WebResearchRequest):
             "citations": [],
             "error": str(exc),
         }
+
+
+@router.post("/deep-research")
+async def deep_research(req: DeepResearchRequest):
+    """Fan-out + iterative deep research (Manus Wide Research / Perplexity Deep
+    Research pattern): the planner decomposes the goal into independent
+    sub-questions; each runs its own isolated search -> fetch -> cited
+    sub-synthesis in parallel; a gap evaluator issues follow-ups; a final
+    synthesis merges everything into one cited report.
+
+    Response: {"status": "ok"|"degraded", "goal", "iterations",
+               "sub_questions": [...], "sub_reports": [{question, answer,
+               citations}], "answer", "citations": [{n,title,url}], "degraded"}
+    """
+    from ..services.deep_research import deep_research as run_deep_research
+
+    return await run_deep_research(
+        goal=req.goal,
+        max_sub_questions=req.max_sub_questions,
+        max_iterations=req.max_iterations,
+        max_results_per_unit=req.max_results_per_unit,
+        follow_up_budget=req.follow_up_budget,
+    )
 
 
 @router.post("/browser-task")
