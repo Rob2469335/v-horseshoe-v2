@@ -92,6 +92,36 @@ def test_score_genome_exact_match_takes_precedence(tmp_path, monkeypatch):
     assert ed._score_genome({"id": "genome_7"}) > 0.5
 
 
+def test_score_genome_aggregate_tie_not_decayed_for_survivors(tmp_path, monkeypatch):
+    """A surviving elite that only ties on the SHARED aggregate must NOT be
+    decayed below a fresh child. The old code applied 0.85^n to the aggregate
+    baseline too, so any elite with decay_generations >= 1 scored below every
+    newborn (aggregate x 1.0) — systematically vacating the elite slots to
+    random children and killing selection pressure when exact-ID records are
+    sparse (the common live shape: outcomes are keyed agent:<id>)."""
+    from swarm_os.services import evolution_daemon as ed
+    from swarm_os.services import outcome_fitness as of
+
+    monkeypatch.setattr(ed, "GENOMES_PATH", tmp_path / "genomes.jsonl")
+    monkeypatch.setattr(of, "FITNESS_PATH", tmp_path / "fitness.jsonl")
+
+    # Only agent-keyed outcomes exist (the live shape -> every genome ties on
+    # the same aggregate).
+    of.record_outcome("agent:coder", completion=1.0, tool_success=1.0, test_pass=1.0, efficiency=1.0)
+
+    survivor = {"id": "genome_survivor", "decay_generations": 5}
+    newborn = {"id": "genome_newborn", "decay_generations": 0}
+
+    survivor_score = ed._score_genome(survivor)
+    newborn_score = ed._score_genome(newborn)
+    # Both have no exact record -> both = aggregate. The survivor's 5-gen
+    # survival must NOT push it below the newborn.
+    assert survivor_score == newborn_score, (
+        "aggregate tie must not be decayed by survivor generations — decay "
+        f"applies only to exact per-genome records (got {survivor_score} vs {newborn_score})"
+    )
+
+
 @pytest.mark.asyncio
 async def test_handle_final_feeds_real_outcome(tmp_path, monkeypatch):
     """The live final handler must feed a completed outcome to the fitness store

@@ -144,13 +144,19 @@ def _score_genome(genome: dict) -> float:
     returned only when there is no real signal at all."""
     try:
         from swarm_os.services.outcome_fitness import best_fitness, best_aggregate_fitness
-        f = best_fitness(genome.get("id", ""))
+        exact = best_fitness(genome.get("id", ""))
+        f = exact
         if f is None:
             f = best_aggregate_fitness()
         if f is not None:
-            # Apply decayed fitness if this is an elite that has survived multiple generations.
-            # (Decay is tracked in memory to prevent immortal elites from dominating forever)
-            decay = FITNESS_DECAY ** genome.get("decay_generations", 0)
+            # Apply decayed fitness ONLY to an EXACT per-genome record. The
+            # aggregate fallback is the SHARED lineage baseline that every
+            # genome with no record ties on — decaying it would push every
+            # surviving elite below every fresh child (0.85^n), systematically
+            # vacating the elite slots to random children and killing selection
+            # pressure on tool_genes. Decay's purpose (prevent immortal elites)
+            # only applies once a genome has its OWN recorded signal to fade.
+            decay = FITNESS_DECAY ** genome.get("decay_generations", 0) if exact is not None else 1.0
             return round(f * decay, 4)
         return 0.05
     except Exception:
