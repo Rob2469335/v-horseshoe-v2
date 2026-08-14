@@ -80,7 +80,6 @@ def _save_registry(registry: dict) -> None:
     except Exception as exc:
         log.warning("Canary registry save failed (%s).", exc)
 
-
 def register_canary(file_rel: str, snapshot_id: str, window_minutes: float = 30.0,
                     policy=None) -> tuple[bool, str]:
     """Register a pending canary for a repaired file. Refuses if the file already
@@ -89,27 +88,42 @@ def register_canary(file_rel: str, snapshot_id: str, window_minutes: float = 30.
     file_key = file_rel.replace("\\", "/").lstrip("./")
     if not file_key:
         return False, "empty file path"
-    registry = load_registry()
-    for rid, c in registry.items():
-        if c.get("file") == file_key and c.get("state") == PENDING:
-            return False, f"canary already pending for {file_key} ({rid})"
-    window = float(window_minutes)
-    if policy is not None:
-        try:
-            window = float(policy.data["rollback"]["signal_gate"]["canary_window_minutes"])
-        except Exception:
-            pass
-    repair_id = f"canary-{int(_now()*1000)}-{abs(hash(file_key)) % 10000}"
-    registry[repair_id] = {
-        "repair_id": repair_id,
-        "file": file_key,
-        "snapshot_id": snapshot_id,
-        "due_at": _now() + window * 60,
-        "created_at": _iso(),
-        "state": PENDING,
-    }
-    _save_registry(registry)
-    return True, repair_id
+    # The lock must guard the ENTIRE load-check-save span, not just the write —
+    # otherwise two concurrent registrations for the same file can both pass the
+    # pending check and produce TWO pending canaries (breaking the one-snapshot
+    # invariant a flagged rollback relies on).
+    try:
+        _REGISTRY_FILE.parent.mkdir(parents=True, exist_ok=True)
+        lock = FileLock(str(_REGISTRY_FILE) + ".lock", timeout=5.0)
+        with lock:
+            registry = load_registry()
+            for rid, c in registry.items():
+                if c.get("file") == file_key and c.get("state") == PENDING:
+                    return False, f"canary already pending for {file_key} ({rid})"
+            window = float(window_minutes)
+            if policy is not None:
+                try:
+                    window = float(policy.data["rollback"]["signal_gate"]["canary_window_minutes"])
+                except Exception:
+                    pass
+            repair_id = f"canary-{int(_now()*1000)}-{abs(hash(file_key)) % 10000}"
+            registry[repair_id] = {
+                "repair_id": repair_id,
+                "file": file_key,
+                "snapshot_id": snapshot_id,
+                "due_at": _now() + window * 60,
+                "created_at": _iso(),
+                "state": PENDING,
+            }
+            # Write directly under the SAME lock we already hold — calling
+            # _save_registry here would try to re-acquire the lock file with a
+            # NEW FileLock instance (re-entrancy is per-instance) and deadlock.
+            _REGISTRY_FILE.write_text(json.dumps(registry, ensure_ascii=False, indent=2),
+                                      encoding="utf-8")
+            return True, repair_id
+    except Exception as exc:
+        log.warning("Canary registration failed (%s).", exc)
+        return False, f"registration failed: {exc}"
 
 
 def pending_canaries() -> list[dict]:

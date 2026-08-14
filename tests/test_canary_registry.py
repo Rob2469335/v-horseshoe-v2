@@ -53,6 +53,34 @@ def test_refuse_second_pending_canary_same_file(tmp_path):
     assert ok3
 
 
+def test_concurrent_register_same_file_registers_once(tmp_path):
+    """Two CONCURRENT registrations for the same file must produce exactly ONE
+    pending canary (the load-check-save span must be atomic). The old code held
+    the file lock only inside _save_registry, so a check-then-act race let both
+    threads pass the pending check and write two canaries for one file."""
+    import threading
+    results = []
+
+    def _reg():
+        results.append(cr.register_canary("swarm_os/api/routes.py", "snap", window_minutes=5))
+
+    barrier = threading.Barrier(2)
+    def _gated():
+        barrier.wait()
+        _reg()
+
+    threads = [threading.Thread(target=_gated) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    oks = [r[0] for r in results]
+    assert oks.count(True) == 1, f"expected exactly one successful registration, got {results}"
+    pending = [c for c in cr.load_registry().values() if c.get("state") == cr.PENDING]
+    assert len(pending) == 1, "exactly one pending canary for the file after a concurrent race"
+
+
 def test_registry_restart_survival(tmp_path):
     ok, rid = cr.register_canary("swarm_os/api/routes.py", "snap1", window_minutes=5)
     assert ok
