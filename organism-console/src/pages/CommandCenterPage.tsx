@@ -9,6 +9,7 @@ import BrowserPanel from "../components/BrowserPanel"
 import FilePanel from "../components/FilePanel"
 import WebTaskPanel from "../components/WebTaskPanel"
 import DeepResearchPanel from "../components/DeepResearchPanel"
+import NewsPanel from "../components/NewsPanel"
 import TasksPanel from "../components/TasksPanel"
 
 type LiveEvent = {
@@ -305,6 +306,7 @@ export default function CommandCenterPage() {
         <FilePanel backendUrl={backendUrl} />
         <WebTaskPanel backendUrl={backendUrl} />
         <DeepResearchPanel backendUrl={backendUrl} />
+        <NewsPanel backendUrl={backendUrl} />
         <TasksPanel backendUrl={backendUrl} />
 
         {/* ============ System probes ============ */}

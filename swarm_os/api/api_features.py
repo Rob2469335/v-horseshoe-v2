@@ -33,6 +33,21 @@ class DeepResearchRequest(BaseModel):
     follow_up_budget: int = 3
 
 
+class NewsSubscriptionAdd(BaseModel):
+    topic: str
+    url: str
+
+
+class NewsSubscriptionRemove(BaseModel):
+    topic: str
+    url: str | None = None
+
+
+class NewsDigestRequest(BaseModel):
+    topic: str | None = None
+    max_items: int = 30
+
+
 class BrowserTaskRequest(BaseModel):
     goal: str
     max_steps: int = 12
@@ -230,6 +245,47 @@ async def deep_research(req: DeepResearchRequest):
         max_results_per_unit=req.max_results_per_unit,
         follow_up_budget=req.follow_up_budget,
     )
+
+
+@router.get("/news/subscriptions")
+async def news_subscriptions():
+    """List news topics -> feed URLs (and the allowed-feed-host guard)."""
+    from ..services.news_digest import list_subscriptions
+
+    return list_subscriptions()
+
+
+@router.post("/news/subscriptions/add")
+async def news_subscription_add(req: NewsSubscriptionAdd):
+    """Subscribe a feed URL to a topic (http(s) + allowlisted host required)."""
+    from ..services.news_digest import add_subscription
+
+    return add_subscription(req.topic, req.url)
+
+
+@router.post("/news/subscriptions/remove")
+async def news_subscription_remove(req: NewsSubscriptionRemove):
+    """Remove a topic (or one URL within it)."""
+    from ..services.news_digest import remove_subscription
+
+    return remove_subscription(req.topic, req.url)
+
+
+@router.post("/news/ingest")
+async def news_ingest(limit_per_feed: int = 10):
+    """Fetch + parse every subscribed feed, persist NEW items, return the diff."""
+    from ..services.news_digest import ingest_feeds
+
+    return await ingest_feeds(limit_per_feed=limit_per_feed)
+
+
+@router.post("/news/digest")
+async def news_digest(req: NewsDigestRequest):
+    """LLM digest of the recent items, grouped by topic, flagging evolving
+    stories — the 'custom news digest / follow how they evolve' capability."""
+    from ..services.news_digest import digest
+
+    return await digest(topic=req.topic, max_items=req.max_items)
 
 
 @router.post("/browser-task")
