@@ -191,6 +191,46 @@ async def status(runtime: Any = Depends(runtime_dep)):
         if any(marker in m.lower() for marker in ["vl", "vision", "moondream", "llava"])
     ]
 
+    # LIVE cloud fallback chain: count ready models per provider bucket so the
+    # console banner's FALLBACKS row reflects reality, not "Checking status...".
+    fallback_pool = {}
+    try:
+        from runtime_v2.services.fallback_manager import get_live_fallbacks
+
+        chain = await get_live_fallbacks(mode="auto")
+        buckets: dict[str, int] = {}
+        for f in chain:
+            mid = str(f.get("model", "") or "")
+            # OpenCode (zen / openai-prefixed) FIRST — its model ids contain
+            # "deepseek" too and would otherwise be miscounted as deepseek-direct.
+            if "zen/" in mid or mid.startswith("openai"):
+                b = "opencode"
+            elif mid.startswith("openrouter"):
+                b = "openrouter"
+            elif mid.startswith("nvidia"):
+                b = "nvidia"
+            elif mid.startswith("groq"):
+                b = "groq"
+            elif mid.startswith("gemini"):
+                b = "gemini"
+            elif "deepseek" in mid:
+                b = "deepseek"
+            else:
+                b = "local"
+            buckets[b] = buckets.get(b, 0) + 1
+        fallback_pool = {
+            "total": len(chain),
+            "openrouter": buckets.get("openrouter", 0),
+            "groq": buckets.get("groq", 0),
+            "gemini": buckets.get("gemini", 0),
+            "nvidia": buckets.get("nvidia", 0),
+            "deepseek": buckets.get("deepseek", 0),
+            "opencode": buckets.get("opencode", 0),
+            "local": buckets.get("local", 0),
+        }
+    except Exception as exc:
+        log.debug("fallback_pool unavailable: %s", exc)
+
     return StatusResponse(
         ready=getattr(runtime, "orchestrator", None) is not None,
         events_path=".swarm/patch_log.jsonl",
@@ -206,6 +246,7 @@ async def status(runtime: Any = Depends(runtime_dep)):
         installed_model_count=len(installed_models),
         installed_models=installed_models,
         primary_vision_model=vision_models[0] if vision_models else None,
+        fallback_pool=fallback_pool,
     )
 
 

@@ -40,6 +40,7 @@ class StatusResponse(BaseModel):
     installed_model_count: int = 0
     installed_models: List[str] = Field(default_factory=list)
     primary_vision_model: Optional[str] = None
+    fallback_pool: Dict[str, Any] = Field(default_factory=dict)
 
 # --- New Capability Tool Schemas ---
 class ToolExecuteRequest(BaseModel):

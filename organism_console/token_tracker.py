@@ -139,6 +139,17 @@ def start_background_poll():
 
 
 # ── Record chunk (called every SSE chunk in cli.py) ──────────────────────────
+def seed_model_if_empty(model: str):
+    """Seed the tracker's 'last model' display with the CLI's active model when
+    there has been NO live traffic yet. Without this the banner's TRACKER row
+    shows `mdl:—` until the first real model chunk arrives — misleading at
+    startup, where the model IS known from /agents/models."""
+    with _lock:
+        if not _state["last_model"] and model:
+            _state["last_model"] = model
+            _state["last_provider"] = _classify_provider(model, "")
+
+
 def record_chunk(chunk: dict):
     model    = chunk.get("model", "")
     provider = chunk.get("provider", "")

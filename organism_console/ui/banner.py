@@ -15,7 +15,7 @@ _WEATHER_CACHE = "Weather: [dim]Syncing...[/dim]"
 _WEATHER_LAST_FETCH = 0
 _WEATHER_LOCK = threading.Lock()
 
-_BANNER_CACHE: dict = {"agents": None, "status": None, "last": 0}
+_BANNER_CACHE: dict = {"agents": None, "status": None, "agent_models": None, "last": 0}
 _BANNER_LOCK = threading.Lock()
 
 def get_system_stats():
@@ -34,11 +34,14 @@ def _refresh_banner_cache():
     try:
         agents_resp = requests.get(f"{BACKEND_URL}/agents", timeout=15, verify=settings.ssl_verify)
         status_resp = requests.get(f"{BACKEND_URL}/status", timeout=15, verify=settings.ssl_verify)
+        models_resp = requests.get(f"{BACKEND_URL}/agents/models", timeout=15, verify=settings.ssl_verify)
         with _BANNER_LOCK:
             if agents_resp and agents_resp.status_code == 200:
                 _BANNER_CACHE["agents"] = agents_resp.json()
             if status_resp and status_resp.status_code == 200:
                 _BANNER_CACHE["status"] = status_resp.json()
+            if models_resp and models_resp.status_code == 200:
+                _BANNER_CACHE["agent_models"] = models_resp.json()
             _BANNER_CACHE["last"] = time.time()
     except Exception:
         pass
@@ -185,17 +188,23 @@ def print_banner(ctx):
 
     banner_data = get_banner_data()
     agents = banner_data.get("agents") or []
+    # Real agent→model resolution from /agents/models (qwen3.5-4b, etc.) — NOT
+    # the stale role names ("reasoning"/"fast") or a persisted active_model that
+    # may no longer be served.
+    agent_models = banner_data.get("agent_models") or {}
     if agents:
         for a in agents:
             agent_id = a.get("id", "").upper()
-            model = a.get("model_role", "")
+            resolved = (agent_models.get(a.get("id", ""), {}) or {}).get("model")
+            model = resolved or a.get("model_role", "") or ctx.active_model
             if agent_id.lower() == ctx.active_agent.lower():
                 table.add_row(f"[bold white]{agent_id}[/bold white]", f"[bold #00f0ff]{model}[/bold #00f0ff] [bold #00ffcc](ACTIVE)[/bold #00ffcc]")
             else:
                 table.add_row(f"{agent_id}", f"[#00f0ff]{model}[/#00f0ff]")
     else:
         table.add_row("AGENT", f"[bold #ffffff]{ctx.active_agent.upper()}[/bold #ffffff]")
-        table.add_row("CORE", f"[#00f0ff]{ctx.active_model}[/#00f0ff]")
+        resolved_core = (agent_models.get(ctx.active_agent, {}) or {}).get("model") or ctx.active_model
+        table.add_row("CORE", f"[#00f0ff]{resolved_core}[/#00f0ff]")
     table.add_row("SECURE", f"[{mode_style}]{ctx.mode.upper()}[/{mode_style}]")
     table.add_row("UPLINK", backend_state)
     table.add_row("UPTIME", f"[dim]{uptime_str}[/dim]")
@@ -207,15 +216,21 @@ def print_banner(ctx):
         fallbacks_data = status_json.get("fallback_pool", {})
 
     cloud_status = "[bold #00ffcc]\\[ON][/bold #00ffcc]" if ctx.cloud_enabled else "[bold #ff00ea]\\[OFF][/bold #ff00ea]"
-    
-    c_toks = ctx.cloud_input_tokens + ctx.cloud_output_tokens
-    quota = getattr(ctx, "cloud_token_quota", 0)
-    q_pct = min(100, int((c_toks / quota) * 100)) if quota > 0 else 0
-    q_width = 15
-    filled_q = int((q_pct / 100) * q_width)
-    q_bar = "■" * filled_q + "□" * (q_width - filled_q)
-    q_color = "#00f0ff" if q_pct < 70 else "#ffaa00" if q_pct < 90 else "bold #ff00ea blink"
-    table.add_row("CLOUD", f"{cloud_status} [dim]QUOTA[/dim] [{q_color}]{q_pct}%[/{q_color}] [dim][{q_bar}] ({c_toks:,}/{quota:,})[/dim]")
+
+    # HONEST CLOUD ROW: the console token counters (cloud_input_tokens/quota)
+    # are a local per-session estimate, NOT a real limit — showing "235,031/100,000"
+    # as a 235% quota bar is misleading. Show the REAL persisted usage_log cost
+    # (the same source the /tokens command reads), falling back to "n/a" when
+    # there is no data yet.
+    try:
+        from runtime_v2.services.usage_log import usage_report
+        _rpt = usage_report(days=30)
+        known = _rpt.get("known_cost") or 0.0
+        unknown = _rpt.get("unknown_cost") or 0.0
+        _cost_s = f"${known + unknown:.4f}"
+    except Exception:
+        _cost_s = "[dim]n/a[/dim]"
+    table.add_row("CLOUD", f"{cloud_status} [dim]30d cost[/dim] [bold #00f0ff]{_cost_s}[/bold #00f0ff]")
     
     if fallbacks_data:
         total_f = fallbacks_data.get("total", 0)
@@ -223,7 +238,12 @@ def print_banner(ctx):
         grq = fallbacks_data.get("groq", 0)
         gem = fallbacks_data.get("gemini", 0)
         nvd = fallbacks_data.get("nvidia", 0)
-        table.add_row("FALLBACKS", f"[bold #00f0ff]{total_f} READY[/bold #00f0ff] [dim](OpenRouter: {orr}, Groq: {grq}, Gemini: {gem}, NVIDIA: {nvd})[/dim]")
+        dsk = fallbacks_data.get("deepseek", 0)
+        ocd = fallbacks_data.get("opencode", 0)
+        table.add_row(
+            "FALLBACKS",
+            f"[bold #00f0ff]{total_f} READY[/bold #00f0ff] [dim](DeepSeek: {dsk}, OpenCode: {ocd}, NVIDIA: {nvd}, OpenRouter: {orr}, Groq: {grq}, Gemini: {gem})[/dim]",
+        )
     else:
         table.add_row("FALLBACKS", "[dim]Checking status...[/dim]")
 
@@ -232,6 +252,10 @@ def print_banner(ctx):
     table.add_row("METRICS", f"[dim]CPU[/dim] [#00f0ff]{stats['cpu']:.0f}%[/#00f0ff] [dim]RAM[/dim] [#ff00ea]{stats['ram_used_gb']:.1f}GB[/#ff00ea] [dim][{ram_bar}][/dim]")
     table.add_row("WEATHER", get_weather_stats())
     
+    from organism_console.token_tracker import seed_model_if_empty
+    resolved_active = (agent_models.get(ctx.active_agent, {}) or {}).get("model") or ctx.active_model
+    seed_model_if_empty(resolved_active)
+
     status_seg = get_status_segment()
     if status_seg:
         table.add_row("TRACKER", status_seg)
