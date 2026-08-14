@@ -370,9 +370,9 @@ async def legal_moot(req: MootRequest) -> dict[str, Any]:
 async def legal_trial_overview() -> dict[str, Any]:
     """High-level structure of the defendant's own trial record (all ingested
     transcript days): days, pages, passage counts."""
-    from swarm_os.services.legal.trial_advisor import _load_indices, trial_overview
+    from swarm_os.services.legal.trial_advisor import _load_indices_async, trial_overview
     try:
-        indices = _load_indices()
+        indices = await _load_indices_async()
         if not indices:
             return {"ok": False, "error": "No trial transcripts found in data/legal/transcripts. "
                     "Add your corrected .txt transcript files there first."}
@@ -387,10 +387,10 @@ async def legal_trial_attorneys() -> dict[str, Any]:
     """Per-attorney profiles across the trial: objections, examinations, key
     statements, page range — each page-cited from the record."""
     from swarm_os.services.legal.trial_advisor import (
-        _load_indices, build_attorney_profiles,
+        _load_indices_async, build_attorney_profiles,
     )
     try:
-        indices = _load_indices()
+        indices = await _load_indices_async()
         profiles = build_attorney_profiles(indices)
         return {
             "ok": True,
@@ -421,10 +421,10 @@ async def legal_trial_errors() -> dict[str, Any]:
     investigate (preserved errors, evidence/chain-of-custody, confrontation,
     jury selection) — page-cited, framed as questions for qualified counsel."""
     from swarm_os.services.legal.trial_advisor import (
-        _load_indices, build_error_flags, build_key_events, build_phone_evidence_events,
+        _load_indices_async, build_error_flags, build_key_events, build_phone_evidence_events,
     )
     try:
-        indices = _load_indices()
+        indices = await _load_indices_async()
         return {
             "ok": True,
             "flags": build_error_flags(indices),
@@ -452,9 +452,9 @@ class TrialSearchRequest(BaseModel):
 @router.post("/trial/search")
 async def legal_trial_search(req: TrialSearchRequest) -> dict[str, Any]:
     """Page-cited search over the defendant's own trial transcript (all days)."""
-    from swarm_os.services.legal.trial_advisor import _load_indices, search_record
+    from swarm_os.services.legal.trial_advisor import _load_indices_async, search_record
     try:
-        indices = _load_indices()
+        indices = await _load_indices_async()
         return {"ok": True, "hits": search_record(indices, req.query, req.limit)}
     except Exception:
         log.exception("trial search failed")
@@ -470,9 +470,9 @@ class TrialSpeakerRequest(BaseModel):
 @router.post("/trial/speaker")
 async def legal_trial_speaker(req: TrialSpeakerRequest) -> dict[str, Any]:
     """Every passage spoken by one attorney, page-cited across all days."""
-    from swarm_os.services.legal.trial_advisor import _load_indices, speaker_summary
+    from swarm_os.services.legal.trial_advisor import _load_indices_async, speaker_summary
     try:
-        indices = _load_indices()
+        indices = await _load_indices_async()
         return {"ok": True, "passages": speaker_summary(indices, req.speaker, req.limit)}
     except Exception:
         log.exception("trial speaker failed")

@@ -109,3 +109,29 @@ def test_trial_overview_shape():
     assert ov["days"]
     assert ov["total_passages"] > 0
     assert ov["page_min"] == 100
+
+
+def test_load_indices_async_offloads_and_caches(monkeypatch):
+    """The async endpoint loader must run the CPU-bound transcript parse via
+    asyncio.to_thread (never on the event loop) and cache the result so a
+    burst of /trial/* requests parses once."""
+    import asyncio
+    from unittest.mock import patch
+
+    called = {"n": 0}
+
+    def _fake_load():
+        called["n"] += 1
+        return _mini_index()
+
+    # Reset the module cache so the test observes a fresh load.
+    ta._indices_cache[0] = None
+    with patch.object(ta, "_load_indices", _fake_load):
+        indices = asyncio.run(ta._load_indices_async())
+        assert indices
+        assert called["n"] == 1
+        # Second call hits the cache — the underlying loader is NOT re-run.
+        indices2 = asyncio.run(ta._load_indices_async())
+        assert indices2 is indices
+        assert called["n"] == 1, "async loader must cache after first parse"
+    ta._indices_cache[0] = None

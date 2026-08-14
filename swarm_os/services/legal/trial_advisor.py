@@ -107,6 +107,26 @@ def _load_indices() -> list[TranscriptIndex]:
     return indices
 
 
+async def _load_indices_async() -> list[TranscriptIndex]:
+    """Thread-offloaded _load_indices for async endpoints.
+
+    Parsing is CPU-bound regex work over hundreds of transcript pages — on the
+    event loop it stalls every concurrent request. The transcripts are static
+    per-process, so the parsed result is cached (thread-safe: a missed cache
+    just re-parses; the parse is idempotent)."""
+    _cache = _indices_cache[0]
+    if _cache is not None:
+        return _cache
+    import asyncio
+    indices = await asyncio.to_thread(_load_indices)
+    if _indices_cache[0] is None:
+        _indices_cache[0] = indices
+    return indices
+
+
+_indices_cache: list = [None]
+
+
 def _resolve_attorney(speaker: str) -> str | None:
     s = (speaker or "").upper().strip()
     for prefix, key in _ATTR_PREFIX_MAP.items():
