@@ -83,6 +83,7 @@ class BooksService:
             books = [b for b in books if b.get("priority") == priority]
         if tier is not None:
             books = [b for b in books if b.get("tier") == tier]
+        tiers = sorted({b.get("tier") for b in data.get("books", []) if b.get("tier")})
         return {
             "ok": True,
             "count": len(books),
@@ -90,7 +91,7 @@ class BooksService:
             "tracks": TRACKS,
             "priorities": PRIORITIES,
             "genres": GENRES,
-            "tiers": [1],
+            "tiers": tiers,
             "generated_at": data.get("generated_at"),
         }
 
