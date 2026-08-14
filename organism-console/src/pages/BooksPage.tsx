@@ -9,17 +9,22 @@ type Book = {
   slug: string
   title: string
   author: string
+  genre: string
   track: string
   track_label: string
+  tier: number | null
+  rating_band: string
+  year: number | null
   priority: string
   scores: Record<string, number>
   legitimate_source: string
   public_domain: boolean
   summary_status: string
-  ai_relevance: string
+  ai_relevance: string | null
   best_parts: string[]
   warnings: string[]
   freelancer_translation: string
+  beginner_translation: string
 }
 
 type Library = {
@@ -28,12 +33,15 @@ type Library = {
   books: Book[]
   tracks: string[]
   priorities: string[]
+  genres: string[]
+  tiers: number[]
 }
 
-type SearchResult = { slug: string; title: string; author: string; track: string; priority: string; ai_relevance: string; score: number }
+type SearchResult = { slug: string; title: string; author: string; genre: string; track: string; tier: number | null; rating_band: string; priority: string; ai_relevance: string | null; score: number }
 type SynthesizeOutput = {
   ok: boolean
   question: string
+  genre: string
   topic_tracks: string[]
   fragments: Book[]
 }
@@ -51,11 +59,14 @@ const TRACK_COLOR: Record<string, string> = {
   investing: "text-teal-300",
   "real estate": "text-orange-300",
   technical: "text-emerald-300",
+  chess: "text-rose-300",
 }
 
 export default function BooksPage() {
   const backendUrl = useUiStore((state) => state.backendUrl)
+  const [genre, setGenre] = useState<string>("all")
   const [track, setTrack] = useState<string>("all")
+  const [tier, setTier] = useState<string>("all")
   const [priority, setPriority] = useState<string>("all")
   const [query, setQuery] = useState("")
   const [selected, setSelected] = useState<string | null>(null)
@@ -64,10 +75,15 @@ export default function BooksPage() {
   const [asking, setAsking] = useState(false)
 
   const library = useQuery({
-    queryKey: ["books", track, priority, backendUrl],
+    queryKey: ["books", genre, track, tier, priority, backendUrl],
     queryFn: async () => {
       const params = new URLSearchParams()
-      if (track !== "all") params.set("track", track)
+      if (genre !== "all") params.set("genre", genre)
+      if (genre === "chess") {
+        if (tier !== "all") params.set("tier", tier)
+      } else if (track !== "all") {
+        params.set("track", track)
+      }
       if (priority !== "all") params.set("priority", priority)
       const res = await fetch(`${backendUrl}/books?${params.toString()}`, { headers: { Accept: "application/json" } })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -78,9 +94,11 @@ export default function BooksPage() {
   })
 
   const search = useQuery({
-    queryKey: ["books-search", query, backendUrl],
+    queryKey: ["books-search", query, genre, backendUrl],
     queryFn: async () => {
-      const res = await fetch(`${backendUrl}/books/search?q=${encodeURIComponent(query)}`, { headers: { Accept: "application/json" } })
+      const params = new URLSearchParams({ q: query })
+      if (genre !== "all") params.set("genre", genre)
+      const res = await fetch(`${backendUrl}/books/search?${params.toString()}`, { headers: { Accept: "application/json" } })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const j = (await res.json()) as { ok: boolean; results: SearchResult[] }
       return j.results
@@ -103,6 +121,8 @@ export default function BooksPage() {
 
   const tracks = library.data?.tracks ?? ["all", "income", "mindset", "personal finance", "investing", "real estate", "technical"]
   const priorities = library.data?.priorities ?? ["all", "READ NOW", "READ LATER", "REFERENCE"]
+  const tiers = library.data?.tiers ?? ["all", 1]
+  const genres = library.data?.genres ?? ["all", "freelancer", "chess"]
 
   const askLibrary = async () => {
     if (ask.trim().length < 3) return
@@ -111,12 +131,12 @@ export default function BooksPage() {
       const res = await fetch(`${backendUrl}/books/synthesize`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ question: ask }),
+        body: JSON.stringify({ question: ask, genre: genre === "chess" ? "chess" : "freelancer" }),
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       setSynth((await res.json()) as SynthesizeOutput)
     } catch {
-      setSynth({ ok: false, question: ask, topic_tracks: [], fragments: [] })
+      setSynth({ ok: false, question: ask, genre: genre === "chess" ? "chess" : "freelancer", topic_tracks: [], fragments: [] })
     } finally {
       setAsking(false)
     }
@@ -136,8 +156,8 @@ export default function BooksPage() {
         <div>
           <h1 className="text-2xl font-bold">Book Library</h1>
           <p className="max-w-3xl text-sm text-white/60">
-            Your AI/Data freelancer knowledge base: expert digests of the career bookshelf. Original synthesis about each
-            book - never the full text. Use library access or summaries for the copyrighted originals.
+            Two expert-digest shelves: your AI/Data freelancer career bookshelf and a 500-rated chess study library.
+            Original synthesis about each book - never the full text. Use library access or summaries for the copyrighted originals.
           </p>
         </div>
         {library.data && (
@@ -146,6 +166,20 @@ export default function BooksPage() {
           </div>
         )}
       </header>
+
+      <div className="flex flex-wrap gap-2">
+        {genres.map((g) => (
+          <button
+            key={g}
+            onClick={() => { setGenre(g); setTrack("all"); setTier("all"); setSelected(null); setSynth(null) }}
+            className={`rounded-lg border px-3 py-1.5 text-sm transition-colors ${genre === g
+              ? "border-emerald-400/50 bg-emerald-400/10 text-emerald-200"
+              : "border-white/10 bg-white/5 text-white/70 hover:bg-white/10"}`}
+          >
+            {g === "all" ? "All shelves" : g === "chess" ? "Chess (500)" : "Freelancer"}
+          </button>
+        ))}
+      </div>
 
       {library.isError && (
         <Card className="border-amber-400/40 bg-amber-400/5">
@@ -161,7 +195,9 @@ export default function BooksPage() {
         <CardHeader>
           <CardTitle className="text-base">Ask the library</CardTitle>
           <CardDescription>
-            Cross-book reasoning: e.g. "Combine E-Myth + Lean Startup + Zero to One into a strategy for productizing my AI automation service."
+            {genre === "chess"
+              ? "Cross-book chess reasoning: e.g. \"At 500, what should I drill first — and which book teaches it best?\""
+              : "Cross-book reasoning: e.g. \"Combine E-Myth + Lean Startup + Zero to One into a strategy for productizing my AI automation service.\""}
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
@@ -207,8 +243,8 @@ export default function BooksPage() {
                   <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-white/70">
                     {f.best_parts.slice(0, 3).map((p, i) => <li key={i}>{p}</li>)}
                   </ul>
-                  {f.freelancer_translation && (
-                    <div className="mt-2 rounded bg-emerald-950/30 px-2 py-1 text-sm text-emerald-200/90">{f.freelancer_translation}</div>
+                  {translationFor(f) && (
+                    <div className="mt-2 rounded bg-emerald-950/30 px-2 py-1 text-sm text-emerald-200/90">{translationFor(f)}</div>
                   )}
                 </div>
               ))}
@@ -217,19 +253,35 @@ export default function BooksPage() {
         </Card>
       )}
 
-      <div className="flex flex-wrap gap-2">
-        {tracks.map((t) => (
-          <button
-            key={t}
-            onClick={() => setTrack(t)}
-            className={`rounded-lg border px-3 py-1.5 text-sm transition-colors ${track === t
-              ? "border-emerald-400/50 bg-emerald-400/10 text-emerald-200"
-              : "border-white/10 bg-white/5 text-white/70 hover:bg-white/10"}`}
-          >
-            {t === "all" ? "All" : t}
-          </button>
-        ))}
-      </div>
+      {genre === "chess" ? (
+        <div className="flex flex-wrap gap-2">
+          {tiers.map((t) => (
+            <button
+              key={t}
+              onClick={() => setTier(String(t))}
+              className={`rounded-lg border px-3 py-1.5 text-sm transition-colors ${tier === String(t)
+                ? "border-emerald-400/50 bg-emerald-400/10 text-emerald-200"
+                : "border-white/10 bg-white/5 text-white/70 hover:bg-white/10"}`}
+            >
+              {t === "all" ? "All tiers" : `Tier ${t}`}
+            </button>
+          ))}
+        </div>
+      ) : (
+        <div className="flex flex-wrap gap-2">
+          {tracks.map((t) => (
+            <button
+              key={t}
+              onClick={() => setTrack(t)}
+              className={`rounded-lg border px-3 py-1.5 text-sm transition-colors ${track === t
+                ? "border-emerald-400/50 bg-emerald-400/10 text-emerald-200"
+                : "border-white/10 bg-white/5 text-white/70 hover:bg-white/10"}`}
+            >
+              {t === "all" ? "All" : t}
+            </button>
+          ))}
+        </div>
+      )}
       <div className="flex flex-wrap gap-2">
         {priorities.map((p) => (
           <button
@@ -259,6 +311,8 @@ export default function BooksPage() {
               <div className="flex flex-wrap items-center gap-2">
                 <CardTitle className="text-lg">{b.title}</CardTitle>
                 <Badge className={TRACK_COLOR[b.track] ?? ""}>{b.track}</Badge>
+                {b.genre === "chess" && b.tier && <Badge className="border-white/20 bg-white/5 text-white/70">Tier {b.tier}</Badge>}
+                {b.genre === "chess" && b.rating_band && <Badge className="border-rose-400/30 bg-rose-400/5 text-rose-200/80">{b.rating_band}</Badge>}
                 <Badge className={PRIORITY_COLOR[b.priority]}>{b.priority}</Badge>
               </div>
               <div className="flex flex-wrap gap-1">
@@ -270,7 +324,7 @@ export default function BooksPage() {
               </div>
             </div>
             <CardDescription>
-              {b.author} · {b.track_label}
+              {b.author} · {b.genre === "chess" ? (b.track_label + (b.year ? ` · ${b.year}` : "")) : b.track_label}
               {b.public_domain ? " · public domain" : " · library/summary"}
               {b.ai_relevance === "high" && " · ★ high AI relevance"}
             </CardDescription>
@@ -283,10 +337,10 @@ export default function BooksPage() {
                   {detail.data.best_parts.map((p, i) => <li key={i}>{p}</li>)}
                 </ul>
               </div>
-              {detail.data.freelancer_translation && (
+              {translationFor(detail.data) && (
                 <div>
-                  <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-white/50">For you (AI/Data freelancer)</div>
-                  <div className="rounded bg-emerald-950/30 px-3 py-2 text-sm text-emerald-200/90">{detail.data.freelancer_translation}</div>
+                  <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-white/50">{translationLabel(detail.data)}</div>
+                  <div className="rounded bg-emerald-950/30 px-3 py-2 text-sm text-emerald-200/90">{translationFor(detail.data)}</div>
                 </div>
               )}
               {detail.data.warnings.length > 0 && (
@@ -316,4 +370,12 @@ export default function BooksPage() {
 
 function Loading() {
   return <div className="text-sm text-white/50">Loading the library.</div>
+}
+
+function translationFor(b: Book): string {
+  return b.genre === "chess" ? b.beginner_translation : b.freelancer_translation
+}
+
+function translationLabel(b: Book): string {
+  return b.genre === "chess" ? "For you (500-rated beginner)" : "For you (AI/Data freelancer)"
 }

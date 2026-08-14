@@ -15,13 +15,18 @@ from swarm_os.services.books_service import BooksService
 
 SAMPLE = {
     "generated_at": "2026-08-14T00:00:00",
+    "genres": ["freelancer", "chess"],
     "books": [
         {
             "slug": "the-e-myth-revisited",
             "title": "The E-Myth Revisited",
             "author": "Michael Gerber",
+            "genre": "freelancer",
             "track": "income",
             "track_label": "INCOME",
+            "tier": None,
+            "rating_band": "",
+            "year": None,
             "priority": "READ NOW",
             "scores": {"ai": 9, "income": 10, "technical": 2, "business": 10, "apply": 9, "long": 3},
             "legitimate_source": "Library / summary",
@@ -31,13 +36,18 @@ SAMPLE = {
             "best_parts": ["Work on the business, not just in it."],
             "warnings": ["Some dated examples."],
             "freelancer_translation": "Productize your service into repeatable systems.",
+            "beginner_translation": "",
         },
         {
             "slug": "the-lean-startup",
             "title": "The Lean Startup",
             "author": "Eric Ries",
+            "genre": "freelancer",
             "track": "mindset",
             "track_label": "MINDSET",
+            "tier": None,
+            "rating_band": "",
+            "year": None,
             "priority": "READ LATER",
             "scores": {"ai": 6, "income": 7, "technical": 3, "business": 9, "apply": 8, "long": 6},
             "legitimate_source": "Library / summary",
@@ -47,6 +57,49 @@ SAMPLE = {
             "best_parts": ["Build-measure-learn loop."],
             "warnings": [],
             "freelancer_translation": "Validate offers cheaply before scaling.",
+            "beginner_translation": "",
+        },
+        {
+            "slug": "winning-chess-tactics",
+            "title": "Winning Chess Tactics",
+            "author": "Yasser Seirawan",
+            "genre": "chess",
+            "track": "chess",
+            "track_label": "CHESS",
+            "tier": 1,
+            "rating_band": "600-1200",
+            "year": 1992,
+            "priority": "READ NOW",
+            "scores": {"tactics": 9, "strategy": 3, "endgames": 1, "openings": 1, "instruction": 8, "exercises": 6},
+            "legitimate_source": "Library / summary",
+            "public_domain": False,
+            "summary_status": "complete",
+            "ai_relevance": None,
+            "best_parts": ["The double attack and knight fork."],
+            "warnings": ["Assumes you know the rules."],
+            "freelancer_translation": "",
+            "beginner_translation": "Read the first four chapters slowly; cover the solution and try to find the winning move yourself.",
+        },
+        {
+            "slug": "chess-fundamentals",
+            "title": "Chess Fundamentals",
+            "author": "José Raúl Capablanca",
+            "genre": "chess",
+            "track": "chess",
+            "track_label": "CHESS",
+            "tier": 1,
+            "rating_band": "1000-1600",
+            "year": 1921,
+            "priority": "READ LATER",
+            "scores": {"tactics": 4, "strategy": 8, "endgames": 7, "openings": 4, "instruction": 8, "exercises": 3},
+            "legitimate_source": "Public domain (1921) — Project Gutenberg #33870",
+            "public_domain": True,
+            "summary_status": "complete",
+            "ai_relevance": None,
+            "best_parts": ["The principle of the development of the pieces."],
+            "warnings": ["Descriptive notation in the original."],
+            "freelancer_translation": "",
+            "beginner_translation": "SKIP at 500 — mark it for the ~1000 milestone.",
         },
     ],
 }
@@ -73,8 +126,34 @@ def test_books_list_all(tmp_path):
     assert r.status_code == 200
     j = r.json()
     assert j["ok"] is True
-    assert j["count"] == 2
+    assert j["count"] == 4
     assert {"income", "mindset"} <= set(j["tracks"])
+    assert set(j["genres"]) == {"freelancer", "chess"}
+
+
+def test_books_list_genre_chess(tmp_path):
+    with _make_client(tmp_path) as c:
+        r = c.get("/books", params={"genre": "chess"})
+    j = r.json()
+    assert j["count"] == 2
+    assert {b["slug"] for b in j["books"]} == {"winning-chess-tactics", "chess-fundamentals"}
+    assert j["books"][0]["tier"] == 1
+    assert j["books"][0]["rating_band"] == "600-1200"
+
+
+def test_books_list_genre_freelancer(tmp_path):
+    with _make_client(tmp_path) as c:
+        r = c.get("/books", params={"genre": "freelancer"})
+    assert r.json()["count"] == 2
+
+
+def test_books_list_tier_filter(tmp_path):
+    with _make_client(tmp_path) as c:
+        r = c.get("/books", params={"genre": "chess", "tier": 1})
+    assert r.json()["count"] == 2
+    with _make_client(tmp_path) as c:
+        r2 = c.get("/books", params={"genre": "chess", "tier": 9})
+    assert r2.json()["count"] == 0
 
 
 def test_books_list_filters(tmp_path):
@@ -83,7 +162,7 @@ def test_books_list_filters(tmp_path):
         assert r.json()["count"] == 1
         assert r.json()["books"][0]["slug"] == "the-e-myth-revisited"
         r = c.get("/books", params={"priority": "READ NOW"})
-        assert r.json()["count"] == 1
+        assert r.json()["count"] == 2
 
 
 def test_get_book(tmp_path):
@@ -91,6 +170,16 @@ def test_get_book(tmp_path):
         r = c.get("/books/the-e-myth-revisited")
     assert r.status_code == 200
     assert r.json()["book"]["author"] == "Michael Gerber"
+
+
+def test_get_book_chess_includes_beginner_translation(tmp_path):
+    with _make_client(tmp_path) as c:
+        r = c.get("/books/winning-chess-tactics")
+    assert r.status_code == 200
+    book = r.json()["book"]
+    assert book["genre"] == "chess"
+    assert book["beginner_translation"].startswith("Read the first four chapters")
+    assert book["freelancer_translation"] == ""
 
 
 def test_get_book_missing(tmp_path):
@@ -106,6 +195,19 @@ def test_search_matches_fields(tmp_path):
     assert j["ok"] is True
     assert j["count"] == 1
     assert j["results"][0]["slug"] == "the-e-myth-revisited"
+
+
+def test_search_scoped_to_chess_genre(tmp_path):
+    with _make_client(tmp_path) as c:
+        r = c.get("/books/search", params={"q": "knight fork", "genre": "chess"})
+    j = r.json()
+    assert j["count"] == 1
+    assert j["results"][0]["slug"] == "winning-chess-tactics"
+    assert j["results"][0]["genre"] == "chess"
+    assert j["results"][0]["tier"] == 1
+    with _make_client(tmp_path) as c:
+        r2 = c.get("/books/search", params={"q": "knight fork", "genre": "freelancer"})
+    assert r2.json()["count"] == 0
 
 
 def test_search_empty_query_returns_nothing(tmp_path):
@@ -132,9 +234,24 @@ def test_synthesize_returns_fragments(tmp_path):
     assert r.status_code == 200
     j = r.json()
     assert j["ok"] is True
+    assert j["genre"] == "freelancer"
     assert j["question"].startswith("how do I productize")
     assert len(j["fragments"]) == 2
     assert j["fragments"][0]["slug"] == "the-e-myth-revisited"
+
+
+def test_synthesize_chess_genre_only_uses_chess_books(tmp_path):
+    with _make_client(tmp_path) as c:
+        r = c.post("/books/synthesize", json={
+            "question": "I blunder every game and miss forks — what tactics should I drill?",
+            "genre": "chess",
+        })
+    assert r.status_code == 200
+    j = r.json()
+    assert j["genre"] == "chess"
+    assert j["topic_tracks"] == ["tactics"]
+    assert {f["slug"] for f in j["fragments"]} == {"winning-chess-tactics", "chess-fundamentals"}
+    assert j["fragments"][0]["beginner_translation"]
 
 
 def test_missing_manifest_is_fail_closed(tmp_path):

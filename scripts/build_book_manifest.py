@@ -1,18 +1,26 @@
-"""Build data/books/manifest.json from the expert digest.
+"""Build data/books/manifest.json from the expert digests.
 
-Deterministic + idempotent: parses data/books/expert-digest.md (the canonical
-human-authored source of truth) into per-book structured records, then merges
-the hand-authored LEGAL_SOURCES table (legitimate free-access route + copyright
-status per the 50-book acquisition plan — data, not policy).
+Deterministic + idempotent: parses the two canonical human-authored source
+files into per-book structured records —
+
+  1. data/books/expert-digest.md (the freelancer library, genre="freelancer")
+     plus the hand-authored LEGAL_SOURCES table (legitimate free-access route +
+     copyright status — data, not policy);
+  2. data/books/chess-digest.json (the chess library, genre="chess" — authored
+     from verified deep research; already structured, so read directly).
 
 Output schema (per book):
-  slug, title, author, track, track_label, priority, scores{ai,income,
-  technical,business,apply,long}, legitimate_source, public_domain,
-  summary_status, ai_relevance, best_parts[], warnings[], freelancer_translation
+  slug, title, author, genre, track, track_label, priority,
+  scores{ai,income,technical,business,apply,long} | {tactics,strategy,
+  endgames,openings,instruction,exercises}, legitimate_source, public_domain,
+  summary_status, ai_relevance, best_parts[], warnings[],
+  freelancer_translation, and for chess: tier, rating_band, year,
+  beginner_translation
 
 Run with the project venv:
   .venv\\Scripts\\python.exe scripts/build_book_manifest.py
 """
+
 from __future__ import annotations
 
 import json
@@ -21,6 +29,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 DIGEST = ROOT / "data" / "books" / "expert-digest.md"
+CHESS_DIGEST = ROOT / "data" / "books" / "chess-digest.json"
 OUT = ROOT / "data" / "books" / "manifest.json"
 
 HEADER_RE = re.compile(r"^### (?:\d+\.?|30[ab]\.) (.+?) — (.+)$")
@@ -50,10 +59,13 @@ LEGAL_SOURCES: dict[tuple[str, str], dict] = {
 
 def _legal(track: str, title: str) -> dict:
     key = (track, title.lower())
-    return LEGAL_SOURCES.get(key, {
-        "legitimate_source": "Library / summary",
-        "public_domain": False,
-    })
+    return LEGAL_SOURCES.get(
+        key,
+        {
+            "legitimate_source": "Library / summary",
+            "public_domain": False,
+        },
+    )
 
 
 def parse_digest() -> list[dict]:
@@ -73,15 +85,17 @@ def parse_digest() -> list[dict]:
         if not hm:
             continue
         title, author = hm.group(1).strip(), hm.group(2).strip()
-        books.append({
-            "title": title,
-            "author": author,
-            "track": track,
-            "track_label": track_label,
-            "best_parts": [],
-            "warnings": [],
-            "freelancer_translation": "",
-        })
+        books.append(
+            {
+                "title": title,
+                "author": author,
+                "track": track,
+                "track_label": track_label,
+                "best_parts": [],
+                "warnings": [],
+                "freelancer_translation": "",
+            }
+        )
     # second pass: attach per-book content lines (bullets belong to last header)
     idx = -1
     for line in lines:
@@ -94,8 +108,9 @@ def parse_digest() -> list[dict]:
         sm = SCORE_RE.search(line)
         if sm:
             books[idx]["priority"] = sm.group("priority").strip()
-            books[idx]["scores"] = {k: int(v) for k, v in sm.groupdict().items()
-                                    if k != "priority"}
+            books[idx]["scores"] = {
+                k: int(v) for k, v in sm.groupdict().items() if k != "priority"
+            }
             continue
         bm = BEST_RE.match(line)
         if bm:
@@ -117,31 +132,86 @@ def parse_digest() -> list[dict]:
         ai_relevance = "high" if ai >= 7 else ("medium" if ai >= 4 else "low")
         legal = _legal(b["track"], b["title"])
         slug = re.sub(r"[^a-z0-9]+", "-", b["title"].lower()).strip("-")
-        records.append({
-            "slug": slug,
-            "title": b["title"],
-            "author": b["author"],
-            "track": b["track"],
-            "track_label": b["track_label"],
-            "priority": b.get("priority", "REFERENCE"),
-            "scores": scores,
-            "legitimate_source": legal["legitimate_source"],
-            "public_domain": legal["public_domain"],
-            "summary_status": "complete",
-            "ai_relevance": ai_relevance,
-            "best_parts": b["best_parts"],
-            "warnings": b["warnings"],
-            "freelancer_translation": b["freelancer_translation"],
-        })
+        records.append(
+            {
+                "slug": slug,
+                "title": b["title"],
+                "author": b["author"],
+                "track": b["track"],
+                "track_label": b["track_label"],
+                "priority": b.get("priority", "REFERENCE"),
+                "scores": scores,
+                "legitimate_source": legal["legitimate_source"],
+                "public_domain": legal["public_domain"],
+                "summary_status": "complete",
+                "ai_relevance": ai_relevance,
+                "best_parts": b["best_parts"],
+                "warnings": b["warnings"],
+                "freelancer_translation": b["freelancer_translation"],
+            }
+        )
+    return records
+
+
+def parse_chess_digest() -> list[dict]:
+    """Read the chess digest (data/books/chess-digest.json) into manifest records.
+
+    The chess digest is already structured JSON (authored from verified deep
+    research), so this is a validation + normalization pass: every book must
+    carry the chess fields, and the record is given a single uniform shape.
+    """
+    try:
+        data = json.loads(CHESS_DIGEST.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError) as exc:
+        print(f"warning: chess digest unreadable ({exc}); skipped")
+        return []
+    records = []
+    for b in data.get("books", []):
+        records.append(
+            {
+                "slug": b.get("slug")
+                or re.sub(r"[^a-z0-9]+", "-", b["title"].lower()).strip("-"),
+                "title": b["title"],
+                "author": b["author"],
+                "genre": "chess",
+                "track": "chess",
+                "track_label": "CHESS",
+                "tier": b.get("tier"),
+                "rating_band": b.get("rating_band", ""),
+                "year": b.get("year"),
+                "priority": b.get("priority", "READ LATER"),
+                "scores": b.get("scores", {}),
+                "legitimate_source": b.get("legitimate_source", "Library / summary"),
+                "public_domain": bool(b.get("public_domain", False)),
+                "summary_status": "complete",
+                "ai_relevance": None,
+                "best_parts": b.get("best_parts", []),
+                "warnings": b.get("warnings", []),
+                "freelancer_translation": "",
+                "beginner_translation": b.get("beginner_translation", ""),
+            }
+        )
     return records
 
 
 def main() -> None:
     records = parse_digest()
+    for b in records:
+        b["genre"] = "freelancer"
+        b.setdefault("tier", None)
+        b.setdefault("rating_band", "")
+        b.setdefault("year", None)
+        b.setdefault("beginner_translation", "")
+    records.extend(parse_chess_digest())
     out = {
-        "generated_from": str(DIGEST.relative_to(ROOT)),
-        "generated_at": __import__("datetime").datetime.now(
-            __import__("datetime").timezone.utc).isoformat(),
+        "generated_from": [
+            str(DIGEST.relative_to(ROOT)),
+            str(CHESS_DIGEST.relative_to(ROOT)),
+        ],
+        "generated_at": __import__("datetime")
+        .datetime.now(__import__("datetime").timezone.utc)
+        .isoformat(),
+        "genres": ["freelancer", "chess"],
         "count": len(records),
         "books": records,
     }
