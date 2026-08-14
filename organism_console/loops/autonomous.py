@@ -262,7 +262,18 @@ def draft_task_list(plan_text: str, cmd_ctx) -> str:
     return "- [ ] Implement proposed changes\n- [ ] Verify execution"
 
 
-def run_autonomous_goal_loop(goal: str, cmd_ctx):
+def run_autonomous_goal_loop(
+    goal: str, cmd_ctx, *, force_readonly: bool = False
+) -> str:
+    """Run the autonomous goal loop. Returns the final assistant message content
+    (the agent's last `final` output) so callers like `/upgrade` can capture a
+    research proposal before deciding whether to apply changes.
+
+    `force_readonly=True` deterministically treats the goal as read-only even if
+    the objective text contains write-intent keywords (used by the research phase
+    of `/upgrade`, whose proposal text must never be misclassified as a write
+    goal).
+    """
     console = cmd_ctx.console
     state = cmd_ctx.state
 
@@ -342,14 +353,16 @@ def run_autonomous_goal_loop(goal: str, cmd_ctx):
     # failed with "No file changes detected". Write intent (fix/implement/
     # patch/write/edit/...) is the ONLY thing that moves a goal into the
     # fix pipeline — and that is already captured by has_write below.
-    is_readonly = has_read_only and not has_write
+    is_readonly = force_readonly or (has_read_only and not has_write)
 
     if is_readonly:
         console.print(
             "[dim]Detected read-only goal — running as a single tool call, skipping verification loop.[/dim]"
         )
-        stream_prompt(cmd_ctx.state, entry_agent, goal, list(state.history))
-        return
+        history = stream_prompt(cmd_ctx.state, entry_agent, goal, list(state.history))
+        if history and isinstance(history[-1], dict):
+            return str(history[-1].get("content", ""))
+        return ""
     console.print()
 
     plan_first = len(goal) > 200 and Confirm.ask(
@@ -738,3 +751,9 @@ def run_autonomous_goal_loop(goal: str, cmd_ctx):
                 )
 
             current_prompt += "</EPHEMERAL_MESSAGE>\n\n"
+
+    # Return the final assistant message content (all exit paths: success, max
+    # attempts, failure). Callers that only need the loop's side effects ignore it.
+    if history and isinstance(history[-1], dict):
+        return str(history[-1].get("content", ""))
+    return ""

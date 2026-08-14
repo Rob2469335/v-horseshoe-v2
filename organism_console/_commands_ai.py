@@ -211,38 +211,88 @@ def cmd_heal(ctx: CommandContext, args: List[str]) -> None:
             ctx.console.print("[red]Goal loop runner unavailable.[/red]")
 
 
-@registry.register("upgrade", "Autonomously find SOTA architectures and upgrade the codebase")
+@registry.register("upgrade", "Research SOTA upgrades, then apply them only after your approval. Usage: /upgrade [task]")
 def cmd_upgrade(ctx: CommandContext, args: List[str]) -> None:
     custom_task = " ".join(args) if args else ""
-    objective = (
-        "Find SOTA Python AI agent upgrades via web_search. Research GitHub, Arxiv, HuggingFace. "
-        "Analyze the codebase and use filesystem to implement upgrades."
+    if not ctx.run_goal_loop:
+        ctx.console.print("[red]Goal loop not configured.[/red]")
+        return
+
+    ctx.console.print("[bold magenta]Initiating Autonomous Self-Upgrade Cycle...[/bold magenta]")
+    if custom_task:
+        ctx.console.print(f"[cyan]Targeting: {custom_task}[/cyan]")
+
+    # PHASE 1 — read-only research + proposal. `force_readonly=True` pins the
+    # read-only branch deterministically (the proposal text must never be
+    # classified as a write goal), and the objective itself uses only read-only
+    # keywords so the agent researches and proposes rather than edits.
+    from rich.prompt import Confirm
+    from organism_console.loops.autonomous import run_autonomous_goal_loop
+
+    research_objective = (
+        "Research SOTA Python AI agent upgrades via web_search (GitHub, Arxiv, HuggingFace) "
+        "and analyze this codebase. Produce a CONCRETE upgrade proposal: for each recommended "
+        "change, list the file path, the exact change, the reason, and the source. Do NOT "
+        "modify, write, or create any files — research and propose only."
     )
     if custom_task:
-        objective += f"\n\nSPECIFIC USER TASK: {custom_task}"
-    if ctx.run_goal_loop:
-        ctx.console.print("[bold magenta]Initiating Autonomous Self-Upgrade Cycle...[/bold magenta]")
-        if custom_task:
-            ctx.console.print(f"[cyan]Targeting: {custom_task}[/cyan]")
-        ctx.run_goal_loop(objective)
-        ctx.console.print("[bold cyan]Running skill-memory self-improvement analysis...[/bold cyan]")
-        try:
-            from organism_console.core.self_improvement_agent import SelfImprovementAgent
-            agent = SelfImprovementAgent()
-            upgrades = agent.analyze_and_upgrade()
-            if not upgrades:
-                ctx.console.print("[dim]No upgrade suggestions from skill memory.[/dim]")
-            for upgrade in upgrades:
-                ctx.console.print(f"[yellow]{upgrade['type']}:[/yellow] {upgrade['description']} [dim]({upgrade['priority']})[/dim]")
-                try:
-                    agent.execute_upgrade(upgrade)
-                    ctx.console.print(f"[green]  ✓ Executed {upgrade['type']} upgrade[/green]")
-                except Exception as e:
-                    ctx.console.print(f"[red]  ✗ Failed to execute {upgrade['type']} upgrade: {e}[/red]")
-        except Exception as e:
-            ctx.console.print(f"[red]Self-improvement analysis failed: {e}[/red]")
-    else:
-        ctx.console.print("[red]Goal loop not configured.[/red]")
+        research_objective += f"\n\nSPECIFIC USER TASK: {custom_task}"
+
+    try:
+        proposal = run_autonomous_goal_loop(research_objective, ctx, force_readonly=True)
+    except Exception as e:
+        ctx.console.print(f"[red]Upgrade research failed: {e}[/red]")
+        return
+
+    if not proposal or not proposal.strip():
+        ctx.console.print("[red]Research produced no upgrade proposal — nothing was changed.[/red]")
+        return
+
+    ctx.console.print()
+    ctx.console.print(
+        Panel(
+            Markdown(proposal),
+            title="🔬 [bold green]Upgrade Proposal[/bold green]",
+            border_style="green",
+            padding=(1, 2),
+        )
+    )
+    ctx.console.print()
+
+    # GATE — the ONLY point at which the swarm may touch the working tree for
+    # this cycle. Default is no; declining applies zero changes.
+    if not Confirm.ask(
+        "[bold yellow]Apply these upgrades? (Changes land only after you approve)[/bold yellow]",
+        default=False,
+    ):
+        ctx.console.print("[dim]Upgrade declined — no changes were applied.[/dim]")
+        return
+
+    # PHASE 2 — apply the approved proposal through the verified write loop
+    # (syntax checks → related tests → ratchet guardrail).
+    apply_objective = (
+        "Implement the following APPROVED upgrade proposal. For each item, read the target "
+        "file first, apply the exact change described, keep existing conventions, then verify "
+        "syntax and run the related tests.\n\nAPPROVED PROPOSAL:\n\n" + proposal
+    )
+    ctx.run_goal_loop(apply_objective)
+
+    ctx.console.print("[bold cyan]Running skill-memory self-improvement analysis...[/bold cyan]")
+    try:
+        from organism_console.core.self_improvement_agent import SelfImprovementAgent
+        agent = SelfImprovementAgent()
+        upgrades = agent.analyze_and_upgrade()
+        if not upgrades:
+            ctx.console.print("[dim]No upgrade suggestions from skill memory.[/dim]")
+        for upgrade in upgrades:
+            ctx.console.print(f"[yellow]{upgrade['type']}:[/yellow] {upgrade['description']} [dim]({upgrade['priority']})[/dim]")
+            try:
+                agent.execute_upgrade(upgrade)
+                ctx.console.print(f"[green]  ✓ Executed {upgrade['type']} upgrade[/green]")
+            except Exception as e:
+                ctx.console.print(f"[red]  ✗ Failed to execute {upgrade['type']} upgrade: {e}[/red]")
+    except Exception as e:
+        ctx.console.print(f"[red]Self-improvement analysis failed: {e}[/red]")
 
 
 @registry.register("goal", "Run autonomous self-correcting loop. Usage: /goal <objective>")
