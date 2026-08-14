@@ -156,6 +156,54 @@ def test_related_test_discovery_finds_governor():
     assert any("governor" in n for n in names)
 
 
+class _FakeProc:
+    def __init__(self, code, out="output"):
+        self.returncode = code
+        self.stdout = out
+        self.stderr = ""
+
+
+def test_run_related_tests_treats_flaky_pass_as_sound(monkeypatch):
+    """A first-run failure that passes on --lf re-run is a FLAKY test, not a
+    broken repair — the repair must be treated as sound (True) so a good fix is
+    not rolled back on a transient failure."""
+    import subprocess as _sp
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if len(calls) == 1:
+            return _FakeProc(1, "FAILED pytest: 1 failed")
+        return _FakeProc(0, "1 passed")
+
+    monkeypatch.setattr(_sp, "run", fake_run)
+    monkeypatch.setattr(repair_engine, "_find_related_tests",
+                        lambda path: [Path("tests/test_x.py")])
+    ok, out = repair_engine._run_related_tests(Path("swarm_os/services/x.py"))
+    assert ok is True, f"flaky re-run must count as sound: {out}"
+    assert "[flaky]" in out
+    assert len(calls) == 2  # original + last-failed re-run
+    assert "--lf" in calls[1]
+
+
+def test_run_related_tests_flaky_rerun_still_failing_is_broken(monkeypatch):
+    """If the --lf re-run ALSO fails, the repair is genuinely broken (False) —
+    a flake retry must never mask a real regression."""
+    import subprocess as _sp
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return _FakeProc(1, "FAILED still failing")
+
+    monkeypatch.setattr(_sp, "run", fake_run)
+    monkeypatch.setattr(repair_engine, "_find_related_tests",
+                        lambda path: [Path("tests/test_x.py")])
+    ok, out = repair_engine._run_related_tests(Path("swarm_os/services/x.py"))
+    assert ok is False, "repeated failure must remain broken"
+    assert "last-failed re-run" in out
+
+
 class _FakeDate:
     today_iso = "2099-01-01"
 
@@ -258,3 +306,34 @@ def test_save_breaker_uses_filelock(tmp_path, monkeypatch):
     src = inspect.getsource(repair_engine._save_breaker)
     assert "FileLock" in src
     assert "BREAKER_FILE" in src
+
+
+def test_repair_security_gate_reverts_banned_construct(tmp_path, monkeypatch):
+    """Independent verify (P0): a repaired file that INTRODUCES a banned
+    construct (subprocess/exec/eval) must be reverted, not shipped. The
+    pre-repair file passed the gate, so this is the 'security signals not worse
+    than baseline' condition — a repair that adds a banned import is a
+    security regression."""
+    # Isolate the security gate: the path guard runs before it, and tmp_path is
+    # outside the repo allowlist — bypass only the path check for this unit test.
+    monkeypatch.setattr(repair_engine, "_is_repairable_path", lambda p: True)
+    orch = repair_engine.TieredRepairOrchestrator(cmd_ctx=None)
+    f = tmp_path / "bug.py"
+    original = "x = 1\n"
+    f.write_text(original, encoding="utf-8")
+    result = {"fixed": True}
+    # Repaired content smuggles a banned module import.
+    f.write_text("import subprocess\nsubprocess.call('x')\n", encoding="utf-8")
+    ok = orch._snapshot_and_validate(f, result, original)
+    assert ok is False, "repair introducing a banned construct must be reverted"
+    assert result["fixed"] is False
+    assert "security gate" in (result.get("validation_error") or "").lower()
+    assert f.read_text(encoding="utf-8") == original, "file must be reverted to original"
+    # A clean repair still passes the gate.
+    f.write_text("def helper(x):\n    return x + 1\n", encoding="utf-8")
+    result2 = {"fixed": True}
+    ok2 = orch._snapshot_and_validate(f, result2, original)
+    assert ok2 is True, "clean repair must pass the security gate"
+
+
+

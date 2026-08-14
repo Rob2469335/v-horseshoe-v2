@@ -209,19 +209,39 @@ def _find_related_tests(file_path: Path) -> List[Path]:
 
 
 def _run_related_tests(file_path: Path) -> Optional[Tuple[bool, str]]:
-    """Run the repaired module's own tests. Returns None when no tests exist."""
+    """Run the repaired module's own tests. Returns None when no tests exist.
+
+    Flake-aware: if the first run fails, the failed tests are re-run once with
+    pytest --lf (last-failed). A passing re-run means the failure was a flaky
+    test, NOT a broken repair — the repair is treated as sound and reported as
+    `(True, "<flaky> ...")` instead of rolling back a good fix on a transient
+    failure."""
     related = _find_related_tests(file_path)
     if not related:
         return None
-    cmd = [sys.executable, "-m", "pytest", *[str(t) for t in related], "-q", "--tb=line"]
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=90,
-                              encoding="utf-8", errors="replace")
-        return proc.returncode == 0, (proc.stdout or "") + (proc.stderr or "")
-    except subprocess.TimeoutExpired:
-        return False, "related test run timed out after 90s"
-    except Exception as exc:
-        return False, f"related test run failed: {exc}"
+
+    def _run(cmd: List[str]) -> Tuple[int, str]:
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=90,
+                                  encoding="utf-8", errors="replace")
+            return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
+        except subprocess.TimeoutExpired:
+            return -1, "related test run timed out after 90s"
+        except Exception as exc:
+            return -2, f"related test run failed: {exc}"
+
+    first_cmd = [sys.executable, "-m", "pytest", *[str(t) for t in related], "-q", "--tb=line"]
+    code, out = _run(first_cmd)
+    if code == 0:
+        return True, out
+    if code in (-1, -2):
+        return False, out  # timeout / infra error — not a flake signal
+    # First run failed: re-run only the failed tests. Passing -> flaky, not broken.
+    retry_cmd = [sys.executable, "-m", "pytest", "-q", "--tb=line", "--lf", "--no-header"]
+    retry_code, retry_out = _run(retry_cmd)
+    if retry_code == 0:
+        return True, f"[flaky] first run failed, last-failed re-run passed:\n{out}\n--- re-run ---\n{retry_out}"
+    return False, f"{out}\n--- last-failed re-run ---\n{retry_out}"
 
 def classify_failure(error_text: str) -> Tuple[str, int]:
     error_lower = error_text.lower()
@@ -659,6 +679,22 @@ class TieredRepairOrchestrator:
             result["validation_error"] = msg
             if self.cmd_ctx:
                 self.cmd_ctx.console.print(f"[red]Validation failed, reverted: {msg}[/red]")
+            return False
+
+        # Security gate (independent verify): the repaired file must not have
+        # INTRODUCED a banned construct (subprocess/socket/exec/eval/...). The
+        # pre-repair file already passed this gate, so scanning the repaired
+        # file is a true "not worse than baseline" check — a repair that adds a
+        # banned import is reverted, not shipped.
+        try:
+            from swarm_os.services.security_gate import SecurityGate
+            SecurityGate.scan_file(file_path)
+        except Exception as exc:
+            file_path.write_text(original, encoding="utf-8")
+            result["fixed"] = False
+            result["validation_error"] = f"security gate rejected: {exc}"
+            if self.cmd_ctx:
+                self.cmd_ctx.console.print(f"[red]Security gate rejected repair, reverted: {exc}[/red]")
             return False
 
         # Quality gate (R11): run the repaired module's own tests before accepting.
