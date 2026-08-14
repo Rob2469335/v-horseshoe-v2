@@ -312,7 +312,14 @@ class WatchLoop:
                         "no related tests and no downstream breakage detected",
                     )
                 return
-            ok, output = result
+            # _run_related_tests returns a STRUCTURED dict
+            # {ok, output, flaky, initial_result, retry_result} — never a tuple.
+            # Unpacking it as a tuple raised ValueError (too many values), which
+            # the generic handler caught and resolved EVERY tested canary to
+            # "unverifiable" — the authoritative signal-1 auto-rollback never
+            # fired in the live seam.
+            ok = bool(result.get("ok"))
+            output = str(result.get("output", "") or "")
             if ok:
                 self._resolve_clear(rid, "cleared", "related tests pass")
                 return

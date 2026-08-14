@@ -354,3 +354,52 @@ def test_soft_case_wired_into_evaluate_as_human_review(tmp_path, monkeypatch):
     )
     assert calls["auto"] == 0
     assert calls["human"] == 1
+
+
+# ── canary eval consumes the REAL structured dict from _run_related_tests ────
+def test_canary_eval_signal1_uses_real_dict_shape(tmp_path, monkeypatch):
+    """_run_related_tests returns a STRUCTURED DICT
+    {ok, output, flaky, initial_result, retry_result}. The canary evaluator must
+    consume that dict. The old `ok, output = result` unpacked the dict KEYS
+    (5 into 2) -> ValueError -> the generic handler resolved every tested canary
+    to 'unverifiable', so the authoritative signal-1 auto-rollback NEVER fired.
+    This drives the evaluator with the real shape and asserts signal-1 routes to
+    automatic rollback (human_review=False)."""
+    import asyncio
+    import organism_console.core.repair_engine as re_mod
+
+    loop = _build_signal2_loop(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        re_mod,
+        "_run_related_tests",
+        lambda fp: {
+            "ok": False,
+            "output": (
+                'E   File "C:/repo/runtime_v2/services/indexer.py", line 22\n'
+                "    IndentationError: unexpected indent"
+            ),
+            "flaky": False,
+            "initial_result": "fail",
+            "retry_result": "fail",
+        },
+    )
+    calls = {"auto": 0, "human": 0}
+    loop._auto_rollback = lambda *a, **k: calls.__setitem__("auto", calls["auto"] + 1)
+    loop._flag_for_human = lambda *a, **k: calls.__setitem__("human", calls["human"] + 1)
+    loop._resolve_flag = lambda rid, st, det, sid, f, human_review: calls.__setitem__(
+        "auto" if not human_review else "human",
+        calls["auto" if not human_review else "human"] + 1,
+    )
+
+    asyncio.run(
+        loop._evaluate_canary(
+            {
+                "repair_id": "ridX",
+                "file": "runtime_v2/services/indexer.py",
+                "snapshot_id": "snapX",
+            }
+        )
+    )
+    # signal-1 attributable failure -> automatic rollback (auto=1), NOT human review.
+    assert calls["auto"] == 1
+    assert calls["human"] == 0

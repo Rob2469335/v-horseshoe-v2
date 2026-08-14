@@ -259,7 +259,17 @@ def test_canary_clears_on_pass_and_rolls_back_on_fail(tmp_path, temp_git_repo, m
     canary = cr.load_registry()[rid]
 
     # Sub-case A: passing test -> cleared.
-    monkeypatch.setattr(re_mod, "_run_related_tests", lambda fp: (True, "1 passed"))
+    monkeypatch.setattr(
+        re_mod,
+        "_run_related_tests",
+        lambda fp: {
+            "ok": True,
+            "output": "1 passed",
+            "flaky": False,
+            "initial_result": "pass",
+            "retry_result": None,
+        },
+    )
     asyncio.run(loop._evaluate_canary(canary))
     assert cr.load_registry()[rid]["state"] == cr.CLEARED
 
@@ -277,8 +287,17 @@ def test_canary_clears_on_pass_and_rolls_back_on_fail(tmp_path, temp_git_repo, m
         snap = load_run_snapshot(snapshot_id)
         restore_run_snapshot(snap, scope=snap.get("scope"), root=temp_git_repo)
     monkeypatch.setattr(wl.WatchLoop, "_auto_rollback", _auto_rollback_with_root)
-    monkeypatch.setattr(re_mod, "_run_related_tests",
-                        lambda fp: (False, f'File "{FIXTURE_REL}", line 1: assertion failed'))
+    monkeypatch.setattr(
+        re_mod,
+        "_run_related_tests",
+        lambda fp: {
+            "ok": False,
+            "output": f'File "{FIXTURE_REL}", line 1: assertion failed',
+            "flaky": False,
+            "initial_result": "fail",
+            "retry_result": "fail",
+        },
+    )
     asyncio.run(loop._evaluate_canary(canary2))
     reg = cr.load_registry()
     assert reg[rid2]["state"] == cr.FLAGGED
