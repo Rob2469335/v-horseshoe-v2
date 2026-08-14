@@ -16,7 +16,6 @@ from qdrant_client import models
 logger = logging.getLogger(__name__)
 
 _shared_client: AsyncQdrantClient | None = None
-_collection_lock: asyncio.Lock = asyncio.Lock()
 
 
 class VectorStore:
@@ -47,6 +46,11 @@ class VectorStore:
 
         self.collection_name = collection_name
         self.vector_size = vector_size
+        # Per-instance (created in __init__): a module-level asyncio.Lock is
+        # bound to the FIRST loop that acquires it, and a second loop (server vs
+        # test portal vs CLI thread) raising RuntimeError on the same lock — the
+        # exact cross-loop hazard the INT-4 fix moved out of tool_registry.
+        self._collection_lock = asyncio.Lock()
         try:
             loop = asyncio.get_running_loop()
             self._init_task = loop.create_task(self._ensure_collection(vector_size))
@@ -81,7 +85,7 @@ class VectorStore:
         max_attempts = 5
         for attempt in range(max_attempts):
             try:
-                async with _collection_lock:
+                async with self._collection_lock:
                     if not await self.client.collection_exists(self.collection_name):
                         await self.client.create_collection(
                             collection_name=self.collection_name,

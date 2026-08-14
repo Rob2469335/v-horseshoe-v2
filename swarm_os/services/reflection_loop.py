@@ -21,12 +21,22 @@ from swarm_os.services.embedding_service import EmbeddingService
 logger = logging.getLogger("ReflectionLoop")
 
 _point_locks: dict[str, asyncio.Lock] = {}
+_POINT_LOCK_MAX = 256
 
 
 def _get_point_lock(point_id: str) -> asyncio.Lock:
     # setdefault inserts only if absent — atomic, no check-then-assign race
-    # between two concurrent callers for the same point_id.
-    return _point_locks.setdefault(point_id, asyncio.Lock())
+    # between two concurrent callers for the same point_id. Bounded: point ids
+    # are deterministic (uuid5 of component|failure_reason), but prune when the
+    # dict grows past _POINT_LOCK_MAX so it can never leak unbounded (a distinct
+    # key per (component, failure_reason) combination).
+    lock = _point_locks.setdefault(point_id, asyncio.Lock())
+    if len(_point_locks) > _POINT_LOCK_MAX:
+        # Trim to the most recent keys (dict preserves insertion order).
+        overflow = len(_point_locks) - _POINT_LOCK_MAX
+        for k in list(_point_locks)[:overflow]:
+            _point_locks.pop(k, None)
+    return lock
 
 
 ROOT_DIR = Path(__file__).parent.parent.parent.resolve()
