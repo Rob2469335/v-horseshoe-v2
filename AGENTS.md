@@ -129,6 +129,69 @@ repo. They never get relaxed.
   negative constraint ("never X") and harmful rules are positive directives
   ("always X"). Prefer "don't..." phrasing.
 
+### VERIFICATION STANDARDS (standing — added 2026-08-13)
+These are the non-negotiable bar for every change, in every agent/tool. They
+restate and sharpen the evidence-first rules above; where they go further, they
+govern.
+
+**Verification**
+- **A finding is not real until it's checked against current code, not described
+  from memory or a prior audit.** Before implementing anything from an audit,
+  plan, or prior finding: read the actual file, at the actual current line,
+  right now. "This was true when the audit ran" is not the same claim as "this
+  is true now" — code changes underneath audits.
+- **A fix is not verified by "tests pass."** For any bug involving concurrency,
+  timing, security boundaries, or a claim about existing behavior: revert the
+  fix, confirm the regression test fails on the reverted code, then re-apply
+  and confirm it passes. A test that was never shown to catch the bug is not
+  evidence the fix is correct — it might pass for an unrelated reason.
+- **A claim about a live system needs a live check, not a plausible inference.**
+  Confirm the specific mechanism (which model ran, what the actual prompt
+  contained, what the actual API response shape was), not a proxy for it. A
+  string match on a source-code comment is not the same as verified data flow —
+  check what's actually being matched.
+
+**Scope discipline**
+- **One fix, one commit, one verification.** Never batch unrelated fixes into
+  one commit or one review pass. If five things need fixing, that's five
+  separate diffs, each checked before the next starts. A batch of "13 things
+  fixed" hides which one thing might be wrong.
+- **Finding a second bug while fixing the first is a reason to report, not a
+  reason to also fix it right now.** Scope creep under momentum is how an
+  urgent, unreviewed change lands next to a good one.
+- **A large audit document (many files, many "findings") gets the same
+  treatment as one finding:** nothing is accepted until checked individually
+  against current code. Volume and formatting quality are not evidence. A
+  confident, well-organized table of "17 findings" is not more trustworthy than
+  one unverified claim — it's seventeen unverified claims.
+
+**Asymmetric failure awareness**
+- **When a fix could fail in two directions, name which direction is worse
+  before choosing the fix** (missing a real citation vs. flagging a fake one;
+  silently proceeding vs. refusing when uncertain). Default to the safer
+  failure direction, explicitly, not by accident.
+- **When you don't have enough information to be right, say so — don't guess
+  and present it as fact.** A tool that says "I don't know" is more trustworthy
+  than one that's confidently wrong. This applies especially to anything
+  computing dates, legal rules, financial figures, or attributing data to a
+  specific source (a judge, a case, a person) — verify the source is real and
+  correctly attributed before presenting it as fact.
+
+**Self-correction**
+- **If you find your own earlier claim was wrong, say so plainly and
+  immediately** — don't quietly fix it and move on as if it was always correct.
+  The correction itself is valuable information for whoever reads this later.
+- **Re-derive from the current state before trusting your own prior context,
+  especially in a long session.** Something you verified an hour ago may have
+  changed since. If a claim matters, check it fresh rather than citing your own
+  earlier conclusion.
+
+**Meta (for reviewers of any agent's work)**
+- **Distrust any summary that describes many fixes at once without a diff for
+  each**, regardless of how confident or well-organized it sounds. That pattern
+  was wrong almost every time it appeared. No ruleset replaces a skeptical
+  reviewer asking "show me the diff."
+
 ### CONVENTIONS (match the repo)
 - Full day-to-day lint/test loop, scoped to the CI gate only:
   `ruff format .` → `ruff check . --select E9,F` → `pytest`. Never run bare
