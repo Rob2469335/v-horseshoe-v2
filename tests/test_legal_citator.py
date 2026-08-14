@@ -151,7 +151,6 @@ async def test_pace_is_async_not_blocking_sleep(monkeypatch):
     heartbeats, daemons) for minutes during a citator poll, and made the
     `asyncio.timeout` on the endpoint unable to fire mid-sleep. An async sleep
     keeps the loop responsive while preserving the rate limit."""
-    import asyncio
     import inspect
     import swarm_os.services.legal.citator as ct
 
