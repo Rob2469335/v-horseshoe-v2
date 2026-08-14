@@ -212,4 +212,162 @@ def test_structural_verify_detects_parse_and_emptiness(tmp_path):
     assert service._structural_verify("good.py", repo=tmp_path) is True
     assert service._structural_verify("bad.py", repo=tmp_path) is False
     assert service._structural_verify("empty.py", repo=tmp_path) is False
+
+
+# ---------------------------------------------------------------------------
+# Agent-loop exit-path outcome audit: every TERMINAL path must feed an outcome
+# to the fitness store (SWARM_EVOLUTION=1), so no failure/success is invisible.
+# Covered here: premature-final ABORT, reviewer-fail ABORT, circular-recovery
+# RECOVERED, and coordinator COORDINATOR_DONE. (ask_user / approval_request are
+# PAUSES, not terminals — the resumed stream feeds its own outcome.)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_premature_final_abort_feeds_failed_outcome(tmp_path, monkeypatch):
+    """A run aborted for calling final twice without reading any files must
+    feed completed=False — the failure must not be invisible to the kernel."""
+    from runtime_v2.api.agent_service_v2 import AgentServiceV2, _CallState
+    from swarm_os.services import outcome_fitness as of
+    from runtime_v2.api import _agent_config
+
+    monkeypatch.setattr(of, "FITNESS_PATH", tmp_path / "fitness.jsonl")
+    monkeypatch.setenv("SWARM_EVOLUTION", "1")
+    monkeypatch.setattr(_agent_config, "ANALYSIS_AGENTS", ("code_analyzer",))
+
+    service = AgentServiceV2()
+    service._remember = AsyncMock()
+    service._record_success = lambda *a, **k: None
+    state = _CallState()
+    state._start_time = 1.0
+    state._tool_attempts = 2
+    state._tool_successes = 0
+    state._turn = 2
+    state.premature_finals = 1  # next premature final trips the abort
+    messages = []
+    gen = service._handle_final(
+        {"action": "final", "response": "done"},
+        "code_analyzer", "m", "p", messages, 0.0, "audit the codebase", False, state,
+    )
+    [e async for e in gen]
+
+    assert state.handler_status == "ABORT"
+    recs = of.recent_fitness()
+    assert recs, "premature-final abort must feed an outcome"
+    assert recs[-1]["completion"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_reviewer_fail_abort_feeds_failed_outcome(tmp_path, monkeypatch):
+    """A run aborted because the reviewer failed 3x must feed completed=False."""
+    from runtime_v2.api.agent_service_v2 import AgentServiceV2, _CallState
+    from swarm_os.services import outcome_fitness as of
+
+    monkeypatch.setattr(of, "FITNESS_PATH", tmp_path / "fitness.jsonl")
+    monkeypatch.setenv("SWARM_EVOLUTION", "1")
+
+    service = AgentServiceV2()
+    service._remember = AsyncMock()
+    service._record_success = lambda *a, **k: None
+    state = _CallState()
+    state._start_time = 1.0
+    state._tool_attempts = 2
+    state._tool_successes = 2
+    state._turn = 2
+    state.reviewer_fails = 2  # next failure trips the abort
+    messages = []
+    gen = service._handle_final(
+        {"action": "final", "response": "FAIL: this review failed", "verdict": "FAIL"},
+        "reviewer", "m", "p", messages, 0.0, "review this patch", True, state,
+    )
+    [e async for e in gen]
+
+    assert state.handler_status == "ABORT"
+    recs = of.recent_fitness()
+    assert recs, "reviewer-fail abort must feed an outcome"
+    assert recs[-1]["completion"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_circular_delegation_recovered_feeds_success(tmp_path, monkeypatch):
+    """A circular delegation that RECOVERS the prior result and yields a final
+    must feed completed=True — a resolved success must not be invisible."""
+    from runtime_v2.api.agent_service_v2 import AgentServiceV2, _CallState
+    from swarm_os.services import outcome_fitness as of
+
+    monkeypatch.setattr(of, "FITNESS_PATH", tmp_path / "fitness.jsonl")
+    monkeypatch.setenv("SWARM_EVOLUTION", "1")
+
+    service = AgentServiceV2()
+    service._remember = AsyncMock()
+    service._record_success = lambda *a, **k: None
+    state = _CallState()
+    state._start_time = 1.0
+    state._tool_attempts = 2
+    state._tool_successes = 2
+    state._turn = 2
+    # The recovery branch scans history for "TOOL RESULT (delegate)" +
+    # "{target} responded:" — seed that shape so the match fires.
+    messages = [
+        {
+            "role": "user",
+            "content": (
+                "TOOL RESULT (delegate)\ncoder responded: earlier fix result\n\n"
+                "Review this result and decide the next step."
+            ),
+        }
+    ]
+    gen = service._handle_delegate(
+        {"action": "delegate", "target_agent": "coder", "task": "fix it"},
+        "executor", ["executor", "coder"], "m", "p", messages, 0.0, "fix the bug", state,
+    )
+    [e async for e in gen]
+
+    assert state.handler_status == "RECOVERED"
+    recs = of.recent_fitness()
+    assert recs, "circular-recovery must feed an outcome"
+    assert recs[-1]["completion"] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_coordinator_done_feeds_success(tmp_path, monkeypatch):
+    """A coordinator that finishes a delegation and yields the child's final
+    must feed completed=True — a successful coordinator run must not be
+    invisible to the kernel."""
+    from runtime_v2.api.agent_service_v2 import AgentServiceV2, _CallState
+    from swarm_os.services import outcome_fitness as of
+
+    monkeypatch.setattr(of, "FITNESS_PATH", tmp_path / "fitness.jsonl")
+    monkeypatch.setenv("SWARM_EVOLUTION", "1")
+
+    service = AgentServiceV2()
+    service._remember = AsyncMock()
+    service._record_success = lambda *a, **k: None
+    # The child stream must be mocked — _handle_delegate drives a REAL
+    # step_agent_stream for the delegated target, which would spawn an LLM.
+    async def _fake_child_stream(*args, **kwargs):
+        yield {"type": "final", "content": "child did the work"}
+        yield {"type": "content", "content": "child did the work"}
+
+    service.step_agent_stream = _fake_child_stream
+    state = _CallState()
+    state._start_time = 1.0
+    state._tool_attempts = 2
+    state._tool_successes = 2
+    state._turn = 2
+
+    captured = []
+    gen = service._handle_delegate(
+        {"action": "delegate", "target_agent": "coder", "task": "implement it"},
+        "coordinator", ["coordinator"], "m", "p", [], 0.0, "build a feature", state,
+    )
+    async for chunk in gen:
+        captured.append(chunk)
+
+    assert state.handler_status == "COORDINATOR_DONE"
+    assert any(c.get("type") == "final" for c in captured)
+    recs = of.recent_fitness()
+    assert recs, "coordinator success must feed an outcome"
+    assert recs[-1]["completion"] == 1.0
+
     assert service._structural_verify("nonexistent.py", repo=tmp_path) is False

@@ -1334,6 +1334,20 @@ class AgentServiceV2:
                     "provider": provider,
                     "content": error_msg,
                 }
+                tsr = (
+                    (state._tool_successes / state._tool_attempts)
+                    if state._tool_attempts
+                    else 0.0
+                )
+                self._feed_outcome(
+                    agent_id,
+                    prompt,
+                    state,
+                    completed=False,
+                    tool_success_rate=tsr,
+                    turns_used=state._turn,
+                    genome_id=getattr(state, "genome_id", ""),
+                )
                 state.handler_status = "ABORT"
                 return
             log.warning("[%s] Rejected premature final (no files read).", agent_id)
@@ -1536,6 +1550,20 @@ class AgentServiceV2:
                     "type": "error",
                     "content": "Reviewer failed too many times. Aborting delegation loop.",
                 }
+                tsr = (
+                    (state._tool_successes / state._tool_attempts)
+                    if state._tool_attempts
+                    else 0.0
+                )
+                self._feed_outcome(
+                    agent_id,
+                    prompt,
+                    state,
+                    completed=False,
+                    tool_success_rate=tsr,
+                    turns_used=state._turn,
+                    genome_id=getattr(state, "genome_id", ""),
+                )
                 state.handler_status = "ABORT"
                 return
 
@@ -1622,6 +1650,20 @@ class AgentServiceV2:
                                 "content": f"[Recovered from circular delegation] {match.group(1).strip()}",
                             }
                             self._record_success(model, start_time)
+                            tsr = (
+                                (state._tool_successes / state._tool_attempts)
+                                if state._tool_attempts
+                                else 1.0
+                            )
+                            self._feed_outcome(
+                                agent_id,
+                                prompt,
+                                state,
+                                completed=True,
+                                tool_success_rate=tsr,
+                                turns_used=state._turn,
+                                genome_id=getattr(state, "genome_id", ""),
+                            )
                             state.handler_status = "RECOVERED"
                             return
             state.handler_status = "CIRCULAR_ERROR"
@@ -1729,6 +1771,20 @@ class AgentServiceV2:
                 "provider": provider,
                 "content": child_final_response,
             }
+            tsr = (
+                (state._tool_successes / state._tool_attempts)
+                if state._tool_attempts
+                else 1.0
+            )
+            self._feed_outcome(
+                agent_id,
+                prompt,
+                state,
+                completed=True,
+                tool_success_rate=tsr,
+                turns_used=state._turn,
+                genome_id=getattr(state, "genome_id", ""),
+            )
             state.handler_status = "COORDINATOR_DONE"
             return
 
