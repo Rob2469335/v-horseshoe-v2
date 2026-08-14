@@ -295,3 +295,62 @@ def test_signal2_ignores_ok_events(tmp_path, monkeypatch):
             + "\n"
         )
     assert loop._signal2_downstream_breakage("pkg/core.py") is False
+
+
+# ── soft-case signal 3 (elevated downstream failure rate) ────────────────────
+def test_soft_case_single_hit_below_threshold(tmp_path, monkeypatch):
+    """A single failure naming a dependent is signal 2's job, NOT signal 3 —
+    the soft-case rate trigger needs a PATTERN (default threshold 2)."""
+    loop = _build_signal2_loop(tmp_path, monkeypatch)
+    _write_failure_event(
+        tmp_path,
+        'E   File "C:/repo/pkg/consumer.py", line 3, in run\n    AttributeError',
+    )
+    assert loop._soft_case_elevated_failure_rate("pkg/core.py") is False
+
+
+def test_soft_case_elevated_rate_flags(tmp_path, monkeypatch):
+    """Multiple recent failures naming the repaired module's dependents must
+    trip the soft-case rate trigger (human-review tier)."""
+    loop = _build_signal2_loop(tmp_path, monkeypatch)
+    for i in range(2):
+        _write_failure_event(
+            tmp_path,
+            f'E   File "C:/repo/pkg/consumer.py", line {i}, in run\n    AttributeError #{i}',
+        )
+    assert loop._soft_case_elevated_failure_rate("pkg/core.py") is True
+
+
+def test_soft_case_ignores_unrelated_failures(tmp_path, monkeypatch):
+    """Failures naming unrelated modules must NOT trip the soft-case trigger."""
+    loop = _build_signal2_loop(tmp_path, monkeypatch)
+    for i in range(5):
+        _write_failure_event(
+            tmp_path,
+            f'E   File "C:/repo/other/mod{i}.py", line 1\n    Error',
+        )
+    assert loop._soft_case_elevated_failure_rate("pkg/core.py") is False
+
+
+def test_soft_case_wired_into_evaluate_as_human_review(tmp_path, monkeypatch):
+    """In the no-related-tests path, an elevated downstream failure rate must
+    flag for HUMAN review (never auto-rollback)."""
+    loop = _build_signal2_loop(tmp_path, monkeypatch)
+    for i in range(2):
+        _write_failure_event(
+            tmp_path,
+            f'E   File "C:/repo/pkg/consumer.py", line {i}\n    AttributeError',
+        )
+    calls = {"auto": 0, "human": 0}
+    loop._auto_rollback = lambda *a, **k: calls.__setitem__("auto", calls["auto"] + 1)
+    loop._flag_for_human = lambda *a, **k: calls.__setitem__("human", calls["human"] + 1)
+    loop._resolve_flag(
+        "rid3",
+        cr.FLAGGED,
+        "signal_3 elevated downstream failure rate; HUMAN REVIEW",
+        "snap3",
+        "pkg/core.py",
+        human_review=True,
+    )
+    assert calls["auto"] == 0
+    assert calls["human"] == 1

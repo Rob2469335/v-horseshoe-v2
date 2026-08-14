@@ -291,6 +291,20 @@ class WatchLoop:
                         file_rel,
                         human_review=True,
                     )
+                elif self._soft_case_elevated_failure_rate(file_rel):
+                    # SOFT CASE (L3 0.5, untested-but-sound): no single clean
+                    # traceback through a dependent, but the repaired module's
+                    # dependents are failing at an ELEVATED rate within the
+                    # window. Correlation-based -> human review only (never
+                    # auto-revert), so a fuzzy signal cannot thrash rollback.
+                    self._resolve_flag(
+                        rid,
+                        "flagged",
+                        "signal_3 elevated downstream failure rate; HUMAN REVIEW",
+                        snapshot_id,
+                        file_rel,
+                        human_review=True,
+                    )
                 else:
                     self._resolve_clear(
                         rid,
@@ -386,6 +400,43 @@ class WatchLoop:
             return False
         except Exception as exc:
             log.warning("WatchLoop: signal-2 check failed (%s); treating as no breakage.", exc)
+            return False
+
+    def _soft_case_elevated_failure_rate(
+        self, file_rel: str, threshold: int = 2
+    ) -> bool:
+        """SOFT-CASE signal (signal 3, human-review tier): an untested-but-sound
+        repair (no related tests, L3 score 0.5) whose dependents start failing at
+        an ELEVATED rate without a single clean traceback through a dependent.
+
+        Correlation-based, so this can ONLY raise a human-review flag — never an
+        automatic rollback (a fuzzy statistical trigger on correlation-not-
+        causation must not thrash diff-scoped reverts).
+
+        Detection: count recent tool_result failures that name the repaired
+        module OR a static dependent module. If that count reaches `threshold`
+        (default 2 — a pattern, not a single blip; single hits are signal 2's
+        job), treat the rate as elevated. Fails open (False) on any error."""
+        try:
+            deps = self._dependent_modules(file_rel)
+            if not deps:
+                return False
+            module = file_rel.replace("\\", "/")[:-3].replace("/", ".")
+            targets = [module] + deps
+            target_paths = [t.replace(".", "/") for t in targets]
+            failures = self._recent_tool_result_failures()
+            if not failures:
+                return False
+            hits = 0
+            for f in failures:
+                h = f.replace("\\", "/")
+                if any(t in h for t in targets) or any(p in h for p in target_paths):
+                    hits += 1
+                    if hits >= threshold:
+                        return True
+            return False
+        except Exception as exc:
+            log.debug("WatchLoop: soft-case rate check failed (%s).", exc)
             return False
 
     def _dependent_modules(self, file_rel: str) -> list:
