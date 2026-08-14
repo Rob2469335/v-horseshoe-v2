@@ -14,10 +14,6 @@
       "command": "npx",
       "args": ["-y", "@upstash/context7-mcp"]
     },
-    "semgrep": {
-      "command": "semgrep",
-      "args": ["mcp", "-t", "stdio"]
-    },
     "github": {
       "command": "C:\\Users\\rober\\Projects\\v-horseshoe-v2\\bin\\mcp\\github\\github-mcp-server.exe",
       "args": ["stdio"],
@@ -28,6 +24,14 @@
     "s2_scholar": {
       "command": "uvx",
       "args": ["s2-mcp-server"]
+    },
+    "seq_thinking": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+    },
+    "code_review": {
+      "command": "npx",
+      "args": ["-y", "@opencodereview/mcp-server"]
     }
   }
 }
