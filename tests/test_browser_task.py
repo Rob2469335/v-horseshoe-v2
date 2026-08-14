@@ -172,3 +172,73 @@ def test_fill_form_validity_gate_reports_incomplete(monkeypatch):
     # The form has a required empty field -> ok:False with incomplete reported.
     assert r.get("ok") is False
     assert "incomplete" in r or "error" in r
+
+
+def _fake_completion_response(content: str, reasoning: str = ""):
+    """A minimal litellm-compatible acompletion response."""
+    from types import SimpleNamespace
+    return SimpleNamespace(choices=[SimpleNamespace(
+        message=SimpleNamespace(
+            content=content,
+            reasoning_content=reasoning,
+            finish_reason=None,
+            model=None,
+        )
+    )])
+
+
+def test_planner_salvages_decision_from_reasoning_content(monkeypatch):
+    """deepseek-v4-flash reasons inside `reasoning_content` before emitting the
+    JSON decision in `content`. With a small output budget (the pre-fix
+    max_tokens=500), the model ran out of tokens mid-reasoning and returned
+    content="" -> the planner raised "did not return JSON" and the web-task
+    failed right after the first navigate. The planner must (1) request a large
+    budget + json_object so the decision actually lands in content, and (2) as a
+    last resort salvage the JSON decision from reasoning_content."""
+    import litellm
+
+    calls = {}
+
+    async def fake_acompletion(**kwargs):
+        calls["kwargs"] = kwargs
+        return _fake_completion_response(
+            content="",
+            reasoning=(
+                "Let me think about this page... I should click the Search button. "
+                'The decision is {"action": "click", "params": {"name": "Search"}, '
+                '"reason": "submit the query"}'
+            ),
+        )
+
+    monkeypatch.setattr(litellm, "acompletion", fake_acompletion)
+
+    decision = asyncio.run(bt._get_planner_decision("a prompt"))
+    assert decision["action"] == "click"
+    assert decision["params"] == {"name": "Search"}
+    kw = calls["kwargs"]
+    assert kw["max_tokens"] >= 3000, (
+        "small max_tokens truncates deepseek-v4-flash mid-reasoning and "
+        f"returns empty content (got {kw['max_tokens']})"
+    )
+    assert kw["response_format"] == {"type": "json_object"}, (
+        "the OpenCode Go/Zen proxy rejects json_schema and only json_object "
+        "guarantees the decision is emitted in content"
+    )
+
+
+def test_planner_parses_content_when_present(monkeypatch):
+    """The normal path: the decision arrives in `content` and must parse."""
+    import litellm
+
+    async def fake_acompletion(**kwargs):
+        return _fake_completion_response(
+            content=(
+                '{"action": "navigate", "params": {"url": "https://chess.com"}, '
+                '"reason": "start the task"}'
+            ),
+        )
+
+    monkeypatch.setattr(litellm, "acompletion", fake_acompletion)
+    decision = asyncio.run(bt._get_planner_decision("a prompt"))
+    assert decision["action"] == "navigate"
+    assert decision["params"] == {"url": "https://chess.com"}

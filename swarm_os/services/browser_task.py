@@ -87,9 +87,18 @@ async def _get_planner_decision(prompt: str) -> dict:
     resp = await litellm.acompletion(
         model="openai/deepseek-v4-flash", messages=[{"role": "user", "content": prompt}],
         api_base=base, api_key=key, custom_llm_provider="openai",
-        max_tokens=500, timeout=90,
+        # LARGE output budget: deepseek-v4-flash reasons heavily (lives in
+        # `reasoning_content`) before emitting the JSON decision in `content`.
+        # A 500-token cap ran out mid-reasoning -> empty content -> the planner
+        # "did not return JSON" error immediately after the first navigate.
+        max_tokens=3000, timeout=90,
+        # json_object is the ONLY response_format this OpenCode Go/Zen proxy
+        # accepts (verified in _llm_client._cloud_response_format) and
+        # guarantees the decision is emitted in `content`, not just reasoning.
+        response_format={"type": "json_object"},
     )
-    text = (resp.choices[0].message.content or "").strip()
+    choice = resp.choices[0].message
+    text = (choice.content or "").strip()
     # Robust JSON extraction: find the JSON object even if the model wraps it in
     # prose or markdown fences. Try the last {...} block (the decision).
     candidates = re.findall(r"\{.*\}", text, re.DOTALL)
@@ -100,7 +109,19 @@ async def _get_planner_decision(prompt: str) -> dict:
                 return obj
         except Exception:
             continue
-    raise ValueError(f"planner did not return JSON: {text[:200]}")
+    # LAST-RESORT fallback: if `content` was empty or unparseable, salvage the
+    # decision JSON from the reasoning trace (the observed failure mode).
+    reasoning = getattr(choice, "reasoning_content", None) or ""
+    if reasoning.strip():
+        candidates = re.findall(r"\{.*\}", reasoning, re.DOTALL)
+        for cand in reversed(candidates):
+            try:
+                obj = json.loads(cand)
+                if isinstance(obj, dict) and obj.get("action"):
+                    return obj
+            except Exception:
+                continue
+    raise ValueError(f"planner did not return JSON: {(text or reasoning)[:200]}")
 
 
 def _clean_a11y(a11y: list, limit: int = 40) -> list:
