@@ -102,12 +102,68 @@ def run_test_suite(
             encoding="utf-8",
             errors="replace",
         )
-        passed = result.returncode == 0
-        return passed, result.stdout + "\n" + result.stderr
+        if result.returncode == 0:
+            return True, result.stdout + "\n" + result.stderr
+
+        # FLAKE-AWARE: a first-run failure is re-run once against only the
+        # last-failed subset (--lf), scoped to the same targets. A passing
+        # re-run means the failure was a flaky test, NOT a broken agent patch —
+        # do not reject a sound patch on a transient failure (same semantics as
+        # repair_engine._run_related_tests).
+        retry_cmd = (
+            [sys.executable, "-m", "pytest", "--tb=short", "--lf"]
+            + test_targets
+        )
+        retry_result = subprocess.run(
+            retry_cmd,
+            capture_output=True,
+            text=True,
+            cwd=PROJECT_ROOT,
+            timeout=120,
+            encoding="utf-8",
+            errors="replace",
+        )
+        combined = (
+            result.stdout + "\n" + result.stderr
+            + "\n--- last-failed re-run ---\n"
+            + retry_result.stdout + "\n" + retry_result.stderr
+        )
+        if retry_result.returncode == 0:
+            return True, "[flaky] first run failed, last-failed re-run passed:\n" + combined
+        return False, combined
     except subprocess.TimeoutExpired:
         return False, "Test execution timed out after 120 seconds."
     except Exception as e:
         return False, f"Failed to execute tests: {e}"
+
+
+def _scan_changed_for_security(changed: set[str]) -> tuple[bool, str]:
+    """Run the security gate over every `.py` file changed this attempt.
+
+    An agent patch (especially one drafted from internet research) must not
+    introduce a banned construct (exec/eval/subprocess/socket/ctypes/pty/shlex,
+    destructive os calls) before the goal loop accepts it. Returns (ok, message);
+    any violation message names the offending file + reason for the correction
+    feedback loop.
+    """
+    from swarm_os.services.security_gate import SecurityGate, SecurityGateViolation
+
+    violations = []
+    for rel in sorted(changed or set()):
+        if not rel.endswith(".py"):
+            continue
+        file_path = PROJECT_ROOT / rel
+        if not file_path.exists():
+            continue
+        try:
+            SecurityGate.scan_file(file_path)
+        except SecurityGateViolation as e:
+            violations.append(f"{rel}: {e}")
+        except Exception as e:
+            violations.append(f"{rel}: security scan error: {e}")
+    if violations:
+        return False, "\n".join(violations)
+    return True, ""
 
 
 def _verify_goal_with_reviewer(goal: str, final_msg: str) -> tuple[bool, str]:
@@ -614,19 +670,32 @@ def run_autonomous_goal_loop(
                     )
                     passed, logs = _verify_goal_with_reviewer(goal, final_msg)
                 else:
-                    console.print("[dim]Running test verification suite...[/dim]")
-                    test_passed, test_logs = run_test_suite(
-                        goal, baseline=attempt_baseline, changed=changed_this_attempt
-                    )
-                    if test_passed is None:
-                        # No tests cover this attempt's changes — do NOT pass on
-                        # that alone. Ask the reviewer whether the goal was met.
-                        console.print(
-                            "[dim]No tests cover the changed files. Verifying goal...[/dim]"
+                    console.print("[dim]Running security gate on changed files...[/dim]")
+                    sec_ok, sec_logs = _scan_changed_for_security(changed_this_attempt)
+                    if not sec_ok:
+                        passed = False
+                        logs = (
+                            "Security Gate rejected a modified file (banned "
+                            "construct — exec/eval/subprocess/socket/ctypes/pty/"
+                            "shlex or destructive os call):\n\n" + sec_logs
                         )
-                        passed, logs = _verify_goal_with_reviewer(goal, final_msg)
+                        console.print(
+                            "[bold red]✗ Security Gate rejected a modified file.[/bold red]"
+                        )
                     else:
-                        passed, logs = test_passed, test_logs
+                        console.print("[dim]Running test verification suite...[/dim]")
+                        test_passed, test_logs = run_test_suite(
+                            goal, baseline=attempt_baseline, changed=changed_this_attempt
+                        )
+                        if test_passed is None:
+                            # No tests cover this attempt's changes — do NOT pass on
+                            # that alone. Ask the reviewer whether the goal was met.
+                            console.print(
+                                "[dim]No tests cover the changed files. Verifying goal...[/dim]"
+                            )
+                            passed, logs = _verify_goal_with_reviewer(goal, final_msg)
+                        else:
+                            passed, logs = test_passed, test_logs
 
         if passed:
             console.print()

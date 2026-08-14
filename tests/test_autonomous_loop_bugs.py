@@ -526,3 +526,109 @@ class TestBug5VerificationGateNoRubberStamp:
             )
             is None
         )
+
+
+# ---------------------------------------------------------------------------
+# Goal-loop verification hardening (2026 autonomy gate)
+# Goal: (a) run_test_suite is flake-aware — a first-run failure re-runs only the
+#       last-failed subset (--lf); a passing re-run means a flaky test, not a
+#       broken agent patch. (b) files changed by the agent are security-scanned
+#       (SecurityGate.scan_file) before acceptance, so an LLM patch (possibly
+#       drafted from internet research) cannot introduce a banned construct.
+# ---------------------------------------------------------------------------
+
+
+class TestGoalLoopFlakeAwareTests:
+    """run_test_suite must re-run the failed subset once (--lf) before declaring
+    failure — matching repair_engine._run_related_tests semantics."""
+
+    def _target(self):
+        return "make tests/test_auth.py pass"
+
+    def test_first_run_fail_rerun_pass_is_flaky_pass(self):
+        mod = _reload_autonomous()
+        fail = MagicMock()
+        fail.returncode = 1
+        fail.stdout = "E   AssertionError: boom"
+        fail.stderr = ""
+        ok = MagicMock()
+        ok.returncode = 0
+        ok.stdout = "1 passed"
+        ok.stderr = ""
+        with patch("subprocess.run", side_effect=[fail, ok]) as mocked:
+            passed, msg = mod.run_test_suite(self._target())
+        assert passed is True, (
+            "a first-run failure that passes on the last-failed re-run is a "
+            "flake, not a broken patch"
+        )
+        assert "[flaky]" in msg
+        cmds = [c.args[0] for c in mocked.call_args_list]
+        assert any("--lf" in c for c in cmds), "must re-run the failed subset with --lf"
+
+    def test_first_run_fail_rerun_fail_is_failure(self):
+        mod = _reload_autonomous()
+        fail = MagicMock()
+        fail.returncode = 1
+        fail.stdout = "E   AssertionError: boom"
+        fail.stderr = ""
+        with patch("subprocess.run", side_effect=[fail, fail]):
+            passed, msg = mod.run_test_suite(self._target())
+        assert passed is False
+        assert "[flaky]" not in msg
+        assert "AssertionError" in msg
+
+    def test_first_run_pass_no_rerun(self):
+        mod = _reload_autonomous()
+        ok = MagicMock()
+        ok.returncode = 0
+        ok.stdout = "1 passed"
+        ok.stderr = ""
+        with patch("subprocess.run", side_effect=[ok]) as mocked:
+            passed, msg = mod.run_test_suite(self._target())
+        assert passed is True
+        assert mocked.call_count == 1, "passing run must not trigger a --lf rerun"
+
+
+class TestGoalLoopSecurityGate:
+    """Files changed by the agent must pass SecurityGate.scan_file before the
+    goal loop accepts them (an LLM patch from internet research must not carry a
+    banned construct)."""
+
+    def test_banned_construct_rejected(self, tmp_path, monkeypatch):
+        mod = _reload_autonomous()
+        bad = tmp_path / "evil.py"
+        bad.write_text("import subprocess\nsubprocess.run(['x'])\n", encoding="utf-8")
+        monkeypatch.setattr(mod, "PROJECT_ROOT", tmp_path)
+        ok, msg = mod._scan_changed_for_security({"evil.py"})
+        assert ok is False
+        assert "evil.py" in msg
+        assert "subprocess" in msg
+
+    def test_clean_file_passes(self, tmp_path, monkeypatch):
+        mod = _reload_autonomous()
+        good = tmp_path / "good.py"
+        good.write_text("def f():\n    return 1 + 2\n", encoding="utf-8")
+        monkeypatch.setattr(mod, "PROJECT_ROOT", tmp_path)
+        ok, msg = mod._scan_changed_for_security({"good.py"})
+        assert ok is True
+        assert msg == ""
+
+    def test_non_py_ignored(self, tmp_path, monkeypatch):
+        mod = _reload_autonomous()
+        # A non-.py file with suspicious content must not be scanned at all.
+        (tmp_path / "notes.txt").write_text(
+            "import subprocess\n", encoding="utf-8"
+        )
+        monkeypatch.setattr(mod, "PROJECT_ROOT", tmp_path)
+        ok, msg = mod._scan_changed_for_security({"notes.txt"})
+        assert ok is True, "non-.py files must not be security-scanned"
+
+    def test_wired_into_accept_path(self):
+        """The goal loop's accept path must call the security scan on changed
+        files before the test suite."""
+        mod = _reload_autonomous()
+        src = Path(mod.__file__).read_text(encoding="utf-8")
+        assert "_scan_changed_for_security" in src
+        # The scan must be invoked on the files-changed path (before run_test_suite).
+        assert "Running security gate on changed files" in src
+
