@@ -80,15 +80,19 @@ class CitatorReport:
     message: str = ""
 
 
-def _pace() -> None:
-    time.sleep(_PACE_S)
+async def _pace() -> None:
+    # CourtListener free tier rate-limits ~5 req/min; but sleeping the WHOLE
+    # event loop (old `time.sleep`) froze every concurrent agent stream,
+    # heartbeat, and daemon for minutes during a citator poll. The rate-limit
+    # intent is preserved with an ASYNC sleep — the loop stays responsive.
+    await asyncio.sleep(_PACE_S)
 
 
 async def _resolve_opinion_id(client: httpx.AsyncClient, cite: str) -> int | None:
     """Resolve a case cite to its CourtListener opinion id via the two-step
     seam (citation-lookup -> cluster -> opinions-by-cluster). Returns None on
     any failure (caller records it, never raises)."""
-    _pace()
+    await _pace()
     try:
         resp = await client.post(
             CITATION_LOOKUP_URL, data={"text": cite}, timeout=30.0,
@@ -108,7 +112,7 @@ async def _resolve_opinion_id(client: httpx.AsyncClient, cite: str) -> int | Non
     cluster_id = clusters[0].get("id")
     if not cluster_id:
         return None
-    _pace()
+    await _pace()
     try:
         opin = await client.get(
             OPINIONS_URL, params={"cluster": cluster_id, "format": "json"}, timeout=30.0,
@@ -131,7 +135,7 @@ async def _resolve_opinion_id(client: httpx.AsyncClient, cite: str) -> int | Non
 async def _forward_citing(client: httpx.AsyncClient, opinion_id: int) -> list[dict]:
     """GET /opinions-cited/?cited_opinion=<id> — cases citing this opinion,
     each with a `depth`. Returns [{citing_opinion, depth}]. Empty on outage."""
-    _pace()
+    await _pace()
     try:
         resp = await client.get(
             OPINIONS_CITED_URL,
@@ -157,7 +161,7 @@ async def _forward_citing(client: httpx.AsyncClient, opinion_id: int) -> list[di
 async def _citing_opinion_text(client: httpx.AsyncClient, citing_id: int) -> tuple[str, str]:
     """Fetch a citing opinion's text + case name (for treatment classification).
     Returns (text, case_name); empty on outage."""
-    _pace()
+    await _pace()
     try:
         resp = await client.get(
             OPINIONS_URL, params={"id": citing_id, "format": "json"}, timeout=30.0,

@@ -383,12 +383,9 @@ async def _dispatch(tool_name: str, payload: dict, *, trace_hook=None) -> dict:
                                 ),
                             }
                         else:
-                            res_obj = filesystem_handler(payload, _ROOT, trace_hook=trace_hook)
                             async with asyncio.timeout(180.0):
-                                result = (
-                                    await res_obj
-                                    if inspect.isawaitable(res_obj)
-                                    else res_obj
+                                result = await asyncio.to_thread(
+                                    filesystem_handler, payload, _ROOT, trace_hook=trace_hook
                                 )
                     elif op in ("write", "write_file", "create", "create_file"):
                         # Read-before-write: writing over an EXISTING file the agent has
@@ -414,20 +411,14 @@ async def _dispatch(tool_name: str, payload: dict, *, trace_hook=None) -> dict:
                                 ),
                             }
                         else:
-                            res_obj = filesystem_handler(payload, _ROOT, trace_hook=trace_hook)
                             async with asyncio.timeout(180.0):
-                                result = (
-                                    await res_obj
-                                    if inspect.isawaitable(res_obj)
-                                    else res_obj
+                                result = await asyncio.to_thread(
+                                    filesystem_handler, payload, _ROOT, trace_hook=trace_hook
                                 )
                     else:
-                        res_obj = filesystem_handler(payload, _ROOT, trace_hook=trace_hook)
                         async with asyncio.timeout(180.0):
-                            result = (
-                                await res_obj
-                                if inspect.isawaitable(res_obj)
-                                else res_obj
+                            result = await asyncio.to_thread(
+                                filesystem_handler, payload, _ROOT, trace_hook=trace_hook
                             )
                     if operation == "read" and result.get("ok"):
                         _get_read_cache()[cache_key] = result.get("result")
@@ -597,21 +588,24 @@ async def _dispatch(tool_name: str, payload: dict, *, trace_hook=None) -> dict:
             try:
                 async with asyncio.timeout(60.0):
                     if op in ("email_list", "list"):
-                        result = email_service.email_list(
+                        result = await asyncio.to_thread(
+                            email_service.email_list,
                             folder=payload.get("folder", "INBOX"),
                             limit=int(payload.get("limit", 20)),
                             unread_only=bool(payload.get("unread_only")),
                             account=payload.get("account"),
                         )
                     elif op in ("email_search", "search"):
-                        result = email_service.email_search(
+                        result = await asyncio.to_thread(
+                            email_service.email_search,
                             payload.get("query", ""),
                             folder=payload.get("folder", "INBOX"),
                             limit=int(payload.get("limit", 20)),
                             account=payload.get("account"),
                         )
                     elif op in ("email_read", "read"):
-                        result = email_service.email_read(
+                        result = await asyncio.to_thread(
+                            email_service.email_read,
                             payload.get("uid", ""),
                             folder=payload.get("folder", "INBOX"),
                             account=payload.get("account"),
@@ -619,7 +613,8 @@ async def _dispatch(tool_name: str, payload: dict, *, trace_hook=None) -> dict:
                     elif op in ("email_draft", "draft"):
                         # Stage a sendable draft; returns a send_token that MUST
                         # be routed through the approval gate before email_send.
-                        result = email_service.email_draft(
+                        result = await asyncio.to_thread(
+                            email_service.email_draft,
                             to=payload.get("to", ""),
                             subject=payload.get("subject", ""),
                             body=payload.get("body", ""),
@@ -629,7 +624,8 @@ async def _dispatch(tool_name: str, payload: dict, *, trace_hook=None) -> dict:
                         )
                     elif op in ("email_send", "send"):
                         # Human-approved send: only proceeds with confirmed=True.
-                        result = email_service.email_send(
+                        result = await asyncio.to_thread(
+                            email_service.email_send,
                             payload.get("send_token", ""),
                             confirmed=bool(payload.get("confirmed")),
                         )

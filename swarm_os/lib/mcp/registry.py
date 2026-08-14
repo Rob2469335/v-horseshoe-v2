@@ -36,7 +36,12 @@ class MCPRegistry:
         logger.debug(f"MCP call: {tool} with params: {params}")
         
         if tool == "filesystem":
-            return await filesystem_handler(params, self.root, self.trace_hook)
+            import asyncio
+            # filesystem_handler is SYNC (blocking file I/O) — offload so a
+            # recursive grep/list over the repo never blocks the event loop.
+            return await asyncio.to_thread(
+                filesystem_handler, params, self.root, self.trace_hook
+            )
         
         if tool == "playwright":
             return await playwright_handler(params, self.trace_hook)

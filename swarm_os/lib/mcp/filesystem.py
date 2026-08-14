@@ -6,9 +6,11 @@ from typing import Any, Dict
 
 logger = logging.getLogger(__name__)
 
-async def filesystem_handler(params: Dict[str, Any], root: Path, trace_hook=None) -> Dict[str, Any]:
+def filesystem_handler(params: Dict[str, Any], root: Path, trace_hook=None) -> Dict[str, Any]:
     """
-    Handles filesystem operations within a sandboxed root.
+    Handles filesystem operations within a sandboxed root. SYNCHRONOUS: it does
+    blocking file I/O (reads, writes, recursive walks) and must be called via
+    asyncio.to_thread from async callers so it never blocks the event loop.
     """
     op_raw = str(params.get("operation", "read")).lower().strip()
     if op_raw in ("read", "read_file", "read_all", "read_files", "read_multiple", "view", "view_file", "cat", "get", "get_file"):

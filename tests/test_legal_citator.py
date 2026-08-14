@@ -142,3 +142,34 @@ async def test_poll_authority_records_resolve_failure(tmp_path, monkeypatch):
                                       max_authorities=1)
     assert report.authorities[0]["error"] == "resolve_failed"
     assert _load_state()["999 F.3d 999"]["error"] == "resolve_failed"
+
+
+@pytest.mark.asyncio
+async def test_pace_is_async_not_blocking_sleep(monkeypatch):
+    """The CourtListener rate limiter must be an ASYNC sleep — the old
+    `time.sleep(12.5)` blocked the WHOLE FastAPI event loop (all agent streams,
+    heartbeats, daemons) for minutes during a citator poll, and made the
+    `asyncio.timeout` on the endpoint unable to fire mid-sleep. An async sleep
+    keeps the loop responsive while preserving the rate limit."""
+    import asyncio
+    import inspect
+    import swarm_os.services.legal.citator as ct
+
+    assert inspect.iscoroutinefunction(ct._pace), (
+        "_pace must be async — a sync time.sleep freezes the event loop"
+    )
+    # The four rate-limited call sites must AWAIT it.
+    import swarm_os.services.legal.citator as _ct
+    src = inspect.getsource(_ct)
+    assert src.count("await _pace()") == 4, (
+        "all four rate-limited legs must await _pace()"
+    )
+    # And it must actually yield to the loop (an await asyncio.sleep), not run a
+    # blocking time.sleep on the loop thread.
+    with patch.object(ct, "_PACE_S", 0.001):
+        await ct._pace()  # must complete quickly and not block
+
+    # time.sleep must not be CALLED in the pace implementation anymore.
+    pace_src = inspect.getsource(ct._pace)
+    assert "time.sleep(" not in pace_src
+    assert "asyncio.sleep(" in pace_src
