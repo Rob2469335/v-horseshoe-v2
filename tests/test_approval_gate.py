@@ -56,6 +56,47 @@ def test_read_only_ops_are_allow():
     assert ar.agent_tool_policy("git", "reset") == ar.DENY
 
 
+@pytest.mark.asyncio
+async def test_git_operation_cannot_smuggle_arguments():
+    """The git tool's only caller input is `operation`, which is whitelisted and
+    used as a dict key to select a hardcoded argv list — caller text never
+    reaches the subprocess as an argument. A hostile operation (metacharacters,
+    path-traversal, unknown) must return an error WITHOUT spawning git."""
+    from runtime_v2.services.tool_executor import run as te_run
+
+    spawned = []
+    orig = None
+    try:
+        import asyncio
+        orig = asyncio.create_subprocess_exec
+        async def _spy(*args, **kwargs):
+            spawned.append(args)
+            raise RuntimeError("git should not spawn for this input")
+        asyncio.create_subprocess_exec = _spy  # type: ignore[assignment]
+        result = await te_run("git", {"operation": "diff; rm -rf /"})
+        assert result.get("ok") is False
+        result2 = await te_run("git", {"operation": "../etc/passwd"})
+        assert result2.get("ok") is False
+        assert spawned == [], f"git spawned for hostile input: {spawned}"
+        # A VALID op must spawn EXACTLY the hardcoded argv — never caller text.
+        spawned.clear()
+        def _capture(*args, **kwargs):
+            spawned.append(args)
+            raise RuntimeError("capture only")
+        asyncio.create_subprocess_exec = _capture  # type: ignore[assignment]
+        try:
+            await te_run("git", {"operation": "diff", "path": "../../etc/passwd", "ref": "HEAD; echo pwned"})
+        except RuntimeError:
+            pass
+        assert spawned, "git diff should spawn"
+        argv = spawned[0]
+        assert argv == ("git", "diff"), f"argv had extra caller input: {argv}"
+    finally:
+        if orig is not None:
+            asyncio.create_subprocess_exec = orig  # type: ignore[assignment]
+
+
+
 def test_side_effecting_ops_require_confirm():
     assert ar.agent_tool_policy("filesystem", "write") == ar.ALWAYS_CONFIRM
     assert ar.agent_tool_policy("filesystem", "patch") == ar.ALWAYS_CONFIRM
