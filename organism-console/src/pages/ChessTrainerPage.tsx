@@ -626,11 +626,16 @@ export default function ChessTrainerPage() {
   const [gmExplain, setGmExplain] = useState<{ ok: boolean; explanation?: string; gm_move_san?: string; degraded?: boolean; error?: string } | null>(null)
 
   // chess.com personalization.
-  const [ccUsername, setCcUsername] = useState("")
+  const [ccUsername, setCcUsername] = useState(() => localStorage.getItem("chesscom_username") ?? "")
   const [ccProfile, setCcProfile] = useState<ChessProfile | null>(null)
   const [ccProfileLoading, setCcProfileLoading] = useState(false)
   const [ccJob, setCcJob] = useState<AnalysisJob | null>(null)
   const [ccPoll, setCcPoll] = useState<NodeJS.Timeout | null>(null)
+
+  const saveCcUsername = (name: string) => {
+    setCcUsername(name)
+    if (name.trim()) localStorage.setItem("chesscom_username", name.trim())
+  }
 
   const buildProfile = async () => {
     if (!ccUsername.trim()) return
@@ -1089,7 +1094,7 @@ export default function ChessTrainerPage() {
                   className="flex-1 rounded-md border border-white/10 bg-black/40 px-3 py-1.5 text-sm"
                   placeholder="chess.com username"
                   value={ccUsername}
-                  onChange={(e) => setCcUsername(e.target.value)}
+                  onChange={(e) => saveCcUsername(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && buildProfile()}
                 />
                 <Button size="sm" variant="outline" onClick={buildProfile} disabled={ccProfileLoading}>
