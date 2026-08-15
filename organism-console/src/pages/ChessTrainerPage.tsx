@@ -221,6 +221,31 @@ type GmSession = {
   error?: string
 }
 
+type ChessProfile = {
+  ok: boolean
+  username?: string
+  games?: number
+  record?: { wins: number; losses: number; draws: number; white_wins: number; black_wins: number }
+  opening_report?: Array<{ opening: string; games: number; score_pct: number }>
+  time_controls?: Array<{ tc: string; games: number; score_pct: number }>
+  think_seconds?: Record<string, number | null>
+  journey?: Array<{ date: number; rating?: number | null; opp?: number | null; result?: string | null }>
+  journey_summary?: { first?: number; current?: number; peak?: number; trough?: number; best_gain?: number; worst_drop?: number }
+  error?: string
+}
+
+type AnalysisJob = {
+  ok: boolean
+  job_id?: string
+  resumed?: boolean
+  username?: string
+  status?: string
+  done_games?: number
+  total_games?: number
+  mistakes_queued?: number
+  error?: string
+}
+
 type GmGuess = {
   ok: boolean
   correct?: boolean
@@ -599,6 +624,58 @@ export default function ChessTrainerPage() {
   const [gmSession, setGmSession] = useState<GmSession | null>(null)
   const [gmGuessResult, setGmGuessResult] = useState<GmGuess | null>(null)
   const [gmExplain, setGmExplain] = useState<{ ok: boolean; explanation?: string; gm_move_san?: string; degraded?: boolean; error?: string } | null>(null)
+
+  // chess.com personalization.
+  const [ccUsername, setCcUsername] = useState("")
+  const [ccProfile, setCcProfile] = useState<ChessProfile | null>(null)
+  const [ccProfileLoading, setCcProfileLoading] = useState(false)
+  const [ccJob, setCcJob] = useState<AnalysisJob | null>(null)
+  const [ccPoll, setCcPoll] = useState<NodeJS.Timeout | null>(null)
+
+  const buildProfile = async () => {
+    if (!ccUsername.trim()) return
+    setCcProfileLoading(true)
+    setCcProfile(null)
+    try {
+      const p = await (await fetch(`${backendUrl}/chess/trainer/import/chesscom/profile`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: ccUsername.trim() }),
+      })).json() as ChessProfile
+      setCcProfile(p)
+    } catch {
+      setCcProfile({ ok: false, error: "profile build failed" })
+    } finally {
+      setCcProfileLoading(false)
+    }
+  }
+
+  const startAnalysis = async () => {
+    if (!ccUsername.trim()) return
+    setCcJob(null)
+    try {
+      const j = await (await fetch(`${backendUrl}/chess/trainer/analysis/start`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: ccUsername.trim() }),
+      })).json() as AnalysisJob
+      setCcJob(j)
+      // Poll status every 5s while running.
+      if (ccPoll) clearInterval(ccPoll)
+      const poll = setInterval(async () => {
+        try {
+          const s = await (await fetch(`${backendUrl}/chess/trainer/analysis/status/${j.job_id}`)).json() as AnalysisJob
+          setCcJob(s)
+          if (s.status === "done" || s.status === "error") clearInterval(poll)
+        } catch { /* ignore */ }
+      }, 5000)
+      setCcPoll(poll)
+    } catch {
+      setCcJob({ ok: false, error: "could not start analysis" })
+    }
+  }
+
+  const ccLoading = ccProfileLoading || (ccJob?.status === "running")
 
   const loadGmGames = useCallback(async () => {
     try {
@@ -994,6 +1071,128 @@ export default function ChessTrainerPage() {
                   Find and capture: {drill.find.hanging.map((h) => `the ${h.piece} on ${h.square}`).join(", ")}
                 </div>
               ) : null}
+            </CardContent>
+          </Card>
+
+          <Card className="border-white/10 bg-panel">
+            <CardHeader>
+              <CardTitle className="text-base">My chess.com games</CardTitle>
+              <CardDescription>
+                Import ALL your real games (public API, no login) so the trainer knows your actual
+                weaknesses. Build your profile + journey instantly, then run the background engine
+                analysis to queue every blunder into your spaced practice.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="flex gap-2">
+                <input
+                  className="flex-1 rounded-md border border-white/10 bg-black/40 px-3 py-1.5 text-sm"
+                  placeholder="chess.com username"
+                  value={ccUsername}
+                  onChange={(e) => setCcUsername(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && buildProfile()}
+                />
+                <Button size="sm" variant="outline" onClick={buildProfile} disabled={ccProfileLoading}>
+                  {ccProfileLoading ? "Building…" : "Profile + journey"}
+                </Button>
+                <Button size="sm" variant="outline" onClick={startAnalysis} disabled={ccJob?.status === "running"}>
+                  {ccJob?.status === "running" ? "Analyzing…" : "Analyze all games"}
+                </Button>
+              </div>
+
+              {ccJob?.status === "running" && (
+                <div className="rounded-lg border border-sky-400/30 bg-sky-950/10 p-3 text-sm text-sky-200">
+                  <div className="font-semibold">Background analysis running</div>
+                  <div className="text-xs text-white/70">
+                    {ccJob.done_games ?? 0} / {ccJob.total_games ?? "?"} games · {ccJob.mistakes_queued ?? 0} mistakes
+                    queued so far. Leave the computer on — it resumes if you reboot.
+                  </div>
+                </div>
+              )}
+              {ccJob?.status === "done" && (
+                <div className="rounded-lg border border-emerald-400/30 bg-emerald-950/10 p-3 text-sm text-emerald-200">
+                  Done — {ccJob.done_games} games analyzed, {ccJob.mistakes_queued} mistakes queued for review.
+                </div>
+              )}
+              {ccJob?.error && <div className="text-xs text-red-300">{ccJob.error}</div>}
+
+              {ccProfile?.error && <div className="text-xs text-red-300">{ccProfile.error}</div>}
+
+              {ccProfile?.ok && (
+                <div className="space-y-3">
+                  <div className="flex flex-wrap gap-2">
+                    <Badge className="border-white/20 bg-white/5 text-white/70">{ccProfile.games} games</Badge>
+                    {ccProfile.record && (
+                      <Badge className="border-emerald-400/30 bg-emerald-400/5 text-emerald-300">
+                        {ccProfile.record.wins}W {ccProfile.record.draws}D {ccProfile.record.losses}L
+                      </Badge>
+                    )}
+                    {ccProfile.journey_summary?.peak != null && (
+                      <Badge className="border-white/20 bg-white/5 text-white/70">
+                        peak {ccProfile.journey_summary.peak} → now {ccProfile.journey_summary.current}
+                      </Badge>
+                    )}
+                  </div>
+
+                  {ccProfile.journey && ccProfile.journey.length > 0 && (
+                    <div>
+                      <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-white/40">
+                        Your journey (rating per game)
+                      </div>
+                      <div className="flex h-20 items-end gap-px overflow-hidden rounded-md bg-black/40 p-1">
+                        {ccProfile.journey.map((p, i) => {
+                          const r = p.rating ?? 0
+                          const min = ccProfile.journey_summary?.trough ?? r
+                          const max = ccProfile.journey_summary?.peak ?? r
+                          const h = max > min ? ((r - min) / (max - min)) * 100 : 50
+                          const win = p.result === "win"
+                          return (
+                            <div
+                              key={i}
+                              title={`${p.result} · ${r}`}
+                              className="flex-1 rounded-sm"
+                              style={{
+                                height: `${Math.max(3, Math.min(100, h))}%`,
+                                backgroundColor: win ? "#3fae6a" : p.result === "loss" ? "#d2554d" : "#4a6fa5",
+                              }}
+                            />
+                          )
+                        })}
+                      </div>
+                      {ccProfile.journey_summary && (
+                        <div className="mt-1 text-[10px] text-white/40">
+                          {ccProfile.journey_summary.first} first · peak {ccProfile.journey_summary.peak} · trough{" "}
+                          {ccProfile.journey_summary.trough} · best climb +{ccProfile.journey_summary.best_gain} · worst
+                          drop {ccProfile.journey_summary.worst_drop}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {ccProfile.think_seconds && (
+                    <div className="text-xs text-white/60">
+                      Avg think (s): opening {ccProfile.think_seconds.opening ?? "—"} · middlegame{" "}
+                      {ccProfile.think_seconds.middlegame ?? "—"} · endgame {ccProfile.think_seconds.endgame ?? "—"}
+                    </div>
+                  )}
+
+                  {ccProfile.opening_report && ccProfile.opening_report.length > 0 && (
+                    <div>
+                      <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-white/40">
+                        Openings (most played)
+                      </div>
+                      <ul className="space-y-0.5 text-xs text-white/60">
+                        {ccProfile.opening_report.slice(0, 5).map((o, i) => (
+                          <li key={i} className="flex justify-between gap-2">
+                            <span className="truncate font-mono">{o.opening}</span>
+                            <span className="shrink-0">{o.games}g · {o.score_pct}%</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
             </CardContent>
           </Card>
 
