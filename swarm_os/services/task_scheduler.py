@@ -320,9 +320,33 @@ async def run_due_tasks(runner=None) -> list[str]:
             _record_result(tid, result)
             ran.append(tid)
             log.info("scheduled task %s ran: %s", tid, str(result)[:120])
+            await _notify_task_complete(tid, task, result)
         except Exception as exc:
             log.warning("scheduled task %s failed: %s", tid, exc)
     return ran
+
+
+async def _notify_task_complete(task_id: str, task: dict, result: dict) -> None:
+    """Push a notify-when-done to the Telegram owner when a scheduled task runs.
+    No-op when the bot is disabled."""
+    try:
+        from .telegram_center import enabled, notify
+
+        if not enabled():
+            return
+        goal = str(task.get("goal", ""))[:120]
+        ok = bool(result.get("ok"))
+        status = "✅" if ok else "⚠️"
+        detail = ""
+        if result.get("blocked"):
+            detail = f" — blocked: {result.get('reason', '')}"
+        elif result.get("type") == "email_summary":
+            detail = f" — {result.get('count', 0)} emails"
+        elif result.get("ingested") is not None:
+            detail = f" — {result.get('ingested')} new items"
+        await notify(f"{status} Task <b>{goal}</b> done{detail}")
+    except Exception as exc:
+        log.warning("task notify failed: %s", exc)
 
 
 def _record_result(task_id: str, result: dict) -> None:

@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     snapshots_dir: Path = Path("data") / "snapshots"
     llamacpp_base_url: str = "http://127.0.0.1:8080/v1"
     qdrant_url: str = "http://127.0.0.1:6333"
+    telegram_bot_token: str = ""
+    telegram_owner_id: str = ""
 
     @property
     def snapshot_dir(self) -> Path:
@@ -32,4 +34,3 @@ class Settings(BaseSettings):
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()
-

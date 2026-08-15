@@ -2,6 +2,7 @@ from __future__ import annotations
 
 try:
     import truststore
+
     truststore.inject_into_ssl()
 except ImportError:
     pass
@@ -15,9 +16,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 
 from dotenv import load_dotenv
+
 load_dotenv(override=True)
 
 import os
+
 # Set default HTTP timeout in environment if not already set
 # read=None is critical for SSE streaming — LLM responses can take 30-120s
 os.environ.setdefault("HTTPX_DEFAULT_TIMEOUT", "300.0")
@@ -26,6 +29,7 @@ os.environ.setdefault("HTTPX_DEFAULT_TIMEOUT", "300.0")
 # Only disable SSL verification if explicitly requested via environment variable
 if os.environ.get("DISABLE_SSL_VERIFICATION", "").lower() in ("1", "true", "yes"):
     import ssl
+
     try:
         ssl._create_default_https_context = ssl._create_unverified_context
         ssl.create_default_context = ssl._create_unverified_context
@@ -34,7 +38,10 @@ if os.environ.get("DISABLE_SSL_VERIFICATION", "").lower() in ("1", "true", "yes"
         os.environ["REQUESTS_CA_BUNDLE"] = ""
     except Exception as _ssl_exc:
         import logging as _logging
-        _logging.getLogger(__name__).warning("SSL verification override failed: %s", _ssl_exc)
+
+        _logging.getLogger(__name__).warning(
+            "SSL verification override failed: %s", _ssl_exc
+        )
 else:
     os.environ.setdefault("LITELLM_VERIFY_SSL", "True")
 
@@ -42,6 +49,7 @@ else:
 # ---------------------------------------------------------------------------
 # RuntimeGraph — every service the routes need, built once at startup
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class RuntimeGraph:
@@ -54,7 +62,9 @@ class RuntimeGraph:
     router: Any = None
     snapshot_repo: Any = None
     simulation_service: Any = None
-    _agent_runtime_instance: Any = None  # BUG FIX: cache instance to avoid creating new one per access
+    _agent_runtime_instance: Any = (
+        None  # BUG FIX: cache instance to avoid creating new one per access
+    )
 
     @property
     def agent_runtime(self):
@@ -63,6 +73,7 @@ class RuntimeGraph:
         # breaking statefulness (tools list, caches, etc.)
         if self._agent_runtime_instance is None:
             from swarm_os.agent_runtime import AgentRuntime
+
             self._agent_runtime_instance = AgentRuntime()
         return self._agent_runtime_instance
 
@@ -72,18 +83,20 @@ class RuntimeGraph:
         return self.agent_service
 
 
-
 # ---------------------------------------------------------------------------
 # Lifespan
 # ---------------------------------------------------------------------------
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     import logging
+
     log = logging.getLogger("swarm_os.startup")
 
     try:
         from swarm_os.core.settings import get_settings
+
         settings = get_settings()
         log.info("Settings loaded")
     except Exception as exc:
@@ -92,6 +105,7 @@ async def lifespan(app: FastAPI):
 
     try:
         from swarm_os.services.orchestrator import Orchestrator
+
         orchestrator = Orchestrator()
         log.info("Orchestrator ready")
     except Exception as exc:
@@ -101,6 +115,7 @@ async def lifespan(app: FastAPI):
     try:
         from swarm_os.events.store import EventStore
         from pathlib import Path
+
         event_store = EventStore(Path("data/events"))
         log.info("EventStore ready")
     except Exception as exc:
@@ -109,6 +124,7 @@ async def lifespan(app: FastAPI):
 
     try:
         from swarm_os.healing.healing_service import HealingService
+
         healing = HealingService()
         log.info("HealingService ready")
     except Exception as exc:
@@ -117,6 +133,7 @@ async def lifespan(app: FastAPI):
 
     try:
         from runtime_v2.api.agent_service_v2 import AgentServiceV2
+
         agent_service = AgentServiceV2(
             orchestrator=orchestrator,
             settings=settings,
@@ -128,7 +145,11 @@ async def lifespan(app: FastAPI):
         agent_service = None
 
     try:
-        from swarm_os.services.control_plane.bootstrap import bootstrap_control_plane, get_router
+        from swarm_os.services.control_plane.bootstrap import (
+            bootstrap_control_plane,
+            get_router,
+        )
+
         bootstrap_control_plane()
         router = get_router()
         log.info("Control plane bootstrapped")
@@ -137,7 +158,10 @@ async def lifespan(app: FastAPI):
         router = None
 
     try:
-        from swarm_os.repositories.file_snapshot_repository import FileSnapshotRepository
+        from swarm_os.repositories.file_snapshot_repository import (
+            FileSnapshotRepository,
+        )
+
         snapshot_repo = FileSnapshotRepository()
         log.info("FileSnapshotRepository ready")
     except Exception as exc:
@@ -146,6 +170,7 @@ async def lifespan(app: FastAPI):
 
     try:
         from swarm_os.services.simulation_service import SimulationService
+
         simulation_service = SimulationService(snapshot_repo=snapshot_repo)
         log.info("SimulationService ready")
     except Exception as exc:
@@ -165,8 +190,8 @@ async def lifespan(app: FastAPI):
     app.state.runtime = runtime
     app.state.orchestrator = orchestrator
 
-
     import asyncio
+
     bg_tasks = set()
     # Background indexing removed: it causes a 10-minute Ollama embedding bottleneck on startup.
     # Users should use the explicit `/index` command in the CLI which utilizes the optimized batch indexer.
@@ -192,7 +217,9 @@ async def lifespan(app: FastAPI):
     # BUG FIX: Start MemoryBridge background daemons so events are processed into Qdrant memories
     if orchestrator and hasattr(orchestrator, "bridge"):
         t1 = asyncio.create_task(orchestrator.bridge.watch_loop(interval_seconds=5.0))
-        t2 = asyncio.create_task(orchestrator.bridge.start_manager_daemon(interval_seconds=300.0))
+        t2 = asyncio.create_task(
+            orchestrator.bridge.start_manager_daemon(interval_seconds=300.0)
+        )
         bg_tasks.add(t1)
         bg_tasks.add(t2)
         log.info("Started MemoryBridge daemons (watch_loop and start_manager_daemon)")
@@ -200,7 +227,9 @@ async def lifespan(app: FastAPI):
     try:
         from swarm_os.services.reflection_loop import run_reflection
 
-        async def _reflection_daemon(interval_seconds: float = 600.0, first_delay: float = 120.0):
+        async def _reflection_daemon(
+            interval_seconds: float = 600.0, first_delay: float = 120.0
+        ):
             # Defer the first distillation (an LLM call) out of the startup
             # window so the backend serves immediately.
             if first_delay > 0:
@@ -218,16 +247,32 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         log.warning(f"Reflection daemon unavailable: {exc}")
 
+    # Telegram command center — the Command Center's chat presence + phone push.
+    # Disabled (no-op) unless TELEGRAM_BOT_TOKEN is set in .env. Long-polling:
+    # outbound-only, zero inbound ports. Registers its shutdown with the app so
+    # the client closes cleanly.
+    try:
+        from swarm_os.services.telegram_center import get_center
+
+        center = get_center()
+        center.start()
+        app.state.telegram_center = center
+    except Exception as exc:
+        log.warning(f"Telegram command center unavailable: {exc}")
+
     # Genetic self-improvement daemon — OPT-IN via SWARM_GENETIC_MUTATION=1.
     # The mutation loop is expensive (LLM + sandbox compile/test) and stages every
     # mutation to .data/pending_mutations/ for explicit approval, so it never
     # modifies live code on its own. Off by default to keep the runtime lean.
     try:
         import os as _os
+
         if _os.environ.get("SWARM_GENETIC_MUTATION", "").strip() == "1":
             from swarm_os.services.genetic_mutation_loop import run_genetic_mutation
 
-            async def _mutation_daemon(interval_seconds: float = 3600.0, first_delay: float = 180.0):
+            async def _mutation_daemon(
+                interval_seconds: float = 3600.0, first_delay: float = 180.0
+            ):
                 # Defer the first expensive run (LLM + full-repo DangerRoom sandbox
                 # copy + compile + pytest) out of the startup window so the backend
                 # becomes responsive immediately; the hourly cadence then applies.
@@ -242,7 +287,9 @@ async def lifespan(app: FastAPI):
 
             t5 = asyncio.create_task(_mutation_daemon())
             bg_tasks.add(t5)
-            log.info("Started Genetic Mutation daemon (hourly, SWARM_GENETIC_MUTATION=1)")
+            log.info(
+                "Started Genetic Mutation daemon (hourly, SWARM_GENETIC_MUTATION=1)"
+            )
     except Exception as exc:
         log.warning(f"Genetic mutation daemon unavailable: {exc}")
 
@@ -255,11 +302,14 @@ async def lifespan(app: FastAPI):
     # dedicated nomic-embed slot) whenever the collection is missing or empty.
     try:
         import os as _os2
+
         if _os2.environ.get("SWARM_CODEBASE_INDEX", "1").strip() == "1":
             from runtime_v2.services.indexer import (
-                index_codebase, collection_exists,
+                index_codebase,
+                collection_exists,
             )
             import logging as _logging
+
             _index_log = _logging.getLogger("swarm_os.app.main.codebase_index")
 
             async def _index_daemon(first_delay: float = 90.0):
@@ -270,12 +320,16 @@ async def lifespan(app: FastAPI):
                     await asyncio.sleep(first_delay)
                 try:
                     if collection_exists():
-                        _index_log.info("codebase_index present — skipping startup rebuild")
+                        _index_log.info(
+                            "codebase_index present — skipping startup rebuild"
+                        )
                         return
                     root = _os2.getcwd()
                     _index_log.info("Rebuilding codebase index for %s ...", root)
                     files, chunks = await asyncio.to_thread(index_codebase, root)
-                    _index_log.info("Codebase index ready: %s files, %s chunks", files, chunks)
+                    _index_log.info(
+                        "Codebase index ready: %s files, %s chunks", files, chunks
+                    )
                 except Exception as exc:
                     _index_log.warning("Codebase index rebuild failed: %s", exc)
 
@@ -292,6 +346,7 @@ async def lifespan(app: FastAPI):
     # kernel's tool-selection policy evolves against real execution, not LLM noise.
     try:
         import os as _os
+
         if _os.environ.get("SWARM_EVOLUTION", "").strip() == "1":
             from swarm_os.services.evolution_daemon import evolution_daemon
 
@@ -309,6 +364,7 @@ async def lifespan(app: FastAPI):
     # unset) — set to 0 to keep repairs manual-only.
     try:
         import os as _os_autonomy
+
         if _os_autonomy.environ.get("SWARM_AUTONOMY", "1").strip() == "1":
             from swarm_os.services.watch_loop import WatchLoop
             from organism_console.core.self_repair_engine import SelfRepairEngine
@@ -318,7 +374,9 @@ async def lifespan(app: FastAPI):
                     await asyncio.sleep(first_delay)
                 loop = WatchLoop(SelfRepairEngine(), interval_seconds=30.0)
                 loop.start(start_at_end=True)
-                log.info("Started autonomous watch-loop (server-side, SWARM_AUTONOMY=1)")
+                log.info(
+                    "Started autonomous watch-loop (server-side, SWARM_AUTONOMY=1)"
+                )
                 while loop.is_running:
                     await asyncio.sleep(30.0)
 
@@ -334,6 +392,7 @@ async def lifespan(app: FastAPI):
     # goals (see task_scheduler.py).
     try:
         from swarm_os.services.task_scheduler import TaskSchedulerDaemon
+
         _sched = TaskSchedulerDaemon(interval_seconds=60.0)
         _sched.start()
         log.info("Recurring task scheduler daemon started")
@@ -359,11 +418,11 @@ async def lifespan(app: FastAPI):
     log.info("RuntimeGraph mounted on app.state — all routes live")
     yield
     log.info("Swarm OS shutting down")
-    
+
     # Graceful shutdown of background tasks
     for task in bg_tasks:
         task.cancel()
-    
+
     if bg_tasks:
         try:
             await asyncio.gather(*bg_tasks, return_exceptions=True)
@@ -372,19 +431,32 @@ async def lifespan(app: FastAPI):
 
     # Close shared httpx clients to release connection pools
     try:
-        from swarm_os.core.orchestrator import close_global_client as close_orchestrator_client
+        from swarm_os.core.orchestrator import (
+            close_global_client as close_orchestrator_client,
+        )
+
         await close_orchestrator_client()
     except Exception as exc:
         log.warning(f"Error closing orchestrator httpx client: {exc}")
 
+    # Close the Telegram command center (long-poll loop + its httpx client)
+    try:
+        center = getattr(app.state, "telegram_center", None)
+        if center is not None:
+            await center.stop()
+    except Exception as exc:
+        log.warning(f"Error stopping telegram center: {exc}")
+
     try:
         from swarm_os.services.llm_client import close_global_client as close_llm_client
+
         await close_llm_client()
     except Exception as exc:
         log.warning(f"Error closing llm_client httpx client: {exc}")
 
     try:
         from swarm_os.capabilities.lsp_tool import close_all as close_lsp_clients
+
         await close_lsp_clients()
     except Exception as exc:
         log.warning(f"Error closing LSP clients: {exc}")
@@ -406,6 +478,7 @@ async def lifespan(app: FastAPI):
 # App
 # ---------------------------------------------------------------------------
 
+
 def create_app() -> FastAPI:
     app = FastAPI(title="Swarm OS", lifespan=lifespan)
 
@@ -418,18 +491,25 @@ def create_app() -> FastAPI:
     # process or browser page when the swarm is deployed. When unset, the app
     # stays open (local single-user dev default).
     import os as _os
+
     _api_token = _os.getenv("SWARM_API_TOKEN", "").strip()
     if _api_token:
 
         @app.middleware("http")
         async def _api_token_guard(request, call_next):
             from starlette.responses import JSONResponse
+
             path = request.url.path
             if path in ("/health", "/readyz", "/", "/docs", "/openapi.json"):
                 return await call_next(request)
             auth = request.headers.get("Authorization", "")
             if auth != f"Bearer {_api_token}":
-                return JSONResponse(status_code=401, content={"detail": "Unauthorized: missing or invalid SWARM_API_TOKEN"})
+                return JSONResponse(
+                    status_code=401,
+                    content={
+                        "detail": "Unauthorized: missing or invalid SWARM_API_TOKEN"
+                    },
+                )
             return await call_next(request)
 
     app.add_middleware(
@@ -476,11 +556,7 @@ def create_app() -> FastAPI:
             "health_score": 100,
         }
 
-
-
     return app
 
 
 app = create_app()
-
-
