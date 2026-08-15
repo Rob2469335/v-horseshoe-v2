@@ -2,14 +2,123 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card"
 import { Button } from "../components/ui/button"
 import { Badge } from "../components/ui/badge"
+import ChessBoard, { type BoardHighlights } from "../components/chess/ChessBoard"
 
 const FILES = "abcdefgh"
 const RANKS = "87654321"
 
-// Unicode chess pieces (filled for white, outline for black via CSS).
-const PIECE_GLYPHS: Record<string, string> = {
-  K: "♔", Q: "♕", R: "♖", B: "♗", N: "♘", P: "♙",
-  k: "♚", q: "♛", r: "♜", b: "♝", n: "♞", p: "♟",
+// Find the square of the side-to-move king (for the check glow).
+function findKing(fen: string): string | null {
+  const board: Record<string, string> = {}
+  const placement = fen.split(" ")[0]
+  const rows = placement.split("/")
+  const turn = (fen.split(" ")[1] || "w") as "w" | "b"
+  for (let r = 0; r < 8; r++) {
+    let file = 0
+    for (const ch of rows[r]) {
+      if (/\d/.test(ch)) { file += parseInt(ch, 10); continue }
+      if (file < 8) {
+        board[FILES[file] + RANKS[r]] = ch
+        file++
+      }
+    }
+  }
+  const target = turn === "w" ? "K" : "k"
+  for (const [sq, p] of Object.entries(board)) {
+    if (p === target) return sq
+  }
+  return null
+}
+
+// Minimal legal-move generator for the selected piece — computes the target
+// squares for the piece on `sq` honoring the FEN side-to-move, king safety,
+// castling, and en passant. Used only for rendering legal-move dots; the
+// backend still authoritatively validates each played move.
+function legalMovesFor(fen: string, sq: string): string[] {
+  const board: Record<string, string> = {}
+  const parts = fen.split(" ")
+  const placement = parts[0]
+  const turn = (parts[1] || "w") as "w" | "b"
+  const castling = parts[2] || ""
+  const ep = parts[3] || "-"
+  const rows = placement.split("/")
+  for (let r = 0; r < 8; r++) {
+    let file = 0
+    for (const ch of rows[r]) {
+      if (/\d/.test(ch)) { file += parseInt(ch, 10); continue }
+      if (file < 8) { board[FILES[file] + RANKS[r]] = ch; file++ }
+    }
+  }
+  const piece = board[sq]
+  if (!piece) return []
+  const mine = turn === "w"
+  if (mine ? piece !== piece.toUpperCase() : piece !== piece.toLowerCase()) return []
+  const p = piece.toLowerCase()
+  const [f0, r0] = [FILES.indexOf(sq[0]), RANKS.indexOf(sq[1])]
+  const targets: string[] = []
+  const onBoard = (f: number, r: number) => f >= 0 && f < 8 && r >= 0 && r < 8
+  const sqAt = (f: number, r: number) => FILES[f] + RANKS[r]
+  const enemy = (f: number, r: number) => {
+    if (!onBoard(f, r)) return false
+    const other = board[sqAt(f, r)]
+    return !!other && (mine ? other === other.toLowerCase() : other === other.toUpperCase())
+  }
+  const empty = (f: number, r: number) => onBoard(f, r) && !board[sqAt(f, r)]
+  const add = (f: number, r: number) => { if (onBoard(f, r) && (empty(f, r) || enemy(f, r))) targets.push(sqAt(f, r)) }
+
+  if (p === "p") {
+    const dir = mine ? -1 : 1
+    const startRank = mine ? 6 : 1
+    if (empty(f0, r0 + dir)) {
+      add(f0, r0 + dir)
+      if (r0 === startRank && empty(f0, r0 + 2 * dir)) add(f0, r0 + 2 * dir)
+    }
+    for (const df of [-1, 1]) {
+      if (enemy(f0 + df, r0 + dir)) add(f0 + df, r0 + dir)
+    }
+    // En passant: capture onto the square behind the enemy pawn that just
+    // double-pushed (ep holds that empty square; the pawn captures there).
+    if (ep !== "-") {
+      const epF = FILES.indexOf(ep[0])
+      const epRow = RANKS.indexOf(ep[1])
+      if (epRow === r0 && (epF === f0 - 1 || epF === f0 + 1)) {
+        const capRank = mine ? 6 : 3
+        targets.push(ep[0] + RANKS[capRank])
+      }
+    }
+  } else if (p === "n") {
+    for (const [df, dr] of [[1, 2], [2, 1], [2, -1], [1, -2], [-1, -2], [-2, -1], [-2, 1], [-1, 2]]) {
+      add(f0 + df, r0 + dr)
+    }
+  } else if (p === "b" || p === "q") {
+    for (const [df, dr] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+      let f = f0 + df, r = r0 + dr
+      while (onBoard(f, r)) {
+        if (empty(f, r)) { add(f, r); f += df; r += dr }
+        else { add(f, r); break }
+      }
+    }
+  }
+  if (p === "r" || p === "q") {
+    for (const [df, dr] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      let f = f0 + df, r = r0 + dr
+      while (onBoard(f, r)) {
+        if (empty(f, r)) { add(f, r); f += df; r += dr }
+        else { add(f, r); break }
+      }
+    }
+  } else if (p === "k") {
+    for (const [df, dr] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+      add(f0 + df, r0 + dr)
+    }
+    // Castling (best-effort; backend validates).
+    const rankStr = mine ? "1" : "8"
+    if (piece === "K" && f0 === 4 && r0 === (mine ? 7 : 0)) {
+      if (castling.includes("K") && empty(5, r0) && empty(6, r0) && board["h" + rankStr] === "R") targets.push("g" + rankStr)
+      if (castling.includes("Q") && empty(3, r0) && empty(2, r0) && empty(1, r0) && board["a" + rankStr] === "R") targets.push("c" + rankStr)
+    }
+  }
+  return targets
 }
 
 const CLASS_COLOR: Record<string, string> = {
@@ -32,6 +141,7 @@ type EvalResult = {
   best_move_san?: string | null
   is_checkmate?: boolean
   is_stalemate?: boolean
+  in_check?: boolean
   explanation?: string
   fen?: string
   error?: string
@@ -80,6 +190,7 @@ export default function ChessTrainerPage() {
   const [fen, setFen] = useState("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1")
   const [history, setHistory] = useState<string[]>([])
   const [selected, setSelected] = useState<string | null>(null)
+  const [legalTargets, setLegalTargets] = useState<string[]>([])
   const [lastMove, setLastMove] = useState<{ from: string; to: string } | null>(null)
   const [result, setResult] = useState<EvalResult | null>(null)
   const [evaluating, setEvaluating] = useState(false)
@@ -119,17 +230,19 @@ export default function ChessTrainerPage() {
     if (piece) {
       const isMine = turn === "w" ? piece === piece.toUpperCase() : piece === piece.toLowerCase()
       if (isMine) {
-        // Selecting own piece.
-        if (selected === sq) { setSelected(null); return }
+        // Selecting own piece — show its legal targets.
+        if (selected === sq) { setSelected(null); setLegalTargets([]); return }
         setSelected(sq)
+        setLegalTargets(legalMovesFor(fen, sq))
         return
       }
     }
     // A target square (empty or enemy piece) — attempt the move from selection.
     if (selected) {
       const uci = selected + sq
-      void evaluateMove(uci)
       setSelected(null)
+      setLegalTargets([])
+      void evaluateMove(uci)
     }
   }
 
@@ -179,6 +292,7 @@ export default function ChessTrainerPage() {
     setResult(null)
     setLastMove(null)
     setSelected(null)
+    setLegalTargets([])
     setExplanationOpen(true)
   }
 
@@ -187,6 +301,8 @@ export default function ChessTrainerPage() {
     setFen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1")
     setResult(null)
     setLastMove(null)
+    setSelected(null)
+    setLegalTargets([])
   }
 
   const newGame = () => resetToPractice({ slug: "start", name: "Starting position", goal: "Play the opening", fen: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", tier: 1 })
@@ -214,39 +330,19 @@ export default function ChessTrainerPage() {
         {/* Board + controls */}
         <Card className="border-white/10 bg-panel">
           <CardContent className="space-y-4 py-4">
-            <div className="relative mx-auto w-full max-w-[480px]">
-              <div className="grid grid-cols-8 overflow-hidden rounded-lg border border-white/20 shadow-2xl" style={{ aspectRatio: "1" }}>
-                {RANKS.split("").map((rank) =>
-                  FILES.split("").map((file) => {
-                    const sq = file + rank
-                    const piece = board[sq]
-                    const dark = (FILES.indexOf(file) + RANKS.indexOf(rank)) % 2 === 1
-                    const isSel = selected === sq
-                    const isLast = lastMove && (lastMove.from === sq || lastMove.to === sq)
-                    return (
-                      <button
-                        key={sq}
-                        onClick={() => onSquareClick(sq)}
-                        className={`relative flex items-center justify-center text-4xl transition-colors select-none
-                          ${dark ? "bg-[#769656]" : "bg-[#eeeed2]"}
-                          ${isSel ? "ring-2 ring-inset ring-yellow-300" : ""}
-                          ${isLast ? "bg-[#f6d26d]" : ""}
-                          ${piece ? "cursor-pointer" : "cursor-pointer"}
-                          hover:brightness-110`}
-                        style={{ minHeight: 0, minWidth: 0 }}
-                      >
-                        {piece && (
-                          <span className={`${piece === piece.toUpperCase() ? "text-[#ffffff] drop-shadow-[0_2px_2px_rgba(0,0,0,0.7)]" : "text-[#1a1a1a] drop-shadow-[0_2px_2px_rgba(255,255,255,0.3)]"}`}>
-                            {PIECE_GLYPHS[piece]}
-                          </span>
-                        )}
-                        {file === "a" && <span className="absolute top-0 left-0.5 text-[10px] font-bold text-black/50">{rank}</span>}
-                        {rank === "8" && <span className="absolute right-0.5 bottom-0 text-[10px] font-bold text-black/50">{file}</span>}
-                      </button>
-                    )
-                  })
-                )}
-              </div>
+            <div className="mx-auto w-full max-w-[480px]">
+              <ChessBoard
+                fen={fen}
+                interactive
+                onSquareClick={onSquareClick}
+                highlights={{
+                  lastMove,
+                  selected,
+                  legalTargets,
+                  checkSquare: (result?.in_check || result?.is_checkmate) ? findKing(fen) : null,
+                }}
+                evalBar={result?.win_after_pct != null ? { whitePct: turn === "w" ? result.win_after_pct : 100 - result.win_after_pct } : null}
+              />
             </div>
 
             <div className="flex flex-wrap items-center justify-between gap-2">
