@@ -212,7 +212,13 @@ async def curate(force: bool = False) -> dict[str, Any]:
                     collection_name=_COLLECTION,
                     points=[
                         PointStruct(
-                            id=abs(hash(point["id"])) % (2**63),
+                            # Stable ID across restarts (Python hash() is salted).
+                            id=int.from_bytes(
+                                __import__("hashlib")
+                                .sha256(point["id"].encode())
+                                .digest()[:8],
+                                "big",
+                            ),
                             vector=vec,
                             payload={
                                 "id": point["id"],

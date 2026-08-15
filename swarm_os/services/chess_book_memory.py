@@ -137,7 +137,15 @@ async def index_books(force: bool = False) -> dict:
                     continue
                 points.append(
                     PointStruct(
-                        id=int(hash(f"{b['slug']}:{i}") % (2**63)),
+                        # Stable ID across restarts — Python's built-in hash() is
+                        # salted per-process, so it would mint a new ID on every
+                        # re-index and duplicate points. Use sha256 instead.
+                        id=int.from_bytes(
+                            __import__("hashlib")
+                            .sha256(f"{b['slug']}:{i}".encode())
+                            .digest()[:8],
+                            "big",
+                        ),
                         vector=vec,
                         payload={
                             "slug": b.get("slug"),

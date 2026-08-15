@@ -549,3 +549,18 @@ def test_persistent_plan_coach_none_fails_gracefully():
     r = advance("g3", {"ok": False})
     assert r["ok"] is True
     assert r["plan"] is None
+
+
+def test_eval_cp_mate_does_not_crash():
+    """Regression: PovScore.score() returns None for mates — _eval_cp must use
+    mate_score= so a mate position evaluates to a large signed value instead of
+    throwing TypeError and returning 0 (which corrupted classification + eval
+    bar in endgames)."""
+    import chess.engine as ce
+
+    # Mate-in-12 for White.
+    info = {"score": ce.PovScore(ce.Mate(12), chess.WHITE)}
+    assert ct._eval_cp(info) == pytest.approx(99988.0)
+    # Side-to-move being mated in 3 -> negative.
+    info2 = {"score": ce.PovScore(ce.Mate(-3), chess.BLACK)}
+    assert ct._eval_cp(info2) == pytest.approx(-99997.0)

@@ -129,7 +129,12 @@ def _analyse(board, limit):
 
 def _eval_cp(info) -> float:
     """Return the eval in centipawns from the side-to-move's perspective (the
-    default python-chess pov), clamped."""
+    default python-chess pov), clamped.
+
+    IMPORTANT: for a mate score, PovScore.score() returns None — the mate
+    distance is exposed via .mate(). Pass mate_score= to get a signed centipawn
+    equivalent (e.g. mate-in-12 = +99988), so mate positions evaluate correctly
+    instead of throwing TypeError / returning 0."""
     if info is None:
         return 0.0
     score = info.get("score")
@@ -137,7 +142,8 @@ def _eval_cp(info) -> float:
         return 0.0
     pov = score.pov(score.turn)
     if pov.is_mate():
-        return 10000.0 if pov.score() > 0 else -10000.0
+        # mate_score maps mate-in-N to +- (100000 - N), preserving sign.
+        return float(pov.score(mate_score=100000) or 0.0)
     return float(pov.score() or 0.0)
 
 
@@ -294,11 +300,18 @@ def _king_zone(board, color) -> tuple[int, int]:
     file, rank = chess.square_file(king_sq), chess.square_rank(king_sq)
     shield = 0
     for df in (-1, 0, 1):
-        sq = chess.square(file + df, rank + (1 if color == chess.WHITE else -1))
-        if chess.square_rank(sq) in range(8) and chess.square_file(sq) in range(8):
-            p = board.piece_at(sq)
-            if p and p.color == color and p.piece_type == chess.PAWN:
-                shield += 1
+        # Guard the file BEFORE chess.square() — an out-of-range file silently
+        # wraps to the other edge of the board (verified: square(-1,1) == h1),
+        # which would count a wrong square's pawn in the shield.
+        f = file + df
+        if not (0 <= f < 8):
+            continue
+        sq = chess.square(f, rank + (1 if color == chess.WHITE else -1))
+        if not (0 <= chess.square_rank(sq) < 8):
+            continue
+        p = board.piece_at(sq)
+        if p and p.color == color and p.piece_type == chess.PAWN:
+            shield += 1
     center = rank in (4, 5) if color == chess.WHITE else rank in (3, 2)
     return (shield, 1 if center else 0)
 
@@ -830,10 +843,13 @@ def detect_sacrifice(
             return None
         given_val = _PIECE_VALUE.get(given.symbol().lower(), 0)
         # A sacrifice = gave up a piece (not a pawn trade) with material cost.
-        material_after = _material_balance(board)
+        # _material_balance is from White's perspective; convert to the MOVER's
+        # perspective so a Black sacrifice also counts its own material loss.
+        mover_sign = 1 if given.color == chess.WHITE else -1
+        before_mover = _material_balance(board) * mover_sign
         board.push(move)
-        material_after = _material_balance(board)
-        lost_material = _material_balance(chess.Board(fen)) - material_after
+        after_mover = _material_balance(board) * mover_sign
+        lost_material = before_mover - after_mover
         if given_val < 3 and lost_material < 2:
             return None  # not a piece sacrifice (pawn move / even trade)
         # Soundness: eval barely moved (within ~60cp) => you bought the attack.
@@ -1111,11 +1127,14 @@ async def evaluate_move(
                 giver = probe.piece_at(bm.from_square)
                 if giver and _PIECE_VALUE.get(giver.symbol().lower(), 0) >= 3:
                     probe.push(bm)
-                    best_after_cp = (await asyncio.to_thread(_best_move_and_cp, probe))[
-                        1
-                    ]
+                    # _best_move_and_cp returns the eval from the NEW side-to-move
+                    # (the opponent). Negate to the MOVER's perspective before
+                    # comparing against before_cp.
+                    mover_after_best = -(
+                        await asyncio.to_thread(_best_move_and_cp, probe)
+                    )[1]
                     # Sound sacrifice: giving up the piece kept/improved the eval.
-                    if best_after_cp >= before_cp - 60.0:
+                    if mover_after_best >= before_cp - 60.0:
                         result["missed_sacrifice"] = {
                             "move": before_best,
                             "san": result.get("best_move_san"),
