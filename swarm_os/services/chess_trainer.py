@@ -42,6 +42,140 @@ _ENGINE_LOCK = threading.Lock()
 _MAX_ENGINE_WAIT_S = 60.0
 # Bound the local-LLM explanation so the UI never hangs on a slow generation.
 _EXPLAIN_TIMEOUT_S = 45.0
+# Persistent engine (2026 SOTA — one process, TT reused across adjacent
+# searches; never re-spawn per eval — spawn + NNUE load is the expensive part).
+_persistent_engine = None
+
+
+def _new_engine():
+    import chess.engine
+
+    return chess.engine.SimpleEngine.popen_uci(str(STOCKFISH_PATH))
+
+
+def close_engine() -> None:
+    """Quit the persistent engine cleanly. Required: python-chess's
+    SimpleEngine background thread otherwise hangs the interpreter at shutdown
+    on Windows (it never terminates on its own)."""
+    global _persistent_engine
+    engine = _persistent_engine
+    _persistent_engine = None
+    if engine is not None:
+        try:
+            engine.quit()
+        except Exception as exc:
+            log.warning("engine quit failed: %s", exc)
+
+
+import atexit
+
+atexit.register(close_engine)
+
+
+def _get_engine():
+    """The shared persistent engine. One process reused across all evals (TT
+    reuse between adjacent searches); no configure() — the python-chess↔
+    Stockfish-18 `setoption` handshake hangs on this build, and the defaults
+    (Threads=1, Hash=16) are correct for a 2-core CPU anyway."""
+    global _persistent_engine
+    if _persistent_engine is not None:
+        return _persistent_engine
+    if not STOCKFISH_PATH.exists():
+        log.warning("stockfish binary missing at %s", STOCKFISH_PATH)
+        return None
+    with _ENGINE_LOCK:
+        if _persistent_engine is not None:
+            return _persistent_engine
+        try:
+            _persistent_engine = _new_engine()
+        except Exception as exc:
+            log.warning("engine init failed: %s", exc)
+            _persistent_engine = None
+    return _persistent_engine
+
+
+def _analyse(board, limit):
+    """Analyse with the persistent engine (TT reuse between adjacent searches —
+    the second position is inside the first search's tree)."""
+    engine = _get_engine()
+    if engine is None:
+        return None
+    try:
+        return engine.analyse(board, limit)
+    except Exception as exc:
+        log.warning("engine analyse failed: %s", exc)
+        return None
+
+
+def _eval_cp(info) -> float:
+    """Return the eval in centipawns from the side-to-move's perspective (the
+    default python-chess pov), clamped."""
+    if info is None:
+        return 0.0
+    score = info.get("score")
+    if score is None:
+        return 0.0
+    pov = score.pov(score.turn)
+    if pov.is_mate():
+        return 10000.0 if pov.score() > 0 else -10000.0
+    return float(pov.score() or 0.0)
+
+
+# FEN-keyed eval cache: revisiting the same position (SR queue, retry-on-blunder,
+# review sessions) should be ~0ms instead of re-burning engine time.
+_eval_cache: dict[str, tuple[str | None, float, list[str]]] = {}
+_EVAL_CACHE_MAX = 512
+
+
+def _best_move_and_cp(board) -> tuple[str | None, float, list[str]]:
+    """Best move (UCI), its centipawn eval from side-to-move, and the PV as a
+    list of UCI moves. Uses the persistent engine with a time-bounded search
+    (bounded latency, not random fixed-depth wall time) and a FEN-keyed cache
+    so revisited positions are instant. Never raises: on failure returns
+    (None, 0.0, [])."""
+    if not STOCKFISH_PATH.exists():
+        log.warning("stockfish binary missing at %s", STOCKFISH_PATH)
+        return None, 0.0, []
+    try:
+        import chess.engine
+
+        key = (
+            board._transposition_key()
+            if hasattr(board, "_transposition_key")
+            else board.fen()
+        )
+        cached = _eval_cache.get(key)
+        if cached is not None:
+            return cached
+
+        # _get_engine() initializes the persistent engine; subsequent calls
+        # return early without the lock, so calling it here (before taking the
+        # lock) avoids a non-reentrant-lock deadlock inside _analyse.
+        engine = _get_engine()
+        if engine is None:
+            return None, 0.0, []
+
+        with _ENGINE_LOCK:
+            # Time-bounded (~800ms): bounded latency (a fixed depth can take
+            # wildly different wall time on tactical positions). The engine's
+            # own background thread services the request — no extra executor.
+            info = _analyse(board, chess.engine.Limit(time=0.8, depth=20))
+        if info is None:
+            return None, 0.0, []
+        pv = [m.uci() for m in info.get("pv", [])]
+        best = pv[0] if pv else None
+        result = (best, _eval_cp(info), pv)
+        if best is not None:
+            _eval_cache[key] = result
+            if len(_eval_cache) > _EVAL_CACHE_MAX:
+                for k in list(_eval_cache)[: len(_eval_cache) // 2]:
+                    _eval_cache.pop(k, None)
+        return result
+    except Exception as exc:
+        log.warning("engine evaluation failed: %s", exc)
+        return None, 0.0, []
+
+
 # Qwen3.5's think-block is disabled per-request via chat_template_kwargs
 # {"enable_thinking": False} (verified: clean prose, finish_reason=stop). The
 # local LLM writes the "friendly voice" layer over the engine facts + Qdrant
@@ -88,58 +222,6 @@ def _classify(rating: int, before_cp: float, after_cp: float, was_best: bool) ->
         if loss >= threshold * scale and name != "Best":
             return name
     return "Best"
-
-
-# ---------------------------------------------------------------------------
-# Engine evaluation
-# ---------------------------------------------------------------------------
-def _new_engine():
-    import chess.engine
-
-    return chess.engine.SimpleEngine.popen_uci(str(STOCKFISH_PATH))
-
-
-def _eval_cp(info) -> float:
-    """Return the eval in centipawns from the side-to-move's perspective (the
-    default python-chess pov), clamped."""
-    score = info.get("score")
-    if score is None:
-        return 0.0
-    pov = score.pov(score.turn)
-    if pov.is_mate():
-        return 10000.0 if pov.score() > 0 else -10000.0
-    return float(pov.score() or 0.0)
-
-
-def _best_move_and_cp(board) -> tuple[str | None, float, list[str]]:
-    """Best move (UCI), its centipawn eval from side-to-move, and the PV as a
-    list of UCI moves. Runs on a worker thread (the engine blocks on the UCI
-    subprocess) and never raises: on failure returns (None, 0.0, [])."""
-    if not STOCKFISH_PATH.exists():
-        log.warning("stockfish binary missing at %s", STOCKFISH_PATH)
-        return None, 0.0, []
-    try:
-        import chess.engine
-        import concurrent.futures
-
-        with _ENGINE_LOCK:
-
-            def _run():
-                engine = _new_engine()
-                try:
-                    info = engine.analyse(board, chess.engine.Limit(depth=12))
-                    pv = [m.uci() for m in info.get("pv", [])]
-                    best = pv[0] if pv else None
-                    return best, _eval_cp(info), pv
-                finally:
-                    engine.quit()
-
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-                fut = ex.submit(_run)
-                return fut.result(timeout=_MAX_ENGINE_WAIT_S)
-    except Exception as exc:
-        log.warning("engine evaluation failed: %s", exc)
-        return None, 0.0, []
 
 
 def _eval_only(board) -> float:
@@ -674,7 +756,7 @@ async def evaluate_move(
             "legal_moves": [m.uci() for m in board.legal_moves][:20],
         }
 
-    before_best, before_cp, _ = _best_move_and_cp(board)
+    before_best, before_cp, _ = await asyncio.to_thread(_best_move_and_cp, board)
     # SAN must be computed BEFORE pushing (the move is only legal pre-push).
     try:
         played_san = board.san(move)
@@ -682,7 +764,7 @@ async def evaluate_move(
         played_san = uci
     board.push(move)
 
-    after_cp = _best_move_and_cp(board)[1]
+    after_cp = (await asyncio.to_thread(_best_move_and_cp, board))[1]
 
     # Eval from the MOVER's perspective for classification (before was mover's
     # perspective; after is opponent's perspective now).
@@ -760,7 +842,9 @@ async def evaluate_move(
                 giver = probe.piece_at(bm.from_square)
                 if giver and _PIECE_VALUE.get(giver.symbol().lower(), 0) >= 3:
                     probe.push(bm)
-                    best_after_cp = _eval_only(probe)
+                    best_after_cp = (await asyncio.to_thread(_best_move_and_cp, probe))[
+                        1
+                    ]
                     # Sound sacrifice: giving up the piece kept/improved the eval.
                     if best_after_cp >= before_cp - 60.0:
                         result["missed_sacrifice"] = {
