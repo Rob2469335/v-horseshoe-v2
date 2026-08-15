@@ -379,18 +379,23 @@ async def explain_move(game_id: str, ply: int) -> dict[str, Any]:
         det = f"GM played {gm_san}. "
         if plan.get("ok") and plan.get("plan"):
             det += f"Position plan before this move: {plan['plan']}. "
-        swing = after_cp - before_cp
+        # after_cp is from the NEW side-to-move (opponent) — negate to the
+        # mover's perspective before comparing with before_cp.
+        mover_after = -after_cp
+        swing = mover_after - before_cp
         if swing > 60:
             det += f"The move improved White's chances by roughly {round(swing)} centipawns. "
         elif swing < -60:
             det += f"The move gives up ~{round(-swing)} centipawns — likely a deliberate positional choice. "
 
-        # Cloud prose (best-effort): why + what they're setting up.
+        # Cloud prose (best-effort): why + what they're setting up. Prefer
+        # DeepSeek direct (DEEPSEEK_API_KEY, native provider — clean prose,
+        # reliable); fall back to the OpenCode Go proxy.
         prose = ""
         s = get_settings()
-        model = getattr(s, "analysis_cloud_model", None) or "openai/deepseek-v4-flash"
+        ds_key = os.getenv("DEEPSEEK_API_KEY", "")
         key = os.getenv("OPENAI_API_KEY", "")
-        if key:
+        if ds_key or key:
             prompt = (
                 "You are a chess coach explaining a famous grandmaster move to a ~500-rated "
                 "beginner. Explain in 2-3 short sentences WHY the GM played this move, what it "
@@ -404,17 +409,27 @@ async def explain_move(game_id: str, ply: int) -> dict[str, Any]:
             )
             try:
                 async with asyncio.timeout(45):
-                    resp = await litellm.acompletion(
-                        model=model,
-                        messages=[{"role": "user", "content": prompt}],
-                        api_base=os.getenv(
-                            "OPENAI_API_BASE", "https://opencode.ai/zen/go/v1"
-                        ),
-                        api_key=key,
-                        custom_llm_provider="openai",
-                        max_tokens=2000,
-                        timeout=45,
-                    )
+                    if ds_key:
+                        resp = await litellm.acompletion(
+                            model="deepseek/deepseek-v4-flash",
+                            messages=[{"role": "user", "content": prompt}],
+                            api_key=ds_key,
+                            max_tokens=500,
+                            timeout=45,
+                        )
+                    else:
+                        resp = await litellm.acompletion(
+                            model=getattr(s, "analysis_cloud_model", None)
+                            or "openai/deepseek-v4-flash",
+                            messages=[{"role": "user", "content": prompt}],
+                            api_base=os.getenv(
+                                "OPENAI_API_BASE", "https://opencode.ai/zen/go/v1"
+                            ),
+                            api_key=key,
+                            custom_llm_provider="openai",
+                            max_tokens=2000,
+                            timeout=45,
+                        )
                 prose = (resp.choices[0].message.content or "").strip()
             except Exception as exc:
                 log.warning("gm explain LLM failed: %s", exc)

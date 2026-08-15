@@ -1311,14 +1311,16 @@ async def _llm_enhancement(
     best_move_san: str | None,
     frags: list[dict],
 ) -> str:
-    """Best-effort cloud-LLM prose (deepseek-v4-flash via the analysis-cloud
-    model — $0/token on the funded OpenCode Go account). Returns '' on any
-    failure/timeout; the deterministic explanation is the instant fallback.
+    """Best-effort cloud-LLM prose. Returns '' on any failure/timeout; the
+    deterministic explanation is the instant fallback.
 
-    Cost-gated hard: this only runs for Mistake/Blunder/Inaccuracy (a few moves
-    per game, not every move), and only when the local-LLM enhancement is
-    enabled (SWARM_CHESS_LLM_EXPLAIN, default on). The engine facts + book
-    citations ground every claim — never free-form chess analysis."""
+    Routing (preferred first): DeepSeek DIRECT via litellm's native
+    `deepseek/` provider keyed by DEEPSEEK_API_KEY (your paid credit — verified
+    to return clean prose reliably, no reasoning-only flakiness); falls back to
+    the OpenCode Go proxy (OPENAI_API_KEY, $0/token) if the direct key is
+    absent. Cost-gated: only runs for Mistake/Blunder/Inaccuracy, and only when
+    the enhancement is enabled. Engine facts + book citations ground every
+    claim."""
     try:
         import chess
         import os
@@ -1345,19 +1347,41 @@ async def _llm_enhancement(
             f"BOOK IDEAS:\n{context}\n\nEXPLANATION:"
         )
         s = get_settings()
+
+        # Prefer DeepSeek direct (native provider handles api.deepseek.com).
+        ds_key = os.getenv("DEEPSEEK_API_KEY", "")
+        if ds_key:
+            # The model occasionally spends the whole budget reasoning (empty
+            # content) — retry once before giving up.
+            for attempt in (0, 1):
+                async with asyncio.timeout(_EXPLAIN_TIMEOUT_S):
+                    resp = await litellm.acompletion(
+                        model="deepseek/deepseek-v4-flash",
+                        messages=[{"role": "user", "content": prompt}],
+                        api_key=ds_key,
+                        max_tokens=500,
+                        timeout=_EXPLAIN_TIMEOUT_S,
+                    )
+                text = (resp.choices[0].message.content or "").strip()
+                if text:
+                    return text
+                if attempt == 0:
+                    await asyncio.sleep(0.5)
+            return ""
+
+        # Fallback: OpenCode Go proxy ($0/token).
         model = getattr(s, "analysis_cloud_model", None) or "openai/deepseek-v4-flash"
         base = os.getenv("OPENAI_API_BASE", "https://opencode.ai/zen/go/v1")
         key = os.getenv("OPENAI_API_KEY", "")
         if not key:
-            log.warning("move explanation skipped: no OPENAI_API_KEY")
+            log.warning("move explanation skipped: no DEEPSEEK/OPENAI key")
             return ""
         async with asyncio.timeout(_EXPLAIN_TIMEOUT_S):
-            # NOTE: no system message — the OpenCode Go proxy sends this model
-            # into reasoning_content (empty content) when a system prompt is
-            # present (verified empirically). The model REASONS (variable
-            # length, up to ~3000 tokens) before answering, so max_tokens must
-            # leave budget for the content itself; with 2000 it reliably
-            # produces prose (verified: 250 -> empty, 2000 -> answer).
+            # No system message — the OpenCode Go proxy sends this model into
+            # reasoning_content (empty content) with a system prompt. The model
+            # reasons (variable, up to ~3000 tokens) before answering, so
+            # max_tokens must leave budget for content (verified: 250 -> empty,
+            # 2000 -> answer).
             resp = await litellm.acompletion(
                 model=model,
                 messages=[{"role": "user", "content": prompt}],
@@ -1368,9 +1392,8 @@ async def _llm_enhancement(
                 timeout=_EXPLAIN_TIMEOUT_S,
             )
         msg = resp.choices[0].message
-        # Only return clean prose content. If the model spent the whole budget
-        # reasoning (empty content), return "" — the deterministic explanation
-        # covers it; garbage mid-thought reasoning is worse than none.
+        # Only return clean prose content; empty (reasoning-only) -> "" and the
+        # deterministic explanation covers it.
         return (msg.content or "").strip()
     except Exception as exc:
         log.warning("move explanation LLM enhancement failed: %s", exc)
