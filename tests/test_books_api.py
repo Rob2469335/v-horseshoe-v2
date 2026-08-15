@@ -304,7 +304,7 @@ def test_synthesize_returns_fragments(tmp_path):
     with _make_client(tmp_path) as c:
         r = c.post(
             "/books/synthesize",
-            json={"question": "how do I productize an AI automation service?"},
+            json={"question": "how do I productize an AI automation service?", "generate": False},
         )
     assert r.status_code == 200
     j = r.json()
@@ -322,6 +322,7 @@ def test_synthesize_chess_genre_only_uses_chess_books(tmp_path):
             json={
                 "question": "I blunder every game and miss forks — what tactics should I drill?",
                 "genre": "chess",
+                "generate": False,
             },
         )
     assert r.status_code == 200
@@ -334,6 +335,59 @@ def test_synthesize_chess_genre_only_uses_chess_books(tmp_path):
         "the-woodpecker-method",
     }
     assert j["fragments"][0]["beginner_translation"]
+
+
+def test_synthesize_chess_at_500_caps_to_tier_1(tmp_path):
+    """The bug: 'At 500, what should I drill' surfaced Tier-5 books. A low-rating
+    hint must cap the pool to beginner tiers so the highest-signal fragments are
+    Tier 1 (Bain/Polgar-style), never Tier 3+."""
+    with _make_client(tmp_path) as c:
+        r = c.post(
+            "/books/synthesize",
+            json={
+                "question": "At 500, what should I drill first — and which book teaches it best?",
+                "genre": "chess",
+                "generate": False,
+            },
+        )
+    assert r.status_code == 200
+    j = r.json()
+    assert j["level"] == 1
+    slugs = {f["slug"] for f in j["fragments"]}
+    # The tier-3 woodpecker must be excluded; only tier-1 books remain.
+    assert "the-woodpecker-method" not in slugs
+    assert slugs == {"winning-chess-tactics", "chess-fundamentals"}
+    assert all((f.get("tier") or 99) == 1 for f in j["fragments"])
+
+
+def test_synthesize_generates_answer_via_model(tmp_path, monkeypatch):
+    """When generate=true, the service writes an actual answer through the
+    analysis-cloud seam (mocked here) — the 'Ask the library' returns prose,
+    not just fragments."""
+    from swarm_os.services import books_service as bs
+
+    async def fake_answer(self, question, genre, level, fragments):
+        return "TIPS:\n1. Solve mate-in-one problems daily [Bain]"
+
+    monkeypatch.setattr(bs.BooksService, "_write_answer", fake_answer)
+    with _make_client(tmp_path) as c:
+        r = c.post(
+            "/books/synthesize",
+            json={"question": "give me 100 chess tips", "genre": "chess"},
+        )
+    assert r.status_code == 200
+    j = r.json()
+    assert j["answer"].startswith("TIPS:")
+    assert "Bain" in j["answer"]
+
+
+def test_detect_chess_level():
+    from swarm_os.services.books_service import _detect_chess_level
+
+    assert _detect_chess_level("at 500 what should I drill") == 1
+    assert _detect_chess_level("I am a beginner") == 1
+    assert _detect_chess_level("for a 1200 player") == 3
+    assert _detect_chess_level("how to play better") is None
 
 
 def test_missing_manifest_is_fail_closed(tmp_path):

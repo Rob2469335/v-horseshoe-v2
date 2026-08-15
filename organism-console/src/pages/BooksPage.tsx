@@ -42,8 +42,10 @@ type SynthesizeOutput = {
   ok: boolean
   question: string
   genre: string
+  level?: number | null
   topic_tracks: string[]
   fragments: Book[]
+  answer?: string
 }
 
 const PRIORITY_COLOR: Record<string, string> = {
@@ -131,7 +133,7 @@ export default function BooksPage() {
       const res = await fetch(`${backendUrl}/books/synthesize`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ question: ask, genre: genre === "chess" ? "chess" : "freelancer" }),
+        body: JSON.stringify({ question: ask, genre: genre === "chess" ? "chess" : "freelancer", generate: true }),
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       setSynth((await res.json()) as SynthesizeOutput)
@@ -220,7 +222,12 @@ export default function BooksPage() {
       {synth && (
         <Card className="border-emerald-400/30 bg-emerald-950/10">
           <CardContent className="py-4">
-            <div className="mb-2 text-sm font-semibold text-emerald-300">Grounded fragments · question: {synth.question}</div>
+            <div className="mb-2 text-sm font-semibold text-emerald-300">Answer · {synth.question}</div>
+            {synth.answer && (
+              <div className="mb-4 rounded-xl border border-emerald-400/20 bg-black/30 p-4">
+                <pre className="whitespace-pre-wrap text-sm leading-relaxed text-white/90">{synth.answer}</pre>
+              </div>
+            )}
             {synth.topic_tracks.length > 0 && (
               <div className="mb-3 flex flex-wrap gap-1.5">
                 {synth.topic_tracks.map((t) => (
@@ -228,6 +235,7 @@ export default function BooksPage() {
                 ))}
               </div>
             )}
+            <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-white/40">Grounded fragments</div>
             <div className="space-y-3">
               {synth.fragments.map((f) => (
                 <div key={f.slug} className="rounded-lg border border-white/10 bg-black/20 p-3">

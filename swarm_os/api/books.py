@@ -84,14 +84,30 @@ class SynthesizeRequest(BaseModel):
         None,
         description="Scope to a genre ('freelancer' | 'chess'); defaults to freelancer",
     )
+    level: int | None = Field(
+        None,
+        description="Chess rating band hint (1-5 tiers, ascending). 'at 500' questions "
+        "should pull Tier 1, not Tier 5. Defaults to 1 for chess.",
+    )
+    generate: bool = Field(
+        True,
+        description="Also synthesize a written answer via the model (True) or return "
+        "only the grounded fragments (False).",
+    )
 
 
 @router.post("/synthesize")
 async def book_synthesize(req: SynthesizeRequest) -> dict[str, Any]:
-    """Topic-aware cross-book retrieval: returns the highest-signal digest
-    fragments for an LLM agent to reason over (deterministic retrieval only —
-    no generation happens here)."""
-    res = _svc().synthesize(req.question, genre=req.genre)
+    """Topic-aware cross-book reasoning: pulls the highest-signal digest
+    fragments (beginner-friendly for chess — lowest tier first, so 'at 500'
+    surfaces Tier 1, not Tier 5), then when `generate` is set, actually writes a
+    grounded answer via the analysis-cloud model."""
+    res = await _svc().synthesize(
+        req.question,
+        genre=req.genre,
+        level=req.level,
+        generate=req.generate,
+    )
     if not res.get("ok"):
         raise HTTPException(
             status_code=503, detail=res.get("error", "Books manifest unavailable")
