@@ -837,9 +837,10 @@ export default function ChessTrainerPage() {
         </div>
       </header>
 
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,520px)_minmax(0,1fr)]">
-        {/* Board + controls */}
-        <Card className="border-white/10 bg-panel">
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,520px)_minmax(0,1fr)] lg:items-start">
+        {/* Board + controls — sticky so the board stays visible while you scroll
+            the right-side lists (review queue, chess.com games, GM games, etc.). */}
+        <Card className="border-white/10 bg-panel lg:sticky lg:top-4 lg:self-start">
           <CardContent className="space-y-4 py-4">
             <div className="mx-auto w-full max-w-[480px]">
               <ChessBoard
