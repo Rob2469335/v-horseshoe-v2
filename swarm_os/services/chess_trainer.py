@@ -27,7 +27,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import re
 import threading
 from pathlib import Path
 from typing import Any
@@ -748,10 +747,12 @@ async def evaluate_move(
     uci: str,
     rating: int = 500,
     want_explain: bool = True,
+    game_id: str | None = None,
 ) -> dict[str, Any]:
     """Evaluate the learner's move: legality, classification, eval delta, best
     alternative, and (when want_explain) a local-LLM 'why' grounded in the chess
-    book digests."""
+    book digests. When `game_id` is given, the move is recorded for the guided
+    review."""
     try:
         import chess
 
@@ -926,6 +927,31 @@ async def evaluate_move(
             is_checkmate=result.get("is_checkmate", False),
             in_check=result.get("in_check", False),
         )
+    # Record the move for the guided review (best-effort, never raises).
+    if game_id and result.get("ok") and result.get("legal"):
+        try:
+            from .chess_games import record_move
+
+            record_move(
+                game_id,
+                {
+                    "uci": uci,
+                    "san": result.get("san", uci),
+                    "fen": result.get("fen", ""),
+                    "pre_fen": fen,
+                    "classification": classification,
+                    "eval_before_cp": round(before_cp, 1),
+                    "eval_after_cp": round(mover_after, 1),
+                    "win_after_pct": round(win_after * 100, 1),
+                    "win_delta_pct": round((win_after - win_before) * 100, 1),
+                    "best_uci": before_best,
+                    "best_move_san": result.get("best_move_san"),
+                    "is_best": was_best,
+                    "concept": result.get("coach", {}).get("weak_square") or "",
+                },
+            )
+        except Exception as exc:
+            log.warning("game move recording failed: %s", exc)
     return result
 
 
@@ -1013,12 +1039,21 @@ async def _llm_enhancement(
     best_move_san: str | None,
     frags: list[dict],
 ) -> str:
-    """Best-effort local-LLM prose. Returns '' on any failure/timeout — the
-    deterministic explanation already covers the fallback."""
+    """Best-effort cloud-LLM prose (deepseek-v4-flash via the analysis-cloud
+    model — $0/token on the funded OpenCode Go account). Returns '' on any
+    failure/timeout; the deterministic explanation is the instant fallback.
+
+    Cost-gated hard: this only runs for Mistake/Blunder/Inaccuracy (a few moves
+    per game, not every move), and only when the local-LLM enhancement is
+    enabled (SWARM_CHESS_LLM_EXPLAIN, default on). The engine facts + book
+    citations ground every claim — never free-form chess analysis."""
     try:
         import chess
+        import os
 
-        from ..infra.llama_client import LlamaClient
+        import litellm
+
+        from ..core.settings import get_settings
 
         board = chess.Board(fen)
         move = chess.Move.from_uci(uci)
@@ -1027,33 +1062,44 @@ async def _llm_enhancement(
             f"[{r['title']}]: {r['text'][:300]}" for r in frags if r.get("text")
         )
         prompt = (
-            "Explain in 2-3 short sentences why this chess move is a "
+            "You are a chess coach for a ~500-rated beginner. Explain in 2-3 "
+            "short sentences why this move is a "
             f"{classification}, in plain beginner language. Use only the book "
-            "ideas given; do not invent citations.\n\n"
+            "ideas given; do not invent citations. Ground every claim in the "
+            "position facts — never invent analysis. Do not reason — just "
+            "answer directly.\n\n"
             f"POSITION (FEN): {fen}\nPLAYED: {played_san}\n"
             f"BEST WAS: {best_move_san or 'unknown'}\n\n"
             f"BOOK IDEAS:\n{context}\n\nEXPLANATION:"
         )
-        client = LlamaClient(base_url="http://127.0.0.1:8084")
+        s = get_settings()
+        model = getattr(s, "analysis_cloud_model", None) or "openai/deepseek-v4-flash"
+        base = os.getenv("OPENAI_API_BASE", "https://opencode.ai/zen/go/v1")
+        key = os.getenv("OPENAI_API_KEY", "")
+        if not key:
+            log.warning("move explanation skipped: no OPENAI_API_KEY")
+            return ""
         async with asyncio.timeout(_EXPLAIN_TIMEOUT_S):
-            text = await client.generate(
-                "qwen3.5-0.8b",
-                [
-                    {
-                        "role": "system",
-                        "content": "You are a chess coach. Answer directly and briefly.",
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                # Qwen3.5 dropped Qwen3's /no_think soft-switch; only the
-                # template-level hard switch disables the think block and makes
-                # the model actually emit prose `content`.
-                chat_template_kwargs={"enable_thinking": False},
-                max_tokens=300,
+            # NOTE: no system message — the OpenCode Go proxy sends this model
+            # into reasoning_content (empty content) when a system prompt is
+            # present (verified empirically). The model REASONS (variable
+            # length, up to ~3000 tokens) before answering, so max_tokens must
+            # leave budget for the content itself; with 2000 it reliably
+            # produces prose (verified: 250 -> empty, 2000 -> answer).
+            resp = await litellm.acompletion(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                api_base=base,
+                api_key=key,
+                custom_llm_provider="openai",
+                max_tokens=2000,
+                timeout=_EXPLAIN_TIMEOUT_S,
             )
-        # The 0.8B emits an empty <think>  </think> wrapper first; strip it.
-        text = re.sub(r"<think>\s*</think>", "", text).strip()
-        return text
+        msg = resp.choices[0].message
+        # Only return clean prose content. If the model spent the whole budget
+        # reasoning (empty content), return "" — the deterministic explanation
+        # covers it; garbage mid-thought reasoning is worse than none.
+        return (msg.content or "").strip()
     except Exception as exc:
         log.warning("move explanation LLM enhancement failed: %s", exc)
         return ""
