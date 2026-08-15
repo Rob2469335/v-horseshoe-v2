@@ -217,6 +217,15 @@ type GmGuess = {
   error?: string
 }
 
+type Analytics = {
+  ok: boolean
+  training_rating?: number | null
+  games_count?: number
+  moves_count?: number
+  skills?: Record<string, number>
+  recent?: Array<{ game_id?: string; accuracy?: number; move_count?: number; started_at?: number }>
+}
+
 type HangingDrill = {
   ok: boolean
   fen?: string
@@ -553,6 +562,7 @@ export default function ChessTrainerPage() {
       })).json() as GameReview
       setGameReview(r)
       setGameId(null)
+      loadAnalytics()
     } catch {
       setGameReview({ ok: false, error: "review failed" })
     } finally {
@@ -657,6 +667,15 @@ export default function ChessTrainerPage() {
   }, [backendUrl])
 
   useEffect(() => { loadReview() }, [loadReview])
+
+  const [analytics, setAnalytics] = useState<Analytics | null>(null)
+  const loadAnalytics = useCallback(async () => {
+    try {
+      const a = await (await fetch(`${backendUrl}/chess/trainer/analytics`)).json() as Analytics
+      setAnalytics(a)
+    } catch { /* ignore */ }
+  }, [backendUrl])
+  useEffect(() => { loadAnalytics() }, [loadAnalytics])
 
   const startReview = (entry: ReviewEntry) => {
     setActiveReview(entry)
@@ -1085,6 +1104,56 @@ export default function ChessTrainerPage() {
 
               {gmSession?.finished && (
                 <div className="text-sm text-emerald-300">Game complete — {gmSession.result}. Pick another to keep going.</div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="border-white/10 bg-panel">
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-base">Progress</CardTitle>
+                {analytics?.training_rating != null && (
+                  <Badge className="border-emerald-400/40 bg-emerald-400/10 text-emerald-300">Training ~{analytics.training_rating}</Badge>
+                )}
+              </div>
+              <CardDescription>
+                Your move-quality signals across recorded games (vs the engine — an estimate, not Elo).
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {analytics && (analytics.games_count ?? 0) === 0 && (
+                <div className="text-xs text-white/40">Play and finish a recorded game to see your progress.</div>
+              )}
+              {analytics?.skills && (analytics.games_count ?? 0) > 0 && (
+                <div className="space-y-2">
+                  <div className="text-xs text-white/50">
+                    {analytics.games_count} game(s) · {analytics.moves_count} moves
+                  </div>
+                  {Object.entries(analytics.skills).map(([k, v]) => (
+                    <div key={k}>
+                      <div className="mb-0.5 flex justify-between text-xs">
+                        <span className="capitalize text-white/70">{k.replace("_", " ")}</span>
+                        <span className="text-white/50">{v}%</span>
+                      </div>
+                      <div className="h-1.5 overflow-hidden rounded-full bg-black/40">
+                        <div
+                          className={`h-full rounded-full ${v >= 80 ? "bg-emerald-400" : v >= 50 ? "bg-amber-400" : "bg-red-400"}`}
+                          style={{ width: `${Math.max(0, Math.min(100, v))}%` }}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                  {analytics.recent && analytics.recent.length > 0 && (
+                    <div>
+                      <div className="mb-1 mt-2 text-xs font-semibold uppercase tracking-wide text-white/40">Recent games</div>
+                      <ul className="space-y-0.5 text-xs text-white/60">
+                        {analytics.recent.map((r) => (
+                          <li key={r.game_id}>{r.move_count} moves · {r.accuracy}% accuracy</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
               )}
             </CardContent>
           </Card>

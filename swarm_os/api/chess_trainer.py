@@ -319,6 +319,15 @@ async def trainer_games(limit: int = 20) -> dict[str, Any]:
     return list_games(limit=limit)
 
 
+@router.get("/analytics")
+async def trainer_analytics() -> dict[str, Any]:
+    """Progress analytics: training-rating estimate + skill bars from recorded
+    games. Honest scope: measures move quality vs the engine, not Elo."""
+    from ..services.chess_games import progress_analytics
+
+    return progress_analytics()
+
+
 class GmGuessRequest(BaseModel):
     game_id: str = Field(..., description="Curated GM game id")
     ply: int = Field(0, ge=0, description="The ply the learner is guessing")
