@@ -173,6 +173,17 @@ type SacrificeInfo = {
   brilliant?: boolean
 }
 
+type HangingDrill = {
+  ok: boolean
+  fen?: string
+  instruction?: string
+  find?: {
+    ok?: boolean
+    count?: number
+    hanging?: Array<{ square: string; piece: string; attackers?: number; defenders?: number; capture_uci?: string | null }>
+  }
+}
+
 type EngineReply = {
   ok: boolean
   uci?: string
@@ -244,6 +255,8 @@ export default function ChessTrainerPage() {
   const [hint, setHint] = useState<CoachPlan | null>(null)
   const [hintLevel, setHintLevel] = useState(0)
   const [boardTheme, setBoardTheme] = useState<BoardThemeKey>("vibrant")
+  const [drill, setDrill] = useState<HangingDrill | null>(null)
+  const [drillResult, setDrillResult] = useState<"none" | "solved" | "missed">("none")
   const [reviewSolved, setReviewSolved] = useState<"none" | "solved" | "failed">("none")
 
   const board = useMemo(() => parseFen(fen), [fen])
@@ -297,6 +310,30 @@ export default function ChessTrainerPage() {
     setResult(null)
     const preFen = fen
     try {
+      // Pre-move safety check (Heisman Slow->Safe->Active): if this move hangs
+      // a piece or leaves the king exposed, BLOCK it and make the learner
+      // reconsider — this is the #1 beginner habit the research prescribes.
+      const safety = await (await fetch(`${backendUrl}/chess/trainer/safety`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fen: preFen, uci }),
+      })).json() as { ok: boolean; safe?: boolean; message?: string; hanging_after?: string[]; error?: string }
+
+      if (safety.ok && safety.safe === false) {
+        setResult({
+          ok: true,
+          legal: false,
+          error: safety.message ?? "unsafe move",
+          classification: "Blunder",
+          legal_moves: undefined,
+        })
+        setRetryFen(preFen)
+        setSelected(null)
+        setLegalTargets([])
+        setEvaluating(false)
+        return
+      }
+
       const res = await (await fetch(`${backendUrl}/chess/trainer/evaluate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -304,6 +341,14 @@ export default function ChessTrainerPage() {
       })).json() as EvalResult
       setResult(res)
       setExplanationOpen(true)
+      // In drill mode, capturing a hanging piece solves it.
+      if (drill && res.legal && res.ok) {
+        setDrillResult(drillSolved(res) ? "solved" : "missed")
+        if (drillSolved(res)) {
+          setDrill(null)
+          setDrillResult("solved")
+        }
+      }
       // In review mode, playing the entry's best move solves it.
       if (activeReview && res.legal && uci === activeReview.best_uci) {
         setReviewSolved("solved")
@@ -405,6 +450,33 @@ export default function ChessTrainerPage() {
     } catch {
       setHint({ ok: false, plan: "coach unavailable" })
     }
+  }
+
+  // Hanging-piece drill: load a position with a loose enemy piece and put it on
+  // the board; the learner finds + captures it.
+  const newDrill = async () => {
+    try {
+      const drill = await (await fetch(`${backendUrl}/chess/trainer/drill/hanging`)).json() as HangingDrill
+      if (drill.ok && drill.fen) {
+        setFen(drill.fen)
+        setDrill(drill)
+        setHistory([])
+        setResult(null)
+        setLastMove(null)
+        setSelected(null)
+        setLegalTargets([])
+        setRetryFen(null)
+      }
+    } catch { /* ignore */ }
+  }
+
+  const drillSolved = (r: EvalResult) => {
+    // Did the learner capture one of the hanging pieces?
+    const hanging = drill?.find?.hanging ?? []
+    const captured = r.san?.includes("x") ?? false
+    const target = r.san ? r.san.split("x")[1]?.[0] ?? "" : ""
+    const matched = hanging.some((h) => h.square.startsWith(target))
+    return captured && matched
   }
 
   const loadReview = useCallback(async () => {
@@ -687,6 +759,27 @@ export default function ChessTrainerPage() {
                   </div>
                 )}
               </div>
+            </CardContent>
+          </Card>
+
+          <Card className="border-white/10 bg-panel">
+            <CardHeader>
+              <CardTitle className="text-base">Hanging pieces — board vision</CardTitle>
+              <CardDescription>
+                The #1 beginner skill (Steps Method: "top priority"). Spot the loose enemy
+                piece and capture it. The pre-move safety check also blocks your own
+                hanging moves during play.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <Button size="sm" onClick={newDrill}>New drill position</Button>
+              {drillResult === "solved" && <div className="text-sm text-emerald-300">✓ Caught it — you took the loose piece!</div>}
+              {drillResult === "missed" && <div className="text-sm text-amber-300">That wasn't the loose piece — look again.</div>}
+              {drill && drill.find?.hanging?.length ? (
+                <div className="rounded-lg border border-emerald-400/20 bg-emerald-950/10 p-3 text-sm text-emerald-100/90">
+                  Find and capture: {drill.find.hanging.map((h) => `the ${h.piece} on ${h.square}`).join(", ")}
+                </div>
+              ) : null}
             </CardContent>
           </Card>
 

@@ -232,3 +232,42 @@ async def trainer_review_stats() -> dict[str, Any]:
     from ..services.chess_mistakes import stats
 
     return stats()
+
+
+class SafetyCheckRequest(BaseModel):
+    fen: str = Field(..., description="Current position FEN (side to move)")
+    uci: str = Field(..., description="The move to check for safety")
+
+
+class ThreatCheckRequest(BaseModel):
+    fen: str = Field(..., description="Current position FEN")
+    uci: str = Field(..., description="The last move played (to read its threats)")
+
+
+@router.get("/drill/hanging")
+async def trainer_drill_hanging(fen: str | None = None) -> dict[str, Any]:
+    """A hanging-piece drill: a position where the side to move can capture a
+    loose enemy piece. Returns the FEN + the found loose pieces (the learner
+    must spot + take one)."""
+    from ..services.chess_trainer import hanging_drill
+
+    return hanging_drill(fen)
+
+
+@router.post("/safety")
+async def trainer_safety(req: SafetyCheckRequest) -> dict[str, Any]:
+    """The pre-move safety check (Heisman Slow->Safe->Active): would this move
+    leave a piece hanging or the king exposed? The learner confirms this BEFORE
+    the trainer accepts the move."""
+    from ..services.chess_trainer import check_move_safety
+
+    return check_move_safety(req.fen, req.uci)
+
+
+@router.post("/threats")
+async def trainer_threats(req: ThreatCheckRequest) -> dict[str, Any]:
+    """'Looking for Trouble': what did the last move threaten? Lists enemy
+    pieces now attacked and undefended."""
+    from ..services.chess_trainer import threats_from_move
+
+    return threats_from_move(req.fen, req.uci)

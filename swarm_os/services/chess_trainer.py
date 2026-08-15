@@ -304,6 +304,216 @@ def coach_plan(fen: str) -> dict[str, Any]:
         return {"ok": False, "error": str(exc)}
 
 
+# ---------------------------------------------------------------------------
+# Hanging-piece training (2026 SOTA — the #1 beginner lever)
+# ---------------------------------------------------------------------------
+# The research (Steps Method: board vision is "top priority"; Heisman: the
+# hanging piece is "the big mistake"; ChessPivot: detection != solution)
+# converges on the same missing skill: spotting LOOSE pieces — both taking the
+# opponent's and seeing that your own move hangs one. These functions derive
+# positions + checks purely from python-chess (no engine needed for
+# attack/defense counts), and the drill feeds the spaced-review queue.
+
+
+def _attackers_of(board, sq, color) -> int:
+    """How many of `color`'s pieces attack the square sq (via python-chess's
+    built-in attack map — correct for pawn captures, sliders, knights)."""
+    return len(board.attackers(color, sq))
+
+
+def _defenders_of(board, sq) -> int:
+    p = board.piece_at(sq)
+    if p is None:
+        return 0
+    return _attackers_of(board, sq, p.color)
+
+
+def find_hanging_pieces(fen: str) -> dict[str, Any]:
+    """Find every enemy piece that is hanging (attacked and under-defended) for
+    the side to move. Returns {ok, hanging: [{square, piece, attackers,
+    defenders, capture_uci}], count}."""
+    try:
+        board = chess.Board(fen)
+        me = board.turn
+        enemy = not me
+        result = []
+        for sq in chess.SQUARES:
+            p = board.piece_at(sq)
+            if not p or p.color != enemy or p.piece_type == chess.KING:
+                continue  # ignore the enemy king (it's never 'hanging')
+            attackers = _attackers_of(board, sq, me)
+            defenders = _defenders_of(board, sq)
+            if attackers > defenders:
+                # Find a capture move for the learner.
+                cap = None
+                for m in board.legal_moves:
+                    if (
+                        m.to_square == sq
+                        and board.piece_at(m.from_square)
+                        and board.piece_at(m.from_square).color == me
+                    ):
+                        cap = m.uci()
+                        break
+                result.append(
+                    {
+                        "square": chess.square_name(sq),
+                        "piece": p.symbol(),
+                        "attackers": attackers,
+                        "defenders": defenders,
+                        "capture_uci": cap,
+                    }
+                )
+        return {"ok": True, "count": len(result), "hanging": result[:8]}
+    except Exception as exc:
+        log.warning("hanging-piece detection failed: %s", exc)
+        return {"ok": False, "error": str(exc)}
+
+
+def _move_hangs_piece(board, move) -> list[str]:
+    """After making `move`, which of the mover's pieces are left hanging?
+    Returns a list of square names. Checks every own piece attacked more than
+    defended (a real material-loss threat), excluding the moved piece (it just
+    moved — unless it went en prise)."""
+    try:
+        probe = board.copy()
+        probe.push(move)
+        mover = not probe.turn  # the side that just moved
+        hanging = []
+        for sq in chess.SQUARES:
+            p = probe.piece_at(sq)
+            if not p or p.color != mover or p.piece_type == chess.KING:
+                continue
+            attackers = _attackers_of(probe, sq, probe.turn)  # opponent attacks
+            defenders = _defenders_of(probe, sq)
+            if attackers > defenders:
+                hanging.append(chess.square_name(sq))
+        return hanging
+    except Exception as exc:
+        log.warning("move-hangs detection failed: %s", exc)
+        return []
+
+
+def check_move_safety(fen: str, uci: str) -> dict[str, Any]:
+    """The pre-move safety check (Heisman Slow->Safe->Active): would this move
+    leave a piece hanging, or leave the king in check / badly exposed? Returns
+    {ok, safe, hanging_after, king_in_check, message}."""
+    try:
+        board = chess.Board(fen)
+        move = chess.Move.from_uci(uci)
+        if move not in board.legal_moves:
+            return {"ok": False, "safe": False, "error": "not a legal move"}
+        hanging = _move_hangs_piece(board, move)
+        probe = board.copy()
+        probe.push(move)
+        king_in_check = probe.is_check()
+        if not hanging and not king_in_check:
+            return {
+                "ok": True,
+                "safe": True,
+                "hanging_after": [],
+                "king_in_check": False,
+                "message": "safe — no piece hangs and your king is fine",
+            }
+        issues = []
+        if king_in_check:
+            issues.append("your king is left in check")
+        if hanging:
+            issues.append(f"this move hangs {', '.join(hanging[:3])}")
+        return {
+            "ok": True,
+            "safe": False,
+            "hanging_after": hanging,
+            "king_in_check": king_in_check,
+            "message": "caught it! "
+            + " and ".join(issues)
+            + " — check before you move",
+        }
+    except Exception as exc:
+        log.warning("move safety check failed: %s", exc)
+        return {"ok": False, "safe": False, "error": str(exc)}
+
+
+def hanging_drill(fen: str | None = None) -> dict[str, Any]:
+    """A hanging-piece drill: a position where the side to move can capture a
+    loose enemy piece. When no FEN is given, search forward from the start
+    position (deterministic, bounded) until a position with a hanging piece is
+    found; fall back to the start position."""
+    import random
+
+    if fen:
+        try:
+            board = chess.Board(fen)
+            found = find_hanging_pieces(board.fen())
+            return {
+                "ok": True,
+                "fen": board.fen(),
+                "find": found,
+                "instruction": "find a loose enemy piece you can capture",
+            }
+        except Exception:
+            pass
+    # Search forward from the start position until a hanging piece appears.
+    rng = random.Random(42)
+    start = chess.Board()
+    for _ in range(60):
+        legal = [m for m in start.legal_moves]
+        if not legal:
+            break
+        m = rng.choice(legal)
+        start.push(m)
+        if start.is_game_over():
+            break
+        found = find_hanging_pieces(start.fen())
+        if found.get("count", 0) > 0:
+            return {
+                "ok": True,
+                "fen": start.fen(),
+                "find": found,
+                "instruction": "find a loose enemy piece you can capture",
+            }
+    return {
+        "ok": True,
+        "fen": chess.Board().fen(),
+        "find": find_hanging_pieces(chess.Board().fen()),
+        "instruction": "find a loose enemy piece you can capture",
+    }
+
+
+def threats_from_move(fen: str, uci: str) -> dict[str, Any]:
+    """'Looking for Trouble': after a move, what does it threaten? Enumerate the
+    enemy pieces the move now attacks that are undefended, and any check."""
+    try:
+        board = chess.Board(fen)
+        move = chess.Move.from_uci(uci)
+        if move not in board.legal_moves:
+            return {"ok": False, "error": "not a legal move"}
+        probe = board.copy()
+        probe.push(move)
+        me = probe.turn  # opponent now; their move was the threat
+        threats = []
+        for sq in chess.SQUARES:
+            p = probe.piece_at(sq)
+            if not p or p.color != me or p.piece_type == chess.KING:
+                continue
+            attackers = _attackers_of(probe, sq, not me)
+            defenders = _defenders_of(probe, sq)
+            if attackers > defenders:
+                threats.append(chess.square_name(sq))
+        return {
+            "ok": True,
+            "threats": threats,
+            "gives_check": probe.is_check(),
+            "summary": (
+                f"their last move attacks {', '.join(threats[:3])}"
+                if threats
+                else "their last move doesn't hang anything — it's your turn to create a threat"
+            ),
+        }
+    except Exception as exc:
+        log.warning("threat detection failed: %s", exc)
+        return {"ok": False, "error": str(exc)}
+
+
 def detect_sacrifice(
     fen: str,
     uci: str,
