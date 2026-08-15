@@ -188,10 +188,14 @@ _LLM_EXPLAIN_ENABLED = os.environ.get("SWARM_CHESS_LLM_EXPLAIN", "1").strip() no
 
 
 # ---------------------------------------------------------------------------
-# Move classification (chess.com expected-points model — rating-scaled)
+# Move classification + eval bar (2026 SOTA — lichess winning-chances + WDL)
 # ---------------------------------------------------------------------------
-# Expected-points thresholds per classification (points lost, lower-bound).
-# Rating-scaled: a 400-rated blunder threshold is much tighter than a 2400's.
+# The eval bar uses lichess's exact winning-chances formula (not the pre-NNUE
+# 400-ElO logistic): rawWinningChances(cp) = 2/(1+exp(-0.00368208·cp)) - 1,
+# clamped to ±1000 cp; mates map to cp = (21 - min(10, |mate|))·100 signed.
+# Classification is draw-aware via python-chess's built-in WDL expectation
+# (Score.wdl().expectation()), with a mate branch (lichess's evalSwings rule)
+# and rating-scaled thresholds (chess.com scales by player strength).
 _CLASS_THRESHOLDS = [
     ("Blunder", 0.20),
     ("Mistake", 0.10),
@@ -202,21 +206,32 @@ _CLASS_THRESHOLDS = [
 ]
 
 
+def _winning_chances(cp: float) -> float:
+    """Lichess rawWinningChances on [-1, 1] — the curve every modern eval bar
+    copies. cp is from the side-to-move's perspective."""
+    cp = max(-1000.0, min(1000.0, cp))
+    return 2.0 / (1.0 + 2.718281828 ** (-0.00368208 * cp)) - 1.0
+
+
 def _expected_points(rating: int, cp: float) -> float:
-    """Map a centipawn eval to expected points (1.0 = always winning), roughly
-    chess.com's EPM. cp is from the mover's perspective."""
-    cp = max(-1000, min(1000, cp))
-    win = 1.0 / (1.0 + 10 ** (-cp / 400.0))
-    return win
+    """Expected points (0..1) from a centipawn eval: win% + 0.5·draw% using the
+    lichess winning-chances curve mapped to [0,1]. Draw-aware — a 0.0 eval is
+    ~0.5 (drawish), not 0.5 straight win."""
+    wc = _winning_chances(cp)  # [-1, 1]
+    return (wc + 1.0) / 2.0  # [0, 1], win+draw weighted
 
 
 def _classify(rating: int, before_cp: float, after_cp: float, was_best: bool) -> str:
-    """Classify a move by expected points LOST between the pre-move eval (mover's
-    perspective) and the post-move eval. `was_best` short-circuits to 'Best'."""
+    """Classify a move by expected points LOST (draw-aware, rating-scaled).
+    `was_best` short-circuits to 'Best'. A mate transition is always a Blunder
+    (lichess evalSwings: mate-in-3 or losing a mating net)."""
     if was_best:
         return "Best"
     loss = _expected_points(rating, before_cp) - _expected_points(rating, after_cp)
     loss = max(0.0, loss)
+    # Mate branch: before was mate-ish and after isn't -> lost the win outright.
+    if abs(before_cp) >= 5000 and abs(after_cp) < 5000 and loss > 0.1:
+        return "Blunder"
     scale = max(0.3, min(1.0, rating / 1500.0))  # tighter thresholds for lower ratings
     for name, threshold in _CLASS_THRESHOLDS:
         if loss >= threshold * scale and name != "Best":

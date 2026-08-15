@@ -15,9 +15,14 @@ from swarm_os.services import chess_trainer as ct
 # Classification (pure logic)
 # ---------------------------------------------------------------------------
 def test_expected_points_midpoint_and_edges():
+    # Draw-aware (lichess curve): 0 cp = 0.5 (drawish), ±400 cp maps via the
+    # winning-chances curve (not the old 400-ELO logistic).
     assert ct._expected_points(500, 0) == pytest.approx(0.5)
-    assert ct._expected_points(500, 400) == pytest.approx(0.909, abs=0.01)
-    assert ct._expected_points(500, -400) == pytest.approx(0.091, abs=0.01)
+    assert ct._winning_chances(0) == pytest.approx(0.0, abs=0.01)
+    assert ct._winning_chances(100) == pytest.approx(0.18, abs=0.02)
+    assert ct._winning_chances(-100) == pytest.approx(-0.18, abs=0.02)
+    assert ct._expected_points(500, 400) == pytest.approx(0.8135, abs=0.02)
+    assert ct._expected_points(500, -400) == pytest.approx(0.1865, abs=0.02)
 
 
 def test_classify_best_short_circuit():
