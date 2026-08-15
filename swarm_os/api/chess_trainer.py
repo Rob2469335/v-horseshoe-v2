@@ -75,6 +75,9 @@ class EvaluateMoveRequest(BaseModel):
     uci: str = Field(..., description="The move the learner played, UCI notation")
     rating: int = Field(500, ge=100, le=2500)
     want_explain: bool = Field(True)
+    game_id: str | None = Field(
+        None, description="Active game id to record this move into"
+    )
 
 
 class EngineMoveRequest(BaseModel):
@@ -128,7 +131,11 @@ async def trainer_evaluate(req: EvaluateMoveRequest) -> dict[str, Any]:
 
     try:
         return await evaluate_move(
-            req.fen, req.uci, rating=req.rating, want_explain=req.want_explain
+            req.fen,
+            req.uci,
+            rating=req.rating,
+            want_explain=req.want_explain,
+            game_id=req.game_id,
         )
     except Exception as exc:
         log.warning("chess evaluate failed: %s", exc)
@@ -271,3 +278,94 @@ async def trainer_threats(req: ThreatCheckRequest) -> dict[str, Any]:
     from ..services.chess_trainer import threats_from_move
 
     return threats_from_move(req.fen, req.uci)
+
+
+class GameIdRequest(BaseModel):
+    game_id: str | None = Field(
+        None, description="Game id (defaults to the most recent)"
+    )
+
+
+@router.post("/game/start")
+async def trainer_game_start() -> dict[str, Any]:
+    """Start a new recorded game. Returns the game id to pass to /evaluate."""
+    from ..services.chess_games import start_game
+
+    return start_game()
+
+
+@router.post("/game/review")
+async def trainer_game_review(req: GameIdRequest) -> dict[str, Any]:
+    """Finalize + review a game: eval curve, key moments, per-phase accuracy,
+    and the queue-mistakes payload."""
+    from ..services.chess_games import finish_game
+
+    return finish_game(req.game_id or "")
+
+
+@router.post("/game/queue-mistakes")
+async def trainer_game_queue_mistakes(req: GameIdRequest) -> dict[str, Any]:
+    """Queue every mistake/blunder of the game into the spaced-repetition store."""
+    from ..services.chess_games import queue_game_mistakes
+
+    return queue_game_mistakes(req.game_id)
+
+
+@router.get("/games")
+async def trainer_games(limit: int = 20) -> dict[str, Any]:
+    """Recent recorded games + their accuracy."""
+    from ..services.chess_games import list_games
+
+    return list_games(limit=limit)
+
+
+class GmGuessRequest(BaseModel):
+    game_id: str = Field(..., description="Curated GM game id")
+    ply: int = Field(0, ge=0, description="The ply the learner is guessing")
+    guess_uci: str = Field(..., description="The learner's guessed move, UCI")
+
+
+@router.get("/gm-games")
+async def trainer_gm_games() -> dict[str, Any]:
+    """The curated famous Fischer + Carlsen games for guess-the-move study."""
+    from ..services.gm_games import list_gm_games
+
+    return list_gm_games()
+
+
+@router.post("/gm-games/curate")
+async def trainer_gm_curate(force: bool = False) -> dict[str, Any]:
+    """Rebuild the gm_games Qdrant index from the curated famous games."""
+    from ..services.gm_games import curate
+
+    return await curate(force=force)
+
+
+@router.post("/gm-games/play")
+async def trainer_gm_play(req: GmGuessRequest) -> dict[str, Any]:
+    """Get the position at `ply` (without revealing the answer)."""
+    from ..services.gm_games import play_game
+
+    return play_game(req.game_id, req.ply)
+
+
+@router.post("/gm-games/guess")
+async def trainer_gm_guess(req: GmGuessRequest) -> dict[str, Any]:
+    """Compare the learner's guess against the GM's actual move."""
+    from ..services.gm_games import guess_move
+
+    return guess_move(req.game_id, req.ply, req.guess_uci)
+
+
+class GmExplainRequest(BaseModel):
+    game_id: str = Field(..., description="Curated GM game id")
+    ply: int = Field(0, ge=0, description="The ply whose GM move to explain")
+
+
+@router.post("/gm-games/explain")
+async def trainer_gm_explain(req: GmExplainRequest) -> dict[str, Any]:
+    """Explain a GM's move: why they played it, what it threatens, what they're
+    setting up. Engine-grounded + book-grounded with a cloud narrative."""
+    from ..services.gm_games import explain_move
+
+    return await explain_move(req.game_id, req.ply)

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card"
 import { Button } from "../components/ui/button"
 import { Badge } from "../components/ui/badge"
@@ -173,6 +173,50 @@ type SacrificeInfo = {
   brilliant?: boolean
 }
 
+type GameReview = {
+  ok: boolean
+  game_id?: string
+  move_count?: number
+  accuracy?: number
+  curve?: Array<{ n: number; san?: string; win_pct?: number; classification?: string }>
+  key_moments?: Array<{ type: string; move_n?: number; san?: string; classification?: string; win_delta_pct?: number; fen?: string }>
+  phases?: Record<string, number>
+  queue_mistakes?: Array<Record<string, unknown>>
+  error?: string
+}
+
+type GmGame = {
+  id: string
+  name: string
+  player: string
+  white?: string
+  black?: string
+  year?: number
+  result?: string
+  move_count?: number
+}
+
+type GmSession = {
+  ok: boolean
+  finished?: boolean
+  game_id?: string
+  name?: string
+  ply?: number
+  fen?: string
+  side_to_move?: string
+  move_number?: number
+  result?: string
+  error?: string
+}
+
+type GmGuess = {
+  ok: boolean
+  correct?: boolean
+  gm_move_uci?: string
+  gm_move_san?: string
+  error?: string
+}
+
 type HangingDrill = {
   ok: boolean
   fen?: string
@@ -257,6 +301,9 @@ export default function ChessTrainerPage() {
   const [boardTheme, setBoardTheme] = useState<BoardThemeKey>("vibrant")
   const [drill, setDrill] = useState<HangingDrill | null>(null)
   const [drillResult, setDrillResult] = useState<"none" | "solved" | "missed">("none")
+  const [gameId, setGameId] = useState<string | null>(null)
+  const [gameReview, setGameReview] = useState<GameReview | null>(null)
+  const [reviewing, setReviewing] = useState(false)
   const [reviewSolved, setReviewSolved] = useState<"none" | "solved" | "failed">("none")
 
   const board = useMemo(() => parseFen(fen), [fen])
@@ -301,9 +348,16 @@ export default function ChessTrainerPage() {
       const uci = selected + sq
       setSelected(null)
       setLegalTargets([])
-      void evaluateMove(uci)
+      if (gmSessionRef.current?.ok && !gmSessionRef.current.finished) {
+        void gmGuessRef.current(uci)
+      } else {
+        void evaluateMove(uci)
+      }
     }
   }
+
+  const gmGuessRef = useRef<(uci: string) => Promise<void>>(async () => {})
+  const gmSessionRef = useRef<GmSession | null>(null)
 
   const evaluateMove = async (uci: string) => {
     setEvaluating(true)
@@ -337,7 +391,7 @@ export default function ChessTrainerPage() {
       const res = await (await fetch(`${backendUrl}/chess/trainer/evaluate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fen: preFen, uci, rating, want_explain: true }),
+        body: JSON.stringify({ fen: preFen, uci, rating, want_explain: true, game_id: gameId }),
       })).json() as EvalResult
       setResult(res)
       setExplanationOpen(true)
@@ -478,6 +532,118 @@ export default function ChessTrainerPage() {
     const matched = hanging.some((h) => h.square.startsWith(target))
     return captured && matched
   }
+
+  // Full-game guided review: start a recorded game, then finish + review it.
+  const startGame = async () => {
+    try {
+      const g = await (await fetch(`${backendUrl}/chess/trainer/game/start`, { method: "POST" })).json() as { id: string }
+      setGameId(g.id)
+      setGameReview(null)
+      resetToPractice({ slug: "start", name: "Starting position", goal: "Play the opening", fen: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", tier: 1 })
+    } catch { /* ignore */ }
+  }
+
+  const finishReview = async () => {
+    setReviewing(true)
+    try {
+      const r = await (await fetch(`${backendUrl}/chess/trainer/game/review`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ game_id: gameId }),
+      })).json() as GameReview
+      setGameReview(r)
+      setGameId(null)
+    } catch {
+      setGameReview({ ok: false, error: "review failed" })
+    } finally {
+      setReviewing(false)
+    }
+  }
+
+  const queueGameMistakes = async () => {
+    if (!gameReview?.game_id) return
+    try {
+      await fetch(`${backendUrl}/chess/trainer/game/queue-mistakes`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ game_id: gameReview.game_id }),
+      })
+      loadReview()
+    } catch { /* ignore */ }
+  }
+
+  // Play-like-the-greats: guess-the-move on famous Fischer/Carlsen games.
+  const [gmGames, setGmGames] = useState<GmGame[]>([])
+  const [gmSession, setGmSession] = useState<GmSession | null>(null)
+  const [gmGuessResult, setGmGuessResult] = useState<GmGuess | null>(null)
+  const [gmExplain, setGmExplain] = useState<{ ok: boolean; explanation?: string; gm_move_san?: string; degraded?: boolean; error?: string } | null>(null)
+
+  const loadGmGames = useCallback(async () => {
+    try {
+      const g = await (await fetch(`${backendUrl}/chess/trainer/gm-games`)).json() as { ok: boolean; games: GmGame[] }
+      setGmGames(g.games ?? [])
+    } catch { /* ignore */ }
+  }, [backendUrl])
+
+  useEffect(() => { loadGmGames() }, [loadGmGames])
+
+  const startGm = async (gid: string) => {
+    setGmSession(null)
+    setGmGuessResult(null)
+    setGmExplain(null)
+    try {
+      const s = await (await fetch(`${backendUrl}/chess/trainer/gm-games/play`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ game_id: gid, ply: 0, guess_uci: "" }),
+      })).json() as GmSession
+      if (s.ok && s.fen) {
+        setGmSession(s)
+        setFen(s.fen)
+        setHistory([])
+        setResult(null)
+        setLastMove(null)
+      }
+    } catch { /* ignore */ }
+  }
+
+  const gmGuess = async (uci: string) => {
+    if (!gmSession?.game_id || gmSession.ply == null) return
+    try {
+      const g = await (await fetch(`${backendUrl}/chess/trainer/gm-games/guess`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ game_id: gmSession.game_id, ply: gmSession.ply, guess_uci: uci }),
+      })).json() as GmGuess
+      setGmGuessResult(g)
+      // Explain the GM's move (why, what it threatens, what it sets up).
+      setGmExplain(null)
+      if (g.ok && g.gm_move_uci) {
+        const plyToExplain = gmSession.ply
+        void (async () => {
+          try {
+            const ex = await (await fetch(`${backendUrl}/chess/trainer/gm-games/explain`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ game_id: gmSession.game_id, ply: plyToExplain }),
+            })).json() as { ok: boolean; explanation?: string; gm_move_san?: string; degraded?: boolean; error?: string }
+            setGmExplain(ex)
+          } catch { /* ignore */ }
+        })()
+        // Advance the session one ply.
+        const nextPly = gmSession.ply + 1
+        const s = await (await fetch(`${backendUrl}/chess/trainer/gm-games/play`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ game_id: gmSession.game_id, ply: nextPly, guess_uci: "" }),
+        })).json() as GmSession
+        setGmSession(s)
+        if (s.ok && s.fen) setFen(s.fen)
+      }
+    } catch { /* ignore */ }
+  }
+  gmGuessRef.current = gmGuess
+  gmSessionRef.current = gmSession
 
   const loadReview = useCallback(async () => {
     try {
@@ -780,6 +946,146 @@ export default function ChessTrainerPage() {
                   Find and capture: {drill.find.hanging.map((h) => `the ${h.piece} on ${h.square}`).join(", ")}
                 </div>
               ) : null}
+            </CardContent>
+          </Card>
+
+          <Card className="border-white/10 bg-panel">
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-base">Game review</CardTitle>
+                {gameReview?.accuracy != null && (
+                  <Badge className="border-emerald-400/40 bg-emerald-400/10 text-emerald-300">{gameReview.accuracy}%</Badge>
+                )}
+              </div>
+              <CardDescription>
+                Record a full game, then get the guided review — eval curve, key moments, and one-click
+                queue of every mistake into your spaced practice.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="flex flex-wrap gap-2">
+                <Button size="sm" variant={gameId ? "destructive" : "outline"} onClick={startGame}>
+                  {gameId ? "New recorded game" : "Start recorded game"}
+                </Button>
+                {gameId && (
+                  <Button size="sm" variant="outline" onClick={finishReview} disabled={reviewing}>
+                    {reviewing ? "Reviewing…" : "Finish + review game"}
+                  </Button>
+                )}
+              </div>
+
+              {gameReview?.error && <div className="text-xs text-red-300">{gameReview.error}</div>}
+
+              {gameReview?.ok && (
+                <div className="space-y-2">
+                  {gameReview.move_count != null && (
+                    <div className="text-xs text-white/50">{gameReview.move_count} moves</div>
+                  )}
+                  {gameReview.phases && Object.keys(gameReview.phases).length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {Object.entries(gameReview.phases).map(([phase, acc]) => (
+                        <Badge key={phase} className="border-white/20 bg-white/5 text-white/70">
+                          {phase} {acc}%
+                        </Badge>
+                      ))}
+                    </div>
+                  )}
+                  {gameReview.curve && gameReview.curve.length > 0 && (
+                    <div>
+                      <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-white/40">Eval curve</div>
+                      <div className="flex h-16 items-end gap-px overflow-hidden rounded-md bg-black/40 p-1">
+                        {gameReview.curve.map((pt) => (
+                          <div
+                            key={pt.n}
+                            title={`${pt.n}. ${pt.san ?? ""} (${pt.win_pct ?? "?"}%)`}
+                            className="flex-1 rounded-sm transition-all"
+                            style={{
+                              height: `${Math.max(4, Math.min(100, pt.win_pct ?? 50))}%`,
+                              backgroundColor: (pt.classification ?? "").startsWith("B") ? "#e05b4d" : "#4da3e0",
+                            }}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {gameReview.key_moments && gameReview.key_moments.length > 0 && (
+                    <div>
+                      <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-white/40">Key moments</div>
+                      <ul className="space-y-1 text-xs">
+                        {gameReview.key_moments.map((k, i) => (
+                          <li key={i} className="text-white/70">
+                            <span className={k.classification === "Blunder" ? "text-red-300" : "text-emerald-300"}>
+                              {k.move_n}. {k.san}
+                            </span>{" "}
+                            {k.classification}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {gameReview.queue_mistakes && gameReview.queue_mistakes.length > 0 && (
+                    <Button size="sm" variant="outline" onClick={queueGameMistakes}>
+                      Queue {gameReview.queue_mistakes.length} mistake(s) for spaced review
+                    </Button>
+                  )}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="border-white/10 bg-panel">
+            <CardHeader>
+              <CardTitle className="text-base">Play like the greats</CardTitle>
+              <CardDescription>
+                Guess-the-move on famous Fischer + Carlsen games. See a position, guess what the
+                GM played, and learn from the difference.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="grid gap-1.5 sm:grid-cols-2">
+                {gmGames.map((g) => (
+                  <button
+                    key={g.id}
+                    onClick={() => startGm(g.id)}
+                    className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-left text-xs hover:bg-black/40"
+                  >
+                    <div className="font-semibold text-white/90">{g.name}</div>
+                    <div className="text-white/50">{g.player} · {g.result} · {g.move_count} plies</div>
+                  </button>
+                ))}
+              </div>
+
+              {gmSession?.ok && !gmSession.finished && gmSession.fen && (
+                <div className="rounded-lg border border-emerald-400/20 bg-emerald-950/10 p-3">
+                  <div className="mb-1 text-sm font-semibold text-emerald-200">{gmSession.name}</div>
+                  <div className="mb-2 text-xs text-white/60">
+                    Move {gmSession.move_number} · {gmSession.side_to_move} to move — guess the GM's move
+                    (click the board to play it).
+                  </div>
+                  {gmGuessResult?.ok && (
+                    <div className={`text-sm ${gmGuessResult.correct ? "text-emerald-300" : "text-amber-300"}`}>
+                      {gmGuessResult.correct
+                        ? `✓ Correct — ${gmGuessResult.gm_move_san}!`
+                        : `The GM played ${gmGuessResult.gm_move_san}.`}
+                    </div>
+                  )}
+                  {gmExplain?.explanation && (
+                    <div className="mt-2 rounded-lg border border-violet-400/20 bg-violet-950/10 p-2 text-xs leading-relaxed text-violet-100/90">
+                      <div className="mb-1 font-semibold uppercase tracking-wide text-white/40">
+                        Why {gmExplain.gm_move_san} — what it sets up
+                      </div>
+                      <pre className="whitespace-pre-wrap">{gmExplain.explanation}</pre>
+                      {gmExplain.degraded && (
+                        <div className="mt-1 text-[10px] text-white/40">(deterministic engine explanation — LLM unavailable)</div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {gmSession?.finished && (
+                <div className="text-sm text-emerald-300">Game complete — {gmSession.result}. Pick another to keep going.</div>
+              )}
             </CardContent>
           </Card>
 
