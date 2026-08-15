@@ -287,6 +287,28 @@ async def evaluate_move(
         except Exception:
             pass
 
+    # Learn-from-mistakes: persist Mistake/Blunder positions (the research's
+    # #1 evidence-backed feature — your own blunders become review puzzles).
+    if classification in ("Mistake", "Blunder", "Inaccuracy"):
+        try:
+            from .chess_book_memory import _concept_from, retrieve
+            from .chess_mistakes import record_mistake
+
+            concept = _concept_from(classification, f"{uci} {before_best or ''}")
+            frags = await retrieve(f"{concept}", top_k=2)
+            record_mistake(
+                pre_fen=fen,
+                played_uci=uci,
+                played_san=result["san"],
+                best_uci=before_best,
+                best_san=result.get("best_move_san"),
+                classification=classification,
+                concept=concept,
+                book_titles=[f.get("title") for f in frags if f.get("title")][:3],
+            )
+        except Exception as exc:
+            log.warning("mistake recording failed: %s", exc)
+
     if want_explain and classification not in ("Best", "Excellent"):
         result["explanation"] = await _explain_move(
             fen,

@@ -164,6 +164,19 @@ type EngineReply = {
 
 type PracticePosition = { slug: string; name: string; goal: string; fen: string; tier: number }
 
+type ReviewEntry = {
+  id: string
+  pre_fen: string
+  played_san: string
+  best_uci?: string | null
+  best_san?: string | null
+  classification: string
+  concept?: string
+  book_titles?: string[]
+  box?: number
+  due_at?: number
+}
+
 function parseFen(fen: string): Record<string, string> {
   const board: Record<string, string> = {}
   const placement = fen.split(" ")[0]
@@ -201,6 +214,10 @@ export default function ChessTrainerPage() {
   const [level, setLevel] = useState(1)
   const [health, setHealth] = useState<{ engine?: { available: boolean }; book_index?: { available: boolean } } | null>(null)
   const [explanationOpen, setExplanationOpen] = useState(true)
+  const [review, setReview] = useState<ReviewEntry[]>([])
+  const [reviewStats, setReviewStats] = useState<{ total: number; due_count: number } | null>(null)
+  const [activeReview, setActiveReview] = useState<ReviewEntry | null>(null)
+  const [reviewSolved, setReviewSolved] = useState<"none" | "solved" | "failed">("none")
 
   const board = useMemo(() => parseFen(fen), [fen])
   const turn = useMemo(() => sideToMove(fen), [fen])
@@ -260,6 +277,14 @@ export default function ChessTrainerPage() {
       })).json() as EvalResult
       setResult(res)
       setExplanationOpen(true)
+      // In review mode, playing the entry's best move solves it.
+      if (activeReview && res.legal && uci === activeReview.best_uci) {
+        setReviewSolved("solved")
+        resolveReview(activeReview, true)
+      } else if (activeReview && res.legal && res.classification && ["Mistake", "Blunder"].includes(res.classification)) {
+        setReviewSolved("failed")
+        resolveReview(activeReview, false)
+      }
       if (res.ok && res.legal && res.fen) {
         // Learning-first: on a bad move, hold the position so the learner can
         // RETRY (find the right move themselves) instead of the engine replying
@@ -333,6 +358,44 @@ export default function ChessTrainerPage() {
   }
 
   const newGame = () => resetToPractice({ slug: "start", name: "Starting position", goal: "Play the opening", fen: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", tier: 1 })
+
+  const loadReview = useCallback(async () => {
+    try {
+      const [d, s] = await Promise.all([
+        (await fetch(`${backendUrl}/chess/trainer/review?limit=20`)).json(),
+        (await fetch(`${backendUrl}/chess/trainer/review/stats`)).json(),
+      ])
+      setReview(d.due ?? [])
+      setReviewStats({ total: s.total ?? 0, due_count: s.due_count ?? 0 })
+    } catch { /* ignore */ }
+  }, [backendUrl])
+
+  useEffect(() => { loadReview() }, [loadReview])
+
+  const startReview = (entry: ReviewEntry) => {
+    setActiveReview(entry)
+    setReviewSolved("none")
+    setFen(entry.pre_fen)
+    setHistory([])
+    setResult(null)
+    setLastMove(null)
+    setSelected(null)
+    setLegalTargets([])
+    setRetryFen(null)
+    setExplanationOpen(true)
+  }
+
+  const resolveReview = async (entry: ReviewEntry, solved: boolean) => {
+    try {
+      await fetch(`${backendUrl}/chess/trainer/review/${solved ? "solved" : "failed"}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ entry_id: entry.id }),
+      })
+    } catch { /* ignore */ }
+    setReviewSolved(solved ? "solved" : "failed")
+    loadReview()
+  }
 
   return (
     <div className="space-y-6 p-6">
@@ -458,6 +521,67 @@ export default function ChessTrainerPage() {
               </CardContent>
             </Card>
           )}
+
+          <Card className="border-white/10 bg-panel">
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-base">Review — your mistakes</CardTitle>
+                {reviewStats && (
+                  <Badge className="border-white/20 bg-white/5 text-white/60">{reviewStats.due_count} due · {reviewStats.total} total</Badge>
+                )}
+              </div>
+              <CardDescription>
+                Positions you blundered, re-presented as "find the better move". Solved ones come back on a spaced
+                schedule (1d → 3d → 7d → 14d) so the pattern sticks.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {activeReview && (
+                <div className="rounded-lg border border-emerald-400/20 bg-emerald-950/10 p-3">
+                  <div className="mb-1 text-sm font-semibold text-emerald-200">Review position</div>
+                  <div className="mb-2 text-xs text-white/50">
+                    You played {activeReview.played_san} here ({activeReview.classification}).
+                    {activeReview.concept ? ` Theme: ${activeReview.concept}.` : ""}
+                    Find the better move.
+                  </div>
+                  {reviewSolved === "solved" && (
+                    <div className="mb-2 text-sm text-emerald-300">✓ Correct — that's the right idea. Added to your spaced review.</div>
+                  )}
+                  {reviewSolved === "failed" && (
+                    <div className="mb-2 text-sm text-amber-300">That's still a mistake — it'll come back tomorrow.</div>
+                  )}
+                  <div className="flex gap-2">
+                    {reviewSolved === "none" && (
+                      <Button size="sm" variant="outline" onClick={() => resolveReview(activeReview, false)}>Show answer</Button>
+                    )}
+                    <Button size="sm" variant="outline" onClick={() => { setActiveReview(null); setReviewSolved("none"); newGame() }}>Done reviewing</Button>
+                  </div>
+                </div>
+              )}
+
+              {review.length === 0 ? (
+                <div className="text-xs text-white/40">No review positions due right now. Blunder in a game and they'll show up here.</div>
+              ) : (
+                <div className="max-h-56 space-y-1.5 overflow-y-auto">
+                  {review.map((r) => (
+                    <button
+                      key={r.id}
+                      onClick={() => startReview(r)}
+                      className={`flex w-full items-center justify-between rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-left text-sm hover:bg-black/40 ${activeReview?.id === r.id ? "border-emerald-400/40" : ""}`}
+                    >
+                      <span className="text-white/85">
+                        {r.played_san} <span className="text-white/40">— find the better move</span>
+                      </span>
+                      <span className="flex items-center gap-1.5">
+                        {r.concept && <Badge className="border-white/20 bg-white/5 text-white/60">{r.concept}</Badge>}
+                        <Badge className={CLASS_COLOR[r.classification] ?? ""}>{r.classification}</Badge>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
 
           <Card className="border-white/10 bg-panel">
             <CardHeader>

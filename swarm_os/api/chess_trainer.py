@@ -165,3 +165,41 @@ async def trainer_practice() -> dict[str, Any]:
         "count": len(PRACTICE_POSITIONS),
         "positions": PRACTICE_POSITIONS,
     }
+
+
+class ReviewResolveRequest(BaseModel):
+    entry_id: str = Field(..., description="The mistake entry id")
+
+
+@router.get("/review")
+async def trainer_review(limit: int = 10, box: int | None = None) -> dict[str, Any]:
+    """Due learn-from-mistakes positions (spaced ladder), oldest box first.
+    Each entry is a position the learner blundered, to be solved as 'find the
+    better move'."""
+    from ..services.chess_mistakes import review_due
+
+    return review_due(limit=limit, box=box)
+
+
+@router.post("/review/solved")
+async def trainer_review_solved(req: ReviewResolveRequest) -> dict[str, Any]:
+    """Mark a review position solved: advance its spaced-repetition box (or
+    retire it past the ladder)."""
+    from ..services.chess_mistakes import mark_solved
+
+    return mark_solved(req.entry_id)
+
+
+@router.post("/review/failed")
+async def trainer_review_failed(req: ReviewResolveRequest) -> dict[str, Any]:
+    """Mark a review position failed: reset it to box 0 (due tomorrow)."""
+    from ..services.chess_mistakes import mark_failed
+
+    return mark_failed(req.entry_id)
+
+
+@router.get("/review/stats")
+async def trainer_review_stats() -> dict[str, Any]:
+    from ..services.chess_mistakes import stats
+
+    return stats()
