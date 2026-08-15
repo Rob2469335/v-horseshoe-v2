@@ -25,6 +25,8 @@ export function ChessPiece({ piece }: { piece: string }) {
         backgroundSize: "100% 100%",
         backgroundRepeat: "no-repeat",
         backgroundPosition: "center",
+        // Subtle depth so the piece pops against the vibrant squares.
+        filter: "drop-shadow(0 1px 1px rgba(0,0,0,0.25))",
       }}
     />
   )

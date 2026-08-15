@@ -18,11 +18,27 @@ import { ChessPiece } from "./ChessPiece"
 const FILES = "abcdefgh"
 const RANKS = "87654321"
 
-const LIGHT = "#f0d9b5"
-const DARK = "#b58863"
-const LAST_MOVE = "rgba(155,199,0,0.41)"
-const SELECTED = "rgba(20,85,30,0.5)"
-const HOVER = "rgba(20,85,30,0.3)"
+// Vibrant board themes — rich, saturated two-tone palettes (2026 look: vivid
+// wood/emerald/ocean/royal/violet). The lichess flat recipe, but colorful.
+export type BoardThemeKey = "vibrant" | "emerald" | "ocean" | "royal" | "violet" | "rose" | "amber"
+
+export const BOARD_THEMES: Record<BoardThemeKey, { light: string; dark: string; name: string }> = {
+  vibrant: { light: "#f2e6b0", dark: "#4f8a3c", name: "Vibrant" },
+  emerald: { light: "#e8f5e0", dark: "#3f8a4c", name: "Emerald" },
+  ocean: { light: "#d8ecf5", dark: "#2f7f9e", name: "Ocean" },
+  royal: { light: "#dce4f7", dark: "#3a5fc9", name: "Royal" },
+  violet: { light: "#efe3fa", dark: "#7a5cc2", name: "Violet" },
+  rose: { light: "#fde8ec", dark: "#c2546f", name: "Rose" },
+  amber: { light: "#fff3d6", dark: "#c98a2d", name: "Amber" },
+}
+
+function themeOf(key: BoardThemeKey | string): { light: string; dark: string } {
+  return BOARD_THEMES[key as BoardThemeKey] ?? BOARD_THEMES.vibrant
+}
+
+const LAST_MOVE = "rgba(255, 213, 94, 0.55)"
+const SELECTED = "rgba(20, 85, 30, 0.5)"
+const HOVER = "rgba(20, 85, 30, 0.3)"
 const CHECK = "radial-gradient(ellipse at center, rgba(255,0,0,1) 0%, rgba(231,0,0,1) 25%, rgba(169,0,0,0) 89%, rgba(158,0,0,0) 100%)"
 const DEST_DOT = "radial-gradient(rgba(20,85,30,0.5) 22%, #208530 0, rgba(0,0,0,0.3) 0, rgba(0,0,0,0) 0)"
 const DEST_RING = "radial-gradient(transparent 0%, transparent 80%, rgba(20,85,0,0.3) 80%)"
@@ -63,6 +79,7 @@ type Props = {
   orientation?: "white" | "black"
   highlights?: BoardHighlights
   evalBar?: { whitePct: number } | null
+  theme?: BoardThemeKey | string
 }
 
 export default function ChessBoard({
@@ -72,9 +89,11 @@ export default function ChessBoard({
   orientation = "white",
   highlights = {},
   evalBar = null,
+  theme = "vibrant",
 }: Props) {
   const board = useMemo(() => parseFen(fen), [fen])
   const { lastMove, selected, legalTargets = [], checkSquare, arrows = [] } = highlights
+  const { light: LIGHT, dark: DARK } = themeOf(theme)
 
   const displayFiles = orientation === "white" ? FILES.split("") : FILES.split("").reverse()
   const displayRanks = orientation === "white" ? RANKS.split("") : RANKS.split("")

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card"
 import { Button } from "../components/ui/button"
 import { Badge } from "../components/ui/badge"
-import ChessBoard, { type BoardHighlights } from "../components/chess/ChessBoard"
+import ChessBoard, { type BoardHighlights, BOARD_THEMES, type BoardThemeKey } from "../components/chess/ChessBoard"
 
 const FILES = "abcdefgh"
 const RANKS = "87654321"
@@ -243,6 +243,7 @@ export default function ChessTrainerPage() {
   const [activeReview, setActiveReview] = useState<ReviewEntry | null>(null)
   const [hint, setHint] = useState<CoachPlan | null>(null)
   const [hintLevel, setHintLevel] = useState(0)
+  const [boardTheme, setBoardTheme] = useState<BoardThemeKey>("vibrant")
   const [reviewSolved, setReviewSolved] = useState<"none" | "solved" | "failed">("none")
 
   const board = useMemo(() => parseFen(fen), [fen])
@@ -472,6 +473,7 @@ export default function ChessTrainerPage() {
                 fen={fen}
                 interactive
                 onSquareClick={onSquareClick}
+                theme={boardTheme}
                 highlights={{
                   lastMove,
                   selected,
@@ -497,6 +499,10 @@ export default function ChessTrainerPage() {
                   <option value={2}>Casual</option>
                   <option value={3}>Solid</option>
                   <option value={4}>Strong</option>
+                </select>
+                <label className="text-xs text-white/50">Board</label>
+                <select value={boardTheme} onChange={(e) => setBoardTheme(e.target.value as BoardThemeKey)} className="rounded-md border border-white/10 bg-black/40 px-2 py-1 text-sm">
+                  {Object.entries(BOARD_THEMES).map(([k, t]) => <option key={k} value={k}>{t.name}</option>)}
                 </select>
               </div>
               <div className="flex gap-2">
