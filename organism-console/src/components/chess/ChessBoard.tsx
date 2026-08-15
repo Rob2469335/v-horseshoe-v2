@@ -146,10 +146,11 @@ export default function ChessBoard({
               const isDest = legalTargets.includes(sq)
               const isCheck = checkSquare === sq
               const hasCapture = isDest && !!piece
-              // High-contrast coordinates: near-white on dark squares, near-black
-              // on light squares, with an opposite-color shadow for readability.
-              const coordColor = dark ? "#ffffff" : "#1a1a1a"
-              const coordShadow = dark ? "0 1px 2px rgba(0,0,0,0.9)" : "0 1px 2px rgba(255,255,255,0.7)"
+              // Distinct gold coordinates: one consistent color that reads on
+              // every theme, large and bold for fast scanning. Gold + dark
+              // shadow stays legible on both light and dark squares.
+              const coordColor = "#ffd54a"
+              const coordShadow = "0 1px 2px rgba(0,0,0,0.95), 0 0 3px rgba(0,0,0,0.6)"
               const isLeftEdge = file === "a"
               const isRightEdge = file === "h"
               const isTopEdge = rank === "8"
@@ -182,11 +183,11 @@ export default function ChessBoard({
                   )}
                   {showCoord && (
                     <span
-                      className="pointer-events-none absolute font-bold leading-none"
+                      className="pointer-events-none absolute font-black leading-none"
                       style={{
                         color: coordColor,
                         textShadow: coordShadow,
-                        fontSize: "clamp(12px, 2.6vw, 15px)",
+                        fontSize: "clamp(17px, 3.4vw, 21px)",
                         ...(isTopEdge
                           ? { top: "2px", left: "4px" }
                           : isBottomEdge
