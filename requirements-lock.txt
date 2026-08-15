@@ -13,6 +13,7 @@ beautifulsoup4==4.15.0
 black==26.5.1
 cachetools==7.1.4
 certifi==2026.6.17
+chess==1.11.2
 cffi==2.0.0
 charset-normalizer==3.4.7
 click==8.3.3

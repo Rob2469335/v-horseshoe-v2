@@ -2,6 +2,7 @@ export type PanelKey =
   | "command"
   | "lawyer"
   | "books"
+  | "chess-trainer"
   | "agent"
   | "workspace"
   | "organism"
