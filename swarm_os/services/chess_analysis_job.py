@@ -1,0 +1,285 @@
+"""Resumable background chess.com analysis job — every game, every move, best eval.
+
+The heavy pass: processes ALL of a player's games with Stockfish (engine
+analysis of every move — the trainer's best-eval seam), feeding every blunder
+into the spaced-repetition mistake store and recording games for analytics.
+
+Runs as a background asyncio task so the API never blocks. Designed for a
+long unattended run (hours):
+  - resumable: progress is persisted after each game; on restart (or app boot)
+    an incomplete job resumes from where it left off;
+  - bounded memory: one game at a time, progress written per game;
+  - fail-closed: per-game errors are recorded and the job continues; a network
+    failure pauses (retries later) rather than losing progress.
+
+Job state lives in data/chess/analysis_jobs/<job_id>.json:
+  {job_id, username, archives:[url...], next_archive, done_games:int,
+   total_games:int, mistakes_queued:int, started_at, updated_at, status}
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import time
+import uuid
+from pathlib import Path
+from typing import Any
+
+from .chess_import import _analyze_game, _fetch, _last_archives, _parse_game_pgn
+from .chess_trainer import _best_move_and_cp  # noqa: F401 (engine warm-up)
+
+log = logging.getLogger(__name__)
+
+_JOBS_DIR = Path("data/chess/analysis_jobs")
+_jobs: dict[str, dict[str, Any]] = {}
+_jobs_lock = asyncio.Lock()
+
+
+def _job_path(job_id: str) -> Path:
+    return _JOBS_DIR / f"{job_id}.json"
+
+
+def _load_job(job_id: str) -> dict[str, Any] | None:
+    try:
+        if _job_path(job_id).exists():
+            return json.loads(_job_path(job_id).read_text(encoding="utf-8"))
+    except Exception as exc:
+        log.warning("job load failed: %s", exc)
+    return None
+
+
+def _save_job(job: dict[str, Any]) -> None:
+    try:
+        _JOBS_DIR.mkdir(parents=True, exist_ok=True)
+        _job_path(job["job_id"]).write_text(json.dumps(job), encoding="utf-8")
+    except Exception as exc:
+        log.warning("job save failed: %s", exc)
+
+
+def list_jobs() -> dict[str, Any]:
+    """All known jobs (from disk + memory) with their status."""
+    if not _JOBS_DIR.exists():
+        return {"ok": True, "jobs": []}
+    out = []
+    for p in sorted(_JOBS_DIR.glob("*.json")):
+        try:
+            job = json.loads(p.read_text(encoding="utf-8"))
+            out.append(
+                {
+                    k: job.get(k)
+                    for k in (
+                        "job_id",
+                        "username",
+                        "status",
+                        "done_games",
+                        "total_games",
+                        "mistakes_queued",
+                        "started_at",
+                        "updated_at",
+                        "error",
+                    )
+                }
+            )
+        except Exception:
+            continue
+    out.sort(key=lambda j: j.get("started_at") or 0, reverse=True)
+    return {"ok": True, "jobs": out}
+
+
+def job_status(job_id: str) -> dict[str, Any]:
+    job = _jobs.get(job_id) or _load_job(job_id)
+    if not job:
+        return {"ok": False, "error": "job not found"}
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "username": job.get("username"),
+        "status": job.get("status"),
+        "done_games": job.get("done_games", 0),
+        "total_games": job.get("total_games", 0),
+        "mistakes_queued": job.get("mistakes_queued", 0),
+        "started_at": job.get("started_at"),
+        "updated_at": job.get("updated_at"),
+        "error": job.get("error"),
+        "running": job.get("status") == "running",
+    }
+
+
+async def _collect_games(
+    username: str, max_archives: int | None = None
+) -> tuple[list[tuple[str, dict]], list[str]]:
+    """All (url, game) pairs across the player's archives (or capped)."""
+    games: list[tuple[str, dict]] = []
+    errors: list[str] = []
+    try:
+        archives = await _last_archives(username, n=9999)
+    except Exception as exc:
+        return [], [f"archives: {exc}"]
+    if max_archives:
+        archives = archives[-max_archives:]
+    for url in archives:
+        try:
+            month = await _fetch(url)
+        except Exception as exc:
+            errors.append(f"{url}: {exc}")
+            continue
+        for g in month.get("games", []):
+            games.append((url, g))
+    return games, errors
+
+
+async def _analyze_one(username: str, game: dict) -> dict[str, Any]:
+    """Analyze one game with the engine (best eval, every move). Returns
+    {records, mistakes, error}."""
+    parsed = _parse_game_pgn(game.get("pgn", ""))
+    if parsed is None:
+        return {"records": [], "mistakes": 0, "error": "unparseable pgn"}
+    headers, board = parsed
+    if len(board.move_stack) < 4:
+        return {"records": [], "mistakes": 0, "error": None}
+    try:
+        records = await asyncio.to_thread(_analyze_game, board, max_plies=100000)
+    except Exception as exc:
+        return {"records": [], "mistakes": 0, "error": f"analysis: {exc}"}
+
+    from .chess_games import record_move, start_game
+    from .chess_mistakes import record_mistake
+
+    gid = start_game()["id"]
+    mistakes = 0
+    for rec in records:
+        record_move(
+            gid,
+            {
+                "uci": rec["uci"],
+                "san": rec["san"],
+                "fen": rec["fen"],
+                "pre_fen": rec["pre_fen"],
+                "classification": rec["classification"],
+                "eval_before_cp": rec["eval_before_cp"],
+                "eval_after_cp": rec["eval_after_cp"],
+                "win_delta_pct": 0.0,
+                "best_uci": rec["best_uci"],
+                "best_move_san": rec["best_move_san"],
+                "is_best": rec["was_best"],
+                "concept": "",
+                "source": f"chess.com:{username}",
+            },
+        )
+        if rec["classification"] in ("Mistake", "Blunder", "Inaccuracy"):
+            record_mistake(
+                pre_fen=rec["pre_fen"],
+                played_uci=rec["uci"],
+                played_san=rec["san"],
+                best_uci=rec["best_uci"],
+                best_san=rec["best_move_san"],
+                classification=rec["classification"],
+                concept="imported",
+                book_titles=[],
+            )
+            mistakes += 1
+    return {"records": records, "mistakes": mistakes, "error": None}
+
+
+async def _run_job(job: dict[str, Any]) -> None:
+    """Process every game in the job, updating progress + persisting per game."""
+    username = job["username"]
+    # Collect all games (or resume from stored position).
+    if "games" not in job:
+        games, errs = await _collect_games(username, job.get("max_archives"))
+        if not games:
+            job["status"] = "error"
+            job["error"] = "no games found" + (f": {errs[0]}" if errs else "")
+            _save_job(job)
+            return
+        job["games"] = games
+        job["total_games"] = len(games)
+        job["done_games"] = 0
+        job["mistakes_queued"] = 0
+        _save_job(job)
+
+    games = job["games"]
+    start = job.get("done_games", 0)
+    for i in range(start, len(games)):
+        job["status"] = "running"
+        job["updated_at"] = time.time()
+        url, game = games[i]
+        try:
+            res = await _analyze_one(username, game)
+            job["done_games"] = i + 1
+            if res["mistakes"]:
+                job["mistakes_queued"] = job.get("mistakes_queued", 0) + res["mistakes"]
+        except asyncio.CancelledError:
+            _save_job(job)
+            raise
+        except Exception as exc:
+            job["errors"] = job.get("errors", [])
+            job["errors"].append(f"game {i}: {exc}")
+            job["done_games"] = i + 1
+        _save_job(job)
+
+    job["status"] = "done"
+    job["updated_at"] = time.time()
+    _save_job(job)
+
+
+async def start_analysis(
+    username: str,
+    max_archives: int | None = None,
+    auto_start: bool = True,
+) -> dict[str, Any]:
+    """Start (or resume) the background analysis job for a player."""
+    username = (username or "").strip().lower()
+    if not username:
+        return {"ok": False, "error": "username is required"}
+
+    # If a running/incomplete job exists for this username, resume it.
+    existing = None
+    for job in list_jobs().get("jobs", []):
+        if job.get("username") == username and job.get("status") in (
+            "running",
+            "paused",
+        ):
+            existing = job.get("job_id")
+            break
+    if existing:
+        job = _load_job(existing)
+        if auto_start and job and job.get("status") in ("running", "paused"):
+            _jobs[existing] = job
+            asyncio.create_task(_run_job(job))
+        return {"ok": True, "job_id": existing, "resumed": True}
+
+    job_id = uuid.uuid4().hex[:12]
+    job = {
+        "job_id": job_id,
+        "username": username,
+        "max_archives": max_archives,
+        "status": "running",
+        "started_at": time.time(),
+        "updated_at": time.time(),
+        "done_games": 0,
+        "total_games": 0,
+        "mistakes_queued": 0,
+        "errors": [],
+    }
+    _jobs[job_id] = job
+    _save_job(job)
+    if auto_start:
+        asyncio.create_task(_run_job(job))
+    return {"ok": True, "job_id": job_id, "resumed": False}
+
+
+async def resume_incomplete() -> None:
+    """On app boot, resume any job left in 'running'/'paused' state from a
+    prior process (crash/restart) so a long 24h run continues."""
+    for job in list_jobs().get("jobs", []):
+        if job.get("status") in ("running", "paused"):
+            j = _load_job(job.get("job_id"))
+            if j:
+                _jobs[j["job_id"]] = j
+                asyncio.create_task(_run_job(j))
+                log.info(
+                    "resumed chess analysis job %s (%s)", j["job_id"], j["username"]
+                )

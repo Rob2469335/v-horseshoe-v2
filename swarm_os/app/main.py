@@ -260,6 +260,15 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         log.warning(f"Telegram command center unavailable: {exc}")
 
+    # Resume any incomplete chess.com analysis job (a prior 24h run that was
+    # interrupted by a restart continues from where it left off).
+    try:
+        from swarm_os.services.chess_analysis_job import resume_incomplete
+
+        await resume_incomplete()
+    except Exception as exc:
+        log.warning(f"Chess analysis job resume unavailable: {exc}")
+
     # Genetic self-improvement daemon — OPT-IN via SWARM_GENETIC_MUTATION=1.
     # The mutation loop is expensive (LLM + sandbox compile/test) and stages every
     # mutation to .data/pending_mutations/ for explicit approval, so it never

@@ -378,3 +378,87 @@ async def trainer_gm_explain(req: GmExplainRequest) -> dict[str, Any]:
     from ..services.gm_games import explain_move
 
     return await explain_move(req.game_id, req.ply)
+
+
+class ChessComImportRequest(BaseModel):
+    username: str = Field(
+        ..., min_length=2, max_length=60, description="chess.com username"
+    )
+    months: int = Field(3, ge=1, le=12)
+    max_games: int = Field(30, ge=1, le=200)
+    color: str = Field("both", description="'white' | 'black' | 'both'")
+    record_mistakes: bool = Field(True)
+    record_games: bool = Field(True)
+
+
+@router.post("/import/chesscom")
+async def trainer_import_chesscom(req: ChessComImportRequest) -> dict[str, Any]:
+    """Import a player's recent chess.com games via the public API, analyze
+    every move, and feed the trainer's mistake queue + games store — so the
+    trainer learns weaknesses from REAL games."""
+    from ..services.chess_import import import_games
+
+    return await import_games(
+        req.username,
+        months=req.months,
+        max_games=req.max_games,
+        color=req.color,
+        record_mistakes=req.record_mistakes,
+        record_games=req.record_games,
+    )
+
+
+class ChessComProfileRequest(BaseModel):
+    username: str = Field(
+        ..., min_length=2, max_length=60, description="chess.com username"
+    )
+    max_archives: int | None = Field(
+        None, ge=1, le=120, description="Cap monthly archives (None = all)"
+    )
+
+
+@router.post("/import/chesscom/profile")
+async def trainer_import_chesscom_profile(
+    req: ChessComProfileRequest,
+) -> dict[str, Any]:
+    """Bulk-parse ALL of a player's games (no engine — fast) and compute their
+    weaknesses/strengths profile: openings, color split, time controls,
+    think-time per phase, rating trend, win/loss. The personalization source."""
+    from ..services.chess_import import build_profile
+
+    return await build_profile(req.username, max_archives=req.max_archives)
+
+
+class AnalysisStartRequest(BaseModel):
+    username: str = Field(
+        ..., min_length=2, max_length=60, description="chess.com username"
+    )
+    max_archives: int | None = Field(
+        None, ge=1, le=120, description="Cap monthly archives (None = all)"
+    )
+
+
+@router.post("/analysis/start")
+async def trainer_analysis_start(req: AnalysisStartRequest) -> dict[str, Any]:
+    """Start (or resume) the background engine-analysis job: every game, every
+    move analyzed with Stockfish, feeding the mistake store. Runs for hours in
+    the background and survives restarts."""
+    from ..services.chess_analysis_job import start_analysis
+
+    return await start_analysis(req.username, max_archives=req.max_archives)
+
+
+@router.get("/analysis/jobs")
+async def trainer_analysis_jobs() -> dict[str, Any]:
+    """All analysis jobs + their status."""
+    from ..services.chess_analysis_job import list_jobs
+
+    return list_jobs()
+
+
+@router.get("/analysis/status/{job_id}")
+async def trainer_analysis_status(job_id: str) -> dict[str, Any]:
+    """Live status of one analysis job."""
+    from ..services.chess_analysis_job import job_status
+
+    return job_status(job_id)
