@@ -1,8 +1,16 @@
 /**
- * SOTA chess board renderer (2026 lichess-style): wood-toned squares, crisp
- * SVG piece set, coordinates, last-move highlight, check glow, selected-square
- * ring, legal-move dots, piece-move animation via CSS grid positioning, and a
- * win%-split eval bar. Pure React + CSS — no board dependency.
+ * SOTA chess board renderer (2026 — chessground/lichess recipe).
+ *
+ * Key details (from chessground's base CSS + lichess board gen, not invented):
+ *  - Real cburnett pieces rendered as background-image, 100% of the square.
+ *  - Flat two-tone board (brown theme): #f0d9b5 / #b58863.
+ *  - Last move: muted olive wash rgba(155,199,0,0.41) (NOT yellow).
+ *  - Selected square: translucent green rgba(20,85,30,0.5).
+ *  - Move-dest dot: green, radius 22%, crisp #208530 ring.
+ *  - Capture target: ring at 80%.
+ *  - Check: red radial ellipse fading out by 89%.
+ *  - Coordinates: lichess-style, 9px, opacity .8, alternating dark/light.
+ *  - Move animation: transform transition ~200ms cubic-bezier on pieces.
  */
 import { useMemo } from "react"
 import { ChessPiece } from "./ChessPiece"
@@ -12,13 +20,12 @@ const RANKS = "87654321"
 
 const LIGHT = "#f0d9b5"
 const DARK = "#b58863"
-const LIGHT_HOVER = "#f7e7c7"
-const DARK_HOVER = "#c9a277"
-const LAST_MOVE = "rgba(255, 213, 94, 0.5)"
-const SELECTED = "rgba(20, 85, 30, 0.6)"
-const CHECK = "radial-gradient(circle, rgba(255,0,0,0.7) 18%, rgba(255,0,0,0.25) 60%)"
-const DOT = "radial-gradient(circle, rgba(0,0,0,0.22) 0%, rgba(0,0,0,0.22) 34%, transparent 40%)"
-const CAPTURE_RING = "radial-gradient(circle, transparent 0%, transparent 58%, rgba(0,0,0,0.25) 62%, rgba(0,0,0,0.25) 72%, transparent 76%)"
+const LAST_MOVE = "rgba(155,199,0,0.41)"
+const SELECTED = "rgba(20,85,30,0.5)"
+const HOVER = "rgba(20,85,30,0.3)"
+const CHECK = "radial-gradient(ellipse at center, rgba(255,0,0,1) 0%, rgba(231,0,0,1) 25%, rgba(169,0,0,0) 89%, rgba(158,0,0,0) 100%)"
+const DEST_DOT = "radial-gradient(rgba(20,85,30,0.5) 22%, #208530 0, rgba(0,0,0,0.3) 0, rgba(0,0,0,0) 0)"
+const DEST_RING = "radial-gradient(transparent 0%, transparent 80%, rgba(20,85,0,0.3) 80%)"
 
 function parseFen(fen: string): Record<string, string> {
   const board: Record<string, string> = {}
@@ -38,9 +45,7 @@ function parseFen(fen: string): Record<string, string> {
 }
 
 function squareColor(sq: string): "light" | "dark" {
-  const file = FILES.indexOf(sq[0])
-  const rank = RANKS.indexOf(sq[1])
-  return (file + rank) % 2 === 1 ? "dark" : "light"
+  return (FILES.indexOf(sq[0]) + RANKS.indexOf(sq[1])) % 2 === 1 ? "dark" : "light"
 }
 
 export type BoardHighlights = {
@@ -71,64 +76,43 @@ export default function ChessBoard({
   const board = useMemo(() => parseFen(fen), [fen])
   const { lastMove, selected, legalTargets = [], checkSquare, arrows = [] } = highlights
 
-  // Build the displayed square order honoring orientation.
   const displayFiles = orientation === "white" ? FILES.split("") : FILES.split("").reverse()
   const displayRanks = orientation === "white" ? RANKS.split("") : RANKS.split("")
 
-  const svgArrows = useMemo(() => {
-    if (!arrows.length) return null
-    const sqToCoord = (sq: string) => {
-      const f = displayFiles.indexOf(sq[0])
-      const r = displayRanks.indexOf(sq[1])
-      return { x: f * 12.5 + 6.25, y: r * 12.5 + 6.25 }
-    }
-    return (
-      <svg viewBox="0 0 100 100" className="pointer-events-none absolute inset-0 h-full w-full">
-        {arrows.map((a, i) => {
-          const from = sqToCoord(a.from)
-          const to = sqToCoord(a.to)
-          const color = a.color ?? "rgba(20,170,110,0.9)"
-          const dx = to.x - from.x
-          const dy = to.y - from.y
-          const len = Math.hypot(dx, dy) || 1
-          const ux = dx / len, uy = dy / len
-          const startX = from.x + ux * 8
-          const startY = from.y + uy * 8
-          const endX = to.x - ux * 7
-          const endY = to.y - uy * 7
-          const head = 5
-          const hx = ux * head, hy = uy * head
-          return (
-            <g key={i}>
-              <path
-                d={`M${startX} ${startY} L${endX} ${endY}`}
-                stroke={color} strokeWidth="3.4" strokeLinecap="round" fill="none" opacity="0.95"
-              />
-              <path
-                d={`M${endX} ${endY} L${endX - hx + hy * 0.6} ${endY - hy - hx * 0.6} L${endX - hx - hy * 0.6} ${endY - hy + hx * 0.6} Z`}
-                fill={color}
-              />
-            </g>
-          )
-        })}
-      </svg>
-    )
-  }, [arrows, displayFiles, displayRanks])
-
   const whitePct = evalBar ? Math.max(0, Math.min(100, evalBar.whitePct)) : null
+
+  // Piece animation layer: each piece is absolutely positioned at its square
+  // and animates via a transform transition (the 2026 FLIP-style standard).
+  // We key by square so a moved piece is the same DOM element translated.
+  const pieceLayer = useMemo(() => {
+    const items: Array<{ sq: string; piece: string; fileIdx: number; rankIdx: number }> = []
+    for (let fi = 0; fi < 8; fi++) {
+      for (let ri = 0; ri < 8; ri++) {
+        const sq = displayFiles[fi] + displayRanks[ri]
+        const p = board[sq]
+        if (p) items.push({ sq, piece: p, fileIdx: fi, rankIdx: ri })
+      }
+    }
+    return items
+    // displayFiles/displayRanks/board are stable per render; recompute on change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [board, displayFiles.join(""), displayRanks.join("")])
+
+  const sqTopPct = (rankIdx: number) => rankIdx * 12.5
+  const sqLeftPct = (fileIdx: number) => fileIdx * 12.5
 
   return (
     <div className="flex w-full gap-2">
       {evalBar && whitePct !== null && (
-        <div className="flex w-4 shrink-0 flex-col overflow-hidden rounded-md border border-white/20 bg-black/60" style={{ height: "100%", aspectRatio: "1 / 1" }}>
-          <div className="flex flex-col" style={{ height: "100%" }}>
-            <div className="bg-slate-100 transition-all duration-500" style={{ height: `${whitePct}%` }} />
-            <div className="flex-1 bg-slate-900" />
+        <div className="w-4 shrink-0 overflow-hidden rounded-md border border-black/40" style={{ aspectRatio: "1 / 1", background: "#222" }}>
+          <div className="flex h-full flex-col">
+            <div className="bg-[#eee] transition-all duration-500" style={{ height: `${whitePct}%` }} />
+            <div className="flex-1 bg-[#111]" />
           </div>
         </div>
       )}
       <div
-        className="relative w-full select-none overflow-hidden rounded-md border border-white/25 shadow-2xl"
+        className="relative w-full select-none overflow-hidden rounded-[4px] border border-black/50 shadow-[0_4px_12px_rgba(0,0,0,0.55)]"
         style={{ aspectRatio: "1 / 1", background: DARK }}
       >
         <div className="grid h-full w-full grid-cols-8 grid-rows-8">
@@ -137,46 +121,70 @@ export default function ChessBoard({
               const sq = file + rank
               const piece = board[sq]
               const dark = squareColor(sq) === "dark"
+              const base = dark ? DARK : LIGHT
               const isLast = lastMove && (lastMove.from === sq || lastMove.to === sq)
               const isSelected = selected === sq
-              const isLegalTarget = legalTargets.includes(sq)
+              const isDest = legalTargets.includes(sq)
               const isCheck = checkSquare === sq
-              const hasCapture = isLegalTarget && !!piece
-              const base = dark ? DARK : LIGHT
-              const hover = dark ? DARK_HOVER : LIGHT_HOVER
+              const hasCapture = isDest && !!piece
+              const coordColor = dark ? "rgba(255,255,255,0.8)" : "rgba(72,72,72,0.8)"
+
               return (
                 <button
                   key={sq}
                   onClick={() => interactive && onSquareClick?.(sq)}
-                  className="relative flex items-center justify-center transition-[background-color] duration-100"
+                  className="relative"
                   style={{
-                    backgroundColor: isLast ? LAST_MOVE : isSelected ? SELECTED : base,
+                    backgroundColor: isSelected ? SELECTED : isLast ? LAST_MOVE : base,
                     backgroundImage: isCheck ? CHECK : undefined,
-                    cursor: interactive ? (isLegalTarget ? "pointer" : piece ? "pointer" : "default") : "default",
+                    cursor: interactive ? "pointer" : "default",
                   }}
-                  onMouseEnter={(e) => { if (interactive && !isLast && !isSelected) e.currentTarget.style.backgroundColor = hover }}
-                  onMouseLeave={(e) => { if (interactive && !isLast && !isSelected) e.currentTarget.style.backgroundColor = base }}
+                  onMouseEnter={(e) => { if (interactive && isDest) e.currentTarget.style.backgroundColor = HOVER }}
+                  onMouseLeave={(e) => { if (interactive && isDest) e.currentTarget.style.backgroundColor = isSelected ? SELECTED : isLast ? LAST_MOVE : base }}
                   aria-label={sq}
                 >
-                  {isLegalTarget && !hasCapture && <span className="pointer-events-none absolute inset-0" style={{ backgroundImage: DOT }} />}
-                  {isLegalTarget && hasCapture && <span className="pointer-events-none absolute inset-0" style={{ backgroundImage: CAPTURE_RING }} />}
-                  {piece && (
-                    <span className="relative z-10 flex h-full w-full items-center justify-center transition-transform duration-150 hover:scale-[1.06]" style={{ padding: "4%" }}>
-                      <ChessPiece piece={piece} />
-                    </span>
+                  {isDest && !hasCapture && (
+                    <span className="pointer-events-none absolute inset-0" style={{ backgroundImage: DEST_DOT }} />
+                  )}
+                  {isDest && hasCapture && (
+                    <span className="pointer-events-none absolute inset-0" style={{ backgroundImage: DEST_RING }} />
                   )}
                   {file === "a" && (
-                    <span className="absolute top-0 left-0.5 z-20 text-[9px] font-bold leading-tight text-black/55">{rank}</span>
+                    <span className="absolute top-0 left-0.5 text-[9px] font-semibold leading-tight" style={{ color: coordColor }}>{rank}</span>
                   )}
                   {rank === "8" && (
-                    <span className="absolute right-0.5 bottom-0 z-20 text-[9px] font-bold leading-tight text-black/55">{file}</span>
+                    <span className="absolute right-0.5 bottom-0 text-[9px] font-semibold uppercase leading-tight" style={{ color: coordColor }}>{file}</span>
                   )}
                 </button>
               )
             })
           )}
         </div>
-        {svgArrows}
+        {/* Animated piece layer (transform-transitioned, 200ms cubic-bezier). */}
+        <div className="pointer-events-none absolute inset-0 z-10">
+          {pieceLayer.map((it) => {
+            const isMoved = lastMove && lastMove.to === it.sq && lastMove.from !== lastMove.to
+            const dx = isMoved ? (sqLeftPct(displayFiles.indexOf(lastMove!.from[0])) - sqLeftPct(it.fileIdx)) : 0
+            const dy = isMoved ? (sqTopPct(displayRanks.indexOf(lastMove!.from[1])) - sqTopPct(it.rankIdx)) : 0
+            return (
+              <div
+                key={it.sq}
+                className="absolute"
+                style={{
+                  width: "12.5%",
+                  height: "12.5%",
+                  left: `${sqLeftPct(it.fileIdx)}%`,
+                  top: `${sqTopPct(it.rankIdx)}%`,
+                  transform: isMoved ? `translate(${dx}%, ${dy}%)` : undefined,
+                  transition: isMoved ? "transform 200ms cubic-bezier(0.35, 0.7, 0.5, 1)" : undefined,
+                  willChange: "transform",
+                }}
+              >
+                <ChessPiece piece={it.piece} />
+              </div>
+            )
+          })}
+        </div>
       </div>
     </div>
   )
