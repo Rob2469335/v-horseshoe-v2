@@ -82,6 +82,13 @@ def start_game(
         }
         games.append(game)
         _save_games(games)
+        # Reset the persistent current-plan state for the new game.
+        try:
+            from .chess_plans import reset
+
+            reset(game["id"])
+        except Exception as exc:
+            log.warning("plan state reset failed: %s", exc)
         return game
 
 

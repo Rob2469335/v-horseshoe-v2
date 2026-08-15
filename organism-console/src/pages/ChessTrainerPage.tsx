@@ -148,17 +148,29 @@ type EvalResult = {
   error?: string
   legal_moves?: string[]
   coach?: CoachPlan
+  plan_now?: CoachPlan
+  plan_state?: PlanState
   sacrifice?: SacrificeInfo | null
   missed_sacrifice?: { move?: string; san?: string; message?: string } | null
+}
+
+type PlanState = {
+  ok?: boolean
+  persisted?: boolean
+  plan?: { name?: string; recipe?: string; trigger?: string } | null
+  unchanged_moves?: number
 }
 
 type CoachPlan = {
   ok?: boolean
   plan?: string
+  standard_plan?: { key?: string; name?: string; recipe?: string; trigger?: string }
+  mode?: string
   king_alert?: string
   worst_piece?: string | null
   weak_square?: string | null
   attack_now?: boolean
+  material?: number
   hint_level_1?: string
   hint_level_2?: string
 }
@@ -920,10 +932,27 @@ export default function ChessTrainerPage() {
                   </div>
                 </div>
               )}
+              {result?.plan_state?.plan && (
+                <div className="rounded-lg border border-amber-400/30 bg-amber-950/10 p-3">
+                  <div className="mb-1 flex items-center justify-between text-xs font-semibold uppercase tracking-wide text-white/40">
+                    <span>Current plan · {result.plan_state.plan.name}</span>
+                    <span>{(result.plan_state.unchanged_moves ?? 0) > 0 ? `holding ${result.plan_state.unchanged_moves}+ moves` : "new"}</span>
+                  </div>
+                  <div className="text-sm font-medium text-amber-100">{result.plan_state.plan.recipe}</div>
+                  {result.plan_state.plan.trigger && (
+                    <div className="mt-0.5 text-xs text-white/50">trigger: {result.plan_state.plan.trigger}</div>
+                  )}
+                </div>
+              )}
               {result?.coach?.plan && (
                 <div className="rounded-lg border border-emerald-400/20 bg-emerald-950/10 p-3">
                   <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-white/40">Plan</div>
                   <div className="text-sm text-emerald-100/90">{result.coach.plan}</div>
+                  {result.coach.material != null && result.coach.material !== 0 && (
+                    <div className="mt-0.5 text-xs text-white/50">
+                      material: {result.coach.material > 0 ? "+" : ""}{result.coach.material}
+                    </div>
+                  )}
                 </div>
               )}
 

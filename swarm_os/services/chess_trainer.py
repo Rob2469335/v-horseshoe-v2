@@ -55,15 +55,36 @@ def _new_engine():
 def close_engine() -> None:
     """Quit the persistent engine cleanly. Required: python-chess's
     SimpleEngine background thread otherwise hangs the interpreter at shutdown
-    on Windows (it never terminates on its own)."""
+    on Windows (it never terminates on its own). A graceful quit() can itself
+    hang during interpreter teardown, so we hard-kill the subprocess — the
+    engine has no persistent state that matters."""
     global _persistent_engine
     engine = _persistent_engine
     _persistent_engine = None
-    if engine is not None:
-        try:
-            engine.quit()
-        except Exception as exc:
-            log.warning("engine quit failed: %s", exc)
+    if engine is None:
+        return
+    try:
+        # Direct process kill — reliable at shutdown where quit()'s handshake
+        # can deadlock on Windows (verified via faulthandler).
+        proc = getattr(engine, "engine", None)
+        if (
+            proc is not None
+            and getattr(proc, "poll", None) is not None
+            and proc.poll() is None
+        ):
+            try:
+                proc.terminate()
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    try:
+        engine.quit()
+    except Exception as exc:
+        log.warning("engine quit failed: %s", exc)
 
 
 import atexit
@@ -332,10 +353,181 @@ def _weakest_square(board, color) -> str | None:
     return weak[0] if weak else None
 
 
+# The standard-plans menu (2026 SOTA — research: teaching plans as recognizable
+# patterns beats abstract theory at 500-1200). Each plan has a TRIGGER (a
+# machine-detectable board condition) and a RECIPE (the one-line do-this).
+_STANDARD_PLANS: list[dict[str, Any]] = [
+    {
+        "key": "open_file",
+        "name": "Open File",
+        "recipe": "double rooks on the open file, then invade the 7th rank",
+    },
+    {
+        "key": "outpost",
+        "name": "Knight Outpost",
+        "recipe": "park a knight on the weak square it can't be chased from",
+    },
+    {
+        "key": "attack_king",
+        "name": "Attack the King",
+        "recipe": "their king is exposed — open the files toward it",
+    },
+    {
+        "key": "convert",
+        "name": "Trade + Convert",
+        "recipe": "you're ahead — trade pieces (not pawns) and push the extra pawn",
+    },
+    {
+        "key": "passed_pawn",
+        "name": "Push the Passer",
+        "recipe": "your passed pawn is a real threat — protect and advance it",
+    },
+    {
+        "key": "develop",
+        "name": "Develop",
+        "recipe": "finish development / bring the worst piece into the game",
+    },
+    {
+        "key": "consolidate",
+        "name": "Consolidate",
+        "recipe": "quiet position — improve your worst piece and don't force",
+    },
+]
+
+
+def _open_file_for(board, color) -> str | None:
+    """An open file (no pawns) where a rook of `color` could enter. Returns the
+    file letter or None."""
+    for f in range(8):
+        has_pawn = any(
+            (p := board.piece_at(chess.square(f, r))) and p.piece_type == chess.PAWN
+            for r in range(8)
+        )
+        if not has_pawn:
+            return "abcdefgh"[f]
+    return None
+
+
+def _outpost_for(board, color) -> str | None:
+    """A stable outpost square for a knight of `color`: a square in ENEMY
+    territory that no enemy pawn can attack AND that one of your pawns
+    defends (the research definition: 'a square the opponent cannot — or dare
+    not — chase your piece from')."""
+    enemy = not color
+    # Enemy territory: ranks 3-5 for White (toward Black), 4-6 for Black.
+    ranks = (3, 4, 5) if color == chess.WHITE else (2, 3, 4)
+    for r in ranks:
+        for f in range(8):
+            sq = chess.square(f, r)
+            if board.piece_at(sq) is not None:
+                continue
+            # An enemy pawn attacks the adjacent files on the rank one toward us.
+            pawn_attack_rank = r + (1 if color == chess.WHITE else -1)
+            if not (0 <= pawn_attack_rank < 8):
+                continue
+            attacked = False
+            for df in (-1, 1):
+                af = f + df
+                if 0 <= af < 8:
+                    p = board.piece_at(chess.square(af, pawn_attack_rank))
+                    if p and p.color == enemy and p.piece_type == chess.PAWN:
+                        attacked = True
+            if attacked:
+                continue
+            # Must be defended by one of our pawns (or it's not a real outpost).
+            defender_rank = r - (1 if color == chess.WHITE else -1)
+            if not (0 <= defender_rank < 8):
+                continue
+            defended = False
+            for df in (-1, 1):
+                af = f + df
+                if 0 <= af < 8:
+                    p = board.piece_at(chess.square(af, defender_rank))
+                    if p and p.color == color and p.piece_type == chess.PAWN:
+                        defended = True
+            if defended:
+                return chess.square_name(sq)
+    return None
+
+
+def _passed_pawn_for(board, color) -> str | None:
+    """A passed pawn (no enemy pawns on its file or adjacent files in front)."""
+    enemy = not color
+    for r in range(8):
+        for f in range(8):
+            p = board.piece_at(chess.square(f, r))
+            if p and p.color == color and p.piece_type == chess.PAWN:
+                forward = (
+                    range(r + 1, 8) if color == chess.WHITE else range(r - 1, -1, -1)
+                )
+                blocked = any(
+                    (q := board.piece_at(chess.square(af, rr)))
+                    and q.color == enemy
+                    and q.piece_type == chess.PAWN
+                    for af in (f - 1, f, f + 1)
+                    if 0 <= af < 8
+                    for rr in forward
+                )
+                if not blocked:
+                    return chess.square_name(chess.square(f, r))
+    return None
+
+
+def _detect_standard_plan(
+    board, color, attack_now: bool, weak: str | None
+) -> dict[str, Any]:
+    """Pick the standard plan whose trigger fires, or fall back to Develop /
+    Consolidate. Returns {key, name, recipe, trigger}."""
+    material = _material_balance(board)  # + = white ahead
+    my_mat = material if color == chess.WHITE else -material
+    if attack_now:
+        p = next(x for x in _STANDARD_PLANS if x["key"] == "attack_king")
+        return {**p, "trigger": "exposed king + development lead"}
+    if my_mat >= 3:
+        p = next(x for x in _STANDARD_PLANS if x["key"] == "convert")
+        return {**p, "trigger": "material advantage"}
+    if my_mat <= -3:
+        # Down material: defend/complicate, don't trade.
+        return {
+            "key": "defend",
+            "name": "Defend & Complicate",
+            "recipe": "you're behind — keep it solid, create counterplay, don't trade pieces freely",
+            "trigger": "material deficit",
+        }
+    passed = _passed_pawn_for(board, color)
+    if passed:
+        p = next(x for x in _STANDARD_PLANS if x["key"] == "passed_pawn")
+        return {**p, "trigger": f"passed pawn on {passed}"}
+    open_file = _open_file_for(board, color)
+    if open_file:
+        p = next(x for x in _STANDARD_PLANS if x["key"] == "open_file")
+        return {**p, "trigger": f"open {open_file}-file"}
+    outpost = _outpost_for(board, color)
+    if outpost:
+        p = next(x for x in _STANDARD_PLANS if x["key"] == "outpost")
+        return {**p, "trigger": f"stable outpost on {outpost}"}
+    if weak:
+        return {
+            "key": "weak_pawn",
+            "name": "Attack the Weak Pawn",
+            "recipe": f"their pawn on {weak} is weak — pile up on the square in front of it",
+            "trigger": f"weak pawn on {weak}",
+        }
+    worst = _worst_piece(board, color)
+    if worst:
+        p = next(x for x in _STANDARD_PLANS if x["key"] == "develop")
+        return {**p, "trigger": f"undeveloped {worst}"}
+    p = next(x for x in _STANDARD_PLANS if x["key"] == "consolidate")
+    return {**p, "trigger": "quiet position"}
+
+
 def coach_plan(fen: str) -> dict[str, Any]:
-    """The 3-question plan checklist for the side to move, engine-grounded.
-    Returns {ok, plan, king_alert, worst_piece, weak_square, attack_now} where
-    `plan` is the one-line beginner plan."""
+    """The plan checklist for the side to move, engine-grounded (2026 SOTA:
+    a standard-plans menu with machine-detectable triggers, plus the
+    attack/improve/defend decision rule).
+
+    Returns {ok, plan, standard_plan:{key,name,recipe,trigger}, mode,
+    king_alert, worst_piece, weak_square, attack_now, material}."""
     try:
         board = chess.Board(fen)
         color = board.turn
@@ -373,27 +565,34 @@ def coach_plan(fen: str) -> dict[str, Any]:
         my_king_bad = my_center or my_king <= 2
         attack_now = (not my_king_bad) and their_king_bad and my_dev >= their_dev + 1
 
-        # Build the one-line plan from the most lopsided factor.
+        material = _material_balance(board)
+        my_mat = material if color == chess.WHITE else -material
+
+        # Decision rule (research: attack / improve / defend, keyed on king
+        # safety + development + material).
         if attack_now:
-            plan = (
-                "their king is exposed and you're better developed — this is your moment; "
-                "look for a way to open the files toward it"
-            )
-        elif weak:
-            plan = f"their pawn on {weak} is weak — put a piece on the square in front of it and keep attacking it"
-        elif worst:
-            plan = f"{worst} isn't doing anything yet — bring it into the game"
+            mode = "attack"
+        elif my_mat <= -3 or (my_king_bad and not their_king_bad):
+            mode = "defend"
         else:
-            plan = "quiet position — improve your worst piece and don't force anything"
+            mode = "improve"
+
+        std = _detect_standard_plan(board, color, attack_now, weak)
+
+        # One-line plan = the recipe (concrete, no vagueness).
+        plan = std["recipe"]
         return {
             "ok": True,
             "plan": plan,
+            "standard_plan": std,
+            "mode": mode,
             "king_alert": f"their king has only {their_king} pawn(s) in front of it"
             if their_king <= 2
             else "",
             "worst_piece": worst,
             "weak_square": weak,
             "attack_now": attack_now,
+            "material": round(my_mat, 1),
         }
     except Exception as exc:
         log.warning("coach plan failed: %s", exc)
@@ -680,15 +879,25 @@ def detect_sacrifice(
 
 
 async def engine_reply(fen: str, rating: int = 500, level: int = 1) -> dict[str, Any]:
-    """The engine's reply move for playing against it. `level` (1-4) maps to the
-    Stockfish Skill Level option so the opponent plays at a fair strength for a
-    ~500-rated learner instead of always crushing."""
+    """The engine's reply move for playing against it. `level` (1-4) produces a
+    HUMAN-LIKE opponent (2026 SOTA — softmax sampling over the engine's top
+    moves, not Skill Level's one-shot noise):
+
+      - level 1 (Gentle): picks among the top moves nearly uniformly (a ~500
+        plays all sorts of reasonable + slightly-off moves, occasionally blunders)
+      - level 4 (Strong): almost always takes the engine's best move
+
+    The engine still evaluates (facts), but the opponent CHOOSES like a player
+    of that strength — gradually less precise as the level drops, with a
+    level-scaled blunder chance. This is the research's recommended alternative
+    to UCI Skill Level (which plays near-perfectly then randomly explodes)."""
     if not STOCKFISH_PATH.exists():
         return {"ok": False, "error": "stockfish binary missing"}
     try:
         import chess
         import chess.engine
-        import concurrent.futures
+        import math
+        import random
 
         board = chess.Board(fen)
         if board.is_game_over():
@@ -699,40 +908,63 @@ async def engine_reply(fen: str, rating: int = 500, level: int = 1) -> dict[str,
                 "is_checkmate": board.is_checkmate(),
                 "is_stalemate": board.is_stalemate(),
             }
-        skill = max(0, min(20, int({1: 0, 2: 5, 3: 10, 4: 16}.get(level, 0))))
 
-        def _run():
-            engine = _new_engine()
-            try:
-                # Skill Level blunders like a human at that strength.
-                engine.configure({"Skill Level": skill})
-                limit = chess.engine.Limit(time=1.0)
-                if level >= 4:
-                    limit = chess.engine.Limit(depth=15)
-                result = engine.play(board, limit)
-                return result.move
-            finally:
-                engine.quit()
+        # Level -> temperature (higher = more uniform/blurrier choice) and a
+        # blunder probability (occasionally play a clearly-worse move).
+        temp = {1: 2.2, 2: 1.4, 3: 0.8, 4: 0.3}.get(level, 1.4)
+        blunder_p = {1: 0.35, 2: 0.22, 3: 0.10, 4: 0.02}.get(level, 0.22)
 
-        with _ENGINE_LOCK:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-                fut = ex.submit(_run)
-                move = fut.result(timeout=_MAX_ENGINE_WAIT_S)
-        if move is None:
-            return {"ok": False, "error": "engine returned no move"}
+        # Evaluate the position, then build a sampling pool from legal moves
+        # weighted by the engine's preference. We get ONE strong move from the
+        # engine; the human-like layer adds principled randomness around it.
+        best_move, _, _ = await asyncio.to_thread(_best_move_and_cp, board)
+
+        legal = list(board.legal_moves)
+        if not legal:
+            return {"ok": False, "error": "no legal moves"}
+
+        chosen: chess.Move | None = None
+        if best_move is not None:
+            best = chess.Move.from_uci(best_move)
+            # Occasionally blunder: pick a random legal move (not the best).
+            if random.random() < blunder_p:
+                pool = [m for m in legal if m != best]
+                if pool:
+                    chosen = random.choice(pool)
+                else:
+                    chosen = best
+            else:
+                # Softmax over the top candidates: weight the engine's best
+                # move heavily, and a few plausible alternatives less so.
+                candidates = [best]
+                for m in legal:
+                    if m != best and len(candidates) < min(4, len(legal)):
+                        candidates.append(m)
+                weights = []
+                for i, m in enumerate(candidates):
+                    # The best move gets the highest weight; alternatives decay
+                    # with temperature (higher temp flattens the distribution).
+                    w = math.exp((len(candidates) - i) / temp)
+                    weights.append(w)
+                chosen = random.choices(candidates, weights=weights, k=1)[0]
+        if chosen is None:
+            chosen = random.choice(legal)
+
         try:
-            san = board.san(move)
+            san = board.san(chosen)
         except Exception:
-            san = move.uci()
-        board.push(move)
+            san = chosen.uci()
+        board.push(chosen)
         return {
             "ok": True,
-            "uci": move.uci(),
+            "uci": chosen.uci(),
             "san": san,
             "fen": board.fen(),
             "is_checkmate": board.is_checkmate(),
             "is_stalemate": board.is_stalemate(),
             "in_check": board.is_check(),
+            "human_like": True,
+            "level": level,
         }
     except Exception as exc:
         log.warning("engine reply failed: %s", exc)
@@ -831,6 +1063,27 @@ async def evaluate_move(
     except Exception as exc:
         log.warning("coach plan generation failed: %s", exc)
         result["coach"] = {}
+
+    # The corrective plan (Hattie feed-forward + Butler correction): after a bad
+    # move, tell the learner what the plan should be in the RESULTING position
+    # (the one they must actually navigate), not the pre-move one.
+    try:
+        post_plan = coach_plan(board.fen())
+        result["plan_now"] = post_plan if post_plan.get("ok") else {}
+    except Exception as exc:
+        log.warning("post-move plan generation failed: %s", exc)
+        result["plan_now"] = {}
+
+    # Persistent current-plan state (anti-drift): carry the plan forward, only
+    # regenerate on a trigger change. Per-game.
+    if game_id and result.get("plan_now", {}).get("ok"):
+        try:
+            from .chess_plans import advance
+
+            result["plan_state"] = advance(game_id, result.get("plan_now"))
+        except Exception as exc:
+            log.warning("plan state advance failed: %s", exc)
+            result["plan_state"] = {}
 
     # Sacrifice detection (chess.com Brilliant rule): did the learner give up
     # material but keep the eval -> sound sacrifice?

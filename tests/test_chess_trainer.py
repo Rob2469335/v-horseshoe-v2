@@ -137,23 +137,8 @@ def test_evaluate_invalid_fen_fails_closed():
 def test_engine_reply_returns_move(monkeypatch):
     import asyncio
 
-    def fake_new_engine():
-        import chess
-        import chess.engine
-
-        class FakeEngine:
-            def configure(self, options):
-                pass
-
-            def play(self, board, limit):
-                return chess.engine.PlayResult(chess.Move.from_uci("e2e4"), None)
-
-            def quit(self):
-                pass
-
-        return FakeEngine()
-
-    monkeypatch.setattr(ct, "_new_engine", fake_new_engine)
+    # The human-like opponent evaluates via _best_move_and_cp then samples.
+    monkeypatch.setattr(ct, "_best_move_and_cp", lambda board: ("e2e4", 30.0, ["e2e4"]))
     r = asyncio.run(
         ct.engine_reply(
             "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
@@ -162,7 +147,7 @@ def test_engine_reply_returns_move(monkeypatch):
         )
     )
     assert r["ok"] is True
-    assert r["san"] == "e4"
+    assert r["human_like"] is True
 
 
 def test_engine_reply_game_over():
@@ -259,7 +244,17 @@ def test_coach_plan_opening_advises_development():
     assert plan["ok"] is True
     assert "plan" in plan
     assert plan["attack_now"] is False
-    assert "bishop" in plan["plan"] or "knight" in plan["plan"]
+    assert plan["standard_plan"]["key"] == "develop"
+    assert plan["mode"] == "improve"
+
+
+def test_coach_plan_material_branch():
+    # White down a queen -> defend mode, Defend & Complicate.
+    plan = ct.coach_plan("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNB1KBNR w KQkq - 0 1")
+    assert plan["ok"] is True
+    assert plan["mode"] == "defend"
+    assert plan["material"] == -9.0
+    assert plan["standard_plan"]["key"] == "defend"
 
 
 def test_coach_plan_invalid_fen_fails_closed():
@@ -459,3 +454,98 @@ def test_api_safety_and_drill(tmp_path):
         )
         assert r.status_code == 200
         assert r.json()["ok"] is True
+
+
+# ---------------------------------------------------------------------------
+# Standard-plans menu + persistent plan state
+# ---------------------------------------------------------------------------
+def test_standard_plan_convert_when_up_material():
+    import chess as _ch
+
+    b = _ch.Board("rnb1kbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1")
+    std = ct._detect_standard_plan(b, _ch.WHITE, attack_now=False, weak=None)
+    assert std["key"] == "convert"
+    assert "extra pawn" in std["recipe"]
+
+
+def test_standard_plan_defend_when_down():
+    import chess as _ch
+
+    b = _ch.Board("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNB1KBNR w KQkq - 0 1")
+    std = ct._detect_standard_plan(b, _ch.WHITE, attack_now=False, weak=None)
+    assert std["key"] == "defend"
+    assert "counterplay" in std["recipe"]
+
+
+def test_persistent_plan_persists_on_same_trigger():
+    from swarm_os.services.chess_plans import advance, reset
+
+    reset("g1")
+    a = advance(
+        "g1",
+        {
+            "ok": True,
+            "standard_plan": {
+                "key": "develop",
+                "name": "Develop",
+                "recipe": "x",
+                "trigger": "y",
+            },
+        },
+    )
+    b = advance(
+        "g1",
+        {
+            "ok": True,
+            "standard_plan": {
+                "key": "develop",
+                "name": "Develop",
+                "recipe": "x",
+                "trigger": "y",
+            },
+        },
+    )
+    assert a["persisted"] is False
+    assert b["persisted"] is True
+    assert b["unchanged_moves"] == 1
+
+
+def test_persistent_plan_regenerates_on_trigger_change():
+    from swarm_os.services.chess_plans import advance, reset
+
+    reset("g2")
+    advance(
+        "g2",
+        {
+            "ok": True,
+            "standard_plan": {
+                "key": "develop",
+                "name": "Develop",
+                "recipe": "x",
+                "trigger": "y",
+            },
+        },
+    )
+    c = advance(
+        "g2",
+        {
+            "ok": True,
+            "standard_plan": {
+                "key": "convert",
+                "name": "Trade + Convert",
+                "recipe": "z",
+                "trigger": "w",
+            },
+        },
+    )
+    assert c["persisted"] is False
+    assert c["plan"]["name"] == "Trade + Convert"
+
+
+def test_persistent_plan_coach_none_fails_gracefully():
+    from swarm_os.services.chess_plans import advance, reset
+
+    reset("g3")
+    r = advance("g3", {"ok": False})
+    assert r["ok"] is True
+    assert r["plan"] is None
