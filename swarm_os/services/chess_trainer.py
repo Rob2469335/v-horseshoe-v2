@@ -236,7 +236,7 @@ async def evaluate_move(
             "legal_moves": [m.uci() for m in board.legal_moves][:20],
         }
 
-    before_cp = _best_move_and_cp(board)[1]
+    before_best, before_cp, _ = _best_move_and_cp(board)
     # SAN must be computed BEFORE pushing (the move is only legal pre-push).
     try:
         played_san = board.san(move)
@@ -250,8 +250,8 @@ async def evaluate_move(
     # perspective; after is opponent's perspective now).
     mover_after = -after_cp
 
-    # Is the played move the engine's best? Compare via re-analyse before.
-    before_best, _, before_pv = _best_move_and_cp(chess.Board(fen))
+    # The played move is the engine's best if it matches the best move found
+    # in the single pre-move evaluation above (no re-analysis needed).
     was_best = before_best == uci
 
     classification = _classify(rating, before_cp, mover_after, was_best)
@@ -406,10 +406,10 @@ async def _llm_enhancement(
             f"BEST WAS: {best_move_san or 'unknown'}\n\n"
             f"BOOK IDEAS:\n{context}\n\nEXPLANATION:"
         )
-        client = LlamaClient()
+        client = LlamaClient(base_url="http://127.0.0.1:8084")
         async with asyncio.timeout(_EXPLAIN_TIMEOUT_S):
             text = await client.generate(
-                "qwen3.5-4b",
+                "qwen3.5-0.8b",
                 [
                     {
                         "role": "system",
@@ -421,9 +421,9 @@ async def _llm_enhancement(
                 # template-level hard switch disables the think block and makes
                 # the model actually emit prose `content`.
                 chat_template_kwargs={"enable_thinking": False},
-                max_tokens=400,
+                max_tokens=300,
             )
-        # Some 0.8B builds emit an empty <think>  </think> wrapper first.
+        # The 0.8B emits an empty <think>  </think> wrapper first; strip it.
         text = re.sub(r"<think>\s*</think>", "", text).strip()
         return text
     except Exception as exc:
