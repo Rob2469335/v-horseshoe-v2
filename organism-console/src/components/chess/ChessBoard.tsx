@@ -146,7 +146,19 @@ export default function ChessBoard({
               const isDest = legalTargets.includes(sq)
               const isCheck = checkSquare === sq
               const hasCapture = isDest && !!piece
-              const coordColor = dark ? "rgba(255,255,255,0.8)" : "rgba(72,72,72,0.8)"
+              // High-contrast coordinates: near-white on dark squares, near-black
+              // on light squares, with an opposite-color shadow for readability.
+              const coordColor = dark ? "#ffffff" : "#1a1a1a"
+              const coordShadow = dark ? "0 1px 2px rgba(0,0,0,0.9)" : "0 1px 2px rgba(255,255,255,0.7)"
+              const isLeftEdge = file === "a"
+              const isRightEdge = file === "h"
+              const isTopEdge = rank === "8"
+              const isBottomEdge = rank === "1"
+              const showCoord =
+                (isLeftEdge && rank !== "8" && rank !== "1")
+                || (isRightEdge && rank !== "8" && rank !== "1")
+                || (isTopEdge && file !== "a" && file !== "h")
+                || (isBottomEdge && file !== "a" && file !== "h")
 
               return (
                 <button
@@ -168,11 +180,24 @@ export default function ChessBoard({
                   {isDest && hasCapture && (
                     <span className="pointer-events-none absolute inset-0" style={{ backgroundImage: DEST_RING }} />
                   )}
-                  {file === "a" && (
-                    <span className="absolute top-0 left-0.5 text-[9px] font-semibold leading-tight" style={{ color: coordColor }}>{rank}</span>
-                  )}
-                  {rank === "8" && (
-                    <span className="absolute right-0.5 bottom-0 text-[9px] font-semibold uppercase leading-tight" style={{ color: coordColor }}>{file}</span>
+                  {showCoord && (
+                    <span
+                      className="pointer-events-none absolute font-bold leading-none"
+                      style={{
+                        color: coordColor,
+                        textShadow: coordShadow,
+                        fontSize: "clamp(12px, 2.6vw, 15px)",
+                        ...(isTopEdge
+                          ? { top: "2px", left: "4px" }
+                          : isBottomEdge
+                            ? { bottom: "2px", left: "4px" }
+                            : isRightEdge
+                              ? { bottom: "2px", right: "4px" }
+                              : { top: "2px", left: "4px" }),
+                      }}
+                    >
+                      {isTopEdge || isBottomEdge ? file : rank}
+                    </span>
                   )}
                 </button>
               )
