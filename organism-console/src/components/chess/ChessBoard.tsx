@@ -23,13 +23,13 @@ const RANKS = "87654321"
 export type BoardThemeKey = "vibrant" | "emerald" | "ocean" | "royal" | "violet" | "rose" | "amber"
 
 export const BOARD_THEMES: Record<BoardThemeKey, { light: string; dark: string; name: string }> = {
-  vibrant: { light: "#f2e6b0", dark: "#4f8a3c", name: "Vibrant" },
-  emerald: { light: "#e8f5e0", dark: "#3f8a4c", name: "Emerald" },
-  ocean: { light: "#d8ecf5", dark: "#2f7f9e", name: "Ocean" },
-  royal: { light: "#dce4f7", dark: "#3a5fc9", name: "Royal" },
-  violet: { light: "#efe3fa", dark: "#7a5cc2", name: "Violet" },
-  rose: { light: "#fde8ec", dark: "#c2546f", name: "Rose" },
-  amber: { light: "#fff3d6", dark: "#c98a2d", name: "Amber" },
+  vibrant: { light: "#f7e8a0", dark: "#3f8f3f", name: "Vibrant" },
+  emerald: { light: "#d7f7b8", dark: "#1f9e4f", name: "Emerald" },
+  ocean: { light: "#b8ecf5", dark: "#0f7fb0", name: "Ocean" },
+  royal: { light: "#c9d8ff", dark: "#2f52c9", name: "Royal" },
+  violet: { light: "#e3c9ff", dark: "#7a3fd0", name: "Violet" },
+  rose: { light: "#ffd3de", dark: "#d23f6a", name: "Rose" },
+  amber: { light: "#ffe9b3", dark: "#e08a1e", name: "Amber" },
 }
 
 function themeOf(key: BoardThemeKey | string): { light: string; dark: string } {
