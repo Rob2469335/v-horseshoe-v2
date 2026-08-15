@@ -138,6 +138,7 @@ type EvalResult = {
   win_before_pct?: number
   win_after_pct?: number
   win_delta_pct?: number
+  best_move?: string | null
   best_move_san?: string | null
   is_checkmate?: boolean
   is_stalemate?: boolean
@@ -193,6 +194,7 @@ export default function ChessTrainerPage() {
   const [legalTargets, setLegalTargets] = useState<string[]>([])
   const [lastMove, setLastMove] = useState<{ from: string; to: string } | null>(null)
   const [result, setResult] = useState<EvalResult | null>(null)
+  const [retryFen, setRetryFen] = useState<string | null>(null)
   const [evaluating, setEvaluating] = useState(false)
   const [practice, setPractice] = useState<PracticePosition[]>([])
   const [rating, setRating] = useState(500)
@@ -249,26 +251,49 @@ export default function ChessTrainerPage() {
   const evaluateMove = async (uci: string) => {
     setEvaluating(true)
     setResult(null)
+    const preFen = fen
     try {
       const res = await (await fetch(`${backendUrl}/chess/trainer/evaluate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fen, uci, rating, want_explain: true }),
+        body: JSON.stringify({ fen: preFen, uci, rating, want_explain: true }),
       })).json() as EvalResult
       setResult(res)
       setExplanationOpen(true)
       if (res.ok && res.legal && res.fen) {
-        setHistory((h) => [...h, res.san ?? uci])
-        setLastMove({ from: uci.slice(0, 2), to: uci.slice(2, 4) })
-        setFen(res.fen)
-        // After the player's move, let the engine reply.
-        void engineReply(res.fen)
+        // Learning-first: on a bad move, hold the position so the learner can
+        // RETRY (find the right move themselves) instead of the engine replying
+        // and steamrolling on. Only advance when the move was fine.
+        const needsRetry = res.classification === "Mistake" || res.classification === "Blunder" || res.classification === "Inaccuracy"
+        if (needsRetry) {
+          setRetryFen(preFen)
+          setHistory((h) => [...h, res.san ?? uci])
+          setLastMove({ from: uci.slice(0, 2), to: uci.slice(2, 4) })
+        } else {
+          setRetryFen(null)
+          setHistory((h) => [...h, res.san ?? uci])
+          setLastMove({ from: uci.slice(0, 2), to: uci.slice(2, 4) })
+          setFen(res.fen)
+          void engineReply(res.fen)
+        }
       }
     } catch {
       setResult({ ok: false, error: "evaluation failed" })
     } finally {
       setEvaluating(false)
     }
+  }
+
+  const retry = () => {
+    if (!retryFen) return
+    setFen(retryFen)
+    setRetryFen(null)
+    setResult(null)
+    setLastMove(null)
+    setSelected(null)
+    setLegalTargets([])
+    setHistory([])
+    setExplanationOpen(false)
   }
 
   const engineReply = async (playerFen: string) => {
@@ -293,6 +318,7 @@ export default function ChessTrainerPage() {
     setLastMove(null)
     setSelected(null)
     setLegalTargets([])
+    setRetryFen(null)
     setExplanationOpen(true)
   }
 
@@ -303,6 +329,7 @@ export default function ChessTrainerPage() {
     setLastMove(null)
     setSelected(null)
     setLegalTargets([])
+    setRetryFen(null)
   }
 
   const newGame = () => resetToPractice({ slug: "start", name: "Starting position", goal: "Play the opening", fen: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", tier: 1 })
@@ -340,6 +367,9 @@ export default function ChessTrainerPage() {
                   selected,
                   legalTargets,
                   checkSquare: (result?.in_check || result?.is_checkmate) ? findKing(fen) : null,
+                  arrows: result?.best_move && result.best_move.length === 4
+                    ? [{ from: result.best_move.slice(0, 2), to: result.best_move.slice(2, 4) }]
+                    : [],
                 }}
                 evalBar={result?.win_after_pct != null ? { whitePct: turn === "w" ? result.win_after_pct : 100 - result.win_after_pct } : null}
               />
@@ -406,6 +436,15 @@ export default function ChessTrainerPage() {
               <CardContent className="space-y-3">
                 {result.is_checkmate && <div className="text-emerald-300">Checkmate! Well played.</div>}
                 {result.is_stalemate && <div className="text-amber-300">Stalemate — a draw.</div>}
+                {retryFen && (
+                  <div className="rounded-lg border border-amber-400/30 bg-amber-400/5 p-3">
+                    <div className="mb-2 text-sm text-amber-200">
+                      That move wasn't ideal — the arrow shows a stronger option.
+                      <span className="text-white/50"> Try to find it yourself.</span>
+                    </div>
+                    <Button size="sm" onClick={retry}>↺ Try again</Button>
+                  </div>
+                )}
                 {result.explanation && (
                   <div>
                     <button className="text-xs font-semibold uppercase tracking-wide text-white/50 hover:text-white" onClick={() => setExplanationOpen((o) => !o)}>
