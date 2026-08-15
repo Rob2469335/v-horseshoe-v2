@@ -149,6 +149,35 @@ async def trainer_engine_move(req: EngineMoveRequest) -> dict[str, Any]:
         raise HTTPException(status_code=503, detail="engine move failed")
 
 
+class CoachHintRequest(BaseModel):
+    fen: str = Field(..., description="Current position FEN (side to move)")
+
+
+@router.post("/coach/hint")
+async def trainer_coach_hint(req: CoachHintRequest) -> dict[str, Any]:
+    """The on-demand coach hint for the side to move (Play-Coach escalation).
+    Level 1 = a concept nudge from the 3-question plan checklist (no move
+    given); the frontend escalates to the best-move arrow and then the move.
+    Research-grounded: actionable hints beat vague praise; escalation preserves
+    the retrieval-practice benefit while rescuing a stuck learner."""
+    from ..services.chess_trainer import coach_plan
+
+    plan = coach_plan(req.fen)
+    if not plan.get("ok"):
+        raise HTTPException(status_code=503, detail="coach hint unavailable")
+    # Build a concept nudge (level 1) without revealing the move.
+    nudge = plan.get("plan", "")
+    if plan.get("attack_now"):
+        nudge = "Do you see how to use their exposed king? (think: open the files)"
+    elif plan.get("king_alert"):
+        nudge = f"{plan['king_alert']} — pieces pointing at a bare king are worth more than pawns"
+    plan["hint_level_1"] = nudge
+    plan["hint_level_2"] = (
+        "Look for a forcing move — a check, capture, or a sacrifice that opens their position"
+    )
+    return plan
+
+
 @router.post("/index-books")
 async def trainer_index_books(force: bool = False) -> dict[str, Any]:
     """Build/refresh the Qdrant chess-book index (idempotent)."""

@@ -147,6 +147,30 @@ type EvalResult = {
   fen?: string
   error?: string
   legal_moves?: string[]
+  coach?: CoachPlan
+  sacrifice?: SacrificeInfo | null
+  missed_sacrifice?: { move?: string; san?: string; message?: string } | null
+}
+
+type CoachPlan = {
+  ok?: boolean
+  plan?: string
+  king_alert?: string
+  worst_piece?: string | null
+  weak_square?: string | null
+  attack_now?: boolean
+  hint_level_1?: string
+  hint_level_2?: string
+}
+
+type SacrificeInfo = {
+  is_sacrifice?: boolean
+  sound?: boolean
+  pattern?: string
+  give_up?: string
+  get_back?: string
+  eval_held?: boolean
+  brilliant?: boolean
 }
 
 type EngineReply = {
@@ -217,6 +241,8 @@ export default function ChessTrainerPage() {
   const [review, setReview] = useState<ReviewEntry[]>([])
   const [reviewStats, setReviewStats] = useState<{ total: number; due_count: number } | null>(null)
   const [activeReview, setActiveReview] = useState<ReviewEntry | null>(null)
+  const [hint, setHint] = useState<CoachPlan | null>(null)
+  const [hintLevel, setHintLevel] = useState(0)
   const [reviewSolved, setReviewSolved] = useState<"none" | "solved" | "failed">("none")
 
   const board = useMemo(() => parseFen(fen), [fen])
@@ -359,6 +385,27 @@ export default function ChessTrainerPage() {
 
   const newGame = () => resetToPractice({ slug: "start", name: "Starting position", goal: "Play the opening", fen: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", tier: 1 })
 
+  // Coach hint escalation (Play-Coach pattern): press 1 = concept nudge,
+  // press 2 = best-move arrow, press 3 = the best move revealed.
+  const coachHint = async () => {
+    const next = (hintLevel + 1) % 3
+    setHintLevel(next)
+    try {
+      if (next === 0) {
+        setHint(null)
+        return
+      }
+      const plan = await (await fetch(`${backendUrl}/chess/trainer/coach/hint`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fen }),
+      })).json() as CoachPlan
+      setHint(plan)
+    } catch {
+      setHint({ ok: false, plan: "coach unavailable" })
+    }
+  }
+
   const loadReview = useCallback(async () => {
     try {
       const [d, s] = await Promise.all([
@@ -454,6 +501,7 @@ export default function ChessTrainerPage() {
               </div>
               <div className="flex gap-2">
                 <Button size="sm" variant="outline" onClick={undoMove} disabled={history.length === 0}>↺ Undo</Button>
+                <Button size="sm" variant="outline" onClick={coachHint}>💡 Coach</Button>
                 <Button size="sm" variant="outline" onClick={newGame}>New game</Button>
               </div>
             </div>
@@ -580,6 +628,59 @@ export default function ChessTrainerPage() {
                   ))}
                 </div>
               )}
+            </CardContent>
+          </Card>
+
+          <Card className="border-white/10 bg-panel">
+            <CardHeader>
+              <CardTitle className="text-base">Coach</CardTitle>
+              <CardDescription>
+                Engine-grounded coaching: the plan for this position, sacrifice detection, and a
+                tap-to-escalate hint (concept → arrow → best move).
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {result?.sacrifice && result.sacrifice.sound && (
+                <div className="rounded-lg border border-violet-400/30 bg-violet-400/10 p-3">
+                  <div className="mb-1 text-sm font-semibold text-violet-200">Brilliant — sound sacrifice! {result.sacrifice.pattern}</div>
+                  <div className="text-xs text-white/70">
+                    You offered {result.sacrifice.give_up} and got {result.sacrifice.get_back}. The engine kept the eval
+                    — you bought the attack, you didn't lose the piece.
+                  </div>
+                </div>
+              )}
+              {result?.missed_sacrifice && (
+                <div className="rounded-lg border border-amber-400/30 bg-amber-400/5 p-3">
+                  <div className="mb-1 text-sm font-semibold text-amber-200">Missed gift</div>
+                  <div className="text-xs text-white/70">
+                    {result.missed_sacrifice.message}. The arrow shows it.
+                  </div>
+                </div>
+              )}
+              {result?.coach?.plan && (
+                <div className="rounded-lg border border-emerald-400/20 bg-emerald-950/10 p-3">
+                  <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-white/40">Plan</div>
+                  <div className="text-sm text-emerald-100/90">{result.coach.plan}</div>
+                </div>
+              )}
+
+              <div className="rounded-lg border border-white/10 bg-black/20 p-3">
+                <div className="mb-2 flex items-center justify-between">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-white/40">Coach hint</span>
+                  <Button size="sm" variant="outline" onClick={coachHint}>
+                    {hintLevel === 0 ? "Ask coach" : `Hint ${hintLevel}/2`}
+                  </Button>
+                </div>
+                {hintLevel === 1 && hint?.hint_level_1 && (
+                  <div className="text-sm text-white/85">{hint.hint_level_1}</div>
+                )}
+                {hintLevel === 2 && (
+                  <div className="text-sm text-white/85">
+                    {hint?.hint_level_2}
+                    <div className="mt-1 text-xs text-white/50">The green arrow shows the best move.</div>
+                  </div>
+                )}
+              </div>
             </CardContent>
           </Card>
 

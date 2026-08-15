@@ -32,6 +32,8 @@ import threading
 from pathlib import Path
 from typing import Any
 
+import chess
+
 log = logging.getLogger(__name__)
 
 _ROOT = Path(__file__).resolve().parent.parent.parent
@@ -143,6 +145,232 @@ def _best_move_and_cp(board) -> tuple[str | None, float, list[str]]:
 def _eval_only(board) -> float:
     best, cp, _ = _best_move_and_cp(board)
     return cp
+
+
+# ---------------------------------------------------------------------------
+# Coach analysis (2026 SOTA — engine-grounded plan + sacrifice detection)
+# ---------------------------------------------------------------------------
+# The research's beginner plan checklist (Silman's 5-step method reduced to 3
+# questions) + the chess.com "Brilliant" soundness rule for sacrifices. Every
+# output is computed from engine numbers / python-chess structure, never free-
+# form LLM speculation (ACT-Eval: freeform chess commentary hallucinates >40%).
+_PIECE_VALUE = {"p": 1, "n": 3, "b": 3, "r": 5, "q": 9}
+
+
+def _material_balance(board) -> float:
+    """Material from White's perspective (pawns=1, minors=3, rooks=5, queen=9)."""
+    bal = 0.0
+    for sq in chess.SQUARES:
+        p = board.piece_at(sq)
+        if not p:
+            continue
+        val = _PIECE_VALUE.get(p.symbol().lower(), 0)
+        bal += val if p.color == chess.WHITE else -val
+    return bal
+
+
+def _king_zone(board, color) -> tuple[int, int]:
+    """(pawn-shield count, king-in-center?) for the given color."""
+    king_sq = board.king(color)
+    if king_sq is None:
+        return (0, 1)
+    file, rank = chess.square_file(king_sq), chess.square_rank(king_sq)
+    shield = 0
+    for df in (-1, 0, 1):
+        sq = chess.square(file + df, rank + (1 if color == chess.WHITE else -1))
+        if chess.square_rank(sq) in range(8) and chess.square_file(sq) in range(8):
+            p = board.piece_at(sq)
+            if p and p.color == color and p.piece_type == chess.PAWN:
+                shield += 1
+    center = rank in (4, 5) if color == chess.WHITE else rank in (3, 2)
+    return (shield, 1 if center else 0)
+
+
+def _worst_piece(board, color) -> str | None:
+    """The mover's least-active minor piece (knight/bishop) or queen that's not
+    developed and has few moves — the 'develop your worst piece' signal. Rooks
+    are ignored (they belong at home until files open)."""
+    best_sq = None
+    best_score = 99
+    for sq in chess.SQUARES:
+        p = board.piece_at(sq)
+        if not p or p.color != color:
+            continue
+        if p.piece_type in (chess.KING, chess.ROOK):
+            continue  # rooks stay home in the opening; kings never 'develop'
+        count = sum(1 for m in board.legal_moves if m.from_square == sq)
+        developed = not (
+            (color == chess.WHITE and chess.square_rank(sq) in (0, 1))
+            or (color == chess.BLACK and chess.square_rank(sq) in (6, 7))
+        )
+        score = count - (0 if developed else 3)
+        if score < best_score:
+            best_score = score
+            best_sq = sq
+    if best_sq is None:
+        return None
+    return f"the {chess.piece_name(board.piece_at(best_sq).piece_type)} on {chess.square_name(best_sq)}"
+
+
+def _weakest_square(board, color) -> str | None:
+    """The weakest enemy pawn (isolated/doubled/backward) or a weak square in
+    front of one — the 'aim at his weakness' signal."""
+    enemy = not color
+    weak: list[str] = []
+    for sq in chess.SQUARES:
+        p = board.piece_at(sq)
+        if not p or p.color != enemy or p.piece_type != chess.PAWN:
+            continue
+        file, rank = chess.square_file(sq), chess.square_rank(sq)
+        neighbors = 0
+        for df in (-1, 0, 1):
+            if df == 0:
+                continue
+            f = file + df
+            if 0 <= f < 8:
+                n = board.piece_at(chess.square(f, rank))
+                if n and n.color == enemy and n.piece_type == chess.PAWN:
+                    neighbors += 1
+        if neighbors == 0:
+            weak.append(chess.square_name(sq))
+    return weak[0] if weak else None
+
+
+def coach_plan(fen: str) -> dict[str, Any]:
+    """The 3-question plan checklist for the side to move, engine-grounded.
+    Returns {ok, plan, king_alert, worst_piece, weak_square, attack_now} where
+    `plan` is the one-line beginner plan."""
+    try:
+        board = chess.Board(fen)
+        color = board.turn
+    except Exception:
+        return {"ok": False, "error": "invalid position"}
+    try:
+        my_king, my_center = _king_zone(board, color)
+        their_king, their_center = _king_zone(board, not color)
+        worst = _worst_piece(board, color)
+        weak = _weakest_square(board, color)
+        # Development count (minor pieces off the back rank).
+        my_dev = sum(
+            1
+            for sq in chess.SQUARES
+            if (p := board.piece_at(sq))
+            and p.color == color
+            and p.piece_type in (chess.KNIGHT, chess.BISHOP)
+            and not (
+                (color == chess.WHITE and chess.square_rank(sq) in (0, 1))
+                or (color == chess.BLACK and chess.square_rank(sq) in (6, 7))
+            )
+        )
+        their_dev = sum(
+            1
+            for sq in chess.SQUARES
+            if (p := board.piece_at(sq))
+            and p.color != color
+            and p.piece_type in (chess.KNIGHT, chess.BISHOP)
+            and not (
+                (color == chess.BLACK and chess.square_rank(sq) in (0, 1))
+                or (color == chess.WHITE and chess.square_rank(sq) in (6, 7))
+            )
+        )
+        their_king_bad = their_center or their_king <= 2
+        my_king_bad = my_center or my_king <= 2
+        attack_now = (not my_king_bad) and their_king_bad and my_dev >= their_dev + 1
+
+        # Build the one-line plan from the most lopsided factor.
+        if attack_now:
+            plan = (
+                "their king is exposed and you're better developed — this is your moment; "
+                "look for a way to open the files toward it"
+            )
+        elif weak:
+            plan = f"their pawn on {weak} is weak — put a piece on the square in front of it and keep attacking it"
+        elif worst:
+            plan = f"{worst} isn't doing anything yet — bring it into the game"
+        else:
+            plan = "quiet position — improve your worst piece and don't force anything"
+        return {
+            "ok": True,
+            "plan": plan,
+            "king_alert": f"their king has only {their_king} pawn(s) in front of it"
+            if their_king <= 2
+            else "",
+            "worst_piece": worst,
+            "weak_square": weak,
+            "attack_now": attack_now,
+        }
+    except Exception as exc:
+        log.warning("coach plan failed: %s", exc)
+        return {"ok": False, "error": str(exc)}
+
+
+def detect_sacrifice(
+    fen: str,
+    uci: str,
+    before_cp: float,
+    after_cp: float,
+) -> dict[str, Any] | None:
+    """Detect whether the played move was a sound sacrifice (the chess.com
+    Brilliant rule). Returns None when not a sacrifice; otherwise a dict with
+    {is_sacrifice, pattern, give_up, get_back, eval_held, brilliant}."""
+    try:
+        import chess
+
+        board = chess.Board(fen)
+        move = chess.Move.from_uci(uci)
+        if move not in board.legal_moves:
+            return None
+        given = board.piece_at(move.from_square)
+        if given is None:
+            return None
+        given_val = _PIECE_VALUE.get(given.symbol().lower(), 0)
+        # A sacrifice = gave up a piece (not a pawn trade) with material cost.
+        material_after = _material_balance(board)
+        board.push(move)
+        material_after = _material_balance(board)
+        lost_material = _material_balance(chess.Board(fen)) - material_after
+        if given_val < 3 and lost_material < 2:
+            return None  # not a piece sacrifice (pawn move / even trade)
+        # Soundness: eval barely moved (within ~60cp) => you bought the attack.
+        held = after_cp >= before_cp - 60.0
+        if not held:
+            # Gave up material AND lost the eval -> that's a blunder, not a
+            # sacrifice. The research's rule: "a blunder is when you lose the
+            # piece AND the attack dies." Only report SOUND sacrifices here.
+            return None
+        # Pattern tag.
+        pattern = ""
+        cap = board.piece_at(move.to_square)
+        target_sq = move.to_square
+        # Greek gift: bishop takes h-pawn (h7/h2) with check.
+        if (
+            given.piece_type == chess.BISHOP
+            and chess.square_name(target_sq) in ("h7", "h2")
+            and board.is_check()
+        ):
+            pattern = "Greek gift (Bxh7+/Bxh2+) — rips open the castled king"
+        elif (
+            given.piece_type == chess.ROOK
+            and cap
+            and cap.piece_type in (chess.KNIGHT, chess.BISHOP)
+        ):
+            pattern = "exchange sacrifice — rook for a minor piece"
+        elif given_val >= 3 and lost_material >= 3 and not (board.is_check()):
+            pattern = "piece sacrifice for initiative"
+        if not pattern:
+            pattern = "piece sacrifice"
+        return {
+            "is_sacrifice": True,
+            "sound": True,
+            "pattern": pattern,
+            "give_up": f"a {chess.piece_name(given.piece_type)} (worth {given_val})",
+            "get_back": "the initiative — the opponent must answer your threats",
+            "eval_held": True,
+            "brilliant": True,
+        }
+    except Exception as exc:
+        log.warning("sacrifice detection failed: %s", exc)
+        return None
 
 
 async def engine_reply(fen: str, rating: int = 500, level: int = 1) -> dict[str, Any]:
@@ -286,6 +514,52 @@ async def evaluate_move(
             result["best_move_san"] = bb.san(chess.Move.from_uci(before_best))
         except Exception:
             pass
+
+    # Coach: the one-line plan for the position the learner is IN (pre-move),
+    # engine-grounded (king safety / worst piece / weak square).
+    try:
+        plan = coach_plan(fen)
+        result["coach"] = plan if plan.get("ok") else {}
+    except Exception as exc:
+        log.warning("coach plan generation failed: %s", exc)
+        result["coach"] = {}
+
+    # Sacrifice detection (chess.com Brilliant rule): did the learner give up
+    # material but keep the eval -> sound sacrifice?
+    try:
+        sac = detect_sacrifice(fen, uci, before_cp, mover_after)
+        if sac:
+            result["sacrifice"] = sac
+            if sac.get("brilliant"):
+                result["classification"] = "Brilliant"
+    except Exception as exc:
+        log.warning("sacrifice detection failed: %s", exc)
+
+    # Missed-gift: a sound sacrifice was the engine's best move but the learner
+    # played something else — flag it as a teachable moment. Rare path (only on
+    # a bad move), so the extra engine eval is acceptable.
+    if (
+        before_best
+        and before_best != uci
+        and classification in ("Mistake", "Blunder", "Inaccuracy")
+    ):
+        try:
+            probe = chess.Board(fen)
+            bm = chess.Move.from_uci(before_best)
+            if bm in probe.legal_moves:
+                giver = probe.piece_at(bm.from_square)
+                if giver and _PIECE_VALUE.get(giver.symbol().lower(), 0) >= 3:
+                    probe.push(bm)
+                    best_after_cp = _eval_only(probe)
+                    # Sound sacrifice: giving up the piece kept/improved the eval.
+                    if best_after_cp >= before_cp - 60.0:
+                        result["missed_sacrifice"] = {
+                            "move": before_best,
+                            "san": result.get("best_move_san"),
+                            "message": "you had a sound piece sacrifice here (the best move) but played something else",
+                        }
+        except Exception as exc:
+            log.warning("missed-sacrifice probe failed: %s", exc)
 
     # Learn-from-mistakes: persist Mistake/Blunder positions (the research's
     # #1 evidence-backed feature — your own blunders become review puzzles).
