@@ -22,7 +22,10 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import logging
+import re
+from pathlib import Path
 from typing import Any
 
 import chess
@@ -268,11 +271,33 @@ async def import_games(
 #   - clock/think-time per phase (the #1 research finding — time management)
 # Persisted to data/chess/profile_<username>.json, fail-closed.
 
-import re
-from pathlib import Path
-
 _PROFILE_DIR = Path("data/chess")
 _CLOCK_RE = re.compile(r"%clk\s+([\d:.]+)")
+_USERNAME_FILE = _PROFILE_DIR / "last_username.json"
+
+
+def save_last_username(username: str) -> dict[str, Any]:
+    """Persist the last chess.com username (survives any browser/origin)."""
+    username = (username or "").strip()
+    if not username:
+        return {"ok": False, "error": "username is required"}
+    try:
+        _PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+        _USERNAME_FILE.write_text(json.dumps({"username": username.lower()}), encoding="utf-8")
+        return {"ok": True, "username": username.lower()}
+    except Exception as exc:
+        log.warning("username save failed: %s", exc)
+        return {"ok": False, "error": str(exc)}
+
+
+def get_last_username() -> dict[str, Any]:
+    """The last saved chess.com username (or None)."""
+    try:
+        if _USERNAME_FILE.exists():
+            return {"ok": True, "username": json.loads(_USERNAME_FILE.read_text(encoding="utf-8")).get("username")}
+    except Exception as exc:
+        log.warning("username load failed: %s", exc)
+    return {"ok": True, "username": None}
 
 
 def _parse_clock(comment: str) -> float | None:

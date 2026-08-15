@@ -150,3 +150,32 @@ def test_api_import_endpoint(tmp_path):
         assert r.json()["ok"] is True
         r = c.post("/chess/trainer/import/chesscom", json={"username": ""})
         assert r.status_code == 422
+
+
+def test_username_persistence(monkeypatch, tmp_path):
+    monkeypatch.setattr(ci, "_USERNAME_FILE", tmp_path / "last_username.json")
+    res = ci.save_last_username("Lilrob2")
+    assert res["ok"] is True
+    assert ci.get_last_username()["username"] == "lilrob2"
+    # Empty username refused.
+    assert ci.save_last_username("  ")["ok"] is False
+
+
+def test_api_username_endpoints(monkeypatch, tmp_path):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(ci, "_USERNAME_FILE", tmp_path / "last_username.json")
+    from swarm_os.api import chess_trainer as trainer_api
+
+    app = FastAPI()
+    app.include_router(trainer_api.router)
+    with TestClient(app) as c:
+        r = c.get("/chess/trainer/import/chesscom/username")
+        assert r.status_code == 200
+        assert r.json()["username"] is None
+        r = c.post("/chess/trainer/import/chesscom/username", json={"username": "Lilrob2"})
+        assert r.status_code == 200
+        assert r.json()["username"] == "lilrob2"
+        r = c.get("/chess/trainer/import/chesscom/username")
+        assert r.json()["username"] == "lilrob2"

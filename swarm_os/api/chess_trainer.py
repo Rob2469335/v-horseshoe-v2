@@ -417,6 +417,29 @@ class ChessComProfileRequest(BaseModel):
     )
 
 
+class UsernameRequest(BaseModel):
+    username: str = Field(
+        ..., min_length=2, max_length=60, description="chess.com username"
+    )
+
+
+@router.get("/import/chesscom/username")
+async def trainer_get_username() -> dict[str, Any]:
+    """The last saved chess.com username (persisted on the backend so it
+    survives any browser/origin)."""
+    from ..services.chess_import import get_last_username
+
+    return get_last_username()
+
+
+@router.post("/import/chesscom/username")
+async def trainer_set_username(req: UsernameRequest) -> dict[str, Any]:
+    """Persist the chess.com username for next time."""
+    from ..services.chess_import import save_last_username
+
+    return save_last_username(req.username)
+
+
 @router.post("/import/chesscom/profile")
 async def trainer_import_chesscom_profile(
     req: ChessComProfileRequest,

@@ -230,6 +230,42 @@ export default function ChessBoard({
             )
           })}
         </div>
+        {/* Best-move / hint arrows (SVG overlay above pieces). */}
+        {arrows.length > 0 && (
+          <svg viewBox="0 0 100 100" className="pointer-events-none absolute inset-0 z-20 h-full w-full">
+            {arrows.map((a, i) => {
+              const fromF = displayFiles.indexOf(a.from[0])
+              const fromR = displayRanks.indexOf(a.from[1])
+              const toF = displayFiles.indexOf(a.to[0])
+              const toR = displayRanks.indexOf(a.to[1])
+              if (fromF < 0 || toF < 0 || fromR < 0 || toR < 0) return null
+              const x1 = fromF * 12.5 + 6.25
+              const y1 = fromR * 12.5 + 6.25
+              const x2 = toF * 12.5 + 6.25
+              const y2 = toR * 12.5 + 6.25
+              const dx = x2 - x1
+              const dy = y2 - y1
+              const len = Math.hypot(dx, dy) || 1
+              const ux = dx / len
+              const uy = dy / len
+              const sx = x1 + ux * 8
+              const sy = y1 + uy * 8
+              const ex = x2 - ux * 7
+              const ey = y2 - uy * 7
+              const color = a.color ?? "rgba(20,170,110,0.9)"
+              const head = 4.5
+              return (
+                <g key={i}>
+                  <path d={`M${sx} ${sy} L${ex} ${ey}`} stroke={color} strokeWidth="2.6" strokeLinecap="round" fill="none" />
+                  <path
+                    d={`M${ex} ${ey} L${ex - ux * head - uy * head * 0.55} ${ey - uy * head + ux * head * 0.55} L${ex - ux * head + uy * head * 0.55} ${ey - uy * head - ux * head * 0.55} Z`}
+                    fill={color}
+                  />
+                </g>
+              )
+            })}
+          </svg>
+        )}
       </div>
     </div>
   )

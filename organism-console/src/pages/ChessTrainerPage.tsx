@@ -632,9 +632,31 @@ export default function ChessTrainerPage() {
   const [ccJob, setCcJob] = useState<AnalysisJob | null>(null)
   const [ccPoll, setCcPoll] = useState<NodeJS.Timeout | null>(null)
 
+  // Load the last chess.com username from the backend (survives any browser/
+  // origin) on mount, preferring a saved value.
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await (await fetch(`${backendUrl}/chess/trainer/import/chesscom/username`)).json() as { ok: boolean; username?: string }
+        if (r.ok && r.username && !ccUsername) {
+          setCcUsername(r.username)
+          localStorage.setItem("chesscom_username", r.username)
+        }
+      } catch { /* ignore */ }
+    })()
+  }, [backendUrl]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const saveCcUsername = (name: string) => {
     setCcUsername(name)
-    if (name.trim()) localStorage.setItem("chesscom_username", name.trim())
+    if (name.trim()) {
+      localStorage.setItem("chesscom_username", name.trim())
+      // Also persist on the backend so it survives host/origin changes.
+      void fetch(`${backendUrl}/chess/trainer/import/chesscom/username`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: name.trim() }),
+      })
+    }
   }
 
   const buildProfile = async () => {
