@@ -583,6 +583,29 @@ async def evaluate_move(
         except Exception as exc:
             log.warning("mistake recording failed: %s", exc)
 
+    # Missed sacrifice -> review queue too: the learner's own position where a
+    # sound sacrifice was available but wasn't played. The review asks them to
+    # FIND the sacrifice (best move).
+    if result.get("missed_sacrifice"):
+        try:
+            from .chess_book_memory import _concept_from, retrieve
+            from .chess_mistakes import record_mistake
+
+            concept = _concept_from("sacrifice", f"{before_best or ''}")
+            frags = await retrieve(f"{concept} sacrifice", top_k=2)
+            record_mistake(
+                pre_fen=fen,
+                played_uci=uci,
+                played_san=f"{result['san']} (missed a sacrifice)",
+                best_uci=before_best,
+                best_san=result.get("best_move_san"),
+                classification="Missed sacrifice",
+                concept=concept,
+                book_titles=[f.get("title") for f in frags if f.get("title")][:3],
+            )
+        except Exception as exc:
+            log.warning("missed-sacrifice queueing failed: %s", exc)
+
     if want_explain and classification not in ("Best", "Excellent"):
         result["explanation"] = await _explain_move(
             fen,

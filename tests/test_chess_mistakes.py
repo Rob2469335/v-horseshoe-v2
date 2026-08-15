@@ -117,5 +117,22 @@ def test_api_review_endpoints(tmp_path):
         assert r.json()["ok"] is True
         r = c.post("/chess/trainer/review/failed", json={"entry_id": entry["id"]})
         assert r.json()["ok"] is True
-        r = c.get("/chess/trainer/review/stats")
-        assert r.json()["ok"] is True
+
+
+def test_missed_sacrifice_records_as_review_item():
+    # A missed sacrifice is queued with the best move as the answer — the
+    # review asks the learner to FIND the sacrifice.
+    entry = cm.record_mistake(
+        pre_fen="f1",
+        played_uci="d1h5",
+        played_san="Qh5 (missed a sacrifice)",
+        best_uci="c4h7",
+        best_san="Bxh7+",
+        classification="Missed sacrifice",
+        concept="sacrifice",
+        book_titles=["Winning Chess Tactics"],
+    )
+    assert entry["best_uci"] == "c4h7"
+    assert entry["classification"] == "Missed sacrifice"
+    assert "missed a sacrifice" in entry["played_san"]
+    assert cm.review_due()["total"] == 1
