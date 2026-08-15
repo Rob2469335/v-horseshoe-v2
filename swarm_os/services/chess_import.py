@@ -200,8 +200,13 @@ async def import_games(
             moves_analyzed += len(records)
 
             if record_games:
+                from .chess_games import finish_game
+                from .chess_trainer import _expected_points
+
                 gid = start_game()["id"]
                 for rec in records:
+                    win_before = _expected_points(500, rec["eval_before_cp"])
+                    win_after = _expected_points(500, rec["eval_after_cp"])
                     record_move(
                         gid,
                         {
@@ -212,7 +217,7 @@ async def import_games(
                             "classification": rec["classification"],
                             "eval_before_cp": rec["eval_before_cp"],
                             "eval_after_cp": rec["eval_after_cp"],
-                            "win_delta_pct": 0.0,
+                            "win_delta_pct": round((win_after - win_before) * 100, 1),
                             "best_uci": rec["best_uci"],
                             "best_move_san": rec["best_move_san"],
                             "is_best": rec["was_best"],
@@ -220,6 +225,9 @@ async def import_games(
                             "source": f"chess.com:{username}",
                         },
                     )
+                # Finalize so the game counts in analytics (only finished games
+                # do) — otherwise every imported game stays in_progress forever.
+                finish_game(gid)
                 games_analyzed += 1
 
             if record_mistakes:
