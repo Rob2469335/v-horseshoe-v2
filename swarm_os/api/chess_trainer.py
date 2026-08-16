@@ -279,6 +279,12 @@ class TrainingAnswerRequest(BaseModel):
     confidence: str | None = Field(
         None, description="guess | idea | confident (for calibration)"
     )
+    confidence_captured_at: float | None = Field(
+        None,
+        description="Client timestamp (epoch seconds) when the user SELECTED "
+        "confidence — must be BEFORE the answer was submitted (calibration "
+        "invariant: confidence_captured_at <= answer_recorded_at).",
+    )
 
 
 @router.get("/review/training")
@@ -305,7 +311,7 @@ async def trainer_training_answer(req: TrainingAnswerRequest) -> dict[str, Any]:
     """Record a training answer and advance/fall back the item's box."""
     from ..services import chess_training
 
-    return chess_training.record_answer(req.item_id, req.correct, req.confidence)
+    return chess_training.record_answer(req.item_id, req.correct, req.confidence, req.confidence_captured_at)
 
 
 @router.get("/review/training/progress")

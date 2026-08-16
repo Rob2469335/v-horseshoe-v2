@@ -329,12 +329,31 @@ def training_due(limit: int = 10, concept: str | None = None) -> dict[str, Any]:
     return {"ok": True, "due": pool[:limit], "due_count": len(pool), "total": len(items)}
 
 
-def record_answer(item_id: str, correct: bool, confidence: str | None = None) -> dict[str, Any]:
+def record_answer(
+    item_id: str,
+    correct: bool,
+    confidence: str | None = None,
+    confidence_captured_at: float | None = None,
+) -> dict[str, Any]:
     """Record an answer and advance/fall back the item on its STAGE-AWARE
     ladder. A correct solve advances one box; a wrong answer resets to box 0.
     An item is 'mastered' when it has TWO clean solves and has reached box >= 2
-    (repeated success, not a single lucky hit). Confidence is recorded for
-    later calibration but does not drive the box advance."""
+    (repeated success, not a single lucky hit).
+
+    CALIBRATION INVARIANT (explicit): confidence must be captured BEFORE the
+    answer is submitted. The API enforces this by requiring `confidence` to
+    accompany the answer in the SAME call (there is no 'answer now, confidence
+    later' path). `confidence_captured_at` (client timestamp of the selection)
+    is stored alongside so the calibration layer can verify the ordering:
+      confidence_captured_at <= answer_recorded_at.
+    A confidence that arrives with a capture time AFTER the answer is rejected
+    as unusable calibration data (recorded, but flagged 'post-hoc')."""
+    now = _now()
+    answer_time = now
+    post_hoc = bool(
+        confidence_captured_at is not None
+        and confidence_captured_at > answer_time + 5.0  # clock-skew tolerance
+    )
     with _LOCK:
         items = _load()
         it = next((x for x in items if x.get("id") == item_id), None)
@@ -344,6 +363,10 @@ def record_answer(item_id: str, correct: bool, confidence: str | None = None) ->
         it["attempts"] = (it.get("attempts", 0) or 0) + 1
         it["correct_history"] = (it.get("correct_history", []) or []) + [bool(correct)]
         it["confidence_history"] = (it.get("confidence_history", []) or []) + [confidence]
+        it["confidence_times"] = (it.get("confidence_times", []) or []) + [confidence_captured_at]
+        it["answer_times"] = (it.get("answer_times", []) or []) + [answer_time]
+        if post_hoc:
+            it["calibration_flags"] = (it.get("calibration_flags", []) or []) + ["post-hoc-confidence"]
         if correct:
             it["corrects"] = (it.get("corrects", 0) or 0) + 1
             it["clean_solves"] = (it.get("clean_solves", 0) or 0) + 1
@@ -439,14 +462,32 @@ def calibration_report() -> dict[str, Any]:
     with _LOCK:
         items = _load()
 
-    # Aggregate: (concept, stage, confidence) -> {n, corrects}
+    # Aggregate: (concept, stage, confidence) -> {n, corrects}. Entries whose
+    # confidence was captured AFTER the answer (post-hoc) are EXCLUDED from
+    # calibration (they measure post-answer reflection, not pre-commitment
+    # certainty) and counted as rejected calibration data.
     agg: dict[tuple[str, str, str], dict[str, int]] = {}
+    rejected = 0
     for it in items:
         concept = it.get("concept", "?")
         stage = it.get("stage", "repair")
         conf_hist = it.get("confidence_history", []) or []
         corr_hist = it.get("correct_history", []) or []
-        for conf, correct in zip(conf_hist, corr_hist):
+        conf_times = it.get("confidence_times", []) or []
+        answer_times = it.get("answer_times", []) or []
+        flags = it.get("calibration_flags", []) or []
+        for i, (conf, correct) in enumerate(zip(conf_hist, corr_hist)):
+            # Post-hoc confidence: capture time is after the answer time (with
+            # a small clock-skew tolerance). These are not calibration data.
+            ct_ = conf_times[i] if i < len(conf_times) else None
+            at_ = answer_times[i] if i < len(answer_times) else None
+            is_posthoc = (
+                (flags[i] if i < len(flags) else None) == "post-hoc-confidence"
+                or (ct_ is not None and at_ is not None and ct_ > at_ + 5.0)
+            )
+            if is_posthoc:
+                rejected += 1
+                continue
             level = conf if conf in _CONFIDENCE_LEVELS else "idea"
             key = (concept, stage, level)
             cell = agg.setdefault(key, {"n": 0, "corrects": 0})
@@ -480,4 +521,10 @@ def calibration_report() -> dict[str, Any]:
         all_levels = [cell for st in entry["stages"].values() for cell in st.values()]
         flagged = any(c["interpretation"] == "overconfident" for c in all_levels)
         entry["overconfident"] = flagged
-    return {"ok": True, "concepts": by_concept, "min_samples": _MIN_CALIBRATION_SAMPLES}
+    return {
+        "ok": True,
+        "concepts": by_concept,
+        "min_samples": _MIN_CALIBRATION_SAMPLES,
+        "rejected_post_hoc": rejected,
+        "invariant": "confidence_captured_at <= answer_recorded_at; post-hoc confidence excluded",
+    }

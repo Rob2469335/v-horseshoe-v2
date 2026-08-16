@@ -231,3 +231,22 @@ def test_confidence_never_reorders_scheduling():
     # hanging piece is still served FIRST despite the confident claims, because
     # scheduling reads concept_scores (observed mistakes), not confidence.
     assert concepts_served.index("hanging piece") < concepts_served.index("king safety")
+
+
+def test_post_hoc_confidence_rejected_from_calibration():
+    """A confidence that arrives AFTER the answer (post-hoc) must be excluded
+    from calibration — it measures post-answer reflection, not pre-commitment
+    certainty. The invariant is confidence_captured_at <= answer_recorded_at."""
+    import time
+
+    it = _seed_item()
+    t = time.time()
+    # Post-hoc: confidence captured AFTER the answer time.
+    ct.record_answer(it["id"], correct=True, confidence="confident", confidence_captured_at=t + 100.0)
+    # Valid: confidence captured BEFORE the answer.
+    ct.record_answer(it["id"], correct=True, confidence="confident", confidence_captured_at=t - 5.0)
+    cal = ct.calibration_report()
+    # Only the valid entry is in calibration; the post-hoc one is rejected.
+    assert cal["rejected_post_hoc"] == 1
+    cell = cal["concepts"]["hanging piece"]["stages"]["repair"]["confident"]
+    assert cell["n"] == 1

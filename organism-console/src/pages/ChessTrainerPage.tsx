@@ -419,6 +419,7 @@ export default function ChessTrainerPage() {
   const [trainingProgress, setTrainingProgress] = useState<TrainingProgress | null>(null)
   const [trainingAnswered, setTrainingAnswered] = useState<{ correct: boolean; mastered?: boolean; retired?: boolean } | null>(null)
   const [trainingConfidence, setTrainingConfidence] = useState<"guess" | "idea" | "confident" | null>(null)
+  const [trainingConfidenceAt, setTrainingConfidenceAt] = useState<number | null>(null)
   const [trainingCalibration, setTrainingCalibration] = useState<Record<string, any> | null>(null)
   const [trainingBuilding, setTrainingBuilding] = useState(false)
 
@@ -897,6 +898,7 @@ export default function ChessTrainerPage() {
       setTrainingCalibration(c)
       setTrainingAnswered(null)
       setTrainingConfidence(null) // confidence is chosen fresh before each reveal
+      setTrainingConfidenceAt(null)
     } catch { /* ignore */ }
   }, [backendUrl])
 
@@ -918,7 +920,14 @@ export default function ChessTrainerPage() {
       const r = await (await fetch(`${backendUrl}/chess/trainer/review/training/answer`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ item_id: trainingItem.id, correct, confidence: trainingConfidence }),
+        body: JSON.stringify({
+          item_id: trainingItem.id,
+          correct,
+          confidence: trainingConfidence,
+          // When confidence was selected (before this submit) — the backend
+          // rejects a capture that lands AFTER the answer as post-hoc.
+          confidence_captured_at: trainingConfidenceAt ?? undefined,
+        }),
       })).json()
       setTrainingAnswered({ correct, mastered: r.mastered, retired: r.retired })
       // Load the next item + refreshed progress.
@@ -1333,7 +1342,7 @@ export default function ChessTrainerPage() {
                         {(["guess", "idea", "confident"] as const).map((c) => (
                           <button
                             key={c}
-                            onClick={() => setTrainingConfidence(c)}
+                            onClick={() => { setTrainingConfidence(c); setTrainingConfidenceAt(Date.now() / 1000) }}
                             className={`rounded px-2 py-1 text-[11px] ${trainingConfidence === c ? "bg-emerald-400/30 text-emerald-200" : "bg-black/30 text-white/60 hover:text-white/90"}`}
                           >
                             {c === "guess" ? "🔴 Guessing" : c === "idea" ? "🟡 I have an idea" : "🟢 Confident"}
