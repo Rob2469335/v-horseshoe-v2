@@ -46,6 +46,40 @@ def _job_path(job_id: str) -> Path:
     return _JOBS_DIR / f"{job_id}.json"
 
 
+def _record_completion(job: dict[str, Any]) -> None:
+    """Append a (done_games, timestamp) point to the job's rolling completion
+    log (capped at 20). The slope of these points is the ACTUAL recent rate,
+    used for an honest ETA instead of a manual games-per-minute average."""
+    completions = job.setdefault("completions", [])
+    completions.append([job.get("done_games", 0), time.time()])
+    job["completions"] = completions[-20:]
+
+
+def _rolling_rate(job: dict[str, Any]) -> float | None:
+    """Games per minute from the last two completion points (or None if fewer
+    than two points exist within a sane window)."""
+    completions = job.get("completions") or []
+    if len(completions) < 2:
+        return None
+    (g0, t0), (g1, t1) = completions[-2], completions[-1]
+    dt = t1 - t0
+    dg = g1 - g0
+    if dt <= 0 or dg <= 0:
+        return None
+    return dg / dt * 60.0  # games per minute
+
+
+def _job_eta(job: dict[str, Any]) -> float | None:
+    """Estimated hours remaining from the rolling rate (None if unknown)."""
+    rate = _rolling_rate(job)
+    if not rate:
+        return None
+    remaining = job.get("total_games", 0) - job.get("done_games", 0)
+    if remaining <= 0:
+        return 0.0
+    return remaining / rate / 60.0
+
+
 def _load_job(job_id: str) -> dict[str, Any] | None:
     try:
         if _job_path(job_id).exists():
@@ -68,29 +102,34 @@ def _save_job(job: dict[str, Any]) -> None:
 
 
 def list_jobs() -> dict[str, Any]:
-    """All known jobs (from disk + memory) with their status."""
+    """All known jobs (from disk + memory) with their status + rolling ETA."""
     if not _JOBS_DIR.exists():
         return {"ok": True, "jobs": []}
     out = []
     for p in sorted(_JOBS_DIR.glob("*.json")):
         try:
             job = json.loads(p.read_text(encoding="utf-8"))
-            out.append(
-                {
-                    k: job.get(k)
-                    for k in (
-                        "job_id",
-                        "username",
-                        "status",
-                        "done_games",
-                        "total_games",
-                        "mistakes_queued",
-                        "started_at",
-                        "updated_at",
-                        "error",
-                    )
-                }
-            )
+            entry = {
+                k: job.get(k)
+                for k in (
+                    "job_id",
+                    "username",
+                    "status",
+                    "done_games",
+                    "total_games",
+                    "mistakes_queued",
+                    "started_at",
+                    "updated_at",
+                    "error",
+                )
+            }
+            eta_h = _job_eta(job)
+            rate = _rolling_rate(job)
+            if eta_h is not None:
+                entry["eta_hours"] = round(eta_h, 1)
+            if rate is not None:
+                entry["games_per_minute"] = round(rate, 2)
+            out.append(entry)
         except Exception:
             continue
     out.sort(key=lambda j: j.get("started_at") or 0, reverse=True)
@@ -271,6 +310,7 @@ async def _run_job(job: dict[str, Any]) -> None:
             job["done_games"] = global_i + 1
             if res["mistakes"]:
                 job["mistakes_queued"] = job.get("mistakes_queued", 0) + res["mistakes"]
+            _record_completion(job)
         except asyncio.CancelledError:
             job.pop("_live_task", None)
             _save_job(job)

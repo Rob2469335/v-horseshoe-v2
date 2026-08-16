@@ -120,6 +120,47 @@ def test_job_resume_incomplete(monkeypatch, tmp_path):
     assert cj.list_jobs()["jobs"][0]["done_games"] == 1
 
 
+def test_run_job_resume_builds_from_done_games(monkeypatch, tmp_path):
+    """Regression: on resume, _games is built from done_games onward (not all
+    games), and the loop indexes it locally so no games are skipped/duplicated."""
+    import asyncio
+
+    from swarm_os.services import chess_games as cg
+    from swarm_os.services import chess_mistakes as cm
+
+    monkeypatch.setattr(cg, "_DATA_DIR", tmp_path / "chess")
+    monkeypatch.setattr(cg, "_GAMES_FILE", tmp_path / "chess" / "games.jsonl")
+    monkeypatch.setattr(cm, "_DATA_DIR", tmp_path / "chess")
+    monkeypatch.setattr(cm, "_STORE_FILE", tmp_path / "chess" / "mistakes.jsonl")
+    monkeypatch.setattr(cm, "_ladder_days", lambda: [1, 3, 7])
+
+    # Simulate a job with 3 game refs that has done 2.
+    job = {
+        "job_id": "resume-test",
+        "username": "tester",
+        "status": "running",
+        "done_games": 2,
+        "total_games": 3,
+        "mistakes_queued": 0,
+        "errors": [],
+        "game_refs": [("u1", 0), ("u2", 0), ("u2", 1)],
+    }
+    cj._save_job(job)
+
+    # Mock archive fetch to return one game per url.
+    async def fake_fetch(url, timeout=20.0):
+        return {"games": [{"pgn": SAMPLE_PGN}]}
+
+    monkeypatch.setattr(cj, "_fetch", fake_fetch)
+
+    # Run the job to completion (analyze remaining games 2..3).
+    asyncio.run(cj._run_job(job))
+    done = cj._load_job("resume-test")
+    assert done["status"] == "done"
+    assert done["done_games"] == 3
+    assert len(job["_games"]) == 1  # only the remaining game (index 2) fetched
+
+
 def test_analysis_endpoint(tmp_path):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
@@ -148,3 +189,34 @@ def test_analysis_endpoint(tmp_path):
         )
         assert r.status_code == 200
         assert r.json()["ok"] is True
+
+
+def test_rolling_eta_from_recent_completions(monkeypatch, tmp_path):
+    """ETA must come from the ACTUAL recent completion rate (the slope of the
+    last two completion points), not a manual games-per-minute guess. Fewer
+    than two points => no ETA (honest 'unknown'), not a fabricated number."""
+    monkeypatch.setattr(cj, "_JOBS_DIR", tmp_path)
+    job = {
+        "job_id": "j1",
+        "username": "tester",
+        "status": "running",
+        "done_games": 100,
+        "total_games": 842,
+    }
+    # Two completion points: 90 games -> 100 games over 60s => 10 games/min.
+    now = 1000.0
+    job["completions"] = [
+        [90, now - 60.0],
+        [100, now],
+    ]
+    monkeypatch.setattr(cj, "time", type("T", (), {"time": staticmethod(lambda: now)})())
+    rate = cj._rolling_rate(job)
+    assert rate is not None
+    assert abs(rate - 10.0) < 0.01  # 10 games/min from the slope
+    eta = cj._job_eta(job)
+    assert eta is not None
+    assert abs(eta - (742 / 10.0 / 60.0)) < 0.01  # remaining / rate / 60 -> hours
+    # With only one completion point, ETA is honestly unknown.
+    job2 = {"done_games": 100, "total_games": 842, "completions": [[100, now]]}
+    assert cj._rolling_rate(job2) is None
+    assert cj._job_eta(job2) is None
