@@ -226,11 +226,13 @@ def _classify_concept(
         import chess
 
         b = chess.Board(pre_fen)
-    except Exception:
+    except Exception as exc:
+        log.warning("pre_fen parse failed (%s): %s", pre_fen, exc)
         return classification or "inaccuracy"
     try:
         played = chess.Move.from_uci(played_uci)
-    except Exception:
+    except Exception as exc:
+        log.warning("played_uci parse failed (%s): %s", played_uci, exc)
         played = None
     if played is None or played not in b.legal_moves:
         return "inaccuracy"
@@ -271,8 +273,8 @@ def _classify_concept(
                 bbest.push(best)
                 if bbest.is_check() and not after.is_check():
                     return "missed check"
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("missed-check detection failed (uci=%s): %s", best_uci, exc)
 
     # Missed a capture: best move captures material the player passed on.
     if best_uci and not b.is_capture(played):
@@ -280,8 +282,8 @@ def _classify_concept(
             best = chess.Move.from_uci(best_uci)
             if best in b.legal_moves and b.is_capture(best):
                 return "missed capture"
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("missed-capture detection failed (uci=%s): %s", best_uci, exc)
 
     # King safety: only flag when the king is genuinely at risk — the best move
     # castles OR the played move leaves the king exposed to attack. Not just
@@ -294,8 +296,8 @@ def _classify_concept(
             best = chess.Move.from_uci(best_uci)
             if best in b.legal_moves and best.uci() in ("e1g1", "e1c1", "e8g8", "e8c8"):
                 best_castled = True
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("castle detection failed (uci=%s): %s", best_uci, exc)
     if king_attackers or best_castled:
         return "king safety"
 

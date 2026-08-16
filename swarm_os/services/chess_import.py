@@ -107,7 +107,8 @@ def _analyze_game(board: chess.Board, max_plies: int = 40) -> list[dict[str, Any
             try:
                 bb = chess.Board(pre_fen)
                 best_san = bb.san(chess.Move.from_uci(before_best))
-            except Exception:
+            except Exception as exc:
+                log.debug("best_san conversion failed for %s/%s: %s", before_best, pre_fen, exc)
                 pass
         records.append(
             {
@@ -386,7 +387,8 @@ async def build_profile(
                         board.push(node.move)
                 if not board.move_stack:
                     continue
-            except Exception:
+            except Exception as exc:
+                log.warning("game pgn parse failed (%s): %s", game.get("id"), exc)
                 continue
             stats["games"] += 1
             # Determine the player's color from the PGN headers (the API's

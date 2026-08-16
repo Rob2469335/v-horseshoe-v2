@@ -93,8 +93,8 @@ def _ladder_for(stage: str) -> list[int]:
             days = [int(x) for x in env.split(",") if x.strip()]
             if days:
                 return days
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            log.warning("CHESS_SR_LADDER %r isn't a comma-separated int list; using defaults: %s", env, exc)
     return _LADDER_STAGES.get(stage, _DEFAULT_LADDER)
 
 
@@ -177,7 +177,7 @@ def build_items_from_mistakes(force: bool = False) -> dict[str, Any]:
         if e.get("id") in existing_keys:
             continue
         concept = cm._classify_concept(
-            e.get("pre_fen", ""), e.get("played_uci", ""), e.get("best_uci", ""), e.get("classification", "")
+            e.get("pre_fen", ""), e.get("played_uci", ""), e.get("best_uci"), e.get("classification", "")
         )
         if not concept or concept == "imprecise move":
             continue  # imprecise moves are not a clean training concept
@@ -200,9 +200,14 @@ def build_items_from_mistakes(force: bool = False) -> dict[str, Any]:
             )
         )
     with _LOCK:
-        merged = _load() + new_items
-        _save(merged)
-    return {"ok": True, "created": len(new_items)}
+        # Re-check against the CURRENT store before appending: another task may
+        # have already built these items while we held no lock (TOCTOU). Only
+        # append items whose source_ref is still absent.
+        merged = _load()
+        present = {it.get("source_ref") for it in merged if it.get("stage") == "repair"}
+        fresh = [it for it in new_items if it.get("source_ref") not in present]
+        _save(merged + fresh)
+    return {"ok": True, "created": len(fresh)}
 
 
 def build_items_from_gm(force: bool = False) -> dict[str, Any]:

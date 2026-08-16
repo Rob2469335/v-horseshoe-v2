@@ -144,7 +144,8 @@ def list_jobs() -> dict[str, Any]:
             if rate is not None:
                 entry["games_per_minute"] = round(rate, 2)
             out.append(entry)
-        except Exception:
+        except Exception as exc:
+            log.warning("job list: skipping unreadable job file %s: %s", p, exc)
             continue
     out.sort(key=lambda j: j.get("started_at") or 0, reverse=True)
     return {"ok": True, "jobs": out}

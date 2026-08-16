@@ -18,6 +18,7 @@ citations.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 
@@ -27,6 +28,10 @@ COLLECTION = "chess_books"
 QDRANT_URL = os.getenv("QDRANT_URL", "http://127.0.0.1:6333")
 EMBED_URL = "http://127.0.0.1:8081/v1"
 EMBED_DIM = 768
+
+# Serializes the check-and-create collection init so concurrent index_books
+# calls can't both see "missing" and both create it (TOCTOU race).
+_init_lock = asyncio.Lock()
 
 # Concept keywords -> deterministic fallback scoring (used when the embedder
 # or Qdrant is down). Maps the blunder type to the books that teach it.
@@ -101,16 +106,21 @@ async def index_books(force: bool = False) -> dict:
         return {"ok": False, "error": "no chess books found in manifest"}
     client = AsyncQdrantClient(url=QDRANT_URL, api_key=os.getenv("QDRANT_API_KEY"))
     try:
-        collections = await client.get_collections()
-        names = {c.name for c in collections.collections}
-        if COLLECTION not in names:
-            await client.create_collection(
-                collection_name=COLLECTION,
-                vectors_config=VectorParams(size=EMBED_DIM, distance=Distance.COSINE),
-            )
+        async with _init_lock:
+            # Check-and-create under the lock: two concurrent index_books calls
+            # must not both see the collection missing and both create it.
+            async with asyncio.timeout(10.0):
+                collections = await client.get_collections()
+            names = {c.name for c in collections.collections}
+            if COLLECTION not in names:
+                await client.create_collection(
+                    collection_name=COLLECTION,
+                    vectors_config=VectorParams(size=EMBED_DIM, distance=Distance.COSINE),
+                )
 
         if not force:
-            res = await client.count(collection_name=COLLECTION, exact=True)
+            async with asyncio.timeout(10.0):
+                res = await client.count(collection_name=COLLECTION, exact=True)
             existing_count = getattr(res, "count", 0)
             if existing_count > 0:
                 return {
@@ -162,7 +172,8 @@ async def index_books(force: bool = False) -> dict:
                     )
                 )
         if points:
-            await client.upsert(collection_name=COLLECTION, points=points)
+            async with asyncio.timeout(10.0):
+                await client.upsert(collection_name=COLLECTION, points=points)
         return {"ok": True, "indexed": len(points), "existing": 0, "total": len(books)}
     finally:
         await client.close()
@@ -181,12 +192,13 @@ async def retrieve(query: str, top_k: int = 3) -> list[dict]:
                 url=QDRANT_URL, api_key=os.getenv("QDRANT_API_KEY")
             )
             try:
-                response = await client.query_points(
-                    collection_name=COLLECTION,
-                    query=vector,
-                    limit=top_k,
-                    with_payload=True,
-                )
+                async with asyncio.timeout(10.0):
+                    response = await client.query_points(
+                        collection_name=COLLECTION,
+                        query=vector,
+                        limit=top_k,
+                        with_payload=True,
+                    )
                 points = getattr(response, "points", response) or []
                 results = []
                 for p in points:

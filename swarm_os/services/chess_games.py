@@ -129,7 +129,8 @@ def finish_game(game_id: str) -> dict[str, Any]:
 
 
 def list_games(limit: int = 20) -> dict[str, Any]:
-    games = _load_games()
+    with _LOCK:
+        games = _load_games()
     return {
         "ok": True,
         "count": len(games),
@@ -300,8 +301,9 @@ def progress_analytics() -> dict[str, Any]:
 
     Returns {ok, training_rating, games_count, moves_count, skills: {
     accuracy, blunder_rate, mistake_rate, best_rate, opening, middlegame,
-    endgame}, recent: [{game_id, accuracy, move_count, started_at}]}."""
-    games = _load_games()
+    endgame},     recent: [{game_id, accuracy, move_count, started_at}]}."""
+    with _LOCK:
+        games = _load_games()
     finished = [g for g in games if g.get("status") == "finished" and g.get("moves")]
     if not finished:
         return {

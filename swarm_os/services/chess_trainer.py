@@ -38,6 +38,10 @@ log = logging.getLogger(__name__)
 _ROOT = Path(__file__).resolve().parent.parent.parent
 STOCKFISH_PATH = _ROOT / "bin" / "stockfish.exe"
 _ENGINE_LOCK = threading.Lock()
+# Guards the shared _eval_cache dict — the read happens before _ENGINE_LOCK is
+# taken and the write inside it, so concurrent threads otherwise race a resize
+# during dict iteration (RuntimeError: dictionary changed size during iteration).
+_CACHE_LOCK = threading.Lock()
 _MAX_ENGINE_WAIT_S = 60.0
 # Bound the local-LLM explanation so the UI never hangs on a slow generation.
 _EXPLAIN_TIMEOUT_S = 45.0
@@ -74,13 +78,14 @@ def close_engine() -> None:
         ):
             try:
                 proc.terminate()
-            except Exception:
+            except Exception as exc:
+                log.debug("stockfish terminate failed (will try kill): %s", exc)
                 try:
                     proc.kill()
-                except Exception:
-                    pass
-    except Exception:
-        pass
+                except Exception as exc2:
+                    log.warning("stockfish kill failed: %s", exc2)
+    except Exception as exc:
+        log.warning("stockfish shutdown failed: %s", exc)
     try:
         engine.quit()
     except Exception as exc:
@@ -178,10 +183,10 @@ def _best_move_and_cp(board) -> tuple[str | None, float, list[str]]:
             if hasattr(board, "_transposition_key")
             else board.fen()
         )
-        cached = _eval_cache.get(key)
+        with _CACHE_LOCK:
+            cached = _eval_cache.get(key)
         if cached is not None:
             return cached
-
         # _get_engine() initializes the persistent engine; subsequent calls
         # return early without the lock, so calling it here (before taking the
         # lock) avoids a non-reentrant-lock deadlock inside _analyse.
@@ -208,10 +213,11 @@ def _best_move_and_cp(board) -> tuple[str | None, float, list[str]]:
         best = pv[0] if pv else None
         result = (best, _eval_cp(info), pv)
         if best is not None:
-            _eval_cache[key] = result
-            if len(_eval_cache) > _EVAL_CACHE_MAX:
-                for k in list(_eval_cache)[: len(_eval_cache) // 2]:
-                    _eval_cache.pop(k, None)
+            with _CACHE_LOCK:
+                _eval_cache[key] = result
+                if len(_eval_cache) > _EVAL_CACHE_MAX:
+                    for k in list(_eval_cache)[: len(_eval_cache) // 2]:
+                        _eval_cache.pop(k, None)
         return result
     except Exception as exc:
         log.warning("engine evaluation failed: %s", exc)
@@ -802,8 +808,8 @@ def hanging_drill(fen: str | None = None) -> dict[str, Any]:
                 "find": found,
                 "instruction": "find a loose enemy piece you can capture",
             }
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("no hanging piece in given drill fen (%s): %s", fen, exc)
     # Search forward from the start position until a hanging piece appears.
     rng = random.Random(42)
     start = chess.Board()
@@ -1118,8 +1124,8 @@ async def evaluate_move(
         try:
             bb = chess.Board(fen)
             result["best_move_san"] = bb.san(chess.Move.from_uci(before_best))
-        except Exception:
-            pass
+        except Exception as exc:
+            log.warning("best_move_san parse failed (%s/%s): %s", fen, before_best, exc)
 
     # Coach: the one-line plan for the position the learner is IN (pre-move),
     # engine-grounded (king safety / worst piece / weak square).
