@@ -63,12 +63,25 @@ async def _llm_deep_dive(listings: list[RVListing], budget: int) -> str:
         from litellm import acompletion
 
         attempts = []
+        # DeepSeek direct is the reliable prose provider (the OpenCode Go proxy
+        # sends long prompts into reasoning_content and returns empty content).
+        # NOTE: DeepSeek V4 flash reasons BEFORE answering (~8k reasoning tokens
+        # for this prompt), so max_tokens must be high enough to leave room for
+        # the actual report — 1200 gets eaten entirely by reasoning.
+        if os.environ.get("DEEPSEEK_API_KEY"):
+            attempts.append({
+                "model": "deepseek/deepseek-v4-flash",
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 3000,
+                "timeout": 120.0,
+                "num_retries": 0,
+            })
         if os.environ.get("OPENAI_API_KEY"):
             attempts.append({
                 "model": "openai/deepseek-v4-flash",
                 "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 1000,
-                "timeout": 60.0,
+                "max_tokens": 3000,
+                "timeout": 90.0,
                 "num_retries": 0,
                 "api_base": os.getenv("OPENAI_API_BASE", "https://opencode.ai/zen/go/v1"),
                 "api_key": os.getenv("OPENAI_API_KEY"),
