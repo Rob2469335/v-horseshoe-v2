@@ -56,17 +56,31 @@ def _record_completion(job: dict[str, Any]) -> None:
 
 
 def _rolling_rate(job: dict[str, Any]) -> float | None:
-    """Games per minute from the last two completion points (or None if fewer
-    than two points exist within a sane window)."""
+    """Games per minute from a least-squares fit over the recent completion
+    points (the last up-to-6 points spanning >= 60s). Using more than two
+    points makes the ETA robust to a single slow game — a 2-point window
+    swings wildly (0.89 -> 1.99 /min across consecutive games). Returns None
+    when there isn't enough recent history yet."""
     completions = job.get("completions") or []
     if len(completions) < 2:
         return None
-    (g0, t0), (g1, t1) = completions[-2], completions[-1]
-    dt = t1 - t0
-    dg = g1 - g0
-    if dt <= 0 or dg <= 0:
+    pts = completions[-6:]
+    t0 = pts[0][1]
+    if pts[-1][1] - t0 < 60.0:
+        return None  # not enough elapsed time for a stable slope
+    # Least-squares slope of done_games vs time (games per second).
+    n = len(pts)
+    sx = sum(p[1] for p in pts)
+    sy = sum(p[0] for p in pts)
+    sxx = sum(p[1] * p[1] for p in pts)
+    sxy = sum(p[1] * p[0] for p in pts)
+    denom = n * sxx - sx * sx
+    if abs(denom) < 1e-9:
         return None
-    return dg / dt * 60.0  # games per minute
+    slope = (n * sxy - sx * sy) / denom  # games per second
+    if slope <= 0:
+        return None
+    return slope * 60.0  # games per minute
 
 
 def _job_eta(job: dict[str, Any]) -> float | None:

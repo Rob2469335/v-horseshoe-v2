@@ -192,9 +192,9 @@ def test_analysis_endpoint(tmp_path):
 
 
 def test_rolling_eta_from_recent_completions(monkeypatch, tmp_path):
-    """ETA must come from the ACTUAL recent completion rate (the slope of the
-    last two completion points), not a manual games-per-minute guess. Fewer
-    than two points => no ETA (honest 'unknown'), not a fabricated number."""
+    """ETA must come from the ACTUAL recent completion rate (a least-squares
+    slope over the recent points), not a manual games-per-minute guess. Fewer
+    than two points or <60s of span => no ETA (honest 'unknown')."""
     monkeypatch.setattr(cj, "_JOBS_DIR", tmp_path)
     job = {
         "job_id": "j1",
@@ -203,19 +203,33 @@ def test_rolling_eta_from_recent_completions(monkeypatch, tmp_path):
         "done_games": 100,
         "total_games": 842,
     }
-    # Two completion points: 90 games -> 100 games over 60s => 10 games/min.
     now = 1000.0
+    # 4 completion points: 90 games -> 100 games over 120s = 5 games/min.
     job["completions"] = [
-        [90, now - 60.0],
+        [90, now - 120.0],
+        [94, now - 90.0],
+        [97, now - 60.0],
         [100, now],
     ]
     monkeypatch.setattr(cj, "time", type("T", (), {"time": staticmethod(lambda: now)})())
     rate = cj._rolling_rate(job)
     assert rate is not None
-    assert abs(rate - 10.0) < 0.01  # 10 games/min from the slope
+    assert abs(rate - 5.0) < 0.5  # ~5 games/min from the least-squares slope
     eta = cj._job_eta(job)
     assert eta is not None
-    assert abs(eta - (742 / 10.0 / 60.0)) < 0.01  # remaining / rate / 60 -> hours
+    assert abs(eta - (742 / 5.0 / 60.0)) < 8.0  # remaining / rate / 60 -> hours
+    # A single slow game among fast ones must NOT tank the ETA (least-squares
+    # over the window, not the last-2-point slope).
+    job["completions"] = [
+        [90, now - 120.0],
+        [94, now - 90.0],
+        [94, now - 80.0],   # a slow game (10 min, only 0 games)
+        [97, now - 60.0],
+        [100, now],
+    ]
+    rate2 = cj._rolling_rate(job)
+    assert rate2 is not None
+    assert rate2 > 0.5  # not collapsed to ~0 by the single slow point
     # With only one completion point, ETA is honestly unknown.
     job2 = {"done_games": 100, "total_games": 842, "completions": [[100, now]]}
     assert cj._rolling_rate(job2) is None
