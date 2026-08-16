@@ -254,6 +254,26 @@ type GmGuess = {
   error?: string
 }
 
+// STUDY MODE session — the GM's move is REVEALED + explained (no guessing).
+type GmStudy = {
+  ok: boolean
+  finished?: boolean
+  game_id?: string
+  name?: string
+  year?: number
+  ply?: number
+  total_plies?: number
+  fen_before?: string
+  side_to_move?: string
+  move_number?: number
+  gm_move_san?: string
+  gm_move_uci?: string
+  explanation?: string
+  degraded?: boolean
+  result?: string
+  error?: string
+}
+
 type Analytics = {
   ok: boolean
   training_rating?: number | null
@@ -416,16 +436,9 @@ export default function ChessTrainerPage() {
       const uci = selected + sq
       setSelected(null)
       setLegalTargets([])
-      if (gmSessionRef.current?.ok && !gmSessionRef.current.finished) {
-        void gmGuessRef.current(uci)
-      } else {
-        void evaluateMove(uci)
-      }
+      void evaluateMove(uci)
     }
   }
-
-  const gmGuessRef = useRef<(uci: string) => Promise<void>>(async () => {})
-  const gmSessionRef = useRef<GmSession | null>(null)
 
   const evaluateMove = async (uci: string) => {
     setEvaluating(true)
@@ -641,11 +654,11 @@ export default function ChessTrainerPage() {
     } catch { /* ignore */ }
   }
 
-  // Play-like-the-greats: guess-the-move on famous Fischer/Carlsen games.
+  // Play-like-the-greats: STUDY MODE on famous Fischer/Carlsen games — each
+  // GM move is revealed and explained (why, what it threatens, the plan).
   const [gmGames, setGmGames] = useState<GmGame[]>([])
-  const [gmSession, setGmSession] = useState<GmSession | null>(null)
-  const [gmGuessResult, setGmGuessResult] = useState<GmGuess | null>(null)
-  const [gmExplain, setGmExplain] = useState<{ ok: boolean; explanation?: string; gm_move_san?: string; degraded?: boolean; error?: string } | null>(null)
+  const [gmStudy, setGmStudy] = useState<GmStudy & { loading?: boolean } | null>(null)
+  const gmStudyRef = useRef<GmStudy | null>(null)
 
   // chess.com personalization.
   const [ccUsername, setCcUsername] = useState(() => localStorage.getItem("chesscom_username") ?? "")
@@ -736,18 +749,17 @@ export default function ChessTrainerPage() {
   useEffect(() => { loadGmGames() }, [loadGmGames])
 
   const startGm = async (gid: string) => {
-    setGmSession(null)
-    setGmGuessResult(null)
-    setGmExplain(null)
+    setGmStudy(null)
     try {
-      const s = await (await fetch(`${backendUrl}/chess/trainer/gm-games/play`, {
+      // STUDY MODE: open the game at move 0 — the first GM move is shown + explained.
+      const s = await (await fetch(`${backendUrl}/chess/trainer/gm-games/study`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ game_id: gid, ply: 0, guess_uci: "" }),
-      })).json() as GmSession
-      if (s.ok && s.fen) {
-        setGmSession(s)
-        setFen(s.fen)
+        body: JSON.stringify({ game_id: gid, ply: 0 }),
+      })).json() as GmStudy
+      if (s.ok && s.fen_before) {
+        setGmStudy(s)
+        setFen(s.fen_before)
         setHistory([])
         setResult(null)
         setLastMove(null)
@@ -755,43 +767,26 @@ export default function ChessTrainerPage() {
     } catch { /* ignore */ }
   }
 
-  const gmGuess = async (uci: string) => {
-    if (!gmSession?.game_id || gmSession.ply == null) return
+  // STUDY MODE: advance one ply — show the next GM move + its explanation.
+  const gmNext = async () => {
+    if (!gmStudy?.game_id || gmStudy.ply == null || gmStudy.finished) return
     try {
-      const g = await (await fetch(`${backendUrl}/chess/trainer/gm-games/guess`, {
+      setGmStudy((prev) => (prev ? { ...prev, loading: true } : prev))
+      const nextPly = gmStudy.ply + 1
+      const s = await (await fetch(`${backendUrl}/chess/trainer/gm-games/study`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ game_id: gmSession.game_id, ply: gmSession.ply, guess_uci: uci }),
-      })).json() as GmGuess
-      setGmGuessResult(g)
-      // Explain the GM's move (why, what it threatens, what it sets up).
-      setGmExplain(null)
-      if (g.ok && g.gm_move_uci) {
-        const plyToExplain = gmSession.ply
-        void (async () => {
-          try {
-            const ex = await (await fetch(`${backendUrl}/chess/trainer/gm-games/explain`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ game_id: gmSession.game_id, ply: plyToExplain }),
-            })).json() as { ok: boolean; explanation?: string; gm_move_san?: string; degraded?: boolean; error?: string }
-            setGmExplain(ex)
-          } catch { /* ignore */ }
-        })()
-        // Advance the session one ply.
-        const nextPly = gmSession.ply + 1
-        const s = await (await fetch(`${backendUrl}/chess/trainer/gm-games/play`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ game_id: gmSession.game_id, ply: nextPly, guess_uci: "" }),
-        })).json() as GmSession
-        setGmSession(s)
-        if (s.ok && s.fen) setFen(s.fen)
+        body: JSON.stringify({ game_id: gmStudy.game_id, ply: nextPly }),
+      })).json() as GmStudy
+      if (s.ok && s.fen_before) {
+        setGmStudy(s)
+        setFen(s.fen_before)
+        // Show the move on the board (last move highlight).
+        if (s.gm_move_uci) setLastMove({ from: s.gm_move_uci.slice(0, 2), to: s.gm_move_uci.slice(2, 4) })
       }
     } catch { /* ignore */ }
   }
-  gmGuessRef.current = gmGuess
-  gmSessionRef.current = gmSession
+  gmStudyRef.current = gmStudy
 
   const loadReview = useCallback(async () => {
     try {
@@ -1386,8 +1381,9 @@ export default function ChessTrainerPage() {
             <CardHeader>
               <CardTitle className="text-base">Play like the greats</CardTitle>
               <CardDescription>
-                Guess-the-move on famous Fischer + Carlsen games. See a position, guess what the
-                GM played, and learn from the difference.
+                Study famous Fischer + Carlsen games move-by-move. Each move is revealed and
+                explained — why they played it, what it threatens, and what it sets up. You
+                understand the game, you don't guess it.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
@@ -1399,42 +1395,45 @@ export default function ChessTrainerPage() {
                     className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-left text-xs hover:bg-black/40"
                   >
                     <div className="font-semibold text-white/90">{g.name}</div>
-                    <div className="text-white/50">{g.player} · {g.result} · {g.move_count} plies</div>
+                    <div className="text-white/50">{g.player} · {g.year}</div>
                   </button>
                 ))}
               </div>
 
-              {gmSession?.ok && !gmSession.finished && gmSession.fen && (
+              {gmStudy?.ok && !gmStudy.finished && gmStudy.fen_before && (
                 <div className="rounded-lg border border-emerald-400/20 bg-emerald-950/10 p-3">
-                  <div className="mb-1 text-sm font-semibold text-emerald-200">{gmSession.name}</div>
+                  <div className="mb-1 text-sm font-semibold text-emerald-200">{gmStudy.name}</div>
                   <div className="mb-2 text-xs text-white/60">
-                    Move {gmSession.move_number} · {gmSession.side_to_move} to move — guess the GM's move
-                    (click the board to play it).
+                    Move {gmStudy.move_number} · {gmStudy.side_to_move} to move — the GM played
+                    <span className="ml-1 font-mono font-semibold text-emerald-300">{gmStudy.gm_move_san}</span>
+                    {gmStudy.total_plies != null && gmStudy.ply != null ? ` · ${gmStudy.ply + 1}/${gmStudy.total_plies} plies` : ""}
                   </div>
-                  {gmGuessResult?.ok && (
-                    <div className={`text-sm ${gmGuessResult.correct ? "text-emerald-300" : "text-amber-300"}`}>
-                      {gmGuessResult.correct
-                        ? `✓ Correct — ${gmGuessResult.gm_move_san}!`
-                        : `The GM played ${gmGuessResult.gm_move_san}.`}
-                    </div>
-                  )}
-                  {gmExplain?.explanation && (
-                    <div className="mt-2 rounded-lg border border-violet-400/20 bg-violet-950/10 p-2 text-xs leading-relaxed text-violet-100/90">
+                  {gmStudy.explanation && (
+                    <div className="rounded-lg border border-violet-400/20 bg-violet-950/10 p-2 text-xs leading-relaxed text-violet-100/90">
                       <div className="mb-1 font-semibold uppercase tracking-wide text-white/40">
-                        Why {gmExplain.gm_move_san} — what it sets up
+                        Why {gmStudy.gm_move_san} — what it threatens, what it sets up
                       </div>
-                      <pre className="whitespace-pre-wrap">{gmExplain.explanation}</pre>
-                      {gmExplain.degraded && (
+                      <pre className="whitespace-pre-wrap">{gmStudy.explanation}</pre>
+                      {gmStudy.degraded && (
                         <div className="mt-1 text-[10px] text-white/40">(deterministic engine explanation — LLM unavailable)</div>
                       )}
                     </div>
                   )}
+                  <Button size="sm" className="mt-3" onClick={gmNext} disabled={gmStudy.loading}>
+                    {gmStudy.loading ? "…" : "Next move →"}
+                  </Button>
                 </div>
               )}
 
-              {gmSession?.finished && (
-                <div className="text-sm text-emerald-300">Game complete — {gmSession.result}. Pick another to keep going.</div>
+              {gmStudy?.finished && (
+                <div className="text-sm text-emerald-300">Game complete — {gmStudy.result}. Pick another to keep going.</div>
               )}
+
+              <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-xs leading-relaxed text-white/60">
+                <div className="mb-1 font-semibold uppercase tracking-wide text-white/40">Fischer → Carlsen: how the game changed</div>
+                <p><span className="text-white/80">Bobby Fischer</span> (sharpest attacker of his era) showed the power of concrete, forcing play — look at how he wins material or mates.</p>
+                <p className="mt-1"><span className="text-white/80">Magnus Carlsen</span> (world #1) wins by outplaying in quiet positions — tiny advantages, endgame precision, and squeezing a draw into a win. Compare how each world champion wins the same type of position.</p>
+              </div>
             </CardContent>
           </Card>
 
