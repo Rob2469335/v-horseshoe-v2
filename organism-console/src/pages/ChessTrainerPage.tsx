@@ -254,6 +254,32 @@ type GmGuess = {
   error?: string
 }
 
+// Concept-training item (Repair / Reinforce / Transfer).
+type TrainingItem = {
+  ok?: boolean
+  id?: string
+  concept?: string
+  skill?: string
+  stage?: "repair" | "reinforce" | "transfer"
+  pre_fen?: string
+  solution_uci?: string
+  solution_san?: string
+  prompt?: string
+  difficulty?: number
+  box?: number
+  due_at?: number
+}
+
+type TrainingProgress = {
+  ok: boolean
+  total_items?: number
+  concepts?: Record<string, {
+    repair?: number; reinforce?: number; transfer?: number
+    repair_mastered?: boolean; reinforce_mastered?: boolean; transfer_mastered?: boolean
+    concept_mastered?: boolean; mastery?: string; success_rate?: number
+  }>
+}
+
 // STUDY MODE session — the GM's move is REVEALED + explained (no guessing).
 type GmStudy = {
   ok: boolean
@@ -389,6 +415,10 @@ export default function ChessTrainerPage() {
   const [gmTrainMode, setGmTrainMode] = useState(true) // Train (active recall) vs Explore (passive)
   const [gmRevealed, setGmRevealed] = useState(false)  // has the current think position been revealed?
   const [gmConfidence, setGmConfidence] = useState<"guess" | "idea" | "confident" | null>(null)
+  const [trainingItem, setTrainingItem] = useState<TrainingItem | null>(null)
+  const [trainingProgress, setTrainingProgress] = useState<TrainingProgress | null>(null)
+  const [trainingAnswered, setTrainingAnswered] = useState<{ correct: boolean; mastered?: boolean; retired?: boolean } | null>(null)
+  const [trainingBuilding, setTrainingBuilding] = useState(false)
 
   const board = useMemo(() => parseFen(fen), [fen])
   const turn = useMemo(() => sideToMove(fen), [fen])
@@ -852,6 +882,45 @@ export default function ChessTrainerPage() {
 
   useEffect(() => { loadCoach() }, [loadCoach])
 
+  // Concept training: load the next due item + progress.
+  const loadTraining = useCallback(async () => {
+    try {
+      const [d, p] = await Promise.all([
+        (await fetch(`${backendUrl}/chess/trainer/review/training?limit=1`)).json(),
+        (await fetch(`${backendUrl}/chess/trainer/review/training/progress`)).json(),
+      ])
+      setTrainingItem((d.due ?? [])[0] ?? null)
+      setTrainingProgress(p)
+      setTrainingAnswered(null)
+    } catch { /* ignore */ }
+  }, [backendUrl])
+
+  const buildTraining = async () => {
+    setTrainingBuilding(true)
+    try {
+      await (await fetch(`${backendUrl}/chess/trainer/review/training/build`, { method: "POST" })).json()
+      await loadTraining()
+      await loadCoach()
+    } catch { /* ignore */ } finally { setTrainingBuilding(false) }
+  }
+
+  const answerTraining = async (correct: boolean, confidence: string | null) => {
+    if (!trainingItem?.id) return
+    try {
+      const r = await (await fetch(`${backendUrl}/chess/trainer/review/training/answer`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ item_id: trainingItem.id, correct, confidence }),
+      })).json()
+      setTrainingAnswered({ correct, mastered: r.mastered, retired: r.retired })
+      // Load the next item + refreshed progress.
+      setTimeout(() => void loadTraining(), 1200)
+    } catch { /* ignore */ }
+  }
+
+  useEffect(() => { loadTraining() }, [loadTraining]) // load existing training on mount
+  useEffect(() => { if (trainingItem) setFen(trainingItem.pre_fen ?? fen) }, [trainingItem]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const [analytics, setAnalytics] = useState<Analytics | null>(null)
   const loadAnalytics = useCallback(async () => {
     try {
@@ -1167,6 +1236,79 @@ export default function ChessTrainerPage() {
                     </div>
                   )}
                 </>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="border-white/10 bg-panel">
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-base">Concept training</CardTitle>
+                <Button size="sm" variant="outline" onClick={buildTraining} disabled={trainingBuilding}>
+                  {trainingBuilding ? "…" : "Build / refresh"}
+                </Button>
+              </div>
+              <CardDescription>
+                Repair (your own mistake) → Reinforce (new position, same idea) → Transfer
+                (same idea in disguise). A concept is mastered only when both Reinforce and
+                Transfer are solved repeatedly.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {!trainingItem && (
+                <div className="flex flex-col gap-2">
+                  <div className="text-xs text-white/40">
+                    {trainingProgress?.total_items ? `${trainingProgress.total_items} training items ready.` : "No training items yet — analyze games, then Build."}
+                  </div>
+                  {trainingProgress && trainingProgress.concepts && Object.keys(trainingProgress.concepts).length > 0 && (
+                    <div className="space-y-1">
+                      {Object.entries(trainingProgress.concepts)
+                        .filter(([, v]) => !v.concept_mastered)
+                        .slice(0, 4)
+                        .map(([c, v]) => (
+                          <div key={c} className="flex items-center justify-between text-xs">
+                            <span className="capitalize text-white/70">{c}</span>
+                            <span className="text-white/40">
+                              {v.reinforce_mastered ? "reinforced" : `${v.reinforce ?? 0}+`} · {v.transfer_mastered ? "transferred" : `${v.transfer ?? 0}T`}
+                              {v.mastery === "mastered" && " · mastered"}
+                            </span>
+                          </div>
+                        ))}
+                    </div>
+                  )}
+                  <Button size="sm" onClick={buildTraining} disabled={trainingBuilding}>
+                    {trainingBuilding ? "Building…" : "Build training items"}
+                  </Button>
+                </div>
+              )}
+
+              {trainingItem && trainingItem.id && trainingItem.pre_fen && (
+                <div className="rounded-lg border border-emerald-400/20 bg-emerald-950/10 p-3">
+                  <div className="mb-1 flex items-center justify-between">
+                    <span className="text-sm font-semibold capitalize text-emerald-200">{trainingItem.concept}</span>
+                    <Badge className="border-white/20 bg-white/5 text-white/60">
+                      {trainingItem.stage} {trainingItem.difficulty ? `· diff ${trainingItem.difficulty}` : ""}
+                    </Badge>
+                  </div>
+                  <div className="mb-2 text-sm text-white/85">{trainingItem.prompt}</div>
+                  {trainingItem.solution_san && !trainingAnswered && (
+                    <div className="text-xs text-white/40">Solution: {trainingItem.solution_san} (click below when you have it)</div>
+                  )}
+                  {trainingAnswered ? (
+                    <div className={`mt-2 text-sm ${trainingAnswered.correct ? "text-emerald-300" : "text-amber-300"}`}>
+                      {trainingAnswered.correct
+                        ? trainingAnswered.mastered
+                          ? "✓ Correct — mastered! Loading the next item…"
+                          : "✓ Correct — box advanced. Loading the next item…"
+                        : "✗ Not quite — it will come back soon. Loading the next item…"}
+                    </div>
+                  ) : (
+                    <div className="mt-2 flex gap-1.5">
+                      <Button size="sm" variant="outline" onClick={() => answerTraining(true, null)}>✓ I got it</Button>
+                      <Button size="sm" variant="outline" onClick={() => answerTraining(false, null)}>✗ Not quite</Button>
+                    </div>
+                  )}
+                </div>
               )}
             </CardContent>
           </Card>

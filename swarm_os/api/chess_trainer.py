@@ -273,6 +273,50 @@ async def trainer_review_coach() -> dict[str, Any]:
     return coach_report()
 
 
+class TrainingAnswerRequest(BaseModel):
+    item_id: str = Field(..., description="The training item to record")
+    correct: bool = Field(..., description="Was the solution correct?")
+    confidence: str | None = Field(
+        None, description="guess | idea | confident (for calibration)"
+    )
+
+
+@router.get("/review/training")
+async def trainer_training(limit: int = 10, concept: str | None = None) -> dict[str, Any]:
+    """Concept-level spaced-repetition training items (Repair / Reinforce /
+    Transfer). Prioritizes your weakest concept first."""
+    from ..services import chess_training
+
+    return chess_training.training_due(limit=limit, concept=concept)
+
+
+@router.post("/review/training/build")
+async def trainer_training_build(force: bool = False) -> dict[str, Any]:
+    """(Re)build training items from your mistakes + GM critical moments."""
+    from ..services import chess_training
+
+    own = chess_training.build_items_from_mistakes(force=force)
+    gm = chess_training.build_items_from_gm(force=force)
+    return {"ok": True, "own_game": own, "gm": gm, "progress": chess_training.concept_progress()}
+
+
+@router.post("/review/training/answer")
+async def trainer_training_answer(req: TrainingAnswerRequest) -> dict[str, Any]:
+    """Record a training answer and advance/fall back the item's box."""
+    from ..services import chess_training
+
+    return chess_training.record_answer(req.item_id, req.correct, req.confidence)
+
+
+@router.get("/review/training/progress")
+async def trainer_training_progress() -> dict[str, Any]:
+    """Per-concept learning progress (Repair/Reinforce/Transfer counts,
+    success rate, mastery)."""
+    from ..services import chess_training
+
+    return chess_training.concept_progress()
+
+
 class SafetyCheckRequest(BaseModel):
     fen: str = Field(..., description="Current position FEN (side to move)")
     uci: str = Field(..., description="The move to check for safety")
