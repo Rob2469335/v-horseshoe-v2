@@ -134,3 +134,100 @@ def test_weakness_priority_drives_scheduling():
     concepts_served = [it["concept"] for it in due["due"]]
     # hanging piece should appear before king safety in the served order.
     assert concepts_served.index("hanging piece") < concepts_served.index("king safety")
+
+
+def _confidence_item(concept="hanging piece"):
+    return _seed_item(concept=concept)
+
+
+def test_calibration_math_and_overconfidence_flag():
+    """'confident' solves that are rare -> overconfident flag, but the flag is
+    analytics only: scheduling is untouched."""
+    it = _confidence_item()
+    # 6 confident attempts, only 2 correct (solve rate 33% < 80% -> overconfident)
+    for i in range(6):
+        ct.record_answer(it["id"], correct=(i < 2), confidence="confident")
+    cal = ct.calibration_report()
+    cell = cal["concepts"]["hanging piece"]["stages"]["repair"]["confident"]
+    assert cell["n"] == 6
+    assert cell["solve_rate"] == round(100.0 * 2 / 6, 1)
+    assert cell["interpretation"] == "overconfident"
+    assert cal["concepts"]["hanging piece"]["overconfident"] is True
+
+
+def test_calibration_small_sample_guard():
+    """Fewer than the min sample size -> 'insufficient', never a wild score."""
+    it = _confidence_item()
+    for i in range(3):  # 3 < min (5)
+        ct.record_answer(it["id"], correct=True, confidence="confident")
+    cal = ct.calibration_report()
+    cell = cal["concepts"]["hanging piece"]["stages"]["repair"]["confident"]
+    assert cell["interpretation"] == "insufficient"
+    assert cell["n"] == 3
+
+
+def test_calibration_well_calibrated():
+    """High confidence + high solve rate -> well-calibrated (not over/under)."""
+    it = _confidence_item()
+    for _ in range(6):
+        ct.record_answer(it["id"], correct=True, confidence="confident")
+    cal = ct.calibration_report()
+    cell = cal["concepts"]["hanging piece"]["stages"]["repair"]["confident"]
+    assert cell["interpretation"] == "well-calibrated"
+
+
+def test_calibration_survives_reload():
+    """Calibration is derived from the persisted item history, so it survives
+    a 'restart' (re-reading the store) — no separate volatile state."""
+    it = _confidence_item()
+    for _ in range(6):
+        ct.record_answer(it["id"], correct=True, confidence="idea")
+    # Force a re-read from disk (simulates restart).
+    cal = ct.calibration_report()
+    cell = cal["concepts"]["hanging piece"]["stages"]["repair"]["idea"]
+    assert cell["n"] == 6
+    assert cell["interpretation"] in ("well-calibrated", "underconfident")
+
+
+def test_confidence_recorded_atomically_with_answer():
+    """Confidence is stored in the SAME record as the answer — it cannot be
+    changed after the result (append-only history, no update path)."""
+    it = _confidence_item()
+    ct.record_answer(it["id"], correct=True, confidence="confident")
+    reloaded = ct._load()[0]
+    assert reloaded["confidence_history"] == ["confident"]
+    assert reloaded["correct_history"] == [True]
+    # There is no mutation path: the history is append-only by construction.
+
+
+def test_confidence_never_reorders_scheduling():
+    """THE invariant: a user saying 'confident' on a weak concept must NEVER
+    cause that concept to be skipped or reordered. Scheduling is driven only
+    by the weakness model (observed mistakes -> concept_scores), never by the
+    confidence history stored on training items."""
+    from swarm_os.services import chess_mistakes as cm
+
+    hp = _seed_item(concept="hanging piece")
+    ks = _seed_item(concept="king safety")
+    # Make hanging piece the clearly weakest concept in the mistake model.
+    for _ in range(5):
+        cm.record_mistake(
+            "rnbqkbnr/pppp1ppp/2n5/4p2Q/4P3/8/PPPP1PPP/RNB1KBNR w KQkq - 1 2",
+            "h5f7", "Qxf7", None, None, "Blunder", concept="imported",
+        )
+    # Record MANY confident answers (including failures) on hanging piece.
+    for i in range(6):
+        ct.record_answer(hp["id"], correct=(i % 3 == 0), confidence="confident")
+    ct.record_answer(ks["id"], correct=True, confidence="guess")
+    # Force both items back to due (a failure resets due_at to +1h; we want to
+    # assert ORDERING of due items, not the cooldown).
+    with ct._LOCK:
+        items = ct._load()
+        for it in items:
+            it["due_at"] = 0
+        ct._save(items)
+    due = ct.training_due(limit=10)
+    concepts_served = [it["concept"] for it in due["due"]]
+    # hanging piece is still served FIRST despite the confident claims, because
+    # scheduling reads concept_scores (observed mistakes), not confidence.
+    assert concepts_served.index("hanging piece") < concepts_served.index("king safety")

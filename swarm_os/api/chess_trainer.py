@@ -317,6 +317,18 @@ async def trainer_training_progress() -> dict[str, Any]:
     return chess_training.concept_progress()
 
 
+@router.get("/review/training/calibration")
+async def trainer_training_calibration() -> dict[str, Any]:
+    """Confidence calibration (analytics only): how well self-reported
+    confidence (guess/idea/confident) matches ACTUAL solve rate, per concept
+    and stage. Overconfidence flags a concept where 'confident' solves are
+    rare. This NEVER drives scheduling — observed performance outranks
+    self-report."""
+    from ..services import chess_training
+
+    return chess_training.calibration_report()
+
+
 class SafetyCheckRequest(BaseModel):
     fen: str = Field(..., description="Current position FEN (side to move)")
     uci: str = Field(..., description="The move to check for safety")

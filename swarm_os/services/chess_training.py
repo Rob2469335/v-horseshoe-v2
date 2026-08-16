@@ -409,3 +409,75 @@ def reset_all() -> dict[str, Any]:
         if _STORE_FILE.exists():
             _STORE_FILE.unlink()
     return {"ok": True, "reset": True}
+
+
+# ---------------------------------------------------------------------------
+# Confidence calibration (observation layer only — NEVER drives scheduling)
+# ---------------------------------------------------------------------------
+# The design invariant: observed performance outranks self-reported confidence.
+# Confidence is ANALYZED, never used to skip or reorder training. A user saying
+# "I'm 100% sure" must never cause a genuinely-weak concept to be dropped.
+_MIN_CALIBRATION_SAMPLES = 5  # below this, a calibration estimate is unreliable
+
+_CONFIDENCE_LEVELS = ("guess", "idea", "confident")
+
+
+def calibration_report() -> dict[str, Any]:
+    """Compute confidence-vs-performance calibration from recorded history.
+
+    For each concept and stage, groups attempts by the confidence recorded
+    BEFORE the reveal, then computes the ACTUAL clean-solve rate per level.
+
+    Interpretation per (concept, stage, confidence):
+      well-calibrated  - high confidence -> high solve rate, low -> low
+      overconfident    - high confidence -> LOW solve rate ("I know it" but don't)
+      underconfident   - low confidence -> HIGH solve rate (know it but doubt)
+      insufficient     - fewer than _MIN_CALIBRATION_SAMPLES attempts
+
+    This is ANALYTICS ONLY. Scheduling stays driven by the weakness model
+    (frequency x severity x recurrence x trend)."""
+    with _LOCK:
+        items = _load()
+
+    # Aggregate: (concept, stage, confidence) -> {n, corrects}
+    agg: dict[tuple[str, str, str], dict[str, int]] = {}
+    for it in items:
+        concept = it.get("concept", "?")
+        stage = it.get("stage", "repair")
+        conf_hist = it.get("confidence_history", []) or []
+        corr_hist = it.get("correct_history", []) or []
+        for conf, correct in zip(conf_hist, corr_hist):
+            level = conf if conf in _CONFIDENCE_LEVELS else "idea"
+            key = (concept, stage, level)
+            cell = agg.setdefault(key, {"n": 0, "corrects": 0})
+            cell["n"] += 1
+            if correct:
+                cell["corrects"] += 1
+
+    # Build the report, concept -> stage -> level.
+    by_concept: dict[str, dict[str, Any]] = {}
+    for (concept, stage, level), cell in agg.items():
+        entry = by_concept.setdefault(concept, {"stages": {}})
+        stages = entry["stages"].setdefault(stage, {})
+        n = cell["n"]
+        rate = round(100.0 * cell["corrects"] / n, 1) if n else 0.0
+        if n < _MIN_CALIBRATION_SAMPLES:
+            interpretation = "insufficient"
+        elif level == "confident":
+            interpretation = "well-calibrated" if rate >= 80 else "overconfident"
+        elif level == "guess":
+            interpretation = "well-calibrated" if rate <= 40 else "underconfident"
+        else:  # idea
+            interpretation = "well-calibrated" if 40 <= rate <= 80 else ("overconfident" if rate < 40 else "underconfident")
+        stages[level] = {
+            "n": n,
+            "solve_rate": rate,
+            "interpretation": interpretation,
+        }
+
+    # Per-concept overconfidence flag (the signal that matters for coaching).
+    for concept, entry in by_concept.items():
+        all_levels = [cell for st in entry["stages"].values() for cell in st.values()]
+        flagged = any(c["interpretation"] == "overconfident" for c in all_levels)
+        entry["overconfident"] = flagged
+    return {"ok": True, "concepts": by_concept, "min_samples": _MIN_CALIBRATION_SAMPLES}
