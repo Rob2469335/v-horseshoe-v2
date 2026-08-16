@@ -418,6 +418,8 @@ export default function ChessTrainerPage() {
   const [trainingItem, setTrainingItem] = useState<TrainingItem | null>(null)
   const [trainingProgress, setTrainingProgress] = useState<TrainingProgress | null>(null)
   const [trainingAnswered, setTrainingAnswered] = useState<{ correct: boolean; mastered?: boolean; retired?: boolean } | null>(null)
+  const [trainingConfidence, setTrainingConfidence] = useState<"guess" | "idea" | "confident" | null>(null)
+  const [trainingCalibration, setTrainingCalibration] = useState<Record<string, any> | null>(null)
   const [trainingBuilding, setTrainingBuilding] = useState(false)
 
   const board = useMemo(() => parseFen(fen), [fen])
@@ -882,16 +884,19 @@ export default function ChessTrainerPage() {
 
   useEffect(() => { loadCoach() }, [loadCoach])
 
-  // Concept training: load the next due item + progress.
+  // Concept training: load the next due item + progress + calibration.
   const loadTraining = useCallback(async () => {
     try {
-      const [d, p] = await Promise.all([
+      const [d, p, c] = await Promise.all([
         (await fetch(`${backendUrl}/chess/trainer/review/training?limit=1`)).json(),
         (await fetch(`${backendUrl}/chess/trainer/review/training/progress`)).json(),
+        (await fetch(`${backendUrl}/chess/trainer/review/training/calibration`)).json(),
       ])
       setTrainingItem((d.due ?? [])[0] ?? null)
       setTrainingProgress(p)
+      setTrainingCalibration(c)
       setTrainingAnswered(null)
+      setTrainingConfidence(null) // confidence is chosen fresh before each reveal
     } catch { /* ignore */ }
   }, [backendUrl])
 
@@ -904,13 +909,16 @@ export default function ChessTrainerPage() {
     } catch { /* ignore */ } finally { setTrainingBuilding(false) }
   }
 
-  const answerTraining = async (correct: boolean, confidence: string | null) => {
+  const answerTraining = async (correct: boolean) => {
     if (!trainingItem?.id) return
+    // Invariant: confidence is chosen BEFORE the answer is submitted; it can't
+    // be added after the fact (a post-hoc 'confident' is worthless calibration).
+    if (!trainingConfidence) return
     try {
       const r = await (await fetch(`${backendUrl}/chess/trainer/review/training/answer`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ item_id: trainingItem.id, correct, confidence }),
+        body: JSON.stringify({ item_id: trainingItem.id, correct, confidence: trainingConfidence }),
       })).json()
       setTrainingAnswered({ correct, mastered: r.mastered, retired: r.retired })
       // Load the next item + refreshed progress.
@@ -1255,6 +1263,24 @@ export default function ChessTrainerPage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
+              {/* Confidence calibration summary (analytics only — never reorders
+                  training; observed performance outranks self-reported confidence). */}
+              {trainingCalibration && trainingCalibration.concepts && Object.keys(trainingCalibration.concepts).length > 0 && (
+                <div className="rounded-lg border border-white/10 bg-black/20 p-2 text-xs">
+                  {Object.entries(trainingCalibration.concepts)
+                    .filter(([, v]: any) => v.overconfident)
+                    .slice(0, 3)
+                    .map(([c]) => (
+                      <div key={c} className="text-amber-300/90">
+                        ⚠ You're often <span className="font-semibold">overconfident</span> on <span className="capitalize">{c}</span> — slow down and verify.
+                      </div>
+                    ))}
+                  {!Object.values(trainingCalibration.concepts).some((v: any) => v.overconfident) && (
+                    <div className="text-white/40">Confidence calibration is building as you train.</div>
+                  )}
+                </div>
+              )}
+
               {!trainingItem && (
                 <div className="flex flex-col gap-2">
                   <div className="text-xs text-white/40">
@@ -1291,22 +1317,34 @@ export default function ChessTrainerPage() {
                     </Badge>
                   </div>
                   <div className="mb-2 text-sm text-white/85">{trainingItem.prompt}</div>
-                  {trainingItem.solution_san && !trainingAnswered && (
-                    <div className="text-xs text-white/40">Solution: {trainingItem.solution_san} (click below when you have it)</div>
-                  )}
                   {trainingAnswered ? (
                     <div className={`mt-2 text-sm ${trainingAnswered.correct ? "text-emerald-300" : "text-amber-300"}`}>
                       {trainingAnswered.correct
                         ? trainingAnswered.mastered
-                          ? "✓ Correct — mastered! Loading the next item…"
-                          : "✓ Correct — box advanced. Loading the next item…"
-                        : "✗ Not quite — it will come back soon. Loading the next item…"}
+                          ? `✓ Correct — ${trainingItem.solution_san}, mastered! Loading the next item…`
+                          : `✓ Correct — ${trainingItem.solution_san}, box advanced. Loading the next item…`
+                        : `✗ Not quite — the answer was ${trainingItem.solution_san}. It will come back soon.`}
                     </div>
                   ) : (
-                    <div className="mt-2 flex gap-1.5">
-                      <Button size="sm" variant="outline" onClick={() => answerTraining(true, null)}>✓ I got it</Button>
-                      <Button size="sm" variant="outline" onClick={() => answerTraining(false, null)}>✗ Not quite</Button>
-                    </div>
+                    <>
+                      {/* Confidence is captured BEFORE the answer is revealed. */}
+                      <div className="mb-1 mt-1 text-[10px] text-white/40">How confident are you? (choose before you check)</div>
+                      <div className="mb-2 flex gap-1.5">
+                        {(["guess", "idea", "confident"] as const).map((c) => (
+                          <button
+                            key={c}
+                            onClick={() => setTrainingConfidence(c)}
+                            className={`rounded px-2 py-1 text-[11px] ${trainingConfidence === c ? "bg-emerald-400/30 text-emerald-200" : "bg-black/30 text-white/60 hover:text-white/90"}`}
+                          >
+                            {c === "guess" ? "🔴 Guessing" : c === "idea" ? "🟡 I have an idea" : "🟢 Confident"}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="mt-1 flex gap-1.5">
+                        <Button size="sm" variant="outline" onClick={() => answerTraining(true)} disabled={!trainingConfidence}>✓ I got it</Button>
+                        <Button size="sm" variant="outline" onClick={() => answerTraining(false)} disabled={!trainingConfidence}>✗ Not quite</Button>
+                      </div>
+                    </>
                   )}
                 </div>
               )}
