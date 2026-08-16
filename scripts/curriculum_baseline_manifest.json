@@ -1,11 +1,18 @@
 {
-  "curriculum_version": "A-322",
-  "description": "Immutable baseline snapshot of the PARTIAL-data curriculum (Version A). Frozen at 625/842 games. Used as the experimental control for the A/B comparison against the full-842 curriculum (Version B).",
+  "curriculum_version": "B-300 (production)",
+  "description": "Curriculum promotion record. Version A (322 items, partial 625-game data) is the IMMUTABLE experimental control; Version B (300 items, full 842-game data) is the production curriculum. The A/B comparison showed the diagnosis replicated (hanging piece #1 in both) while the training sample was substantially refreshed (1.9% position retention) — 'the diagnosis replicated; the training sample was substantially refreshed.'",
   "snapshot_files": {
     "curriculum_A_322.jsonl": {
       "path": "data/chess/baseline/curriculum_A_322.jsonl",
       "sha256": "8A08F220B1E3828561F4883B0BEF6083EB5F670814CADB7A18550271E16A752B",
-      "item_count": 322
+      "item_count": 322,
+      "role": "IMMUTABLE control (partial-data curriculum, 625/842 games)"
+    },
+    "curriculum_B_300.jsonl": {
+      "path": "data/chess/baseline/curriculum_B_300.jsonl",
+      "sha256": "54465CC96EDCEEDFE379E5A43F59D6507FE5D8ACB4E5E2CE1C92D3A96E0F35D7",
+      "item_count": 300,
+      "role": "PRODUCTION curriculum (full 842-game data)"
     },
     "mistakes_at_625.jsonl": {
       "path": "data/chess/baseline/mistakes_at_625.jsonl",
@@ -13,12 +20,26 @@
       "entries_in_capped_file": 500
     }
   },
+  "promotion": {
+    "version_a_items": 322,
+    "version_b_items": 300,
+    "original_items_retained": 6,
+    "items_removed": 316,
+    "new_items_added": 294,
+    "retention_pct": 1.9,
+    "hanging_piece_still_1": true,
+    "concept_rank_changes": {},
+    "diagnosis_conclusion": "Diagnosis REPLICATED across 625->842 games (hanging piece #1, ordering unchanged). No evidence of diagnostic overfitting.",
+    "sample_conclusion": "Training sample substantially refreshed (1.9% retention) — the 217 additional games replaced most teaching examples. Whether the new positions are BETTER is a separate question verified by curriculum-selection metrics, not by retention alone.",
+    "full_evidence_artifact": "data/chess/baseline/full_evidence_842games.json"
+  },
   "snapshot_context": {
     "games_done_at_snapshot": 625,
     "games_total": 842,
     "mistakes_queued_at_snapshot": 11636,
+    "final_mistakes_queued": 14561,
     "captured_at_utc": "2026-08-16T20:09:00Z",
     "note": "mistakes.jsonl is a 500-entry rolling window; mistakes_queued_at_snapshot is the durable job counter."
   },
-  "integrity_rule": "compare_curriculum.py verifies the on-disk baseline file SHA-256 against this manifest before reporting. A mismatch means the baseline was modified and the comparison is invalid."
+  "integrity_rule": "compare_curriculum.py verifies the on-disk baseline file SHA-256 against this manifest before reporting. A mismatch means the baseline was modified and the comparison is invalid. Version A must never be modified."
 }

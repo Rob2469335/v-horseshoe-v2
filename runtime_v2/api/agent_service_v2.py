@@ -32,6 +32,7 @@ def _append_diary_line(diary_path, record: dict) -> None:
     """Append one diary record (runs inside asyncio.to_thread — never on the
     event loop)."""
     import json as _json
+
     with open(diary_path, "a", encoding="utf-8") as f:
         f.write(_json.dumps(record, ensure_ascii=False) + "\n")
 
@@ -380,6 +381,16 @@ class _CallState:
     # genome before the turn loop starts (see _step_agent_stream_inner). Listed in
     # _CHECKPOINT_STATE_FIELDS so it is preserved across resume checkpoints.
     genome_id: str = ""
+    # Design A pre-action authorization: pending_ids whose approval was already
+    # resolved THIS run (consumed via execute_approved, or denied via
+    # deny_pending). The CLI feeds the approve/deny answer back as an
+    # Observation that REMAINS in history, so without this set the deterministic
+    # resolution block re-resolves the same pending on every turn — a consumed
+    # pending re-denies ("expired or already used") on each loop until MAX_TURNS.
+    # One-shot resolution is required. Listed in _CHECKPOINT_STATE_FIELDS so a
+    # resume cannot re-resolve (the pending is consumed; re-resolving would
+    # replay the DENY loop against the restored history).
+    _resolved_approvals: set = field(default_factory=set)
 
 
 from runtime_v2.api._agent_config import (
@@ -639,6 +650,7 @@ class AgentServiceV2:
         "_tool_successes",
         "_turn",
         "genome_id",
+        "_resolved_approvals",
     )
 
     def _state_to_dict(self, state: _CallState) -> dict:
@@ -658,6 +670,8 @@ class AgentServiceV2:
                 continue
             v = d[f]
             if f == "read_paths" and isinstance(v, list):
+                v = set(v)
+            if f == "_resolved_approvals" and isinstance(v, list):
                 v = set(v)
             try:
                 setattr(state, f, v)
@@ -800,9 +814,7 @@ class AgentServiceV2:
                     "error": str(error)[:300],
                     "action": action,
                 }
-                await asyncio.to_thread(
-                    _append_diary_line, diary_path, record
-                )
+                await asyncio.to_thread(_append_diary_line, diary_path, record)
             except Exception as diary_err:
                 log.debug("[%s] diary write skipped: %s", agent_id, diary_err)
         except Exception as exc:
@@ -2365,15 +2377,18 @@ class AgentServiceV2:
             # LLM decide whether an approval executes. The stored payload is
             # dispatched via execute_approved (digest-trust-anchored).
             approval = _approval_from_history(trimmed_messages)
-            if approval is not None:
+            resolve_now = approval is not None
+            if resolve_now:
                 pending_id = approval["pending_id"]
-                if approval["approved"]:
+                already = pending_id in state._resolved_approvals
+                if approval["approved"] and not already:
                     from runtime_v2.services.tool_executor import (
                         execute_approved,
                     )
 
                     approved_result = await execute_approved(pending_id)
-                else:
+                    state._resolved_approvals.add(pending_id)
+                elif not approval["approved"]:
                     from runtime_v2.services.tool_executor import deny_pending
 
                     approved_result = {
@@ -2381,7 +2396,22 @@ class AgentServiceV2:
                         "error": "Approval DENIED by user.",
                         "authorization": "DENY",
                     }
-                    deny_pending(pending_id)
+                    if deny_pending(pending_id):
+                        state._resolved_approvals.add(pending_id)
+                else:
+                    # One-shot resolution (Design A): the CLI feeds the approve/
+                    # deny answer back as an Observation that REMAINS in history.
+                    # Re-resolving a pending consumed earlier this run re-runs
+                    # execute_approved on nothing and re-denies ("expired or
+                    # already used") on every turn until MAX_TURNS — the approval
+                    # replay bug. Skip and fall through to the normal decision.
+                    log.debug(
+                        "[%s] approval %s... already resolved this run; skipping.",
+                        agent_id,
+                        pending_id[:8],
+                    )
+                    resolve_now = False
+            if resolve_now:
                 try:
                     self._record_event(
                         "authorization",
@@ -2908,7 +2938,10 @@ class AgentServiceV2:
             # the tool did NOT execute. Yield an approval_request event carrying
             # the pending_id so the CLI can render an approve/deny prompt; pause
             # the turn (the CLI re-calls with the Observation answer).
-            if state.tool_result and state.tool_result.get("status") == "confirmation_required":
+            if (
+                state.tool_result
+                and state.tool_result.get("status") == "confirmation_required"
+            ):
                 yield {
                     "agent_id": agent_id,
                     "type": "approval_request",

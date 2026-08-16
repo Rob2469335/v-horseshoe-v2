@@ -10,6 +10,7 @@ Covers the security invariants the user specified:
   - read-only agent ops -> ALLOW (no approval)
   - existing unconfirmed email_send behavior preserved
 """
+
 from __future__ import annotations
 
 import time
@@ -68,10 +69,13 @@ async def test_git_operation_cannot_smuggle_arguments():
     orig = None
     try:
         import asyncio
+
         orig = asyncio.create_subprocess_exec
+
         async def _spy(*args, **kwargs):
             spawned.append(args)
             raise RuntimeError("git should not spawn for this input")
+
         asyncio.create_subprocess_exec = _spy  # type: ignore[assignment]
         result = await te_run("git", {"operation": "diff; rm -rf /"})
         assert result.get("ok") is False
@@ -80,12 +84,21 @@ async def test_git_operation_cannot_smuggle_arguments():
         assert spawned == [], f"git spawned for hostile input: {spawned}"
         # A VALID op must spawn EXACTLY the hardcoded argv — never caller text.
         spawned.clear()
+
         def _capture(*args, **kwargs):
             spawned.append(args)
             raise RuntimeError("capture only")
+
         asyncio.create_subprocess_exec = _capture  # type: ignore[assignment]
         try:
-            await te_run("git", {"operation": "diff", "path": "../../etc/passwd", "ref": "HEAD; echo pwned"})
+            await te_run(
+                "git",
+                {
+                    "operation": "diff",
+                    "path": "../../etc/passwd",
+                    "ref": "HEAD; echo pwned",
+                },
+            )
         except RuntimeError:
             pass
         assert spawned, "git diff should spawn"
@@ -94,7 +107,6 @@ async def test_git_operation_cannot_smuggle_arguments():
     finally:
         if orig is not None:
             asyncio.create_subprocess_exec = orig  # type: ignore[assignment]
-
 
 
 def test_side_effecting_ops_require_confirm():
@@ -180,7 +192,9 @@ async def test_wrong_payload_cannot_reuse_pending(monkeypatch, tmp_path):
     import runtime_v2.services.tool_executor as te
 
     monkeypatch.setattr(te, "_ROOT", tmp_path)
-    first = await run("filesystem", {"operation": "write", "path": "a.txt", "content": "x"})
+    first = await run(
+        "filesystem", {"operation": "write", "path": "a.txt", "content": "x"}
+    )
     assert first.get("status") == "confirmation_required"
     pending_id = first["pending_id"]
 
@@ -276,4 +290,96 @@ async def test_trace_hook_wired_through_dispatch(tmp_path):
         )
     finally:
         monkeypatch.undo()
-    assert any(t[0] == "filesystem_read" for t in traces), f"trace_hook not invoked, got {traces}"
+    assert any(t[0] == "filesystem_read" for t in traces), (
+        f"trace_hook not invoked, got {traces}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_approved_pending_resolves_exactly_once_across_turns(monkeypatch):
+    """An approved pending action must resolve at most ONCE per run, even though
+    the CLI's approval Observation stays in the message history for every turn.
+
+    Pre-fix, the loop's deterministic resolution block re-ran execute_approved
+    on the SAME pending each turn: the first turn consumed it (web_fetch ran),
+    then every remaining turn re-denied with "expired or already used", the
+    tool result was swallowed by the resolution path's `continue`, and the run
+    burned out at MAX_TURNS with NO final ever produced.
+    """
+    import json
+
+    import runtime_v2.services.tool_executor as _te
+    from runtime_v2.api.agent_service_v2 import AgentServiceV2
+
+    monkeypatch.setattr("runtime_v2.api.agent_service_v2.ANALYSIS_AGENTS", ())
+
+    pending = ar.get_registry().create(
+        agent_id="researcher",
+        turn=0,
+        tool="web_fetch",
+        action="fetch",
+        payload={"url": "https://example.com"},
+    )
+    pending_id = pending["pending_id"]
+
+    message_history = [
+        {
+            "role": "user",
+            "content": (
+                "Observation: "
+                + json.dumps({"approval": {"pending_id": pending_id, "approved": True}})
+            ),
+        }
+    ]
+
+    dispatched: list[tuple[str, dict]] = []
+
+    async def counting_dispatch(tool_name, payload, *, trace_hook=None):
+        dispatched.append((tool_name, payload))
+        return {"ok": True, "result": "fetched"}
+
+    calls = {"count": 0}
+
+    async def decide(
+        agent_id,
+        model,
+        messages,
+        allowed_tools,
+        prompt,
+        turn,
+        state,
+        research_discharged,
+    ):
+        # The fake LLM: the approval turn is deterministic in-code (never here),
+        # so this only ever produces the follow-up final after approval.
+        calls["count"] += 1
+        assert turn >= 1, f"_get_decision called on the approval turn: turn={turn}"
+        return {"action": "final", "response": "Fetched page summarized."}
+
+    monkeypatch.setattr(_te, "_dispatch", counting_dispatch)
+
+    svc = AgentServiceV2(orchestrator=None)
+    svc._get_decision = decide
+
+    chunks = []
+    async for chunk in svc.step_agent_stream("researcher", "", history=message_history):
+        chunks.append(chunk)
+
+    approvals = [c for c in chunks if c.get("type") == "approval_result"]
+    assert len(approvals) == 1, (
+        f"expected exactly one approval_result, got {len(approvals)} ({[c['type'] for c in chunks]})"
+    )
+    assert approvals[0]["result"].get("ok") is True, approvals[0]["result"]
+
+    assert len(dispatched) == 1, (
+        f"web_fetch dispatched {len(dispatched)} times: {dispatched}"
+    )
+    assert dispatched[0][0] == "web_fetch", dispatched[0]
+
+    assert not any(
+        "expired or already used" in str(c) for c in chunks if isinstance(c, dict)
+    ), f"D ENY repeat leak, chunks: {[c.get('type') for c in chunks]}"
+
+    finals = [c for c in chunks if c.get("type") == "final"]
+    assert finals, f"no final produced, chunks: {[c.get('type') for c in chunks]}"
+    assert calls["count"] >= 1, "follow-up _get_decision never ran after approval"
