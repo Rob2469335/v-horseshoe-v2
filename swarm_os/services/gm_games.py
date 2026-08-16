@@ -171,18 +171,9 @@ CURATED: list[dict[str, Any]] = [
         "tag": "carlsen-gukesh-2026-norway",
         "white": "Carlsen",
         "black": "Gukesh",
-        "name": "Carlsen vs Gukesh — Norway Chess 2026 (beating the World Champion)",
+        "name": "Carlsen vs Gukesh — Norway Chess 2026 (Carlsen beats the World Champion)",
         "year": 2026,
         "date": "2026.06.05",
-    },
-    {
-        "player": "carlsen",
-        "tag": "carlsen-caruana-2026",
-        "white": "Caruana",
-        "black": "Carlsen",
-        "name": "Caruana vs Carlsen — 2026 (Carlsen wins; he'd take the Freestyle WC later that year)",
-        "year": 2026,
-        "date": "2026.03.10",
     },
 ]
 
