@@ -122,6 +122,17 @@ async def trainer_health() -> dict[str, Any]:
     }
 
 
+@router.get("/tips")
+async def trainer_tips(count: int = 10, seed: int | None = None) -> dict[str, Any]:
+    """Ten chess tips drawn from the 100-book chess library. Rotates per load
+    (seeded/random) so each page refresh surfaces fresh, book-grounded advice.
+    Fail-closed: curated tips always return, even if the manifest is missing."""
+    from ..services.books_service import get_books_service
+
+    count = max(1, min(int(count), 20))
+    return get_books_service().get_chess_tips(count=count, seed=seed)
+
+
 @router.post("/evaluate")
 async def trainer_evaluate(req: EvaluateMoveRequest) -> dict[str, Any]:
     """Evaluate the learner's move. Runs the engine (on a worker thread) so it

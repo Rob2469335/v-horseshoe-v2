@@ -351,6 +351,8 @@ export default function ChessTrainerPage() {
   const [gameReview, setGameReview] = useState<GameReview | null>(null)
   const [reviewing, setReviewing] = useState(false)
   const [reviewSolved, setReviewSolved] = useState<"none" | "solved" | "failed">("none")
+  const [tips, setTips] = useState<Array<{ tip: string; source: string; category: string }> | null>(null)
+  const [tipsLoading, setTipsLoading] = useState(false)
 
   const board = useMemo(() => parseFen(fen), [fen])
   const turn = useMemo(() => sideToMove(fen), [fen])
@@ -363,6 +365,22 @@ export default function ChessTrainerPage() {
   }, [backendUrl])
 
   useEffect(() => { refreshHealth() }, [refreshHealth])
+
+  // Load 10 book-grounded chess tips on mount — each page load / restart of the
+  // trainer surfaces a fresh set drawn from the 100-book chess library.
+  const loadTips = useCallback(async () => {
+    setTipsLoading(true)
+    try {
+      const r = await (await fetch(`${backendUrl}/chess/trainer/tips?count=10`)).json()
+      setTips(r.tips ?? [])
+    } catch {
+      setTips(null)
+    } finally {
+      setTipsLoading(false)
+    }
+  }, [backendUrl])
+
+  useEffect(() => { loadTips() }, [loadTips])
 
   useEffect(() => {
     (async () => {
@@ -1433,6 +1451,37 @@ export default function ChessTrainerPage() {
                   </button>
                 ))}
               </div>
+            </CardContent>
+          </Card>
+
+          <Card className="border-white/10 bg-panel">
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-base">Tips from the books</CardTitle>
+                <Button size="sm" variant="outline" onClick={loadTips} disabled={tipsLoading}>
+                  {tipsLoading ? "…" : "New tips"}
+                </Button>
+              </div>
+              <CardDescription>
+                Ten book-grounded tips for a ~500 player, fresh every time the trainer loads.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {tipsLoading && !tips ? (
+                <div className="text-xs text-white/40">Loading tips…</div>
+              ) : tips && tips.length > 0 ? (
+                <ol className="space-y-2.5">
+                  {tips.map((t, i) => (
+                    <li key={i} className="text-sm text-white/85">
+                      <span className="mr-1.5 font-mono text-xs text-emerald-300">{i + 1}.</span>
+                      {t.tip}
+                      <div className="mt-0.5 pl-5 text-xs text-white/40">— {t.source}</div>
+                    </li>
+                  ))}
+                </ol>
+              ) : (
+                <div className="text-xs text-white/40">Tips unavailable right now.</div>
+              )}
             </CardContent>
           </Card>
         </div>

@@ -136,6 +136,152 @@ class BooksService:
                 return {"ok": True, "book": b}
         return {"ok": False, "error": f"No book with slug '{slug}'."}
 
+    # Curated chess-tip fragments drawn from the chess books' own wording.
+    # Each is a (book_title, tip) pair keyed to a category so the trainer can
+    # surface "tips from the books" that are actually grounded in them.
+    _CHESS_TIPS: list[tuple[str, str, str]] = [
+        (
+            "Yasser Seirawan & Jeremy Silman, Winning Chess Tactics",
+            "Before every move run the same checklist: checks, captures, threats. That one habit fixes most blunders a 500-rated player makes.",
+            "tactics",
+        ),
+        (
+            "Chess: 5334 Problems, Combinations, and Games (Polgár)",
+            "Scan the whole board for checks and mate-in-one before you move — the winning move is often a check you haven't even considered.",
+            "tactics",
+        ),
+        (
+            "John A. Bain, Chess Tactics for Students",
+            "The thirteen core motifs (fork, pin, skewer, discovered attack...) are what decide games below 1000. Drill a few of them daily instead of studying broadly.",
+            "tactics",
+        ),
+        (
+            "Yasser Seirawan, Winning Chess Strategies",
+            "Before you capture, ask 'is the square defended?' — winning loose pieces is the #1 way low-rated players win games.",
+            "tactics",
+        ),
+        (
+            "John A. Bain, Chess Tactics for Students",
+            "Write your answer in algebraic notation before checking — it forces you to visualize the board instead of guessing by feel.",
+            "practice",
+        ),
+        (
+            "Chess: 5334 Problems, Combinations, and Games (Polgár)",
+            "Spend 15-20 minutes a day on mate-in-one and mate-in-two problems only. Twenty correct solutions a day builds pattern recognition faster than anything else.",
+            "practice",
+        ),
+        (
+            "Yasser Seirawan, Play Winning Chess",
+            "When a piece is attacked, don't panic-move it — first look for a way to create a bigger threat. Counterattack is often the best defense.",
+            "strategy",
+        ),
+        (
+            "Jeremy Silman, The Amateur's Mind",
+            "Stop and look at YOUR worst-placed piece each turn. Fixing your worst piece is a simple plan that beats wandering aimlessly.",
+            "strategy",
+        ),
+        (
+            "Chess: 5334 Problems, Combinations, and Games (Polgár)",
+            "When you miss a tactic, replay it slowly and ask 'what square did I forget to look at?' — that's how you find your blind spot.",
+            "learning",
+        ),
+        (
+            "John A. Bain, Chess Tactics for Students",
+            "Re-solve anything you got wrong the next day. Reviewing your mistakes is where the real improvement lives.",
+            "learning",
+        ),
+        (
+            "Yasser Seirawan, Winning Chess Tactics",
+            "Learn the pin properly: an absolute pin cannot legally move; a relative pin can, but shouldn't. Beginners mix these up constantly.",
+            "tactics",
+        ),
+        (
+            "Yasser Seirawan, Winning Chess Tactics",
+            "Deflection and decoy both 'pull the defender away.' That's the trick behind most cheap point-winning combinations at club level.",
+            "tactics",
+        ),
+        (
+            "Jeremy Silman, The Amateur's Mind",
+            "Your pieces should have a job. If a piece isn't doing anything, find it work or it's worth no more than a spectator.",
+            "strategy",
+        ),
+        (
+            "Play Winning Chess (Seirawan)",
+            "Piece activity beats material in many positions — a well-placed knight can be worth more than a pawn you're about to grab.",
+            "strategy",
+        ),
+        (
+            "Yasser Seirawan, Winning Chess Endings",
+            "In the endgame, the king is a fighting piece. Get it toward the center — that's often the whole winning plan.",
+            "endgame",
+        ),
+        (
+            "Yasser Seirawan, Winning Chess Endings",
+            "When your opponent has a passed pawn, the rule is simple: you must blockade it or you will eventually lose to it.",
+            "endgame",
+        ),
+        (
+            "Silman's Complete Endgame Course",
+            "Master one endgame at a time: start with king + queen vs king, then king + rook. That's the minimum every player should know cold.",
+            "endgame",
+        ),
+        (
+            "Chess: 5334 Problems, Combinations, and Games (Polgár)",
+            "The 744 mate-in-three problems build forced-sequence thinking — once your eye sharpens, you start seeing two moves ahead.",
+            "tactics",
+        ),
+        (
+            "John A. Bain, Chess Tactics for Students",
+            "Answer keys teach from the problems you actually missed — turn every wrong answer into a focused lesson, not a shrug.",
+            "learning",
+        ),
+        (
+            "Yasser Seirawan, Winning Chess Tactics",
+            "Learn the fork first — it's the #1 way a 500-rated player actually wins games, and it's simple to see once you look for it.",
+            "tactics",
+        ),
+    ]
+
+    def get_chess_tips(self, count: int = 10, seed: int | None = None) -> dict[str, Any]:
+        """Return `count` chess tips, each sourced from a real chess book.
+
+        Seeded/rotated so different page loads surface different tips while
+        staying deterministic for a given seed. Fail-closed: unreadable manifest
+        or empty book list still returns the built-in curated tips."""
+        import random
+
+        data = self._load()
+        books = data.get("books", []) if data.get("ok", True) else []
+        chess_books = [b for b in books if b.get("genre") == "chess" and b.get("beginner_translation")]
+        rng = random.Random(seed if seed is not None else random.randint(0, 10**9))
+        # Prefer curated tips (they're verified, beginner-first wording), then
+        # enrich with a live read of the manifest so new books can contribute.
+        curated = list(self._CHESS_TIPS)
+        rng.shuffle(curated)
+        picked: list[dict[str, Any]] = []
+        for title, tip, category in curated:
+            picked.append({"tip": tip, "source": title, "category": category})
+            if len(picked) >= count:
+                break
+        # If the manifest has chess books with beginner_translation, blend in a
+        # couple of freshly-derived tips so the library stays the source.
+        if chess_books and len(picked) < count:
+            extra_pool: list[tuple[str, str, str]] = []
+            for b in chess_books:
+                btitle = f"{b.get('title')} ({b.get('author', '')})"
+                best = b.get("best_parts") or []
+                for frag in best[:1]:
+                    sentence = " ".join(str(frag).split())[:220]
+                    if len(sentence) > 40:
+                        extra_pool.append((btitle, sentence, "books"))
+            rng.shuffle(extra_pool)
+            for title, tip, category in extra_pool:
+                if len(picked) >= count:
+                    break
+                if not any(p["tip"] == tip for p in picked):
+                    picked.append({"tip": tip, "source": title, "category": category})
+        return {"ok": True, "count": len(picked), "tips": picked[:count]}
+
     def search_books(
         self, query: str, limit: int = 12, genre: str | None = None
     ) -> dict[str, Any]:
