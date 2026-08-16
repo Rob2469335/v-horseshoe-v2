@@ -269,6 +269,11 @@ type GmStudy = {
   gm_move_san?: string
   gm_move_uci?: string
   explanation?: string
+  is_key_moment?: boolean
+  critical_type?: string[]
+  difficulty?: number
+  think_required?: boolean
+  hint?: string
   degraded?: boolean
   result?: string
   error?: string
@@ -377,6 +382,13 @@ export default function ChessTrainerPage() {
     concept: string; count: number; share_pct: number; severity: Record<string, number>
     examples: Array<{ played_san?: string; best_san?: string; classification?: string }>
   }> | null>(null)
+  const [coach, setCoach] = useState<{
+    ok: boolean; total: number; skills: Record<string, { count: number; share_pct: number; bar: number }>
+    top_concepts?: Array<[string, number]>; focus_skill?: string; focus?: string
+  } | null>(null)
+  const [gmTrainMode, setGmTrainMode] = useState(true) // Train (active recall) vs Explore (passive)
+  const [gmRevealed, setGmRevealed] = useState(false)  // has the current think position been revealed?
+  const [gmConfidence, setGmConfidence] = useState<"guess" | "idea" | "confident" | null>(null)
 
   const board = useMemo(() => parseFen(fen), [fen])
   const turn = useMemo(() => sideToMove(fen), [fen])
@@ -750,6 +762,8 @@ export default function ChessTrainerPage() {
 
   const startGm = async (gid: string) => {
     setGmStudy(null)
+    setGmRevealed(false)
+    setGmConfidence(null)
     try {
       // STUDY MODE: open the game at move 0 — the first GM move is shown + explained.
       const s = await (await fetch(`${backendUrl}/chess/trainer/gm-games/study`, {
@@ -768,10 +782,14 @@ export default function ChessTrainerPage() {
   }
 
   // STUDY MODE: advance one ply — show the next GM move + its explanation.
+  // In TRAIN mode a think position is held (not revealed) until the learner
+  // commits a confidence + Reveal; in EXPLORE mode it flows straight through.
   const gmNext = async () => {
     if (!gmStudy?.game_id || gmStudy.ply == null || gmStudy.finished) return
     try {
       setGmStudy((prev) => (prev ? { ...prev, loading: true } : prev))
+      setGmRevealed(false)
+      setGmConfidence(null)
       const nextPly = gmStudy.ply + 1
       const s = await (await fetch(`${backendUrl}/chess/trainer/gm-games/study`, {
         method: "POST",
@@ -781,10 +799,25 @@ export default function ChessTrainerPage() {
       if (s.ok && s.fen_before) {
         setGmStudy(s)
         setFen(s.fen_before)
-        // Show the move on the board (last move highlight).
-        if (s.gm_move_uci) setLastMove({ from: s.gm_move_uci.slice(0, 2), to: s.gm_move_uci.slice(2, 4) })
+        // In EXPLORE mode (or non-think moves) reveal immediately; in TRAIN
+        // mode a think position waits for the learner.
+        const shouldHold = gmTrainMode && s.think_required
+        if (!shouldHold) {
+          if (s.gm_move_uci) setLastMove({ from: s.gm_move_uci.slice(0, 2), to: s.gm_move_uci.slice(2, 4) })
+          setGmRevealed(true)
+        } else {
+          setLastMove(null)
+          setGmRevealed(false)
+        }
       }
     } catch { /* ignore */ }
+  }
+
+  // Reveal the held think-position move.
+  const gmReveal = () => {
+    if (!gmStudy?.gm_move_uci) return
+    setLastMove({ from: gmStudy.gm_move_uci.slice(0, 2), to: gmStudy.gm_move_uci.slice(2, 4) })
+    setGmRevealed(true)
   }
   gmStudyRef.current = gmStudy
 
@@ -809,6 +842,15 @@ export default function ChessTrainerPage() {
   }, [backendUrl])
 
   useEffect(() => { loadTopMistakes() }, [loadTopMistakes])
+
+  const loadCoach = useCallback(async () => {
+    try {
+      const c = await (await fetch(`${backendUrl}/chess/trainer/review/coach`)).json()
+      setCoach(c)
+    } catch { setCoach(null) }
+  }, [backendUrl])
+
+  useEffect(() => { loadCoach() }, [loadCoach])
 
   const [analytics, setAnalytics] = useState<Analytics | null>(null)
   const loadAnalytics = useCallback(async () => {
@@ -1076,6 +1118,55 @@ export default function ChessTrainerPage() {
                     </li>
                   ))}
                 </ol>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="border-white/10 bg-panel">
+            <CardHeader>
+              <CardTitle className="text-base">Your coach profile</CardTitle>
+              <CardDescription>
+                Built from your recurring mistake types — where you lose games, ranked as
+                skill weaknesses. Your trainer's personal curriculum.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {!coach || coach.total === 0 ? (
+                <div className="text-xs text-white/40">Analyze games to build your coach profile.</div>
+              ) : (
+                <>
+                  {coach.focus && (
+                    <div className="rounded-lg border border-emerald-400/30 bg-emerald-950/20 p-3">
+                      <div className="mb-0.5 text-xs font-semibold uppercase tracking-wide text-white/40">
+                        Today's focus · {coach.focus_skill}
+                      </div>
+                      <div className="text-sm text-emerald-100/90">{coach.focus}</div>
+                    </div>
+                  )}
+                  {coach.skills && Object.entries(coach.skills).length > 0 && (
+                    <div className="space-y-2">
+                      {Object.entries(coach.skills).map(([skill, v]) => (
+                        <div key={skill}>
+                          <div className="mb-0.5 flex justify-between text-xs">
+                            <span className="capitalize text-white/70">{skill}</span>
+                            <span className="text-white/50">{v.share_pct}%</span>
+                          </div>
+                          <div className="h-1.5 overflow-hidden rounded-full bg-black/40">
+                            <div
+                              className={`h-full rounded-full ${(v.bar ?? 0) >= 80 ? "bg-red-400" : (v.bar ?? 0) >= 50 ? "bg-amber-400" : "bg-emerald-400"}`}
+                              style={{ width: `${Math.max(4, Math.min(100, v.bar ?? 0))}%` }}
+                            />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {coach.top_concepts && coach.top_concepts.length > 0 && (
+                    <div className="mt-2 text-xs text-white/50">
+                      Top error: <span className="text-white/80">{coach.top_concepts[0][0]}</span> ({coach.top_concepts[0][1]}×)
+                    </div>
+                  )}
+                </>
               )}
             </CardContent>
           </Card>
@@ -1379,11 +1470,27 @@ export default function ChessTrainerPage() {
 
           <Card className="border-white/10 bg-panel">
             <CardHeader>
-              <CardTitle className="text-base">Play like the greats</CardTitle>
+              <div className="flex items-center justify-between gap-2">
+                <CardTitle className="text-base">Play like the greats</CardTitle>
+                <div className="flex overflow-hidden rounded-md border border-white/10">
+                  <button
+                    onClick={() => setGmTrainMode(true)}
+                    className={`px-2 py-1 text-[11px] ${gmTrainMode ? "bg-emerald-400/20 text-emerald-300" : "text-white/50 hover:text-white/80"}`}
+                  >
+                    Train
+                  </button>
+                  <button
+                    onClick={() => setGmTrainMode(false)}
+                    className={`px-2 py-1 text-[11px] ${!gmTrainMode ? "bg-emerald-400/20 text-emerald-300" : "text-white/50 hover:text-white/80"}`}
+                  >
+                    Explore
+                  </button>
+                </div>
+              </div>
               <CardDescription>
-                Study famous Fischer + Carlsen games move-by-move. Each move is revealed and
-                explained — why they played it, what it threatens, and what it sets up. You
-                understand the game, you don't guess it.
+                {gmTrainMode
+                  ? "Train mode: at key moments you think before the GM's move is revealed — then the 'why' lands harder."
+                  : "Explore mode: smooth playback, every move explained."}
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
@@ -1404,20 +1511,59 @@ export default function ChessTrainerPage() {
                 <div className="rounded-lg border border-emerald-400/20 bg-emerald-950/10 p-3">
                   <div className="mb-1 text-sm font-semibold text-emerald-200">{gmStudy.name}</div>
                   <div className="mb-2 text-xs text-white/60">
-                    Move {gmStudy.move_number} · {gmStudy.side_to_move} to move — the GM played
-                    <span className="ml-1 font-mono font-semibold text-emerald-300">{gmStudy.gm_move_san}</span>
+                    Move {gmStudy.move_number} · {gmStudy.side_to_move} to move
                     {gmStudy.total_plies != null && gmStudy.ply != null ? ` · ${gmStudy.ply + 1}/${gmStudy.total_plies} plies` : ""}
+                    {gmStudy.is_key_moment && gmTrainMode && !gmRevealed && (
+                      <span className="ml-2 rounded bg-amber-400/20 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300">
+                        KEY MOMENT
+                      </span>
+                    )}
                   </div>
-                  {gmStudy.explanation && (
-                    <div className="rounded-lg border border-violet-400/20 bg-violet-950/10 p-2 text-xs leading-relaxed text-violet-100/90">
-                      <div className="mb-1 font-semibold uppercase tracking-wide text-white/40">
-                        Why {gmStudy.gm_move_san} — what it threatens, what it sets up
+
+                  {/* THINK POSITION (Train mode, not yet revealed): the move is hidden. */}
+                  {gmTrainMode && gmStudy.think_required && !gmRevealed ? (
+                    <div className="rounded-lg border border-amber-400/30 bg-amber-950/10 p-3">
+                      <div className="mb-1 text-sm font-semibold text-amber-200">Your move — what would you play?</div>
+                      {gmStudy.hint && <div className="mb-2 text-xs text-amber-100/80">{gmStudy.hint}</div>}
+                      <div className="mb-2 text-[10px] text-white/40">
+                        Think on the board. Then say how confident you feel and reveal the GM's move.
                       </div>
-                      <pre className="whitespace-pre-wrap">{gmStudy.explanation}</pre>
-                      {gmStudy.degraded && (
-                        <div className="mt-1 text-[10px] text-white/40">(deterministic engine explanation — LLM unavailable)</div>
-                      )}
+                      <div className="mb-2 flex gap-1.5">
+                        {(["guess", "idea", "confident"] as const).map((c) => (
+                          <button
+                            key={c}
+                            onClick={() => setGmConfidence(c)}
+                            className={`rounded px-2 py-1 text-[11px] ${gmConfidence === c ? "bg-emerald-400/30 text-emerald-200" : "bg-black/30 text-white/60 hover:text-white/90"}`}
+                          >
+                            {c === "guess" ? "🔴 Guessing" : c === "idea" ? "🟡 I have an idea" : "🟢 Confident"}
+                          </button>
+                        ))}
+                      </div>
+                      <Button size="sm" onClick={gmReveal}>Reveal the GM's move</Button>
                     </div>
+                  ) : (
+                    <>
+                      {/* REVEALED: the GM move + explanation. */}
+                      <div className="mb-1 text-sm text-white/85">
+                        The GM played <span className="font-mono font-semibold text-emerald-300">{gmStudy.gm_move_san}</span>
+                        {gmConfidence && gmStudy.think_required && (
+                          <span className="ml-2 text-[11px] text-white/40">
+                            (you were {gmConfidence === "confident" ? "confident" : gmConfidence === "idea" ? "unsure" : "guessing"})
+                          </span>
+                        )}
+                      </div>
+                      {gmStudy.explanation && (
+                        <div className="rounded-lg border border-violet-400/20 bg-violet-950/10 p-2 text-xs leading-relaxed text-violet-100/90">
+                          <div className="mb-1 font-semibold uppercase tracking-wide text-white/40">
+                            Why {gmStudy.gm_move_san} — what it threatens, what it sets up
+                          </div>
+                          <pre className="whitespace-pre-wrap">{gmStudy.explanation}</pre>
+                          {gmStudy.degraded && (
+                            <div className="mt-1 text-[10px] text-white/40">(deterministic engine explanation — LLM unavailable)</div>
+                          )}
+                        </div>
+                      )}
+                    </>
                   )}
                   <Button size="sm" className="mt-3" onClick={gmNext} disabled={gmStudy.loading}>
                     {gmStudy.loading ? "…" : "Next move →"}
