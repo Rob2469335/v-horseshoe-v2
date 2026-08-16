@@ -103,7 +103,13 @@ def _get_engine():
     if not STOCKFISH_PATH.exists():
         log.warning("stockfish binary missing at %s", STOCKFISH_PATH)
         return None
-    with _ENGINE_LOCK:
+    # Timeout the lock: a thread that died mid-search (e.g. an asyncio.to_thread
+    # cancelled by a backend restart) would otherwise hold _ENGINE_LOCK forever
+    # and wedge every future eval. With a bounded acquire we fail open instead.
+    if not _ENGINE_LOCK.acquire(timeout=10):
+        log.warning("engine init lock timed out — skipping engine init")
+        return None
+    try:
         if _persistent_engine is not None:
             return _persistent_engine
         try:
@@ -111,6 +117,8 @@ def _get_engine():
         except Exception as exc:
             log.warning("engine init failed: %s", exc)
             _persistent_engine = None
+    finally:
+        _ENGINE_LOCK.release()
     return _persistent_engine
 
 
@@ -181,11 +189,19 @@ def _best_move_and_cp(board) -> tuple[str | None, float, list[str]]:
         if engine is None:
             return None, 0.0, []
 
-        with _ENGINE_LOCK:
+        # Timeout the lock: a thread that died mid-search (cancelled
+        # asyncio.to_thread from a restart/abort) would hold _ENGINE_LOCK
+        # forever and wedge every later eval. Bounded acquire fails open.
+        if not _ENGINE_LOCK.acquire(timeout=10):
+            log.warning("engine lock timed out — skipping eval")
+            return None, 0.0, []
+        try:
             # Time-bounded (~800ms): bounded latency (a fixed depth can take
             # wildly different wall time on tactical positions). The engine's
             # own background thread services the request — no extra executor.
             info = _analyse(board, chess.engine.Limit(time=0.8, depth=20))
+        finally:
+            _ENGINE_LOCK.release()
         if info is None:
             return None, 0.0, []
         pv = [m.uci() for m in info.get("pv", [])]

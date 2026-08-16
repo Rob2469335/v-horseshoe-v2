@@ -36,6 +36,11 @@ _JOBS_DIR = Path("data/chess/analysis_jobs")
 _jobs: dict[str, dict[str, Any]] = {}
 _jobs_lock = asyncio.Lock()
 
+# Max wall-clock per single game analysis. A 100+ move game is genuinely slow,
+# but a wedged engine (leaked lock) must never stall the whole run — games
+# exceeding this bound are skipped and the job continues.
+_GAME_TIMEOUT_S = 300
+
 
 def _job_path(job_id: str) -> Path:
     return _JOBS_DIR / f"{job_id}.json"
@@ -261,7 +266,8 @@ async def _run_job(job: dict[str, Any]) -> None:
                 job["done_games"] = global_i + 1
                 _save_job(job)
                 continue
-            res = await _analyze_one(username, game)
+            async with asyncio.timeout(_GAME_TIMEOUT_S):
+                res = await _analyze_one(username, game)
             job["done_games"] = global_i + 1
             if res["mistakes"]:
                 job["mistakes_queued"] = job.get("mistakes_queued", 0) + res["mistakes"]
@@ -269,6 +275,14 @@ async def _run_job(job: dict[str, Any]) -> None:
             job.pop("_live_task", None)
             _save_job(job)
             raise
+        except TimeoutError:
+            # A single wedged game (e.g. the shared engine lock leaked by a
+            # cancelled thread) must not stall the whole run — skip it, log it,
+            # continue. The lock-acquire timeout in chess_trainer makes the
+            # next eval fail-open, so we don't stay wedged.
+            job["errors"] = job.get("errors", [])
+            job["errors"].append(f"game {global_i}: timed out after {_GAME_TIMEOUT_S}s (skipped)")
+            job["done_games"] = global_i + 1
         except Exception as exc:
             job["errors"] = job.get("errors", [])
             job["errors"].append(f"game {global_i}: {exc}")
