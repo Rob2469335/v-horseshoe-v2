@@ -179,3 +179,52 @@ def test_study_mode_reveals_and_explains(monkeypatch):
     res_end = asyncio.run(gg.study_game("fischer-game-of-the-century", 1000))
     assert res_end["ok"] is True
     assert res_end["finished"] is True
+
+
+def test_critical_moment_detection():
+    """A routine recapture is NOT a think position; a material-winning tactic
+    IS — and carries structured type/difficulty metadata."""
+    import chess
+
+    # Routine mutual recapture (net material unchanged): 1.d4 d5 2.c4 dxc4
+    # 3.e3 b5 4.a4 c6 5.axb5 cxb5 (both sides trade pawns, swing 0)
+    b = chess.Board()
+    for san in ("d4", "d5", "c4", "dxc4", "e3", "b5", "a4", "c6", "axb5", "cxb5"):
+        b.push_san(san)
+    cm = gg._critical_moment(b, "cxb5", ply=9)
+    assert cm["think_required"] is False  # an equal trade is not a decision
+
+    # A tactic that wins material (hangs-then-captures a queen's defender):
+    # 1.e4 e5 2.Nf3 Nc6 3.Bb5 a6 4.Ba4 Nf6 5.O-O Nxe4 (wins a pawn, tactical)
+    b2 = chess.Board()
+    for san in ("e4", "e5", "Nf3", "Nc6", "Bb5", "a6", "Ba4", "Nf6", "O-O"):
+        b2.push_san(san)
+    cm2 = gg._critical_moment(b2, "Nxe4", ply=9)
+    assert cm2["think_required"] is True
+    assert cm2["difficulty"] >= 1
+    assert isinstance(cm2["critical_type"], list)
+    assert cm2["reason"]
+
+
+def test_study_includes_critical_moment_metadata(monkeypatch):
+    """Study-mode responses carry structured critical-moment fields so the
+    frontend can decide how to present each move (pause vs pass-through)."""
+    import asyncio
+
+    from swarm_os.services import chess_trainer as ct
+
+    def fake_bmcp(board):
+        return ("g1f3", 30.0, ["g1f3"])
+
+    monkeypatch.setattr(ct, "_best_move_and_cp", fake_bmcp)
+    monkeypatch.setenv("OPENAI_API_KEY", "")
+
+    async def fake_retrieve(q, top_k=2):
+        return []
+
+    monkeypatch.setattr("swarm_os.services.chess_book_memory.retrieve", fake_retrieve)
+
+    res = asyncio.run(gg.study_game("fischer-game-of-the-century", 0))
+    for field in ("is_key_moment", "critical_type", "difficulty", "think_required"):
+        assert field in res, f"missing {field}"
+    assert isinstance(res["critical_type"], list)

@@ -548,6 +548,106 @@ async def explain_move(game_id: str, ply: int) -> dict[str, Any]:
     }
 
 
+_PIECE_VAL = {"p": 1, "n": 3, "b": 3, "r": 5, "q": 9, "k": 0}
+
+
+def _material(b: chess.Board, color: bool) -> int:
+    """Material count for a color (pawns=1, minors=3, rooks=5, queen=9)."""
+    total = 0
+    for sq in chess.SQUARES:
+        p = b.piece_at(sq)
+        if p and p.color == color:
+            total += _PIECE_VAL.get(p.symbol().lower(), 0)
+    return total
+
+
+def _critical_moment(before: chess.Board, gm_san: str, ply: int) -> dict[str, Any]:
+    """Classify a GM move as a THINK POSITION or a smooth pass-through.
+
+    Combines signals — check, capture, material change, pawn-structure change,
+    endgame transition, forced sequence — so a long game yields only ~8-15
+    real pauses, not one per move. Returns {think_required, critical_type
+    (list), difficulty (1-3), reason}."""
+    try:
+        mv = before.parse_san(gm_san)
+    except Exception:
+        return {"think_required": False, "critical_type": [], "difficulty": 1, "reason": ""}
+    after = before.copy()
+    after.push(mv)
+
+    critical_type: list[str] = []
+    reasons: list[str] = []
+
+    if after.is_check():
+        critical_type.append("check")
+        reasons.append("it's a check")
+    # Material swing from a FIXED perspective (White) before vs after — using
+    # side-to-move flips the sign incorrectly for the after-state.
+    mat_before = _material(before, chess.WHITE) - _material(before, chess.BLACK)
+    mat_after = _material(after, chess.WHITE) - _material(after, chess.BLACK)
+    swing = abs(mat_after - mat_before)
+    if swing >= 3:
+        critical_type.append("tactical")
+        reasons.append(f"the material balance swings by {swing} points")
+    elif swing >= 1:
+        # A small net material gain/loss (a pawn) is a real decision.
+        critical_type.append("capture")
+        reasons.append("a pawn is won or lost")
+    # Sacrifice: White-side material swung DOWN (relative to the mover, the
+    # mover gave material up). If White moved, mover_swing = mat_after-mat_before;
+    # if Black moved, the mover's loss is the opposite sign.
+    mover_is_white = before.turn == chess.WHITE
+    mover_lost = (mat_before - mat_after) if mover_is_white else (mat_after - mat_before)
+    if mover_lost >= 3:
+        critical_type.append("sacrifice")
+        reasons.append("material is offered — a sacrifice or a deliberate trade")
+    # Pawn-structure change (a pawn was captured) that isn't an obvious recapture.
+    if (
+        before.is_capture(mv)
+        and before.piece_at(mv.to_square)
+        and before.piece_at(mv.to_square).piece_type == chess.PAWN
+        and swing >= 1
+    ):
+        critical_type.append("structure")
+        if "the pawn structure changes" not in reasons:
+            reasons.append("the pawn structure changes")
+    # Endgame transition: queens off the board.
+    if before.queens > 0 and after.queens == 0:
+        critical_type.append("endgame")
+        reasons.append("the queens come off — a new endgame begins")
+
+    think_required = bool(
+        critical_type
+        and (
+            swing >= 1  # any net material win/loss is a real decision (recaptures are swing 0)
+            or "tactical" in critical_type
+            or "sacrifice" in critical_type
+            or "endgame" in critical_type
+        )
+    )
+    difficulty = min(3, max(1, 1 + (1 if "tactical" in critical_type else 0) + (1 if "sacrifice" in critical_type else 0) + (1 if "endgame" in critical_type else 0)))
+    reason = "; ".join(reasons) if reasons else ""
+    return {
+        "think_required": think_required,
+        "critical_type": critical_type,
+        "difficulty": difficulty,
+        "reason": reason,
+    }
+
+
+def _moment_hint(critical_type: list[str]) -> str:
+    """A one-line prompt for a THINK POSITION (what to think about)."""
+    if "tactical" in critical_type:
+        return "Material is on the line — find the best move and check your calculation."
+    if "check" in critical_type:
+        return "A check — is it the right one, or just a check?"
+    if "capture" in critical_type:
+        return "A capture — is it actually safe to take?"
+    if "endgame" in critical_type:
+        return "Queens are coming off — what changes in the endgame?"
+    return "A key moment — what's the best move and why?"
+
+
 async def study_game(game_id: str, ply: int = 0) -> dict[str, Any]:
     """STUDY MODE: return the position at `ply` AND the GM's move at that ply
     with a full 'why' explanation (what it threatens, what it sets up). Unlike
@@ -578,6 +678,13 @@ async def study_game(game_id: str, ply: int = 0) -> dict[str, Any]:
     scratch = b.copy()
     scratch.push_san(gm_san)
     gm_uci = scratch.peek().uci()
+    # STRUCTURED CRITICAL-MOMENT detection. Not every check/capture is a hard
+    # pause — combine signals so a 129-ply game yields ~8-15 think positions,
+    # not 60 interruptions.
+    cm = _critical_moment(b, gm_san, ply)
+    hint = None
+    if cm["think_required"]:
+        hint = _moment_hint(cm["critical_type"])
     try:
         explanation = await explain_move(game_id, ply)
         explain = explanation.get("explanation", "")
@@ -596,6 +703,12 @@ async def study_game(game_id: str, ply: int = 0) -> dict[str, Any]:
         "side_to_move": "white" if b.turn else "black",
         "move_number": ply // 2 + 1,
         "gm_move_san": gm_san,
+        "is_key_moment": cm["think_required"],
+        "critical_type": cm["critical_type"],
+        "difficulty": cm["difficulty"],
+        "think_required": cm["think_required"],
+        "reason": cm["reason"],
+        "hint": hint,
         "gm_move_uci": gm_uci,
         "explanation": explain,
         "degraded": degraded,
