@@ -262,6 +262,17 @@ async def trainer_review_top(limit: int = 10) -> dict[str, Any]:
     return get_recurring_mistakes(limit=limit)
 
 
+@router.get("/review/coach")
+async def trainer_review_coach() -> dict[str, Any]:
+    """The personalized coach report: skill bars (tactics / positional /
+    defense / calculation / endgame) built from your recurring mistake types,
+    your top error concepts, and a 'today's focus' coaching line. This is the
+    personal-curriculum seed."""
+    from ..services.chess_mistakes import coach_report
+
+    return coach_report()
+
+
 class SafetyCheckRequest(BaseModel):
     fen: str = Field(..., description="Current position FEN (side to move)")
     uci: str = Field(..., description="The move to check for safety")
