@@ -53,9 +53,10 @@ def _load_job(job_id: str) -> dict[str, Any] | None:
 def _save_job(job: dict[str, Any]) -> None:
     try:
         _JOBS_DIR.mkdir(parents=True, exist_ok=True)
-        # Never persist the in-memory `_games` (full PGN-laden game dicts) —
-        # only the light `game_refs` (url, index) survive to disk.
-        disk = {k: v for k, v in job.items() if k != "_games"}
+        # Never persist the in-memory `_games` (full PGN-laden game dicts) or
+        # `_live_task` (a live asyncio.Task, not JSON-serializable) — only the
+        # light `game_refs` (url, index) survive to disk.
+        disk = {k: v for k, v in job.items() if k not in ("_games", "_live_task")}
         _job_path(job["job_id"]).write_text(json.dumps(disk), encoding="utf-8")
     except Exception as exc:
         log.warning("job save failed: %s", exc)
@@ -135,18 +136,6 @@ async def _collect_games(
     return games, errors
 
 
-async def _game_at(url: str, index: int) -> dict | None:
-    """Re-fetch one game by archive URL + index (used on resume)."""
-    try:
-        month = await _fetch(url)
-        games = month.get("games", [])
-        if 0 <= index < len(games):
-            return games[index]
-    except Exception as exc:
-        log.warning("refetch failed %s[%d]: %s", url, index, exc)
-    return None
-
-
 async def _analyze_one(username: str, game: dict) -> dict[str, Any]:
     """Analyze one game with the engine (best eval, every move). Returns
     {records, mistakes, error}."""
@@ -213,8 +202,10 @@ async def _run_job(job: dict[str, Any]) -> None:
     Only lightweight references (url, index) are persisted — the full game
     dicts live in memory and are re-fetched on resume."""
     username = job["username"]
-    # Collect all games (or resume from stored refs).
-    if "games" not in job:
+    # Collect all games (or resume from stored refs). On resume the job has
+    # `game_refs` but no `games` — only collect when NEITHER is present
+    # (otherwise resume re-fetches everything and resets done_games to 0).
+    if "games" not in job and "game_refs" not in job:
         games, errs = await _collect_games(username, job.get("max_archives"))
         if not games:
             job["status"] = "error"
@@ -231,29 +222,47 @@ async def _run_job(job: dict[str, Any]) -> None:
         _save_job(job)
 
     # Restore the in-memory game list (from memory or by refetching on resume).
+    # Only fetch the REMAINING games (done_games onward), and fetch by archive
+    # once (not per-game) — the old path re-fetched every game individually
+    # on resume, which was minutes of sequential HTTP for a partially-done run.
     if "_games" not in job:
-        job["_games"] = []
-        for url, idx in job.get("game_refs", []):
-            g = await _game_at(url, idx)
-            if g is not None:
-                job["_games"].append((url, idx, g))
-            else:
-                job["_games"].append((url, idx, {}))  # placeholder -> skip
+        by_gi: dict[int, tuple[str, int, dict]] = {}
+        refs = job.get("game_refs", [])
+        start = job.get("done_games", 0)
+        # Group remaining refs by archive URL so we fetch each archive once.
+        by_url: dict[str, list[tuple[int, int]]] = {}
+        for gi in range(start, len(refs)):
+            url, idx = refs[gi]
+            by_url.setdefault(url, []).append((gi, idx))
+        for url, items in by_url.items():
+            try:
+                month = await _fetch(url)
+                games = month.get("games", [])
+            except Exception as exc:
+                log.warning("resume fetch failed %s: %s", url, exc)
+                games = []
+            for gi, idx in items:
+                if 0 <= idx < len(games):
+                    by_gi[gi] = (url, idx, games[idx])
+                else:
+                    by_gi[gi] = (url, idx, {})  # placeholder -> skip
+        # Build _games in global order (games[i] aligns with done_games).
+        job["_games"] = [by_gi[i] for i in range(start, len(refs))]
 
-    games = job["_games"]
+    games = job["_games"]  # indexed from 0, aligned with done_games offset
     start = job.get("done_games", 0)
-    for i in range(start, len(games)):
+    for local_i, (_, _, game) in enumerate(games):
+        global_i = start + local_i
         job["status"] = "running"
         job["updated_at"] = time.time()
-        _, _, game = games[i]
         try:
             if not game:
                 # Refetch failed on resume; skip.
-                job["done_games"] = i + 1
+                job["done_games"] = global_i + 1
                 _save_job(job)
                 continue
             res = await _analyze_one(username, game)
-            job["done_games"] = i + 1
+            job["done_games"] = global_i + 1
             if res["mistakes"]:
                 job["mistakes_queued"] = job.get("mistakes_queued", 0) + res["mistakes"]
         except asyncio.CancelledError:
@@ -262,10 +271,10 @@ async def _run_job(job: dict[str, Any]) -> None:
             raise
         except Exception as exc:
             job["errors"] = job.get("errors", [])
-            job["errors"].append(f"game {i}: {exc}")
-            job["done_games"] = i + 1
+            job["errors"].append(f"game {global_i}: {exc}")
+            job["done_games"] = global_i + 1
         # Save every 5 games (not every game) to avoid thrashing a growing file.
-        if (i + 1) % 5 == 0 or i == len(games) - 1:
+        if (global_i + 1) % 5 == 0 or local_i == len(games) - 1:
             _save_job(job)
 
     job["status"] = "done"
