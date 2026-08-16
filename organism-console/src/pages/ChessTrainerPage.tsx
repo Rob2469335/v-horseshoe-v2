@@ -353,6 +353,10 @@ export default function ChessTrainerPage() {
   const [reviewSolved, setReviewSolved] = useState<"none" | "solved" | "failed">("none")
   const [tips, setTips] = useState<Array<{ tip: string; source: string; category: string }> | null>(null)
   const [tipsLoading, setTipsLoading] = useState(false)
+  const [topMistakes, setTopMistakes] = useState<Array<{
+    concept: string; count: number; share_pct: number; severity: Record<string, number>
+    examples: Array<{ played_san?: string; best_san?: string; classification?: string }>
+  }> | null>(null)
 
   const board = useMemo(() => parseFen(fen), [fen])
   const turn = useMemo(() => sideToMove(fen), [fen])
@@ -802,6 +806,15 @@ export default function ChessTrainerPage() {
 
   useEffect(() => { loadReview() }, [loadReview])
 
+  const loadTopMistakes = useCallback(async () => {
+    try {
+      const r = await (await fetch(`${backendUrl}/chess/trainer/review/top?limit=10`)).json()
+      setTopMistakes(r.top ?? [])
+    } catch { setTopMistakes(null) }
+  }, [backendUrl])
+
+  useEffect(() => { loadTopMistakes() }, [loadTopMistakes])
+
   const [analytics, setAnalytics] = useState<Analytics | null>(null)
   const loadAnalytics = useCallback(async () => {
     try {
@@ -1025,6 +1038,49 @@ export default function ChessTrainerPage() {
                     </button>
                   ))}
                 </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="border-white/10 bg-panel">
+            <CardHeader>
+              <CardTitle className="text-base">Top recurring mistakes</CardTitle>
+              <CardDescription>
+                What you keep doing wrong, ranked — the patterns to actually drill
+                (distilled from every queued mistake).
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {!topMistakes ? (
+                <div className="text-xs text-white/40">Analyze games to build your mistake profile.</div>
+              ) : topMistakes.length === 0 ? (
+                <div className="text-xs text-white/40">No mistakes recorded yet.</div>
+              ) : (
+                <ol className="space-y-2.5">
+                  {topMistakes.map((t, i) => (
+                    <li key={i}>
+                      <div className="flex items-baseline justify-between gap-2">
+                        <span className="text-sm font-medium text-white/90">
+                          <span className="mr-1.5 font-mono text-xs text-emerald-300">{i + 1}.</span>
+                          {t.concept}
+                        </span>
+                        <span className="shrink-0 text-xs text-white/50">{t.share_pct}% · {t.count}×</span>
+                      </div>
+                      {t.severity && Object.entries(t.severity).length > 0 && (
+                        <div className="mt-0.5 flex gap-1.5">
+                          {Object.entries(t.severity).map(([k, v]) => (
+                            <Badge key={k} className={CLASS_COLOR[k] ?? "border-white/20 bg-white/5 text-white/60"}>{k} {v}</Badge>
+                          ))}
+                        </div>
+                      )}
+                      {t.examples?.[0] && (
+                        <div className="mt-1 pl-4 font-mono text-xs text-white/50">
+                          you played {t.examples[0].played_san} → better {t.examples[0].best_san}
+                        </div>
+                      )}
+                    </li>
+                  ))}
+                </ol>
               )}
             </CardContent>
           </Card>

@@ -136,3 +136,25 @@ def test_missed_sacrifice_records_as_review_item():
     assert entry["classification"] == "Missed sacrifice"
     assert "missed a sacrifice" in entry["played_san"]
     assert cm.review_due()["total"] == 1
+
+
+def test_recurring_mistakes_aggregates_by_concept():
+    """The 'top recurring mistakes' summary must group by concept (or a
+    derived signature for generic 'imported' concepts) and rank by frequency."""
+    cm.record_mistake("f1", "e2e4", "e4", "g1f3", "Nf3", "Blunder", concept="hanging")
+    cm.record_mistake("f2", "d2d4", "d4", "c2c4", "c4", "Blunder", concept="hanging")
+    cm.record_mistake("f3", "g2g4", "g4", "h2h4", "h4", "Blunder", concept="hanging")
+    cm.record_mistake("f4", "c2c3", "c3", "d2d4", "d4", "Mistake", concept="imported")
+    cm.record_mistake("f5", "b2b3", "b3", "c2c4", "c4", "Inaccuracy", concept="imported")
+    cm.record_mistake("f6", "a2a3", "a3", "b2b4", "b4", "Blunder", concept="imported")
+
+    r = cm.get_recurring_mistakes(limit=10)
+    assert r["ok"] is True
+    assert r["total"] == 6
+    top = r["top"][0]
+    assert top["count"] == 3
+    assert top["concept"] == "hanging"
+    assert top["severity"].get("Blunder") == 3
+    # derived signature for 'imported' blunder/mistake/inaccuracy buckets
+    concepts = {t["concept"] for t in r["top"]}
+    assert "hanging piece / losing blunder" in concepts

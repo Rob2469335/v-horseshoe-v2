@@ -252,6 +252,16 @@ async def trainer_review_stats() -> dict[str, Any]:
     return stats()
 
 
+@router.get("/review/top")
+async def trainer_review_top(limit: int = 10) -> dict[str, Any]:
+    """The TOP recurring mistakes — the concepts you keep making, ranked by
+    frequency, with example (played -> better) moves for each. This is the
+    'what should I actually drill' summary, distilled from the raw queue."""
+    from ..services.chess_mistakes import get_recurring_mistakes
+
+    return get_recurring_mistakes(limit=limit)
+
+
 class SafetyCheckRequest(BaseModel):
     fen: str = Field(..., description="Current position FEN (side to move)")
     uci: str = Field(..., description="The move to check for safety")

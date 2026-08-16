@@ -197,3 +197,74 @@ def stats() -> dict[str, Any]:
         "boxes": {str(k): v for k, v in sorted(boxes.items())},
         "ladder_days": _ladder_days(),
     }
+
+
+def get_recurring_mistakes(limit: int = 10) -> dict[str, Any]:
+    """Aggregate the queued mistakes into the TOP recurring patterns — the
+    concepts the learner keeps making. When the stored concept is generic
+    ('imported', empty), a lightweight signature is derived from the move text
+    (what kind of move was played) so the bucket is still meaningful without
+    an LLM. Each bucket shows frequency, severity split, and example moves."""
+    with _LOCK:
+        entries = _load()
+    if not entries:
+        return {"ok": True, "top": [], "total": 0}
+
+    def _signature(e: dict[str, Any]) -> str:
+        concept = (e.get("concept") or "").strip()
+        if concept and concept != "imported" and concept != "general":
+            return concept
+        # Derive a motif from the played move's algebraic shape.
+        san = e.get("played_san") or ""
+        played = (e.get("played_uci") or "").lower()
+        captured = "x" in san or (len(played) == 4 and played[2] == "x") if isinstance(played, str) else False
+        cls = e.get("classification") or ""
+        if not san:
+            return cls or "general"
+        if san.startswith("O"):
+            return "castling decision"
+        if san.startswith(("+", "K", "Q", "R", "B", "N", "P")) and san.endswith(("+", "#")):
+            return "ignored a check / missed the point"
+        if captured:
+            return "bad capture (hanging the exchange)"
+        if cls == "Blunder":
+            return "hanging piece / losing blunder"
+        if cls == "Mistake":
+            return "imprecise move (missed a stronger line)"
+        return "inaccuracy"
+
+    by_sig: dict[str, list[dict[str, Any]]] = {}
+    for e in entries:
+        sig = _signature(e)
+        by_sig.setdefault(sig, []).append(e)
+
+    ranked: list[dict[str, Any]] = []
+    for sig, group in by_sig.items():
+        severities: dict[str, int] = {}
+        for e in group:
+            c = e.get("classification") or "Inaccuracy"
+            severities[c] = severities.get(c, 0) + 1
+        ranked.append(
+            {
+                "concept": sig,
+                "count": len(group),
+                "share_pct": round(100.0 * len(group) / len(entries), 1),
+                "severity": severities,
+                "examples": [
+                    {
+                        "played_san": e.get("played_san"),
+                        "best_san": e.get("best_san"),
+                        "pre_fen": e.get("pre_fen"),
+                        "classification": e.get("classification"),
+                    }
+                    for e in group[:2]
+                ],
+            }
+        )
+    ranked.sort(key=lambda x: (-x["count"], -x["share_pct"]))
+    return {
+        "ok": True,
+        "total": len(entries),
+        "concepts": len(ranked),
+        "top": ranked[:max(1, min(int(limit), 25))],
+    }
