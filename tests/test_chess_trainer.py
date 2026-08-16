@@ -35,8 +35,22 @@ def test_classify_good_move():
 
 
 def test_classify_blunder_big_loss():
-    # Large swing (100cp -> -400cp) => Blunder.
-    assert ct._classify(500, 100, -400, was_best=False) == "Blunder"
+    # Large swing (100cp -> -400cp) that ALSO loses a piece => Blunder.
+    assert ct._classify(500, 100, -400, was_best=False, material_delta=-3.0) == "Blunder"
+
+
+def test_classify_no_material_loss_caps_at_inaccuracy():
+    # A fine move the engine merely dislikes (big eval swing, NO material lost)
+    # is at most an Inaccuracy — a normal developing move is not a blunder
+    # (chess.com: beginners average ~70% accuracy playing normal moves).
+    assert ct._classify(500, 100, -400, was_best=False, material_delta=0.0) == "Inaccuracy"
+    assert ct._classify(500, 259, -298, was_best=False, material_delta=0.0) == "Inaccuracy"
+
+
+def test_classify_material_loss_floors():
+    # Hanging material is never missed even if the eval didn't swing much.
+    assert ct._classify(500, 100, 90, was_best=False, material_delta=-1.0) == "Mistake"
+    assert ct._classify(500, 100, 90, was_best=False, material_delta=-3.0) == "Blunder"
 
 
 def test_classify_rating_scaled_thresholds():

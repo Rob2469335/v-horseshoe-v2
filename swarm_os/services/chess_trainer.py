@@ -263,10 +263,25 @@ def _expected_points(rating: int, cp: float) -> float:
     return (wc + 1.0) / 2.0  # [0, 1], win+draw weighted
 
 
-def _classify(rating: int, before_cp: float, after_cp: float, was_best: bool) -> str:
-    """Classify a move by expected points LOST (draw-aware, rating-scaled).
-    `was_best` short-circuits to 'Best'. A mate transition is always a Blunder
-    (lichess evalSwings: mate-in-3 or losing a mating net)."""
+def _classify(
+    rating: int,
+    before_cp: float,
+    after_cp: float,
+    was_best: bool,
+    material_delta: float = 0.0,
+) -> str:
+    """Classify a move by expected points LOST (draw-aware), with a material
+    guard so a normal developing move is never labeled a blunder.
+
+    The engine's eval can swing badly on fine-but-not-engine-optimal moves (a
+    human's developing move deviates from Stockfish's top line -> huge sigmoid
+    swing). chess.com's model doesn't punish that: a move that LOSES NO MATERIAL
+    is at most an Inaccuracy (a plan difference). Only an actual material loss
+    (or a missed mate) escalates to Mistake/Blunder. `material_delta` is the net
+    material change from the MOVER's perspective (negative = they lost material).
+
+    `was_best` short-circuits to 'Best'. Fixed chess.com cutoffs (verified SOTA):
+    Inaccuracy 0.05-0.10, Mistake 0.10-0.20, Blunder 0.20+."""
     if was_best:
         return "Best"
     loss = _expected_points(rating, before_cp) - _expected_points(rating, after_cp)
@@ -274,14 +289,24 @@ def _classify(rating: int, before_cp: float, after_cp: float, was_best: bool) ->
     # Mate branch: before was mate-ish and after isn't -> lost the win outright.
     if abs(before_cp) >= 5000 and abs(after_cp) < 5000 and loss > 0.1:
         return "Blunder"
-    # Fixed chess.com cutoffs (verified SOTA): Inaccuracy 0.05-0.10, Mistake
-    # 0.10-0.20, Blunder 0.20+. NOT rating-scaled — chess.com applies the same
-    # expected-points thresholds at every rating (400s avg 69.8% accuracy,
-    # 2700+ avg ~90%: the rating difference shows in the moves, not the bar).
+    # Material guard (the SOTA fix): no material lost => never worse than
+    # Inaccuracy, no matter how much the engine's eval swings.
+    if material_delta >= 0.0:
+        return "Inaccuracy" if loss >= 0.05 else ("Good" if loss >= 0.02 else "Good")
+    # Material WAS lost — floor it so a hung pawn/piece is never missed even if
+    # the engine's eval didn't swing much: a piece (-3+) is always a Blunder, a
+    # pawn (-1/-2) is at least a Mistake. Then let the eval loss escalate.
+    eval_class = "Best"
     for name, threshold in _CLASS_THRESHOLDS:
         if loss >= threshold and name != "Best":
-            return name
-    return "Best"
+            eval_class = name
+            break
+    if material_delta <= -3.0:
+        return "Blunder"
+    if material_delta < 0.0:
+        # -1/-2 material: at least Mistake (Blunder if the eval already says so).
+        return "Blunder" if eval_class == "Blunder" else "Mistake"
+    return eval_class
 
 
 def _eval_only(board) -> float:
@@ -1040,12 +1065,18 @@ async def evaluate_move(
         }
 
     before_best, before_cp, _ = await asyncio.to_thread(_best_move_and_cp, board)
+    # Material before the move (for the material guard in classification: a
+    # move that doesn't lose material is never a Mistake/Blunder).
+    material_before = _material_balance(board)
     # SAN must be computed BEFORE pushing (the move is only legal pre-push).
     try:
         played_san = board.san(move)
     except Exception:
         played_san = uci
     board.push(move)
+    # Net material change from the MOVER's perspective (after is now the
+    # opponent's side, so flip the balance sign).
+    material_delta = (_material_balance(board) * -1) - material_before
 
     after_cp = (await asyncio.to_thread(_best_move_and_cp, board))[1]
 
@@ -1057,7 +1088,7 @@ async def evaluate_move(
     # in the single pre-move evaluation above (no re-analysis needed).
     was_best = before_best == uci
 
-    classification = _classify(rating, before_cp, mover_after, was_best)
+    classification = _classify(rating, before_cp, mover_after, was_best, material_delta)
 
     # WDL-style win% for the eval bar (mover's perspective).
     win_before = _expected_points(rating, before_cp)
