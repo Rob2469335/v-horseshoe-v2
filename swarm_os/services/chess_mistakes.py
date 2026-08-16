@@ -401,11 +401,16 @@ def coach_report() -> dict[str, Any]:
     # Classify each entry, then group into skills.
     skill_counts: dict[str, int] = {}
     concept_counts: dict[str, int] = {}
+    concept_blunders: dict[str, int] = {}
+    concept_positions: dict[str, set] = {}
     for e in entries:
         concept = _classify_concept(
             e.get("pre_fen", ""), e.get("played_uci", ""), e.get("best_uci"), e.get("classification", "")
         )
         concept_counts[concept] = concept_counts.get(concept, 0) + 1
+        if e.get("classification") == "Blunder":
+            concept_blunders[concept] = concept_blunders.get(concept, 0) + 1
+        concept_positions.setdefault(concept, set()).add(e.get("pre_fen", ""))
         group = _SKILL_GROUPS.get(concept, ("positional", ""))[0]
         skill_counts[group] = skill_counts.get(group, 0) + 1
 
@@ -421,6 +426,25 @@ def coach_report() -> dict[str, Any]:
                 "bar": round(100.0 * count / max_skill),
             }
 
+    # Weakness model: frequency x severity x recurrence x trend -> priority.
+    # frequency = share of all mistakes; severity = blunder share; recurrence =
+    # distinct positions (a recurring pattern, not one-off); trend = unknown
+    # until training history exists (0.0 here — the training engine fills it).
+    concept_scores: dict[str, dict[str, Any]] = {}
+    for concept, count in concept_counts.items():
+        frequency = count / len(entries)
+        severity = (concept_blunders.get(concept, 0) / count) if count else 0.0
+        recurrence = len(concept_positions.get(concept, set())) / count if count else 0.0
+        trend = 0.0  # unknown until the training loop accumulates history
+        priority = round(frequency * (0.4 + 0.6 * severity) * (0.5 + recurrence) * (1.0 - trend), 4)
+        concept_scores[concept] = {
+            "frequency": round(frequency, 3),
+            "severity": round(severity, 3),
+            "recurrence": round(recurrence, 3),
+            "trend": trend,
+            "priority": priority,
+        }
+
     # Today's focus: the weakest skill (most frequent) -> its coaching line.
     focus_skill = max(skill_counts, key=skill_counts.get)
     focus_concept = max(concept_counts, key=concept_counts.get)
@@ -430,6 +454,7 @@ def coach_report() -> dict[str, Any]:
         "total": len(entries),
         "skills": skills,
         "top_concepts": sorted(concept_counts.items(), key=lambda x: -x[1])[:5],
+        "concept_scores": concept_scores,
         "focus_skill": focus_skill,
         "focus": advice,
     }

@@ -581,6 +581,22 @@ def _critical_moment(before: chess.Board, gm_san: str, ply: int) -> dict[str, An
     if after.is_check():
         critical_type.append("check")
         reasons.append("it's a check")
+    # DEFENSE moment: the side to move has a piece attacked more than defended
+    # (it WOULD hang) and the GM's move rescues it — a 'don't hang your piece'
+    # training signal, the mirror image of a hanging-piece mistake.
+    before_turn = before.turn
+    for sq in chess.SQUARES:
+        p = before.piece_at(sq)
+        if not p or p.color != before_turn or p.piece_type == chess.KING:
+            continue
+        atk = before.attackers(not before_turn, sq)
+        if len(atk) > len(before.attackers(before_turn, sq)):
+            # This piece is en prise; does the GM's move save it?
+            still_attacked = len(after.attackers(not before_turn, sq)) > len(after.attackers(before_turn, sq)) if after.piece_at(sq) and after.piece_at(sq).color == before_turn else False
+            if not still_attacked:
+                critical_type.append("defense")
+                reasons.append(f"a piece on {chess.square_name(sq)} is rescued")
+            break
     # Material swing from a FIXED perspective (White) before vs after — using
     # side-to-move flips the sign incorrectly for the after-state.
     mat_before = _material(before, chess.WHITE) - _material(before, chess.BLACK)
