@@ -274,9 +274,12 @@ def _classify(rating: int, before_cp: float, after_cp: float, was_best: bool) ->
     # Mate branch: before was mate-ish and after isn't -> lost the win outright.
     if abs(before_cp) >= 5000 and abs(after_cp) < 5000 and loss > 0.1:
         return "Blunder"
-    scale = max(0.3, min(1.0, rating / 1500.0))  # tighter thresholds for lower ratings
+    # Fixed chess.com cutoffs (verified SOTA): Inaccuracy 0.05-0.10, Mistake
+    # 0.10-0.20, Blunder 0.20+. NOT rating-scaled — chess.com applies the same
+    # expected-points thresholds at every rating (400s avg 69.8% accuracy,
+    # 2700+ avg ~90%: the rating difference shows in the moves, not the bar).
     for name, threshold in _CLASS_THRESHOLDS:
-        if loss >= threshold * scale and name != "Best":
+        if loss >= threshold and name != "Best":
             return name
     return "Best"
 

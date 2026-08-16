@@ -40,19 +40,13 @@ def test_classify_blunder_big_loss():
 
 
 def test_classify_rating_scaled_thresholds():
-    # The same loss is a worse classification for a 400-rated player.
-    blunder_400 = ct._classify(400, 30, -30, was_best=False)
-    same_2000 = ct._classify(2000, 30, -30, was_best=False)
-    # 400 is more sensitive -> at least as severe as 2000.
-    order = {
-        "Best": 0,
-        "Excellent": 1,
-        "Good": 2,
-        "Inaccuracy": 3,
-        "Mistake": 4,
-        "Blunder": 5,
-    }
-    assert order[blunder_400] >= order[same_2000]
+    # chess.com's verified model uses FIXED expected-points cutoffs at every
+    # rating (Inaccuracy 0.05 / Mistake 0.10 / Blunder 0.20) — the rating
+    # difference shows in the moves a player makes, not in looser thresholds.
+    # Same loss => same classification regardless of rating.
+    low = ct._classify(400, 30, -30, was_best=False)
+    high = ct._classify(2000, 30, -30, was_best=False)
+    assert low == high
 
 
 # ---------------------------------------------------------------------------
