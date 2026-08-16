@@ -202,6 +202,8 @@ def _extract_make_model(title: str, url: str = "") -> tuple[str, str]:
         if make in text:
             idx = text.find(make)
             rest = re.sub(r"[^a-z0-9 .\-]", " ", text[idx + len(make):]).strip()
+            # drop craigslist/url noise tokens before taking the model
+            rest = re.sub(r"\b(craigslist|www|http|org|com|view|d)\b", " ", rest)
             # take up to 4 tokens as the model, stop at digits that look like lengths/ids
             tokens = [t for t in rest.split() if t][:4]
             model = " ".join(tokens)
@@ -209,6 +211,8 @@ def _extract_make_model(title: str, url: str = "") -> tuple[str, str]:
     # fallback: strip year + price-ish tokens from title
     cleaned = re.sub(r"^\s*(20\d\d)\s*", "", title or "")
     cleaned = re.sub(r"\$\s?[\d,]+.*$", "", cleaned).strip()
+    cleaned = re.sub(r"\b(craigslist|www|http|org|com|view|d)\b", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return "", cleaned[:40]
 
 
@@ -223,8 +227,7 @@ async def _discover_ppl(budget: int, rv_type: str = "all", max_results: int = 40
         return []
 
     items = re.findall(
-        r'data-mz-product="rv-(\d+)".*?mz-productlisting-title.*?href="(/used-rvs-for-sale/[^"]+)"'
-        r".*?mz-price[^>]*>\s*\$([\d,]+)",
+        r'data-mz-product="rv-(\d+)".*?mz-productlisting-title.*?href="(/used-rvs-for-sale/[^"]+)".*?mz-price[^>]*>[^<]*\$([\d,]+)',
         html,
         re.DOTALL,
     )
@@ -490,9 +493,126 @@ async def _discover_web(budget: int, rv_type: str = "all", max_results: int = 40
 
 
 # --------------------------------------------------------------------------
+# Craigslist parser (real marketplace — private sellers, no dealer markup).
+# Uses the Crawl4AI browser fetch so the JS-rendered listing grid is read.
+# --------------------------------------------------------------------------
+def _build_craigslist_queries(budget: int, rv_type: str) -> list[str]:
+    """Craigslist search URLs for the budget + (optionally) the RV type."""
+    area = "longisland"  # user's home area; extendable to a radius later
+    filters = f"max_price={int(budget)}"
+    if rv_type and rv_type != "all" and rv_type != "unknown":
+        t = rv_type.lower()
+        term = {
+            "class a motorhome": "motorhome",
+            "class b motorhome": "campervan",
+            "class c motorhome": "motorhome",
+        }.get(t, t)
+        filters += f"&auto_make_model={term}"
+    return [f"https://{area}.craigslist.org/search/rvs?{filters}"]
+
+
+def _parse_craigslist_content(content: str, budget: int) -> list[RVListing]:
+    """Parse the Crawl4AI markdown of a Craigslist /search/rvs page into listings.
+
+    Listing shape (verified live): `[TITLE](https://www.craigslist.org/view/d/{area}-{slug}/{hash})`
+    followed on the same text run by `| {MM/DD}{Area} | ${price}`. Only /view/d/
+    links are real listings — /search/, images, and nav are skipped.
+    """
+    from .analysis import _is_motorhome_like  # noqa: F401  (type helpers below)
+
+    listings: list[RVListing] = []
+    # Real listings are links whose URL is /view/d/{area}-{slug}/{hash}; the
+    # price follows as "| {MM/DD}{Area} | $N". Image thumbnails precede the real
+    # link in markdown ([![alt](img.jpg)](view-url)), so read the title as the
+    # LAST "[...]" before "(view-url)" and strip any inner image markdown.
+    for m in re.finditer(r"\(https://www\.craigslist\.org/view/d/([^)]+)\)", content or ""):
+        slug = m.group(1)
+        url = f"https://www.craigslist.org/view/d/{slug}"
+        pre = content[max(0, m.start() - 200):m.start()]
+        lb = pre.rfind("[")
+        lc = pre.rfind("]")
+        title = pre[lb + 1:lc] if lb != -1 and lc > lb else ""
+        # Drop any "](image-url)" that rode along inside the alt text.
+        title = re.sub(r"\]\(https?://\S+\)?", "", title)
+        title = re.sub(r"[_!]+", "", title).strip()
+        title = re.sub(r"\s+\d+$", "", title).strip()
+        title = re.sub(r"\s*https?://\S+", "", title).strip()
+        title = re.sub(r"\s+", " ", title).strip()
+        if len(title) < 6:
+            continue
+        # Price follows within the next ~160 chars as "$N,NNN"
+        tail = content[m.end():m.end() + 160]
+        price_m = re.search(r"\$\s?([\d,]{3,7}(?:\.\d{2})?)", tail)
+        if not price_m:
+            continue
+        price = float(price_m.group(1).replace(",", ""))
+        if not (1000 <= price <= budget):
+            continue
+        # Location: from the "| {MM/DD}{Area} |" segment right before the price.
+        loc_m = re.search(r"\|\s*\d{1,2}/\d{1,2}\s*([A-Za-z .-]+?)\s*\|\s*\$", tail)
+        location = loc_m.group(1).strip().title() if loc_m else ""
+        # Year / make / model from the title via existing helpers.
+        year = _extract_year(title) or 0
+        make, model = _extract_make_model(title, url)
+        rv_type = _classify_rv_type(title)
+        if location:
+            location = f"{location}, NY"
+        # Mark as a verified real listing (not a snippet-only lead) with the
+        # data we parsed from the page, so it scores honestly.
+        attrs: dict[str, list] = {"_verified": ["craigslist"]}
+        if year:
+            attrs["Year"] = [str(year)]
+        if rv_type != "unknown":
+            attrs["RV Type"] = [rv_type]
+        listings.append(
+            RVListing(
+                source="Craigslist (private)",
+                title=title,
+                year=year,
+                make=make,
+                model=model,
+                rv_type=rv_type,
+                price=price,
+                url=url,
+                location=location,
+                attrs=attrs,
+                description=f"{title}. Private-sale listing on Craigslist (Long Island) — inspect thoroughly; verify title before paying.",
+            )
+        )
+    return listings
+
+
+async def _discover_craigslist(budget: int, rv_type: str = "all", max_results: int = 40) -> list[RVListing]:
+    """Discover used-RV listings from Craigslist via the Crawl4AI browser fetch."""
+    from swarm_os.lib.mcp.web_search import web_fetch_handler
+
+    listings: list[RVListing] = []
+    seen: set[str] = set()
+    for url in _build_craigslist_queries(budget, rv_type):
+        try:
+            res = await web_fetch_handler({"url": url, "max_chars": 20000})
+        except Exception as e:
+            logger.warning("craigslist fetch failed (%s): %s", url, e)
+            continue
+        if not res.get("ok"):
+            continue
+        for lst in _parse_craigslist_content(res.get("content") or "", budget):
+            if lst.url in seen:
+                continue
+            seen.add(lst.url)
+            listings.append(lst)
+            if len(listings) >= max_results:
+                break
+        if len(listings) >= max_results:
+            break
+    return listings
+
+
+# --------------------------------------------------------------------------
 # Parser registry
 # --------------------------------------------------------------------------
 DISCOVERY_PARSERS = {
     "ppl": _discover_ppl,
     "web": _discover_web,
+    "craigslist": _discover_craigslist,
 }

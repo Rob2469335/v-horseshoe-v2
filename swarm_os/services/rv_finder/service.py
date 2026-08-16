@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from typing import Any
 
@@ -113,6 +114,9 @@ async def find_best_rv_deals(
         tasks.append(DISCOVERY_PARSERS["ppl"](budget, rv_type, max_results=max(1, int(max_results * 0.6))))
     if use_web:
         tasks.append(DISCOVERY_PARSERS["web"](budget, rv_type, max_results=max(1, int(max_results * 0.5))))
+    # Craigslist is the most reliable real-marketplace source (private sellers,
+    # no dealer markup) and is fetched with a real browser crawl.
+    tasks.append(DISCOVERY_PARSERS["craigslist"](budget, rv_type, max_results=max(1, int(max_results * 0.5))))
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
     for r in results:
@@ -131,6 +135,23 @@ async def find_best_rv_deals(
         if existing is None or len(lst.description) > len(existing.description):
             by_url[key] = lst
     listings = list(by_url.values())
+
+    # Secondary dedupe: Craigslist reposts the same unit under different hash
+    # URLs — collapse listings that share (normalized title, price).
+    title_key: dict[tuple, RVListing] = {}
+    kept: dict[str, RVListing] = {}
+    for lst in listings:
+        norm = re.sub(r"[^a-z0-9]+", "", (lst.title or "").lower())
+        if not norm or lst.price <= 0:
+            kept[lst.url or lst.title] = lst
+            continue
+        key = (norm[:40], round(lst.price))
+        existing = title_key.get(key)
+        if existing is None or len(lst.description) > len(existing.description):
+            title_key[key] = lst
+    for lst in title_key.values():
+        kept[lst.url or lst.title] = lst
+    listings = list(kept.values())
 
     # Keep only listings that carry a real price, skip junk/parts (<$1k).
     listings = [l for l in listings if l.price >= 1000]

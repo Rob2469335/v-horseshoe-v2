@@ -6,6 +6,8 @@ life-ease feature detection, and MPG/livability readouts. No network / LLM.
 """
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from swarm_os.services.rv_finder.analysis import (
@@ -249,3 +251,56 @@ async def test_rv_parser_blocks_ssrf_targets(monkeypatch):
     # A public URL still fetches.
     assert await parsers._fetch_text("https://example.com/rv") == "ok"
     assert fetched == ["https://example.com/rv"]
+
+
+def test_ppl_item_regex_handles_sale_price_label():
+    """Regression: PPL's current inventory page puts literal 'SALE PRICE' text
+    between the price span tag and the dollar amount, and the old regex
+    (\\s*\\$) matched zero listings. The parser must extract real listings."""
+
+    html = (
+        '<div class="mz-productlist-item" data-mz-product="rv-63537">'
+        '<div class="mz-productlisting-productcode">'
+        '<a class="mz-productlisting-title" href="/used-rvs-for-sale/travel-trailer/2025-gulf-stream-kingsport-ranch-21qbs_rv-63537">'
+        "<span>2025 Gulf Stream Kingsport Ranch</span></a></div>"
+        '<div class="mz-pricestack"><span class="mz-price red">\n\n\t\tSALE&nbsp;PRICE \n\n\t\t\t$25,000\n\n</span></div>'
+        "</div>"
+    )
+    items = re.findall(
+        r'data-mz-product="rv-(\d+)".*?mz-productlisting-title.*?href="(/used-rvs-for-sale/[^"]+)".*?mz-price[^>]*>[^<]*\$([\d,]+)',
+        html,
+        re.DOTALL,
+    )
+    assert len(items) == 1
+    assert items[0] == (
+        "63537",
+        "/used-rvs-for-sale/travel-trailer/2025-gulf-stream-kingsport-ranch-21qbs_rv-63537",
+        "25,000",
+    )
+
+
+def test_craigslist_parser_extracts_listings_with_price_and_location():
+    """The Craigslist parser must turn the Crawl4AI markdown (real listing
+    links + '| MM/DD Area | $price') into RVListing objects."""
+    from swarm_os.services.rv_finder import parsers
+
+    content = (
+        "[CL](https://www.craigslist.org/area/longisland) nav noise\n"
+        "[![_2016 Winnebago View 24M 1](https://images.craigslist.org/img.jpg)]"
+        "(https://www.craigslist.org/view/d/patchogue-2016-winnebago-view/uR4abcXyz) | "
+        "8/11Patchogue | $24,500 | "
+        "[2020 Coachmen Catalina](https://www.craigslist.org/view/d/lindenhurst-2020-coachmen/uB2defQrst) | "
+        "8/11Lindenhurst | $19,900 | "
+        "[CL](https://www.craigslist.org/area/longisland) more nav"
+    )
+    listings = parsers._parse_craigslist_content(content, 25000)
+    assert len(listings) == 2
+    first = listings[0]
+    assert first.year == 2016
+    assert first.make == "Winnebago"
+    assert first.price == 24500
+    assert "Patchogue" in first.location
+    assert first.attrs.get("_verified") == ["craigslist"]
+    second = listings[1]
+    assert second.price == 19900
+    assert second.url.startswith("https://www.craigslist.org/view/d/")
