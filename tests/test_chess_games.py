@@ -193,3 +193,19 @@ def test_progress_analytics_rating_moves_with_accuracy():
     # Two games averaged: good (100%) + bad (70%) -> ~85% -> rating ~1235.
     assert 1100 <= res["training_rating"] <= 1400
     assert res["skills"]["accuracy"] >= 50  # mixed but far from 0
+
+
+def test_accuracy_never_exceeds_100():
+    """A game of Best moves can have POSITIVE win-delta on every move — the raw
+    1.0 + delta/100 formula would average ABOVE 1.0 and report accuracy > 100.
+    Accuracy is a percentage; 100 is the ceiling."""
+    game = {"moves": [{"win_delta_pct": 9.0}, {"win_delta_pct": 6.0}, {"win_delta_pct": 4.0}]}
+    acc = cg._accuracy_of(game)
+    assert 0.0 <= acc <= 100.0
+    assert acc == 100.0  # every move improved win% -> perfect, but capped
+    mixed = {"moves": [{"win_delta_pct": 9.0}, {"win_delta_pct": -40.0}, {"win_delta_pct": 4.0}]}
+    assert 0.0 <= cg._accuracy_of(mixed) <= 100.0
+    # A -90% win-delta blunder keeps 1.0-0.9 = 0.1 expected points -> 10%.
+    assert cg._accuracy_of({"moves": [{"win_delta_pct": -90.0}]}) == 10.0
+    # Only a move that loses more than its entire expected points floors at 0.
+    assert cg._accuracy_of({"moves": [{"win_delta_pct": -150.0}]}) == 0.0
