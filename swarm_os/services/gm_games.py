@@ -28,6 +28,7 @@ from typing import Any
 
 import chess
 import chess.pgn
+import json
 
 log = logging.getLogger(__name__)
 
@@ -38,6 +39,71 @@ _MANIFEST = _DATA_DIR / "manifest.json"
 _DB_FISCHER = _DATA_DIR / "db" / "Fischer.pgn"
 _DB_CARLSEN = _DATA_DIR / "db" / "Carlsen.pgn"
 _LOCK = threading.Lock()
+
+# In-memory cache of parsed games per (player, white, black, date) so the
+# 5.7MB Carlsen PGN database is parsed ONCE per unique game, not on every
+# study/play/explain call (a raw scan was ~17s and blocked the event loop).
+_db_cache: dict[tuple, tuple[dict[str, Any] | None, chess.Board | None]] = {}
+
+# Durable cache of the CURATED games' moves — the 5.7MB PGN DB is parsed ONCE
+# and the curated games are written here as a small JSON, so every later
+# study/play/list reads this file (milliseconds) instead of rescanning the
+# whole database (17s+).
+_GAMES_CACHE = _DATA_DIR / "curated_games.json"
+_cache_lock = threading.Lock()
+_games_store: dict[str, dict[str, Any]] | None = None  # game_id -> summary
+
+
+def _load_games_cache() -> dict[str, dict[str, Any]]:
+    """Load (or build) the durable curated-games cache. Builds it from the PGN
+    databases once, then re-reads the small JSON on every call."""
+    global _games_store
+    if _games_store is not None:
+        return _games_store
+    with _cache_lock:
+        if _games_store is not None:
+            return _games_store
+        store: dict[str, dict[str, Any]] = {}
+        if _GAMES_CACHE.exists():
+            try:
+                store = json.loads(_GAMES_CACHE.read_text(encoding="utf-8"))
+            except Exception as exc:
+                log.warning("gm games cache unreadable: %s", exc)
+                store = {}
+        if not store:
+            # Cold build: parse the databases once, cache the curated games.
+            for c in CURATED:
+                summary, board = _load_game(
+                    c["player"], c["white"], c["black"], c.get("date")
+                )
+                if board is None or not summary or not summary.get("moves"):
+                    continue
+                gid = f"{c['player']}-{c['tag']}"
+                store[gid] = {
+                    "game_id": gid,
+                    "name": c["name"],
+                    "player": c["player"],
+                    "tag": c["tag"],
+                    "year": c.get("year"),
+                    "white": summary.get("white", ""),
+                    "black": summary.get("black", ""),
+                    "date": summary.get("date", ""),
+                    "result": summary.get("result", "*"),
+                    "moves": summary["moves"],
+                    "move_count": len(summary["moves"]),
+                }
+            try:
+                _GAMES_CACHE.parent.mkdir(parents=True, exist_ok=True)
+                _GAMES_CACHE.write_text(json.dumps(store), encoding="utf-8")
+            except Exception as exc:
+                log.warning("gm games cache write failed: %s", exc)
+        _games_store = store
+        return store
+
+
+def _get_game(game_id: str) -> dict[str, Any] | None:
+    """The cached summary (name, moves, result) for a curated game, or None."""
+    return _load_games_cache().get(game_id)
 
 # The famous games to curate: (player, tag). Each is located by scanning the
 # database for a game matching White/Black + a move-order signature (the first
@@ -91,6 +157,33 @@ CURATED: list[dict[str, Any]] = [
         "name": "Carlsen vs Caruana, 2018 WC Game 6",
         "year": 2018,
     },
+    {
+        "player": "carlsen",
+        "tag": "gukesh-carlsen-2026-norway-r5",
+        "white": "Gukesh",
+        "black": "Carlsen",
+        "name": "Gukesh vs Carlsen — Norway Chess 2026 (Carlsen wins with Black)",
+        "year": 2026,
+        "date": "2026.05.28",
+    },
+    {
+        "player": "carlsen",
+        "tag": "carlsen-gukesh-2026-norway",
+        "white": "Carlsen",
+        "black": "Gukesh",
+        "name": "Carlsen vs Gukesh — Norway Chess 2026 (beating the World Champion)",
+        "year": 2026,
+        "date": "2026.06.05",
+    },
+    {
+        "player": "carlsen",
+        "tag": "carlsen-caruana-2026",
+        "white": "Caruana",
+        "black": "Carlsen",
+        "name": "Caruana vs Carlsen — 2026 (Carlsen wins; he'd take the Freestyle WC later that year)",
+        "year": 2026,
+        "date": "2026.03.10",
+    },
 ]
 
 
@@ -99,15 +192,27 @@ def _db_path(player: str) -> Path:
 
 
 def _load_game(
-    player: str, white: str, black: str
+    player: str, white: str, black: str, date: str | None = None
 ) -> tuple[dict[str, Any] | None, chess.Board | None]:
     """Find the game matching White/Black in the database and return
-    (summary, board-with-full-move-stack)."""
+    (summary, board-with-full-move-stack). When `date` (e.g. '2026.05.28')
+    is given, only a game with that exact Date header matches — the database
+    holds many Carlsen-vs-X games and name alone can pick a wrong one.
+
+    Parsing the 5.7MB Carlsen PGN on every call is ~17s of blocking — results
+    are cached per (player, white, black, date) so each game is parsed once."""
+    key = (player, white.lower(), black.lower(), date)
+    with _LOCK:
+        if key in _db_cache:
+            return _db_cache[key]
     path = _db_path(player)
     if not path.exists():
+        with _LOCK:
+            _db_cache[key] = (None, None)
         return None, None
     white = white.lower()
     black = black.lower()
+    found: tuple[dict[str, Any] | None, chess.Board | None] = (None, None)
     with open(path, encoding="utf-8", errors="replace") as fh:
         while True:
             try:
@@ -117,6 +222,8 @@ def _load_game(
             if game is None:
                 break
             h = game.headers
+            if date and h.get("Date", "") != date:
+                continue
             if (
                 h.get("White", "").lower() == white
                 or white in h.get("White", "").lower()
@@ -133,14 +240,20 @@ def _load_game(
                         continue
                     moves.append(b.san(mv))
                     b.push(mv)
-                return {
-                    "white": h.get("White"),
-                    "black": h.get("Black"),
-                    "date": h.get("Date", ""),
-                    "result": h.get("Result", "*"),
-                    "moves": moves,
-                }, b
-    return None, None
+                found = (
+                    {
+                        "white": h.get("White"),
+                        "black": h.get("Black"),
+                        "date": h.get("Date", ""),
+                        "result": h.get("Result", "*"),
+                        "moves": moves,
+                    },
+                    b,
+                )
+                break
+    with _LOCK:
+        _db_cache[key] = found
+    return found
 
 
 def _moves_from_board(board: chess.Board) -> list[str]:
@@ -179,7 +292,7 @@ async def curate(force: bool = False) -> dict[str, Any]:
     indexed = 0
     errors: list[str] = []
     for c in CURATED:
-        summary, board = _load_game(c["player"], c["white"], c["black"])
+        summary, board = _load_game(c["player"], c["white"], c["black"], c.get("date"))
         if board is None or not summary.get("moves"):
             errors.append(f"{c['tag']}: game not found in database")
             continue
@@ -258,80 +371,79 @@ async def _embed(text: str) -> list[float]:
         return [0.0] * 768
 
 
-def list_gm_games() -> dict[str, Any]:
-    """The curated famous games (from the local manifest of loaded games)."""
-    out = []
-    for c in CURATED:
-        summary, board = _load_game(c["player"], c["white"], c["black"])
-        out.append(
-            {
-                "id": f"{c['player']}-{c['tag']}",
-                "name": c["name"],
-                "player": c["player"],
-                "white": summary["white"] if summary else c["white"],
-                "black": summary["black"] if summary else c["black"],
-                "year": c["year"],
-                "result": summary["result"] if summary else "*",
-                "move_count": len(summary["moves"]) if summary else 0,
-            }
-        )
+async def list_gm_games() -> dict[str, Any]:
+    """The curated famous games (from the durable game cache)."""
+    store = _load_games_cache()
+    out = [
+        {
+            "id": info["game_id"],
+            "name": info["name"],
+            "player": info["player"],
+            "white": info["white"],
+            "black": info["black"],
+            "year": info.get("year"),
+            "result": info["result"],
+            "move_count": info["move_count"],
+        }
+        for info in store.values()
+    ]
+    out.sort(key=lambda g: (g["player"], str(g["year"])))
     return {"ok": True, "count": len(out), "games": out}
 
 
 def play_game(game_id: str, ply: int = 0) -> dict[str, Any]:
     """Start (or advance) a guess-the-move session: returns the position at
     `ply` (the learner's turn to guess the next move) WITHOUT revealing the
-    answer."""
-    for c in CURATED:
-        if f"{c['player']}-{c['tag']}" != game_id:
-            continue
-        summary, board = _load_game(c["player"], c["white"], c["black"])
-        if board is None:
-            return {"ok": False, "error": "game not found in database"}
-        moves = summary["moves"]
-        if ply >= len(moves):
-            return {
-                "ok": True,
-                "finished": True,
-                "game_id": game_id,
-                "result": summary["result"],
-            }
-        # Rebuild the board up to `ply` for the position FEN.
-        b = chess.Board()
-        for mv in board.move_stack[:ply]:
-            b.push(mv)
+    answer. Served from the durable game cache."""
+    info = _get_game(game_id)
+    if info is None:
+        return {"ok": False, "error": "game not found"}
+    moves = info["moves"]
+    if ply >= len(moves):
         return {
             "ok": True,
-            "finished": False,
+            "finished": True,
             "game_id": game_id,
-            "name": c["name"],
-            "ply": ply,
-            "fen": b.fen(),
-            "side_to_move": "white" if b.turn else "black",
-            "move_number": ply // 2 + 1,
+            "result": info["result"],
         }
+    # Rebuild the board up to `ply` for the position FEN.
+    b = chess.Board()
+    for mv in moves[:ply]:
+        b.push_san(mv)
+    return {
+        "ok": True,
+        "finished": False,
+        "game_id": game_id,
+        "name": info["name"],
+        "ply": ply,
+        "fen": b.fen(),
+        "side_to_move": "white" if b.turn else "black",
+        "move_number": ply // 2 + 1,
+    }
     return {"ok": False, "error": "unknown game"}
 
 
 def guess_move(game_id: str, ply: int, guess_uci: str) -> dict[str, Any]:
     """Compare the learner's guess against the GM's actual move at `ply`.
     Returns {ok, correct, gm_move_uci, gm_move_san, correct_uci}."""
-    for c in CURATED:
-        if f"{c['player']}-{c['tag']}" != game_id:
-            continue
-        summary, board = _load_game(c["player"], c["white"], c["black"])
-        if board is None or ply >= len(board.move_stack):
-            return {"ok": False, "error": "invalid ply"}
-        actual = board.move_stack[ply]
-        actual_san = summary["moves"][ply]
-        return {
-            "ok": True,
-            "correct": guess_uci == actual.uci(),
-            "gm_move_uci": actual.uci(),
-            "gm_move_san": actual_san,
-            "guess_uci": guess_uci,
-        }
-    return {"ok": False, "error": "unknown game"}
+    info = _get_game(game_id)
+    if info is None:
+        return {"ok": False, "error": "game not found"}
+    moves = info["moves"]
+    if ply >= len(moves):
+        return {"ok": False, "error": "invalid ply"}
+    # Replay to the position and get the actual move's UCI + SAN.
+    b = chess.Board()
+    for mv in moves[: ply + 1]:
+        b.push_san(mv)
+    actual_uci = b.peek().uci()
+    return {
+        "ok": True,
+        "correct": guess_uci == actual_uci,
+        "gm_move_uci": actual_uci,
+        "gm_move_san": moves[ply],
+        "guess_uci": guess_uci,
+    }
 
 
 async def explain_move(game_id: str, ply: int) -> dict[str, Any]:
@@ -349,98 +461,151 @@ async def explain_move(game_id: str, ply: int) -> dict[str, Any]:
     from .chess_book_memory import _concept_from, retrieve
     from .chess_trainer import _best_move_and_cp, coach_plan
 
-    for c in CURATED:
-        if f"{c['player']}-{c['tag']}" != game_id:
-            continue
-        summary, board = _load_game(c["player"], c["white"], c["black"])
-        if board is None or ply >= len(board.move_stack):
-            return {"ok": False, "error": "invalid ply"}
-        gm_move = board.move_stack[ply]
-        gm_san = summary["moves"][ply]
+    info = _get_game(game_id)
+    if info is None:
+        return {"ok": False, "error": "game not found"}
+    moves = info["moves"]
+    if ply >= len(moves):
+        return {"ok": False, "error": "invalid ply"}
+    gm_san = moves[ply]
+    # Rebuild the position BEFORE the GM's move from the cached SAN moves.
+    before = chess.Board()
+    for mv in moves[:ply]:
+        before.push_san(mv)
+    gm_move = before.parse_san(gm_san)
 
-        # Position BEFORE the GM's move + the move's eval.
-        before = chess.Board()
-        for mv in board.move_stack[:ply]:
-            before.push(mv)
-        before_best, before_cp, _ = await asyncio.to_thread(_best_move_and_cp, before)
-        after = before.copy()
-        after.push(gm_move)
-        after_cp = (await asyncio.to_thread(_best_move_and_cp, after))[1]
+    before_best, before_cp, _ = await asyncio.to_thread(_best_move_and_cp, before)
+    after = before.copy()
+    after.push(gm_move)
+    after_cp = (await asyncio.to_thread(_best_move_and_cp, after))[1]
 
-        # Deterministic grounding: coach plan + eval swing + book fragments.
-        plan = coach_plan(before.fen())
-        concept = _concept_from("strategy", gm_san)
-        frags = await retrieve(f"{concept} {gm_san}", top_k=2)
-        book_lines = "\n".join(
-            f"[{r['title']}]: {r['text'][:250]}" for r in frags if r.get("text")
+    # Deterministic grounding: coach plan + eval swing + book fragments.
+    plan = coach_plan(before.fen())
+    concept = _concept_from("strategy", gm_san)
+    frags = await retrieve(f"{concept} {gm_san}", top_k=2)
+    book_lines = "\n".join(
+        f"[{r['title']}]: {r['text'][:250]}" for r in frags if r.get("text")
+    )
+
+    # Deterministic narrative (always present).
+    det = f"GM played {gm_san}. "
+    if plan.get("ok") and plan.get("plan"):
+        det += f"Position plan before this move: {plan['plan']}. "
+    # after_cp is from the NEW side-to-move (opponent) — negate to the
+    # mover's perspective before comparing with before_cp.
+    mover_after = -after_cp
+    swing = mover_after - before_cp
+    if swing > 60:
+        det += f"The move improved White's chances by roughly {round(swing)} centipawns. "
+    elif swing < -60:
+        det += f"The move gives up ~{round(-swing)} centipawns — likely a deliberate positional choice. "
+
+    # Cloud prose (best-effort): why + what they're setting up. Prefer
+    # DeepSeek direct (DEEPSEEK_API_KEY, native provider — clean prose,
+    # reliable); fall back to the OpenCode Go proxy.
+    prose = ""
+    s = get_settings()
+    ds_key = os.getenv("DEEPSEEK_API_KEY", "")
+    key = os.getenv("OPENAI_API_KEY", "")
+    if ds_key or key:
+        prompt = (
+            "You are a chess coach explaining a famous grandmaster move to a ~500-rated "
+            "beginner. Explain in 2-3 short sentences WHY the GM played this move, what it "
+            "threatens, and what it is setting up (the plan). Use only the position facts "
+            "and book ideas given; do not invent analysis. Do not reason — just answer "
+            "directly.\n\n"
+            f"GAME: {info['name']}\nPOSITION BEFORE (FEN): {before.fen()}\n"
+            f"GM PLAYED: {gm_san}\n\n"
+            f"COACH PLAN: {plan.get('plan', '')}\n"
+            f"BOOK IDEAS:\n{book_lines or '(none)'}\n\nEXPLANATION:"
         )
+        try:
+            async with asyncio.timeout(45):
+                if ds_key:
+                    resp = await litellm.acompletion(
+                        model="deepseek/deepseek-v4-flash",
+                        messages=[{"role": "user", "content": prompt}],
+                        api_key=ds_key,
+                        max_tokens=500,
+                        timeout=45,
+                    )
+                else:
+                    resp = await litellm.acompletion(
+                        model=getattr(s, "analysis_cloud_model", None)
+                        or "openai/deepseek-v4-flash",
+                        messages=[{"role": "user", "content": prompt}],
+                        api_base=os.getenv(
+                            "OPENAI_API_BASE", "https://opencode.ai/zen/go/v1"
+                        ),
+                        api_key=key,
+                        custom_llm_provider="openai",
+                        max_tokens=2000,
+                        timeout=45,
+                    )
+            prose = (resp.choices[0].message.content or "").strip()
+        except Exception as exc:
+            log.warning("gm explain LLM failed: %s", exc)
 
-        # Deterministic narrative (always present).
-        det = f"GM played {gm_san}. "
-        if plan.get("ok") and plan.get("plan"):
-            det += f"Position plan before this move: {plan['plan']}. "
-        # after_cp is from the NEW side-to-move (opponent) — negate to the
-        # mover's perspective before comparing with before_cp.
-        mover_after = -after_cp
-        swing = mover_after - before_cp
-        if swing > 60:
-            det += f"The move improved White's chances by roughly {round(swing)} centipawns. "
-        elif swing < -60:
-            det += f"The move gives up ~{round(-swing)} centipawns — likely a deliberate positional choice. "
+    return {
+        "ok": True,
+        "game_id": game_id,
+        "ply": ply,
+        "gm_move_san": gm_san,
+        "fen_before": before.fen(),
+        "explanation": (prose + "\n\n" + det).strip() if prose else det.strip(),
+        "degraded": not prose,
+    }
 
-        # Cloud prose (best-effort): why + what they're setting up. Prefer
-        # DeepSeek direct (DEEPSEEK_API_KEY, native provider — clean prose,
-        # reliable); fall back to the OpenCode Go proxy.
-        prose = ""
-        s = get_settings()
-        ds_key = os.getenv("DEEPSEEK_API_KEY", "")
-        key = os.getenv("OPENAI_API_KEY", "")
-        if ds_key or key:
-            prompt = (
-                "You are a chess coach explaining a famous grandmaster move to a ~500-rated "
-                "beginner. Explain in 2-3 short sentences WHY the GM played this move, what it "
-                "threatens, and what it is setting up (the plan). Use only the position facts "
-                "and book ideas given; do not invent analysis. Do not reason — just answer "
-                "directly.\n\n"
-                f"GAME: {c['name']}\nPOSITION BEFORE (FEN): {before.fen()}\n"
-                f"GM PLAYED: {gm_san}\n\n"
-                f"COACH PLAN: {plan.get('plan', '')}\n"
-                f"BOOK IDEAS:\n{book_lines or '(none)'}\n\nEXPLANATION:"
-            )
-            try:
-                async with asyncio.timeout(45):
-                    if ds_key:
-                        resp = await litellm.acompletion(
-                            model="deepseek/deepseek-v4-flash",
-                            messages=[{"role": "user", "content": prompt}],
-                            api_key=ds_key,
-                            max_tokens=500,
-                            timeout=45,
-                        )
-                    else:
-                        resp = await litellm.acompletion(
-                            model=getattr(s, "analysis_cloud_model", None)
-                            or "openai/deepseek-v4-flash",
-                            messages=[{"role": "user", "content": prompt}],
-                            api_base=os.getenv(
-                                "OPENAI_API_BASE", "https://opencode.ai/zen/go/v1"
-                            ),
-                            api_key=key,
-                            custom_llm_provider="openai",
-                            max_tokens=2000,
-                            timeout=45,
-                        )
-                prose = (resp.choices[0].message.content or "").strip()
-            except Exception as exc:
-                log.warning("gm explain LLM failed: %s", exc)
 
+async def study_game(game_id: str, ply: int = 0) -> dict[str, Any]:
+    """STUDY MODE: return the position at `ply` AND the GM's move at that ply
+    with a full 'why' explanation (what it threatens, what it sets up). Unlike
+    guess-the-move, the move is REVEALED and EXPLAINED — the learner studies
+    the game move-by-move instead of guessing. Served from the durable game
+    cache (parsed from the PGN DB once), so it is instant on repeat calls."""
+    info = _get_game(game_id)
+    if info is None:
+        return {"ok": False, "error": "unknown game"}
+    moves = info["moves"]
+    if ply >= len(moves):
         return {
             "ok": True,
+            "finished": True,
             "game_id": game_id,
+            "name": info["name"],
+            "result": info["result"],
             "ply": ply,
-            "gm_move_san": gm_san,
-            "fen_before": before.fen(),
-            "explanation": (prose + "\n\n" + det).strip() if prose else det.strip(),
-            "degraded": not prose,
+            "total_plies": len(moves),
         }
-    return {"ok": False, "error": "unknown game"}
+    # Rebuild the board up to `ply` (the position BEFORE the move) from the
+    # cached SAN moves — no PGN database scan.
+    b = chess.Board()
+    for mv in moves[:ply]:
+        b.push_san(mv)
+    gm_san = moves[ply]
+    # The GM move's UCI (push it on a scratch board to get the UCI).
+    scratch = b.copy()
+    scratch.push_san(gm_san)
+    gm_uci = scratch.peek().uci()
+    try:
+        explanation = await explain_move(game_id, ply)
+        explain = explanation.get("explanation", "")
+        degraded = explanation.get("degraded", False)
+    except Exception:
+        explain, degraded = "", True
+    return {
+        "ok": True,
+        "finished": False,
+        "game_id": game_id,
+        "name": info["name"],
+        "year": info.get("year"),
+        "ply": ply,
+        "total_plies": len(moves),
+        "fen_before": b.fen(),
+        "side_to_move": "white" if b.turn else "black",
+        "move_number": ply // 2 + 1,
+        "gm_move_san": gm_san,
+        "gm_move_uci": gm_uci,
+        "explanation": explain,
+        "degraded": degraded,
+    }

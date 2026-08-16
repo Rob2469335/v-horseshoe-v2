@@ -360,7 +360,7 @@ async def trainer_gm_games() -> dict[str, Any]:
     """The curated famous Fischer + Carlsen games for guess-the-move study."""
     from ..services.gm_games import list_gm_games
 
-    return list_gm_games()
+    return await list_gm_games()
 
 
 @router.post("/gm-games/curate")
@@ -377,6 +377,16 @@ async def trainer_gm_play(req: GmGuessRequest) -> dict[str, Any]:
     from ..services.gm_games import play_game
 
     return play_game(req.game_id, req.ply)
+
+
+@router.post("/gm-games/study")
+async def trainer_gm_study(req: GmExplainRequest) -> dict[str, Any]:
+    """STUDY MODE: the position at `ply` + the GM's move there, with a full
+    'why' explanation (what it threatens, what it sets up). The move is
+    REVEALED and explained — no guessing. Step through the game move-by-move."""
+    from ..services.gm_games import study_game
+
+    return await study_game(req.game_id, req.ply)
 
 
 @router.post("/gm-games/guess")

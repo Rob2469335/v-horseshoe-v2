@@ -22,16 +22,21 @@ SAMPLE_PGN = """[Event "Test Game"]
 
 @pytest.fixture(autouse=True)
 def _isolate(monkeypatch, tmp_path):
-    # Point the DB path at a temp dir and write a tiny synthetic Fischer DB.
+    # Point the DB path + the durable cache at a temp dir and write a tiny
+    # synthetic Fischer DB, so tests never read the real 5.7MB database or the
+    # production curated-games cache.
     db = tmp_path / "db"
     db.mkdir(parents=True, exist_ok=True)
     (db / "Fischer.pgn").write_text(SAMPLE_PGN, encoding="utf-8")
     (db / "Carlsen.pgn").write_text(SAMPLE_PGN, encoding="utf-8")
     monkeypatch.setattr(gg, "_DB_FISCHER", db / "Fischer.pgn")
     monkeypatch.setattr(gg, "_DB_CARLSEN", db / "Carlsen.pgn")
+    monkeypatch.setattr(gg, "_GAMES_CACHE", tmp_path / "curated_games.json")
+    monkeypatch.setattr(gg, "_games_store", None)
     # Only the first curated game matches our synthetic DB.
     monkeypatch.setattr(gg, "CURATED", [gg.CURATED[0]])
     yield
+    monkeypatch.setattr(gg, "_games_store", None)
 
 
 def test_load_game_parses_moves():
@@ -48,7 +53,9 @@ def test_load_game_not_found():
 
 
 def test_list_gm_games():
-    res = gg.list_gm_games()
+    import asyncio
+
+    res = asyncio.run(gg.list_gm_games())
     assert res["ok"] is True
     assert res["count"] == 1
     assert res["games"][0]["move_count"] == 8
@@ -141,3 +148,34 @@ def test_explain_move_deterministic(monkeypatch):
     assert res["gm_move_san"] == "Nf6"
     assert res["explanation"]
     assert "Nf6" in res["explanation"]
+
+
+def test_study_mode_reveals_and_explains(monkeypatch):
+    """STUDY MODE: the GM's move is REVEALED with a full explanation, not a
+    guess prompt — and stepping past the end reports finished."""
+    import asyncio
+
+    from swarm_os.services import chess_trainer as ct
+
+    def fake_bmcp(board):
+        return ("g1f3", 30.0, ["g1f3"])
+
+    monkeypatch.setattr(ct, "_best_move_and_cp", fake_bmcp)
+    monkeypatch.setenv("OPENAI_API_KEY", "")
+
+    async def fake_retrieve(q, top_k=2):
+        return []
+
+    monkeypatch.setattr("swarm_os.services.chess_book_memory.retrieve", fake_retrieve)
+
+    res = asyncio.run(gg.study_game("fischer-game-of-the-century", 0))
+    assert res["ok"] is True
+    assert res["finished"] is False
+    assert res["gm_move_san"] == "Nf3"  # the GM's first move is shown, not guessed
+    assert res["explanation"]
+    assert res["fen_before"].startswith("rnbqkbnr/pppppppp")
+
+    # Stepping past the final ply reports finished.
+    res_end = asyncio.run(gg.study_game("fischer-game-of-the-century", 1000))
+    assert res_end["ok"] is True
+    assert res_end["finished"] is True
