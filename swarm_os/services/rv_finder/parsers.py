@@ -497,18 +497,39 @@ async def _discover_web(budget: int, rv_type: str = "all", max_results: int = 40
 # Uses the Crawl4AI browser fetch so the JS-rendered listing grid is read.
 # --------------------------------------------------------------------------
 def _build_craigslist_queries(budget: int, rv_type: str) -> list[str]:
-    """Craigslist search URLs for the budget + (optionally) the RV type."""
+    """Craigslist search URLs for the budget + (optionally) the RV type.
+
+    For a live-in RV for 2 people, the self-propelled classes matter most, so
+    the default ('all') and motorhome-family filters ALSO run a dedicated
+    motorhome/campervan search — otherwise the grid is dominated by cheap
+    trailers and the Class B/C vans you actually want get buried.
+    """
     area = "longisland"  # user's home area; extendable to a radius later
-    filters = f"max_price={int(budget)}"
-    if rv_type and rv_type != "all" and rv_type != "unknown":
-        t = rv_type.lower()
+    base = f"https://{area}.craigslist.org/search/rvs?max_price={int(budget)}"
+    urls = [base]
+    t = (rv_type or "").lower()
+    want_motorhome = (
+        rv_type == "all"
+        or rv_type == "unknown"
+        or "motorhome" in t
+        or t in ("class a/b/c", "class a/b", "van", "camper van", "sprinter", "rv", "camper")
+    )
+    if want_motorhome:
+        # Campervan = Class B (van conversions); motorhome = Class A/C + B.
+        urls.append(base + "&auto_make_model=campervan")
+        urls.append(base + "&auto_make_model=motorhome")
+    else:
         term = {
-            "class a motorhome": "motorhome",
             "class b motorhome": "campervan",
             "class c motorhome": "motorhome",
+            "travel trailer": "trailer",
+            "fifth wheel": "fifth",
+            "toy hauler": "toy",
+            "truck camper": "camper",
         }.get(t, t)
-        filters += f"&auto_make_model={term}"
-    return [f"https://{area}.craigslist.org/search/rvs?{filters}"]
+        if term and term != "all":
+            urls.append(base + f"&auto_make_model={term}")
+    return urls
 
 
 def _parse_craigslist_content(content: str, budget: int) -> list[RVListing]:
@@ -538,6 +559,12 @@ def _parse_craigslist_content(content: str, budget: int) -> list[RVListing]:
         title = re.sub(r"\s+\d+$", "", title).strip()
         title = re.sub(r"\s*https?://\S+", "", title).strip()
         title = re.sub(r"\s+", " ", title).strip()
+        # Crawl4AI truncates long image-alt titles ("...5th WHEEL TR"). The URL
+        # slug carries the full readable title — use it when it's longer.
+        slug_title = re.sub(r"[-_]+", " ", slug.rsplit("/", 1)[0])
+        slug_title = re.sub(r"^\s*\S+\s+", "", slug_title)  # drop area word
+        if len(slug_title) > len(title):
+            title = re.sub(r"\s+\d+$", "", slug_title).strip().title()
         if len(title) < 6:
             continue
         # Price follows within the next ~160 chars as "$N,NNN"
@@ -551,9 +578,11 @@ def _parse_craigslist_content(content: str, budget: int) -> list[RVListing]:
         # Location: from the "| {MM/DD}{Area} |" segment right before the price.
         loc_m = re.search(r"\|\s*\d{1,2}/\d{1,2}\s*([A-Za-z .-]+?)\s*\|\s*\$", tail)
         location = loc_m.group(1).strip().title() if loc_m else ""
-        # Year / make / model from the title via existing helpers.
+        # Year / make / model from the title via existing helpers. The Craigslist
+        # title is complete (make + model), so the URL slug is NOT fed in — its
+        # area/hash tokens would pollute the model extraction.
         year = _extract_year(title) or 0
-        make, model = _extract_make_model(title, url)
+        make, model = _extract_make_model(title, "")
         rv_type = _classify_rv_type(title)
         if location:
             location = f"{location}, NY"

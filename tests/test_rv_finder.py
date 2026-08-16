@@ -304,3 +304,21 @@ def test_craigslist_parser_extracts_listings_with_price_and_location():
     second = listings[1]
     assert second.price == 19900
     assert second.url.startswith("https://www.craigslist.org/view/d/")
+
+
+def test_craigslist_queries_prioritize_motorhomes():
+    """The default/all Craigslist search must ALSO run dedicated motorhome and
+    campervan queries so self-propelled live-in units aren't buried under
+    trailers. Type-specific filters map to a single targeted query."""
+    from swarm_os.services.rv_finder import parsers
+
+    all_urls = parsers._build_craigslist_queries(25000, "all")
+    assert any("auto_make_model=campervan" in u for u in all_urls)
+    assert any("auto_make_model=motorhome" in u for u in all_urls)
+
+    trailer_urls = parsers._build_craigslist_queries(25000, "Travel Trailer")
+    assert all("auto_make_model=campervan" not in u for u in trailer_urls)
+    assert any("auto_make_model=trailer" in u for u in trailer_urls)
+
+    cb_urls = parsers._build_craigslist_queries(25000, "Class B Motorhome")
+    assert any("auto_make_model=campervan" in u for u in cb_urls)
