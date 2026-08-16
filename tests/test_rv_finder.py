@@ -322,3 +322,7 @@ def test_craigslist_queries_prioritize_motorhomes():
 
     cb_urls = parsers._build_craigslist_queries(25000, "Class B Motorhome")
     assert any("auto_make_model=campervan" in u for u in cb_urls)
+
+    bc_urls = parsers._build_craigslist_queries(25000, "class b/c")
+    assert any("auto_make_model=campervan" in u for u in bc_urls)
+    assert any("auto_make_model=motorhome" in u for u in bc_urls)

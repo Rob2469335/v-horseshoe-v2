@@ -512,7 +512,7 @@ def _build_craigslist_queries(budget: int, rv_type: str) -> list[str]:
         rv_type == "all"
         or rv_type == "unknown"
         or "motorhome" in t
-        or t in ("class a/b/c", "class a/b", "van", "camper van", "sprinter", "rv", "camper")
+        or t in ("class a/b/c", "class a/b", "class b/c", "class b or c", "b/c", "van", "camper van", "sprinter", "rv", "camper")
     )
     if want_motorhome:
         # Campervan = Class B (van conversions); motorhome = Class A/C + B.
