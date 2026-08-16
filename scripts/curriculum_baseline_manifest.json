@@ -1,0 +1,24 @@
+{
+  "curriculum_version": "A-322",
+  "description": "Immutable baseline snapshot of the PARTIAL-data curriculum (Version A). Frozen at 625/842 games. Used as the experimental control for the A/B comparison against the full-842 curriculum (Version B).",
+  "snapshot_files": {
+    "curriculum_A_322.jsonl": {
+      "path": "data/chess/baseline/curriculum_A_322.jsonl",
+      "sha256": "8A08F220B1E3828561F4883B0BEF6083EB5F670814CADB7A18550271E16A752B",
+      "item_count": 322
+    },
+    "mistakes_at_625.jsonl": {
+      "path": "data/chess/baseline/mistakes_at_625.jsonl",
+      "sha256": "79A1B26646517EF30318C85935765FDFD2336F2BD4C861EB4A230BA64C9D6F4B",
+      "entries_in_capped_file": 500
+    }
+  },
+  "snapshot_context": {
+    "games_done_at_snapshot": 625,
+    "games_total": 842,
+    "mistakes_queued_at_snapshot": 11636,
+    "captured_at_utc": "2026-08-16T20:09:00Z",
+    "note": "mistakes.jsonl is a 500-entry rolling window; mistakes_queued_at_snapshot is the durable job counter."
+  },
+  "integrity_rule": "compare_curriculum.py verifies the on-disk baseline file SHA-256 against this manifest before reporting. A mismatch means the baseline was modified and the comparison is invalid."
+}

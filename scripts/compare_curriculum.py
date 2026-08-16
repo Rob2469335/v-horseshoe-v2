@@ -30,7 +30,43 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 _BASELINE = ROOT / "data" / "chess" / "baseline" / "curriculum_A_322.jsonl"
+_BASELINE_MISTAKES = ROOT / "data" / "chess" / "baseline" / "mistakes_at_625.jsonl"
 _TRAINING = ROOT / "data" / "chess" / "training.jsonl"
+_MANIFEST = ROOT / "scripts" / "curriculum_baseline_manifest.json"
+
+
+def _sha256(path: Path) -> str:
+    import hashlib
+
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest().upper()
+
+
+def _verify_baseline_integrity() -> tuple[bool, str]:
+    """Verify the on-disk baseline files match the tracked manifest hashes.
+    A mismatch means the 'immutable' Version A reference was modified — the
+    A/B comparison would then be invalid (tamper detection without committing
+    the dataset itself)."""
+    if not _MANIFEST.exists():
+        return False, f"manifest missing: {_MANIFEST}"
+    manifest = json.loads(_MANIFEST.read_text(encoding="utf-8"))
+    files = manifest.get("snapshot_files", {})
+    for name, meta in files.items():
+        path = ROOT / meta["path"]
+        if not path.exists():
+            return False, f"baseline file missing: {path}"
+        actual = _sha256(path)
+        if actual != meta["sha256"]:
+            return False, (
+                f"SHA-256 mismatch for {name}:\n"
+                f"  manifest: {meta['sha256']}\n"
+                f"  on disk : {actual}\n"
+                f"The Version A baseline was modified — the comparison is invalid."
+            )
+    return True, "baseline verified: on-disk files match the manifest hashes"
 
 
 def _load_jsonl(path: Path) -> list[dict]:
@@ -53,7 +89,6 @@ def _build_full_curriculum() -> list[dict]:
     Mirrors the build functions in chess_training (idempotent on a fresh file).
     Returns the list of items that WOULD be generated from the full dataset."""
     import tempfile
-    import importlib
 
     import swarm_os.services.chess_training as ct
 
@@ -79,6 +114,12 @@ def _item_key(it: dict) -> tuple:
 
 
 def compare() -> dict:
+    # Integrity gate: refuse to report unless the frozen Version A baseline
+    # still matches the tracked manifest hashes (tamper detection).
+    ok, msg = _verify_baseline_integrity()
+    if not ok:
+        return {"ok": False, "integrity": msg}
+
     version_a = _load_jsonl(_BASELINE)
     version_b = _build_full_curriculum()
 
@@ -129,6 +170,12 @@ def compare() -> dict:
 
 
 if __name__ == "__main__":
+    # Integrity check first: the frozen Version A baseline must match the
+    # tracked manifest hashes, or the comparison is invalid.
+    ok, msg = _verify_baseline_integrity()
+    print("INTEGRITY:", msg)
+    if not ok:
+        sys.exit(1)
     # Refuse to run before the analysis is complete.
     from swarm_os.services import chess_analysis_job as cj
 
