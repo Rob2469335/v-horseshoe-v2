@@ -128,8 +128,10 @@ class LlamaClient:
                                 chunk = choices[0].get("delta", {}).get("content", "")
                                 if chunk:
                                     yield chunk
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            log.debug(
+                                "LLM stream chunk parse skipped (GLM fork): %s", exc
+                            )
             except Exception as e:
                 log.error(f"Error in LlamaClient.stream_generate (GLM fork): {e}")
                 raise
@@ -155,8 +157,8 @@ class LlamaClient:
                                 chunk = choices[0].get("delta", {}).get("content", "")
                                 if chunk:
                                     yield chunk
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            log.debug("LLM stream chunk parse skipped: %s", exc)
             except Exception as e:
                 log.error(f"Error in LlamaClient.stream_generate: {e}")
                 raise

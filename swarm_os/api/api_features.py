@@ -12,6 +12,96 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/features", tags=["features"])
 
 
+def _extract_json_object(text: str) -> dict | None:
+    """Robustly pull a single JSON object out of an LLM response.
+
+    Handles fenced code blocks, leading prose, and nested braces. Returns None
+    if no parseable object exists (fail-closed: the caller degrades rather than
+    presenting an unverified answer).
+    """
+    import json as _json
+
+    if not text:
+        return None
+    stripped = text.strip()
+    # Prefer the largest balanced { ... } region.
+    start = stripped.find("{")
+    if start == -1:
+        return None
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(start, len(stripped)):
+        c = stripped[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                in_str = False
+            continue
+        if c == '"':
+            in_str = True
+        elif c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                candidate = stripped[start : i + 1]
+                try:
+                    parsed = _json.loads(candidate)
+                except ValueError:
+                    # Try stripping a trailing comma before the closing brace.
+                    try:
+                        candidate2 = candidate[: candidate.rfind("}")].rstrip()
+                        if candidate2.endswith(","):
+                            candidate2 = candidate2[:-1] + "}"
+                        parsed = _json.loads(candidate2)
+                    except ValueError:
+                        return None
+                return parsed if isinstance(parsed, dict) else None
+    return None
+
+
+async def _llm_complete(prompt: str, max_tokens: int = 800) -> str:
+    """Analysis-cloud completion (deepseek-v4-flash by default). Never raises —
+    an LLM outage degrades to an empty answer, never a fabricated one."""
+    try:
+        import litellm
+        from ..core.settings import get_settings
+        import os
+
+        s = get_settings()
+        model = getattr(s, "analysis_cloud_model", None) or "openai/deepseek-v4-flash"
+        base = os.getenv("OPENAI_API_BASE", "https://opencode.ai/zen/go/v1")
+        key = os.getenv("OPENAI_API_KEY", "")
+        resp = await litellm.acompletion(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            api_base=base,
+            api_key=key,
+            custom_llm_provider="openai",
+            max_tokens=max_tokens,
+            timeout=120,
+        )
+        return resp.choices[0].message.content or ""
+    except Exception as exc:
+        log.warning("web-research synthesis failed: %s", exc)
+        return ""
+
+
+async def _llm_verdict(prompt: str, max_tokens: int = 900) -> dict | None:
+    """Ask the model for the structured verdict JSON. Returns the parsed dict, or
+    None when the model failed / returned unparseable output (fail-closed: the
+    caller then degrades to the plain synthesis path — never fabricates)."""
+    text = await _llm_complete(prompt, max_tokens=max_tokens)
+    verdict = _extract_json_object(text)
+    if verdict is None:
+        log.warning("web-research verdict: model output not parseable as JSON")
+    return verdict
+
+
 class QueryRequest(BaseModel):
     query: str
     collection: str = "chat_archive"
@@ -23,6 +113,7 @@ class WebResearchRequest(BaseModel):
     max_results: int = 6
     deep_read: int = 3
     synthesize: bool = True
+    verdict: bool = True
 
 
 class DeepResearchRequest(BaseModel):
@@ -103,13 +194,23 @@ async def web_research(req: WebResearchRequest):
     """Perplexity-style web research: search the live web, deep-read the top
     results, then synthesize a cited answer via the model.
 
-    Pipeline: web_search_handler (multi-provider: Tavily/Brave/Exa/Serper) ->
+    Pipeline: web_search_handler (parallel fan-out across every configured engine
+    — Tavily/Serper/Brave/Exa/SerpAPI/TinyFish run concurrently and merge by RRF
+    consensus ranking, each result tagged with its provider(s)) ->
     web_fetch_handler (Crawl4AI deep-read) on the top `deep_read` results ->
     a synthesis prompt to the analysis-cloud model (deepseek-v4-flash by default)
     that MUST cite sources as [1][2]... against the fetched list.
 
+    When `verdict=true` (default) the synthesis is a single JSON object carrying
+    the cited `answer`, a fail-closed `sufficiency` judgment (SURE-RAG: an answer
+    the sources can't ground is flagged `insufficient`, never silently asserted),
+    and a `conflicts` list (EvidentialRAG: contradictions between sources are
+    surfaced, not papered over). If the model output isn't parseable, the route
+    fails closed to the deterministic plain synthesis — it never fabricates a
+    verdict.
+
     Response: {"status": "ok"|"degraded", "results": [...], "answer": "...",
-               "citations": [{n, title, url}]}
+               "citations": [{n, title, url}], "verdict": {...}|absent}
     """
     query = req.query.strip()
     if not query:
@@ -165,43 +266,44 @@ async def web_research(req: WebResearchRequest):
                 "note": "synthesis disabled (synthesize=false)",
             }
 
-        # 3) Synthesize a cited answer.
+        # 3) Synthesize a cited answer. When `verdict=true` the model also emits
+        # an explicit sufficiency judgment (fail-closed per SURE-RAG: an answer
+        # that can't be grounded is flagged, never silently asserted) and a
+        # conflict list (per EvidentialRAG: contradictions between sources are
+        # surfaced, not papered over).
         sources_block = "\n\n".join(
             f"[{s['n']}] {s['title']} — {s['url']}\n{s['text']}"
             for s in sources
             if s.get("text")
         )
-        prompt = (
-            "You are a web researcher. Answer the user's question using ONLY the sources below. "
-            "Cite each claim with the source number in brackets, e.g. [1]. Be precise and concise. "
-            "If the sources don't contain the answer, say so and note what's missing.\n\n"
-            f"QUESTION: {query}\n\nSOURCES:\n{sources_block}"
-        )
-        answer = ""
-        try:
-            import litellm
-            from ..core.settings import get_settings
-
-            s = get_settings()
-            model = (
-                getattr(s, "analysis_cloud_model", None) or "openai/deepseek-v4-flash"
+        verdict: dict | None = None
+        if req.verdict:
+            verdict_prompt = (
+                "You are a web researcher. Answer the user's question using ONLY the sources below. "
+                "Cite each claim with the source number in brackets, e.g. [1]. Be precise and concise. "
+                "If the sources don't contain the answer, say so and note what's missing.\n\n"
+                "Respond with a single JSON object (no prose outside it) of this exact shape:\n"
+                '{"answer": "your cited answer", '
+                '"sufficiency": "sufficient" | "insufficient", '
+                '"sufficiency_note": "one sentence on whether the sources are enough to answer confidently; if not, what is missing", '
+                '"conflicts": [{"claim_a": "claim as stated in one source", '
+                '"claim_b": "contradictory claim as stated in another", '
+                '"sources": [1, 3]}]}\n'
+                "`conflicts` must be [] when the sources agree.\n\n"
+                f"QUESTION: {query}\n\nSOURCES:\n{sources_block}"
             )
-            import os
-
-            base = os.getenv("OPENAI_API_BASE", "https://opencode.ai/zen/go/v1")
-            key = os.getenv("OPENAI_API_KEY", "")
-            resp = await litellm.acompletion(
-                model=model,
-                messages=[{"role": "user", "content": prompt}],
-                api_base=base,
-                api_key=key,
-                custom_llm_provider="openai",
-                max_tokens=800,
-                timeout=120,
+            verdict = await _llm_verdict(verdict_prompt)
+        if verdict is None:
+            # Deterministic fallback: no verifiable synthesis — never fabricate.
+            prompt = (
+                "You are a web researcher. Answer the user's question using ONLY the sources below. "
+                "Cite each claim with the source number in brackets, e.g. [1]. Be precise and concise. "
+                "If the sources don't contain the answer, say so and note what's missing.\n\n"
+                f"QUESTION: {query}\n\nSOURCES:\n{sources_block}"
             )
-            answer = resp.choices[0].message.content or ""
-        except Exception as exc:
-            log.warning("web-research synthesis failed: %s", exc)
+            answer = await _llm_complete(prompt)
+        else:
+            answer = verdict.get("answer", "")
 
         return {
             "status": "ok",
@@ -210,6 +312,7 @@ async def web_research(req: WebResearchRequest):
             "citations": [{k: v for k, v in s.items() if k != "text"} for s in sources]
             if sources
             else [],
+            **({"verdict": verdict} if verdict else {}),
         }
     except ImportError:
         raise HTTPException(status_code=503, detail="web research modules unavailable")

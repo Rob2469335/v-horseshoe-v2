@@ -675,8 +675,8 @@ class AgentServiceV2:
                 v = set(v)
             try:
                 setattr(state, f, v)
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug("Failed to set state field %s: %s", f, e)
         return state
 
     def _feed_outcome(
@@ -2157,8 +2157,8 @@ class AgentServiceV2:
                 genome_id, genome_weights = await asyncio.to_thread(
                     get_active_genome, True
                 )
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("active-genome load skipped for %r: %s", agent_id, exc)
 
         history = list(history or [])
         chain = list(delegation_chain or [agent_id])
@@ -2208,8 +2208,8 @@ class AgentServiceV2:
             from runtime_v2.services._llm_client import get_litellm_model
 
             resolved_model = get_litellm_model(agent_id, model)
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("Failed to resolve LiteLLM model mapping: %s", e)
         yield {
             "agent_id": agent_id,
             "type": "model_selected",

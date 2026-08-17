@@ -157,8 +157,8 @@ async def _find_element(page, role: str, name: str):
             loc = page.locator(sel)
             if await loc.count() > 0:
                 return loc
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("CSS locator probe failed (sel=%r): %s", sel, exc)
     return None
 
 
@@ -327,8 +327,8 @@ async def _playwright_impl(params: Dict[str, Any], trace_hook=None) -> Dict[str,
                     return {"ok": False, "filled": filled, "failed": failed,
                             "incomplete": validity, "url": page.url,
                             "error": "form has required/invalid fields after fill"}
-            except Exception:
-                pass  # validity check is best-effort
+            except Exception as exc:
+                logger.debug("form validity check skipped (best-effort): %s", exc)
             return {"ok": not failed, "filled": filled, "failed": failed, "url": page.url}
 
         elif operation == "browser_verify" or operation == "verify":

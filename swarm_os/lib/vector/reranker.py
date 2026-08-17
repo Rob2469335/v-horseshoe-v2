@@ -10,8 +10,8 @@ POST /features/search endpoint raise ImportError and return 503
 """
 from __future__ import annotations
 
+import asyncio
 import logging
-import threading
 
 import httpx
 
@@ -23,8 +23,10 @@ RERANK_MODEL = "qllama-bge-reranker-v2-m3-latest.gguf"
 # Bound concurrent rerank HTTP calls: the BGE reranker is memory-bandwidth bound
 # on the iGPU, and analysis-agent bursts saturated DDR5 (the historical 90/120s
 # timeouts). A semaphore keeps the burst bounded while batching preserves
-# throughput.
-_RERANK_SEM = threading.BoundedSemaphore(2)
+# throughput. asyncio.BoundedSemaphore — the synchronous acquire of the old
+# threading variant could block the event loop when the semaphore was saturated
+# (all callers are async: api_features rerank, legal_search rerank).
+_RERANK_SEM = asyncio.BoundedSemaphore(2)
 
 # The reranker (like the embedder) rejects requests whose combined token count
 # exceeds llama.cpp's physical batch (`-b 8192`), and on CPU a huge single doc
@@ -98,10 +100,10 @@ async def rerank(query: str, candidates: list[dict], top_k: int = 5) -> list[dic
         # Word-choop every candidate so a long statute section can't overflow
         # the reranker's physical batch (500) or stall CPU inference (ReadTimeout).
         texts = [_fit_rerank_budget(_candidate_text(c)) for c in candidates]
-        # _RERANK_SEM is a threading.BoundedSemaphore (the HTTP client is
-        # threadsafe/sync-compatible) — must use `with`, not `async with` (the
-        # latter raised TypeError and degraded every rerank to the dense order).
-        with _RERANK_SEM:
+        # _RERANK_SEM is an asyncio.BoundedSemaphore (all callers are async) —
+        # must use `async with`, never the old threading semaphore's sync `with`,
+        # which could block the event loop on a saturated burst.
+        async with _RERANK_SEM:
             resp = await _get_client().post(
                 f"{RERANK_URL}/v1/rerank",
                 headers={"Authorization": "Bearer llama"},

@@ -73,8 +73,8 @@ async def _store_decision_reflexion(
             )
         )
         log.debug("[%s] Scheduled background episodic memory write for reflexion", agent_id)
-    except Exception:
-        pass
+    except Exception as exc:
+        log.debug("reflexion episodic memory write skipped: %s", exc)
     try:
         from swarm_os.services.reflection_loop import get_reflection_service
 
@@ -303,8 +303,8 @@ async def get_tool_decision(
                         )
                         if lessons:
                             past_lessons = f"\nPAST LESSONS FROM MEMORY:\n{lessons}\n"
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        log.debug("Failed to retrieve memory core lessons: %s", e)
 
                     recovery_hint = (
                         f"SYSTEM RECOVERY (attempt {empty_retry + 2}): Your previous response was completely empty. "

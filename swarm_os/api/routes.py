@@ -309,8 +309,8 @@ async def list_tools(runtime=Depends(runtime_dep)):
             name = f"mcp:{t['server']}:{t['name']}"
             if name not in cap_names:
                 cap_names.append(name)
-    except Exception:
-        pass
+    except Exception as exc:
+        log.debug("MCP tools merge skipped on /tools: %s", exc)
 
     return ToolListResponse(
         capabilities=cap_names,
@@ -986,7 +986,7 @@ def _memory_timestamp(payload: dict) -> float:
         try:
             return float(text)
         except (TypeError, ValueError):
-            pass
+            log.debug("Failed to parse timestamp as float, falling back to isoformat")
         try:
             from datetime import datetime
 

@@ -167,8 +167,8 @@ def extract_json(text: str) -> dict:
         py_obj = ast.literal_eval(text.strip())
         if isinstance(py_obj, dict):
             return normalize_decision(py_obj)
-    except Exception:
-        pass
+    except Exception as exc:
+        log.debug("literal_eval salvage failed: %s", exc)
 
     # `text` was already fence-stripped above — reuse it for the salvage scan.
     stripped_fences = text
@@ -190,8 +190,8 @@ def extract_json(text: str) -> dict:
                     if s_brace == 0:
                         try:
                             salvage_jsons.append(normalize_decision(json.loads(stripped_fences[s_start:j + 1], strict=False)))
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            log.debug("salvage candidate skipped: %s", exc)
                         break
         s_start = stripped_fences.find("{", s_start + 1)
     if salvage_jsons:

@@ -358,8 +358,8 @@ def ast_slice(source_code: str, target_func: str) -> str:
                 if node.end_col_offset is not None:
                     slice_lines[-1] = slice_lines[-1][:node.end_col_offset]
                 return "".join(slice_lines)
-    except Exception:
-        pass
+    except Exception as exc:
+        log.debug("ast_slice failed for %r: %s", target_func, exc)
     # BUG FIX: Return empty string instead of the full source_code.
     # If we returned source_code, the caller's core_code.replace(sliced_code, mutated_code)
     # would replace the ENTIRE file with just the mutated function, wiping out the whole engine.
