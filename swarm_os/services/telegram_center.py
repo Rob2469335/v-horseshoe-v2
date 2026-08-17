@@ -45,10 +45,11 @@ _MAX_MESSAGE_LEN = 4000
 
 
 _pending_pairing = {}
+_pairing_lock = asyncio.Lock()
 
 def _generate_pin() -> str:
-    import random
-    return f"{random.randint(100000, 999999)}"
+    import secrets
+    return str(secrets.randbelow(900000) + 100000)
 
 async def _add_owner(user_id: Any) -> None:
     import json
@@ -58,8 +59,8 @@ async def _add_owner(user_id: Any) -> None:
     if config_path.exists():
         try:
             config = json.loads(config_path.read_text(encoding="utf-8"))
-        except Exception:
-            pass
+        except (json.JSONDecodeError, OSError) as exc:
+            log.error("swarm_config.json corrupt: %s", exc)
     
     owners = config.get("telegram_owners", [])
     if str(user_id) not in owners:
@@ -245,24 +246,27 @@ class TelegramCommandCenter:
             now = time.time()
             clean_text = str(text).strip()
             
-            if user_id in _pending_pairing:
-                pin, ts = _pending_pairing[user_id]
-                if now - ts > 300: # 5 min expiry
-                    del _pending_pairing[user_id]
-                elif clean_text == pin:
-                    del _pending_pairing[user_id]
-                    await _add_owner(user_id)
-                    await self._client.send_message(chat_id, "✅ Device paired successfully. You are now authorized.")
-                    return
-            
-            if user_id not in _pending_pairing:
-                pin = _generate_pin()
-                _pending_pairing[user_id] = (pin, now)
-                log.warning("\n" + "="*60)
-                log.warning("PAIRING REQUEST from Telegram user: %s", user_id)
-                log.warning("Reply with PIN: %s to authorize this device.", pin)
-                log.warning("="*60 + "\n")
+            async with _pairing_lock:
+                expired = [uid for uid, v in _pending_pairing.items() if now - v[1] > 300]
+                for uid in expired:
+                    del _pending_pairing[uid]
+
+                if user_id in _pending_pairing:
+                    pin, ts = _pending_pairing[user_id]
+                    if clean_text == pin:
+                        del _pending_pairing[user_id]
+                        await _add_owner(user_id)
+                        await self._client.send_message(chat_id, "✅ Device paired successfully. You are now authorized.")
+                        return
                 
+                if user_id not in _pending_pairing:
+                    pin = _generate_pin()
+                    _pending_pairing[user_id] = (pin, now)
+                    log.warning("\n" + "="*60)
+                    log.warning("PAIRING REQUEST from Telegram user: %s", user_id)
+                    log.warning("Reply with PIN: %s to authorize this device.", pin)
+                    log.warning("="*60 + "\n")
+                    
             await self._client.send_message(chat_id, "⛔ Not authorized. Check server console for pairing PIN and reply with it to authorize this device.")
             return
         if text.startswith("/approve") or text.startswith("/deny"):
@@ -338,19 +342,45 @@ class TelegramCommandCenter:
             await self._client.send_message(chat_id, "Syntax error in quotes. Use /cron add \"goal\" \"schedule\"")
             return
             
-        if not parts or parts[0].lower() != "add" or len(parts) < 3:
-            await self._client.send_message(chat_id, "Usage: /cron add \"goal\" \"schedule\"")
+        if not parts:
+            await self._client.send_message(chat_id, "Usage: /cron list | /cron remove <id> | /cron add \"goal\" \"schedule\"")
             return
             
-        goal = parts[1]
-        schedule = parts[2]
-        from .task_scheduler import create_task
-        try:
-            task = create_task(goal, schedule)
-            await self._client.send_message(chat_id, f"✅ Created task {task['id']}\nGoal: {goal}\nSchedule: {schedule}")
-        except Exception as exc:
-            log.warning("telegram /cron failed: %s", exc)
-            await self._client.send_message(chat_id, "Failed to create task.")
+        action = parts[0].lower()
+        from .task_scheduler import list_tasks, create_task, delete_task
+        
+        if action == "list":
+            tasks = list_tasks()
+            if not tasks:
+                await self._client.send_message(chat_id, "No scheduled tasks.")
+                return
+            msg = "<b>Scheduled Tasks:</b>\n"
+            for t in tasks:
+                msg += f"ID: <code>{t['id']}</code>\nGoal: {t['goal']}\nSchedule: {t['schedule']}\n\n"
+            await self._client.send_message(chat_id, msg)
+        elif action == "remove":
+            if len(parts) < 2:
+                await self._client.send_message(chat_id, "Usage: /cron remove <task_id>")
+                return
+            success = delete_task(parts[1])
+            if success:
+                await self._client.send_message(chat_id, f"✅ Task {parts[1]} removed.")
+            else:
+                await self._client.send_message(chat_id, f"❌ Task {parts[1]} not found.")
+        elif action == "add":
+            if len(parts) < 3:
+                await self._client.send_message(chat_id, "Usage: /cron add \"goal\" \"schedule\"")
+                return
+            goal = parts[1]
+            schedule = parts[2]
+            try:
+                task = create_task(goal, schedule)
+                await self._client.send_message(chat_id, f"✅ Created task {task['id']}\nGoal: {goal}\nSchedule: {schedule}")
+            except Exception as exc:
+                log.warning("telegram /cron failed: %s", exc)
+                await self._client.send_message(chat_id, "Failed to create task.")
+        else:
+            await self._client.send_message(chat_id, "Usage: /cron list | /cron remove <id> | /cron add \"goal\" \"schedule\"")
 
     async def _send_status(self, chat_id: Any) -> None:
         from .task_scheduler import list_tasks

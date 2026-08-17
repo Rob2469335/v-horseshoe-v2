@@ -959,11 +959,14 @@ async def _dispatch(tool_name: str, payload: dict, *, trace_hook=None) -> dict:
                         skills = content.split("## Custom Learned Skills")[1].strip()
                 result = {"ok": True, "result": skills}
             elif action == "add":
+                import re
                 skill_name = payload.get("skill_name", "unnamed")
                 skill_content = payload.get("skill_content")
                 if not skill_content:
                     result = {"ok": False, "error": "skill_content is required"}
                 else:
+                    skill_name = re.sub(r"[^A-Za-z0-9 _-]", "", skill_name)[:80]
+                    skill_content = str(skill_content).replace("## ", "• ").replace("# ", "• ")
                     from pathlib import Path
                     agents_md = Path("AGENTS.md")
                     if agents_md.exists():
@@ -973,6 +976,25 @@ async def _dispatch(tool_name: str, payload: dict, *, trace_hook=None) -> dict:
                         content += f"\n### {skill_name}\n{skill_content}\n"
                         agents_md.write_text(content, encoding="utf-8")
                         result = {"ok": True, "result": f"Skill '{skill_name}' saved to AGENTS.md"}
+                    else:
+                        result = {"ok": False, "error": "AGENTS.md not found"}
+            elif action == "remove":
+                skill_name = payload.get("skill_name", "")
+                if not skill_name:
+                    result = {"ok": False, "error": "skill_name is required for remove"}
+                else:
+                    from pathlib import Path
+                    import re
+                    agents_md = Path("AGENTS.md")
+                    if agents_md.exists():
+                        content = agents_md.read_text(encoding="utf-8")
+                        pattern = re.compile(rf"\n###\s+{re.escape(skill_name)}\n.*?(?=\n###|\Z)", re.DOTALL)
+                        new_content, count = pattern.subn("", content)
+                        if count > 0:
+                            agents_md.write_text(new_content, encoding="utf-8")
+                            result = {"ok": True, "result": f"Skill '{skill_name}' removed"}
+                        else:
+                            result = {"ok": False, "error": f"Skill '{skill_name}' not found"}
                     else:
                         result = {"ok": False, "error": "AGENTS.md not found"}
             else:

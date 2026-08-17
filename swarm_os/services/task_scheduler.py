@@ -117,7 +117,9 @@ def _parse_daily(schedule: str) -> tuple[int, int] | None:
     return None
 
 
-def _is_due(task: dict, now: float = _now()) -> bool:
+def _is_due(task: dict, now: float | None = None) -> bool:
+    if now is None:
+        now = _now()
     if not task.get("enabled"):
         return False
     schedule = str(task.get("schedule", "")).strip().lower()

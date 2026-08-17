@@ -198,7 +198,7 @@ TOOL_SCHEMAS: Dict[str, dict] = {
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "action": {"type": "string", "enum": ["list", "add"]},
+                    "action": {"type": "string", "enum": ["list", "add", "remove"]},
                     "skill_name": {"type": "string"},
                     "skill_content": {"type": "string"}
                 },
