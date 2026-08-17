@@ -80,7 +80,7 @@ def test_owner_unset_blocks_everyone(monkeypatch):
 
 
 def test_disabled_when_no_token(monkeypatch):
-    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "")
     settings_mod.get_settings.cache_clear()
     assert tc.enabled() is False
     assert tc.get_center()._client is None

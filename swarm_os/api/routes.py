@@ -985,13 +985,13 @@ def _memory_timestamp(payload: dict) -> float:
         text = raw.strip()
         try:
             return float(text)
-        except TypeError, ValueError:
+        except (TypeError, ValueError):
             log.debug("Failed to parse timestamp as float, falling back to isoformat")
         try:
             from datetime import datetime
 
             return datetime.fromisoformat(text).timestamp()
-        except TypeError, ValueError:
+        except (TypeError, ValueError):
             return 0.0
     return 0.0
 

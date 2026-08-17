@@ -32,10 +32,14 @@ def _get_point_lock(point_id: str) -> asyncio.Lock:
     # key per (component, failure_reason) combination).
     lock = _point_locks.setdefault(point_id, asyncio.Lock())
     if len(_point_locks) > _POINT_LOCK_MAX:
-        # Trim to the most recent keys (dict preserves insertion order).
-        overflow = len(_point_locks) - _POINT_LOCK_MAX
-        for k in list(_point_locks)[:overflow]:
-            _point_locks.pop(k, None)
+        # Evict old locks only if they are not actively held. If all 256 happen
+        # to be held at once (burst updates), we safely skip eviction and allow
+        # the dictionary to temporarily grow past 256 rather than risk a race.
+        for k in list(_point_locks):
+            if len(_point_locks) <= _POINT_LOCK_MAX:
+                break
+            if not _point_locks[k].locked():
+                _point_locks.pop(k, None)
     return lock
 
 

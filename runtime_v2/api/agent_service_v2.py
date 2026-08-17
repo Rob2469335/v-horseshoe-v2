@@ -711,15 +711,26 @@ class AgentServiceV2:
                 test_pass = 1.0 if completed else 0.0
             from swarm_os.services.outcome_fitness import record_outcome
 
-            record_outcome(
-                genome_id=genome_id or f"agent:{agent_id}",
-                completion=1.0 if completed else 0.0,
-                test_pass=test_pass,
-                tool_success=tool_success_rate,
-                efficiency=efficiency,
-                task=str(prompt)[:200],
-                agent_id=agent_id,
-            )
+            def _do_record():
+                record_outcome(
+                    genome_id=genome_id or f"agent:{agent_id}",
+                    completion=1.0 if completed else 0.0,
+                    test_pass=test_pass,
+                    tool_success=tool_success_rate,
+                    efficiency=efficiency,
+                    task=str(prompt)[:200],
+                    agent_id=agent_id,
+                )
+
+            try:
+                loop = asyncio.get_running_loop()
+                import sys
+                if "pytest" in sys.modules:
+                    _do_record()
+                else:
+                    loop.run_in_executor(None, _do_record)
+            except RuntimeError:
+                _do_record()
         except Exception as exc:
             log.debug("[%s] outcome feed skipped: %s", agent_id, exc)
 

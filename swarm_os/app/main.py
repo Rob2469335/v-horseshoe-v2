@@ -543,12 +543,14 @@ def create_app() -> FastAPI:
     from swarm_os.api.swarm_stream import router as swarm_stream_router
     from swarm_os.api.admin import router as admin_router
     from swarm_os.api.control import router as control_router
+    from swarm_os.api.chess_trainer import router as chess_trainer_router
 
     app.include_router(api_router)
     app.include_router(agents_router)
     app.include_router(upwork_router)
     app.include_router(swarm_stream_router)
     app.include_router(control_router)
+    app.include_router(chess_trainer_router)
     # BUG FIX: admin_router was imported and stored but never mounted.
     # All /admin/* endpoints were silently unreachable.
     app.include_router(admin_router)

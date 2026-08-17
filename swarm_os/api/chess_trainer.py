@@ -437,6 +437,11 @@ class GmGuessRequest(BaseModel):
     guess_uci: str = Field(..., description="The learner's guessed move, UCI")
 
 
+class GmExplainRequest(BaseModel):
+    game_id: str = Field(..., description="Curated GM game id")
+    ply: int = Field(0, ge=0, description="The ply whose GM move to explain")
+
+
 @router.get("/gm-games")
 async def trainer_gm_games() -> dict[str, Any]:
     """The curated famous Fischer + Carlsen games for guess-the-move study."""
@@ -479,9 +484,7 @@ async def trainer_gm_guess(req: GmGuessRequest) -> dict[str, Any]:
     return guess_move(req.game_id, req.ply, req.guess_uci)
 
 
-class GmExplainRequest(BaseModel):
-    game_id: str = Field(..., description="Curated GM game id")
-    ply: int = Field(0, ge=0, description="The ply whose GM move to explain")
+# GmExplainRequest is defined above GmGuessRequest (moved to fix NameError at startup)
 
 
 @router.post("/gm-games/explain")
