@@ -173,6 +173,39 @@ TOOL_SCHEMAS: Dict[str, dict] = {
             },
         },
     },
+    "cron_manage": {
+        "type": "function",
+        "function": {
+            "name": "cron_manage",
+            "description": "Programmatically list, create, or remove recurring background jobs",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["list", "add", "remove"]},
+                    "task_id": {"type": "string"},
+                    "goal": {"type": "string"},
+                    "schedule": {"type": "string"}
+                },
+                "required": ["action"]
+            }
+        }
+    },
+    "skill_manage": {
+        "type": "function",
+        "function": {
+            "name": "skill_manage",
+            "description": "Programmatically interact with the swarm's skill registry",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["list", "add"]},
+                    "skill_name": {"type": "string"},
+                    "skill_content": {"type": "string"}
+                },
+                "required": ["action"]
+            }
+        }
+    },
 }
 
 import asyncio

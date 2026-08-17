@@ -44,14 +44,54 @@ _POLL_TIMEOUT_S = 25  # long-poll (seconds); Telegram allows up to 50
 _MAX_MESSAGE_LEN = 4000
 
 
+_pending_pairing = {}
+
+def _generate_pin() -> str:
+    import random
+    return f"{random.randint(100000, 999999)}"
+
+async def _add_owner(user_id: Any) -> None:
+    import json
+    from pathlib import Path
+    config_path = Path("swarm_config.json")
+    config = {}
+    if config_path.exists():
+        try:
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    
+    owners = config.get("telegram_owners", [])
+    if str(user_id) not in owners:
+        owners.append(str(user_id))
+    config["telegram_owners"] = owners
+    config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
+
 def _cfg() -> dict:
     """Bot config from env/.env. Empty dict = disabled."""
+    import json
+    from pathlib import Path
     s = get_settings()
     token = os.getenv("TELEGRAM_BOT_TOKEN") or getattr(s, "telegram_bot_token", None)
     owner = os.getenv("TELEGRAM_OWNER_ID") or getattr(s, "telegram_owner_id", None)
+    
+    dynamic_owners = []
+    config_path = Path("swarm_config.json")
+    if config_path.exists():
+        try:
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            dynamic_owners = config.get("telegram_owners", [])
+        except Exception:
+            pass
+
+    all_owners = []
+    if owner:
+        all_owners.extend([o.strip() for o in str(owner).split(",")])
+    all_owners.extend([str(o) for o in dynamic_owners])
+    
     if not token:
         return {}
-    return {"token": str(token), "owner": str(owner) if owner else ""}
+    return {"token": str(token), "owners": all_owners}
 
 
 def enabled() -> bool:
@@ -59,12 +99,13 @@ def enabled() -> bool:
 
 
 def is_owner(user_id: Any) -> bool:
-    """Fail-closed identity allowlist: only the owner may command the bot. An
-    unset owner id blocks everyone (never open)."""
+    """Fail-closed identity allowlist: only the owner may command the bot."""
     cfg = _cfg()
-    if not cfg.get("owner"):
+    owners = cfg.get("owners", [])
+    if not owners:
         return False
-    return str(user_id) == str(cfg["owner"])
+    return str(user_id) in owners
+
 
 
 class TelegramClient:
@@ -200,7 +241,29 @@ class TelegramCommandCenter:
         text = msg.get("text", "")
         user_id = msg.get("from", {}).get("id")
         if not is_owner(user_id):
-            await self._client.send_message(chat_id, "⛔ Not authorized.")
+            import time
+            now = time.time()
+            clean_text = str(text).strip()
+            
+            if user_id in _pending_pairing:
+                pin, ts = _pending_pairing[user_id]
+                if now - ts > 300: # 5 min expiry
+                    del _pending_pairing[user_id]
+                elif clean_text == pin:
+                    del _pending_pairing[user_id]
+                    await _add_owner(user_id)
+                    await self._client.send_message(chat_id, "✅ Device paired successfully. You are now authorized.")
+                    return
+            
+            if user_id not in _pending_pairing:
+                pin = _generate_pin()
+                _pending_pairing[user_id] = (pin, now)
+                log.warning("\n" + "="*60)
+                log.warning("PAIRING REQUEST from Telegram user: %s", user_id)
+                log.warning("Reply with PIN: %s to authorize this device.", pin)
+                log.warning("="*60 + "\n")
+                
+            await self._client.send_message(chat_id, "⛔ Not authorized. Check server console for pairing PIN and reply with it to authorize this device.")
             return
         if text.startswith("/approve") or text.startswith("/deny"):
             # Manual fallback path: /approve <pending_id> from the owner.
@@ -224,6 +287,8 @@ class TelegramCommandCenter:
                 "/research <goal> — deep research (fan-out + iterative)\n"
                 "/approve <pending_id> / /deny <pending_id> — resolve a pending action\n"
                 "/inbox — last 5 emails\n"
+                "/cron add \"goal\" \"schedule\" — add a background task\n"
+                "/learn \"instruction\" — save a permanent skill/rule\n"
                 "Anything else is sent to the swarm as a goal.",
             )
         elif cmd == "/status":
@@ -234,6 +299,10 @@ class TelegramCommandCenter:
             await self._send_research(chat_id, text[len(cmd) :].strip())
         elif cmd == "/inbox":
             await self._send_inbox(chat_id)
+        elif cmd == "/cron":
+            await self._handle_cron_cmd(chat_id, text[len(cmd) :].strip())
+        elif cmd == "/learn":
+            await self._handle_learn_cmd(chat_id, text[len(cmd) :].strip())
         else:
             # Free-form -> route to the swarm as a goal (bounded, read-mostly).
             await self._client.send_message(
@@ -243,6 +312,45 @@ class TelegramCommandCenter:
                 "state-changing actions still ask for your approval here.)",
             )
             await self._dispatch_goal(text.strip())
+
+    async def _handle_learn_cmd(self, chat_id: Any, instruction: str) -> None:
+        if not instruction:
+            await self._client.send_message(chat_id, "Usage: /learn <instruction or rule>")
+            return
+            
+        from pathlib import Path
+        agents_md = Path("AGENTS.md")
+        if agents_md.exists():
+            content = agents_md.read_text(encoding="utf-8")
+            if "## Custom Learned Skills" not in content:
+                content += "\n\n## Custom Learned Skills\n"
+            content += f"- {instruction}\n"
+            agents_md.write_text(content, encoding="utf-8")
+            await self._client.send_message(chat_id, "✅ Skill learned and saved to AGENTS.md.")
+        else:
+            await self._client.send_message(chat_id, "❌ AGENTS.md not found.")
+
+    async def _handle_cron_cmd(self, chat_id: Any, args_text: str) -> None:
+        import shlex
+        try:
+            parts = shlex.split(args_text)
+        except ValueError:
+            await self._client.send_message(chat_id, "Syntax error in quotes. Use /cron add \"goal\" \"schedule\"")
+            return
+            
+        if not parts or parts[0].lower() != "add" or len(parts) < 3:
+            await self._client.send_message(chat_id, "Usage: /cron add \"goal\" \"schedule\"")
+            return
+            
+        goal = parts[1]
+        schedule = parts[2]
+        from .task_scheduler import create_task
+        try:
+            task = create_task(goal, schedule)
+            await self._client.send_message(chat_id, f"✅ Created task {task['id']}\nGoal: {goal}\nSchedule: {schedule}")
+        except Exception as exc:
+            log.warning("telegram /cron failed: %s", exc)
+            await self._client.send_message(chat_id, "Failed to create task.")
 
     async def _send_status(self, chat_id: Any) -> None:
         from .task_scheduler import list_tasks

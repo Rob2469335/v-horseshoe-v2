@@ -58,3 +58,58 @@ def test_candidate_text_extracts_fact_content_and_falls_back():
     assert _candidate_text({"payload": {"fact": "hello"}}) == "hello"
     assert _candidate_text({"payload": {"content": "world"}}) == "world"
     assert _candidate_text({"payload": {}}) == str({"payload": {}})
+
+
+@pytest.mark.asyncio
+async def test_rerank_semaphore_suspends_never_blocks_event_loop():
+    """A saturated rerank burst must not block the event loop. The pre-fix
+    semaphore was a threading.BoundedSemaphore acquired with a SYNC `with` —
+    when both slots were held, a third concurrent rerank's acquire blocked the
+    whole loop until a slot freed. asyncio.BoundedSemaphore + `async with`
+    suspends the waiting task instead, so the loop keeps serving other work."""
+    import asyncio
+
+    import swarm_os.lib.vector.reranker as rr
+
+    # Type pin: the semaphore must be asyncio-native so `async with` suspends.
+    assert isinstance(rr._RERANK_SEM, asyncio.BoundedSemaphore)
+
+    gate = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _post(*a, **k):
+        gate.set()
+        await release.wait()
+        return type("R", (), {"status_code": 200, "json": lambda: {"results": []}})()
+
+    orig_client = rr._get_client
+    rr._get_client = lambda: type("C", (), {"post": _post})()
+    candidates = [
+        {"id": str(i), "score": 0.5, "payload": {"fact": "x"}} for i in range(5)
+    ]
+    try:
+        t1 = asyncio.create_task(rr.rerank("q", candidates, top_k=2))
+        t2 = asyncio.create_task(rr.rerank("q", candidates, top_k=2))
+        await asyncio.wait_for(gate.wait(), timeout=5.0)  # both slots held
+
+        ticks = {"n": 0}
+
+        async def _tick():
+            while True:
+                ticks["n"] += 1
+                await asyncio.sleep(0.01)
+
+        hb = asyncio.create_task(_tick())
+        await asyncio.sleep(0.05)
+
+        t3 = asyncio.create_task(rr.rerank("q", candidates, top_k=2))
+        await asyncio.sleep(0.05)  # let t3 hit the semaphore acquire
+        # The loop must keep ticking. A sync `with` acquire on a saturated
+        # threading semaphore would have frozen it until a slot released.
+        assert ticks["n"] >= 3
+
+        release.set()
+        await asyncio.wait_for(asyncio.gather(t1, t2, t3), timeout=5.0)
+        hb.cancel()
+    finally:
+        rr._get_client = orig_client

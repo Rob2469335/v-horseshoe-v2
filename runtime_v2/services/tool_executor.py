@@ -925,6 +925,58 @@ async def _dispatch(tool_name: str, payload: dict, *, trace_hook=None) -> dict:
                     result = {"ok": False, "error": "git tool execution failed"}
             else:
                 result = {"ok": False, "error": f"Unknown git operation: {operation}"}
+        elif tool_name == "cron_manage":
+            from swarm_os.services.task_scheduler import list_tasks, create_task, delete_task
+            action = str(payload.get("action", "")).lower().strip()
+            if action in ("list", "get"):
+                result = {"ok": True, "result": list_tasks()}
+            elif action == "add":
+                goal = payload.get("goal")
+                schedule = payload.get("schedule")
+                if not goal or not schedule:
+                    result = {"ok": False, "error": "goal and schedule are required for add"}
+                else:
+                    task = create_task(goal, schedule)
+                    result = {"ok": True, "result": task}
+            elif action == "remove":
+                task_id = payload.get("task_id")
+                if not task_id:
+                    result = {"ok": False, "error": "task_id is required for remove"}
+                else:
+                    success = delete_task(task_id)
+                    result = {"ok": success, "result": "Removed" if success else "Not found"}
+            else:
+                result = {"ok": False, "error": f"Unknown cron_manage action: {action}"}
+        elif tool_name == "skill_manage":
+            action = str(payload.get("action", "")).lower().strip()
+            if action in ("list", "get"):
+                from pathlib import Path
+                agents_md = Path("AGENTS.md")
+                skills = "No custom skills found."
+                if agents_md.exists():
+                    content = agents_md.read_text(encoding="utf-8")
+                    if "## Custom Learned Skills" in content:
+                        skills = content.split("## Custom Learned Skills")[1].strip()
+                result = {"ok": True, "result": skills}
+            elif action == "add":
+                skill_name = payload.get("skill_name", "unnamed")
+                skill_content = payload.get("skill_content")
+                if not skill_content:
+                    result = {"ok": False, "error": "skill_content is required"}
+                else:
+                    from pathlib import Path
+                    agents_md = Path("AGENTS.md")
+                    if agents_md.exists():
+                        content = agents_md.read_text(encoding="utf-8")
+                        if "## Custom Learned Skills" not in content:
+                            content += "\n\n## Custom Learned Skills\n"
+                        content += f"\n### {skill_name}\n{skill_content}\n"
+                        agents_md.write_text(content, encoding="utf-8")
+                        result = {"ok": True, "result": f"Skill '{skill_name}' saved to AGENTS.md"}
+                    else:
+                        result = {"ok": False, "error": "AGENTS.md not found"}
+            else:
+                result = {"ok": False, "error": f"Unknown skill_manage action: {action}"}
         else:
             return {"ok": False, "error": f"Unknown tool: {tool_name}"}
 

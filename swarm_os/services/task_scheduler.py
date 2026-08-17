@@ -58,8 +58,8 @@ def _save(data: dict) -> None:
     try:
         _TASKS_FILE.parent.mkdir(parents=True, exist_ok=True)
         _TASKS_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    except OSError:
-        pass
+    except OSError as exc:
+        log.warning("task registry save failed: %s", exc)
 
 
 def list_tasks() -> list[dict]:
@@ -120,7 +120,7 @@ def _parse_daily(schedule: str) -> tuple[int, int] | None:
 def _is_due(task: dict, now: float = _now()) -> bool:
     if not task.get("enabled"):
         return False
-    schedule = str(task.get("schedule", ""))
+    schedule = str(task.get("schedule", "")).strip().lower()
     last = task.get("last_run")
     last_ts = 0.0
     if last:
@@ -128,27 +128,64 @@ def _is_due(task: dict, now: float = _now()) -> bool:
             last_ts = datetime.fromisoformat(last).timestamp()
         except Exception:
             last_ts = 0.0
+
+    now_dt = datetime.fromtimestamp(now)
+
+    # 1. Backwards compatible "hourly"
     if schedule == "hourly":
         return (now - last_ts) >= 3600
+
+    # 2. Backwards compatible "daily HH:MM"
     hm = _parse_daily(schedule)
-    if hm is None:
-        return False
-    hour, minute = hm
-    now_dt = datetime.now()
-    due_today = (now_dt.hour > hour) or (
-        now_dt.hour == hour and now_dt.minute >= minute
-    )
-    if not due_today:
-        return False
-    if last_ts > 0:
-        last_dt = datetime.fromtimestamp(last_ts)
-        if (last_dt.year, last_dt.month, last_dt.day) == (
-            now_dt.year,
-            now_dt.month,
-            now_dt.day,
-        ):
+    if hm is not None:
+        hour, minute = hm
+        due_today = (now_dt.hour > hour) or (
+            now_dt.hour == hour and now_dt.minute >= minute
+        )
+        if not due_today:
             return False
-    return True
+        if last_ts > 0:
+            last_dt = datetime.fromtimestamp(last_ts)
+            if (last_dt.year, last_dt.month, last_dt.day) == (
+                now_dt.year,
+                now_dt.month,
+                now_dt.day,
+            ):
+                return False
+        return True
+
+    # 3. Standard Cron (5-part)
+    parts = schedule.split()
+    if len(parts) == 5:
+        # Prevent multi-firing within the same minute
+        if now - last_ts < 60:
+            return False
+
+        try:
+            from croniter import croniter
+            return croniter.match(schedule, now_dt)
+        except ImportError:
+            pass
+
+        def match_part(part: str, value: int) -> bool:
+            if part == "*": return True
+            if part.startswith("*/"):
+                try: return value % int(part[2:]) == 0
+                except ValueError: return False
+            if "," in part:
+                return any(match_part(p, value) for p in part.split(","))
+            try: return value == int(part)
+            except ValueError: return False
+
+        return (
+            match_part(parts[0], now_dt.minute) and
+            match_part(parts[1], now_dt.hour) and
+            match_part(parts[2], now_dt.day) and
+            match_part(parts[3], now_dt.month) and
+            match_part(parts[4], now_dt.isoweekday() % 7)
+        )
+
+    return False
 
 
 def _ceiling_gate(goal: str) -> tuple[bool, str]:
@@ -283,7 +320,7 @@ async def run_due_tasks(runner=None) -> list[str]:
         runner = _default_runner
     due_ids = []
     with _LOCK:
-        data = await asyncio.to_thread(_load)
+        data = _load()
         for tid, task in data.items():
             if _is_due(task, _now()):
                 due_ids.append(tid)
@@ -291,7 +328,7 @@ async def run_due_tasks(runner=None) -> list[str]:
     for tid in due_ids:
         try:
             with _LOCK:
-                task = (await asyncio.to_thread(_load)).get(tid)
+                task = _load().get(tid)
             if not task:
                 continue
             goal = str(task.get("goal", ""))

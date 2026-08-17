@@ -50,13 +50,19 @@ def test_candidate_text_payload_content_still_works():
     assert reranker._candidate_text(cand) == "memory fact text"
 
 
-def test_rerank_semaphore_is_threading_not_async():
-    """The pre-existing bug: `async with _RERANK_SEM` on a threading semaphore
-    raised TypeError and degraded every rerank to the dense order. The fix uses
-    a plain `with`. This test would fail on a regression to `async with`."""
-    assert isinstance(reranker._RERANK_SEM, type(reranker.threading.BoundedSemaphore(1)))
-    # A threading semaphore must not support the async context manager protocol.
-    assert not hasattr(reranker._RERANK_SEM, "__aenter__")
+def test_rerank_semaphore_is_async_not_threading():
+    """The historical bug: `async with _RERANK_SEM` on a threading semaphore
+    raised TypeError and degraded every rerank to the dense order. The earlier
+    fix used a threading semaphore + a plain `with` — but that sync acquire
+    blocks the event loop when the burst saturates both slots. The corrected
+    contract is an asyncio.BoundedSemaphore + `async with`: it suspends the
+    waiting task instead of freezing the loop. This test fails on a regression
+    to EITHER the threading type OR the sync-acquire pattern."""
+    import asyncio
+
+    assert isinstance(reranker._RERANK_SEM, asyncio.BoundedSemaphore)
+    # An asyncio semaphore MUST support the async context manager protocol.
+    assert hasattr(reranker._RERANK_SEM, "__aenter__")
 
 
 @pytest.mark.asyncio

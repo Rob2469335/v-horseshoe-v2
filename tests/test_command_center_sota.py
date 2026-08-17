@@ -230,6 +230,38 @@ def test_important_goal_blocked_at_scheduler(monkeypatch, tmp_path):
         assert result.get("blocked") == "scheduler_ceiling"
 
 
+def test_run_due_tasks_loads_synchronously_under_lock(monkeypatch, tmp_path):
+    """Regression: run_due_tasks must call _load() synchronously under _LOCK.
+    The pre-fix code did `with _LOCK: data = await asyncio.to_thread(_load)` —
+    a threading.Lock held across an await point lets a concurrent sync caller
+    (e.g. list_tasks from an API route on the same loop) block the entire event
+    loop until the offload completes. The lock must never span an await."""
+    monkeypatch.setattr(ts, "_TASKS_FILE", tmp_path / "tasks.json")
+    t = ts.create_task("summarize my email inbox", "hourly", enabled=True)
+    with ts._LOCK:
+        data = ts._load()
+        data[t["id"]]["last_run"] = (_dt.datetime.now() - _dt.timedelta(hours=2)).isoformat()
+        ts._save(data)
+
+    class _FakeAsyncio:
+        @staticmethod
+        def to_thread(func, *args, **kwargs):
+            raise AssertionError(
+                f"run_due_tasks offloaded {getattr(func, '__name__', func)} via "
+                "asyncio.to_thread — the threading _LOCK must never be held across an await"
+            )
+
+    monkeypatch.setattr(ts, "asyncio", _FakeAsyncio)
+
+    calls = {"n": 0}
+    async def runner(task):
+        calls["n"] += 1
+        return {"ok": True}
+    ran = asyncio.run(ts.run_due_tasks(runner=runner))
+    assert ran == [t["id"]]
+    assert calls["n"] == 1
+
+
 def test_daemon_heartbeat_written(monkeypatch, tmp_path):
     monkeypatch.setattr(ts.TaskSchedulerDaemon, "_HEARTBEAT_FILE", tmp_path / "heartbeat.json")
     daemon = ts.TaskSchedulerDaemon(interval_seconds=0.1)

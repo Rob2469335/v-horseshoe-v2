@@ -232,6 +232,16 @@ def agent_tool_policy(tool: str, action: str | None = None) -> str:
         if a in _SYSTEM_PRIVILEGED_OPS:
             return ALWAYS_CONFIRM
         return DENY if a else ALWAYS_CONFIRM  # unknown system op -> deny
+        
+    if t == "cron_manage":
+        if a in ("list", "get"):
+            return ALLOW
+        return CONFIRM
+        
+    if t == "skill_manage":
+        if a in ("list", "get"):
+            return ALLOW
+        return ALWAYS_CONFIRM
 
     if t == "playwright":
         if a in _PLAYWRIGHT_READ_OPS:
