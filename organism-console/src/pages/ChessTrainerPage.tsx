@@ -730,7 +730,7 @@ export default function ChessTrainerPage() {
   const [ccProfile, setCcProfile] = useState<ChessProfile | null>(null)
   const [ccProfileLoading, setCcProfileLoading] = useState(false)
   const [ccJob, setCcJob] = useState<AnalysisJob | null>(null)
-  const [ccPoll, setCcPoll] = useState<NodeJS.Timeout | null>(null)
+  const [ccPoll, setCcPoll] = useState<ReturnType<typeof setInterval> | null>(null)
 
   // Load the last chess.com username from the backend (survives any browser/
   // origin) on mount, preferring a saved value.
