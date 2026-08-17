@@ -506,6 +506,98 @@ Dependency pairing: React 19 ↔ `@react-three/fiber` ^9.5 / `@react-three/drei`
 
 ## Recent Changes (do NOT re-apply)
 
+- **Chess services SOTA audit round 2 — timeouts, TOCTOU races, bare excepts (`a933f54`, 2026-08-16)**: re-audited the updated chess services; 21 real defects fixed, each verified against live code before edit. **Group 1 (missing timeouts)**: all 4 `chess_book_memory.py` Qdrant calls (`get_collections`/`count`/`upsert`/`query_points`) wrapped in `asyncio.timeout(10.0)`. **Group 2 (concurrency/TOCTOU)**: `_init_lock` serializes the Qdrant check-and-create so concurrent `index_books` calls can't double-create; `chess_games.list_games`/`progress_analytics` reads now hold `_LOCK`; `chess_training.build_items_from_mistakes` re-checks `source_ref` under the final lock before appending (was TOCTOU → duplicate items); `chess_trainer._eval_cache` read+write guarded by a new `_CACHE_LOCK` (the read happens before `_ENGINE_LOCK`, the write inside it). **Group 3 (bare except)**: 12 silent `except Exception: pass/continue` sites now log with the actual exception (`chess_import` pgn parse, `chess_mistakes` classify, `chess_trainer` drill-fen/shutdown/best_move_san, `chess_training` SR-ladder env, `chess_analysis_job` job list). Gates: ruff E9/F clean, 102 chess tests pass.
+
+- **Version B curriculum promoted to production (`9028fe3`, 2026-08-16)**: after the A/B comparison, the full-842-game Version B (300 items — 294 Repair + 6 GM) replaced the empty-serve production curriculum; Version A (322) stays as the immutable control. The manifest (`scripts/curriculum_baseline_manifest.json`) records the promotion with retention metrics + SHA-256 integrity hashes; live training flow verified post-promotion (items served hanging-piece-first, answer advances box).
+
+- **Full pre-rebuild evidence at 842 + A/B comparison artifact (`1428d06`, 2026-08-16)**: `scripts/compare_curriculum.py` captured the complete pre-rebuild evidence in one auditable artifact (`data/chess/baseline/full_evidence_842games.json`): final mistake count, per-concept scores, weakness ranking, mastery — plus the A/B comparison (Version A frozen 322 vs Version B full-842) with dramatic-rank-change flagging. **Result: retention 1.9% (6/322), hanging piece stayed #1 in both, no dramatic rank changes** — the diagnosis replicated across curriculum versions.
+
+- **Tracked baseline manifest + tamper-detection (`376cf63`, 2026-08-16)**: SHA-256 hashes + counts + snapshot context recorded in the baseline manifest; `compare_curriculum.py` refuses to run if the tracked files drifted from their hashes (fail-closed comparison integrity).
+
+- **A/B curriculum comparison tool (`0f00c90`, 2026-08-16)**: `scripts/compare_curriculum.py` compares Version A (frozen 322 at 625 games) against Version B (full 842-game rebuild) with a guard that refuses to run before the analysis job reaches completion.
+
+- **Chess analysis ETA — least-squares slope over recent window (`ec590ec`, 2026-08-16)**: a single slow game no longer swings the rolling ETA from 0.9 → 2.0/min; ETA now uses the least-squares slope over a recent completion window (companion to the honest-ETA service in `117e340`).
+
+- **Calibration invariant enforced (`d264a4b`, 2026-08-16)**: hard invariant `confidence_captured_at <= answer_recorded_at` enforced in the calibration path — a confidence recorded after the answer reveal is rejected from calibration (post-hoc scores would corrupt the honesty signal).
+
+- **Concept-training confidence captured BEFORE reveal (`f09718a`, 2026-08-16)**: the concept-training panel now records the learner's confidence before the answer is revealed (the invariant's UI half), with a calibration summary in the panel.
+
+- **Confidence calibration layer (`e6fd73d`, 2026-08-16)**: observation-only calibration — per concept/stage solve-rate by declared confidence, small-sample guard, overconfidence flag. **Never drives scheduling** (it's a measurement layer, per the learn-pipeline design). The transfer engine later consumes only honest calibrations.
+
+- **Honest rolling ETA (`117e340`, 2026-08-16)**: analysis-job ETA from the recent completion slope, not a manual games/min guess — the progress reads true while the job runs.
+
+- **Concept-training API + panel (`f908e52`, 2026-08-16)**: concept-training endpoints + Concept training panel (Repair/Reinforce/Transfer UI) wired into the trainer.
+
+- **Weakness model (`df07aa5`, 2026-08-16)**: coach report now ranks weaknesses by freq × severity × recurrence × trend, and GM-defense moments feed hanging-piece training (your recurring blunders become study targets).
+
+- **Concept-level spaced repetition + transfer engine (`4affa9a`, 2026-08-16)**: Repair/Reinforce/Transfer per-concept ladders, stage-aware spacing, stage-specific mastery — the engine that makes "one diagnosis → multiple training modalities" possible.
+
+- **Coach profile panel + Train/Explore GM study mode (`4351164`, 2026-08-16)**: UI for the coach profile + Train/Explore study with think-reveal pauses and confidence capture.
+
+- **GM critical-moment detection (`136098d`, 2026-08-16)**: structured critical-moment metadata (type, difficulty, think_required, reason) powering adaptive pauses in GM study.
+
+- **Deterministic mistake-concept classifier + coach report (`3ec2495`, 2026-08-16)**: deterministic mapping from mistakes to concepts + the coach report's skill profile and "today's focus".
+
+- **Unverified Caruana game removed (`5d2e082`, 2026-08-16)**: the blitz Caruana game was Titled Tuesday, not a tournament game — framing unverifiable, so it was removed; only backed Norway Chess 2026 games remain in the GM table (evidence-first discipline applies to study material too).
+
+- **GM section redesigned to study mode (`bd76f0f`, 2026-08-16)**: move-by-move revealed explanations, no guessing — study mode replaces the guess-the-move framing.
+
+- **GM games study mode + durable cache (`a5ff48a`, 2026-08-16)**: revealed+explained moves, durable game cache killing the 17s PGN rescan, new Magnus 2026 games.
+
+- **Material-aware classification guard (`8cb4d82`, 2026-08-16)**: no material loss = never Blunder; a hung piece is always flagged (classification correctness for the beginner).
+
+- **Inverted rating-scaling fix (`1fda6fd`, 2026-08-16)**: classification used inverted rating scaling (beginners judged stricter) — now uses chess.com's fixed per-classification cutoffs.
+
+- **Accuracy clamp (`e8b1f0e`, 2026-08-16)**: per-move accuracy contribution clamped to [0, 1] so a game can't exceed 100% (a Best move that improves win% >start is a 100 ceiling, not a suggestion).
+
+- **Engine-lock leak fix (`3554bf6`, 2026-08-16)**: a cancelled thread could leave the analysis engine lock held and wedge the whole run — bounded lock acquire + per-game timeout.
+
+- **'Top recurring mistakes' summary (`7fefaa4`, 2026-08-16)**: ranked-by-pattern list with examples (your recurring blunder shapes, surfaced weekly).
+
+- **'Tips from the books' (`80195f9`, 2026-08-16)**: 10 book-grounded tips per load, rotating from the 100-book digest library.
+
+- **Analysis-job `_live_task` disk-save fix (`e2197bb`, 2026-08-15)**: `asyncio.Task` isn't JSON-serializable — the live task was filtered from the job's disk save so the job file stays loadable mid-run.
+
+- **RV-finder class b/c URL fix (`fe3c522`, 2026-08-15)**: the 'class b/c' Craigslist filter mapped to a bogus URL — now treated as motorhome (type-filter alias correctness).
+
+- **RV-finder motorhome query focus (`c452ab6`, 2026-08-15)**: motorhome-focused Craigslist queries + cleaner title/model extraction.
+
+- **RV-finder deep-dive DeepSeek direct (`40b3c06`, 2026-08-15)**: deep-dive uses the DeepSeek direct provider with a higher max_tokens budget (V4-flash reasoning was eating the old cap and returning empty content).
+
+- **RV-finder PPL regex + Craigslist source (`fd6c405`, 2026-08-15)**: fixed the PPL price regex + added Craigslist as a real discovery source (was-marketplace gap).
+
+- **Sticky chess board (`823c23e`, 2026-08-15)**: `lg:sticky` keeps the board visible while scrolling the trainer lists.
+
+- **Move/hint arrows + backend-persisted username (`3762144`, 2026-08-15)**: best-move/hint rendered as SVG arrows on the board; chess.com username persisted backend-side.
+
+- **Remember chess.com username (`2cccff3`, 2026-08-15)**: the trainer remembers the chess.com username so it doesn't need re-entry.
+
+- **chess.com analysis audit — 4 bugs (`dc895e4`, 2026-08-15)**: finish games (in_progress never finalized), real win-delta (evaluations were discarded), job bloat, resume race.
+
+- **'My chess.com games' panel (`b9ecb24`, 2026-08-15)**: a panel in the trainer listing your chess.com games.
+
+- **Personalize from ALL chess.com games (`09c3a64`, 2026-08-15)**: journey profile + resumable background engine analysis over the full archive (the 842-game evidence basis).
+
+- **Chess explanations routed to DeepSeek direct (`bd37809`, 2026-08-15)**: explanations use your (free/credit) DeepSeek V4 Flash path instead of the local model.
+
+- **Chess trainer audit — 4 real bugs (`b40fc47`, 2026-08-15)**: engine pipeline audit fixes (persistent process, TT reuse, FEN cache correctness).
+
+- **Real-time plan coaching (`f0b6e37`, 2026-08-15)**: standard-plans menu + persistent plan line during play.
+
+- **Progress analytics (`6bf759c`, 2026-08-15)**: training rating + per-skill bars from recorded games.
+
+- **Play like the greats (`86b2d13`, 2026-08-15)**: GM games + guess-the-move with move explanations.
+
+- **Cloud-model move explanations (`179f69d`, 2026-08-15)**: explanations use deepseek-v4-flash (free/credit path) — richer prose than the local 4B.
+
+- **Eval bar + classification (`5505c9e`, 2026-08-15)**: lichess winning-chances + draw-aware WDL classification.
+
+- **Engine pipeline (`3624cdc`, 2026-08-15)**: persistent engine process + transposition-table reuse + FEN eval cache (the trainer's latency foundation).
+
+- **Board-coordinate polish (`282122e`/`71adbaa`/`e2e3959`, 2026-08-15)**: coordinates on all four edges, bigger + high-contrast; theme saturation punched up so colors pop; coordinates a distinct gold color.
+
+- **Record hanging-piece training + vibrant board in Recent Changes (`bc782ae`, 2026-08-15)**: bookkeeping commit that added the earlier-committed hanging-piece/vibrant-board entries to AGENTS.md.
+
 - **Hanging-piece training + pre-move safety checklist — the #1 beginner lever (`b5dafd2`, 2026-08-15)**: the research (Steps Method: board vision is "top priority"; Heisman: the hanging piece is "the big mistake"; ChessPivot: detection != solution) converges on spotting LOOSE pieces as the missing skill. Two features, engine-free python-chess (attack/defense counts via `board.attackers`): **(1)** `/drill/hanging` generates a position with an undefended enemy piece (deterministic forward search from start until one appears) + reports the loose pieces and the capture; the panel loads it on the board and the learner must spot + take one (solved when they capture a listed square). **(2)** The pre-move safety checklist (`/safety`, Heisman Slow→Safe→Active) BLOCKS any move that hangs a piece or leaves the king in check with "caught it! this move hangs b5 — check before you move", enforced in the game loop so the habit is trained in play. Also fixed `_attackers_of` to use `board.attackers` (was undercounting pawn attacks via pseudo-legal). Tests: +12 (hanging detection incl. defended-not-hanging, safety safe/hang/illegal, threats detection, drill generation, API endpoints). Full suite **1156 passed / 2 skipped / 1 xfailed**, `swarm_os/tests/` 50 passed, tsc + build clean. Live-verified: drill finds b5 pawn (capture a3b5), safety blocks g1f3 with the catch message.
 
 - **Vibrant board themes + piece depth (`ac83eef`, 2026-08-15)**: 7 vibrant two-tone board themes (Vibrant/Emerald/Ocean/Royal/Violet/Rose/Amber) with a Board selector in the trainer controls — the 2026 flat recipe but with rich, saturated palettes. Real cburnett pieces get a subtle drop-shadow so they pop against the colorful squares. Default theme: Vibrant. tsc clean, `npm run build` succeeds. No backend change.
@@ -1131,6 +1223,10 @@ Converted `except:` → `except Exception:` (or specific types) in `swarm_os/cor
 ---
 
 ## Self-Healing & Self-Learning Fixes
+
+- **Rule (code_analyzer)**: Failure: The code_analyzer attempted to read the file path 'x.py' directly without first verifying that the file exists in the filesystem. The oper...
+
+- **Rule (code_analyzer)**: Failure: The code_analyzer agent attempted to read file x.py without first verifying that the path exists in the auditing codebase filesystem, resu...
 
 - **Rule (code_analyzer)**: Failure: The code_analyzer attempted to read the file 'x.py' without first verifying it existed, and the read failed because the file was not found...
 
