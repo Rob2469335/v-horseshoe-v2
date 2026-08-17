@@ -936,7 +936,6 @@ export default function ChessTrainerPage() {
   }
 
   useEffect(() => { loadTraining() }, [loadTraining]) // load existing training on mount
-  useEffect(() => { if (trainingItem) setFen(trainingItem.pre_fen ?? fen) }, [trainingItem]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const [analytics, setAnalytics] = useState<Analytics | null>(null)
   const loadAnalytics = useCallback(async () => {
@@ -1326,6 +1325,25 @@ export default function ChessTrainerPage() {
                     </Badge>
                   </div>
                   <div className="mb-2 text-sm text-white/85">{trainingItem.prompt}</div>
+                  <div className="mb-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        if (trainingItem?.pre_fen) {
+                          setFen(trainingItem.pre_fen)
+                          setHistory([])
+                          setResult(null)
+                          setLastMove(null)
+                          setSelected(null)
+                          setLegalTargets([])
+                          setRetryFen(null)
+                        }
+                      }}
+                    >
+                      Show on board
+                    </Button>
+                  </div>
                   {trainingAnswered ? (
                     <div className={`mt-2 text-sm ${trainingAnswered.correct ? "text-emerald-300" : "text-amber-300"}`}>
                       {trainingAnswered.correct
