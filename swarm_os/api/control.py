@@ -475,7 +475,7 @@ async def control_screen_autonomous(req: AutonomousRequest) -> Dict[str, Any]:
                 ),
             },
         }
-    result = await asyncio.to_thread(set_screen_autonomous, req.enabled)
+    result = await asyncio.to_thread(_screen.set_screen_autonomous, req.enabled)
     return {"status": "executed", "result": result}
 
 
