@@ -3,6 +3,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/
 import { Button } from "./ui/button"
 import { Badge } from "./ui/badge"
 import { ActionOnboardingCard } from "./ui/action-onboarding-card"
+import { safeExternalUrl } from "../lib/utils"
 import { Search } from "lucide-react"
 
 type Citation = { n: number; title: string; url: string }
@@ -128,12 +129,19 @@ export default function DeepResearchPanel({ backendUrl }: Props) {
               <div>
                 <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-white/50">Sources</div>
                 <ul className="space-y-1 text-xs">
-                  {result.citations.map((c) => (
-                    <li key={c.n} className="text-white/60">
-                      <span className="text-emerald-300">[{c.n}]</span> {c.title} —{" "}
-                      <a href={c.url} target="_blank" rel="noreferrer" className="text-sky-300 hover:underline">{c.url}</a>
-                    </li>
-                  ))}
+                  {result.citations.map((c) => {
+                    const target = safeExternalUrl(c.url)
+                    return (
+                      <li key={c.n} className="text-white/60">
+                        <span className="text-emerald-300">[{c.n}]</span> {c.title} —{" "}
+                        {target ? (
+                          <a href={target} target="_blank" rel="noreferrer" className="text-sky-300 hover:underline">{c.url}</a>
+                        ) : (
+                          <span className="text-white/30">{c.url}</span>
+                        )}
+                      </li>
+                    )
+                  })}
                 </ul>
               </div>
             )}

@@ -1,4 +1,5 @@
 import { useState } from "react"
+import { safeExternalUrl } from "../../lib/utils"
 
 interface Props {
   backendUrl: string
@@ -153,8 +154,8 @@ function ListingCard({ listing, highlighted }: { listing: Listing; highlighted?:
         </div>
       )}
 
-      {listing.url ? (
-        <a href={listing.url} target="_blank" rel="noreferrer" style={{ display: "inline-block", marginTop: 10, fontSize: 12, color: "#22d3ee", textDecoration: "none", borderBottom: "1px solid #22d3ee55" }}>
+      {safeExternalUrl(listing.url) ? (
+        <a href={safeExternalUrl(listing.url)} target="_blank" rel="noreferrer" style={{ display: "inline-block", marginTop: 10, fontSize: 12, color: "#22d3ee", textDecoration: "none", borderBottom: "1px solid #22d3ee55" }}>
           View listing ↗
         </a>
       ) : null}

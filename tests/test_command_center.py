@@ -74,3 +74,20 @@ def test_file_read_resolution(tmp_path, monkeypatch):
     assert ctl._resolve_project_file("ok.txt") == str(tmp_path / "ok.txt")
     with pytest.raises(Exception):
         ctl._resolve_project_file("..\\..\\etc\\passwd")
+
+
+def test_file_read_resolution_rejects_sibling_prefix_collision(tmp_path, monkeypatch):
+    """A sibling directory whose NAME merely starts with the project dir must be
+    refused — the old string-prefix check (`joined.startswith(root)`) accepted
+    `C:\\...\\v-horseshoe-v2_evil\\payload.py`. Regression for the 2026-08-17
+    audit finding; uses os.path.commonpath containment now."""
+    from swarm_os.api import control as ctl
+
+    project = tmp_path / "v-horseshoe-v2"
+    sibling = tmp_path / "v-horseshoe-v2_evil"
+    project.mkdir(exist_ok=True)
+    sibling.mkdir(exist_ok=True)
+    (sibling / "payload.py").write_text("pwned", encoding="utf-8")
+    monkeypatch.chdir(project)
+    with pytest.raises(Exception):
+        ctl._resolve_project_file(str(sibling / "payload.py"))

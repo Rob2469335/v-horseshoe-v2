@@ -9,7 +9,18 @@
     <div id="root"></div>
     <script>
       window.addEventListener('error', function(e) {
-        document.body.innerHTML += '<div style="color:red;padding:20px;z-index:9999;position:absolute;top:0;">' + e.message + '<br>' + e.filename + ':' + e.lineno + '</div>';
+        // textContent, never innerHTML: e.message can carry attacker-influenced
+        // markup (error strings echoed from backend/LLM payloads), which
+        // innerHTML would render as live DOM.
+        var div = document.createElement('div');
+        div.style.cssText = 'color:red;padding:20px;z-index:9999;position:absolute;top:0;';
+        var msg = document.createElement('div');
+        msg.textContent = e.message;
+        var loc = document.createElement('div');
+        loc.textContent = e.filename + ':' + e.lineno;
+        div.appendChild(msg);
+        div.appendChild(loc);
+        document.body.appendChild(div);
       });
     </script>
     <script type="module" src="/src/main.tsx"></script>

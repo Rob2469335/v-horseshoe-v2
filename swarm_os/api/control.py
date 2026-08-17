@@ -710,7 +710,13 @@ def _resolve_project_file(raw: str) -> str:
     """Resolve a relative path inside the project root; refuse traversal."""
     root = os.getcwd()
     joined = os.path.abspath(os.path.join(root, raw))
-    if not joined.startswith(root):
+    # os.path.commonpath refuses path components that don't share a common root
+    # (e.g. a sibling dir whose name merely starts with the project dir).
+    try:
+        common = os.path.commonpath([root, joined])
+    except ValueError:
+        common = ""
+    if common != os.path.abspath(root):
         raise HTTPException(status_code=400, detail="path escapes project root")
     return joined
 

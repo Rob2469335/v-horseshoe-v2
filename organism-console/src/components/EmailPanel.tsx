@@ -3,6 +3,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/
 import { Button } from "./ui/button"
 import { Badge } from "./ui/badge"
 import { ActionOnboardingCard } from "./ui/action-onboarding-card"
+import { safeExternalUrl } from "../lib/utils"
 import { Mail } from "lucide-react"
 
 type EmailMessage = {
@@ -263,14 +264,21 @@ export default function EmailPanel({ backendUrl }: Props) {
               Newsletters — unsubscribe by opening the link (browser) or mailto
             </div>
             <ul className="space-y-1 text-xs">
-              {unsubscribes.map((u) => (
-                <li key={u.uid} className="flex items-center justify-between gap-2 text-white/60">
-                  <span className="truncate">{u.subject} — {u.from}</span>
-                  <a href={u.unsubscribe?.[0]?.target} target="_blank" rel="noreferrer" className="shrink-0 text-sky-300 hover:underline">
-                    {u.unsubscribe?.[0]?.type === "mailto" ? "mailto" : "open link"}
-                  </a>
-                </li>
-              ))}
+              {unsubscribes.map((u) => {
+                const target = safeExternalUrl(u.unsubscribe?.[0]?.target)
+                return (
+                  <li key={u.uid} className="flex items-center justify-between gap-2 text-white/60">
+                    <span className="truncate">{u.subject} — {u.from}</span>
+                    {target ? (
+                      <a href={target} target="_blank" rel="noreferrer" className="shrink-0 text-sky-300 hover:underline">
+                        {u.unsubscribe?.[0]?.type === "mailto" ? "mailto" : "open link"}
+                      </a>
+                    ) : (
+                      <span className="shrink-0 text-white/25">unavailable</span>
+                    )}
+                  </li>
+                )
+              })}
             </ul>
           </div>
         )}
