@@ -11,6 +11,7 @@ from .web_search import web_search_handler
 
 logger = logging.getLogger(__name__)
 
+
 def _noop_trace(event: str, payload: Dict[str, Any]) -> None:
     return None
 
@@ -26,6 +27,7 @@ def _default_root() -> Path:
     -> project root."""
     return Path(__file__).resolve().parents[3]
 
+
 class MCPRegistry:
     def __init__(self, root: Path | None = None, trace_hook=None):
         self.root = (root or _default_root()).resolve()
@@ -34,27 +36,28 @@ class MCPRegistry:
 
     async def call(self, tool: str, params: Dict[str, Any]) -> Dict[str, Any]:
         logger.debug(f"MCP call: {tool} with params: {params}")
-        
+
         if tool == "filesystem":
             import asyncio
+
             # filesystem_handler is SYNC (blocking file I/O) — offload so a
             # recursive grep/list over the repo never blocks the event loop.
             return await asyncio.to_thread(
                 filesystem_handler, params, self.root, self.trace_hook
             )
-        
+
         if tool == "playwright":
             return await playwright_handler(params, self.trace_hook)
-            
+
         if tool == "context7":
             return await context7_handler(params, self.trace_hook)
-            
+
         if tool == "web_search":
             return await web_search_handler(params, self.trace_hook)
-            
+
         if tool == "qdrant_recall":
             return await self._qdrant_recall(params)
-            
+
         return {"ok": False, "error": f"Unknown tool: {tool}"}
 
     async def _qdrant_recall(self, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -64,13 +67,19 @@ class MCPRegistry:
         top_k = int(params.get("top_k", params.get("limit", 5)))
 
         if not query:
-            return {"ok": False, "error": "query is required", "results": [], "query": query, "collection": collection}
+            return {
+                "ok": False,
+                "error": "query is required",
+                "results": [],
+                "query": query,
+                "collection": collection,
+            }
 
         try:
             from swarm_os.services.embedding_service import EmbeddingService
             from swarm_os.services.vector_store import VectorStore
 
-            if not getattr(self, '_qdrant', None):
+            if not getattr(self, "_qdrant", None):
                 self._embedding = EmbeddingService()
                 self._qdrant = VectorStore(collection_name=collection)
             vector = await self._embedding.embed(query)
@@ -99,36 +108,44 @@ class MCPRegistry:
                     "properties": {
                         "operation": {
                             "type": "string",
-                            "enum": ["read", "read_file", "read_all", "write", "patch", "list", "grep"],
-                            "description": "The filesystem operation to perform ('read', 'read_file', or 'read_all' read file contents)."
+                            "enum": [
+                                "read",
+                                "read_file",
+                                "read_all",
+                                "write",
+                                "patch",
+                                "list",
+                                "grep",
+                            ],
+                            "description": "The filesystem operation to perform ('read', 'read_file', or 'read_all' read file contents).",
                         },
                         "path": {
                             "type": "string",
-                            "description": "Relative path to file or directory from project root within the workspace sandbox (e.g. 'runtime_v2/analyze_codebase.py')."
+                            "description": "Relative path to file or directory from project root within the workspace sandbox (e.g. 'runtime_v2/analyze_codebase.py').",
                         },
                         "content": {
                             "type": "string",
-                            "description": "Complete text content for 'write' operation."
+                            "description": "Complete text content for 'write' operation.",
                         },
                         "old": {
                             "type": "string",
-                            "description": "The exact string segment to replace for 'patch' operation."
+                            "description": "The exact string segment to replace for 'patch' operation.",
                         },
                         "new": {
                             "type": "string",
-                            "description": "The new string replacement content for 'patch' operation."
+                            "description": "The new string replacement content for 'patch' operation.",
                         },
                         "pattern": {
                             "type": "string",
-                            "description": "Literal search pattern for 'grep' operation."
+                            "description": "Literal search pattern for 'grep' operation.",
                         },
                         "recursive": {
                             "type": "boolean",
-                            "description": "Whether to grep recursively."
-                        }
+                            "description": "Whether to grep recursively.",
+                        },
                     },
-                    "required": ["operation", "path"]
-                }
+                    "required": ["operation", "path"],
+                },
             },
             {
                 "name": "playwright",
@@ -138,24 +155,27 @@ class MCPRegistry:
                     "properties": {
                         "action": {
                             "type": "string",
-                            "enum": ["navigate", "click", "fill", "screenshot", "extract_text"],
-                            "description": "The browser action to take."
+                            "enum": [
+                                "navigate",
+                                "click",
+                                "fill",
+                                "screenshot",
+                                "extract_text",
+                            ],
+                            "description": "The browser action to take.",
                         },
                         "url": {
                             "type": "string",
-                            "description": "Target URL for navigate."
+                            "description": "Target URL for navigate.",
                         },
                         "selector": {
                             "type": "string",
-                            "description": "CSS selector for click/fill operations."
+                            "description": "CSS selector for click/fill operations.",
                         },
-                        "text": {
-                            "type": "string",
-                            "description": "Text to fill."
-                        }
+                        "text": {"type": "string", "description": "Text to fill."},
                     },
-                    "required": ["action"]
-                }
+                    "required": ["action"],
+                },
             },
             {
                 "name": "web_search",
@@ -165,11 +185,11 @@ class MCPRegistry:
                     "properties": {
                         "query": {
                             "type": "string",
-                            "description": "Search engine query."
+                            "description": "Search engine query.",
                         }
                     },
-                    "required": ["query"]
-                }
+                    "required": ["query"],
+                },
             },
             {
                 "name": "context7",
@@ -179,11 +199,11 @@ class MCPRegistry:
                     "properties": {
                         "scope": {
                             "type": "string",
-                            "description": "Context retrieval scope."
+                            "description": "Context retrieval scope.",
                         }
                     },
-                    "required": ["scope"]
-                }
+                    "required": ["scope"],
+                },
             },
             {
                 "name": "qdrant_recall",
@@ -193,19 +213,21 @@ class MCPRegistry:
                     "properties": {
                         "query": {
                             "type": "string",
-                            "description": "The search query to match against memories."
+                            "description": "The search query to match against memories.",
                         },
                         "top_k": {
                             "type": "integer",
-                            "description": "Number of results to return (default 5)."
-                        }
+                            "description": "Number of results to return (default 5).",
+                        },
                     },
-                    "required": ["query"]
-                }
+                    "required": ["query"],
+                },
             },
         ]
 
+
 registry = MCPRegistry()
+
 
 async def call(tool: str, params: Dict[str, Any]) -> Dict[str, Any]:
     return await registry.call(tool, params)

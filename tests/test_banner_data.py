@@ -5,6 +5,7 @@ reality instead of stale/placeholder values:
 - The agent/CORE model resolution prefers the live /agents/models mapping.
 - CLOUD row reads the real usage_log cost, not a misleading local counter %.
 """
+
 from organism_console import token_tracker as tt
 
 
@@ -50,7 +51,7 @@ def test_agent_model_resolution_prefers_live_models():
     assert resolved == "qwen3.5-4b"
     # The banner uses this resolution path (source-pin).
     src = open(bn.__file__, encoding="utf-8").read()
-    assert "agent_models.get(a.get(\"id\", \"\"), {})" in src
+    assert 'agent_models.get(a.get("id", ""), {})' in src
     assert "agent_models.get(ctx.active_agent, {})" in src
 
 
@@ -70,7 +71,10 @@ def test_banner_first_fetch_is_synchronous():
     assert "if first:" in src
     # And it must NOT call _refresh_banner_cache while holding the lock (that
     # would deadlock — threading.Lock is not re-entrant).
-    assert "_refresh_banner_cache()\n" not in src.split("with _BANNER_LOCK:")[0][-1:] or True
+    assert (
+        "_refresh_banner_cache()\n" not in src.split("with _BANNER_LOCK:")[0][-1:]
+        or True
+    )
     # The sync call must happen AFTER releasing the lock.
     assert src.count("with _BANNER_LOCK:") >= 2
 
@@ -83,6 +87,6 @@ def test_cloud_row_uses_usage_log_cost():
     src = open(bn.__file__, encoding="utf-8").read()
     assert "usage_report(days=30)" in src
     assert "30d cost" in src
-    assert "QUOTA" not in src.split("CLOUD", 1)[-1].split("table.add_row(\"CLOUD", 1)[0], (
-        "the misleading QUOTA percentage bar must be gone from the CLOUD row"
-    )
+    assert (
+        "QUOTA" not in src.split("CLOUD", 1)[-1].split('table.add_row("CLOUD', 1)[0]
+    ), "the misleading QUOTA percentage bar must be gone from the CLOUD row"

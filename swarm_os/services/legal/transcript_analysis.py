@@ -15,7 +15,9 @@ log = logging.getLogger(__name__)
 # narrating that none were made ("...there were no objections to") are the
 # OPPOSITE of an objection and must not be logged as one. Real shapes from the
 # May 7 report (p.165/167/223 declinations vs p.54-103 objections).
-_OBJECTION_DECLINE_RE = re.compile(r"\b(?:no|without|any)\s+objections?\b", re.IGNORECASE)
+_OBJECTION_DECLINE_RE = re.compile(
+    r"\b(?:no|without|any)\s+objections?\b", re.IGNORECASE
+)
 # An AFFIRMATIVE objection act — the passage raises an objection even if it
 # ALSO contains a negation ("I have no objection to that exhibit, but I do
 # object to the characterization" IS an objection and must stay). Matches a
@@ -50,16 +52,18 @@ def build_analysis(indices: list[TranscriptIndex], outfile: str) -> str:
     """
     out = []
     out.append("# Trial Transcript Analysis")
-    out.append("This report is derived entirely from the transcript text. "
-               "It reports WHAT is on a page and WHERE. It does not assert legal significance.\n")
+    out.append(
+        "This report is derived entirely from the transcript text. "
+        "It reports WHAT is on a page and WHERE. It does not assert legal significance.\n"
+    )
 
     for idx_num, idx in enumerate(indices, 1):
         day_label = f"Day {idx_num}"
         if idx.source:
             day_label += f" ({Path(idx.source).name})"
-        
+
         out.append(f"## {day_label} - Chronology\n")
-        
+
         if not idx.passages:
             out.append("No passages found for this day.\n")
             continue
@@ -77,7 +81,9 @@ def build_analysis(indices: list[TranscriptIndex], outfile: str) -> str:
             out.append("| Witness | Pages | Examining Attorneys | Testimony Summary |")
             out.append("|---|---|---|---|")
             for row in matrix:
-                out.append(f"| {row['name']} | {row['pages']} | {row['attorneys']} | {row['summary']} |")
+                out.append(
+                    f"| {row['name']} | {row['pages']} | {row['attorneys']} | {row['summary']} |"
+                )
         out.append("")
 
         out.append(f"## {day_label} - Objections & Rulings Log\n")
@@ -105,28 +111,34 @@ def _build_chronology(idx: TranscriptIndex) -> list[str]:
     current_exam_atty = None
     current_witness = None
     last_witness_page = None
-    
-    ruling_re = re.compile(r"\b(OVERRULED|SUSTAINED|ALLOW IT|YOU CAN ANSWER|DENIED|GRANTED|STRIKE THAT)\b")
-    
+
+    ruling_re = re.compile(
+        r"\b(OVERRULED|SUSTAINED|ALLOW IT|YOU CAN ANSWER|DENIED|GRANTED|STRIKE THAT)\b"
+    )
+
     for i, p in enumerate(idx.passages):
         t_upper = p.text.upper()
-        
+
         if p.speaker == "THE WITNESS":
             last_witness_page = p.page
             examiner = None
-            for j in range(i-1, max(-1, i-10), -1):
+            for j in range(i - 1, max(-1, i - 10), -1):
                 prev_p = idx.passages[j]
                 if prev_p.speaker not in ("THE WITNESS", "THE COURT"):
                     examiner = prev_p.speaker
                     break
                 elif prev_p.speaker == "THE WITNESS":
                     break
-            
+
             if examiner and current_exam_atty != examiner:
                 if current_exam_atty is not None:
-                    events.append(f"- Examination by {current_exam_atty} ends (Page {last_witness_page})")
+                    events.append(
+                        f"- Examination by {current_exam_atty} ends (Page {last_witness_page})"
+                    )
                 current_exam_atty = examiner
-                events.append(f"- Examination by {current_exam_atty} begins (Page {p.page})")
+                events.append(
+                    f"- Examination by {current_exam_atty} begins (Page {p.page})"
+                )
                 # A new examining attorney always starts a fresh witness identity
                 # (the witness identity is tracked per-examiner: without a header
                 # name we cannot tell if a NEW witness took the stand).
@@ -140,34 +152,46 @@ def _build_chronology(idx: TranscriptIndex) -> list[str]:
             page_name = idx.witness_names.get(p.page)
             if page_name and current_witness != page_name:
                 if current_witness is not None:
-                    events.append(f"- {current_witness}'s testimony ends (Page {last_witness_page})")
+                    events.append(
+                        f"- {current_witness}'s testimony ends (Page {last_witness_page})"
+                    )
                 current_witness = page_name
                 events.append(f"- {current_witness} testifies (Page {p.page})")
-                
+
         if _is_objection(p):
             events.append(f"- Objection by {p.speaker} (Page {p.page})")
-            
+
         if p.speaker == "THE COURT":
             for r_match in ruling_re.finditer(t_upper):
                 r = r_match.group(1).title()
-                if r in ("Allow It", "You Can Answer"): 
+                if r in ("Allow It", "You Can Answer"):
                     r = "Overruled (Allowed)"
-                elif r == "Strike That": 
+                elif r == "Strike That":
                     r = "Sustained (Stricken)"
                 events.append(f"- Ruling: {r} by THE COURT (Page {p.page})")
-                
-            if "CHARGE THE JURY" in t_upper or "CHARGE TO THE JURY" in t_upper or "INSTRUCT THE JURY" in t_upper:
+
+            if (
+                "CHARGE THE JURY" in t_upper
+                or "CHARGE TO THE JURY" in t_upper
+                or "INSTRUCT THE JURY" in t_upper
+            ):
                 events.append(f"- Jury Instructions / Charge (Page {p.page})")
-                
+
         if "SIDEBAR" in t_upper and p.speaker not in ("THE WITNESS",):
             events.append(f"- Sidebar mentioned by {p.speaker} (Page {p.page})")
-            
-        if ("ADJOURN" in t_upper or "RECESS" in t_upper) and p.speaker not in ("THE WITNESS",):
-            events.append(f"- Adjournment/Recess mentioned by {p.speaker} (Page {p.page})")
+
+        if ("ADJOURN" in t_upper or "RECESS" in t_upper) and p.speaker not in (
+            "THE WITNESS",
+        ):
+            events.append(
+                f"- Adjournment/Recess mentioned by {p.speaker} (Page {p.page})"
+            )
 
     if current_exam_atty and last_witness_page:
-        events.append(f"- Examination by {current_exam_atty} ends (Page {last_witness_page})")
-        
+        events.append(
+            f"- Examination by {current_exam_atty} ends (Page {last_witness_page})"
+        )
+
     res = []
     for e in events:
         if not res or res[-1] != e:
@@ -208,16 +232,20 @@ def _build_witness_matrix(idx: TranscriptIndex) -> list[dict[str, str]]:
         best_answers = run_answers[:3]
         summary_snippets = []
         for ans in best_answers:
-            txt = ans.replace('\n', ' ')
+            txt = ans.replace("\n", " ")
             summary_snippets.append(txt[:150] + ("..." if len(txt) > 150 else ""))
 
         p_min = min(run_pages)
-        witnesses.append({
-            "name": run_name or "Unnamed Witness",
-            "pages": f"{p_min}-{max(run_pages)}",
-            "attorneys": ", ".join(sorted(run_attorneys)),
-            "summary": f"Testified regarding: {' | '.join(summary_snippets)} [not assessed; see page {p_min}]" if summary_snippets else f"No substantive testimony extracted [not assessed; see page {p_min}]"
-        })
+        witnesses.append(
+            {
+                "name": run_name or "Unnamed Witness",
+                "pages": f"{p_min}-{max(run_pages)}",
+                "attorneys": ", ".join(sorted(run_attorneys)),
+                "summary": f"Testified regarding: {' | '.join(summary_snippets)} [not assessed; see page {p_min}]"
+                if summary_snippets
+                else f"No substantive testimony extracted [not assessed; see page {p_min}]",
+            }
+        )
         run_name = None
         run_pages = set()
         run_attorneys = set()
@@ -243,7 +271,7 @@ def _build_witness_matrix(idx: TranscriptIndex) -> list[dict[str, str]]:
         if not run_pages:
             run_name = page_name or "Unnamed Witness"
 
-        for j in range(i-1, max(-1, i-10), -1):
+        for j in range(i - 1, max(-1, i - 10), -1):
             prev = idx.passages[j]
             if prev.speaker not in ("THE WITNESS", "THE COURT"):
                 run_attorneys.add(prev.speaker)
@@ -261,14 +289,16 @@ def _build_witness_matrix(idx: TranscriptIndex) -> list[dict[str, str]]:
 def _build_objections_log(idx: TranscriptIndex) -> list[str]:
     logs = []
     pending_objections = []
-    ruling_re = re.compile(r"\b(OVERRULED|SUSTAINED|ALLOW IT|YOU CAN ANSWER|DENIED|GRANTED|STRIKE THAT)\b")
-    
+    ruling_re = re.compile(
+        r"\b(OVERRULED|SUSTAINED|ALLOW IT|YOU CAN ANSWER|DENIED|GRANTED|STRIKE THAT)\b"
+    )
+
     for i, p in enumerate(idx.passages):
         t_upper = p.text.upper()
-        
+
         if _is_objection(p):
             pending_objections.append((p.speaker, p.page, p.text))
-            
+
         if p.speaker == "THE COURT":
             rulings = []
             for r_match in ruling_re.finditer(t_upper):
@@ -278,18 +308,22 @@ def _build_objections_log(idx: TranscriptIndex) -> list[str]:
                 elif r == "Strike That":
                     r = "Sustained (Stricken)"
                 rulings.append(r)
-                
+
             if rulings and pending_objections:
                 r_combined = " / ".join(rulings)
                 for obj_speaker, obj_page, obj_text in pending_objections:
-                    txt = obj_text.replace('\n', ' ')
-                    logs.append(f"- **Objection** by {obj_speaker} on Page {obj_page}: \"{txt}\" -> **Ruling**: {r_combined} (Page {p.page}) [not assessed; see page {p.page}]")
+                    txt = obj_text.replace("\n", " ")
+                    logs.append(
+                        f'- **Objection** by {obj_speaker} on Page {obj_page}: "{txt}" -> **Ruling**: {r_combined} (Page {p.page}) [not assessed; see page {p.page}]'
+                    )
                 pending_objections.clear()
-                    
+
     for obj_speaker, obj_page, obj_text in pending_objections:
-        txt = obj_text.replace('\n', ' ')
-        logs.append(f"- **Objection** by {obj_speaker} on Page {obj_page}: \"{txt}\" -> **Ruling**: No explicit ruling found nearby [not assessed; see page {obj_page}]")
-        
+        txt = obj_text.replace("\n", " ")
+        logs.append(
+            f'- **Objection** by {obj_speaker} on Page {obj_page}: "{txt}" -> **Ruling**: No explicit ruling found nearby [not assessed; see page {obj_page}]'
+        )
+
     return logs
 
 
@@ -318,15 +352,23 @@ def _build_batson_pass(idx: TranscriptIndex) -> str:
         return "No Batson challenge detected.\n"
 
     out = []
-    out.append("The passages below mention the Batson doctrine, peremptory strikes, or a")
+    out.append(
+        "The passages below mention the Batson doctrine, peremptory strikes, or a"
+    )
     out.append("pattern of discrimination during jury selection:\n")
 
     for p in batson_passages:
-        txt = p.text.replace('\n', ' ')
-        out.append(f"- **{p.speaker}** (Page {p.page}): \"{txt}\"")
+        txt = p.text.replace("\n", " ")
+        out.append(f'- **{p.speaker}** (Page {p.page}): "{txt}"')
 
-    out.append("\n**Plain-Language Summary**: The passages above reference jury-selection")
-    out.append("strikes or the Batson doctrine. Whether a viable challenge was made, preserved,")
-    out.append(f"or ruled upon is a question for a qualified person, not this tool. [not assessed; see page {batson_passages[0].page}]")
+    out.append(
+        "\n**Plain-Language Summary**: The passages above reference jury-selection"
+    )
+    out.append(
+        "strikes or the Batson doctrine. Whether a viable challenge was made, preserved,"
+    )
+    out.append(
+        f"or ruled upon is a question for a qualified person, not this tool. [not assessed; see page {batson_passages[0].page}]"
+    )
 
     return "\n".join(out)

@@ -37,11 +37,15 @@ async def test_memories_returns_sane_response_when_timestamp_none():
 async def test_memories_sorts_newest_first_mixed_timestamp_types():
     """Timestamps arrive as floats AND ISO strings across memory writers; the
     sort must handle both without crashing, newest first."""
-    vs = _fake_vs({"agent_memory": [
-        {"fact": "iso_old", "timestamp": "2026-08-01T12:00:00+00:00"},
-        {"fact": "float_new", "timestamp": 1786300000.0},
-        {"fact": "none", "timestamp": None},
-    ]})
+    vs = _fake_vs(
+        {
+            "agent_memory": [
+                {"fact": "iso_old", "timestamp": "2026-08-01T12:00:00+00:00"},
+                {"fact": "float_new", "timestamp": 1786300000.0},
+                {"fact": "none", "timestamp": None},
+            ]
+        }
+    )
     with patch("swarm_os.services.vector_store.VectorStore", return_value=vs):
         result = await get_memories()
     order = [p["fact"] for p in result["data"]["agent_memory"]]
@@ -51,11 +55,15 @@ async def test_memories_sorts_newest_first_mixed_timestamp_types():
 async def test_memories_handles_missing_and_garbage_timestamps():
     """Missing timestamp (default 0) and non-numeric garbage must not raise —
     both degrade to the bottom of the sort."""
-    vs = _fake_vs({"agent_memory": [
-        {"fact": "garbage", "timestamp": "not-a-date"},
-        {"fact": "missing"},
-        {"fact": "num_new", "timestamp": 5000.0},
-    ]})
+    vs = _fake_vs(
+        {
+            "agent_memory": [
+                {"fact": "garbage", "timestamp": "not-a-date"},
+                {"fact": "missing"},
+                {"fact": "num_new", "timestamp": 5000.0},
+            ]
+        }
+    )
     with patch("swarm_os.services.vector_store.VectorStore", return_value=vs):
         result = await get_memories()
     order = [p["fact"] for p in result["data"]["agent_memory"]]

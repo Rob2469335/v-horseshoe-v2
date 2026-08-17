@@ -4,6 +4,7 @@ The critic journal was write-only: MetaCritic weights reset to defaults on every
 restart, so the 'evolution' (weight adjustments from prediction error) was lost.
 These verify the journal can be read back and used to seed weights.
 """
+
 from __future__ import annotations
 
 

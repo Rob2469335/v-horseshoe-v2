@@ -8,6 +8,7 @@ query model configured — the live collections are 768-dim dense-vector stores,
 so text-search silently returned nothing and the /features/search endpoint fell
 through to a misleading 503.
 """
+
 from __future__ import annotations
 
 import os
@@ -87,11 +88,13 @@ async def search(collection: str, query: str, top_k: int = 5) -> list[Any]:
         points = getattr(response, "points", response)
         results = []
         for point in points or []:
-            results.append({
-                "id": getattr(point, "id", None),
-                "score": getattr(point, "score", None),
-                "payload": getattr(point, "payload", None),
-            })
+            results.append(
+                {
+                    "id": getattr(point, "id", None),
+                    "score": getattr(point, "score", None),
+                    "payload": getattr(point, "payload", None),
+                }
+            )
 
         _QUERY_CACHE[cache_key] = (results, time.time())
         return results

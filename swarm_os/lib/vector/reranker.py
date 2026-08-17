@@ -8,6 +8,7 @@ alone. This module was previously an empty stub — which made the
 POST /features/search endpoint raise ImportError and return 503
 ("Vector search not yet configured").
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -107,10 +108,18 @@ async def rerank(query: str, candidates: list[dict], top_k: int = 5) -> list[dic
             resp = await _get_client().post(
                 f"{RERANK_URL}/v1/rerank",
                 headers={"Authorization": "Bearer llama"},
-                json={"model": RERANK_MODEL, "query": query, "documents": texts, "top_n": top_k},
+                json={
+                    "model": RERANK_MODEL,
+                    "query": query,
+                    "documents": texts,
+                    "top_n": top_k,
+                },
             )
         if resp.status_code != 200:
-            logger.warning("Reranker returned %s — returning candidates unchanged", resp.status_code)
+            logger.warning(
+                "Reranker returned %s — returning candidates unchanged",
+                resp.status_code,
+            )
             return candidates[:top_k]
         results = resp.json().get("results", [])
         ordered: list[dict] = []

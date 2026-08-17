@@ -8,6 +8,7 @@ The restored full codebase ships two clients that call POST /generate:
   POSTed a body with `messages` and got 422 Unprocessable Content (the
   "422 flood" seen in the boot logs).
 """
+
 from swarm_os.api.schemas import GenerateRequest
 
 

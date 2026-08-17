@@ -21,6 +21,7 @@ Failure mode being closed: someone adds a new file inside swarm_os/ that the
 repair engine imports — an enumerated path list would miss it; this rule catches
 it because it's derived from the actual import graph at load time.
 """
+
 from __future__ import annotations
 
 import ast
@@ -53,9 +54,13 @@ class AutonomyPolicy:
     def __init__(self, data: dict, repo_root: Path):
         self.data = data
         self.repo_root = repo_root
-        self.repair_allowed_dirs = [repo_root / d for d in data["scope_ceiling"]["repair_allowed_dirs"]]
+        self.repair_allowed_dirs = [
+            repo_root / d for d in data["scope_ceiling"]["repair_allowed_dirs"]
+        ]
         self.blocked_patterns = tuple(data["scope_ceiling"]["blocked_patterns"])
-        self.never_route_to = tuple(data["scope_ceiling"]["hard_model_boundary"]["never_route_to"])
+        self.never_route_to = tuple(
+            data["scope_ceiling"]["hard_model_boundary"]["never_route_to"]
+        )
         self.per_incident_budget = int(data["watch_loop"]["per_incident_repair_budget"])
         self.daily_budget = int(data["watch_loop"]["daily_repair_budget"])
         self.self_modify_files = self._compute_self_modify_files()
@@ -93,9 +98,11 @@ class AutonomyPolicy:
             return pkg if pkg.exists() else None
 
         def is_project(mod: str) -> bool:
-            return (mod.startswith("swarm_os")
-                    or mod.startswith("runtime_v2")
-                    or mod.startswith("organism_console"))
+            return (
+                mod.startswith("swarm_os")
+                or mod.startswith("runtime_v2")
+                or mod.startswith("organism_console")
+            )
 
         def scan(mod_name: str) -> None:
             if mod_name in seen or not is_project(mod_name):
@@ -165,6 +172,8 @@ def get_autonomy_policy(reload: bool = False) -> AutonomyPolicy | None:
         _policy_cache = AutonomyPolicy(data, root)
         return _policy_cache
     except Exception as exc:
-        log.warning("Failed to load autonomy policy (%s); enforcing fail-closed None.", exc)
+        log.warning(
+            "Failed to load autonomy policy (%s); enforcing fail-closed None.", exc
+        )
         _policy_cache = None
         return None

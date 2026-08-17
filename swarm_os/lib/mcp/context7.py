@@ -9,6 +9,7 @@ logger = logging.getLogger(__name__)
 # Simple in-memory storage for context during the session life
 _CONTEXT_STORE: Dict[str, List[Dict[str, Any]]] = {}
 
+
 async def context7_handler(params: Dict[str, Any], trace_hook=None) -> Dict[str, Any]:
     """
     Handles context management for long-running sessions.
@@ -16,7 +17,7 @@ async def context7_handler(params: Dict[str, Any], trace_hook=None) -> Dict[str,
     """
     operation = params.get("operation", "read")
     session_id = str(params.get("session_id", "default"))
-    
+
     if session_id not in _CONTEXT_STORE:
         _CONTEXT_STORE[session_id] = []
 
@@ -25,34 +26,40 @@ async def context7_handler(params: Dict[str, Any], trace_hook=None) -> Dict[str,
             content = params.get("content")
             if content is None:
                 return {"ok": False, "error": "Content is required for write operation"}
-            
+
             metadata = params.get("metadata", {})
             entry = {
                 "timestamp": datetime.now().isoformat(),
                 "content": content,
-                "metadata": metadata
+                "metadata": metadata,
             }
-            
+
             _CONTEXT_STORE[session_id].append(entry)
-            
+
             # Keep only the last 50 entries to prevent memory bloat
             if len(_CONTEXT_STORE[session_id]) > 50:
                 _CONTEXT_STORE[session_id] = _CONTEXT_STORE[session_id][-50:]
 
             if trace_hook:
-                trace_hook("context7_write", {"session_id": session_id, "entries": len(_CONTEXT_STORE[session_id])})
-                
+                trace_hook(
+                    "context7_write",
+                    {
+                        "session_id": session_id,
+                        "entries": len(_CONTEXT_STORE[session_id]),
+                    },
+                )
+
             return {"ok": True, "session_id": session_id, "message": "Context saved"}
 
         elif operation == "read":
             limit = int(params.get("limit", 10))
             entries = _CONTEXT_STORE[session_id][-limit:]
-            
+
             return {
                 "ok": True,
                 "session_id": session_id,
                 "entries": entries,
-                "total_entries": len(_CONTEXT_STORE[session_id])
+                "total_entries": len(_CONTEXT_STORE[session_id]),
             }
 
         elif operation == "clear":

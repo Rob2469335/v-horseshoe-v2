@@ -27,6 +27,7 @@ file with a canary already pending is REFUSED registration (matches Phase A's
 refused_conflict shape) — so a flagged rollback always knows which snapshot to
 restore (the one still in its window).
 """
+
 from __future__ import annotations
 
 import json
@@ -55,6 +56,7 @@ def _now() -> float:
 
 def _iso() -> str:
     from datetime import datetime, timezone
+
     return datetime.now(timezone.utc).isoformat()
 
 
@@ -75,13 +77,16 @@ def _save_registry(registry: dict) -> None:
         _REGISTRY_FILE.parent.mkdir(parents=True, exist_ok=True)
         lock = FileLock(str(_REGISTRY_FILE) + ".lock", timeout=5.0)
         with lock:
-            _REGISTRY_FILE.write_text(json.dumps(registry, ensure_ascii=False, indent=2),
-                                      encoding="utf-8")
+            _REGISTRY_FILE.write_text(
+                json.dumps(registry, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
     except Exception as exc:
         log.warning("Canary registry save failed (%s).", exc)
 
-def register_canary(file_rel: str, snapshot_id: str, window_minutes: float = 30.0,
-                    policy=None) -> tuple[bool, str]:
+
+def register_canary(
+    file_rel: str, snapshot_id: str, window_minutes: float = 30.0, policy=None
+) -> tuple[bool, str]:
     """Register a pending canary for a repaired file. Refuses if the file already
     has a pending canary (one per file at a time — a flagged rollback must know
     which snapshot to restore). Returns (ok, repair_id_or_reason)."""
@@ -103,10 +108,12 @@ def register_canary(file_rel: str, snapshot_id: str, window_minutes: float = 30.
             window = float(window_minutes)
             if policy is not None:
                 try:
-                    window = float(policy.data["rollback"]["signal_gate"]["canary_window_minutes"])
+                    window = float(
+                        policy.data["rollback"]["signal_gate"]["canary_window_minutes"]
+                    )
                 except Exception:
                     pass
-            repair_id = f"canary-{int(_now()*1000)}-{abs(hash(file_key)) % 10000}"
+            repair_id = f"canary-{int(_now() * 1000)}-{abs(hash(file_key)) % 10000}"
             registry[repair_id] = {
                 "repair_id": repair_id,
                 "file": file_key,
@@ -118,8 +125,9 @@ def register_canary(file_rel: str, snapshot_id: str, window_minutes: float = 30.
             # Write directly under the SAME lock we already hold — calling
             # _save_registry here would try to re-acquire the lock file with a
             # NEW FileLock instance (re-entrancy is per-instance) and deadlock.
-            _REGISTRY_FILE.write_text(json.dumps(registry, ensure_ascii=False, indent=2),
-                                      encoding="utf-8")
+            _REGISTRY_FILE.write_text(
+                json.dumps(registry, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
             return True, repair_id
     except Exception as exc:
         log.warning("Canary registration failed (%s).", exc)
@@ -163,6 +171,7 @@ def clear_expired_old_flags(max_age_days: float = 14.0) -> int:
             if not resolved:
                 continue
             from datetime import datetime
+
             try:
                 t = datetime.fromisoformat(resolved).timestamp()
             except Exception:

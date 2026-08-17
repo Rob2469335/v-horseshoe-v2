@@ -6,6 +6,7 @@ startup items, Windows Event Log, and read-only registry queries. No writes, no
 process termination, no destructive operations — callers route these through
 `asyncio.to_thread` because psutil/winreg are blocking.
 """
+
 from __future__ import annotations
 
 import logging
@@ -27,7 +28,9 @@ def _err(message: str) -> Dict[str, Any]:
     return {"ok": False, "error": str(message)}
 
 
-def _run_isolated(action: str, kwargs: Dict[str, Any], timeout: float = 30.0) -> Dict[str, Any]:
+def _run_isolated(
+    action: str, kwargs: Dict[str, Any], timeout: float = 30.0
+) -> Dict[str, Any]:
     """Run a psutil/winreg enumeration in a killable subprocess with a hard timeout.
 
     Root cause (2026-08): psutil's per-process enumeration (memory_info, exe,
@@ -59,7 +62,9 @@ def _run_isolated(action: str, kwargs: Dict[str, Any], timeout: float = 30.0) ->
     try:
         proc = subprocess.run(
             [sys.executable, "-c", worker, payload],
-            capture_output=True, text=True, timeout=timeout,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
             creationflags=flags,
         )
     except subprocess.TimeoutExpired:
@@ -76,6 +81,7 @@ def _run_isolated(action: str, kwargs: Dict[str, Any], timeout: float = 30.0) ->
 # Hardware & OS inventory
 # ---------------------------------------------------------------------------
 
+
 def system_inventory() -> Dict[str, Any]:
     try:
         boot = psutil.boot_time()
@@ -90,7 +96,9 @@ def system_inventory() -> Dict[str, Any]:
             "machine": platform.machine(),
             "python": platform.python_version(),
             "uptime_seconds": round(max(0, __import__("time").time() - boot), 1),
-            "boot_time_iso": __import__("datetime").datetime.fromtimestamp(boot).isoformat(),
+            "boot_time_iso": __import__("datetime")
+            .datetime.fromtimestamp(boot)
+            .isoformat(),
             "cpu_physical_cores": psutil.cpu_count(logical=False),
             "cpu_logical_cores": psutil.cpu_count(logical=True),
             "cpu_percent": psutil.cpu_percent(interval=0.5),
@@ -106,15 +114,17 @@ def system_inventory() -> Dict[str, Any]:
         for part in psutil.disk_partitions(all=False):
             try:
                 usage = psutil.disk_usage(part.mountpoint)
-                info["disks"].append({
-                    "device": part.device,
-                    "mountpoint": part.mountpoint,
-                    "fstype": part.fstype,
-                    "total_gb": round(usage.total / (1024**3), 2),
-                    "used_gb": round(usage.used / (1024**3), 2),
-                    "free_gb": round(usage.free / (1024**3), 2),
-                    "percent": usage.percent,
-                })
+                info["disks"].append(
+                    {
+                        "device": part.device,
+                        "mountpoint": part.mountpoint,
+                        "fstype": part.fstype,
+                        "total_gb": round(usage.total / (1024**3), 2),
+                        "used_gb": round(usage.used / (1024**3), 2),
+                        "free_gb": round(usage.free / (1024**3), 2),
+                        "percent": usage.percent,
+                    }
+                )
             except Exception:
                 continue
         addrs = psutil.net_if_addrs()
@@ -126,10 +136,12 @@ def system_inventory() -> Dict[str, Any]:
             entry: Dict[str, Any] = {"name": name, "ipv4": ipv4}
             counter = io_counters.get(name)
             if counter:
-                entry.update({
-                    "bytes_sent": counter.bytes_sent,
-                    "bytes_recv": counter.bytes_recv,
-                })
+                entry.update(
+                    {
+                        "bytes_sent": counter.bytes_sent,
+                        "bytes_recv": counter.bytes_recv,
+                    }
+                )
             info["network_interfaces"].append(entry)
         return _ok(info)
     except Exception as exc:
@@ -151,9 +163,13 @@ def _process_entry(proc: psutil.Process) -> Dict[str, Any]:
             "username": proc.username(),
             "exe": proc.exe(),
             "cmdline": " ".join(proc.cmdline())[:300],
-            "started_iso": __import__("datetime").datetime.fromtimestamp(proc.create_time()).isoformat() if proc.create_time() else None,
+            "started_iso": __import__("datetime")
+            .datetime.fromtimestamp(proc.create_time())
+            .isoformat()
+            if proc.create_time()
+            else None,
         }
-    except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+    except psutil.NoSuchProcess, psutil.AccessDenied, OSError:
         return None
 
 
@@ -162,10 +178,24 @@ def process_list(sort: str = "memory", top: int = 40) -> Dict[str, Any]:
         sort = str(sort or "memory").lower().strip()
         entries = [_process_entry(p) for p in psutil.process_iter()]
         entries = [e for e in entries if e]
-        key = "memory_mb" if "mem" in sort else ("cpu_percent" if "cpu" in sort else ("name" if "name" in sort else "pid"))
+        key = (
+            "memory_mb"
+            if "mem" in sort
+            else (
+                "cpu_percent"
+                if "cpu" in sort
+                else ("name" if "name" in sort else "pid")
+            )
+        )
         reverse = key not in ("name", "pid")
         entries.sort(key=lambda e: e.get(key, 0), reverse=reverse)
-        return _ok({"count": len(entries), "sort": key, "processes": entries[: max(1, int(top))]})
+        return _ok(
+            {
+                "count": len(entries),
+                "sort": key,
+                "processes": entries[: max(1, int(top))],
+            }
+        )
     except Exception as exc:
         return _err(exc)
 
@@ -178,14 +208,16 @@ def service_list() -> Dict[str, Any]:
         for svc in psutil.win_service_iter():
             try:
                 info = svc.as_dict()
-                services.append({
-                    "name": info.get("name"),
-                    "display_name": info.get("display_name"),
-                    "status": info.get("status"),
-                    "start_type": info.get("start_type"),
-                    "binpath": info.get("binpath", "")[:250],
-                    "pid": info.get("pid"),
-                })
+                services.append(
+                    {
+                        "name": info.get("name"),
+                        "display_name": info.get("display_name"),
+                        "status": info.get("status"),
+                        "start_type": info.get("start_type"),
+                        "binpath": info.get("binpath", "")[:250],
+                        "pid": info.get("pid"),
+                    }
+                )
             except Exception:
                 continue
         services.sort(key=lambda s: str(s.get("name", "")).lower())
@@ -198,6 +230,7 @@ def service_list() -> Dict[str, Any]:
 # Network
 # ---------------------------------------------------------------------------
 
+
 def net_connections() -> Dict[str, Any]:
     try:
         conns = []
@@ -208,17 +241,23 @@ def net_connections() -> Dict[str, Any]:
             if c.pid:
                 try:
                     proc = psutil.Process(c.pid).name()
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                except psutil.NoSuchProcess, psutil.AccessDenied:
                     proc = f"pid:{c.pid}"
-            conns.append({
-                "fd": c.fd,
-                "family": "IPv4" if c.family == socket.AF_INET else ("IPv6" if c.family == socket.AF_INET6 else str(c.family)),
-                "type": "TCP" if c.type == socket.SOCK_STREAM else ("UDP" if c.type == socket.SOCK_DGRAM else str(c.type)),
-                "local": laddr,
-                "remote": raddr,
-                "status": c.status,
-                "process": proc,
-            })
+            conns.append(
+                {
+                    "fd": c.fd,
+                    "family": "IPv4"
+                    if c.family == socket.AF_INET
+                    else ("IPv6" if c.family == socket.AF_INET6 else str(c.family)),
+                    "type": "TCP"
+                    if c.type == socket.SOCK_STREAM
+                    else ("UDP" if c.type == socket.SOCK_DGRAM else str(c.type)),
+                    "local": laddr,
+                    "remote": raddr,
+                    "status": c.status,
+                    "process": proc,
+                }
+            )
         return _ok({"count": len(conns), "connections": conns})
     except Exception as exc:
         return _err(exc)
@@ -228,16 +267,30 @@ def net_connections() -> Dict[str, Any]:
 # Disk analysis
 # ---------------------------------------------------------------------------
 
+
 def _dir_size(path: str, max_depth: int = 2, top: int = 20) -> Dict[str, Any]:
     """Walk a directory tree and return largest subdirectories/files by size."""
     from collections import defaultdict
     from pathlib import Path as _Path
+
     root = _Path(path).resolve()
     if not root.is_dir():
         return _err(f"Not a directory: {path}")
     dir_sizes: Dict[str, int] = defaultdict(int)
     file_sizes: list[tuple[int, str]] = []
-    banned = {".git", ".venv", "__pycache__", ".ruff_cache", "node_modules", ".swarm_brain", "models", "logs", "data", ".pytest_cache", ".mypy_cache"}
+    banned = {
+        ".git",
+        ".venv",
+        "__pycache__",
+        ".ruff_cache",
+        "node_modules",
+        ".swarm_brain",
+        "models",
+        "logs",
+        "data",
+        ".pytest_cache",
+        ".mypy_cache",
+    }
     total = 0
     for dirpath, dirnames, filenames in os.walk(root):
         rel = _Path(dirpath).relative_to(root)
@@ -262,13 +315,25 @@ def _dir_size(path: str, max_depth: int = 2, top: int = 20) -> Dict[str, Any]:
                 file_sizes.append((size, str(rel_path).replace(os.sep, "/")))
     file_sizes.sort(reverse=True)
     dir_entries = sorted(dir_sizes.items(), key=lambda kv: kv[1], reverse=True)[:top]
-    return _ok({
-        "root": str(root),
-        "total_bytes": total,
-        "total_gb": round(total / (1024**3), 3),
-        "largest_dirs": [{"path": d.replace(os.sep, "/"), "bytes": s, "gb": round(s / (1024**3), 3)} for d, s in dir_entries],
-        "largest_files": [{"path": fp, "bytes": s, "gb": round(s / (1024**3), 3)} for s, fp in file_sizes[:top]],
-    })
+    return _ok(
+        {
+            "root": str(root),
+            "total_bytes": total,
+            "total_gb": round(total / (1024**3), 3),
+            "largest_dirs": [
+                {
+                    "path": d.replace(os.sep, "/"),
+                    "bytes": s,
+                    "gb": round(s / (1024**3), 3),
+                }
+                for d, s in dir_entries
+            ],
+            "largest_files": [
+                {"path": fp, "bytes": s, "gb": round(s / (1024**3), 3)}
+                for s, fp in file_sizes[:top]
+            ],
+        }
+    )
 
 
 def disk_analyzer(path: str = ".", max_depth: int = 2, top: int = 20) -> Dict[str, Any]:
@@ -295,6 +360,7 @@ _STARTUP_KEYS = (
 
 def _open_key(subkey: str, hive: str):
     import winreg
+
     hive_map = {
         "HKLM": winreg.HKEY_LOCAL_MACHINE,
         "HKCU": winreg.HKEY_CURRENT_USER,
@@ -305,6 +371,7 @@ def _open_key(subkey: str, hive: str):
 
 def _iter_registry_values(subkey: str, hive: str) -> list[tuple[str, Any]]:
     import winreg
+
     values = []
     try:
         key = _open_key(subkey, hive)
@@ -329,6 +396,7 @@ def installed_apps() -> Dict[str, Any]:
     # Each Uninstall subkey is a per-app key; iterate them
     for subkey, hive in _UNINSTALL_KEYS:
         import winreg
+
         try:
             parent = _open_key(subkey, hive)
         except OSError:
@@ -353,7 +421,9 @@ def installed_apps() -> Dict[str, Any]:
                     "install_date": vals.get("InstallDate"),
                     "install_location": vals.get("InstallLocation", ""),
                     "uninstall_string": (vals.get("UninstallString") or "")[:250],
-                    "estimated_size_mb": (int(vals["EstimatedSize"]) // 1024) if isinstance(vals.get("EstimatedSize"), int) else None,
+                    "estimated_size_mb": (int(vals["EstimatedSize"]) // 1024)
+                    if isinstance(vals.get("EstimatedSize"), int)
+                    else None,
                     "hive": hive,
                 }
         finally:
@@ -368,25 +438,38 @@ def startup_items() -> Dict[str, Any]:
         for name, value in _iter_registry_values(subkey, hive):
             if not isinstance(value, str):
                 continue
-            items.append({
-                "name": name,
-                "command": value[:300],
-                "registry_key": subkey,
-                "hive": hive,
-            })
+            items.append(
+                {
+                    "name": name,
+                    "command": value[:300],
+                    "registry_key": subkey,
+                    "hive": hive,
+                }
+            )
     items.sort(key=lambda i: str(i.get("name", "")).lower())
     return _ok({"count": len(items), "items": items})
 
 
 def registry_query(subkey: str, hive: str = "HKLM") -> Dict[str, Any]:
     """Read-only registry enumeration of a single key's values."""
-    if not subkey or not subkey.startswith("SOFTWARE") and "CurrentVersion" not in subkey:
+    if (
+        not subkey
+        or not subkey.startswith("SOFTWARE")
+        and "CurrentVersion" not in subkey
+    ):
         return _err("Only read-only registry queries under SOFTWARE are allowed.")
     try:
         values = _iter_registry_values(subkey, hive)
         if not values:
             return _ok({"subkey": subkey, "hive": hive, "count": 0, "values": []})
-        return _ok({"subkey": subkey, "hive": hive, "count": len(values), "values": [{"name": n, "value": str(v)[:400]} for n, v in values]})
+        return _ok(
+            {
+                "subkey": subkey,
+                "hive": hive,
+                "count": len(values),
+                "values": [{"name": n, "value": str(v)[:400]} for n, v in values],
+            }
+        )
     except Exception as exc:
         return _err(exc)
 
@@ -395,7 +478,10 @@ def registry_query(subkey: str, hive: str = "HKLM") -> Dict[str, Any]:
 # Windows Event Log (read-only)
 # ---------------------------------------------------------------------------
 
-def event_log_query(log: str = "System", max_events: int = 50, level: str = "") -> Dict[str, Any]:
+
+def event_log_query(
+    log: str = "System", max_events: int = 50, level: str = ""
+) -> Dict[str, Any]:
     """Tail the Windows Event Log. level: Error|Warning|Information (optional filter)."""
 
     log_name = str(log or "System")
@@ -405,7 +491,9 @@ def event_log_query(log: str = "System", max_events: int = 50, level: str = "") 
         return _err("pywin32 not installed — cannot read the Event Log.")
     try:
         handle = win32evtlog.OpenEventLog(None, log_name)
-        flags = win32evtlog.EVENTLOG_BACKWARDS_READ | win32evtlog.EVENTLOG_SEQUENTIAL_READ
+        flags = (
+            win32evtlog.EVENTLOG_BACKWARDS_READ | win32evtlog.EVENTLOG_SEQUENTIAL_READ
+        )
         events = []
         while len(events) < max_events:
             batch = win32evtlog.ReadEventLog(handle, flags, 0)
@@ -414,18 +502,30 @@ def event_log_query(log: str = "System", max_events: int = 50, level: str = "") 
             for evt in batch:
                 try:
                     ts = evt.TimeGenerated
-                    msg = str(evt.StringInserts) if evt.StringInserts else str(evt.SourceName)
-                    evt_level = {1: "Error", 2: "Warning", 4: "Information", 8: "Success", 16: "Failure"}.get(evt.EventType, "Unknown")
+                    msg = (
+                        str(evt.StringInserts)
+                        if evt.StringInserts
+                        else str(evt.SourceName)
+                    )
+                    evt_level = {
+                        1: "Error",
+                        2: "Warning",
+                        4: "Information",
+                        8: "Success",
+                        16: "Failure",
+                    }.get(evt.EventType, "Unknown")
                     if level and evt_level.lower() != str(level).lower():
                         continue
-                    events.append({
-                        "time": ts.strftime("%Y-%m-%d %H:%M:%S"),
-                        "level": evt_level,
-                        "event_id": evt.EventID,
-                        "source": evt.SourceName,
-                        "category": evt.EventCategory,
-                        "message": msg[:400],
-                    })
+                    events.append(
+                        {
+                            "time": ts.strftime("%Y-%m-%d %H:%M:%S"),
+                            "level": evt_level,
+                            "event_id": evt.EventID,
+                            "source": evt.SourceName,
+                            "category": evt.EventCategory,
+                            "message": msg[:400],
+                        }
+                    )
                 except Exception:
                     continue
                 if len(events) >= max_events:
@@ -454,8 +554,14 @@ _HANDLERS = {
 
 
 _BOUNDED_ACTIONS = {
-    "process_list", "net_connections", "system_inventory", "disk_analyzer",
-    "startup_items", "registry_query", "installed_apps", "event_log_query",
+    "process_list",
+    "net_connections",
+    "system_inventory",
+    "disk_analyzer",
+    "startup_items",
+    "registry_query",
+    "installed_apps",
+    "event_log_query",
     "service_list",
 }
 
@@ -465,8 +571,12 @@ def system_handler(payload: Dict[str, Any]) -> Dict[str, Any]:
     action = str(payload.get("action", "") or "").lower().strip()
     handler = _HANDLERS.get(action)
     if not handler:
-        return _err(f"Unknown system action '{action}'. Available: {', '.join(sorted(_HANDLERS))}")
-    kwargs = {k: v for k, v in payload.items() if k not in ("action", "tool", "capability")}
+        return _err(
+            f"Unknown system action '{action}'. Available: {', '.join(sorted(_HANDLERS))}"
+        )
+    kwargs = {
+        k: v for k, v in payload.items() if k not in ("action", "tool", "capability")
+    }
     if action in _BOUNDED_ACTIONS:
         # psutil/winreg enumeration can intermittently block indefinitely in
         # native code on Windows (transient/protected processes). Threads cannot

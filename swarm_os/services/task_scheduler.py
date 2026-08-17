@@ -165,26 +165,32 @@ def _is_due(task: dict, now: float | None = None) -> bool:
 
         try:
             from croniter import croniter
+
             return croniter.match(schedule, now_dt)
         except ImportError:
             pass
 
         def match_part(part: str, value: int) -> bool:
-            if part == "*": return True
+            if part == "*":
+                return True
             if part.startswith("*/"):
-                try: return value % int(part[2:]) == 0
-                except ValueError: return False
+                try:
+                    return value % int(part[2:]) == 0
+                except ValueError:
+                    return False
             if "," in part:
                 return any(match_part(p, value) for p in part.split(","))
-            try: return value == int(part)
-            except ValueError: return False
+            try:
+                return value == int(part)
+            except ValueError:
+                return False
 
         return (
-            match_part(parts[0], now_dt.minute) and
-            match_part(parts[1], now_dt.hour) and
-            match_part(parts[2], now_dt.day) and
-            match_part(parts[3], now_dt.month) and
-            match_part(parts[4], now_dt.isoweekday() % 7)
+            match_part(parts[0], now_dt.minute)
+            and match_part(parts[1], now_dt.hour)
+            and match_part(parts[2], now_dt.day)
+            and match_part(parts[3], now_dt.month)
+            and match_part(parts[4], now_dt.isoweekday() % 7)
         )
 
     return False

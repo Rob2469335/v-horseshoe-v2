@@ -4,8 +4,15 @@ from typing import Any
 
 from .models import CriticResult
 
+
 class Critic:
-    def evaluate_step(self, result: Any, expected_kind: str, retry_count: int = 0, max_retries: int = 3) -> CriticResult:
+    def evaluate_step(
+        self,
+        result: Any,
+        expected_kind: str,
+        retry_count: int = 0,
+        max_retries: int = 3,
+    ) -> CriticResult:
         """Evaluates execution outputs against structural contract rules."""
         can_retry = retry_count < max_retries
         if expected_kind == "tool":
@@ -37,5 +44,3 @@ class Critic:
             reason="non-tool stub-eval",
             retryable=can_retry,
         )
-
-

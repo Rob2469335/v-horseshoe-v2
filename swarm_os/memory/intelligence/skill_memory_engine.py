@@ -8,6 +8,7 @@ try:
 except ImportError:  # optional embedding backend; embed() degrades gracefully
     TextEmbedding = None
 
+
 class SkillMemoryEngine:
     def __init__(self):
         self.repo = None
@@ -16,12 +17,15 @@ class SkillMemoryEngine:
     def _get_repo(self):
         if self.repo is None:
             from organism_console.skills.skill_repository import SkillRepository
+
             self.repo = SkillRepository()
         return self.repo
 
     def embed(self, text: str) -> np.ndarray:
         if self.embedder is None:
-            raise RuntimeError("fastembed is not installed — cannot embed skills. `pip install fastembed`.")
+            raise RuntimeError(
+                "fastembed is not installed — cannot embed skills. `pip install fastembed`."
+            )
         emb = next(self.embedder.embed([text]))
         return np.asarray(emb, dtype=np.float32)
 
@@ -32,10 +36,14 @@ class SkillMemoryEngine:
         if similar and similar[0][1] > 0.95:
             existing, score = similar[0]
             existing.success_count += 1
-            existing.confidence = self.bayesian_confidence(existing.success_count, existing.failure_count)
+            existing.confidence = self.bayesian_confidence(
+                existing.success_count, existing.failure_count
+            )
             existing.updated_at = datetime.utcnow().isoformat()
             repo.upsert(existing, self.embed(existing.pattern))
-            print(f"[memory] Reinforced skill {existing.id}: confidence {existing.confidence}")
+            print(
+                f"[memory] Reinforced skill {existing.id}: confidence {existing.confidence}"
+            )
             return existing
         else:
             skill_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, pattern))
@@ -44,10 +52,12 @@ class SkillMemoryEngine:
                 pattern=pattern,
                 success_count=1,
                 failure_count=0,
-                confidence=self.bayesian_confidence(1, 0)
+                confidence=self.bayesian_confidence(1, 0),
             )
             repo.upsert(skill, self.embed(pattern))
-            print(f"[memory] Created new skill {skill.id}: confidence {skill.confidence}")
+            print(
+                f"[memory] Created new skill {skill.id}: confidence {skill.confidence}"
+            )
             return skill
 
     def bayesian_confidence(self, success_count: int, failure_count: int):
@@ -61,10 +71,14 @@ class SkillMemoryEngine:
                 skill.success_count += 1
             else:
                 skill.failure_count += 1
-            skill.confidence = self.bayesian_confidence(skill.success_count, skill.failure_count)
+            skill.confidence = self.bayesian_confidence(
+                skill.success_count, skill.failure_count
+            )
             skill.updated_at = datetime.utcnow().isoformat()
             repo.upsert(skill, self.embed(skill.pattern))
-            print(f"[memory] Reinforced skill {skill_id}: success={success} confidence={skill.confidence}")
+            print(
+                f"[memory] Reinforced skill {skill_id}: success={success} confidence={skill.confidence}"
+            )
 
     def find_similar(self, pattern: str, top_k: int = 3):
         repo = self._get_repo()

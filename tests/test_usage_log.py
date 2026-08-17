@@ -7,6 +7,7 @@ Covers:
   4. record_usage appends JSONL under the configured path; usage_report aggregates.
   5. Telemetry never raises (write to an invalid path is swallowed).
 """
+
 import json
 from pathlib import Path
 
@@ -63,7 +64,9 @@ def test_extract_usage_object_and_dict():
         "completion_tokens": 50,
         "cached_tokens": 40,
     }
-    assert usage_log.extract_usage({"usage": {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10}}) == {
+    assert usage_log.extract_usage(
+        {"usage": {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10}}
+    ) == {
         "prompt_tokens": 7,
         "completion_tokens": 3,
         "cached_tokens": 0,
@@ -107,8 +110,12 @@ def test_telemetry_never_raises(tmp_path: Path):
     blocker.write_text("x", encoding="utf-8")
     usage_log._USAGE_PATH = blocker / "usage.jsonl"
     try:
-        usage_log.record_usage(model="openai/qwen3.5-4b", prompt_tokens=5, completion_tokens=5)
-        usage_log.record_response({"usage": None}, "openai/qwen3.5-4b")  # no usage -> skip
+        usage_log.record_usage(
+            model="openai/qwen3.5-4b", prompt_tokens=5, completion_tokens=5
+        )
+        usage_log.record_response(
+            {"usage": None}, "openai/qwen3.5-4b"
+        )  # no usage -> skip
     finally:
         usage_log._USAGE_PATH = tmp_path / "usage.jsonl"
 
@@ -116,8 +123,10 @@ def test_telemetry_never_raises(tmp_path: Path):
 def test_record_response_skips_no_usage():
     class Msg:
         content = "hi"
+
     class Choice:
         message = Msg()
+
     class Resp:
         choices = [Choice()]  # no .usage attribute
 

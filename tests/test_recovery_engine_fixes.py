@@ -9,6 +9,7 @@ Covers the Phase 3 fixes:
 - micro_restart dispatches an async action ONCE (not leak the first awaitable
   and execute a second time).
 """
+
 from __future__ import annotations
 import sys
 
@@ -19,8 +20,11 @@ def test_restart_backend_refuses_in_process(monkeypatch):
     """When the calling process IS the backend (sys.argv contains
     swarm_os.app.main:app), restart_backend must refuse fail-closed instead of
     spawning a doomed child on the still-held :8000 port."""
-    monkeypatch.setattr(sys, "argv", ["python", "-m", "uvicorn", "swarm_os.app.main:app"])
+    monkeypatch.setattr(
+        sys, "argv", ["python", "-m", "uvicorn", "swarm_os.app.main:app"]
+    )
     from swarm_os.healing.recovery_engine import restart_backend
+
     res = restart_backend({})
     assert res.get("ok") is False
     assert res.get("action") == "restart_backend"
@@ -32,14 +36,17 @@ def test_restart_backend_allows_external_process(monkeypatch):
     cross-process kill+relaunch is legitimate — not refused."""
     monkeypatch.setattr(sys, "argv", ["rob", "heal", "run"])
     import swarm_os.healing.recovery_engine as re
+
     # Prevent the real kill/spawn side-effects: patch the internals.
     monkeypatch.setattr(re, "_find_and_kill", lambda match, exclude_pid=None: [])
 
     class _FakeProc:
         def poll(self):
             return None  # keep running — not an early-exit
+
         def wait(self, timeout):
             return None
+
         @property
         def returncode(self):
             return None
@@ -58,8 +65,10 @@ def test_restart_failure_paths_carry_action(monkeypatch):
     class _FakeProc:
         def poll(self):
             return 1  # exited with code 1 -> early-exit failure path
+
         def wait(self, timeout):
             return None
+
         @property
         def returncode(self):
             return 1
@@ -83,9 +92,11 @@ def test_micro_restart_async_action_runs_once():
     def async_style_action(anomaly):
         kills = []
         calls["n"] += 1
+
         async def _impl():
             await asyncio.sleep(0)
             return {"ok": True, "killed": kills}
+
         return _impl()
 
     result = micro_restart(

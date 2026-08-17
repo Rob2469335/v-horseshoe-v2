@@ -10,6 +10,7 @@ Plus: event-scope dispatch (tool_result -> repair, turn_budget_exhausted ->
 reflexion only, verification_failed not handled), and fail-closed when the
 policy is missing.
 """
+
 import json
 import time
 from types import SimpleNamespace
@@ -31,7 +32,9 @@ def _isolate_paths(monkeypatch, tmp_path):
 
 
 def _make_engine():
-    return SimpleNamespace(diagnose_and_repair=lambda *a, **k: {"fixed": True, "tier_used": 0})
+    return SimpleNamespace(
+        diagnose_and_repair=lambda *a, **k: {"fixed": True, "tier_used": 0}
+    )
 
 
 def _stub_policy(monkeypatch, daily_budget=50):
@@ -41,7 +44,10 @@ def _stub_policy(monkeypatch, daily_budget=50):
 
 
 def _write_tool_event(path, etype="tool_result", ok=False, error="boom", file_path=""):
-    payload = {"result": {"ok": ok, "error": error}, "arguments": {"file_path": file_path}}
+    payload = {
+        "result": {"ok": ok, "error": error},
+        "arguments": {"file_path": file_path},
+    }
     line = json.dumps({"event_type": etype, "payload": payload}) + "\n"
     with path.open("a", encoding="utf-8") as f:
         f.write(line)
@@ -57,6 +63,7 @@ def test_heartbeat_written_every_tick(monkeypatch, tmp_path):
     _stub_policy(monkeypatch)
     loop = wl.WatchLoop(_make_engine(), interval_seconds=0.01)
     import asyncio
+
     asyncio.run(loop._tick())
     hb = json.loads((tmp_path / "heartbeat.json").read_text(encoding="utf-8"))
     assert "last_tick" in hb
@@ -97,13 +104,18 @@ def test_tick_invokes_expired_flag_gc(monkeypatch, tmp_path):
     assert calls["n"] == 0, "flag GC must be throttled to hourly"
 
 
-def test_stale_heartbeat_detected_by_recency_not_liveness(monkeypatch, tmp_path, caplog):
+def test_stale_heartbeat_detected_by_recency_not_liveness(
+    monkeypatch, tmp_path, caplog
+):
     """A heartbeat that stopped updating (hang) is stale by recency, NOT by 'the
     process object is gone' — the daemon may still be alive but wedged."""
     import logging
+
     old = time.time() - 200  # far older than 3x a 30s interval
     (tmp_path / "heartbeat.json").write_text(
-        json.dumps({"last_tick": old, "last_tick_iso": "2026-01-01T00:00:00Z", "offset": 0}),
+        json.dumps(
+            {"last_tick": old, "last_tick_iso": "2026-01-01T00:00:00Z", "offset": 0}
+        ),
         encoding="utf-8",
     )
     loop = wl.WatchLoop(_make_engine(), interval_seconds=30.0)
@@ -114,8 +126,10 @@ def test_stale_heartbeat_detected_by_recency_not_liveness(monkeypatch, tmp_path,
 
 def test_fresh_heartbeat_not_stale(monkeypatch, tmp_path, caplog):
     import logging
+
     (tmp_path / "heartbeat.json").write_text(
-        json.dumps({"last_tick": time.time()}), encoding="utf-8")
+        json.dumps({"last_tick": time.time()}), encoding="utf-8"
+    )
     loop = wl.WatchLoop(_make_engine(), interval_seconds=30.0)
     with caplog.at_level(logging.WARNING, logger="WatchLoop"):
         loop._check_stale_heartbeat()
@@ -157,7 +171,10 @@ def test_tool_result_triggers_repair_and_audits(monkeypatch, tmp_path):
     def _repair(err, file_path=None):
         calls["n"] += 1
         return {"fixed": True, "tier_used": 0, "fix_class": "prompt_sensitivity"}
-    loop = wl.WatchLoop(SimpleNamespace(diagnose_and_repair=_repair), interval_seconds=0.01)
+
+    loop = wl.WatchLoop(
+        SimpleNamespace(diagnose_and_repair=_repair), interval_seconds=0.01
+    )
     loop._load_policy()
     _write_tool_event(tmp_path / "events.jsonl", file_path="swarm_os/api/routes.py")
     loop._handle(_last_line(tmp_path / "events.jsonl"))
@@ -173,7 +190,11 @@ def test_turn_budget_exhausted_is_learning_only(monkeypatch, tmp_path):
     same 'one event, one consumer' principle as verification_failed."""
     _stub_policy(monkeypatch)
     calls = {"repair": 0}
-    engine = SimpleNamespace(diagnose_and_repair=lambda *a, **k: calls.__setitem__("repair", calls["repair"] + 1))
+    engine = SimpleNamespace(
+        diagnose_and_repair=lambda *a, **k: calls.__setitem__(
+            "repair", calls["repair"] + 1
+        )
+    )
     loop = wl.WatchLoop(engine, interval_seconds=0.01)
     _write_tool_event(tmp_path / "events.jsonl", etype="turn_budget_exhausted")
     loop._handle(_last_line(tmp_path / "events.jsonl"))
@@ -186,7 +207,11 @@ def test_verification_failed_not_handled(monkeypatch, tmp_path):
     does NOT dispatch on it."""
     _stub_policy(monkeypatch)
     calls = {"repair": 0}
-    engine = SimpleNamespace(diagnose_and_repair=lambda *a, **k: calls.__setitem__("repair", calls["repair"] + 1))
+    engine = SimpleNamespace(
+        diagnose_and_repair=lambda *a, **k: calls.__setitem__(
+            "repair", calls["repair"] + 1
+        )
+    )
     loop = wl.WatchLoop(engine, interval_seconds=0.01)
     line = json.dumps({"event_type": "verification_failed", "payload": {}}) + "\n"
     with (tmp_path / "events.jsonl").open("a", encoding="utf-8") as f:
@@ -198,11 +223,19 @@ def test_verification_failed_not_handled(monkeypatch, tmp_path):
 # ── audit trail: AGENTS.md append is lock-guarded ───────────────────────────
 def test_agents_md_append_marked_auto_repair(monkeypatch, tmp_path):
     (tmp_path / "AGENTS.md").write_text(
-        "## Self-Healing & Self-Learning Fixes\n- existing rule\n", encoding="utf-8")
+        "## Self-Healing & Self-Learning Fixes\n- existing rule\n", encoding="utf-8"
+    )
     wl._audit_write(
-        {"timestamp": "2026-08-07T00:00:00Z", "trigger": "watch_loop", "file": "swarm_os/api/routes.py",
-         "tier": 0, "fixed": True, "error": "boom"},
-        "- **[AUTO-REPAIR] (2026-08-07T00:00:00Z)**: swarm_os/api/routes.py (tier 0, fixed=True) — error: boom\n")
+        {
+            "timestamp": "2026-08-07T00:00:00Z",
+            "trigger": "watch_loop",
+            "file": "swarm_os/api/routes.py",
+            "tier": 0,
+            "fixed": True,
+            "error": "boom",
+        },
+        "- **[AUTO-REPAIR] (2026-08-07T00:00:00Z)**: swarm_os/api/routes.py (tier 0, fixed=True) — error: boom\n",
+    )
     content = (tmp_path / "AGENTS.md").read_text(encoding="utf-8")
     assert "[AUTO-REPAIR]" in content
     assert content.count("## Self-Healing & Self-Learning Fixes") == 1  # section intact

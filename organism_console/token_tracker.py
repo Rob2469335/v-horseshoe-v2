@@ -4,39 +4,47 @@ Real-time token + spend + model availability tracker.
 Tracks 4 provider buckets: llama-local, llama-cloud, openrouter, nvidia
 Polls every 30s: Local LLM /v1/models for loaded models, OpenRouter /auth/key for spend.
 """
+
 import os
 import time
 import threading
 import requests
+
 try:
     from dotenv import load_dotenv
+
     load_dotenv()
 except ImportError:
     pass
 
 _lock = threading.Lock()
 
-_PROVIDER_KEYS = ("ollama_local", "ollama_cloud", "openrouter_free", "openrouter_paid", "nvidia", "deepseek", "openai_paid")
+_PROVIDER_KEYS = (
+    "ollama_local",
+    "ollama_cloud",
+    "openrouter_free",
+    "openrouter_paid",
+    "nvidia",
+    "deepseek",
+    "openai_paid",
+)
 
 # Per-provider token accumulators (session)
 _tok = {p: {"in": 0, "out": 0, "est": 0, "calls": 0} for p in _PROVIDER_KEYS}
 
 _state = {
     # Last active model + provider
-    "last_model":    "—",
+    "last_model": "—",
     "last_provider": "—",
-
     # Ollama: currently loaded models from /api/ps
-    "ollama_loaded": [],        # list of model name strings
+    "ollama_loaded": [],  # list of model name strings
     "ollama_poll_ok": False,
-
     # OpenRouter account spend
-    "or_used_today":  0.0,
-    "or_used_total":  0.0,
-    "or_limit":       None,
-    "or_remaining":   None,
-    "or_poll_ok":     False,
-
+    "or_used_today": 0.0,
+    "or_used_total": 0.0,
+    "or_limit": None,
+    "or_remaining": None,
+    "or_poll_ok": False,
     # NVIDIA NIM — no spend API, just track calls/tokens locally
     "nvidia_poll_ok": True,
 }
@@ -54,7 +62,12 @@ def _classify_provider(model: str, chunk_provider: str | None = None) -> str:
     p = (chunk_provider or "").lower()
     m = (model or "").lower()
 
-    if p in ("nvidia", "nvidia_nim") or m.startswith("nvidia") or "nemotron" in m or "nvidia_nim/" in m:
+    if (
+        p in ("nvidia", "nvidia_nim")
+        or m.startswith("nvidia")
+        or "nemotron" in m
+        or "nvidia_nim/" in m
+    ):
         return "nvidia"
 
     if m.startswith("deepseek/"):
@@ -64,7 +77,12 @@ def _classify_provider(model: str, chunk_provider: str | None = None) -> str:
         name = m.replace("openai/", "")
         if name.startswith("zen/"):
             return "openai_paid"
-        if name.startswith("gpt") or name.startswith("o1") or name.startswith("o3") or "deepseek" in name:
+        if (
+            name.startswith("gpt")
+            or name.startswith("o1")
+            or name.startswith("o3")
+            or "deepseek" in name
+        ):
             return "openai_paid"
         return "ollama_local"
 
@@ -81,7 +99,11 @@ def _classify_provider(model: str, chunk_provider: str | None = None) -> str:
 # ── Ollama poller ─────────────────────────────────────────────────────────────
 def _poll_ollama():
     try:
-        r = requests.get("http://127.0.0.1:8080/v1/models", headers={"Authorization": "Bearer llama"}, timeout=5)
+        r = requests.get(
+            "http://127.0.0.1:8080/v1/models",
+            headers={"Authorization": "Bearer llama"},
+            timeout=5,
+        )
         if r.status_code == 200:
             models = r.json().get("data", [])
             names = [m.get("id", "") for m in models if m.get("id")]
@@ -113,9 +135,13 @@ def _poll_openrouter():
                 _state["or_used_total"] = float(d.get("usage", 0) or 0)
                 _state["or_used_today"] = float(d.get("usage_daily", 0) or 0)
                 limit = d.get("limit")
-                _state["or_limit"]     = float(limit) if limit is not None else None
-                _state["or_remaining"] = (float(limit) - _state["or_used_total"]) if limit is not None else None
-                _state["or_poll_ok"]   = True
+                _state["or_limit"] = float(limit) if limit is not None else None
+                _state["or_remaining"] = (
+                    (float(limit) - _state["or_used_total"])
+                    if limit is not None
+                    else None
+                )
+                _state["or_poll_ok"] = True
             return
     except Exception:
         pass
@@ -151,45 +177,45 @@ def seed_model_if_empty(model: str):
 
 
 def record_chunk(chunk: dict):
-    model    = chunk.get("model", "")
+    model = chunk.get("model", "")
     provider = chunk.get("provider", "")
-    bucket   = _classify_provider(model, provider)
+    bucket = _classify_provider(model, provider)
 
     with _lock:
         if model and model not in ("health-check", "delegation-guard"):
-            _state["last_model"]    = model
+            _state["last_model"] = model
             _state["last_provider"] = bucket
 
         usage = chunk.get("usage")
         if isinstance(usage, dict):
-            _tok[bucket]["in"]    += int(usage.get("prompt_tokens", 0) or 0)
-            _tok[bucket]["out"]   += int(usage.get("completion_tokens", 0) or 0)
+            _tok[bucket]["in"] += int(usage.get("prompt_tokens", 0) or 0)
+            _tok[bucket]["out"] += int(usage.get("completion_tokens", 0) or 0)
             _tok[bucket]["calls"] += 1
             return
 
         content = chunk.get("content", "")
         if content:
-            _tok[bucket]["est"]   += max(1, len(content) // 4)
+            _tok[bucket]["est"] += max(1, len(content) // 4)
             _tok[bucket]["calls"] += 1
 
 
 # ── Status segment builder ────────────────────────────────────────────────────
 def get_status_segment() -> str:
     with _lock:
-        s   = dict(_state)
+        s = dict(_state)
         tok = {p: dict(v) for p, v in _tok.items()}
 
     lines = []
 
     # ── Row 1: active model + provider ───────────────────────────────────────
     mdl_color = {
-        "ollama_local":    "cyan",
-        "ollama_cloud":    "bright_cyan",
+        "ollama_local": "cyan",
+        "ollama_cloud": "bright_cyan",
         "openrouter_free": "green",
         "openrouter_paid": "yellow",
-        "nvidia":          "bright_green",
-        "deepseek":        "bright_cyan",
-        "openai_paid":     "bright_yellow",
+        "nvidia": "bright_green",
+        "deepseek": "bright_cyan",
+        "openai_paid": "bright_yellow",
     }.get(s["last_provider"], "white")
 
     lines.append(
@@ -200,22 +226,22 @@ def get_status_segment() -> str:
     # ── Row 2: per-provider token counters ────────────────────────────────────
     segs = []
     labels = {
-        "ollama_local":    "loc",
-        "ollama_cloud":    "cld",
+        "ollama_local": "loc",
+        "ollama_cloud": "cld",
         "openrouter_free": "or✓",
         "openrouter_paid": "or$",
-        "nvidia":          "nv",
-        "deepseek":        "ds",
-        "openai_paid":     "oai",
+        "nvidia": "nv",
+        "deepseek": "ds",
+        "openai_paid": "oai",
     }
     for p in _PROVIDER_KEYS:
-        t   = tok[p]
+        t = tok[p]
         out = t["out"] or t["est"]
         inp = t["in"]
         if inp == 0 and out == 0:
             continue
         total = inp + out
-        col   = "green" if total < 8_000 else "yellow" if total < 24_000 else "red"
+        col = "green" if total < 8_000 else "yellow" if total < 24_000 else "red"
         segs.append(f"[bold]{labels[p]}[/bold]:[{col}]▲{inp}▼{out}[/{col}]")
 
     if segs:
@@ -239,9 +265,9 @@ def get_status_segment() -> str:
         today = s["or_used_today"]
         total = s["or_used_total"]
         limit = s["or_limit"]
-        rem   = s["or_remaining"]
-        frac  = (total / limit) if limit else 0
-        col   = "green" if frac < 0.6 else "yellow" if frac < 0.85 else "red"
+        rem = s["or_remaining"]
+        frac = (total / limit) if limit else 0
+        col = "green" if frac < 0.6 else "yellow" if frac < 0.85 else "red"
         lim_s = f"/${limit:.2f}" if limit is not None else ""
         rem_s = f" rem=[bold]${rem:.4f}[/bold]" if rem is not None else ""
         lines.append(
@@ -252,8 +278,8 @@ def get_status_segment() -> str:
         or_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
         lines.append(
             "[bold blue]or$[/bold blue]:[dim]no key[/dim]"
-            if not or_key else
-            "[bold blue]or$[/bold blue]:[yellow]polling...[/yellow]"
+            if not or_key
+            else "[bold blue]or$[/bold blue]:[yellow]polling...[/yellow]"
         )
 
     # ── Row 5: NVIDIA token summary ───────────────────────────────────────────
@@ -274,5 +300,5 @@ def reset_session():
     with _lock:
         for p in _PROVIDER_KEYS:
             _tok[p] = {"in": 0, "out": 0, "est": 0, "calls": 0}
-        _state["last_model"]    = "—"
+        _state["last_model"] = "—"
         _state["last_provider"] = "—"

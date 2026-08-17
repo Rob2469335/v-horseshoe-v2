@@ -71,7 +71,9 @@ def test_compact_context_messages():
 
     assert len(messages) == 41
 
-    compacted = ChatService.compact_context_messages(messages, max_turns=10, keep_recent=6)
+    compacted = ChatService.compact_context_messages(
+        messages, max_turns=10, keep_recent=6
+    )
 
     # Must contain original system prompt + 1 compacted summary + 6 recent non-system turns
     assert len(compacted) == 8

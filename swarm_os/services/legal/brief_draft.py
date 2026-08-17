@@ -19,6 +19,7 @@ lacking a retrieved source — NOT a stronger prompt). This module:
 Deterministic core (skeleton + checker); the sections are filled by the caller
 from synthesize_irac + verify_citations. No LLM in the checker itself.
 """
+
 from __future__ import annotations
 
 import logging
@@ -26,7 +27,8 @@ import re
 from typing import Any
 
 from swarm_os.services.legal.citation_verify import (
-    extract_case_citations, extract_statute_sections,
+    extract_case_citations,
+    extract_statute_sections,
 )
 
 log = logging.getLogger(__name__)
@@ -35,10 +37,16 @@ log = logging.getLogger(__name__)
 # is a (header, purpose) pair the drafter fills from the IRAC/verification seams.
 BRIEF_SECTIONS: list[tuple[str, str]] = [
     ("Cover Page", "Case caption, court, docket no., party, counsel, title of brief"),
-    ("Corporate Disclosure Statement", "FRAP 26.1 / 2d Cir. L.R. 26.1 — any corporate parent"),
+    (
+        "Corporate Disclosure Statement",
+        "FRAP 26.1 / 2d Cir. L.R. 26.1 — any corporate parent",
+    ),
     ("Table of Contents", "Sections + page numbers"),
     ("Table of Authorities", "All cases/statutes cited, with pages"),
-    ("Jurisdictional Statement", "FRAP 28(a)(4) — basis of district-court jurisdiction, appealability, timeliness"),
+    (
+        "Jurisdictional Statement",
+        "FRAP 28(a)(4) — basis of district-court jurisdiction, appealability, timeliness",
+    ),
     ("Statement of Issues", "The issues presented for review"),
     ("Statement of the Case", "Procedural history + facts (record citations)"),
     ("Summary of the Argument", "Concise overview"),
@@ -55,7 +63,8 @@ _RULE_SENT_RE = re.compile(
     r"\b(?:rule|standard|require|provid|govern|entitle|shall|must|may)\b", re.IGNORECASE
 )
 _APPLICATION_SENT_RE = re.compile(
-    r"\b(?:here|this case|the defendant|the government|the record|the court)\b", re.IGNORECASE
+    r"\b(?:here|this case|the defendant|the government|the record|the court)\b",
+    re.IGNORECASE,
 )
 # Sentence splitter that protects legal abbreviations — "United States v.
 # Moseley", "F.3d 9", "U.S. 644" must NOT split on their internal periods.
@@ -63,16 +72,48 @@ _APPLICATION_SENT_RE = re.compile(
 # whitespace + an uppercase word AND the token preceding the period is not a
 # legal abbreviation (v., u.s., f.3d, cir., inc., et al., e.g., i.e., id.).
 _ABBR_TOKENS = {
-    "v", "u", "s", "f", "d", "cir", "inc", "ltd", "co", "corp", "et", "al",
-    "e", "g", "i", "id", "no", "sup", "n", "y", "rpa", "abc", "cpl", "gol",
+    "v",
+    "u",
+    "s",
+    "f",
+    "d",
+    "cir",
+    "inc",
+    "ltd",
+    "co",
+    "corp",
+    "et",
+    "al",
+    "e",
+    "g",
+    "i",
+    "id",
+    "no",
+    "sup",
+    "n",
+    "y",
+    "rpa",
+    "abc",
+    "cpl",
+    "gol",
     # Multi-letter dotted abbreviations (period-stripped): state codes
     # (N.Y., N.J., G.A.), U.S., F.3d/F.4th reporters.
-    "ny", "nj", "ga", "nc", "us", "f3d", "f4th", "f2d", "fappx",
-    "ed", "sd", "ct", "app", "lexis",
+    "ny",
+    "nj",
+    "ga",
+    "nc",
+    "us",
+    "f3d",
+    "f4th",
+    "f2d",
+    "fappx",
+    "ed",
+    "sd",
+    "ct",
+    "app",
+    "lexis",
 }
-_SENTENCE_SPLIT_RE = re.compile(
-    r"(?<=\.)\s+(?=[A-Z])"
-)
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=\.)\s+(?=[A-Z])")
 
 
 def _split_sentences(text: str) -> list[str]:
@@ -90,7 +131,9 @@ def _split_sentences(text: str) -> list[str]:
             prev_token = prev.rstrip().split()[-1].lower() if prev.strip() else ""
             # prev_token is like "v", "F", "U" (period stripped). Abbreviation?
             prev_alpha = re.sub(r"[^a-z0-9]", "", prev_token)
-            if prev_alpha in _ABBR_TOKENS or (len(prev_alpha) == 1 and prev_alpha.isalpha()):
+            if prev_alpha in _ABBR_TOKENS or (
+                len(prev_alpha) == 1 and prev_alpha.isalpha()
+            ):
                 # Abbreviation — join (no sentence break).
                 cur.append(part)
                 continue
@@ -108,10 +151,12 @@ def draft_skeleton(issue_headers: list[str] | None = None) -> list[dict[str, str
     skeleton = [{"section": s, "purpose": p} for s, p in BRIEF_SECTIONS]
     if issue_headers:
         for i, issue in enumerate(issue_headers, 1):
-            skeleton.append({
-                "section": f"Argument Issue {i}: {issue}",
-                "purpose": "Rule → Application → Conclusion, each citing a retrieved authority",
-            })
+            skeleton.append(
+                {
+                    "section": f"Argument Issue {i}: {issue}",
+                    "purpose": "Rule → Application → Conclusion, each citing a retrieved authority",
+                }
+            )
     return skeleton
 
 
@@ -128,9 +173,9 @@ def _has_citation(sentence: str) -> bool:
     return False
 
 
-def check_brief(argument_text: str,
-                retrieved_statutes: list[str],
-                retrieved_cases: list[str]) -> dict[str, Any]:
+def check_brief(
+    argument_text: str, retrieved_statutes: list[str], retrieved_cases: list[str]
+) -> dict[str, Any]:
     """The post-generation checker. For each Argument sentence:
       - a Rule/Application sentence asserting a legal proposition MUST carry a
         citation (case or statute) — else flagged `uncited_assertion`;
@@ -148,15 +193,20 @@ def check_brief(argument_text: str,
         is_app = bool(_APPLICATION_SENT_RE.search(s))
         if not (is_rule or is_app):
             continue  # not an assertion — narrative/factual sentence
-        rec = {"sentence": s, "role": "rule" if is_rule and not is_app else "application"}
+        rec = {
+            "sentence": s,
+            "role": "rule" if is_rule and not is_app else "application",
+        }
         assertions.append(rec)
         if not _has_citation(s):
             uncited.append(rec)
 
     # Citation alignment (reuse the existing seams).
     from swarm_os.services.legal.citation_verify import (
-        align_citations, align_case_citations,
+        align_citations,
+        align_case_citations,
     )
+
     stat_align = align_citations(argument_text or "", retrieved_statutes)
     case_align = align_case_citations(argument_text or "", retrieved_cases)
     unaligned_statutes = [u["section"] for u in stat_align["unaligned"]]
@@ -176,11 +226,13 @@ def check_brief(argument_text: str,
 
 def render_check(check: dict[str, Any]) -> str:
     """Human-readable checker output for a CLI/console surface."""
-    out = [f"Assertions: {len(check['assertions'])}",
-           f"Uncited assertions: {check['uncited_count']}",
-           f"Unaligned statutes: {check['unaligned_statutes']}",
-           f"Unaligned cases: {check['unaligned_cases']}",
-           f"Overall: {'PASS' if check['ok'] else 'FAIL — fix before filing'}"]
+    out = [
+        f"Assertions: {len(check['assertions'])}",
+        f"Uncited assertions: {check['uncited_count']}",
+        f"Unaligned statutes: {check['unaligned_statutes']}",
+        f"Unaligned cases: {check['unaligned_cases']}",
+        f"Overall: {'PASS' if check['ok'] else 'FAIL — fix before filing'}",
+    ]
     for u in check["uncited_assertions"]:
         out.append(f"  [uncited] ({u['role']}) {u['sentence'][:120]}")
     return "\n".join(out)
@@ -207,8 +259,9 @@ _FRAP32_WORD_LIMIT = 13000
 _FRAP32_REPLY_WORD_LIMIT = 6500
 
 
-def check_frap32(text_or_dict: Any, title: str = "brief",
-                 reply: bool = False) -> dict[str, Any]:
+def check_frap32(
+    text_or_dict: Any, title: str = "brief", reply: bool = False
+) -> dict[str, Any]:
     """Check FRAP 32(a)(7)(B) type-volume + the certificate of compliance.
 
     `text_or_dict` may be plain text (words counted here) or
@@ -227,8 +280,12 @@ def check_frap32(text_or_dict: Any, title: str = "brief",
     has_certificate = "certificate of compliance" in (text or "").lower()
     over = words > limit
     return {
-        "title": title, "words": words, "limit": limit, "reply": reply,
-        "over": over, "remaining": max(0, limit - words),
+        "title": title,
+        "words": words,
+        "limit": limit,
+        "reply": reply,
+        "over": over,
+        "remaining": max(0, limit - words),
         "has_certificate": has_certificate,
         "ok": not over and has_certificate,
     }
@@ -246,9 +303,9 @@ def check_frap32(text_or_dict: Any, title: str = "brief",
 # ---------------------------------------------------------------------------
 
 
-def check_fidelity(argument_text: str,
-                   source_by_cite: dict[str, str],
-                   threshold: float = 0.3) -> dict[str, Any]:
+def check_fidelity(
+    argument_text: str, source_by_cite: dict[str, str], threshold: float = 0.3
+) -> dict[str, Any]:
     """For each assertion sentence carrying a citation (OR a name-only reference
     to a known case), check that the cited source's content overlaps the
     sentence's substantive tokens — i.e. the citation supports (not merely
@@ -264,7 +321,9 @@ def check_fidelity(argument_text: str,
     Deterministic, offline. Returns {checked, supporting, unsupporting, rate}."""
     import re as _re
     from swarm_os.services.legal.citation_verify import (
-        extract_case_citations, extract_statute_sections, _normalize_section,
+        extract_case_citations,
+        extract_statute_sections,
+        _normalize_section,
         case_citation_key,
     )
 
@@ -286,9 +345,34 @@ def check_fidelity(argument_text: str,
 
     def _tokens(s: str) -> set[str]:
         return set(_re.findall(r"[a-z0-9']+", (s or "").lower())) - {
-            "the", "a", "an", "of", "to", "in", "for", "on", "and", "or",
-            "is", "are", "be", "by", "that", "this", "with", "from", "as",
-            "at", "it", "its", "was", "were", "has", "have", "had", "not",
+            "the",
+            "a",
+            "an",
+            "of",
+            "to",
+            "in",
+            "for",
+            "on",
+            "and",
+            "or",
+            "is",
+            "are",
+            "be",
+            "by",
+            "that",
+            "this",
+            "with",
+            "from",
+            "as",
+            "at",
+            "it",
+            "its",
+            "was",
+            "were",
+            "has",
+            "have",
+            "had",
+            "not",
         }
 
     supporting: list[dict] = []
@@ -302,8 +386,11 @@ def check_fidelity(argument_text: str,
             # still must be checked (the fabricated-claim-by-name gap).
             lowered = (s or "").lower()
             matched_src = next(
-                (src for name, src in name_to_source.items()
-                 if name and name in lowered),
+                (
+                    src
+                    for name, src in name_to_source.items()
+                    if name and name in lowered
+                ),
                 "",
             )
             if not matched_src:
@@ -328,10 +415,17 @@ def check_fidelity(argument_text: str,
         if not sent_tokens:
             continue
         src_tokens = _tokens(matched_src)
-        overlap = len(sent_tokens & src_tokens) / max(1, len(sent_tokens)) if src_tokens else 0.0
+        overlap = (
+            len(sent_tokens & src_tokens) / max(1, len(sent_tokens))
+            if src_tokens
+            else 0.0
+        )
         checked += 1
-        rec = {"sentence": s, "overlap": round(overlap, 3),
-               "cites": case_cites + stat_cites}
+        rec = {
+            "sentence": s,
+            "overlap": round(overlap, 3),
+            "cites": case_cites + stat_cites,
+        }
         (supporting if overlap >= threshold else unsupporting).append(rec)
     return {
         "checked": checked,

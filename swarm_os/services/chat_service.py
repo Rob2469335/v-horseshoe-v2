@@ -23,7 +23,9 @@ def _get_chat_http_client() -> httpx.AsyncClient:
 
 class ChatService:
     @staticmethod
-    def compact_context_messages(messages: list[dict], max_turns: int = 10, keep_recent: int = 6) -> list[dict]:
+    def compact_context_messages(
+        messages: list[dict], max_turns: int = 10, keep_recent: int = 6
+    ) -> list[dict]:
         """
         Compacts long conversation histories by summarizing older turns into a single system/context header,
         preventing LLM context flooding on extended agent runs.
@@ -50,8 +52,9 @@ class ChatService:
         summary_text = (
             f"<COMPACTED_SUMMARY>\n"
             f"Earlier conversation summary: {compacted_count} earlier turns compacted for token budget.\n"
-            f"Sample of older topics:\n" + "\n".join(summary_lines) +
-            "\n</COMPACTED_SUMMARY>"
+            f"Sample of older topics:\n"
+            + "\n".join(summary_lines)
+            + "\n</COMPACTED_SUMMARY>"
         )
 
         compacted_msg = {"role": "system", "content": summary_text}
@@ -67,27 +70,37 @@ class ChatService:
         try:
             client = _get_chat_http_client()
             async with asyncio.timeout(10.0):
-                resp = await client.get("http://127.0.0.1:8080/v1/models", headers={"Authorization": "Bearer llama"})
+                resp = await client.get(
+                    "http://127.0.0.1:8080/v1/models",
+                    headers={"Authorization": "Bearer llama"},
+                )
             if resp.status_code == 200:
                 for m in resp.json().get("data", []):
                     name = m["id"].lower()
-                    if "embed" in name or "rerank" in name or "vl" in name or "moondream" in name:
+                    if (
+                        "embed" in name
+                        or "rerank" in name
+                        or "vl" in name
+                        or "moondream" in name
+                    ):
                         continue
                     local_models.append(m["id"])
         except Exception as e:
             raise Exception(f"Failed to fetch local models: {e}")
-            
+
         if not local_models:
             raise Exception("No suitable local chat models found.")
-            
+
         # 2. Get best cloud model
         fallbacks = await get_live_fallbacks()
-        cloud_models = [f["model"] for f in fallbacks if not f["model"].startswith("openai/")]
+        cloud_models = [
+            f["model"] for f in fallbacks if not f["model"].startswith("openai/")
+        ]
         if not cloud_models:
             best_cloud_model = f"openai/{local_models[-1]}"
         else:
             best_cloud_model = cloud_models[0]
-        
+
         # 3. Formulate Prompt
         prompt = f"""You are an elite AI system architect. 
 The user has the following local AI models running: {local_models}
@@ -121,15 +134,16 @@ Rules:
         if best_cloud_model.startswith("openai/"):
             kwargs["api_base"] = "http://127.0.0.1:8080/v1"
             kwargs["api_key"] = "llama"
-            
+
         resp = await litellm.acompletion(**kwargs)
         content = resp.choices[0].message.content or "{}"
         try:
             from runtime_v2.services.usage_log import record_response
+
             record_response(resp, best_cloud_model, source="autoassign")
         except Exception as usage_err:  # noqa: BLE001
             log.debug("usage log skipped: %s", usage_err)
-        
+
         # Clean up possible markdown if provider ignored format
         content = content.replace("```json", "").replace("```", "").strip()
         try:
@@ -138,18 +152,29 @@ Rules:
             start = content.find("{")
             end = content.rfind("}")
             if start != -1 and end != -1:
-                mapping = json.loads(content[start:end+1])
+                mapping = json.loads(content[start : end + 1])
             else:
                 mapping = {}
-        
+
         # 5. Verify and apply
-        valid_roles = ["coordinator", "planner", "researcher", "executor", "coder", "tool-runner", "reviewer", "debugger", "tool-maker", "code_analyzer"]
+        valid_roles = [
+            "coordinator",
+            "planner",
+            "researcher",
+            "executor",
+            "coder",
+            "tool-runner",
+            "reviewer",
+            "debugger",
+            "tool-maker",
+            "code_analyzer",
+        ]
         final_mapping = {}
         for r in valid_roles:
             if r in mapping and mapping[r] in local_models:
                 final_mapping[r] = mapping[r]
             elif local_models:
                 final_mapping[r] = local_models[0]
-                
+
         update_model_mapping(final_mapping)
         return final_mapping

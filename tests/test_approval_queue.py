@@ -13,16 +13,22 @@ from swarm_os.api.api_features import router as features_router
 
 def test_approval_queue_create_and_decide(tmp_path: Path):
     queue = ApprovalQueue(store_path=tmp_path / "approvals.json")
-    request = queue.create_request(component="system", action="restart_component", reason="needs approval")
+    request = queue.create_request(
+        component="system", action="restart_component", reason="needs approval"
+    )
 
     assert request["status"] == "pending"
 
-    approved = queue.decide(request_id=request["request_id"], approved=True, note="approved by operator")
+    approved = queue.decide(
+        request_id=request["request_id"], approved=True, note="approved by operator"
+    )
     assert approved["status"] == "approved"
     assert approved["decision_note"] == "approved by operator"
 
 
-def test_healing_engine_creates_approval_request_for_policy_gated_action(tmp_path: Path):
+def test_healing_engine_creates_approval_request_for_policy_gated_action(
+    tmp_path: Path,
+):
     approvals = ApprovalQueue(store_path=tmp_path / "approvals.json")
     engine = HealingEngine(
         state_path=tmp_path / "state.json",
@@ -47,7 +53,11 @@ def test_approval_endpoints_support_create_list_and_decide():
 
     create_response = client.post(
         "/features/healing-approvals",
-        json={"component": "system", "action": "restart_component", "reason": "manual review required"},
+        json={
+            "component": "system",
+            "action": "restart_component",
+            "reason": "manual review required",
+        },
     )
     assert create_response.status_code == 200
     request_id = create_response.json()["request"]["request_id"]

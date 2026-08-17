@@ -11,6 +11,7 @@ The undo/redo snapshot helpers here are also used by cli.py (it snapshots the
 working tree before every agentic run so `/undo` can restore exactly what the
 coder/debugger changed).
 """
+
 import ast
 import difflib
 import shutil
@@ -53,8 +54,12 @@ def _git_porcelain(root: Path) -> tuple[list[str], list[str]]:
     try:
         res = subprocess.run(
             ["git", "status", "--porcelain"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace",
-            cwd=root, timeout=10,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            cwd=root,
+            timeout=10,
         )
     except Exception:
         return [], []
@@ -105,10 +110,16 @@ def snapshot_worktree(root: Path = PROJECT_ROOT) -> Dict:
                 untracked_content[rel] = path.read_bytes()
             except OSError:
                 pass
-    return {"tracked": tracked, "untracked": set(untracked), "untracked_content": untracked_content}
+    return {
+        "tracked": tracked,
+        "untracked": set(untracked),
+        "untracked_content": untracked_content,
+    }
 
 
-def restore_snapshot(snap: Dict, root: Path = PROJECT_ROOT, scope: Optional[List[str]] = None) -> List[str]:
+def restore_snapshot(
+    snap: Dict, root: Path = PROJECT_ROOT, scope: Optional[List[str]] = None
+) -> List[str]:
     """Restore a snapshot captured by snapshot_worktree(). Returns restored relpaths.
 
     - Tracked files that were modified are written back byte-for-byte.
@@ -122,7 +133,9 @@ def restore_snapshot(snap: Dict, root: Path = PROJECT_ROOT, scope: Optional[List
     """
     restored: list[str] = []
     current_modified, current_untracked = _git_porcelain(root)
-    created_by_agent = [p for p in current_untracked if p not in snap.get("untracked", set())]
+    created_by_agent = [
+        p for p in current_untracked if p not in snap.get("untracked", set())
+    ]
     if scope is None:
         candidates = created_by_agent
     else:
@@ -141,7 +154,9 @@ def restore_snapshot(snap: Dict, root: Path = PROJECT_ROOT, scope: Optional[List
     tracked_items = (snap.get("tracked") or {}).items()
     if scope is not None:
         scope_set = set(scope)
-        tracked_items = [(rel, content) for rel, content in tracked_items if rel in scope_set]
+        tracked_items = [
+            (rel, content) for rel, content in tracked_items if rel in scope_set
+        ]
     for rel, content in tracked_items:
         path = root / rel
         try:
@@ -158,7 +173,9 @@ def _git_show_head(root: Path, rel: str) -> Optional[bytes]:
     try:
         res = subprocess.run(
             ["git", "show", f"HEAD:{rel}"],
-            capture_output=True, cwd=root, timeout=10,
+            capture_output=True,
+            cwd=root,
+            timeout=10,
         )
         if res.returncode == 0:
             return res.stdout
@@ -215,19 +232,32 @@ def build_run_diff(snap: Dict, root: Path = PROJECT_ROOT) -> List[Dict]:
         new_text = (new or b"").decode("utf-8", errors="replace")
         old_lines = old_text.splitlines() if old is not None else []
         new_lines = new_text.splitlines() if new is not None else []
-        diff_lines = list(difflib.unified_diff(
-            old_lines, new_lines, fromfile=f"a/{rel}", tofile=f"b/{rel}", lineterm="", n=2
-        ))
+        diff_lines = list(
+            difflib.unified_diff(
+                old_lines,
+                new_lines,
+                fromfile=f"a/{rel}",
+                tofile=f"b/{rel}",
+                lineterm="",
+                n=2,
+            )
+        )
         if not diff_lines:
             continue
-        added = sum(1 for l in diff_lines if l.startswith("+") and not l.startswith("+++"))
-        removed = sum(1 for l in diff_lines if l.startswith("-") and not l.startswith("---"))
-        results.append({
-            "path": rel,
-            "added": added,
-            "removed": removed,
-            "lines": [(_diff_kind(l), l) for l in diff_lines],
-        })
+        added = sum(
+            1 for l in diff_lines if l.startswith("+") and not l.startswith("+++")
+        )
+        removed = sum(
+            1 for l in diff_lines if l.startswith("-") and not l.startswith("---")
+        )
+        results.append(
+            {
+                "path": rel,
+                "added": added,
+                "removed": removed,
+                "lines": [(_diff_kind(l), l) for l in diff_lines],
+            }
+        )
     return results
 
 
@@ -264,35 +294,51 @@ def last_snapshot(ctx: CommandContext) -> Optional[Dict]:
     return stack[-1] if stack else None
 
 
-@registry.register("permissions", "Show or edit the permission policy table (allow/ask/deny)")
+@registry.register(
+    "permissions", "Show or edit the permission policy table (allow/ask/deny)"
+)
 def cmd_permissions(ctx: CommandContext, args: List[str]) -> None:
     from organism_console import permissions as perms
+
     if not args:
         rows = sorted(perms.all_policies().items())
         table = Table(box=SIMPLE, header_style="bold cyan", title="Permission policy")
         table.add_column("Tool", style="bold green")
         table.add_column("Policy", style="bold yellow")
         for tool, policy in rows:
-            color = {"allow": "green", "ask": "yellow", "deny": "red"}.get(policy, "white")
+            color = {"allow": "green", "ask": "yellow", "deny": "red"}.get(
+                policy, "white"
+            )
             table.add_row(tool, f"[{color}]{policy}[/{color}]")
         ctx.console.print(table)
         auto = perms.auto_mode()
-        ctx.console.print(f"[dim]auto-approve: [bold]{'on' if auto else 'off'}[/bold] (toggle with /auto)[/dim]")
-        ctx.console.print("[dim]usage: /permissions <tool> allow|ask|deny — tools: read write patch grep glob web_search web_fetch sandbox_repl system screen healing approval git[/dim]")
+        ctx.console.print(
+            f"[dim]auto-approve: [bold]{'on' if auto else 'off'}[/bold] (toggle with /auto)[/dim]"
+        )
+        ctx.console.print(
+            "[dim]usage: /permissions <tool> allow|ask|deny — tools: read write patch grep glob web_search web_fetch sandbox_repl system screen healing approval git[/dim]"
+        )
         return
     if len(args) != 2:
         ctx.console.print("[yellow]Usage: /permissions <tool> allow|ask|deny[/yellow]")
         return
     tool, policy = args[0].lower(), args[1].lower()
     if perms.set_policy(tool, policy):
-        ctx.console.print(f"[green]✓[/green] [white]{tool}[/white] → [bold]{policy}[/bold]")
+        ctx.console.print(
+            f"[green]✓[/green] [white]{tool}[/white] → [bold]{policy}[/bold]"
+        )
     else:
-        ctx.console.print(f"[red]✗[/red] unknown tool or policy: [white]{tool} {policy}[/white]")
+        ctx.console.print(
+            f"[red]✗[/red] unknown tool or policy: [white]{tool} {policy}[/white]"
+        )
 
 
-@registry.register("auto", "Toggle auto-approve mode (approves anything not explicitly denied)")
+@registry.register(
+    "auto", "Toggle auto-approve mode (approves anything not explicitly denied)"
+)
 def cmd_auto(ctx: CommandContext, args: List[str]) -> None:
     from organism_console import permissions as perms
+
     want = args[0].lower() if args else None
     if want in ("on", "1", "true", "yes"):
         on = True
@@ -309,7 +355,9 @@ def cmd_auto(ctx: CommandContext, args: List[str]) -> None:
     )
 
 
-@registry.register("toasts", "Toggle desktop attention notifications on run completion / questions")
+@registry.register(
+    "toasts", "Toggle desktop attention notifications on run completion / questions"
+)
 def cmd_toasts(ctx: CommandContext, args: List[str]) -> None:
     want = args[0].lower() if args else None
     if want in ("on", "1", "true", "yes"):
@@ -321,28 +369,41 @@ def cmd_toasts(ctx: CommandContext, args: List[str]) -> None:
     ctx.state.toasts_enabled = on
     ctx.state.save()
     from organism_console.notifications import set_enabled
+
     set_enabled(on)
-    ctx.console.print(f"[dim]desktop notifications [bold]{'on' if on else 'off'}[/bold][/dim]")
+    ctx.console.print(
+        f"[dim]desktop notifications [bold]{'on' if on else 'off'}[/bold][/dim]"
+    )
 
 
-@registry.register("diff-last", "Show a unified diff of what the last agent run changed", aliases=["changes"])
+@registry.register(
+    "diff-last",
+    "Show a unified diff of what the last agent run changed",
+    aliases=["changes"],
+)
 def cmd_diff_last(ctx: CommandContext, args: List[str]) -> None:
     snap = last_snapshot(ctx)
     if not snap:
-        ctx.console.print("[yellow]No previous run snapshot — nothing to diff.[/yellow]")
+        ctx.console.print(
+            "[yellow]No previous run snapshot — nothing to diff.[/yellow]"
+        )
         return
     results = build_run_diff(snap)
     if not results:
         ctx.console.print("[dim]Last run made no file changes.[/dim]")
         return
-    ctx.console.print(Panel(
-        render_run_diff(results),
-        title=f"[bold cyan]Changes from last run ({len(results)} file{'s' if len(results) != 1 else ''})[/bold cyan]",
-        border_style="cyan",
-    ))
+    ctx.console.print(
+        Panel(
+            render_run_diff(results),
+            title=f"[bold cyan]Changes from last run ({len(results)} file{'s' if len(results) != 1 else ''})[/bold cyan]",
+            border_style="cyan",
+        )
+    )
 
 
-@registry.register("build", "BUILD mode: plain prompts edit files via the coder agent (opencode-Build)")
+@registry.register(
+    "build", "BUILD mode: plain prompts edit files via the coder agent (opencode-Build)"
+)
 def cmd_build(ctx: CommandContext, args: List[str]) -> None:
     ctx.state.active_agent = "coder"
     ctx.state.delegation_chain = ["coder"]
@@ -354,7 +415,9 @@ def cmd_build(ctx: CommandContext, args: List[str]) -> None:
     )
 
 
-@registry.register("analyze", "ANALYZE mode: read-only analysis via code_analyzer (opencode-Plan)")
+@registry.register(
+    "analyze", "ANALYZE mode: read-only analysis via code_analyzer (opencode-Plan)"
+)
 def cmd_analyze(ctx: CommandContext, args: List[str]) -> None:
     ctx.state.active_agent = "code_analyzer"
     ctx.state.delegation_chain = ["code_analyzer"]
@@ -380,18 +443,26 @@ def cmd_chat(ctx: CommandContext, args: List[str]) -> None:
 def cmd_undo(ctx: CommandContext, args: List[str]) -> None:
     stack = getattr(ctx.state, "undo_stack", None)
     if not stack:
-        ctx.console.print("[yellow]Nothing to undo — no agent run has been snapshotted yet.[/yellow]")
+        ctx.console.print(
+            "[yellow]Nothing to undo — no agent run has been snapshotted yet.[/yellow]"
+        )
         return
     snap = stack.pop()
     restored = restore_snapshot(snap)
     ctx.state.save()
     if not restored:
-        ctx.console.print("[dim]Undo: no file changes were detected for the last run.[/dim]")
+        ctx.console.print(
+            "[dim]Undo: no file changes were detected for the last run.[/dim]"
+        )
         return
     ctx.console.print(
         Panel(
             "\n".join(f"  [red]↺[/red] {escape(r)}" for r in restored[:40])
-            + (f"\n  [dim]… {len(restored) - 40} more[/dim]" if len(restored) > 40 else ""),
+            + (
+                f"\n  [dim]… {len(restored) - 40} more[/dim]"
+                if len(restored) > 40
+                else ""
+            ),
             title=f"[bold yellow]Undo — reverted {len(restored)} file(s)[/bold yellow]",
             border_style="yellow",
         )
@@ -404,11 +475,15 @@ def cmd_redo(ctx: CommandContext, args: List[str]) -> Optional[str]:
     if not last_prompt:
         ctx.console.print("[yellow]No last prompt to re-run.[/yellow]")
         return None
-    ctx.console.print(f"[bold cyan]↻[/bold cyan] Re-running last prompt: [dim]{last_prompt[:80]}[/dim]")
+    ctx.console.print(
+        f"[bold cyan]↻[/bold cyan] Re-running last prompt: [dim]{last_prompt[:80]}[/dim]"
+    )
     return last_prompt
 
 
-@registry.register("modes", "Show the current agent mode and how to switch (BUILD/ANALYZE/CHAT)")
+@registry.register(
+    "modes", "Show the current agent mode and how to switch (BUILD/ANALYZE/CHAT)"
+)
 def cmd_modes(ctx: CommandContext, args: List[str]) -> None:
     table_rows = [
         f"{mode_badge('coder')}       [white]/build[/white] — edit files, run code, verify",

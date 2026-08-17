@@ -32,8 +32,10 @@ ROLE_PRIORITY = {
     "fast": 70.0,
 }
 
+
 def _capset(value):
     return {str(x).lower() for x in (value or [])}
+
 
 class RoutingStrategy(ABC):
     @property
@@ -52,12 +54,15 @@ class RoutingStrategy(ABC):
     ) -> RouteDecision:
         raise NotImplementedError
 
+
 class DefaultStrategy(RoutingStrategy):
     @property
     def name(self) -> str:
         return "default"
 
-    def _score_candidate(self, *, router, name: str, desired_role: str, now: float) -> tuple[float, str, dict]:
+    def _score_candidate(
+        self, *, router, name: str, desired_role: str, now: float
+    ) -> tuple[float, str, dict]:
         profile = router.profiles.get(name)
         state = router.get_state(name)
         meta: dict = {}
@@ -88,17 +93,30 @@ class DefaultStrategy(RoutingStrategy):
             else:
                 reasons.append("role_mismatch")
 
-            if desired_role in {"vision", "embedding", "reranker", "retrieval"} and not (ROLE_CAPABILITIES.get(desired_role, set()) & caps):
+            if desired_role in {
+                "vision",
+                "embedding",
+                "reranker",
+                "retrieval",
+            } and not (ROLE_CAPABILITIES.get(desired_role, set()) & caps):
                 score -= 80.0
                 reasons.append("missing_required_capability")
 
             if "long_context" in caps:
                 score += 8.0
             if "fast" in caps:
-                score += 5.0 if desired_role == router.default_role or desired_role == "fast" else 0.0
+                score += (
+                    5.0
+                    if desired_role == router.default_role or desired_role == "fast"
+                    else 0.0
+                )
             if "code" in caps and desired_role in {"coder", "deep_coder", "planner"}:
                 score += 12.0
-            if "reasoning" in caps and desired_role in {"reasoning", "planner", "deep_coder"}:
+            if "reasoning" in caps and desired_role in {
+                "reasoning",
+                "planner",
+                "deep_coder",
+            }:
                 score += 10.0
             if "writing" in caps and desired_role == "writer":
                 score += 10.0
@@ -106,7 +124,7 @@ class DefaultStrategy(RoutingStrategy):
             if isinstance(profile.metadata, dict):
                 priority = float(profile.metadata.get("priority") or 0.0)
                 score += priority
-                
+
                 # Apply Thermal Benchmark Speed Bonuses
                 tg128 = float(profile.metadata.get("tg128") or 0.0)
                 pp512 = float(profile.metadata.get("pp512") or 0.0)
@@ -120,7 +138,7 @@ class DefaultStrategy(RoutingStrategy):
                     score += pp_bonus
                     reasons.append(f"speed_bonus_pp{pp512:.0f}")
                     meta["pp512_bonus"] = pp_bonus
-                    
+
                 meta.update({"capabilities": sorted(caps), "priority": priority})
             else:
                 meta.update({"capabilities": sorted(caps), "priority": 0.0})
@@ -146,12 +164,14 @@ class DefaultStrategy(RoutingStrategy):
         with router._state_lock:
             state.last_penalty = failure_penalty + latency_penalty
             state.last_score = score
-        meta.update({
-            "score": score,
-            "failure_penalty": failure_penalty,
-            "latency_penalty": latency_penalty,
-            "recency_bonus": recency_bonus,
-        })
+        meta.update(
+            {
+                "score": score,
+                "failure_penalty": failure_penalty,
+                "latency_penalty": latency_penalty,
+                "recency_bonus": recency_bonus,
+            }
+        )
         return score, ",".join(reasons), meta
 
     def select_model(
@@ -179,7 +199,9 @@ class DefaultStrategy(RoutingStrategy):
         ranked: list[tuple[str, float, str, dict]] = []
 
         for name in candidates:
-            score, reason, meta = self._score_candidate(router=router, name=name, desired_role=desired_role, now=now)
+            score, reason, meta = self._score_candidate(
+                router=router, name=name, desired_role=desired_role, now=now
+            )
             ranked.append((name, score, reason, meta))
 
         ranked.sort(key=lambda item: item[1], reverse=True)
@@ -193,7 +215,11 @@ class DefaultStrategy(RoutingStrategy):
                 reason=best_reason,
                 fallback=False,
                 strategy=strategy_name,
-                metadata={"strategy": strategy_name, "desired_role": desired_role, **best_meta},
+                metadata={
+                    "strategy": strategy_name,
+                    "desired_role": desired_role,
+                    **best_meta,
+                },
             )
 
         if allow_fallback:
@@ -203,7 +229,11 @@ class DefaultStrategy(RoutingStrategy):
                 reason=f"fallback:{best_reason}",
                 fallback=True,
                 strategy=strategy_name,
-                metadata={"strategy": strategy_name, "desired_role": desired_role, **best_meta},
+                metadata={
+                    "strategy": strategy_name,
+                    "desired_role": desired_role,
+                    **best_meta,
+                },
             )
 
         return RouteDecision(
@@ -215,13 +245,18 @@ class DefaultStrategy(RoutingStrategy):
             metadata={"strategy": strategy_name, "desired_role": desired_role},
         )
 
+
 class DeepStrategy(DefaultStrategy):
     @property
     def name(self) -> str:
         return "deep"
 
-    def _score_candidate(self, *, router, name: str, desired_role: str, now: float) -> tuple[float, str, dict]:
-        score, reason, meta = super()._score_candidate(router=router, name=name, desired_role=desired_role, now=now)
+    def _score_candidate(
+        self, *, router, name: str, desired_role: str, now: float
+    ) -> tuple[float, str, dict]:
+        score, reason, meta = super()._score_candidate(
+            router=router, name=name, desired_role=desired_role, now=now
+        )
         profile = router.profiles.get(name)
         if profile and score > -1e8:
             caps = _capset(profile.capabilities)
@@ -284,7 +319,11 @@ class BanditStrategy(RoutingStrategy):
                 reason="bandit_exploration",
                 fallback=False,
                 strategy=strategy_name,
-                metadata={"strategy": strategy_name, "desired_role": desired_role, "exploration": True},
+                metadata={
+                    "strategy": strategy_name,
+                    "desired_role": desired_role,
+                    "exploration": True,
+                },
             )
 
         # Exploitation based on success rate and latency penalty
@@ -315,11 +354,16 @@ class BanditStrategy(RoutingStrategy):
             if profile:
                 if profile.role == desired_role:
                     base_score += 50.0
-                elif desired_role == router.default_role and profile.role == router.default_role:
+                elif (
+                    desired_role == router.default_role
+                    and profile.role == router.default_role
+                ):
                     base_score += 20.0
 
-            score = (success_rate * 100.0) - failure_penalty - latency_penalty + base_score
-            
+            score = (
+                (success_rate * 100.0) - failure_penalty - latency_penalty + base_score
+            )
+
             if score > best_score:
                 best_score = score
                 best_model = name
@@ -333,19 +377,28 @@ class BanditStrategy(RoutingStrategy):
 
         if best_model is None:
             # Fallback to the first non-cooldown candidate or any candidate
-            non_cooldown = [c for c in candidates if router.get_state(c).cooldown_until <= now]
-            best_model = random.choice(non_cooldown) if non_cooldown else random.choice(candidates)
+            non_cooldown = [
+                c for c in candidates if router.get_state(c).cooldown_until <= now
+            ]
+            best_model = (
+                random.choice(non_cooldown)
+                if non_cooldown
+                else random.choice(candidates)
+            )
             best_score = -1.0
             best_meta = {"fallback_choice": True}
 
         best_state = router.get_state(best_model)
-        
+
         return RouteDecision(
             model=best_model,
             role=best_state.role,
             reason="bandit_exploitation",
             fallback=False,
             strategy=strategy_name,
-            metadata={"strategy": strategy_name, "desired_role": desired_role, **best_meta},
+            metadata={
+                "strategy": strategy_name,
+                "desired_role": desired_role,
+                **best_meta,
+            },
         )
-

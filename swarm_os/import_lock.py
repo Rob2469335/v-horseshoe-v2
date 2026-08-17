@@ -8,6 +8,7 @@ CRITICAL_MODULES = [
     "swarm_os.services.control_plane.models",
 ]
 
+
 def validate_import_graph():
     failed = []
     healer = None
@@ -30,4 +31,3 @@ def validate_import_graph():
         raise ImportError("Locked import graph violation detected")
 
     print("IMPORT GRAPH LOCKED ✔")
-

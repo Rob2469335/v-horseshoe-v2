@@ -8,18 +8,30 @@ strength is network structure, not just similarity. These tests pin:
   - holding-vs-dictum classification (CaseHOLD-aligned)
   - the treatment taxonomy (followed/distinguished/overruled/questioned/neutral)
 """
+
 from __future__ import annotations
 
 from swarm_os.services.legal.case_graph import (
-    extract_cited_keys, build_case_graph, graph_expand, classify_holding,
-    label_treatment, citing_sentence_for, enrich_chunks_with_treatment,
+    extract_cited_keys,
+    build_case_graph,
+    graph_expand,
+    classify_holding,
+    label_treatment,
+    citing_sentence_for,
+    enrich_chunks_with_treatment,
 )
 
 
 def _chunk(cite, name, year, content):
-    return {"id": cite, "payload": {
-        "cite": cite, "case_name": name, "year": year, "content": content,
-    }}
+    return {
+        "id": cite,
+        "payload": {
+            "cite": cite,
+            "case_name": name,
+            "year": year,
+            "content": content,
+        },
+    }
 
 
 MANIFEST = [
@@ -39,12 +51,24 @@ def test_extract_cited_keys():
 
 def test_build_case_graph_edges_only_between_manifest():
     chunks = [
-        _chunk("507 U.S. 725", "Olano", 1993,
-               "The plain-error rule of United States v. Olano. See also 252 F.3d 238."),
-        _chunk("252 F.3d 238", "Simeonov", 2001,
-               "We follow the rule of 507 U.S. 725. 669 F.3d 112 agrees."),
-        _chunk("669 F.3d 112", "Hsu", 2012,
-               "We reaffirm 252 F.3d 238. The 999 F.3d 999 case is irrelevant."),
+        _chunk(
+            "507 U.S. 725",
+            "Olano",
+            1993,
+            "The plain-error rule of United States v. Olano. See also 252 F.3d 238.",
+        ),
+        _chunk(
+            "252 F.3d 238",
+            "Simeonov",
+            2001,
+            "We follow the rule of 507 U.S. 725. 669 F.3d 112 agrees.",
+        ),
+        _chunk(
+            "669 F.3d 112",
+            "Hsu",
+            2012,
+            "We reaffirm 252 F.3d 238. The 999 F.3d 999 case is irrelevant.",
+        ),
     ]
     G = build_case_graph(chunks, MANIFEST)
     assert set(G.nodes()) == {"507|us|725", "252|f3d|238", "669|f3d|112", "476|us|79"}
@@ -92,7 +116,9 @@ def test_graph_expand_orders_by_in_degree():
     ]
     G = build_case_graph(chunks, MANIFEST)
     # From Olano: neighbors are Simeonov (in-degree 1) and Hsu (in-degree 2).
-    expanded = graph_expand(G, ["507|us|725"], depth=1, max_nodes=3, include_seeds=False)
+    expanded = graph_expand(
+        G, ["507|us|725"], depth=1, max_nodes=3, include_seeds=False
+    )
     # Hsu is cited by Olano AND Simeonov -> in-degree 2 > Simeonov's in-degree 1.
     assert expanded[0] == "669|f3d|112"
     assert "252|f3d|238" in expanded
@@ -106,21 +132,39 @@ def test_graph_expand_safe_on_empty_and_unknown():
 
 def test_classify_holding_vs_dictum():
     assert classify_holding("We hold that the rule requires notice.") == "holding"
-    assert classify_holding("It is our holding that the defendant is entitled to relief.") == "holding"
+    assert (
+        classify_holding("It is our holding that the defendant is entitled to relief.")
+        == "holding"
+    )
     assert classify_holding("We do not reach the constitutional question.") == "dictum"
-    assert classify_holding("We need not decide whether the statute applies.") == "dictum"
-    assert classify_holding("Assuming arguendo that the claim has merit, we reject it.") == "dictum"
+    assert (
+        classify_holding("We need not decide whether the statute applies.") == "dictum"
+    )
+    assert (
+        classify_holding("Assuming arguendo that the claim has merit, we reject it.")
+        == "dictum"
+    )
     assert classify_holding("The facts of this case are straightforward.") == "neutral"
 
 
 def test_label_treatment_taxonomy():
     assert label_treatment("We follow the rule of 507 U.S. 725.") == "followed"
     assert label_treatment("This case is consistent with 252 F.3d 238.") == "followed"
-    assert label_treatment("The present case is distinguishable from Olano.") == "distinguished"
-    assert label_treatment("We decline to extend 669 F.3d 112 to these facts.") == "distinguished"
-    assert label_treatment("Simeonov was overruled by the Supreme Court.") == "overruled"
+    assert (
+        label_treatment("The present case is distinguishable from Olano.")
+        == "distinguished"
+    )
+    assert (
+        label_treatment("We decline to extend 669 F.3d 112 to these facts.")
+        == "distinguished"
+    )
+    assert (
+        label_treatment("Simeonov was overruled by the Supreme Court.") == "overruled"
+    )
     assert label_treatment("Hsu is no longer good law.") == "overruled"
-    assert label_treatment("The Court questioned the reasoning of Batson.") == "questioned"
+    assert (
+        label_treatment("The Court questioned the reasoning of Batson.") == "questioned"
+    )
     assert label_treatment("The parties cite these cases.") == "neutral"
 
 
@@ -129,11 +173,19 @@ def test_label_treatment_real_appellate_shapes():
     appellate dispositions were classifying neutral. 'we held that' after a
     citation is FOLLOWED (applying the cited case as controlling); 'inapposite'
     is DISTINGUISHED. Both are pinned against the actual stored-corpus shapes."""
-    assert label_treatment(
-        "In Batson v. Kentucky, 476 U.S. 79 (1986), we held that a defendant "
-        "may make a prima facie showing of purposeful racial discrimination.") == "followed"
-    assert label_treatment(
-        "Batson is inapposite here because the strike was not race-based.") == "distinguished"
+    assert (
+        label_treatment(
+            "In Batson v. Kentucky, 476 U.S. 79 (1986), we held that a defendant "
+            "may make a prima facie showing of purposeful racial discrimination."
+        )
+        == "followed"
+    )
+    assert (
+        label_treatment(
+            "Batson is inapposite here because the strike was not race-based."
+        )
+        == "distinguished"
+    )
 
 
 def test_citing_sentence_for_returns_dispositional_window():
@@ -143,9 +195,11 @@ def test_citing_sentence_for_returns_dispositional_window():
     that determines the treatment. The real shape 'overruled Swain. In Batson
     v. Kentucky, 476 U.S. 79 (1986), we held that...' splits at 'Swain. In',
     so the window must span the prior sentence."""
-    real = ("Five years ago we revisited the issue, and overruled Swain. In Batson v. "
-            "Kentucky, 476 U.S. 79 (1986), we held that a defendant may make a prima "
-            "facie showing of purposeful racial discrimination in selection of the venire.")
+    real = (
+        "Five years ago we revisited the issue, and overruled Swain. In Batson v. "
+        "Kentucky, 476 U.S. 79 (1986), we held that a defendant may make a prima "
+        "facie showing of purposeful racial discrimination in selection of the venire."
+    )
     context = citing_sentence_for(real, "476|us|79")
     assert "overruled" in context or "we held" in context, (
         "the dispositional verb must be in the context window"
@@ -155,16 +209,20 @@ def test_citing_sentence_for_returns_dispositional_window():
 
 
 def test_citing_sentence_for_inapposite_window():
-    real = ("The defendant argues Batson v. Kentucky, 476 U.S. 79 (1986) requires reversal. "
-            "We disagree — Batson is inapposite here because the strike was not race-based.")
+    real = (
+        "The defendant argues Batson v. Kentucky, 476 U.S. 79 (1986) requires reversal. "
+        "We disagree — Batson is inapposite here because the strike was not race-based."
+    )
     context = citing_sentence_for(real, "476|us|79")
     assert "inapposite" in context
     assert label_treatment(context) == "distinguished"
 
 
 def test_citing_sentence_for_locates_context():
-    text = ("The rule is settled. We follow 507 U.S. 725 because it controls. "
-            "The other cases are irrelevant.")
+    text = (
+        "The rule is settled. We follow 507 U.S. 725 because it controls. "
+        "The other cases are irrelevant."
+    )
     sent = citing_sentence_for(text, "507|us|725")
     assert "follow" in sent
     assert "507 U.S. 725" in sent

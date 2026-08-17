@@ -8,7 +8,9 @@ MAX_TRACKED_SOURCES = 256  # Cap to prevent unbounded memory growth
 
 
 class AnomalyTracker:
-    def __init__(self, maxlen: int = 1000, alpha: float = 0.3, warning_threshold: float = 5.0):
+    def __init__(
+        self, maxlen: int = 1000, alpha: float = 0.3, warning_threshold: float = 5.0
+    ):
         self.items = collections.deque(maxlen=maxlen)
         self.alpha = alpha  # Smoothing factor for EMA
         self.warning_threshold = warning_threshold
@@ -25,7 +27,7 @@ class AnomalyTracker:
         if len(self.ema_freq) > MAX_TRACKED_SOURCES:
             # Sort by last update time ascending; drop the oldest half.
             by_recency = sorted(self.ema_freq, key=lambda k: self.last_time.get(k, 0.0))
-            to_remove = by_recency[:MAX_TRACKED_SOURCES // 2]
+            to_remove = by_recency[: MAX_TRACKED_SOURCES // 2]
             for key in to_remove:
                 self.ema_freq.pop(key, None)
                 self.last_time.pop(key, None)
@@ -52,7 +54,9 @@ class AnomalyTracker:
 
                 # Update Exponential Moving Average (Exponential Smoothing)
                 prev_ema = self.ema_freq.get(source, 0.0)
-                self.ema_freq[source] = (self.alpha * current_freq) + ((1 - self.alpha) * prev_ema)
+                self.ema_freq[source] = (self.alpha * current_freq) + (
+                    (1 - self.alpha) * prev_ema
+                )
 
             # BUG FIX 3: Prune unbounded dict growth
             self._prune_if_needed()
@@ -65,7 +69,7 @@ class AnomalyTracker:
             "reason": reason,
             "payload": payload or {},
             "timestamp": now,
-            "forecast_freq": forecast
+            "forecast_freq": forecast,
         }
         self.items.append(item)
 
@@ -76,7 +80,12 @@ class AnomalyTracker:
                 f"PREDICTIVE FORECAST: '{source}' is degrading rapidly "
                 f"(EMA: {forecast:.1f} anomalies/min). Emitting preemptive warning."
             )
-            self.record(source, "forecast_warning", "EMA predicts impending failure", {"forecast_freq": forecast})
+            self.record(
+                source,
+                "forecast_warning",
+                "EMA predicts impending failure",
+                {"forecast_freq": forecast},
+            )
 
         return item
 

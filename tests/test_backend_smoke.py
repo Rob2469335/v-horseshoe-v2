@@ -1,9 +1,11 @@
 from fastapi.testclient import TestClient
 from swarm_os.app.main import create_app
 
+
 def make_client():
     app = create_app()
     return TestClient(app)
+
 
 def get_paths(app_or_router):
     paths = set()
@@ -18,10 +20,12 @@ def get_paths(app_or_router):
                 paths.add(prefix + np)
     return paths
 
+
 def test_app_boots():
     app = create_app()
     assert app is not None
     assert app.title == "Swarm OS"
+
 
 def test_health_ok():
     with make_client() as client:
@@ -29,11 +33,13 @@ def test_health_ok():
         assert r.status_code == 200
         assert r.json()["status"] == "ok"
 
+
 def test_expected_core_routes_are_registered():
     app = create_app()
     paths = get_paths(app)
     assert "/health" in paths
     assert "/api/admin/dashboard" in paths
+
 
 def test_optional_routes_if_present_respond():
     app = create_app()
@@ -42,7 +48,12 @@ def test_optional_routes_if_present_respond():
     checks = {
         "/readyz": ["status", "ready", "checks", "health_score"],
         "/api/admin/explorer": ["scenario", "latest_snapshot", "current_run"],
-        "/api/admin/generation": ["scenario", "latest_snapshot", "current_run", "population"],
+        "/api/admin/generation": [
+            "scenario",
+            "latest_snapshot",
+            "current_run",
+            "population",
+        ],
         "/api/admin/run-state": ["scenario", "latest_snapshot", "snapshot_count"],
     }
 

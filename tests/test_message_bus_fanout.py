@@ -8,6 +8,7 @@ SLOW event's handler did not start until the slow handler finished.
 After the fix the loop dispatches handler tasks without awaiting them, so a
 fast event is handled concurrently with a slow one already in flight.
 """
+
 import asyncio
 import time
 

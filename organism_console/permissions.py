@@ -11,6 +11,7 @@ tool whose policy is `allow` or `ask` (explicit `deny` always wins), matching
 opencode's `--auto` behaviour — the REPL prompt shows a muted `auto` indicator
 when it is active.
 """
+
 from __future__ import annotations
 
 import json

@@ -4,12 +4,17 @@ from pathlib import Path
 from typing import Optional, Dict, Any, List
 
 from organism_console.core.repair_engine import (
-    TieredRepairOrchestrator, load_cures, save_cures,
-    load_lessons, meta_classify_lessons,
-    run_adversarial_check, KNOWLEDGE_BASE_DIR,
+    TieredRepairOrchestrator,
+    load_cures,
+    save_cures,
+    load_lessons,
+    meta_classify_lessons,
+    run_adversarial_check,
+    KNOWLEDGE_BASE_DIR,
 )
 
 import logging
+
 log = logging.getLogger("zenith_cli")
 
 TESTS_DIR = KNOWLEDGE_BASE_DIR / "generated_tests"
@@ -20,9 +25,20 @@ class SelfRepairEngine:
         self.cmd_ctx = cmd_ctx
         self.repair_orchestrator = TieredRepairOrchestrator(cmd_ctx)
         self.repair_log: List[Dict] = []
-        self._stats = {"t0_hits": 0, "t1_hits": 0, "t2_hits": 0, "failures": 0, "tokens_spent": 0}
+        self._stats = {
+            "t0_hits": 0,
+            "t1_hits": 0,
+            "t2_hits": 0,
+            "failures": 0,
+            "tokens_spent": 0,
+        }
 
-    def diagnose_and_repair(self, error_text: str, file_path: Optional[Path] = None, context: Optional[Dict] = None) -> Dict[str, Any]:
+    def diagnose_and_repair(
+        self,
+        error_text: str,
+        file_path: Optional[Path] = None,
+        context: Optional[Dict] = None,
+    ) -> Dict[str, Any]:
         result = self.repair_orchestrator.repair(error_text, file_path, context)
 
         validation_error = result.get("validation_error")
@@ -51,20 +67,26 @@ class SelfRepairEngine:
     def _report(self, result: Dict[str, Any]):
         console = self.cmd_ctx.console
         tier = result.get("tier_used", "?")
-        status = "[green]FIXED[/green]" if result.get("fixed") else "[red]UNRESOLVED[/red]"
+        status = (
+            "[green]FIXED[/green]" if result.get("fixed") else "[red]UNRESOLVED[/red]"
+        )
         ftype = result.get("failure_type", "unknown")
         val = " [yellow](reverted)[/yellow]" if result.get("validation_error") else ""
         test = " [dim]+test[/dim]" if result.get("generated_test") else ""
-        repair_act = result.get('repair_action')
-        repair_act_str = str(repair_act) if repair_act is not None else 'no action'
-        console.print(f"  [{ftype}] T{tier} {status}{val}{test}: {repair_act_str[:120]}")
+        repair_act = result.get("repair_action")
+        repair_act_str = str(repair_act) if repair_act is not None else "no action"
+        console.print(
+            f"  [{ftype}] T{tier} {status}{val}{test}: {repair_act_str[:120]}"
+        )
 
-    def _save_generated_test(self, result: Dict[str, Any], error_text: str) -> Optional[Path]:
+    def _save_generated_test(
+        self, result: Dict[str, Any], error_text: str
+    ) -> Optional[Path]:
         test_code = result.get("generated_test")
         if not test_code:
             return None
         TESTS_DIR.mkdir(parents=True, exist_ok=True)
-        safe_name = re.sub(r'[^a-zA-Z0-9]', '_', error_text[:40])
+        safe_name = re.sub(r"[^a-zA-Z0-9]", "_", error_text[:40])
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         test_path = TESTS_DIR / f"test_{safe_name}_{timestamp}.py"
         test_path.write_text(test_code, encoding="utf-8")
@@ -87,7 +109,9 @@ class SelfRepairEngine:
             existing[0]["count"] = existing[0].get("count", 1) + 1
             existing[0]["confidence"] = min(1.0, existing[0]["confidence"] + 0.05)
         else:
-            keywords = [w for w in result.get("error", "").lower().split() if len(w) > 4][:10]
+            keywords = [
+                w for w in result.get("error", "").lower().split() if len(w) > 4
+            ][:10]
             cure_entry = {
                 "action": action,
                 "keywords": keywords,
@@ -101,7 +125,9 @@ class SelfRepairEngine:
                 cure_entry["test_file"] = result.get("generated_test_file")
             cures[failure_type].append(cure_entry)
 
-        cures[failure_type] = sorted(cures[failure_type], key=lambda x: -x.get("count", 0))[:50]
+        cures[failure_type] = sorted(
+            cures[failure_type], key=lambda x: -x.get("count", 0)
+        )[:50]
         save_cures(cures)
 
     def _maybe_retire_cure(self, result: Dict[str, Any]):
@@ -130,7 +156,12 @@ class SelfRepairEngine:
             return
         cures[failure_type] = survivors
         save_cures(cures)
-        log.info("Retired %d low-confidence cure(s) for %s: %s", len(retired), failure_type, retired)
+        log.info(
+            "Retired %d low-confidence cure(s) for %s: %s",
+            len(retired),
+            failure_type,
+            retired,
+        )
 
     def record_feedback(self, action_text: str, success: bool):
         cures = load_cures()
@@ -139,8 +170,12 @@ class SelfRepairEngine:
             survivors = []
             for cure in entries:
                 if cure.get("action") == action_text:
-                    cure["success_count"] = cure.get("success_count", 1) + (1 if success else 0)
-                    cure["failure_count"] = cure.get("failure_count", 0) + (0 if success else 1)
+                    cure["success_count"] = cure.get("success_count", 1) + (
+                        1 if success else 0
+                    )
+                    cure["failure_count"] = cure.get("failure_count", 0) + (
+                        0 if success else 1
+                    )
                     total = cure["success_count"] + cure["failure_count"]
                     cure["confidence"] = cure["success_count"] / max(total, 1)
                     updated = True
@@ -179,5 +214,7 @@ class SelfRepairEngine:
     def run_adversarial(self) -> Dict[str, Any]:
         results = run_adversarial_check(self)
         if self.cmd_ctx:
-            self.cmd_ctx.console.print(f"[bold]Adversarial results:[/bold] {results['detected']}/{results['total']} detected, {results['fixed']} fixed")
+            self.cmd_ctx.console.print(
+                f"[bold]Adversarial results:[/bold] {results['detected']}/{results['total']} detected, {results['fixed']} fixed"
+            )
         return results

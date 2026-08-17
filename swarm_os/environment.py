@@ -4,6 +4,7 @@ Environment — the world organisms live in.
 Weighted random domain selection with burst mode.
 No round-robin — organisms cannot overfit to a predictable schedule.
 """
+
 from __future__ import annotations
 
 import logging
@@ -49,16 +50,16 @@ TASK_POOL: Dict[str, List[str]] = {
 
 DOMAIN_WEIGHTS = {"coding": 0.4, "research": 0.35, "upwork": 0.25}
 _BURST_PROBABILITY = 0.25
-_MAX_BURST_LENGTH  = 3
+_MAX_BURST_LENGTH = 3
 
 
 @dataclass
 class Task:
-    domain:    str
-    prompt:    str
+    domain: str
+    prompt: str
     issued_at: float = field(default_factory=time.time)
-    task_id:   str   = field(
-        default_factory=lambda: f"task_{int(time.time()*1000) % 100000}"
+    task_id: str = field(
+        default_factory=lambda: f"task_{int(time.time() * 1000) % 100000}"
     )
 
 
@@ -67,11 +68,11 @@ class Environment:
     resources: Dict[str, float] = field(
         default_factory=lambda: {"compute": 100.0, "energy": 100.0, "budget": 50.0}
     )
-    entropy:          float = 0.0
-    t:                int   = 0
-    current_task:     Optional[Task] = None
-    task_history:     List[Task] = field(default_factory=list)
-    _burst_domain:    Optional[str] = field(default=None, repr=False)
+    entropy: float = 0.0
+    t: int = 0
+    current_task: Optional[Task] = None
+    task_history: List[Task] = field(default_factory=list)
+    _burst_domain: Optional[str] = field(default=None, repr=False)
     _burst_remaining: int = field(default=0, repr=False)
 
     def _select_domain(self) -> str:
@@ -80,16 +81,18 @@ class Environment:
             return self._burst_domain
         domains = list(DOMAIN_WEIGHTS.keys())
         weights = [DOMAIN_WEIGHTS[d] for d in domains]
-        domain  = random.choices(domains, weights=weights, k=1)[0]
+        domain = random.choices(domains, weights=weights, k=1)[0]
         if random.random() < _BURST_PROBABILITY:
-            self._burst_domain    = domain
+            self._burst_domain = domain
             self._burst_remaining = random.randint(1, _MAX_BURST_LENGTH - 1)
             log.debug("burst domain=%s length=%d", domain, self._burst_remaining + 1)
         return domain
 
     def tick(self) -> None:
         self.entropy += random.uniform(0.01, 0.03)
-        self.resources["energy"] = max(0.0, self.resources["energy"] - self.entropy * 0.1)
+        self.resources["energy"] = max(
+            0.0, self.resources["energy"] - self.entropy * 0.1
+        )
         self.t += 1
         domain = self._select_domain()
         prompt = random.choice(TASK_POOL[domain])
@@ -104,17 +107,18 @@ class Environment:
 
     def state(self) -> Dict[str, Any]:
         return {
-            "resources":    dict(self.resources),
-            "entropy":      round(self.entropy, 4),
-            "t":            self.t,
+            "resources": dict(self.resources),
+            "entropy": round(self.entropy, 4),
+            "t": self.t,
             "current_task": {
-                "domain":  self.current_task.domain,
-                "prompt":  self.current_task.prompt,
+                "domain": self.current_task.domain,
+                "prompt": self.current_task.prompt,
                 "task_id": self.current_task.task_id,
-            } if self.current_task else None,
+            }
+            if self.current_task
+            else None,
             "burst_active": self._burst_remaining > 0,
         }
 
     def resource_pressure(self) -> float:
         return 1.0 - (self.resources["compute"] + self.resources["energy"]) / 200.0
-

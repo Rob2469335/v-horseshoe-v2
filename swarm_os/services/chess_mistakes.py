@@ -244,7 +244,11 @@ def _classify_concept(
     # Material before/after from the MOVER's perspective.
     def _mat(brd, color):
         vals = {"p": 1, "n": 3, "b": 3, "r": 5, "q": 9}
-        return sum(vals.get(p.symbol().lower(), 0) for sq in chess.SQUARES if (p := brd.piece_at(sq)) and p.color == color)
+        return sum(
+            vals.get(p.symbol().lower(), 0)
+            for sq in chess.SQUARES
+            if (p := brd.piece_at(sq)) and p.color == color
+        )
 
     before_mat = _mat(b, mover)
     after_mat = _mat(after, mover)
@@ -303,7 +307,11 @@ def _classify_concept(
         return "king safety"
 
     # Pawn structure: a pawn move that loses material (opened a weakness).
-    if b.piece_at(played.from_square) and b.piece_at(played.from_square).piece_type == chess.PAWN and after_mat < before_mat:
+    if (
+        b.piece_at(played.from_square)
+        and b.piece_at(played.from_square).piece_type == chess.PAWN
+        and after_mat < before_mat
+    ):
         return "pawn structure"
 
     # The played move loses material (miscalculation).
@@ -368,23 +376,53 @@ def get_recurring_mistakes(limit: int = 10) -> dict[str, Any]:
         "ok": True,
         "total": len(entries),
         "concepts": len(ranked),
-        "top": ranked[:max(1, min(int(limit), 25))],
+        "top": ranked[: max(1, min(int(limit), 25))],
     }
 
 
 # Skill-group definitions: which error categories map to which coachable skill.
 # Used to build the weakness profile + "today's focus" recommendation.
 _SKILL_GROUPS: dict[str, tuple[str, str]] = {
-    "hanging piece": ("tactics", "You hang pieces — scan for loose pieces and captures before you move."),
-    "missed capture": ("tactics", "You miss winning captures — look for captures of undefended pieces."),
-    "missed check": ("tactics", "You miss strong checks — check forcing moves before settling."),
-    "imprecise move": ("positional", "You pick solid-but-not-best moves — find the plan, not just a safe move."),
-    "bad exchange": ("positional", "You trade good pieces for worse ones — compare piece values before capturing."),
-    "king safety": ("defense", "Your king gets exposed — castle and keep it safe before attacking."),
-    "pawn structure": ("positional", "Your pawn moves create weaknesses — think about what a pawn push leaves behind."),
-    "calculation": ("calculation", "You miscalculate — check the opponent's reply before committing."),
-    "endgame technique": ("endgame", "Endgame errors cost you — the king is a fighting piece in the endgame."),
-    "development": ("positional", "You mis-handle development — bring pieces out before pushing pawns."),
+    "hanging piece": (
+        "tactics",
+        "You hang pieces — scan for loose pieces and captures before you move.",
+    ),
+    "missed capture": (
+        "tactics",
+        "You miss winning captures — look for captures of undefended pieces.",
+    ),
+    "missed check": (
+        "tactics",
+        "You miss strong checks — check forcing moves before settling.",
+    ),
+    "imprecise move": (
+        "positional",
+        "You pick solid-but-not-best moves — find the plan, not just a safe move.",
+    ),
+    "bad exchange": (
+        "positional",
+        "You trade good pieces for worse ones — compare piece values before capturing.",
+    ),
+    "king safety": (
+        "defense",
+        "Your king gets exposed — castle and keep it safe before attacking.",
+    ),
+    "pawn structure": (
+        "positional",
+        "Your pawn moves create weaknesses — think about what a pawn push leaves behind.",
+    ),
+    "calculation": (
+        "calculation",
+        "You miscalculate — check the opponent's reply before committing.",
+    ),
+    "endgame technique": (
+        "endgame",
+        "Endgame errors cost you — the king is a fighting piece in the endgame.",
+    ),
+    "development": (
+        "positional",
+        "You mis-handle development — bring pieces out before pushing pawns.",
+    ),
 }
 
 
@@ -399,7 +437,12 @@ def coach_report() -> dict[str, Any]:
     with _LOCK:
         entries = _load()
     if not entries:
-        return {"ok": True, "total": 0, "skills": {}, "focus": "Play and analyze a game first — no mistakes recorded yet."}
+        return {
+            "ok": True,
+            "total": 0,
+            "skills": {},
+            "focus": "Play and analyze a game first — no mistakes recorded yet.",
+        }
 
     # Classify each entry, then group into skills.
     skill_counts: dict[str, int] = {}
@@ -408,7 +451,10 @@ def coach_report() -> dict[str, Any]:
     concept_positions: dict[str, set] = {}
     for e in entries:
         concept = _classify_concept(
-            e.get("pre_fen", ""), e.get("played_uci", ""), e.get("best_uci"), e.get("classification", "")
+            e.get("pre_fen", ""),
+            e.get("played_uci", ""),
+            e.get("best_uci"),
+            e.get("classification", ""),
         )
         concept_counts[concept] = concept_counts.get(concept, 0) + 1
         if e.get("classification") == "Blunder":
@@ -437,9 +483,13 @@ def coach_report() -> dict[str, Any]:
     for concept, count in concept_counts.items():
         frequency = count / len(entries)
         severity = (concept_blunders.get(concept, 0) / count) if count else 0.0
-        recurrence = len(concept_positions.get(concept, set())) / count if count else 0.0
+        recurrence = (
+            len(concept_positions.get(concept, set())) / count if count else 0.0
+        )
         trend = 0.0  # unknown until the training loop accumulates history
-        priority = round(frequency * (0.4 + 0.6 * severity) * (0.5 + recurrence) * (1.0 - trend), 4)
+        priority = round(
+            frequency * (0.4 + 0.6 * severity) * (0.5 + recurrence) * (1.0 - trend), 4
+        )
         concept_scores[concept] = {
             "frequency": round(frequency, 3),
             "severity": round(severity, 3),
@@ -451,7 +501,9 @@ def coach_report() -> dict[str, Any]:
     # Today's focus: the weakest skill (most frequent) -> its coaching line.
     focus_skill = max(skill_counts, key=skill_counts.get)
     focus_concept = max(concept_counts, key=concept_counts.get)
-    advice = _SKILL_GROUPS.get(focus_concept, ("", "Keep studying — every review sharpens the skill."))[1]
+    advice = _SKILL_GROUPS.get(
+        focus_concept, ("", "Keep studying — every review sharpens the skill.")
+    )[1]
     return {
         "ok": True,
         "total": len(entries),

@@ -5,6 +5,7 @@ listing (pure domain), ranks by Deal Score, surfaces the best overall deal and
 the best motorhome, and runs an optional LLM deep-dive. Returns a plain dict
 ready for the API layer to hand to FastAPI.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -33,13 +34,34 @@ def _normalize_type_filter(rv_type: str):
 
     t = (rv_type or "").strip().lower()
     motorhome_aliases = {
-        "motorhome", "motor home", "motor coach", "motorized", "self-propelled",
-        "motorized rv", "class a/b/c", "class a/b", "van", "camper van",
-        "sprinter", "rv", "camper", "auto", "engine",
+        "motorhome",
+        "motor home",
+        "motor coach",
+        "motorized",
+        "self-propelled",
+        "motorized rv",
+        "class a/b/c",
+        "class a/b",
+        "van",
+        "camper van",
+        "sprinter",
+        "rv",
+        "camper",
+        "auto",
+        "engine",
     }
     # Class B + Class C only (excludes Class A) — the two-people-living-in-it combo.
-    bc_aliases = {"class b/c", "class b or c", "class b and c", "b/c", "bc",
-                  "class b c", "b or c", "van c", "b and c"}
+    bc_aliases = {
+        "class b/c",
+        "class b or c",
+        "class b and c",
+        "b/c",
+        "bc",
+        "class b c",
+        "b or c",
+        "van c",
+        "b and c",
+    }
     if t in motorhome_aliases:
         return lambda l: "Motorhome" in l.rv_type
     if t in bc_aliases:
@@ -50,8 +72,14 @@ def _normalize_type_filter(rv_type: str):
     return lambda l: l.rv_type == want
 
 
-def _build_summary(ranked: list[RVListing], best: RVListing | None, budget: int, elapsed: float,
-                   location: str = "", radius_miles: int = 0) -> str:
+def _build_summary(
+    ranked: list[RVListing],
+    best: RVListing | None,
+    budget: int,
+    elapsed: float,
+    location: str = "",
+    radius_miles: int = 0,
+) -> str:
     n = len(ranked)
     if n == 0:
         msg = f"No used RVs under ${budget:,} were found on the reachable sources right now."
@@ -59,9 +87,21 @@ def _build_summary(ranked: list[RVListing], best: RVListing | None, budget: int,
             msg += f" Nothing within {radius_miles} mi of {location.strip() or 'your location'} matched."
         msg += " Try widening the RV type or radius, or run again — inventory changes daily."
         return msg
-    excellent = sum(1 for l in ranked if (l.analysis.get("score") or {}).get("verdict") == "Excellent Deal")
-    good = sum(1 for l in ranked if (l.analysis.get("score") or {}).get("verdict") == "Good Deal")
-    risky = sum(1 for l in ranked if (l.analysis.get("score") or {}).get("verdict") == "High Risk")
+    excellent = sum(
+        1
+        for l in ranked
+        if (l.analysis.get("score") or {}).get("verdict") == "Excellent Deal"
+    )
+    good = sum(
+        1
+        for l in ranked
+        if (l.analysis.get("score") or {}).get("verdict") == "Good Deal"
+    )
+    risky = sum(
+        1
+        for l in ranked
+        if (l.analysis.get("score") or {}).get("verdict") == "High Risk"
+    )
     avg_price = int(sum(l.price for l in ranked) / n) if n else 0
     lines = [
         f"Analyzed {n} used RVs under ${budget:,} (avg asking ${avg_price:,}) in {elapsed:.1f}s. "
@@ -72,22 +112,32 @@ def _build_summary(ranked: list[RVListing], best: RVListing | None, budget: int,
         unknown = [l for l in ranked if l.distance_miles is None]
         if known:
             closest = min(known, key=lambda l: l.distance_miles or 1e18)
-            lines.append(f"All shown are within {radius_miles} mi of {location.strip()} "
-                         f"(closest: {closest.year} {closest.make} {closest.model} at "
-                         f"{int(closest.distance_miles or 0)} mi).")
+            lines.append(
+                f"All shown are within {radius_miles} mi of {location.strip()} "
+                f"(closest: {closest.year} {closest.make} {closest.model} at "
+                f"{int(closest.distance_miles or 0)} mi)."
+            )
         if unknown:
-            lines.append(f"{len(unknown)} listing{'s' if len(unknown) > 1 else ''} had no usable "
-                         "location and are shown at the bottom — confirm distance before visiting.")
+            lines.append(
+                f"{len(unknown)} listing{'s' if len(unknown) > 1 else ''} had no usable "
+                "location and are shown at the bottom — confirm distance before visiting."
+            )
     if best:
         b = best.analysis.get("score") or {}
-        dist = f" at {int(best.distance_miles)} mi" if best.distance_miles is not None else ""
+        dist = (
+            f" at {int(best.distance_miles)} mi"
+            if best.distance_miles is not None
+            else ""
+        )
         lines.append(
             f"Best deal: {best.year} {best.make} {best.model} ({best.rv_type}){dist} at "
             f"${int(best.price):,} — {b.get('verdict', '')} with a Deal Score of "
             f"{b.get('score', 'n/a')}/100. {best.analysis.get('negotiation_tip', '')}"
         )
     else:
-        lines.append("No unambiguously great deal emerged — treat anything high-risk as a pass until inspected.")
+        lines.append(
+            "No unambiguously great deal emerged — treat anything high-risk as a pass until inspected."
+        )
     return " ".join(lines)
 
 
@@ -106,17 +156,30 @@ async def find_best_rv_deals(
     raw: list[RVListing] = []
 
     from .geo import DEFAULT_LOCATION, DEFAULT_RADIUS_MILES
+
     location = (location or "").strip() or DEFAULT_LOCATION
     radius = int(radius_miles) if radius_miles else DEFAULT_RADIUS_MILES
 
     tasks = []
     if use_ppl:
-        tasks.append(DISCOVERY_PARSERS["ppl"](budget, rv_type, max_results=max(1, int(max_results * 0.6))))
+        tasks.append(
+            DISCOVERY_PARSERS["ppl"](
+                budget, rv_type, max_results=max(1, int(max_results * 0.6))
+            )
+        )
     if use_web:
-        tasks.append(DISCOVERY_PARSERS["web"](budget, rv_type, max_results=max(1, int(max_results * 0.5))))
+        tasks.append(
+            DISCOVERY_PARSERS["web"](
+                budget, rv_type, max_results=max(1, int(max_results * 0.5))
+            )
+        )
     # Craigslist is the most reliable real-marketplace source (private sellers,
     # no dealer markup) and is fetched with a real browser crawl.
-    tasks.append(DISCOVERY_PARSERS["craigslist"](budget, rv_type, max_results=max(1, int(max_results * 0.5))))
+    tasks.append(
+        DISCOVERY_PARSERS["craigslist"](
+            budget, rv_type, max_results=max(1, int(max_results * 0.5))
+        )
+    )
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
     for r in results:
@@ -170,22 +233,37 @@ async def find_best_rv_deals(
         cache = _load_cache()
         anchor = await resolve_lat_lng(location, cache)
         if anchor is None:
-            logger.warning("RV finder: could not geocode user location %r; skipping radius filter", location)
+            logger.warning(
+                "RV finder: could not geocode user location %r; skipping radius filter",
+                location,
+            )
         else:
             cities: dict[str, tuple[float, float]] = {}
             for lst in listings:
                 if not lst.location:
                     continue
                 if lst.location not in cities:
-                    cities[lst.location] = await resolve_lat_lng(lst.location, cache) or (None, None)  # type: ignore[assignment]
+                    cities[lst.location] = await resolve_lat_lng(
+                        lst.location, cache
+                    ) or (None, None)  # type: ignore[assignment]
                 lat, lng = cities[lst.location]
                 if lat and lng:
                     lst.distance_miles = haversine_miles(anchor[0], anchor[1], lat, lng)
             # Hard filter: drop confirmed out-of-range, keep unknown-distance but demote.
-            listings = [l for l in listings if l.distance_miles is None or l.distance_miles <= radius]
+            listings = [
+                l
+                for l in listings
+                if l.distance_miles is None or l.distance_miles <= radius
+            ]
             listings.sort(key=lambda l: 1 if l.distance_miles is None else 0)
             in_range = sum(1 for l in listings if l.distance_miles is not None)
-            logger.info("RV finder: %d of %d listings within %d mi of %s", in_range, len(listings), radius, location)
+            logger.info(
+                "RV finder: %d of %d listings within %d mi of %s",
+                in_range,
+                len(listings),
+                radius,
+                location,
+            )
 
     # Thorough analysis for every listing.
     for lst in listings:
@@ -213,7 +291,9 @@ async def find_best_rv_deals(
         s = l.analysis.get("score") or {}
         if not (l.year and l.make):
             continue
-        if s.get("verdict") not in ("Excellent Deal", "Good Deal") or s.get("critical_red_flags"):
+        if s.get("verdict") not in ("Excellent Deal", "Good Deal") or s.get(
+            "critical_red_flags"
+        ):
             continue
         if best is None:
             best = l
@@ -230,8 +310,11 @@ async def find_best_rv_deals(
         from .parsers import _is_junk_title
 
         candidates = [
-            l for l in ranked
-            if l.year and l.make and _title_motorhome(l)
+            l
+            for l in ranked
+            if l.year
+            and l.make
+            and _title_motorhome(l)
             and not _is_junk_title(l.title, l.model)
         ]
         candidates.sort(key=lambda l: 1 if l.attrs else 0, reverse=True)
@@ -247,7 +330,9 @@ async def find_best_rv_deals(
     if deep_dive and deep_dive > 0 and ranked:
         deep_dive_text = await _llm_deep_dive(ranked[: max(deep_dive, 5)], budget)
 
-    summary = _build_summary(ranked, best, budget, time.time() - started, location, radius_miles)
+    summary = _build_summary(
+        ranked, best, budget, time.time() - started, location, radius_miles
+    )
 
     return {
         "ok": True,

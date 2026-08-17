@@ -7,6 +7,7 @@ context block so agents never need to guess file paths.
 
 Guarded: any parse error degrades to an empty string (agents keep working).
 """
+
 from __future__ import annotations
 import logging
 import os
@@ -72,12 +73,14 @@ def _pick_sections(text: str) -> str:
     # Reorder so the sections agents touch most come first (runtime_v2 before
     # swarm_os before the rest), protecting them from truncation.
     priority = ("runtime_v2", "swarm_os")
+
     def _key(block_str: str) -> int:
         low = block_str.lower()
         for i, p in enumerate(priority):
             if p in low:
                 return i
         return len(priority)
+
     sub_blocks = []
     current: list[str] = []
     for raw in block.splitlines():

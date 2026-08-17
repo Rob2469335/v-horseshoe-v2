@@ -1,4 +1,5 @@
 """Natural language intent routing for CLI commands."""
+
 import json
 import re
 from typing import Optional
@@ -9,13 +10,41 @@ from organism_console._command_context import CommandContext
 def route_natural_language_keywords(raw: str) -> tuple[Optional[str], list[str]]:
     clean = raw.lower().strip().strip("?!.")
 
-    if clean in ("show diff", "diff", "git diff", "what changed", "changes", "show changes", "show me what changed"):
+    if clean in (
+        "show diff",
+        "diff",
+        "git diff",
+        "what changed",
+        "changes",
+        "show changes",
+        "show me what changed",
+    ):
         return "diff", []
-    if clean in ("status", "health", "check health", "system status", "check status", "how is the system"):
+    if clean in (
+        "status",
+        "health",
+        "check health",
+        "system status",
+        "check status",
+        "how is the system",
+    ):
         return "status", []
-    if clean in ("help", "commands", "what can you do", "show commands", "list commands", "menu"):
+    if clean in (
+        "help",
+        "commands",
+        "what can you do",
+        "show commands",
+        "list commands",
+        "menu",
+    ):
         return "help", []
-    if clean in ("commit", "make a commit", "git commit", "save changes", "commit changes"):
+    if clean in (
+        "commit",
+        "make a commit",
+        "git commit",
+        "save changes",
+        "commit changes",
+    ):
         return "commit", []
     if clean in ("heal", "self heal", "run healing", "fix system", "run heal"):
         return "heal", ["run"]
@@ -23,7 +52,16 @@ def route_natural_language_keywords(raw: str) -> tuple[Optional[str], list[str]]
         return "clear", []
     if clean in ("learn", "learn from history", "run learning", "offline learn"):
         return "heal", ["lessons"]
-    if clean in ("autofix", "auto fix", "fix yourself", "fix bugs", "heal bugs", "fix all", "repair all", "repair everything"):
+    if clean in (
+        "autofix",
+        "auto fix",
+        "fix yourself",
+        "fix bugs",
+        "heal bugs",
+        "fix all",
+        "repair all",
+        "repair everything",
+    ):
         return "heal", ["run"]
     if clean in ("cures", "repair knowledge", "known fixes", "what can you fix"):
         return "heal", ["lessons"]
@@ -62,14 +100,33 @@ def route_natural_language_keywords(raw: str) -> tuple[Optional[str], list[str]]
     if m_debate:
         return "debate", [m_debate.group(1)]
 
-    goal_words = ("fix", "implement", "add", "create", "refactor", "change", "run tests", "verify", "debug", "test", "analyze", "audit", "search", "upgrade", "review", "inspect")
+    goal_words = (
+        "fix",
+        "implement",
+        "add",
+        "create",
+        "refactor",
+        "change",
+        "run tests",
+        "verify",
+        "debug",
+        "test",
+        "analyze",
+        "audit",
+        "search",
+        "upgrade",
+        "review",
+        "inspect",
+    )
     if any(clean.startswith(w) for w in goal_words):
         return "goal", [raw.strip()]
 
     return None, []
 
 
-def classify_intent_with_llm(raw: str, ctx: CommandContext) -> tuple[Optional[str], list[str]]:
+def classify_intent_with_llm(
+    raw: str, ctx: CommandContext
+) -> tuple[Optional[str], list[str]]:
     model = "qwen3.5-4b"
     if ctx.installed_models:
         for m in ctx.installed_models:
@@ -83,21 +140,21 @@ def classify_intent_with_llm(raw: str, ctx: CommandContext) -> tuple[Optional[st
     prompt = (
         "You are the intent routing classification system for Swarm OS CLI. "
         "Classify the following natural language user input into one of these commands:\n"
-        "- \"/diff\" (if they want to see git changes, modifications, diff)\n"
-        "- \"/status\" (if they want to check health, status, system health)\n"
-        "- \"/commit\" (if they want to save changes to git or commit)\n"
-        "- \"/heal run\" (if they want to run a healing/repair cycle)\n"
-        "- \"/clear\" (if they want to clear history or reset the context)\n"
-        "- \"/exit\" (if they want to quit or close the terminal)\n"
-        "- \"/tokens\" (if they want to check token count or session cost)\n"
-        "- \"/benchmark\" (if they want to run model latency benchmarks)\n"
-        "- \"/debate <goal>\" (if they want to discuss or debate a development plan/objective)\n"
-        "- \"/goal <goal>\" (if they want to execute an instruction, write code, fix something, add a feature, refactor, run tests, or debug)\n"
-        "- \"/chat\" (if it's a general question, discussion, explanation request, or just talking to you)\n\n"
-        f"Input: \"{raw}\"\n\n"
+        '- "/diff" (if they want to see git changes, modifications, diff)\n'
+        '- "/status" (if they want to check health, status, system health)\n'
+        '- "/commit" (if they want to save changes to git or commit)\n'
+        '- "/heal run" (if they want to run a healing/repair cycle)\n'
+        '- "/clear" (if they want to clear history or reset the context)\n'
+        '- "/exit" (if they want to quit or close the terminal)\n'
+        '- "/tokens" (if they want to check token count or session cost)\n'
+        '- "/benchmark" (if they want to run model latency benchmarks)\n'
+        '- "/debate <goal>" (if they want to discuss or debate a development plan/objective)\n'
+        '- "/goal <goal>" (if they want to execute an instruction, write code, fix something, add a feature, refactor, run tests, or debug)\n'
+        '- "/chat" (if it\'s a general question, discussion, explanation request, or just talking to you)\n\n'
+        f'Input: "{raw}"\n\n'
         "Return a JSON object with keys:\n"
-        "- \"command\": the selected slash command (e.g. \"/diff\", \"/goal fix the routes\", \"/chat\")\n"
-        "- \"confidence\": float between 0.0 and 1.0\n\n"
+        '- "command": the selected slash command (e.g. "/diff", "/goal fix the routes", "/chat")\n'
+        '- "confidence": float between 0.0 and 1.0\n\n'
         "Return ONLY the valid JSON, no explanations before or after."
     )
 
@@ -107,7 +164,9 @@ def classify_intent_with_llm(raw: str, ctx: CommandContext) -> tuple[Optional[st
             data = r.json()
             response_text = data.get("response", "").strip()
             if "```" in response_text:
-                m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", response_text, re.DOTALL)
+                m = re.search(
+                    r"```(?:json)?\s*(\{.*?\})\s*```", response_text, re.DOTALL
+                )
                 if m:
                     response_text = m.group(1)
             parsed = json.loads(response_text)

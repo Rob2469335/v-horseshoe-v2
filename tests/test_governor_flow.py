@@ -12,7 +12,11 @@ def test_governor_decide_and_persist(tmp_path):
     gov = Governor(diagnostician=diag, learner=learner)
 
     # high-confidence symptom (OOM)
-    sym = {"component": "worker", "detail": "Out of memory: OOM killed process", "metrics_before": {"health_score": 30}}
+    sym = {
+        "component": "worker",
+        "detail": "Out of memory: OOM killed process",
+        "metrics_before": {"health_score": 30},
+    }
     decision = gov.decide(sym)
     # high-confidence should either auto-execute or at least sandbox first
     assert decision.get("mode") in ("auto_execute", "sandbox_first")
@@ -22,12 +26,21 @@ def test_governor_decide_and_persist(tmp_path):
     assert any(f.get("incident_id") == inc for f in failures)
 
     # low-confidence symptom
-    sym2 = {"component": "db", "detail": "unexpected error code 42", "metrics_before": {"health_score": 70}}
+    sym2 = {
+        "component": "db",
+        "detail": "unexpected error code 42",
+        "metrics_before": {"health_score": 70},
+    }
     decision2 = gov.decide(sym2)
     assert decision2.get("mode") in ("approval_required", "sandbox_first")
 
     # finalize incident with success outcome
-    outcome = {"outcome": "SUCCESS", "repair": {"action": "restart", "result": "success"}, "metrics_after": {"health_score": 95}, "confidence": 0.9}
+    outcome = {
+        "outcome": "SUCCESS",
+        "repair": {"action": "restart", "result": "success"},
+        "metrics_after": {"health_score": 95},
+        "confidence": 0.9,
+    }
     gov.finalize(inc, outcome)
     # ensure learner record updated
     failures = learner.list_failures()

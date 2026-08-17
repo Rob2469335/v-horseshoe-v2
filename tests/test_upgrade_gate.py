@@ -11,6 +11,7 @@ These tests pin the gate contract:
   - approving the proposal embeds it in the apply objective for the verified
     write loop.
 """
+
 from unittest.mock import MagicMock, patch
 
 from organism_console import _commands_ai
@@ -38,6 +39,7 @@ def _fake_goal_loop(proposal, error=None):
         if error:
             raise error
         return proposal
+
     return _fake
 
 
@@ -72,7 +74,9 @@ class TestUpgradeResearchGate:
         skill-memory execution, and must not touch any files."""
         ctx = _make_ctx()
         with (
-            patch.object(_au_mod, "run_autonomous_goal_loop", _fake_goal_loop("proposal: X")),
+            patch.object(
+                _au_mod, "run_autonomous_goal_loop", _fake_goal_loop("proposal: X")
+            ),
             patch("rich.prompt.Confirm") as m_confirm,
             patch.object(_sia_mod, "SelfImprovementAgent") as m_sia,
         ):
@@ -89,7 +93,9 @@ class TestUpgradeResearchGate:
         ctx = _make_ctx()
         proposal = "proposal: add caching to orchestrator.py"
         with (
-            patch.object(_au_mod, "run_autonomous_goal_loop", _fake_goal_loop(proposal)),
+            patch.object(
+                _au_mod, "run_autonomous_goal_loop", _fake_goal_loop(proposal)
+            ),
             patch("rich.prompt.Confirm") as m_confirm,
             patch.object(_sia_mod, "SelfImprovementAgent") as m_sia,
         ):
@@ -120,7 +126,11 @@ class TestUpgradeResearchGate:
         stop — never fall through to a silent apply."""
         ctx = _make_ctx()
         with (
-            patch.object(_au_mod, "run_autonomous_goal_loop", _fake_goal_loop(None, error=RuntimeError("boom"))),
+            patch.object(
+                _au_mod,
+                "run_autonomous_goal_loop",
+                _fake_goal_loop(None, error=RuntimeError("boom")),
+            ),
             patch("rich.prompt.Confirm") as m_confirm,
         ):
             _commands_ai.cmd_upgrade(ctx, [])
@@ -131,4 +141,3 @@ class TestUpgradeResearchGate:
             "Upgrade research failed" in str(c.args[0]) if c.args else False
             for c in ctx.console.print.call_args_list
         ), "research failure must be surfaced to the user"
-

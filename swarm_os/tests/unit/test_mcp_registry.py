@@ -26,7 +26,8 @@ async def test_filesystem_blocks_path_escape():
 @pytest.mark.anyio
 async def test_qdrant_recall_returns_valid_shape():
     rt = AgentRuntime()
-    result = await rt.call_tool("qdrant_recall", {"query": "test", "collection": "chat_archive"})
+    result = await rt.call_tool(
+        "qdrant_recall", {"query": "test", "collection": "chat_archive"}
+    )
     assert result["ok"] is True
     assert isinstance(result["results"], list)
-

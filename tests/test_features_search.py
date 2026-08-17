@@ -5,6 +5,7 @@ The endpoint previously returned 503 "Vector search not yet configured" because
 import rerank` raised ImportError. This verifies the modules are importable and
 degrade gracefully (never raise) when the embedding/rerank servers are offline.
 """
+
 from __future__ import annotations
 import pytest
 
@@ -50,11 +51,13 @@ async def test_rerank_degrades_gracefully_when_offline():
 @pytest.mark.asyncio
 async def test_rerank_empty_candidates_returns_empty():
     from swarm_os.lib.vector.reranker import rerank
+
     assert await rerank("q", [], top_k=5) == []
 
 
 def test_candidate_text_extracts_fact_content_and_falls_back():
     from swarm_os.lib.vector.reranker import _candidate_text
+
     assert _candidate_text({"payload": {"fact": "hello"}}) == "hello"
     assert _candidate_text({"payload": {"content": "world"}}) == "world"
     assert _candidate_text({"payload": {}}) == str({"payload": {}})

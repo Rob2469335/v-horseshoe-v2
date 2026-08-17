@@ -1,6 +1,8 @@
 import ssl
+
 try:
     import truststore
+
     truststore.inject_into_ssl()
 except ImportError:
     pass
@@ -15,10 +17,7 @@ if not hasattr(ssl, "_zenith_patched_ssl"):
 
 from swarm_os.import_lock import validate_import_graph
 
+
 def bootstrap():
     validate_import_graph()
-    return {
-        "status": "locked",
-        "router": "available"
-    }
-
+    return {"status": "locked", "router": "available"}

@@ -1,4 +1,5 @@
 """JSON extraction and normalization for LLM tool decisions."""
+
 import json
 import ast
 import re
@@ -8,6 +9,7 @@ import asyncio
 log = logging.getLogger(__name__)
 
 _background_tasks: set[asyncio.Task] = set()
+
 
 def fire_and_forget(coro):
     task = asyncio.create_task(coro)
@@ -21,11 +23,24 @@ TOOL_CALL_SCHEMA = {
     "additionalProperties": False,
     "properties": {
         "thought": {"type": "string"},
-        "action": {"type": "string", "enum": [
-            "delegate", "web_search", "filesystem", "sandbox_repl", "vscode_automation",
-            "semantic_search", "remember", "ask_user", "lsp", "mcp", "mcp_register",
-            "self_heal", "final"
-        ]},
+        "action": {
+            "type": "string",
+            "enum": [
+                "delegate",
+                "web_search",
+                "filesystem",
+                "sandbox_repl",
+                "vscode_automation",
+                "semantic_search",
+                "remember",
+                "ask_user",
+                "lsp",
+                "mcp",
+                "mcp_register",
+                "self_heal",
+                "final",
+            ],
+        },
         "target_agent": {"type": "string"},
         "server_name": {"type": "string"},
         "task": {"type": "string"},
@@ -42,9 +57,9 @@ TOOL_CALL_SCHEMA = {
         "response": {"type": "string"},
         "fact": {"type": "string"},
         "category": {"type": "string"},
-        "question": {"type": "string"}
+        "question": {"type": "string"},
     },
-    "required": ["action"]
+    "required": ["action"],
 }
 
 
@@ -90,7 +105,13 @@ def normalize_decision(obj: dict) -> dict:
             log.debug("Inferred action=final from response field")
         else:
             obj["action"] = "final"
-            resp_val = obj.get("summary", obj.get("content", obj.get("analysis", obj.get("result", obj.get("explanation", "")))))
+            resp_val = obj.get(
+                "summary",
+                obj.get(
+                    "content",
+                    obj.get("analysis", obj.get("result", obj.get("explanation", ""))),
+                ),
+            )
             if not resp_val:
                 resp_val = json.dumps(obj, ensure_ascii=False)
             elif not isinstance(resp_val, str):
@@ -154,7 +175,13 @@ def extract_json(text: str) -> dict:
                     brace_count -= 1
                     if brace_count == 0:
                         try:
-                            valid_jsons.append(normalize_decision(json.loads(text[start:i + 1].strip(), strict=False)))
+                            valid_jsons.append(
+                                normalize_decision(
+                                    json.loads(
+                                        text[start : i + 1].strip(), strict=False
+                                    )
+                                )
+                            )
                         except Exception as parse_exc:
                             log.warning(f"Failed to parse JSON candidate: {parse_exc}")
                         break
@@ -180,16 +207,29 @@ def extract_json(text: str) -> dict:
         s_esc = False
         for j in range(s_start, len(stripped_fences)):
             ch = stripped_fences[j]
-            if s_esc: s_esc = False; continue
-            if ch == "\\": s_esc = True; continue
-            if ch == '"': s_instr = not s_instr; continue
+            if s_esc:
+                s_esc = False
+                continue
+            if ch == "\\":
+                s_esc = True
+                continue
+            if ch == '"':
+                s_instr = not s_instr
+                continue
             if not s_instr:
-                if ch == "{": s_brace += 1
+                if ch == "{":
+                    s_brace += 1
                 elif ch == "}":
                     s_brace -= 1
                     if s_brace == 0:
                         try:
-                            salvage_jsons.append(normalize_decision(json.loads(stripped_fences[s_start:j + 1], strict=False)))
+                            salvage_jsons.append(
+                                normalize_decision(
+                                    json.loads(
+                                        stripped_fences[s_start : j + 1], strict=False
+                                    )
+                                )
+                            )
                         except Exception as exc:
                             log.debug("salvage candidate skipped: %s", exc)
                         break
@@ -199,7 +239,9 @@ def extract_json(text: str) -> dict:
 
     if text.strip():
         clean = text.strip()
-        clean_no_xml = re.sub(r'</?(?:tool_call|tool_code|tools)[^>]*>', '', clean).strip()
+        clean_no_xml = re.sub(
+            r"</?(?:tool_call|tool_code|tools)[^>]*>", "", clean
+        ).strip()
         if not clean_no_xml:
             raise ValueError(f"Model output only contained empty XML tags: {clean}")
         mid = len(clean) // 2
@@ -207,7 +249,7 @@ def extract_json(text: str) -> dict:
             clean = clean[:mid].strip()
         elif mid > 3:
             for split in range(3, mid + 1):
-                if clean[split:split * 2] == clean[:split]:
+                if clean[split : split * 2] == clean[:split]:
                     clean = clean[:split]
                     break
         return {"action": "final", "response": clean}
@@ -223,25 +265,44 @@ def extract_json(text: str) -> dict:
             esc = False
             for i in range(t_start, len(think_content)):
                 c = think_content[i]
-                if esc: esc = False; continue
-                if c == "\\": esc = True; continue
-                if c == '"': in_str = not in_str; continue
+                if esc:
+                    esc = False
+                    continue
+                if c == "\\":
+                    esc = True
+                    continue
+                if c == '"':
+                    in_str = not in_str
+                    continue
                 if not in_str:
-                    if c == "{": brace_count += 1
+                    if c == "{":
+                        brace_count += 1
                     elif c == "}":
                         brace_count -= 1
                         if brace_count == 0:
                             try:
-                                think_jsons.append(normalize_decision(json.loads(think_content[t_start:i + 1], strict=False)))
+                                think_jsons.append(
+                                    normalize_decision(
+                                        json.loads(
+                                            think_content[t_start : i + 1], strict=False
+                                        )
+                                    )
+                                )
                             except Exception as parse_exc:
-                                log.warning(f"Failed to parse JSON candidate inside think block: {parse_exc}")
+                                log.warning(
+                                    f"Failed to parse JSON candidate inside think block: {parse_exc}"
+                                )
                             break
             t_start = think_content.find("{", t_start + 1)
         if think_jsons:
-            log.warning("Recovered JSON from inside <think> block (thinking suppression may have failed)")
+            log.warning(
+                "Recovered JSON from inside <think> block (thinking suppression may have failed)"
+            )
             return think_jsons[-1]
 
-    log.warning(f"Could not extract JSON, defaulting to 'final' action. Text: {raw_text[:100]}")
+    log.warning(
+        f"Could not extract JSON, defaulting to 'final' action. Text: {raw_text[:100]}"
+    )
     return {"action": "final", "response": "Task processed."}
 
 

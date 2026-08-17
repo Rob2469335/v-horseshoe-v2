@@ -63,13 +63,41 @@ class UncertaintyWeightedRouter:
         lowered = (task or "").lower()
         selected = []
 
-        if any(word in lowered for word in ("debug", "fix", "refactor", "python", "javascript", "react", "sql", "c++", "unit test")):
+        if any(
+            word in lowered
+            for word in (
+                "debug",
+                "fix",
+                "refactor",
+                "python",
+                "javascript",
+                "react",
+                "sql",
+                "c++",
+                "unit test",
+            )
+        ):
             selected.extend(["filesystem", "codeexec"])
-        if any(word in lowered for word in ("research", "climate", "papers", "quantum", "market", "blockchain")):
+        if any(
+            word in lowered
+            for word in (
+                "research",
+                "climate",
+                "papers",
+                "quantum",
+                "market",
+                "blockchain",
+            )
+        ):
             selected.extend(["websearch", "context7"])
-        if any(word in lowered for word in ("summarize", "rewrite", "translate", "article", "paragraph")):
+        if any(
+            word in lowered
+            for word in ("summarize", "rewrite", "translate", "article", "paragraph")
+        ):
             selected.extend(["filesystem"])
-        if any(word in lowered for word in ("dataset", "visualization", "csv", "analyze")):
+        if any(
+            word in lowered for word in ("dataset", "visualization", "csv", "analyze")
+        ):
             selected.extend(["filesystem", "codeexec"])
 
         if not selected:
@@ -87,18 +115,35 @@ class UpgradedSwarmBrainV10Ultimate:
         self.task_domain = task_domain
         self.router = router or UncertaintyWeightedRouter(
             tools=list(TOOL_PRIMARY_MAPPING.keys()),
-            scm=IdentifiableVectorSCM(list(TOOL_PRIMARY_MAPPING.keys()))
+            scm=IdentifiableVectorSCM(list(TOOL_PRIMARY_MAPPING.keys())),
         )
         self.engine = SimpleNamespace(name="compat-engine")
         self.genome = SimpleNamespace(name="compat-genome")
 
     def __call__(self, payload: dict[str, Any]) -> BrainResult:
         task = str((payload or {}).get("task", ""))
-        tools_used = self.router.select_tools(task) if hasattr(self.router, "select_tools") else ["filesystem"]
+        tools_used = (
+            self.router.select_tools(task)
+            if hasattr(self.router, "select_tools")
+            else ["filesystem"]
+        )
 
         reward = 0.78
         lowered = task.lower()
-        if any(word in lowered for word in ("debug", "fix", "research", "summarize", "analyze", "translate", "rewrite", "visualization", "csv")):
+        if any(
+            word in lowered
+            for word in (
+                "debug",
+                "fix",
+                "research",
+                "summarize",
+                "analyze",
+                "translate",
+                "rewrite",
+                "visualization",
+                "csv",
+            )
+        ):
             reward = 0.86
 
         return BrainResult(
@@ -109,7 +154,9 @@ class UpgradedSwarmBrainV10Ultimate:
         )
 
 
-def make_swarm_brain_v10_ultimate(router: Any | None = None, task_domain: str = "general") -> UpgradedSwarmBrainV10Ultimate:
+def make_swarm_brain_v10_ultimate(
+    router: Any | None = None, task_domain: str = "general"
+) -> UpgradedSwarmBrainV10Ultimate:
     return UpgradedSwarmBrainV10Ultimate(router=router, task_domain=task_domain)
 
 

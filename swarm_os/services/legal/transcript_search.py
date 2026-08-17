@@ -29,6 +29,7 @@ sidebars, p.7 Norwood-direct objections). The gap is narrow and known; if this
 tool is ever wired into an endpoint where output is consumed WITHOUT
 cross-referencing the source page, re-audit the attribution before trusting it.
 """
+
 from __future__ import annotations
 
 import re
@@ -75,26 +76,37 @@ _WITNESS_NAME_RE = re.compile(
 # Section labels that can never be a witness name (defense-in-depth: a
 # "J591dun1  Direct" style header — a bare section keyword with no name —
 # would otherwise be captured as a bogus witness).
-_SECTION_KEYWORDS = frozenset({
-    "Direct", "Cross", "Redirect", "Recross", "Examination",
-    "Voir", "DirectExamination", "CrossExamination",
-})
-_STAGE_RE = re.compile(r"^\((?:Jury|Witness|Recess|Continued|At sidebar|In open court|In open c)[^)]*\)$", re.I)
+_SECTION_KEYWORDS = frozenset(
+    {
+        "Direct",
+        "Cross",
+        "Redirect",
+        "Recross",
+        "Examination",
+        "Voir",
+        "DirectExamination",
+        "CrossExamination",
+    }
+)
+_STAGE_RE = re.compile(
+    r"^\((?:Jury|Witness|Recess|Continued|At sidebar|In open court|In open c)[^)]*\)$",
+    re.I,
+)
 # Examination section headers that are layout, not speech ("CROSS-EXAMINATION",
 # "DIRECT EXAMINATION", "REDIRECT EXAMINATION", "RECROSS EXAMINATION").
 _SECTION_HEADER_RE = re.compile(
-    r"^(?:CROSS|DIRECT|REDIRECT|RECROSS|VOIR DIRE)?[-\s]*(?:EXAMINATION|QUESTIONS BY)\b", re.I
+    r"^(?:CROSS|DIRECT|REDIRECT|RECROSS|VOIR DIRE)?[-\s]*(?:EXAMINATION|QUESTIONS BY)\b",
+    re.I,
 )
 # Summation / Charge section headers carry the speaker in the header itself,
 # e.g. "J5l1dun2   Summation - Ms. Rothman" or "J5m1dun1  Charge". The body is
 # continuous argument/instruction text with NO per-line "NAME:" prefixes, so we
 # attribute the following text to the named speaker (or THE COURT for a Charge).
 _SUMMATION_HEADER_RE = re.compile(
-    r"^(?:[A-Za-z0-9 ]+\s+)?(Summation|Closing Argument|Charge)\s*-\s*([A-Z][A-Za-z .'-]+?)\s*$", re.I
+    r"^(?:[A-Za-z0-9 ]+\s+)?(Summation|Closing Argument|Charge)\s*-\s*([A-Z][A-Za-z .'-]+?)\s*$",
+    re.I,
 )
-_CHARGE_HEADER_RE = re.compile(
-    r"^(?:[A-Za-z0-9 ]+\s+)?Charge\s*$", re.I
-)
+_CHARGE_HEADER_RE = re.compile(r"^(?:[A-Za-z0-9 ]+\s+)?Charge\s*$", re.I)
 # A bare colon-less line that looks like a speaker reference, e.g. "Ms.
 # Al-Shabazz.", "THE COURT.", "Mr. Folly." — short, capitalized, ends in a
 # period, up to ~4 words. If such a line follows a colon-prefixed line from a
@@ -133,7 +145,10 @@ def _is_bare_name_line(line: str) -> bool:
     Ms./Mr./Dr. names are title-case with a single capitalized name word."""
     if _BARE_NAME_ROLE_RE.match(line):
         return True
-    m = re.match(r"^(?:[Mm][Ss]\.|[Mm][Rr]\.|[Mm][Rr][Ss]\.|[Dd][Rr]\.)(?:\s+[A-Z][A-Za-z0-9.'-]*)?\.?$", line)
+    m = re.match(
+        r"^(?:[Mm][Ss]\.|[Mm][Rr]\.|[Mm][Rr][Ss]\.|[Dd][Rr]\.)(?:\s+[A-Z][A-Za-z0-9.'-]*)?\.?$",
+        line,
+    )
     return bool(m)
 
 
@@ -207,12 +222,14 @@ def parse_transcript(text: str, case: str = "", source: str = "") -> TranscriptI
     def flush(*, keep_speaker: bool = False) -> None:
         nonlocal current_speaker, current_buf, current_flags
         if current_speaker and current_buf:
-            idx.passages.append(Passage(
-                speaker=current_speaker,
-                page=current_page,
-                text=" ".join(current_buf).strip(),
-                flags=list(current_flags),
-            ))
+            idx.passages.append(
+                Passage(
+                    speaker=current_speaker,
+                    page=current_page,
+                    text=" ".join(current_buf).strip(),
+                    flags=list(current_flags),
+                )
+            )
         if keep_speaker:
             # Preserve the speaker across a page boundary so CONTINUOUS speech
             # (the Court reading instructions, a summation) keeps flowing into
@@ -326,7 +343,11 @@ def parse_transcript(text: str, case: str = "", source: str = "") -> TranscriptI
                 continue
             # Page-number and volume-id lines ("502", "J591dun1") and page
             # header lines ("J591dun1  Nichols - Cross") are layout, not speech.
-            if _PAGE_NO_RE.match(line) or _VOLUME_ID_RE.match(line) or _PAGE_HEADER_RE.match(line):
+            if (
+                _PAGE_NO_RE.match(line)
+                or _VOLUME_ID_RE.match(line)
+                or _PAGE_HEADER_RE.match(line)
+            ):
                 # A page-header line names the testifying witness ("J5ATDUN1
                 #  Mueller - Cross" -> "Mueller"). Harvest it so the analysis
                 # layer can group passages by witness. The leading page-number/
@@ -382,12 +403,16 @@ def parse_transcript(text: str, case: str = "", source: str = "") -> TranscriptI
     return idx
 
 
-def ingest_transcript_file(path: str | Path, case: str = "", source: str = "") -> TranscriptIndex:
+def ingest_transcript_file(
+    path: str | Path, case: str = "", source: str = ""
+) -> TranscriptIndex:
     """Read a transcript text file (UTF-8) and parse it. Auto-detects the
     SDNY court-reporter format vs the Min-U-Script (transcript-agency) export."""
     p = Path(path)
     text = p.read_text(encoding="utf-8", errors="replace")
-    if "Min-U-Script" in text[:4000] or re.search(r"\bJ\d+[A-Za-z]*\d*(?:VD)?\s*Page\s*\d+", text[:4000]):
+    if "Min-U-Script" in text[:4000] or re.search(
+        r"\bJ\d+[A-Za-z]*\d*(?:VD)?\s*Page\s*\d+", text[:4000]
+    ):
         return parse_minuscript(text, case=case or p.stem, source=str(p))
     return parse_transcript(text, case=case or p.stem, source=str(p))
 
@@ -416,12 +441,14 @@ def parse_minuscript(text: str, case: str = "", source: str = "") -> TranscriptI
     def flush() -> None:
         nonlocal current_speaker, current_buf, current_flags
         if current_speaker and current_buf:
-            idx.passages.append(Passage(
-                speaker=current_speaker,
-                page=current_page,
-                text=" ".join(current_buf).strip(),
-                flags=list(current_flags),
-            ))
+            idx.passages.append(
+                Passage(
+                    speaker=current_speaker,
+                    page=current_page,
+                    text=" ".join(current_buf).strip(),
+                    flags=list(current_flags),
+                )
+            )
         current_speaker = None
         current_buf = []
         current_flags = []
@@ -443,7 +470,7 @@ def parse_minuscript(text: str, case: str = "", source: str = "") -> TranscriptI
             current_page = int(m.group(1))
             # Reconstruct the spoken content: strip the page marker, then split
             # into (lineno, text) runs. The inline line numbers delimit turns.
-            body = line[m.end():]
+            body = line[m.end() :]
             runs = _MINUSCRIPT_LINENO_SPLIT_RE.split(body)
             pieces = []
             for r in runs:

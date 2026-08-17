@@ -4,6 +4,7 @@ Covers the per-attorney profiles, defense-error flags, phone-evidence events,
 and record search — all built on the real trial-transcript parser with the
 "report the record, never assert a legal conclusion" contract.
 """
+
 from __future__ import annotations
 
 from swarm_os.services.legal import trial_advisor as ta
@@ -19,7 +20,11 @@ def _mini_index(day: str = "2019-05-07") -> list:
         "4    THE COURT:  Sustained.\n"
         "5    MR. SCHOLAR:  Regarding Mr. Rainford's notice, your Honor.\n"
     )
-    idx = parse_transcript(f"\n100\nJ591dun1\n\n{body}\n\nSOUTHERN DISTRICT REPORTERS, P.C.\n(212) 805-0300\n", case="US v. Test", source=f"{day}_x.txt")
+    idx = parse_transcript(
+        f"\n100\nJ591dun1\n\n{body}\n\nSOUTHERN DISTRICT REPORTERS, P.C.\n(212) 805-0300\n",
+        case="US v. Test",
+        source=f"{day}_x.txt",
+    )
     return [idx]
 
 
@@ -44,7 +49,10 @@ def test_attorney_profiles_capture_objections():
 def test_defendant_counsel_map_matches_record():
     """The counsel map matches the record's own conduct: Dinnerstein/Cecutti for
     Locust, Al-Shabazz for Duncan, Scholar for Rainford."""
-    assert ta.DEFENDANT_COUNSEL["Robert Locust"] == ["MITCHELL J. DINNERSTEIN", "ANTHONY CECUTTI"]
+    assert ta.DEFENDANT_COUNSEL["Robert Locust"] == [
+        "MITCHELL J. DINNERSTEIN",
+        "ANTHONY CECUTTI",
+    ]
     assert ta.DEFENDANT_COUNSEL["Bryan Duncan"] == ["IKIESHA TAQUET AL-SHABAZZ"]
     assert ta.DEFENDANT_COUNSEL["Ryan Rainford"] == ["CALVIN H. SCHOLAR"]
 
@@ -80,11 +88,18 @@ def test_phone_evidence_event_detected():
         "out.  How much has the government put into evidence and how much has "
         "been left out?\n"
     )
-    idx = parse_transcript(f"\n1518\nJ591dun1\n\n{body}\n\nSOUTHERN DISTRICT REPORTERS, P.C.\n(212) 805-0300\n", case="US v. Test", source="2019-05-20_x.txt")
+    idx = parse_transcript(
+        f"\n1518\nJ591dun1\n\n{body}\n\nSOUTHERN DISTRICT REPORTERS, P.C.\n(212) 805-0300\n",
+        case="US v. Test",
+        source="2019-05-20_x.txt",
+    )
     events = ta.build_phone_evidence_events([idx])
     assert events, "the selective-evidence challenge must be detected"
     assert events[0]["page"] == 1518
-    assert "selectively left out" in events[0]["text"].lower() or "left out" in events[0]["text"].lower()
+    assert (
+        "selectively left out" in events[0]["text"].lower()
+        or "left out" in events[0]["text"].lower()
+    )
 
 
 def test_phone_evidence_event_ignores_non_phone_passage():
@@ -97,7 +112,11 @@ def test_phone_evidence_event_ignores_non_phone_passage():
         "selectively presented its case about the patient falls, the back "
         "surgeries, and the staffing arrangements at the clinic.\n"
     )
-    idx = parse_transcript(f"\n1518\nJ591dun1\n\n{body}\n\nSOUTHERN DISTRICT REPORTERS, P.C.\n(212) 805-0300\n", case="US v. Test", source="2019-05-20_x.txt")
+    idx = parse_transcript(
+        f"\n1518\nJ591dun1\n\n{body}\n\nSOUTHERN DISTRICT REPORTERS, P.C.\n(212) 805-0300\n",
+        case="US v. Test",
+        source="2019-05-20_x.txt",
+    )
     events = ta.build_phone_evidence_events([idx])
     assert events == [], "non-phone selective-evidence passage must not be flagged"
 

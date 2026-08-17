@@ -10,6 +10,7 @@ Degradation is graceful end-to-end (mirrors qdrant_store/reranker): a reranker
 outage returns the dense ordering; an embed failure returns []. The endpoint
 never raises for a degraded dependency — only for genuinely malformed input.
 """
+
 from __future__ import annotations
 
 import logging
@@ -30,8 +31,9 @@ COLLECTION_CASES = "legal_cases"
 TIERS = (1, 2, 3, 4)
 
 
-async def search_statutes(query: str, jurisdiction: str | None = None,
-                          top_k: int = 8, hybrid: bool = True) -> list[dict[str, Any]]:
+async def search_statutes(
+    query: str, jurisdiction: str | None = None, top_k: int = 8, hybrid: bool = True
+) -> list[dict[str, Any]]:
     """Hybrid statute search.
 
     - `jurisdiction` filters to one of ny/nj/ga/nc/federal (None = all scoped).
@@ -46,7 +48,9 @@ async def search_statutes(query: str, jurisdiction: str | None = None,
     if not query or not query.strip():
         return []
     if jurisdiction is not None and jurisdiction not in JURISDICTIONS:
-        raise ValueError(f"jurisdiction must be one of {JURISDICTIONS}, got {jurisdiction!r}")
+        raise ValueError(
+            f"jurisdiction must be one of {JURISDICTIONS}, got {jurisdiction!r}"
+        )
 
     dense_net = max(top_k * 4, 16)  # pull a wider net than the final count
     dense = await _search_with_filter(query, jurisdiction, dense_net)
@@ -69,6 +73,7 @@ async def _hybrid_fuse(query: str, dense: list[dict], net: int) -> list[dict]:
     lexical leg; never raises — on any failure returns the dense order."""
     try:
         from swarm_os.services.legal.hybrid_search import lexical_rank, hybrid_fuse
+
         lexical = lexical_rank(query, dense, text_key="content")
         return hybrid_fuse(dense, lexical, dense_weight=1.0, lexical_weight=1.0)[:net]
     except Exception as exc:
@@ -76,10 +81,15 @@ async def _hybrid_fuse(query: str, dense: list[dict], net: int) -> list[dict]:
         return dense
 
 
-async def search_cases(query: str, tier: int | None = None,
-                       circuit: str | None = None, batson: bool | None = None,
-                       top_k: int = 8, hybrid: bool = True,
-                       expand: bool = True) -> list[dict[str, Any]]:
+async def search_cases(
+    query: str,
+    tier: int | None = None,
+    circuit: str | None = None,
+    batson: bool | None = None,
+    top_k: int = 8,
+    hybrid: bool = True,
+    expand: bool = True,
+) -> list[dict[str, Any]]:
     """Hybrid case-law search over the `legal_cases` collection.
 
     - `tier` filters to a manifest tier (1 controlling / 2 backbone / 3 context /
@@ -137,7 +147,9 @@ async def _graph_expand_results(results: list[dict], top_k: int) -> list[dict]:
     results unchanged (never raises)."""
     try:
         from swarm_os.services.legal.case_graph import (
-            build_case_graph, graph_expand, case_citation_key,
+            build_case_graph,
+            graph_expand,
+            case_citation_key,
         )
         from swarm_os.services.legal.case_corpus import CASE_MANIFEST
         from qdrant_client import AsyncQdrantClient
@@ -163,13 +175,16 @@ async def _graph_expand_results(results: list[dict], top_k: int) -> list[dict]:
         offset: Any = None
         chunks: list = []
         while True:
-            resp = await client.scroll(COLLECTION_CASES, limit=2000,
-                                       with_payload=True, offset=offset)
+            resp = await client.scroll(
+                COLLECTION_CASES, limit=2000, with_payload=True, offset=offset
+            )
             for point in resp[0]:
-                chunks.append({
-                    "id": getattr(point, "id", None),
-                    "payload": getattr(point, "payload", None),
-                })
+                chunks.append(
+                    {
+                        "id": getattr(point, "id", None),
+                        "payload": getattr(point, "payload", None),
+                    }
+                )
             if resp[1] is None:
                 break
             offset = resp[1]
@@ -184,8 +199,9 @@ async def _graph_expand_results(results: list[dict], top_k: int) -> list[dict]:
     for r in results:
         k = case_citation_key(str(r.get("citation") or ""))
         r["graph_cited_by_count"] = int(G.in_degree(k)) if (k and k in G) else 0
-    expanded_keys = graph_expand(G, seed_keys, depth=1, max_nodes=max(top_k, 4),
-                                 include_seeds=False)
+    expanded_keys = graph_expand(
+        G, seed_keys, depth=1, max_nodes=max(top_k, 4), include_seeds=False
+    )
     if not expanded_keys:
         return results
 
@@ -202,22 +218,25 @@ async def _graph_expand_results(results: list[dict], top_k: int) -> list[dict]:
         if not payload or payload.get("cite") in seen_cites:
             continue
         seen_cites.add(payload.get("cite"))
-        results.append({
-            "id": None, "score": None,
-            "citation": payload.get("cite", ""),
-            "section_title": payload.get("case_name", ""),
-            "content": payload.get("content", ""),
-            "court": payload.get("court", ""),
-            "circuit": payload.get("circuit", ""),
-            "year": payload.get("year", 0),
-            "issues": list(payload.get("issues") or []),
-            "tier": payload.get("tier", 0),
-            "batson": bool(payload.get("batson")),
-            "chunk_index": payload.get("chunk_index", 0),
-            "chunk_count": payload.get("chunk_count", 0),
-            "graph_expanded": True,
-            "graph_cited_by_count": int(G.in_degree(key)),
-        })
+        results.append(
+            {
+                "id": None,
+                "score": None,
+                "citation": payload.get("cite", ""),
+                "section_title": payload.get("case_name", ""),
+                "content": payload.get("content", ""),
+                "court": payload.get("court", ""),
+                "circuit": payload.get("circuit", ""),
+                "year": payload.get("year", 0),
+                "issues": list(payload.get("issues") or []),
+                "tier": payload.get("tier", 0),
+                "batson": bool(payload.get("batson")),
+                "chunk_index": payload.get("chunk_index", 0),
+                "chunk_count": payload.get("chunk_count", 0),
+                "graph_expanded": True,
+                "graph_cited_by_count": int(G.in_degree(key)),
+            }
+        )
     return results
 
 
@@ -243,7 +262,9 @@ def _case_result(point: dict) -> dict[str, Any]:
     }
 
 
-async def _search_cases_with_filter(query: str, qfilter: dict | None, top_k: int) -> list[dict]:
+async def _search_cases_with_filter(
+    query: str, qfilter: dict | None, top_k: int
+) -> list[dict]:
     """Dense search over legal_cases with an optional payload filter (same
     embed + query_points shape as _search_with_filter)."""
     try:
@@ -269,8 +290,11 @@ async def _search_cases_with_filter(query: str, qfilter: dict | None, top_k: int
         )
         points = getattr(response, "points", response)
         return [
-            {"id": getattr(p, "id", None), "score": getattr(p, "score", None),
-             "payload": getattr(p, "payload", None)}
+            {
+                "id": getattr(p, "id", None),
+                "score": getattr(p, "score", None),
+                "payload": getattr(p, "payload", None),
+            }
             for p in (points or [])
         ]
     except Exception as exc:
@@ -280,7 +304,9 @@ async def _search_cases_with_filter(query: str, qfilter: dict | None, top_k: int
         await client.close()
 
 
-async def _search_with_filter(query: str, jurisdiction: str | None, top_k: int) -> list[dict]:
+async def _search_with_filter(
+    query: str, jurisdiction: str | None, top_k: int
+) -> list[dict]:
     """Dense search over legal_statutes with an optional jurisdiction filter.
 
     The repo's qdrant_store.search doesn't accept a filter, so we implement the
@@ -309,12 +335,17 @@ async def _search_with_filter(query: str, jurisdiction: str | None, top_k: int) 
             query=vector,
             limit=top_k,
             with_payload=True,
-            query_filter={"must": [{"key": "jurisdiction", "match": {"value": jurisdiction}}]},
+            query_filter={
+                "must": [{"key": "jurisdiction", "match": {"value": jurisdiction}}]
+            },
         )
         points = getattr(response, "points", response)
         return [
-            {"id": getattr(p, "id", None), "score": getattr(p, "score", None),
-             "payload": getattr(p, "payload", None)}
+            {
+                "id": getattr(p, "id", None),
+                "score": getattr(p, "score", None),
+                "payload": getattr(p, "payload", None),
+            }
             for p in (points or [])
         ]
     except Exception as exc:

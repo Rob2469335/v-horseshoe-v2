@@ -15,6 +15,7 @@ NOT wired into email_service yet for Gmail API sends (that needs the Gmail API,
 not just SMTP) — this is the SMTP/IMAP XOAUTH2 path. Gmail API send is a
 documented follow-up if needed.
 """
+
 from __future__ import annotations
 
 import json
@@ -61,6 +62,7 @@ def get_valid_token(account_name: str, cfg: dict) -> str | None:
         _save_token(account_name, token)
         return token.get("access_token")
     import time
+
     expires_at = token.get("expires_at", 0)
     if time.time() > expires_at - 60:
         refreshed = _refresh(account_name, cfg, token)
@@ -82,6 +84,7 @@ def _run_flow(account_name: str, cfg: dict) -> dict | None:
         return None
 
     received: dict = {}
+
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             q = urllib.parse.urlparse(self.path).query
@@ -91,8 +94,11 @@ def _run_flow(account_name: str, cfg: dict) -> dict | None:
             self.send_response(200)
             self.send_header("Content-Type", "text/html")
             self.end_headers()
-            self.wfile.write(b"<html><body><h3>Authorization received.</h3>"
-                             b"<p>You can close this tab and return to the console.</p></body></html>")
+            self.wfile.write(
+                b"<html><body><h3>Authorization received.</h3>"
+                b"<p>You can close this tab and return to the console.</p></body></html>"
+            )
+
         def log_message(self, *args):  # silence
             pass
 
@@ -101,9 +107,11 @@ def _run_flow(account_name: str, cfg: dict) -> dict | None:
     thread.start()
 
     state = urllib.parse.quote(account_name)
-    authorize_url = (f"{auth_url_tpl}?client_id={urllib.parse.quote(client_id)}"
-                     f"&redirect_uri={urllib.parse.quote(f'http://127.0.0.1:{redirect_port}/')}"
-                     f"&response_type=code&scope={urllib.parse.quote(scopes)}&state={state}")
+    authorize_url = (
+        f"{auth_url_tpl}?client_id={urllib.parse.quote(client_id)}"
+        f"&redirect_uri={urllib.parse.quote(f'http://127.0.0.1:{redirect_port}/')}"
+        f"&response_type=code&scope={urllib.parse.quote(scopes)}&state={state}"
+    )
     if "accounts.google.com" in auth_url_tpl:
         # Google only returns a refresh_token with offline access; without it the
         # 1-hour access token expires and the user must re-consent every time.
@@ -115,6 +123,7 @@ def _run_flow(account_name: str, cfg: dict) -> dict | None:
 
     deadline = 180
     import time
+
     start = time.time()
     while time.time() - start < deadline and "code" not in received:
         time.sleep(0.5)
@@ -126,13 +135,15 @@ def _run_flow(account_name: str, cfg: dict) -> dict | None:
         return None
 
     # Exchange code for token.
-    body = urllib.parse.urlencode({
-        "code": code,
-        "client_id": client_id,
-        "client_secret": cfg.get("oauth2_client_secret", ""),
-        "redirect_uri": f"http://127.0.0.1:{redirect_port}/",
-        "grant_type": "authorization_code",
-    }).encode()
+    body = urllib.parse.urlencode(
+        {
+            "code": code,
+            "client_id": client_id,
+            "client_secret": cfg.get("oauth2_client_secret", ""),
+            "redirect_uri": f"http://127.0.0.1:{redirect_port}/",
+            "grant_type": "authorization_code",
+        }
+    ).encode()
     req = urllib.request.Request(token_url, data=body)
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
@@ -149,15 +160,18 @@ def _refresh(account_name: str, cfg: dict, token: dict) -> dict | None:
     token_url = cfg.get("oauth2_token_url")
     if not refresh_token or not token_url:
         return None
-    body = urllib.parse.urlencode({
-        "refresh_token": refresh_token,
-        "client_id": cfg.get("oauth2_client_id", ""),
-        "client_secret": cfg.get("oauth2_client_secret", ""),
-        "grant_type": "refresh_token",
-    }).encode()
+    body = urllib.parse.urlencode(
+        {
+            "refresh_token": refresh_token,
+            "client_id": cfg.get("oauth2_client_id", ""),
+            "client_secret": cfg.get("oauth2_client_secret", ""),
+            "grant_type": "refresh_token",
+        }
+    ).encode()
     req = urllib.request.Request(token_url, data=body)
     try:
         import time
+
         with urllib.request.urlopen(req, timeout=30) as resp:
             tok = json.loads(resp.read().decode())
         tok["refresh_token"] = refresh_token  # keep the original refresh token

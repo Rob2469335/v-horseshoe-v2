@@ -174,7 +174,9 @@ def test_api_username_endpoints(monkeypatch, tmp_path):
         r = c.get("/chess/trainer/import/chesscom/username")
         assert r.status_code == 200
         assert r.json()["username"] is None
-        r = c.post("/chess/trainer/import/chesscom/username", json={"username": "Lilrob2"})
+        r = c.post(
+            "/chess/trainer/import/chesscom/username", json={"username": "Lilrob2"}
+        )
         assert r.status_code == 200
         assert r.json()["username"] == "lilrob2"
         r = c.get("/chess/trainer/import/chesscom/username")

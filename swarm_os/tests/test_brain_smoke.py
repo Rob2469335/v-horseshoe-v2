@@ -8,6 +8,6 @@ def test_brain_module_imports():
 @pytest.mark.anyio
 async def test_orchestrator_evolve_smoke():
     from swarm_os.services.orchestrator import Orchestrator
+
     o = Orchestrator()
     await o.evolve()
-

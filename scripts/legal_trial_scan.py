@@ -18,6 +18,7 @@ The output is structured so a reader can always tell the difference between
 Usage:
   python scripts/legal_trial_scan.py [--day YYYY-MM-DD] [--json out.json]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -86,16 +87,24 @@ def scan(day: str | None = None) -> dict:
 
     # 6. Targeted searches
     report["targeted_searches"] = {}
-    for term in ["Brady", "chain of custody", "the phone was powered",
-                 "deleted", "selectively left out", "read and delete"]:
+    for term in [
+        "Brady",
+        "chain of custody",
+        "the phone was powered",
+        "deleted",
+        "selectively left out",
+        "read and delete",
+    ]:
         report["targeted_searches"][term] = search_record(idx, term, limit=6)
     return report
 
 
 def render(report: dict) -> str:
     lines = []
-    lines.append(f"Trial fault scan — {report['loaded_days']} days, "
-                 f"{report['total_passages']} passages")
+    lines.append(
+        f"Trial fault scan — {report['loaded_days']} days, "
+        f"{report['total_passages']} passages"
+    )
     lines.append("")
 
     lines.append("=" * 70)
@@ -103,8 +112,10 @@ def render(report: dict) -> str:
     lines.append("=" * 70)
     for key, p in report["attorneys"].items():
         lines.append(f"\n{p['name']} — represents {p['represents']}")
-        lines.append(f"  words={p['words']:,}  objections={p['objections']}  "
-                     f"exams={p['examinations']}  pages={p['page_range']}")
+        lines.append(
+            f"  words={p['words']:,}  objections={p['objections']}  "
+            f"exams={p['examinations']}  pages={p['page_range']}"
+        )
 
     lines.append("\n" + "=" * 70)
     lines.append("2. DEFENSE OBJECTIONS (preserved-error potential)")

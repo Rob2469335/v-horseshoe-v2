@@ -5,6 +5,7 @@ is missing, the directory-level self-modify block, and the DEPENDENCY-AWARE
 self-modify block (a file the repair machinery imports is off-limits even if it
 lives in an allowed directory).
 """
+
 from pathlib import Path
 
 import pytest
@@ -54,7 +55,10 @@ def test_policy_blocks_machinery_dependency_aware(policy):
     root = policy.repo_root
     assert not policy.is_repairable(root / "swarm_os/memory/memory_bridge.py")
     assert not policy.is_repairable(root / "swarm_os/services/vector_store.py")
-    assert str((root / "swarm_os/services/vector_store.py").resolve()) in policy.self_modify_files
+    assert (
+        str((root / "swarm_os/services/vector_store.py").resolve())
+        in policy.self_modify_files
+    )
 
 
 def test_policy_is_repairable_fails_closed_on_none():

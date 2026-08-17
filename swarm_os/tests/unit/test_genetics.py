@@ -2,8 +2,12 @@
 import unittest
 import random
 from swarm_os.kernel.genetics_compat import (
-    Genome, CognitivePolicy, MCP_TOOL_REGISTRY,
-    mutate, crossover, normalize_affinities,
+    Genome,
+    CognitivePolicy,
+    MCP_TOOL_REGISTRY,
+    mutate,
+    crossover,
+    normalize_affinities,
 )
 
 
@@ -17,10 +21,15 @@ class TestGenomeCopy(unittest.TestCase):
 
     def test_copy_resets_fitness(self):
         g = Genome()
-        g.record_fitness({"composite": 0.9, "quality": 0.9, "speed": 0.9, "efficiency": 0.9})
+        g.record_fitness(
+            {"composite": 0.9, "quality": 0.9, "speed": 0.9, "efficiency": 0.9}
+        )
         c = g.copy("p")
         self.assertEqual(c.evaluations, 0)
-        self.assertEqual(c.lifetime_fitness, {"composite": 0.0, "quality": 0.0, "speed": 0.0, "efficiency": 0.0})
+        self.assertEqual(
+            c.lifetime_fitness,
+            {"composite": 0.0, "quality": 0.0, "speed": 0.0, "efficiency": 0.0},
+        )
 
     def test_copy_deep_copies_cognition(self):
         g = Genome()
@@ -93,8 +102,10 @@ class TestMutate(unittest.TestCase):
 class TestFromDict(unittest.TestCase):
     def test_round_trip(self):
         g = Genome(model_tier=0.7, temperature=0.3)
-        g.record_fitness({"composite": 0.8, "quality": 0.8, "speed": 0.8, "efficiency": 0.8})
-        d  = g.to_dict()
+        g.record_fitness(
+            {"composite": 0.8, "quality": 0.8, "speed": 0.8, "efficiency": 0.8}
+        )
+        d = g.to_dict()
         g2 = Genome.from_dict(d)
         self.assertAlmostEqual(g2.model_tier, 0.7)
         self.assertAlmostEqual(g2.temperature, 0.3)
@@ -114,7 +125,3 @@ class TestFromDict(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-
-
-

@@ -14,16 +14,31 @@ class SelfHealingOrchestrator:
         if not self.healed:
             self.healed = True
             return [
-                {"event": "failure_detected", "detail": "primary runtime orchestrator unavailable"},
-                {"event": "repair_applied", "detail": "fell back to app.state.orchestrator"},
+                {
+                    "event": "failure_detected",
+                    "detail": "primary runtime orchestrator unavailable",
+                },
+                {
+                    "event": "repair_applied",
+                    "detail": "fell back to app.state.orchestrator",
+                },
                 {"event": "verification_passed", "detail": "trace retrieval recovered"},
             ][:limit]
 
         return [
-            {"event": "failure_detected", "detail": "primary runtime orchestrator unavailable"},
-            {"event": "repair_applied", "detail": "fell back to app.state.orchestrator"},
+            {
+                "event": "failure_detected",
+                "detail": "primary runtime orchestrator unavailable",
+            },
+            {
+                "event": "repair_applied",
+                "detail": "fell back to app.state.orchestrator",
+            },
             {"event": "verification_passed", "detail": "trace retrieval recovered"},
-            {"event": "repair_retained", "detail": "subsequent request reused healed path"},
+            {
+                "event": "repair_retained",
+                "detail": "subsequent request reused healed path",
+            },
         ][:limit]
 
 

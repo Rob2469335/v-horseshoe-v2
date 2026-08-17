@@ -19,10 +19,19 @@ from swarm_os.repositories.event_log_repo import EventLogRepository
 from swarm_os.repositories.graph_repo import GraphRepository
 from swarm_os.services.memory_daemon import MemoryDaemon
 from swarm_os.memory._memory_bridge_base import (
-    CHUNK_SIZE, SESSION_WINDOW, DEDUP_WINDOW,
-    LLAMA_EMB, LLAMA_SUMM, SUM_MODEL, EMBED_MODEL, VECTOR_SIZE,
-    DECAY, FLUSH_TRIGGERS, EVENT_TYPE_KEYS,
-    Session, Bias,
+    CHUNK_SIZE,
+    SESSION_WINDOW,
+    DEDUP_WINDOW,
+    LLAMA_EMB,
+    LLAMA_SUMM,
+    SUM_MODEL,
+    EMBED_MODEL,
+    VECTOR_SIZE,
+    DECAY,
+    FLUSH_TRIGGERS,
+    EVENT_TYPE_KEYS,
+    Session,
+    Bias,
 )
 
 logger = logging.getLogger(__name__)
@@ -39,11 +48,9 @@ class MemoryBridge:
         self.event_repo = EventLogRepository(
             event_log_path=event_log_path,
             watermark_path="logs/.memory_bridge_offset.json",
-            state_path="logs/.memory_bridge_state.json"
+            state_path="logs/.memory_bridge_state.json",
         )
-        self.graph_repo = GraphRepository(
-            graph_path="logs/memory_graph.graphml"
-        )
+        self.graph_repo = GraphRepository(graph_path="logs/memory_graph.graphml")
 
         self.vs = vector_store or VectorStore(
             collection_name="swarm_memory",
@@ -56,7 +63,9 @@ class MemoryBridge:
             model=EMBED_MODEL,
         )
 
-        self.http = httpx.AsyncClient(timeout=120.0, headers={"Authorization": "Bearer llama"})
+        self.http = httpx.AsyncClient(
+            timeout=120.0, headers={"Authorization": "Bearer llama"}
+        )
 
         self.offset = self.event_repo.load_offset()
         self.state = self.event_repo.load_state()
@@ -71,16 +80,18 @@ class MemoryBridge:
         # surface exceptions instead of silently vanishing (silent memory data loss).
         self._bg_tasks: set[asyncio.Task] = set()
         from collections import OrderedDict
+
         class LRUCache(OrderedDict):
             def __init__(self, maxsize=1000, *args, **kwds):
                 self.maxsize = maxsize
                 super().__init__(*args, **kwds)
+
             def __setitem__(self, key, value):
                 super().__setitem__(key, value)
                 if len(self) > self.maxsize:
                     oldest = next(iter(self))
                     del self[oldest]
-                    
+
         self.embedding_cache: Dict[str, list] = LRUCache(maxsize=1000)
 
         self.policy: Dict[str, Dict[str, float]] = self.state
@@ -90,7 +101,9 @@ class MemoryBridge:
         # load the WHOLE events.jsonl into memory on every boot. Cap to the most
         # recent events; the offset still advances past everything so nothing is
         # re-read, and memory stays bounded.
-        events, new_offset = await asyncio.to_thread(self.event_repo.read_events, self.offset, 5000)
+        events, new_offset = await asyncio.to_thread(
+            self.event_repo.read_events, self.offset, 5000
+        )
 
         if not events:
             if flush_tail and self.session.events:
@@ -125,7 +138,9 @@ class MemoryBridge:
 
         return flushed
 
-    async def watch_loop(self, interval_seconds: float = 5.0, flush_tail: bool = False) -> None:
+    async def watch_loop(
+        self, interval_seconds: float = 5.0, flush_tail: bool = False
+    ) -> None:
         # BUG FIX: Removed internal start_manager_daemon() spawn here — main.py already
         # starts the consolidation daemon explicitly. Two daemons caused duplicate
         # consolidated points and double LLM summarization cost.
@@ -138,21 +153,39 @@ class MemoryBridge:
                 await asyncio.sleep(interval_seconds)
         finally:
             await self.close()
-            
+
     async def start_manager_daemon(self, interval_seconds: float = 300.0) -> None:
         daemon = MemoryDaemon(self, interval_seconds)
         await daemon.start()
-            
+
     def _add(self, event: Dict[str, Any]) -> None:
         # BUG FIX: Events written by agent_service_v2 use EventEnvelope, which nests
         # model/task_id/outcome/status inside `payload`. Reading top-level keys only
         # produced model="unknown", outcome="" and task="" for every event, so Qdrant
         # entries carried no usable metadata and the swarm memory stayed empty.
         pl = event.get("payload") if isinstance(event.get("payload"), dict) else {}
-        model = str(event.get("model") or pl.get("model") or event.get("assigned_to") or pl.get("assigned_to") or "unknown")
-        outcome = str(event.get("outcome") or pl.get("outcome") or event.get("status") or pl.get("status") or "")
+        model = str(
+            event.get("model")
+            or pl.get("model")
+            or event.get("assigned_to")
+            or pl.get("assigned_to")
+            or "unknown"
+        )
+        outcome = str(
+            event.get("outcome")
+            or pl.get("outcome")
+            or event.get("status")
+            or pl.get("status")
+            or ""
+        )
         et = self._extract_event_type(event)
-        task = str(event.get("task_id") or pl.get("task_id") or event.get("goal_id") or pl.get("goal_id") or "")
+        task = str(
+            event.get("task_id")
+            or pl.get("task_id")
+            or event.get("goal_id")
+            or pl.get("goal_id")
+            or ""
+        )
 
         self.session.events.append(event)
         self.session.models.append(model)
@@ -166,28 +199,26 @@ class MemoryBridge:
         task_node = f"Task_{task}" if task else "Task_unknown"
         tool_node = f"Tool_{et}"
         outcome_node = f"Outcome_{outcome}" if outcome else "Outcome_unknown"
-        
+
         now = time.time()
         ts = str(now)
-        
-        self._spawn(self.graph_repo.add_session_data(
-            session_node, agent_node, task_node, tool_node, outcome_node
-        ))
+
+        self._spawn(
+            self.graph_repo.add_session_data(
+                session_node, agent_node, task_node, tool_node, outcome_node
+            )
+        )
 
         # Epistemic Logic (Theory of Mind)
         details = str(event.get("details", "")).lower()
         if "found" in details or "discovered" in details or "learned" in details:
             fact_node = f"Fact_{hashlib.sha256(details.encode()).hexdigest()[:8]}"
-            self._spawn(self.graph_repo.add_fact(
-                fact_node, agent_node, details, ts
-            ))
+            self._spawn(self.graph_repo.add_fact(fact_node, agent_node, details, ts))
 
         delegated_to = event.get("delegated_to")
         if delegated_to:
             receiver_node = f"Agent_{delegated_to}"
-            self._spawn(self.graph_repo.add_delegation(
-                receiver_node, agent_node, ts
-            ))
+            self._spawn(self.graph_repo.add_delegation(receiver_node, agent_node, ts))
 
         self._update_policy(model, et, outcome)
 
@@ -210,7 +241,13 @@ class MemoryBridge:
         key = f"{model}:{et}"
         state = self.policy.setdefault(
             key,
-            {"fail": 0.0, "success": 0.0, "weight": 1.0, "confidence": 0.0, "last": time.time()},
+            {
+                "fail": 0.0,
+                "success": 0.0,
+                "weight": 1.0,
+                "confidence": 0.0,
+                "last": time.time(),
+            },
         )
 
         now = time.time()
@@ -240,7 +277,9 @@ class MemoryBridge:
         total = fail + success
 
         rate = fail / total if total else 0.0
-        conf = float(s.get("confidence", min(1.0, math.log1p(total) / 5.0) if total else 0.0))
+        conf = float(
+            s.get("confidence", min(1.0, math.log1p(total) / 5.0) if total else 0.0)
+        )
         weight = float(s.get("weight", 1.0))
 
         return Bias(
@@ -277,16 +316,21 @@ class MemoryBridge:
             vec = await self._embed(query)
             if vec is not None:
                 from qdrant_client.models import Filter, FieldCondition, MatchValue
+
                 async with self.lock_vector:
                     results = await self.vs.search(
                         query_vector=vec,
                         limit=top_k,
                         filter_condition=Filter(
                             must=[
-                                FieldCondition(key="types", match=MatchValue(value=event_type)),
-                                FieldCondition(key="models", match=MatchValue(value=model))
+                                FieldCondition(
+                                    key="types", match=MatchValue(value=event_type)
+                                ),
+                                FieldCondition(
+                                    key="models", match=MatchValue(value=model)
+                                ),
                             ]
-                        )
+                        ),
                     )
         except Exception as exc:
             logger.warning("routing hint search error: %s", exc)
@@ -297,7 +341,9 @@ class MemoryBridge:
             for candidate in payload.get("models", []) or []:
                 if candidate and candidate != model:
                     fr = float(payload.get("failure_rate", 0.5))
-                    model_scores[candidate] = model_scores.get(candidate, 0.0) + (1.0 - fr)
+                    model_scores[candidate] = model_scores.get(candidate, 0.0) + (
+                        1.0 - fr
+                    )
 
         best_alt = max(model_scores, key=lambda m: model_scores[m], default="")
 
@@ -332,14 +378,28 @@ class MemoryBridge:
                 vec = await self._embed(text)
                 if vec is None:
                     continue
-                pl = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+                pl = (
+                    event.get("payload")
+                    if isinstance(event.get("payload"), dict)
+                    else {}
+                )
                 payload = {
                     "session": self.session.id,
                     "text": text,
                     "event_type": self._extract_event_type(event),
-                    "model": str(event.get("model") or pl.get("model") or self.session.models[-1] if self.session.models else "unknown"),
+                    "model": str(
+                        event.get("model") or pl.get("model") or self.session.models[-1]
+                        if self.session.models
+                        else "unknown"
+                    ),
                     "task_id": str(event.get("task_id") or pl.get("task_id") or ""),
-                    "outcome": str(event.get("outcome") or pl.get("outcome") or event.get("status") or pl.get("status") or ""),
+                    "outcome": str(
+                        event.get("outcome")
+                        or pl.get("outcome")
+                        or event.get("status")
+                        or pl.get("status")
+                        or ""
+                    ),
                     "failure_rate": round(failure_rate, 3),
                     "dominant_outcome": "failure" if failure_rate > 0.5 else "success",
                     "source": "memory_bridge_v12",
@@ -355,18 +415,23 @@ class MemoryBridge:
         if summary:
             vec = await self._embed(summary)
             if vec:
-                await self._store(vec, {
-                    "session": self.session.id,
-                    "summary": summary,
-                    "models": list(dict.fromkeys(self.session.models)),
-                    "types": list(dict.fromkeys(self.session.types)),
-                    "tasks": list(dict.fromkeys(self.session.tasks)),
-                    "event_count": len(self.session.events),
-                    "failure_rate": round(failure_rate, 3),
-                    "dominant_outcome": "failure" if failure_rate > 0.5 else "success",
-                    "source": "memory_bridge_v12_summary",
-                    "indexed_at": time.time(),
-                })
+                await self._store(
+                    vec,
+                    {
+                        "session": self.session.id,
+                        "summary": summary,
+                        "models": list(dict.fromkeys(self.session.models)),
+                        "types": list(dict.fromkeys(self.session.types)),
+                        "tasks": list(dict.fromkeys(self.session.tasks)),
+                        "event_count": len(self.session.events),
+                        "failure_rate": round(failure_rate, 3),
+                        "dominant_outcome": "failure"
+                        if failure_rate > 0.5
+                        else "success",
+                        "source": "memory_bridge_v12_summary",
+                        "indexed_at": time.time(),
+                    },
+                )
 
         await self.graph_repo.save()
         return stored > 0
@@ -385,7 +450,12 @@ class MemoryBridge:
         action = pl.get("action") or event.get("action")
         if action:
             parts.append(f"action={action}")
-        outcome = pl.get("outcome") or pl.get("status") or event.get("outcome") or event.get("status")
+        outcome = (
+            pl.get("outcome")
+            or pl.get("status")
+            or event.get("outcome")
+            or event.get("status")
+        )
         if outcome:
             parts.append(f"outcome={outcome}")
         text = " | ".join(p for p in parts if p)
@@ -423,12 +493,19 @@ class MemoryBridge:
         try:
             snippet = json.dumps(self.session.events[-CHUNK_SIZE:], ensure_ascii=False)
             if self.http.is_closed:
-                self.http = httpx.AsyncClient(timeout=120.0, headers={"Authorization": "Bearer llama"})
+                self.http = httpx.AsyncClient(
+                    timeout=120.0, headers={"Authorization": "Bearer llama"}
+                )
             response = await self.http.post(
                 f"{LLAMA_SUMM}/v1/chat/completions",
                 json={
                     "model": SUM_MODEL,
-                    "messages": [{"role": "user", "content": f"Summarize in one sentence:\n{snippet}"}],
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": f"Summarize in one sentence:\n{snippet}",
+                        }
+                    ],
                     "stream": False,
                     "temperature": 0.0,
                     "max_tokens": 500,
@@ -524,17 +601,17 @@ class MemoryBridge:
             for hit in results:
                 payload = hit.get("payload", {}) or {}
                 summary = payload.get("summary", "")
-                
+
                 boost = 0.0
                 summary_words = set(summary.lower().split())
                 matching_words = query_words & summary_words
                 if matching_words:
                     boost += len(matching_words) * 0.05
-                
+
                 outcome = payload.get("dominant_outcome", "").lower()
                 if outcome and outcome in query.lower():
                     boost += 0.1
-                
+
                 score = hit.get("score", 0.0) + boost
                 boosted_results.append((score, hit))
 
@@ -548,23 +625,34 @@ class MemoryBridge:
                 models = payload.get("models", [])
                 outcome = payload.get("dominant_outcome", "unknown")
                 session_id = payload.get("session", "")
-                
+
                 if summary:
-                    context_parts.append(f"- Summary: {summary} (Models: {', '.join(models)}, Outcome: {outcome})")
-                
+                    context_parts.append(
+                        f"- Summary: {summary} (Models: {', '.join(models)}, Outcome: {outcome})"
+                    )
+
                 if session_id:
                     session_node = f"Session_{session_id}"
-                    paths = await asyncio.to_thread(self.graph_repo.get_session_paths, session_node, limit=15)
+                    paths = await asyncio.to_thread(
+                        self.graph_repo.get_session_paths, session_node, limit=15
+                    )
                     paths_str = []
                     for u, v, rel, score_u, score_v in paths:
-                        if score_u > 0.01 or score_v > 0.01 or "Community" in v or "Community" in u:
-                            paths_str.append(f"  * {u} -> {rel} -> {v} [Importance: {score_v:.4f}]")
+                        if (
+                            score_u > 0.01
+                            or score_v > 0.01
+                            or "Community" in v
+                            or "Community" in u
+                        ):
+                            paths_str.append(
+                                f"  * {u} -> {rel} -> {v} [Importance: {score_v:.4f}]"
+                            )
                         else:
                             paths_str.append(f"  * {u} -> {rel} -> {v}")
                     if paths_str:
                         context_parts.append("  [GraphRAG Subgraph Context]:")
                         context_parts.extend(list(dict.fromkeys(paths_str))[:10])
-            
+
             return "\n".join(context_parts) + "\n"
         except Exception as e:
             logger.warning("Failed to retrieve memory context: %s", e)
@@ -577,6 +665,7 @@ class MemoryBridge:
         """
         try:
             from qdrant_client.models import Filter, FieldCondition, MatchValue
+
             async with self.lock_vector:
                 records, _ = await self.vs.client.scroll(
                     collection_name=self.vs.collection_name,
@@ -585,9 +674,11 @@ class MemoryBridge:
                     with_vectors=False,
                     scroll_filter=Filter(
                         must_not=[
-                            FieldCondition(key="consolidated", match=MatchValue(value=True))
+                            FieldCondition(
+                                key="consolidated", match=MatchValue(value=True)
+                            )
                         ]
-                    )
+                    ),
                 )
             if not records or len(records) < 3:
                 return False
@@ -605,11 +696,15 @@ class MemoryBridge:
                 if len(items) < 2:
                     continue
 
-                summaries = [it.payload.get("summary", "") for it in items if it.payload.get("summary")]
+                summaries = [
+                    it.payload.get("summary", "")
+                    for it in items
+                    if it.payload.get("summary")
+                ]
                 combined_text = " | ".join(summaries)
-                
+
                 prompt = f"Summarize these agent swarm run summaries into a single cohesive sentence summarizing the outcome '{outcome}':\n{combined_text}"
-                
+
                 try:
                     response = await self.http.post(
                         f"{LLAMA_SUMM}/v1/chat/completions",
@@ -623,18 +718,32 @@ class MemoryBridge:
                         timeout=60.0,
                     )
                     response.raise_for_status()
-                    new_summary = (response.json()["choices"][0]["message"]["content"] or "").strip()
+                    new_summary = (
+                        response.json()["choices"][0]["message"]["content"] or ""
+                    ).strip()
                 except (httpx.ReadError, httpx.ReadTimeout) as exc:
                     # Single llama.cpp slot often busy with a main-agent generation.
                     # Slot-busy is expected, not an error — log at debug and fall back
                     # to a concatenated summary instead of a noisy traceback.
-                    logger.debug("consolidation LLM skipped (slot busy) for outcome '%s': %r", outcome, exc)
-                    new_summary = f"Consolidated summary for {len(items)} runs with outcome {outcome}: " + ", ".join(summaries[:3])
+                    logger.debug(
+                        "consolidation LLM skipped (slot busy) for outcome '%s': %r",
+                        outcome,
+                        exc,
+                    )
+                    new_summary = (
+                        f"Consolidated summary for {len(items)} runs with outcome {outcome}: "
+                        + ", ".join(summaries[:3])
+                    )
                 except Exception as exc:
                     # BUG FIX: was silently swallowing LLM HTTP failures with no log,
                     # causing 'Memory consolidation failed:' with blank message.
-                    logger.exception("consolidation LLM failed for outcome '%s': %s", outcome, exc)
-                    new_summary = f"Consolidated summary for {len(items)} runs with outcome {outcome}: " + ", ".join(summaries[:3])
+                    logger.exception(
+                        "consolidation LLM failed for outcome '%s': %s", outcome, exc
+                    )
+                    new_summary = (
+                        f"Consolidated summary for {len(items)} runs with outcome {outcome}: "
+                        + ", ".join(summaries[:3])
+                    )
 
                 vec = await self._embed(new_summary)
                 if vec is None:
@@ -643,10 +752,24 @@ class MemoryBridge:
                 payload = {
                     "summary": new_summary,
                     "dominant_outcome": outcome,
-                    "models": list(dict.fromkeys(sum([it.payload.get("models", []) for it in items], []))),
-                    "types": list(dict.fromkeys(sum([it.payload.get("types", []) for it in items], []))),
-                    "tasks": list(dict.fromkeys(sum([it.payload.get("tasks", []) for it in items], []))),
-                    "event_count": sum([it.payload.get("event_count", 0) for it in items]),
+                    "models": list(
+                        dict.fromkeys(
+                            sum([it.payload.get("models", []) for it in items], [])
+                        )
+                    ),
+                    "types": list(
+                        dict.fromkeys(
+                            sum([it.payload.get("types", []) for it in items], [])
+                        )
+                    ),
+                    "tasks": list(
+                        dict.fromkeys(
+                            sum([it.payload.get("tasks", []) for it in items], [])
+                        )
+                    ),
+                    "event_count": sum(
+                        [it.payload.get("event_count", 0) for it in items]
+                    ),
                     "consolidated": True,
                     "source": "memory_bridge_consolidator",
                     "indexed_at": time.time(),
@@ -655,11 +778,12 @@ class MemoryBridge:
                 success = await self._store(vec, payload)
                 if success:
                     from qdrant_client.models import PointIdsList
+
                     async with self.lock_vector:
                         point_ids = [it.id for it in items]
                         await self.vs.client.delete(
                             collection_name=self.vs.collection_name,
-                            points_selector=PointIdsList(points=point_ids)
+                            points_selector=PointIdsList(points=point_ids),
                         )
                     consolidated_any = True
 
@@ -671,8 +795,13 @@ class MemoryBridge:
             logger.warning("Memory consolidation skipped (Qdrant transport): %r", exc)
             return False
         except Exception as exc:
-            if "ResponseHandlingException" in type(exc).__name__ or "UnexpectedResponse" in type(exc).__name__:
-                logger.warning("Memory consolidation skipped (Qdrant transport): %r", exc)
+            if (
+                "ResponseHandlingException" in type(exc).__name__
+                or "UnexpectedResponse" in type(exc).__name__
+            ):
+                logger.warning(
+                    "Memory consolidation skipped (Qdrant transport): %r", exc
+                )
                 return False
             logger.warning("Memory consolidation failed: %s", exc, exc_info=True)
             return False
@@ -695,12 +824,16 @@ class MemoryBridge:
                 if len(c) < 3:
                     continue
                 comm_node = f"Community_Cluster_{idx}"
-                
+
                 await self.graph_repo.ensure_community_node(comm_node, c)
 
-                important_nodes = sorted([n for n in c], key=lambda x: pagerank_scores.get(x, 0), reverse=True)[:5]
+                important_nodes = sorted(
+                    [n for n in c],
+                    key=lambda x: pagerank_scores.get(x, 0),
+                    reverse=True,
+                )[:5]
                 prompt = f"Summarize the relationship between these graph nodes which belong to the same community cluster: {', '.join(important_nodes)}"
-                
+
                 try:
                     response = await self.http.post(
                         f"{LLAMA_SUMM}/v1/chat/completions",
@@ -714,21 +847,29 @@ class MemoryBridge:
                         timeout=60.0,
                     )
                     response.raise_for_status()
-                    summary = (response.json()["choices"][0]["message"]["content"] or "").strip()
+                    summary = (
+                        response.json()["choices"][0]["message"]["content"] or ""
+                    ).strip()
                 except (httpx.ReadError, httpx.ReadTimeout) as exc:
                     # Single llama.cpp slot is frequently busy with a main-agent
                     # generation or consolidation when cluster_graph_rag fires.
                     # ReadError/ReadTimeout = slot occupied — log at debug and fall
                     # back to a structural summary instead of a noisy traceback.
-                    logger.debug("graph_rag cluster LLM skipped (slot busy) for cluster %d: %r", idx, exc)
+                    logger.debug(
+                        "graph_rag cluster LLM skipped (slot busy) for cluster %d: %r",
+                        idx,
+                        exc,
+                    )
                     summary = f"Community cluster {idx} containing {len(c)} nodes."
                 except Exception as exc:
                     # BUG FIX: was silently swallowing LLM HTTP failures with no log.
-                    logger.exception("graph_rag cluster LLM failed for cluster %d: %s", idx, exc)
+                    logger.exception(
+                        "graph_rag cluster LLM failed for cluster %d: %s", idx, exc
+                    )
                     summary = f"Community cluster {idx} containing {len(c)} nodes."
-                
+
                 await self.graph_repo.set_community_summary(comm_node, summary)
-                
+
                 vec = await self._embed(summary)
                 if vec:
                     payload = {
@@ -737,17 +878,26 @@ class MemoryBridge:
                         "event_count": len(c),
                         "source": "graphrag_community",
                         "indexed_at": time.time(),
-                        "cluster_id": idx
+                        "cluster_id": idx,
                     }
                     await self._store(vec, payload)
-            
+
             await self.graph_repo.save()
-            logger.info(f"GraphRAG: Found {len(communities)} communities and computed PageRank.")
+            logger.info(
+                f"GraphRAG: Found {len(communities)} communities and computed PageRank."
+            )
         except (httpx.ReadError, httpx.ReadTimeout) as exc:
-            logger.warning("GraphRAG clustering skipped (Qdrant/LLM transport): %r", exc)
+            logger.warning(
+                "GraphRAG clustering skipped (Qdrant/LLM transport): %r", exc
+            )
         except Exception as exc:
-            if "ResponseHandlingException" in type(exc).__name__ or "UnexpectedResponse" in type(exc).__name__:
-                logger.warning("GraphRAG clustering skipped (Qdrant transport): %r", exc)
+            if (
+                "ResponseHandlingException" in type(exc).__name__
+                or "UnexpectedResponse" in type(exc).__name__
+            ):
+                logger.warning(
+                    "GraphRAG clustering skipped (Qdrant transport): %r", exc
+                )
             else:
                 logger.exception("GraphRAG clustering failed: %s", exc)
 

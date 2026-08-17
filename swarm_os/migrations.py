@@ -9,6 +9,7 @@ Version history:
         retrieval_top_k, memory_window, crossover_stability,
         lifetime_fitness, evaluations  (current)
 """
+
 from __future__ import annotations
 import logging
 
@@ -18,50 +19,55 @@ CURRENT_VERSION = 4
 
 # ── Default values for backfilling missing fields ──────────────────────────────
 _GENOME_DEFAULTS = {
-    "model_tier":           0.5,
-    "temperature":          0.5,
-    "reasoning_depth":      0.5,
-    "verbosity":            0.5,
-    "coding_affinity":      0.33,
-    "research_affinity":    0.33,
-    "upwork_affinity":      0.33,
-    "context_budget":       0.5,
-    "retrieval_top_k":      0.5,
-    "memory_window":        0.5,
-    "mutation_rate":        0.1,
-    "crossover_stability":  0.5,
-    "parent_id":            None,
-    "generation":           0,
+    "model_tier": 0.5,
+    "temperature": 0.5,
+    "reasoning_depth": 0.5,
+    "verbosity": 0.5,
+    "coding_affinity": 0.33,
+    "research_affinity": 0.33,
+    "upwork_affinity": 0.33,
+    "context_budget": 0.5,
+    "retrieval_top_k": 0.5,
+    "memory_window": 0.5,
+    "mutation_rate": 0.1,
+    "crossover_stability": 0.5,
+    "parent_id": None,
+    "generation": 0,
     # Matches Genome.lifetime_fitness (Dict[str, float]); a float here made
     # from_dict() crash with 'float' object is not iterable on migrated snapshots.
-    "lifetime_fitness":     {"composite": 0.0, "quality": 0.0, "speed": 0.0, "efficiency": 0.0},
-    "evaluations":          0,
+    "lifetime_fitness": {
+        "composite": 0.0,
+        "quality": 0.0,
+        "speed": 0.0,
+        "efficiency": 0.0,
+    },
+    "evaluations": 0,
 }
 
 _COGNITION_DEFAULTS = {
-    "decomposition_bias":       0.5,
-    "max_subtasks":             0.5,
-    "reflection_depth":         0.5,
-    "self_critique_bias":       0.5,
-    "verification_bias":        0.5,
-    "hallucination_sensitivity":0.5,
-    "parallel_tool_calls":      0.5,
-    "retry_aggression":         0.5,
-    "fallback_model_bias":      0.5,
-    "escalation_bias":          0.5,
-    "summarization_bias":       0.5,
-    "compression_ratio":        0.5,
-    "memory_read_bias":         0.5,
-    "memory_write_bias":        0.5,
+    "decomposition_bias": 0.5,
+    "max_subtasks": 0.5,
+    "reflection_depth": 0.5,
+    "self_critique_bias": 0.5,
+    "verification_bias": 0.5,
+    "hallucination_sensitivity": 0.5,
+    "parallel_tool_calls": 0.5,
+    "retry_aggression": 0.5,
+    "fallback_model_bias": 0.5,
+    "escalation_bias": 0.5,
+    "summarization_bias": 0.5,
+    "compression_ratio": 0.5,
+    "memory_read_bias": 0.5,
+    "memory_write_bias": 0.5,
 }
 
 _DEFAULT_TOOL_GENES = {
-    "web_search":    0.5,
-    "playwright":    0.5,
-    "filesystem":    0.5,
-    "context7":      0.5,
+    "web_search": 0.5,
+    "playwright": 0.5,
+    "filesystem": 0.5,
+    "context7": 0.5,
     "qdrant_recall": 0.5,
-    "sandbox_repl":     0.5,
+    "sandbox_repl": 0.5,
 }
 
 _MCP_REGISTRY = list(_DEFAULT_TOOL_GENES.keys())
@@ -90,8 +96,8 @@ def _v2_to_v3(data: dict) -> dict:
             new["tool_bias_hint"] = float(old_genes.get("cost", 0.5))
 
         # Preserve generation lineage
-        new["generation"]    = old.get("generation", 0)
-        new["parent_id"]     = old.get("parent_id", None)
+        new["generation"] = old.get("generation", 0)
+        new["parent_id"] = old.get("parent_id", None)
         new["mutation_rate"] = old.get("mutation_rate", 0.1)
 
         # Preserve valid architecture entries as tool_genes hints
@@ -146,18 +152,26 @@ def _v3_to_v4(data: dict) -> dict:
                 g["cognition"].setdefault(k, v)
 
         # Clean up stale keys that no longer exist in Genome
-        for stale in ("genes", "architecture", "tool_bias", "memory_bias",
-                      "search_bias", "tool_bias_hint"):
+        for stale in (
+            "genes",
+            "architecture",
+            "tool_bias",
+            "memory_bias",
+            "search_bias",
+            "tool_bias_hint",
+        ):
             g.pop(stale, None)
 
         # Normalize affinities so migrated genomes have valid domain competition
-        total = (g.get("coding_affinity", 0.33) +
-                 g.get("research_affinity", 0.33) +
-                 g.get("upwork_affinity", 0.33))
+        total = (
+            g.get("coding_affinity", 0.33)
+            + g.get("research_affinity", 0.33)
+            + g.get("upwork_affinity", 0.33)
+        )
         if total > 1e-9:
-            g["coding_affinity"]   /= total
+            g["coding_affinity"] /= total
             g["research_affinity"] /= total
-            g["upwork_affinity"]   /= total
+            g["upwork_affinity"] /= total
 
         o["genome"] = g
 
@@ -185,4 +199,3 @@ def migrate_snapshot(data: dict) -> dict:
         data = _MIGRATIONS[version](data)
         version = data["snapshot_version"]
     return data
-

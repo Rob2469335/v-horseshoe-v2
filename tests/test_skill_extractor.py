@@ -18,7 +18,7 @@ def make_failure(incident_id, action_name):
         environment={},
         metrics_before={},
         metrics_after={},
-        timestamp=time.time()
+        timestamp=time.time(),
     )
 
 
@@ -33,4 +33,4 @@ def test_skill_extractor_creates_skill(tmp_path):
     skills = se.extract()
     assert len(skills) >= 1
     skill = skills[0]
-    assert 'restart' in ','.join([a.get('action') for a in skill.repair_sequence])
+    assert "restart" in ",".join([a.get("action") for a in skill.repair_sequence])

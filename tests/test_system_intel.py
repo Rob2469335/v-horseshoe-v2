@@ -4,6 +4,7 @@ All system tools are analysis-only: hardware/OS inventory, processes, services,
 network connections, disk usage, installed apps, startup items, registry, and
 Event Log. No destructive operations.
 """
+
 from __future__ import annotations
 import sys
 import pytest
@@ -14,7 +15,9 @@ from runtime_v2.prompts.system_prompts import build as build_system_prompt
 
 # net_connections/startup_items/registry_query use winreg + Windows psutil
 # enumerations; they only run on Windows.
-_WINDOWS_ONLY = pytest.mark.skipif(sys.platform != "win32", reason="Windows-only (winreg)")
+_WINDOWS_ONLY = pytest.mark.skipif(
+    sys.platform != "win32", reason="Windows-only (winreg)"
+)
 
 
 @pytest.fixture(autouse=True)
@@ -65,7 +68,9 @@ def test_net_connections_reports_sockets():
 
 
 def test_disk_analyzer_finds_largest_paths():
-    res = system_handler({"action": "disk_analyzer", "path": ".", "max_depth": 1, "top": 5})
+    res = system_handler(
+        {"action": "disk_analyzer", "path": ".", "max_depth": 1, "top": 5}
+    )
     assert res.get("ok") is True
     result = res["result"]
     assert result["total_bytes"] > 0
@@ -81,10 +86,17 @@ def test_startup_items_readable():
 
 @_WINDOWS_ONLY
 def test_registry_query_is_read_only_softare_only():
-    res = system_handler({"action": "registry_query", "subkey": r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run"})
+    res = system_handler(
+        {
+            "action": "registry_query",
+            "subkey": r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run",
+        }
+    )
     assert res.get("ok") is True
     assert "values" in res["result"]
-    blocked = system_handler({"action": "registry_query", "subkey": r"SYSTEM\CurrentControlSet\Control"})
+    blocked = system_handler(
+        {"action": "registry_query", "subkey": r"SYSTEM\CurrentControlSet\Control"}
+    )
     assert blocked.get("ok") is False
 
 

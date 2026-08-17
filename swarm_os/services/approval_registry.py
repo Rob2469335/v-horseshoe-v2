@@ -232,12 +232,12 @@ def agent_tool_policy(tool: str, action: str | None = None) -> str:
         if a in _SYSTEM_PRIVILEGED_OPS:
             return ALWAYS_CONFIRM
         return DENY if a else ALWAYS_CONFIRM  # unknown system op -> deny
-        
+
     if t == "cron_manage":
         if a in ("list", "get"):
             return ALLOW
         return CONFIRM
-        
+
     if t == "skill_manage":
         if a in ("list", "get"):
             return ALLOW
@@ -414,7 +414,7 @@ def _arg_digest(payload: Any) -> str:
     so argument order does not change the digest."""
     try:
         canonical = json.dumps(payload, sort_keys=True, default=str)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         canonical = str(payload)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 

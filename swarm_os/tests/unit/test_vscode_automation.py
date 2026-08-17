@@ -4,9 +4,11 @@ from swarm_os.capabilities.models import VSCodeAutomationRequest
 
 pytestmark = pytest.mark.anyio
 
+
 @pytest.fixture(scope="session")
 def anyio_backend():
     return "asyncio"
+
 
 async def test_vscode_automation_list_files():
     handler = VSCodeAutomationHandler()
@@ -18,6 +20,7 @@ async def test_vscode_automation_list_files():
     assert response["exit_code"] == 0
     assert "capabilities/models.py" in response["stdout"]
 
+
 async def test_vscode_automation_rejects_disallowed_command():
     handler = VSCodeAutomationHandler()
     req = VSCodeAutomationRequest(command="rm_rf", args=["."])
@@ -26,4 +29,3 @@ async def test_vscode_automation_rejects_disallowed_command():
     assert response["status"] == "rejected"
     assert response["exit_code"] == 1
     assert "Security Error" in response["stderr"]
-

@@ -7,6 +7,7 @@ The key behaviors:
   3. File write via the approval gate refuses without approved=true.
   4. The persistent browser handler reports session state without crashing.
 """
+
 import time
 
 import pytest
@@ -67,6 +68,7 @@ def test_email_draft_requires_to_and_subject():
 def test_file_read_resolution(tmp_path, monkeypatch):
     """The control router's _resolve_project_file must refuse traversal."""
     from swarm_os.api import control as ctl
+
     monkeypatch.chdir(tmp_path)
     (tmp_path / "ok.txt").write_text("hello", encoding="utf-8")
     assert ctl._resolve_project_file("ok.txt") == str(tmp_path / "ok.txt")

@@ -2,6 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+
 @dataclass(slots=True)
 class ModelProfile:
     name: str
@@ -11,6 +12,7 @@ class ModelProfile:
     cooldown_seconds: float = 5.0
     capabilities: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
+
 
 @dataclass(slots=True)
 class ModelState:
@@ -27,6 +29,7 @@ class ModelState:
     last_penalty: float = 0.0
     metadata: dict[str, Any] = field(default_factory=dict)
 
+
 @dataclass(slots=True)
 class RouteDecision:
     model: str
@@ -36,6 +39,7 @@ class RouteDecision:
     metadata: dict[str, Any] = field(default_factory=dict)
     strategy: str = "default"
 
+
 @dataclass(slots=True)
 class PlanStep:
     step_id: str
@@ -44,6 +48,7 @@ class PlanStep:
     assigned_to: str = "none"
     metadata: dict[str, Any] = field(default_factory=dict)
 
+
 @dataclass(slots=True)
 class StepDecision:
     action: str
@@ -51,10 +56,12 @@ class StepDecision:
     target: str
     metadata: dict[str, Any] = field(default_factory=dict)
 
+
 @dataclass(slots=True)
 class StepBudget:
     allowed: bool
     reason: str = "ok"
+
 
 @dataclass(slots=True)
 class CriticResult:
@@ -62,6 +69,7 @@ class CriticResult:
     score: float = 0.5
     reason: str = "ok"
     retryable: bool = True
+
 
 @dataclass(slots=True)
 class ImprovementProposal:

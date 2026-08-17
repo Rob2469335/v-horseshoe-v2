@@ -20,6 +20,7 @@ DISCLAIMER (in every surface): this is not legal advice. It is a record
 analysis tool for a self-represented person who cannot afford counsel. Any
 potential claim should be reviewed by a qualified attorney before filing.
 """
+
 from __future__ import annotations
 
 import logging
@@ -76,11 +77,11 @@ _ATTR_PREFIX_MAP = {
 class AttorneyProfile:
     """One attorney's activity across the trial, page-cited."""
 
-    key: str                    # passage speaker short form
+    key: str  # passage speaker short form
     name: str
     represents: str
-    objections: list[dict] = field(default_factory=list)   # {page, text, ruling?}
-    examinations: list[dict] = field(default_factory=list) # {witness, pages, kind}
+    objections: list[dict] = field(default_factory=list)  # {page, text, ruling?}
+    examinations: list[dict] = field(default_factory=list)  # {witness, pages, kind}
     key_statements: list[dict] = field(default_factory=list)  # {page, text}
     word_count: int = 0
     page_range: tuple[int, int] | None = None
@@ -118,6 +119,7 @@ async def _load_indices_async() -> list[TranscriptIndex]:
     if _cache is not None:
         return _cache
     import asyncio
+
     indices = await asyncio.to_thread(_load_indices)
     if _indices_cache[0] is None:
         _indices_cache[0] = indices
@@ -139,7 +141,9 @@ def _resolve_attorney(speaker: str) -> str | None:
     return None
 
 
-def build_attorney_profiles(indices: list[TranscriptIndex]) -> dict[str, AttorneyProfile]:
+def build_attorney_profiles(
+    indices: list[TranscriptIndex],
+) -> dict[str, AttorneyProfile]:
     """One profile per identified attorney, across all trial days."""
     profiles: dict[str, AttorneyProfile] = {}
     for key, (name, client) in ATTORNEY_ROLES.items():
@@ -164,7 +168,10 @@ def build_attorney_profiles(indices: list[TranscriptIndex]) -> dict[str, Attorne
 
             # Objections raised by this attorney (same discrimination as the
             # objections log: affirmative acts, not declinations).
-            if "OBJECTION" in t.upper() and p.speaker not in ("THE COURT", "THE WITNESS"):
+            if "OBJECTION" in t.upper() and p.speaker not in (
+                "THE COURT",
+                "THE WITNESS",
+            ):
                 prof.objections.append({"page": page, "text": t[:300]})
 
             # Witness examination: attorney passage immediately precedes a
@@ -172,7 +179,9 @@ def build_attorney_profiles(indices: list[TranscriptIndex]) -> dict[str, Attorne
             # Handled in a second pass below for correctness.
 
             # Key statements: openings (early pages of a day) and notable acts.
-            if len(t.split()) > 40 and ("your Honor" in t.lower() or "I object" in t.lower()):
+            if len(t.split()) > 40 and (
+                "your Honor" in t.lower() or "I object" in t.lower()
+            ):
                 if not any(s["page"] == page for s in prof.key_statements):
                     prof.key_statements.append({"page": page, "text": t[:300]})
 
@@ -189,11 +198,13 @@ def build_attorney_profiles(indices: list[TranscriptIndex]) -> dict[str, Attorne
                 key = _resolve_attorney(prev.speaker)
                 if key:
                     witness = idx.witness_names.get(p.page, "Unknown Witness")
-                    profiles[key].examinations.append({
-                        "witness": witness,
-                        "page": p.page,
-                        "kind": "examination",
-                    })
+                    profiles[key].examinations.append(
+                        {
+                            "witness": witness,
+                            "page": p.page,
+                            "kind": "examination",
+                        }
+                    )
                 break
 
     # Dedup examinations per witness/page, cap key statements.
@@ -218,24 +229,28 @@ def build_attorney_profiles(indices: list[TranscriptIndex]) -> dict[str, Attorne
 _ERROR_PATTERNS = {
     "government evidence / tampering concern": re.compile(
         r"\b(tamper|manipulat|altered|missing evidence|withheld|spoliat|"
-        r"chain of custody|fabricat|manufactured)\b", re.IGNORECASE,
+        r"chain of custody|fabricat|manufactured)\b",
+        re.IGNORECASE,
     ),
     "discovery / notice issue": re.compile(
         r"\b(notice|discovery|unsealed|supplemental|late disclosure|Brady|Giglio)\b",
         re.IGNORECASE,
     ),
     "confrontation / hearsay": re.compile(
-        r"\b(confront|hearsay|out.of.court|sixth amendment)\b", re.IGNORECASE,
+        r"\b(confront|hearsay|out.of.court|sixth amendment)\b",
+        re.IGNORECASE,
     ),
     "jury-selection / Batson": re.compile(
         r"\b(batson|peremptory|pattern of discrimination|jury selection)\b",
         re.IGNORECASE,
     ),
     "counsel objection / preservation": re.compile(
-        r"\b(objection|sustained|overruled)\b", re.IGNORECASE,
+        r"\b(objection|sustained|overruled)\b",
+        re.IGNORECASE,
     ),
     "evidence admissibility": re.compile(
-        r"\b(admissib|relevan|prejudice|exclude|strike)\b", re.IGNORECASE,
+        r"\b(admissib|relevan|prejudice|exclude|strike)\b",
+        re.IGNORECASE,
     ),
 }
 
@@ -253,12 +268,14 @@ def build_error_flags(indices: list[TranscriptIndex]) -> list[dict]:
                 continue
             for label, rx in _ERROR_PATTERNS.items():
                 if rx.search(t):
-                    flags.append({
-                        "category": label,
-                        "page": p.page,
-                        "speaker": p.speaker,
-                        "text": t[:280],
-                    })
+                    flags.append(
+                        {
+                            "category": label,
+                            "page": p.page,
+                            "speaker": p.speaker,
+                            "text": t[:280],
+                        }
+                    )
                     break  # one flag per passage
     # cap + sort by page
     flags.sort(key=lambda f: (f["category"], f["page"]))
@@ -278,7 +295,9 @@ def build_error_flags(indices: list[TranscriptIndex]) -> list[dict]:
 # ---------------------------------------------------------------------------
 # Page-grounded Q&A over the trial record
 # ---------------------------------------------------------------------------
-def search_record(indices: list[TranscriptIndex], query: str, limit: int = 20) -> list[dict]:
+def search_record(
+    indices: list[TranscriptIndex], query: str, limit: int = 20
+) -> list[dict]:
     """Search the full trial record (all days) for passages matching `query`.
     Returns page-cited hits across every transcript day."""
     q = query.lower()
@@ -287,12 +306,14 @@ def search_record(indices: list[TranscriptIndex], query: str, limit: int = 20) -
         source = Path(idx.source).name if idx.source else "?"
         for p in idx.passages:
             if q in p.text.lower():
-                hits.append({
-                    "page": p.page,
-                    "speaker": p.speaker,
-                    "text": p.text,
-                    "day": source[:10],
-                })
+                hits.append(
+                    {
+                        "page": p.page,
+                        "speaker": p.speaker,
+                        "text": p.text,
+                        "day": source[:10],
+                    }
+                )
     hits.sort(key=lambda h: h["page"])
     seen = set()
     out = []
@@ -307,7 +328,9 @@ def search_record(indices: list[TranscriptIndex], query: str, limit: int = 20) -
     return out
 
 
-def speaker_summary(indices: list[TranscriptIndex], speaker_prefix: str, limit: int = 25) -> list[dict]:
+def speaker_summary(
+    indices: list[TranscriptIndex], speaker_prefix: str, limit: int = 25
+) -> list[dict]:
     """Every passage spoken by an attorney (case-insensitive prefix), page-cited."""
     q = speaker_prefix.upper()
     out = []
@@ -333,13 +356,15 @@ def trial_overview(indices: list[TranscriptIndex]) -> dict:
         day = src[:10] if src.startswith("20") else src
         pages = {p.page for p in idx.passages}
         total_pages |= pages
-        by_day.setdefault(day, []).append({
-            "file": src,
-            "passages": len(idx.passages),
-            "pages": len(pages),
-            "page_min": min(pages) if pages else None,
-            "page_max": max(pages) if pages else None,
-        })
+        by_day.setdefault(day, []).append(
+            {
+                "file": src,
+                "passages": len(idx.passages),
+                "pages": len(pages),
+                "page_min": min(pages) if pages else None,
+                "page_max": max(pages) if pages else None,
+            }
+        )
     for day, segs in sorted(by_day.items()):
         if len(segs) == 1:
             days.append({"day": day, **segs[0]})
@@ -348,14 +373,16 @@ def trial_overview(indices: list[TranscriptIndex]) -> dict:
         for s in segs:
             # same-day segments restart page numbering; union the ranges
             pages_all |= set(range(s["page_min"], s["page_max"] + 1))
-        days.append({
-            "day": day,
-            "files": len(segs),
-            "passages": sum(s["passages"] for s in segs),
-            "pages": len(pages_all),
-            "page_min": min(s["page_min"] for s in segs),
-            "page_max": max(s["page_max"] for s in segs),
-        })
+        days.append(
+            {
+                "day": day,
+                "files": len(segs),
+                "passages": sum(s["passages"] for s in segs),
+                "pages": len(pages_all),
+                "page_min": min(s["page_min"] for s in segs),
+                "page_max": max(s["page_max"] for s in segs),
+            }
+        )
     return {
         "case": CASE,
         "days": days,
@@ -386,14 +413,21 @@ def build_key_events(indices: list[TranscriptIndex]) -> list[dict]:
         r"\b(phone|cell phone)\b.{0,60}?\b(desk|cubicle|secured|locked cabinet)\b",
         re.IGNORECASE,
     )
-    powered_re = re.compile(r"\b(powered on|powered off|powered on or off)\b", re.IGNORECASE)
-    no_marking_re = re.compile(r"\b(no\s+marking|wasn't\s+marked|not\s+marked)\b", re.IGNORECASE)
+    powered_re = re.compile(
+        r"\b(powered on|powered off|powered on or off)\b", re.IGNORECASE
+    )
+    no_marking_re = re.compile(
+        r"\b(no\s+marking|wasn't\s+marked|not\s+marked)\b", re.IGNORECASE
+    )
 
     # Build a timeline of phone-related passages per agent per day.
     for idx in indices:
         src = Path(idx.source).name if idx.source else "?"
-        phone_passages = [p for p in idx.passages
-                          if re.search(r"\b(phone|cell phone)\b", p.text, re.IGNORECASE)]
+        phone_passages = [
+            p
+            for p in idx.passages
+            if re.search(r"\b(phone|cell phone)\b", p.text, re.IGNORECASE)
+        ]
         if not phone_passages:
             continue
 
@@ -417,25 +451,39 @@ def build_key_events(indices: list[TranscriptIndex]) -> list[dict]:
                 continue
             has_powered = bool(powered_re.search(texts))
             has_no_marking = bool(no_marking_re.search(texts))
-            events.append({
-                "category": "phone evidence / chain of custody",
-                "day": src[:10],
-                "pages": f"{min(pages)}-{max(pages)}",
-                "page_min": min(pages),
-                "page_max": max(pages),
-                "note": (
-                    "Phone evidence handling documented over multiple FBI agents: "
-                    "seized phones kept at an agent's desk/cubicle for ~a month, "
-                    "powered state unknown, no identifying markings, then "
-                    "transferred to CART for analysis."
-                    + (" Powered-state was explicitly probed (unknown)." if has_powered else "")
-                    + (" Absence of identifying markings was elicited." if has_no_marking else "")
-                ),
-                "passages": [
-                    {"page": x["page"], "speaker": x["speaker"], "text": x["text"][:200]}
-                    for x in w[:8]
-                ],
-            })
+            events.append(
+                {
+                    "category": "phone evidence / chain of custody",
+                    "day": src[:10],
+                    "pages": f"{min(pages)}-{max(pages)}",
+                    "page_min": min(pages),
+                    "page_max": max(pages),
+                    "note": (
+                        "Phone evidence handling documented over multiple FBI agents: "
+                        "seized phones kept at an agent's desk/cubicle for ~a month, "
+                        "powered state unknown, no identifying markings, then "
+                        "transferred to CART for analysis."
+                        + (
+                            " Powered-state was explicitly probed (unknown)."
+                            if has_powered
+                            else ""
+                        )
+                        + (
+                            " Absence of identifying markings was elicited."
+                            if has_no_marking
+                            else ""
+                        )
+                    ),
+                    "passages": [
+                        {
+                            "page": x["page"],
+                            "speaker": x["speaker"],
+                            "text": x["text"][:200],
+                        }
+                        for x in w[:8]
+                    ],
+                }
+            )
 
     events.sort(key=lambda e: (e["category"], e["page_min"]))
     return events
@@ -481,23 +529,31 @@ def build_phone_evidence_events(indices: list[TranscriptIndex]) -> list[dict]:
             context = []
             for p2 in idx.passages:
                 if abs(p2.page - p.page) <= 1 and p2.speaker in (
-                    "MS. AL-SHABAZZ", "THE COURT", "MR. CHIUCHIOLO", "MS. ROTHMAN", "MR. FOLLY"
+                    "MS. AL-SHABAZZ",
+                    "THE COURT",
+                    "MR. CHIUCHIOLO",
+                    "MS. ROTHMAN",
+                    "MR. FOLLY",
                 ):
-                    context.append({"page": p2.page, "speaker": p2.speaker, "text": p2.text[:200]})
-            events.append({
-                "category": "phone/email evidence — selective or altered presentation",
-                "day": src[:10],
-                "page": p.page,
-                "speaker": p.speaker,
-                "text": p.text[:320],
-                "context": context[:6],
-                "legal_question": (
-                    "Whether the government's presentation of phone/email/text "
-                    "evidence was complete, and whether omitted or altered "
-                    "messages affected the jury's understanding — a discovery/"
-                    "Brady/fair-trial issue for qualified counsel to assess."
-                ),
-            })
+                    context.append(
+                        {"page": p2.page, "speaker": p2.speaker, "text": p2.text[:200]}
+                    )
+            events.append(
+                {
+                    "category": "phone/email evidence — selective or altered presentation",
+                    "day": src[:10],
+                    "page": p.page,
+                    "speaker": p.speaker,
+                    "text": p.text[:320],
+                    "context": context[:6],
+                    "legal_question": (
+                        "Whether the government's presentation of phone/email/text "
+                        "evidence was complete, and whether omitted or altered "
+                        "messages affected the jury's understanding — a discovery/"
+                        "Brady/fair-trial issue for qualified counsel to assess."
+                    ),
+                }
+            )
     # dedup by page+speaker+text
     seen = set()
     out = []

@@ -7,8 +7,15 @@ from typing import Any, Iterable
 from .models import ModelProfile, ModelState, PlanStep, RouteDecision, StepDecision
 from .strategy_registry import strategy_registry
 
+
 class Router:
-    def __init__(self, *, profiles: Iterable[ModelProfile] | None = None, default_role: str = "reasoning", cooldown_multiplier: float = 2.0) -> None:
+    def __init__(
+        self,
+        *,
+        profiles: Iterable[ModelProfile] | None = None,
+        default_role: str = "reasoning",
+        cooldown_multiplier: float = 2.0,
+    ) -> None:
         self.profiles = {p.name: p for p in profiles} if profiles else {}
         self.default_role = default_role
         self.cooldown_multiplier = cooldown_multiplier
@@ -74,10 +81,11 @@ class Router:
             state.last_penalty = values.get("last_penalty", 0.0)
             state.metadata = values.get("metadata", {})
 
-
     def candidates_for_role(self, role: str | None) -> list[str]:
         role = (role or self.default_role).lower()
-        primary = [name for name, profile in self.profiles.items() if profile.role == role]
+        primary = [
+            name for name, profile in self.profiles.items() if profile.role == role
+        ]
         if primary:
             return primary
 
@@ -94,7 +102,9 @@ class Router:
                 capability_fallback.append(name)
             elif role in {"coding", "coder", "deep_coder"} and "code" in caps:
                 capability_fallback.append(name)
-            elif role in {"planner", "reasoning"} and ("reasoning" in caps or "long_context" in caps):
+            elif role in {"planner", "reasoning"} and (
+                "reasoning" in caps or "long_context" in caps
+            ):
                 capability_fallback.append(name)
             elif role == "writer" and ("writing" in caps or "long_context" in caps):
                 capability_fallback.append(name)
@@ -107,15 +117,35 @@ class Router:
 
         return list(self.profiles.keys())
 
-    async def route_model(self, *, candidates: list[str] | None = None, role: str | None = None, allow_fallback: bool = True) -> RouteDecision:
+    async def route_model(
+        self,
+        *,
+        candidates: list[str] | None = None,
+        role: str | None = None,
+        allow_fallback: bool = True,
+    ) -> RouteDecision:
         role = (role or self.default_role).lower()
         pool = candidates if candidates is not None else self.candidates_for_role(role)
         if not pool:
             pool = list(self.profiles.keys())
 
         import asyncio
-        strategy = await asyncio.to_thread(strategy_registry.get_active, context={"role": role, "candidates": list(pool), "allow_fallback": allow_fallback})
-        decision = await asyncio.to_thread(strategy.select_model, router=self, candidates=list(pool), role=role, allow_fallback=allow_fallback)
+
+        strategy = await asyncio.to_thread(
+            strategy_registry.get_active,
+            context={
+                "role": role,
+                "candidates": list(pool),
+                "allow_fallback": allow_fallback,
+            },
+        )
+        decision = await asyncio.to_thread(
+            strategy.select_model,
+            router=self,
+            candidates=list(pool),
+            role=role,
+            allow_fallback=allow_fallback,
+        )
 
         if decision.model:
             decision.metadata.setdefault("requested_role", role)
@@ -131,7 +161,9 @@ class Router:
         state.last_attempt_at = time.time()
         state.last_success_at = state.last_attempt_at
         state.cooldown_until = 0.0
-        state.failures = int(state.failures * 0.5)  # Exponential decay instead of linear -1
+        state.failures = int(
+            state.failures * 0.5
+        )  # Exponential decay instead of linear -1
 
     def record_failure(self, model: str, cooldown_seconds: float | None = None) -> None:
         state = self.get_state(model)
@@ -140,7 +172,11 @@ class Router:
         state.last_attempt_at = time.time()
         profile = self.profiles.get(model)
         base_cooldown = profile.cooldown_seconds if profile else 5.0
-        applied_cooldown = cooldown_seconds if cooldown_seconds is not None else base_cooldown * self.cooldown_multiplier
+        applied_cooldown = (
+            cooldown_seconds
+            if cooldown_seconds is not None
+            else base_cooldown * self.cooldown_multiplier
+        )
         state.cooldown_until = state.last_attempt_at + max(0.0, applied_cooldown)
 
     def route(self, step: PlanStep) -> StepDecision:
@@ -150,42 +186,71 @@ class Router:
         assigned = raw_assigned if raw_assigned != "none" else self.default_role
 
         if kind in {"tool", "retrieve"}:
-            return StepDecision(action="delegate", reason=f"route:{kind}", target="tool-runtime", metadata={"kind": kind})
+            return StepDecision(
+                action="delegate",
+                reason=f"route:{kind}",
+                target="tool-runtime",
+                metadata={"kind": kind},
+            )
 
         if kind == "vision":
-            return StepDecision(action="delegate", reason="route:vision", target="vision", metadata={"kind": kind})
+            return StepDecision(
+                action="delegate",
+                reason="route:vision",
+                target="vision",
+                metadata={"kind": kind},
+            )
 
         if kind in {"embed", "embedding", "rerank"}:
             target = "reranker" if kind == "rerank" else "embedding"
-            return StepDecision(action="delegate", reason=f"route:{kind}", target=target, metadata={"kind": kind})
+            return StepDecision(
+                action="delegate",
+                reason=f"route:{kind}",
+                target=target,
+                metadata={"kind": kind},
+            )
 
         if kind in {"analyze", "synthesize", "plan", "planner", "reason"}:
             target = assigned
             if raw_assigned == "none":
-                if any(k in goal for k in ("code", "refactor", "bug", "patch", "implement")):
+                if any(
+                    k in goal for k in ("code", "refactor", "bug", "patch", "implement")
+                ):
                     target = "coding"
-                elif any(k in goal for k in ("plan", "strategy", "architect", "design")):
+                elif any(
+                    k in goal for k in ("plan", "strategy", "architect", "design")
+                ):
                     target = "planner"
                 elif any(k in goal for k in ("write", "draft", "summar", "explain")):
                     target = "writer"
                 else:
                     target = self.default_role
-            return StepDecision(action="delegate", reason=f"route:{kind}", target=target, metadata={"kind": kind, "goal": goal})
+            return StepDecision(
+                action="delegate",
+                reason=f"route:{kind}",
+                target=target,
+                metadata={"kind": kind, "goal": goal},
+            )
 
-        return StepDecision(action="complete", reason=f"route:{kind}", target=assigned, metadata={"kind": kind})
+        return StepDecision(
+            action="complete",
+            reason=f"route:{kind}",
+            target=assigned,
+            metadata={"kind": kind},
+        )
+
 
 def attach_to_registry(router: Router, registry: object) -> None:
     if hasattr(registry, "register"):
         registry.register("router", router)
 
+
 def evolve_plugin_weights(registry: object) -> dict[str, float]:
     if not hasattr(registry, "ranked"):
         return {}
     ranked = registry.ranked()
-    return {getattr(item, "name", ""): float(getattr(item, "fitness", 0.0)) for item in ranked if getattr(item, "name", "")}
-
-
-
-
-
-
+    return {
+        getattr(item, "name", ""): float(getattr(item, "fitness", 0.0))
+        for item in ranked
+        if getattr(item, "name", "")
+    }

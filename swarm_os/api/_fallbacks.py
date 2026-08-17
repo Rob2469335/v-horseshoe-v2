@@ -9,7 +9,9 @@ ALLOWED_ROOT_NAMES = {"AGENTS.md", "README.md", "docs"}
 DISALLOWED_DIRS = {"config", "models", "data", "logs", "tests"}
 
 
-def local_docs_search(repo_root: Path, tokens: set[str], top_k: int = 5) -> List[Dict[str, Any]]:
+def local_docs_search(
+    repo_root: Path, tokens: set[str], top_k: int = 5
+) -> List[Dict[str, Any]]:
     """Scan a small, safe set of repository documentation files for keyword
     matches and return scored results suitable for the degraded lexical
     fallback.
@@ -60,8 +62,17 @@ def local_docs_search(repo_root: Path, tokens: set[str], top_k: int = 5) -> List
                     if idx >= 0:
                         raw = text
                         start = max(0, idx - 100)
-                        excerpt = raw[start: start + 300]
-                file_results.append((score, {"id": str(path), "score": float(score), "payload": {"path": str(path), "excerpt": excerpt}}))
+                        excerpt = raw[start : start + 300]
+                file_results.append(
+                    (
+                        score,
+                        {
+                            "id": str(path),
+                            "score": float(score),
+                            "payload": {"path": str(path), "excerpt": excerpt},
+                        },
+                    )
+                )
 
         file_results.sort(key=lambda x: -x[0])
         results = [item for _, item in file_results[:top_k]]

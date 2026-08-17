@@ -1226,6 +1226,8 @@ Converted `except:` → `except Exception:` (or specific types) in `swarm_os/cor
 
 ## Self-Healing & Self-Learning Fixes
 
+- **[CANARY-FLAGGED: human review] (2026-08-17T16:35:31.570630+00:00)**: swarm_os/api/routes.py — test regression NOT attributable to swarm_os/api/routes.py; HUMAN REVIEW
+
 - **Rule (code_analyzer)**: Failure: The code_analyzer attempted to read the file path 'x.py' directly without first verifying that the file exists in the filesystem. The oper...
 
 - **Rule (code_analyzer)**: Failure: The code_analyzer agent attempted to read file x.py without first verifying that the path exists in the auditing codebase filesystem, resu...

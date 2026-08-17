@@ -6,6 +6,7 @@ predate the qwen3.5-4b migration). The distribution must map those to the
 current local generation model instead of reporting models that no longer
 exist.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -18,7 +19,7 @@ from swarm_os.api import routes
     [
         ("qwen3.5-4b", "qwen3.5-4b"),
         ("deepseek-v4-flash", "deepseek-v4-flash"),
-        ("qwen3.5-9b", "qwen3.5-4b"),      # pruned 2026-08-05 -> current model
+        ("qwen3.5-9b", "qwen3.5-4b"),  # pruned 2026-08-05 -> current model
         ("qwen3:14b", "qwen3.5-4b"),
         ("qwen2.5:7b-instruct", "qwen3.5-4b"),
         ("qwen2.5:3b-instruct", "qwen3.5-4b"),
@@ -43,9 +44,21 @@ def test_router_model_normalization(raw, expected):
             return "unknown"
         if m in ("qwen3.5-4b", "deepseek-v4-flash") or "3.5-4b" in m:
             return m
-        if any(x in m for x in ("qwen3.5-9b", "qwen3:14b", "14b", "12b",
-                                "7b-instruct", "qwen2.5", "qwen2", "qwen-tuned",
-                                "qwen3-vl", "3b-instruct")):
+        if any(
+            x in m
+            for x in (
+                "qwen3.5-9b",
+                "qwen3:14b",
+                "14b",
+                "12b",
+                "7b-instruct",
+                "qwen2.5",
+                "qwen2",
+                "qwen-tuned",
+                "qwen3-vl",
+                "3b-instruct",
+            )
+        ):
             return "qwen3.5-4b"
         return str(raw_value)
 

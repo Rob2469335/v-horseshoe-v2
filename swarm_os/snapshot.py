@@ -4,6 +4,7 @@ Snapshot — save and load population state.
 SNAPSHOT_DIR derived from settings.snapshot_dir (absolute, not CWD-relative).
 Auto-cleans old snapshots, keeps last keep_last_n.
 """
+
 from __future__ import annotations
 
 import json
@@ -31,12 +32,12 @@ def save_snapshot(organisms, generation: int, keep_last_n: int = 10) -> Path:
 
     payload = {
         "snapshot_version": SNAPSHOT_VERSION,
-        "generation":       generation,
+        "generation": generation,
         "organisms": [
             {
-                "id":      o.id,
+                "id": o.id,
                 "fitness": o.fitness,
-                "genome":  asdict(o.genome),
+                "genome": asdict(o.genome),
             }
             for o in organisms
         ],
@@ -62,9 +63,8 @@ def load_snapshot(path: str | Path) -> dict:
 
 
 def latest_snapshot() -> Optional[Path]:
-    snap_dir  = _snapshot_dir()
+    snap_dir = _snapshot_dir()
     if not snap_dir.exists():
         return None
     snapshots = sorted(snap_dir.glob("snapshot_*.json"))
     return snapshots[-1] if snapshots else None
-

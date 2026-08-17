@@ -7,6 +7,7 @@ This module exists for backward compatibility with callers that import
 simulation_service.py) — it delegates to the canonical implementation so all
 load paths migrate to the SAME current version instead of a divergent one.
 """
+
 from __future__ import annotations
 
 from swarm_os.migrations import CURRENT_VERSION, migrate_snapshot

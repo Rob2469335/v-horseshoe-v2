@@ -5,6 +5,7 @@ build a throwaway repo in a temp dir and exercise snapshot_worktree() /
 restore_snapshot() against it. Command wiring (registry registration, mode
 switching, prompt badge) is exercised with the real registry + a stub context.
 """
+
 import subprocess
 from pathlib import Path
 
@@ -32,12 +33,27 @@ def global_subprocess_mock():
 @pytest.fixture()
 def repo(tmp_path: Path):
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.email", "t@t"], cwd=tmp_path, check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "t@t"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "t"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
     (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
     (tmp_path / "keep.py").write_text("k = 1\n", encoding="utf-8")
     subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, capture_output=True)
-    subprocess.run(["git", "commit", "-m", "init", "-q"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "init", "-q"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
     return tmp_path
 
 
@@ -83,7 +99,9 @@ def test_undo_preserves_preexisting_untracked_file(repo: Path):
 
 def test_undo_restores_added_tracked_file(repo: Path):
     (repo / "staged.py").write_text("pre-agent content\n", encoding="utf-8")
-    subprocess.run(["git", "add", "staged.py"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "add", "staged.py"], cwd=repo, check=True, capture_output=True
+    )
     snap = snapshot_worktree(repo)
     (repo / "staged.py").write_text("post-agent content\n", encoding="utf-8")
     restore_snapshot(snap, repo)
@@ -92,6 +110,7 @@ def test_undo_restores_added_tracked_file(repo: Path):
 
 def test_commands_registered():
     from organism_console.command_registry import registry
+
     for name in ("build", "analyze", "chat", "undo", "redo", "modes"):
         assert name in registry.commands, name
     assert "coder" in EDITING_AGENTS
@@ -115,8 +134,14 @@ def test_mode_commands_switch_active_agent(tmp_path):
     state.history = []
     state.save = lambda **kwargs: None  # avoid the async-save thread racing cleanup
     console = Console(file=io.StringIO(), force_terminal=False)
-    ctx = CommandContext(state=state, console=console, call_api=None, run_prompt=None,
-                         get_system_stats=None, installed_models=["qwen3.5-4b"])
+    ctx = CommandContext(
+        state=state,
+        console=console,
+        call_api=None,
+        run_prompt=None,
+        get_system_stats=None,
+        installed_models=["qwen3.5-4b"],
+    )
     registry.commands["build"]["func"](ctx, [])
     assert state.active_agent == "coder"
     registry.commands["analyze"]["func"](ctx, [])
@@ -145,8 +170,13 @@ def test_run_agentic_sets_last_prompt_on_cli_context(monkeypatch, tmp_path):
         return [{"role": "assistant", "content": "done"}]
 
     monkeypatch.setattr("organism_console.cli.stream_prompt_with_retry", _fake_stream)
-    monkeypatch.setattr("organism_console._commands_opencode.snapshot_worktree", lambda *_, **__: {"test": "snap"})
-    monkeypatch.setattr("organism_console._commands_opencode.build_run_diff", lambda *_, **__: [])
+    monkeypatch.setattr(
+        "organism_console._commands_opencode.snapshot_worktree",
+        lambda *_, **__: {"test": "snap"},
+    )
+    monkeypatch.setattr(
+        "organism_console._commands_opencode.build_run_diff", lambda *_, **__: []
+    )
 
     result = run_agentic(state, "fix the bug", json_flag=True)
     assert result["content"] == "done"
@@ -170,7 +200,10 @@ def test_run_agentic_non_editing_agent_skips_snapshot(monkeypatch, tmp_path):
         return [{"role": "assistant", "content": "hi"}]
 
     monkeypatch.setattr("organism_console.cli.stream_prompt_with_retry", _fake_stream)
-    monkeypatch.setattr("organism_console._commands_opencode.snapshot_worktree", lambda *_, **__: {"should": "not be called"})
+    monkeypatch.setattr(
+        "organism_console._commands_opencode.snapshot_worktree",
+        lambda *_, **__: {"should": "not be called"},
+    )
 
     run_agentic(state, "hello", json_flag=True)
     assert state.last_prompt == "hello"

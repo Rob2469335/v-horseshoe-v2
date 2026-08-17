@@ -20,7 +20,9 @@ def _organisms_from_snapshot(snapshot: dict, generate_fn=None) -> list[Organism]
     items = []
     for item in snapshot.get("organisms", []):
         genome = Genome.from_dict(item["genome"])
-        brain = brain_module.registry.make("swarm", genome, "general", generate_fn=generate_fn)
+        brain = brain_module.registry.make(
+            "swarm", genome, "general", generate_fn=generate_fn
+        )
         org = Organism(id=item["id"], brain=brain, genome=genome)
         org.fitness = float(item.get("fitness", 0.0))
         items.append(org)
@@ -28,7 +30,9 @@ def _organisms_from_snapshot(snapshot: dict, generate_fn=None) -> list[Organism]
 
 
 class SimulationService:
-    def __init__(self, snapshot_repo: SnapshotRepository | None = None, generate_fn=None) -> None:
+    def __init__(
+        self, snapshot_repo: SnapshotRepository | None = None, generate_fn=None
+    ) -> None:
         self.settings = get_settings()
         self.snapshot_repo = snapshot_repo or FileSnapshotRepository(
             self.settings.snapshots_dir
@@ -54,6 +58,7 @@ class SimulationService:
         if resume_path:
             raw = self.snapshot_repo.load(resume_path)
             from swarm_os.kernel.migrations import migrate_snapshot
+
             snapshot = migrate_snapshot(raw)
             organisms = _organisms_from_snapshot(snapshot, generate_fn=generate_fn)
 

@@ -14,6 +14,7 @@ trained re-ranker deliver the best results." The recipe:
 This module is pure + deterministic for the lexical leg and RRF (unit-testable
 offline); the dense/rerank legs are injected so callers reuse the live stack.
 """
+
 from __future__ import annotations
 
 import logging
@@ -54,7 +55,9 @@ def bm25_score(query_tokens: list[str], doc_tokens: list[str]) -> float:
         if f == 0:
             continue
         idf = 1.0  # pool-local: presence is the signal
-        tf_norm = (f * (1.2 + 1.0)) / (f + 1.2 * (1.0 - 0.75 + 0.75 * (doc_len / avg_len)))
+        tf_norm = (f * (1.2 + 1.0)) / (
+            f + 1.2 * (1.0 - 0.75 + 0.75 * (doc_len / avg_len))
+        )
         score += idf * tf_norm
     # Coverage bonus: fraction of DISTINCT query tokens that appear.
     coverage = len(set(query_tokens) & set(tf.keys())) / max(1, len(set(query_tokens)))
@@ -101,8 +104,12 @@ def rrf_fuse(rankings: list[list[dict]], k: float = _RRF_K) -> list[dict]:
     return merged
 
 
-def hybrid_fuse(dense: list[dict], lexical: list[dict],
-                dense_weight: float = 1.0, lexical_weight: float = 1.0) -> list[dict]:
+def hybrid_fuse(
+    dense: list[dict],
+    lexical: list[dict],
+    dense_weight: float = 1.0,
+    lexical_weight: float = 1.0,
+) -> list[dict]:
     """Fuse dense + lexical rankings via weighted RRF. `dense` and `lexical` are
     rank-ordered result lists sharing `id` keys. The weights scale each list's
     RRF contribution (a lexical-heavy query like an exact citation benefits from
@@ -118,7 +125,9 @@ def hybrid_fuse(dense: list[dict], lexical: list[dict],
     return rrf_fuse(rankings)
 
 
-def lexical_rank(query: str, candidates: list[dict], text_key: str = "content") -> list[dict]:
+def lexical_rank(
+    query: str, candidates: list[dict], text_key: str = "content"
+) -> list[dict]:
     """Rank a candidate pool by BM25-style token score against the query.
     Deterministic, offline, no index. Each candidate's searchable text is
     `candidate[text_key]` (falling back to payload[text_key] then str()).

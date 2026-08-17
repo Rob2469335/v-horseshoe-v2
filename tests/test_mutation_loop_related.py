@@ -1,5 +1,7 @@
 """Tests for the genetic mutation loop's related-test discovery (EVO-3)."""
+
 from swarm_os.services.genetic_mutation_loop import _find_related_test_files
+
 
 def test_mutation_loop_finds_related_tests_not_hardcoded():
     """EVO-3: the mutation loop must run the tests related to the MUTATED file,
@@ -47,4 +49,3 @@ def test_mutation_loop_sync_writes_offloaded_to_thread():
     history_block = src.split("HISTORY_FILE.parent.mkdir")[1]
     assert "asyncio.to_thread(" in history_block
     assert "HISTORY_FILE.write_text(json.dumps" not in history_block
-

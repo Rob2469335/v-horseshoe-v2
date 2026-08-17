@@ -5,6 +5,7 @@ Covers:
   - build_run_diff: per-file unified diff of what an agent changed since snapshot
   - /diff-last /permissions /auto /toasts command registration + wiring
 """
+
 import subprocess
 from pathlib import Path
 
@@ -26,11 +27,26 @@ def global_subprocess_mock():
 @pytest.fixture()
 def repo(tmp_path: Path):
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.email", "t@t"], cwd=tmp_path, check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "t@t"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "t"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
     (tmp_path / "a.py").write_text("x = 1\nx = 2\nx = 3\n", encoding="utf-8")
     subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, capture_output=True)
-    subprocess.run(["git", "commit", "-m", "init", "-q"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "init", "-q"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
     return tmp_path
 
 
@@ -38,8 +54,10 @@ def repo(tmp_path: Path):
 # permissions module
 # --------------------------------------------------------------------------
 
+
 def test_permissions_defaults_and_roundtrip(tmp_path, monkeypatch):
     from organism_console import permissions as perms
+
     monkeypatch.setattr(perms, "PERMISSIONS_FILE", tmp_path / "perms.json")
     perms.reset()
     assert perms.policy_for("sandbox_repl") == "ask"
@@ -51,6 +69,7 @@ def test_permissions_defaults_and_roundtrip(tmp_path, monkeypatch):
 
 def test_permissions_auto_mode(tmp_path, monkeypatch):
     from organism_console import permissions as perms
+
     monkeypatch.setattr(perms, "PERMISSIONS_FILE", tmp_path / "perms.json")
     perms.reset()
     perms.set_auto_mode(True)
@@ -65,6 +84,7 @@ def test_permissions_auto_mode(tmp_path, monkeypatch):
 
 def test_permissions_set_policy_validation(tmp_path, monkeypatch):
     from organism_console import permissions as perms
+
     monkeypatch.setattr(perms, "PERMISSIONS_FILE", tmp_path / "perms.json")
     perms.reset()
     assert perms.set_policy("screen", "deny") is True
@@ -76,6 +96,7 @@ def test_permissions_set_policy_validation(tmp_path, monkeypatch):
 # --------------------------------------------------------------------------
 # build_run_diff
 # --------------------------------------------------------------------------
+
 
 def test_run_diff_shows_only_agent_changes(repo: Path):
     snap = snapshot_worktree(repo)
@@ -141,8 +162,10 @@ def test_render_run_diff_output(repo: Path):
 # command registration / wiring
 # --------------------------------------------------------------------------
 
+
 def test_sota_commands_registered():
     from organism_console.command_registry import registry
+
     for name in ("permissions", "auto", "toasts", "diff-last", "changes"):
         assert name in registry.commands, f"/{name} not registered"
 
@@ -157,8 +180,14 @@ def test_diff_last_wiring(tmp_path, monkeypatch):
     state = SessionState(tmp_path / "session.json")
     state.save = lambda **kwargs: None
     console = Console(file=io.StringIO(), force_terminal=False)
-    ctx = CommandContext(state=state, console=console, call_api=None, run_prompt=None,
-                         get_system_stats=None, installed_models=["qwen3.5-4b"])
+    ctx = CommandContext(
+        state=state,
+        console=console,
+        call_api=None,
+        run_prompt=None,
+        get_system_stats=None,
+        installed_models=["qwen3.5-4b"],
+    )
     registry.commands["diff-last"]["func"](ctx, [])
     out = console.file.getvalue()
     assert "No previous run snapshot" in out
@@ -171,14 +200,21 @@ def test_permissions_commands_wire(tmp_path, monkeypatch):
     from organism_console._command_context import CommandContext
     from organism_console.state_store import SessionState
     from organism_console import permissions as perms
+
     monkeypatch.setattr(perms, "PERMISSIONS_FILE", tmp_path / "perms.json")
     perms.reset()
 
     state = SessionState(tmp_path / "session.json")
     state.save = lambda **kwargs: None
     console = Console(file=io.StringIO(), force_terminal=False)
-    ctx = CommandContext(state=state, console=console, call_api=None, run_prompt=None,
-                         get_system_stats=None, installed_models=["qwen3.5-4b"])
+    ctx = CommandContext(
+        state=state,
+        console=console,
+        call_api=None,
+        run_prompt=None,
+        get_system_stats=None,
+        installed_models=["qwen3.5-4b"],
+    )
 
     registry.commands["permissions"]["func"](ctx, [])
     assert "sandbox_repl" in console.file.getvalue()
@@ -195,6 +231,7 @@ def test_permissions_commands_wire(tmp_path, monkeypatch):
 
 def test_session_state_toasts_flag(tmp_path):
     from organism_console.state_store import SessionState
+
     state = SessionState(tmp_path / "session.json")
     assert state.toasts_enabled is True
     state.toasts_enabled = False
@@ -205,6 +242,7 @@ def test_session_state_toasts_flag(tmp_path):
 
 def test_notifications_noop_safe():
     from organism_console import notifications as notif
+
     notif.set_enabled(False)
     notif.notify("t", "b")  # must not raise
     notif.set_enabled(True)

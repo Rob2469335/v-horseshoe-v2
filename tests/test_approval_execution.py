@@ -28,7 +28,9 @@ def test_execute_approved_request_is_idempotent(tmp_path: Path):
     executor = CountingExecutor()
     service = ApprovalExecutionService(queue=queue, executor=executor)
 
-    request = queue.create_request(component="system", action="restart_component", reason="manual remediation")
+    request = queue.create_request(
+        component="system", action="restart_component", reason="manual remediation"
+    )
     queue.decide(request["request_id"], approved=True, note="approved")
 
     first = service.execute_approved(request["request_id"])
@@ -48,7 +50,9 @@ def test_execute_rejects_nonapproved_request(tmp_path: Path):
     executor = CountingExecutor()
     service = ApprovalExecutionService(queue=queue, executor=executor)
 
-    request = queue.create_request(component="system", action="restart_component", reason="manual remediation")
+    request = queue.create_request(
+        component="system", action="restart_component", reason="manual remediation"
+    )
     result = service.execute_approved(request["request_id"])
 
     assert result["status"] == "error"
@@ -63,7 +67,11 @@ def test_execute_endpoint_runs_approved_request():
 
     create_response = client.post(
         "/features/healing-approvals",
-        json={"component": "system", "action": "restart_component", "reason": "manual review required"},
+        json={
+            "component": "system",
+            "action": "restart_component",
+            "reason": "manual review required",
+        },
     )
     request_id = create_response.json()["request"]["request_id"]
 

@@ -17,7 +17,9 @@ class HealingState:
 
 
 class HealingLoop:
-    def __init__(self, cooldown_seconds: int = 30, detector=None, governor=None) -> None:
+    def __init__(
+        self, cooldown_seconds: int = 30, detector=None, governor=None
+    ) -> None:
         self.detector = detector or FailureDetector()
         self.governor = governor or Governor()
         self.state = HealingState()
@@ -25,10 +27,18 @@ class HealingLoop:
 
     def tick(self) -> dict:
         now = time.time()
-        if self.state.last_heal_time and now < (self.state.last_heal_time + self.cooldown_seconds):
-            return {"status": "throttled", "cooldown_remaining": (self.state.last_heal_time + self.cooldown_seconds - now)}
+        if self.state.last_heal_time and now < (
+            self.state.last_heal_time + self.cooldown_seconds
+        ):
+            return {
+                "status": "throttled",
+                "cooldown_remaining": (
+                    self.state.last_heal_time + self.cooldown_seconds - now
+                ),
+            }
 
         from .failure_detector import run_coro_sync
+
         report = run_coro_sync(self.detector.check())
         signals = report.get("signals", [])
         if not signals:
@@ -39,7 +49,11 @@ class HealingLoop:
         # BUG FIX: `if < 1` after += 1 was always False, making the escalation
         # branch dead. Warn once (count == 1), then decide on the second sighting.
         if self.state.consecutive_failures == 1:
-            return {"status": "transient_warning", "signals": signals, "health_score": report.get("health_score", 100)}
+            return {
+                "status": "transient_warning",
+                "signals": signals,
+                "health_score": report.get("health_score", 100),
+            }
 
         symptom = signals[0]
         decision = self.governor.decide(symptom)
@@ -69,14 +83,17 @@ class HealingLoop:
             return
         outcome = "SUCCESS" if result and result.get("ok") else "FAILURE"
         try:
-            self.governor.finalize(decision.get("incident_id"), {
-                "outcome": outcome,
-                "repair": {
-                    "action": (result or {}).get("action"),
-                    "component": decision.get("component"),
+            self.governor.finalize(
+                decision.get("incident_id"),
+                {
+                    "outcome": outcome,
+                    "repair": {
+                        "action": (result or {}).get("action"),
+                        "component": decision.get("component"),
+                    },
+                    "metrics_after": {},
                 },
-                "metrics_after": {},
-            })
+            )
         except Exception as e:
             log.warning("Governor finalize failed: %s", e)
             pass

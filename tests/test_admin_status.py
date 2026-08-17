@@ -4,6 +4,7 @@ from swarm_os.main import app
 
 client = TestClient(app)
 
+
 def test_admin_status():
     response = client.get("/api/admin/status")
     assert response.status_code == 200
@@ -54,7 +55,10 @@ def test_timeline_reads_bounded_events(monkeypatch, client):
     wrote = False
     if not events_path.exists() or events_path.stat().st_size == 0:
         with events_path.open("w", encoding="utf-8") as f:
-            f.write(json.dumps({"occurred_at": "2026-08-10T00:00:00+00:00", "status": "ok"}) + "\n")
+            f.write(
+                json.dumps({"occurred_at": "2026-08-10T00:00:00+00:00", "status": "ok"})
+                + "\n"
+            )
         wrote = True
     try:
         captured = {}
@@ -72,5 +76,3 @@ def test_timeline_reads_bounded_events(monkeypatch, client):
     finally:
         if wrote:
             events_path.unlink(missing_ok=True)
-
-

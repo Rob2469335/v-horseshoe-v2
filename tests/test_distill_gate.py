@@ -10,6 +10,7 @@ import pytest
 @pytest.mark.asyncio
 async def test_distill_skips_model_variability():
     from swarm_os.services.reflection_loop import _distill
+
     mock_acompletion = AsyncMock()
     with patch("swarm_os.services.reflection_loop.acompletion", mock_acompletion):
         result = await _distill("some failure content", fix_class="model_variability")
@@ -20,13 +21,18 @@ async def test_distill_skips_model_variability():
 @pytest.mark.asyncio
 async def test_distill_runs_for_prompt_sensitivity():
     from swarm_os.services.reflection_loop import _distill
+
     mock_resp = SimpleNamespace(
-        choices=[SimpleNamespace(message=SimpleNamespace(content="reflection rule here"))]
+        choices=[
+            SimpleNamespace(message=SimpleNamespace(content="reflection rule here"))
+        ]
     )
     mock_acompletion = AsyncMock(return_value=mock_resp)
     with patch("swarm_os.services.reflection_loop.acompletion", mock_acompletion):
         with patch.dict("os.environ", {}, clear=True):
-            result = await _distill("some failure content", fix_class="prompt_sensitivity")
+            result = await _distill(
+                "some failure content", fix_class="prompt_sensitivity"
+            )
     assert result == "reflection rule here"
     mock_acompletion.assert_called()
 
@@ -34,6 +40,7 @@ async def test_distill_runs_for_prompt_sensitivity():
 @pytest.mark.asyncio
 async def test_distill_runs_for_none_fix_class():
     from swarm_os.services.reflection_loop import _distill
+
     mock_resp = SimpleNamespace(
         choices=[SimpleNamespace(message=SimpleNamespace(content="distilled rule"))]
     )
@@ -53,12 +60,18 @@ async def test_run_reflection_classifies_mv_skips_distill():
     with tempfile.TemporaryDirectory() as tmp:
         diary_path = Path(tmp) / "test_diary.jsonl"
         # Write a diary entry with a model_variability-like error
-        diary_path.write_text(json.dumps({
-            "task": "test task",
-            "content_preview": "I don't know",
-            "error": "hallucinated wrong answer",
-            "component": "code_analyzer",
-        }) + "\n", encoding="utf-8")
+        diary_path.write_text(
+            json.dumps(
+                {
+                    "task": "test task",
+                    "content_preview": "I don't know",
+                    "error": "hallucinated wrong answer",
+                    "component": "code_analyzer",
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
 
         mock_acompletion = AsyncMock()
         mock_acompletion.return_value = SimpleNamespace(
@@ -66,7 +79,9 @@ async def test_run_reflection_classifies_mv_skips_distill():
         )
 
         with patch("swarm_os.services.reflection_loop.DIARY_PATH", diary_path):
-            with patch("swarm_os.services.reflection_loop.acompletion", mock_acompletion):
+            with patch(
+                "swarm_os.services.reflection_loop.acompletion", mock_acompletion
+            ):
                 with patch.dict("os.environ", {}, clear=True):
                     await run_reflection()
 
@@ -81,20 +96,30 @@ async def test_run_reflection_classifies_ps_runs_distill():
 
     with tempfile.TemporaryDirectory() as tmp:
         diary_path = Path(tmp) / "test_diary_ps.jsonl"
-        diary_path.write_text(json.dumps({
-            "task": "test task",
-            "content_preview": "invalid json output",
-            "error": "malformed json parse error",
-            "component": "coder",
-        }) + "\n", encoding="utf-8")
+        diary_path.write_text(
+            json.dumps(
+                {
+                    "task": "test task",
+                    "content_preview": "invalid json output",
+                    "error": "malformed json parse error",
+                    "component": "coder",
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
 
         mock_acompletion = AsyncMock()
         mock_acompletion.return_value = SimpleNamespace(
-            choices=[SimpleNamespace(message=SimpleNamespace(content="a reflection rule"))]
+            choices=[
+                SimpleNamespace(message=SimpleNamespace(content="a reflection rule"))
+            ]
         )
 
         with patch("swarm_os.services.reflection_loop.DIARY_PATH", diary_path):
-            with patch("swarm_os.services.reflection_loop.acompletion", mock_acompletion):
+            with patch(
+                "swarm_os.services.reflection_loop.acompletion", mock_acompletion
+            ):
                 with patch.dict("os.environ", {}, clear=True):
                     await run_reflection()
 

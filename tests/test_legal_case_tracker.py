@@ -5,6 +5,7 @@ data source, ingested via proper APIs, never scraped).
 Pins: atomic persist/load round-trip, chronological timeline, next-event
 primitive, corrupt-file tolerance, list ordering.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -46,7 +47,10 @@ def test_save_load_roundtrip(tmp_path):
     assert loaded is not None
     assert loaded.case_name == "United States v. Kalkanis"
     assert len(loaded.entries) == 2
-    assert loaded.entries[0].description == "JUDGMENT IN A CRIMINAL CASE as to Kerry Gordon"
+    assert (
+        loaded.entries[0].description
+        == "JUDGMENT IN A CRIMINAL CASE as to Kerry Gordon"
+    )
     assert loaded.updated_at  # stamped on save
 
 
@@ -66,10 +70,12 @@ def test_next_event_skips_past(tmp_path):
     rec = _record()
     # Both entries are in the past -> no next event.
     assert case_tracker.next_event(rec) is None
-    rec.entries.append(case_tracker.CaseEntry(
-        entry_date="2030-01-15",
-        description="Evidentiary hearing",
-    ))
+    rec.entries.append(
+        case_tracker.CaseEntry(
+            entry_date="2030-01-15",
+            description="Evidentiary hearing",
+        )
+    )
     nxt = case_tracker.next_event(rec)
     assert nxt is not None and nxt.description == "Evidentiary hearing"
 

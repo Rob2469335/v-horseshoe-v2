@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 import time
 from typing import Dict, Any
 
+
 @dataclass
 class PluginState:
     name: str
@@ -25,4 +26,3 @@ class PluginState:
         self.failure_count += 1
         self.last_used = time.time()
         self.fitness *= 0.9
-

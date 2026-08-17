@@ -15,6 +15,7 @@ The critical behaviors:
   4. Atomic overwrite-latest (os.replace) — a torn write never corrupts.
   5. The checkpoint is invisible to the watch-loop repair budget.
 """
+
 import pytest
 
 from runtime_v2.services import checkpointing as ck
@@ -29,18 +30,35 @@ def _isolate_checkpoint_dir(monkeypatch, tmp_path):
 
 # ── checkpoint_id stability ─────────────────────────────────────────────────
 def test_checkpoint_id_stable_across_logical_goal():
-    assert ck.checkpoint_id("coder", "fix the bug") == ck.checkpoint_id("coder", "fix the bug")
+    assert ck.checkpoint_id("coder", "fix the bug") == ck.checkpoint_id(
+        "coder", "fix the bug"
+    )
     # canonicalization: trailing space / collapsed whitespace / case preserved
-    assert ck.checkpoint_id("coder", "  fix   the   bug  ") == ck.checkpoint_id("coder", "fix the bug")
+    assert ck.checkpoint_id("coder", "  fix   the   bug  ") == ck.checkpoint_id(
+        "coder", "fix the bug"
+    )
     # different agent or different goal -> different id
-    assert ck.checkpoint_id("coder", "fix the bug") != ck.checkpoint_id("debugger", "fix the bug")
-    assert ck.checkpoint_id("coder", "fix the bug") != ck.checkpoint_id("coder", "fix the other bug")
+    assert ck.checkpoint_id("coder", "fix the bug") != ck.checkpoint_id(
+        "debugger", "fix the bug"
+    )
+    assert ck.checkpoint_id("coder", "fix the bug") != ck.checkpoint_id(
+        "coder", "fix the other bug"
+    )
 
 
 def test_checkpoint_id_is_stored_and_resume_uses_stored_id():
     """Resume looks up by the STORED id — never re-derives from caller text."""
     cid = ck.checkpoint_id("coder", "implement the feature")
-    ck.write_checkpoint(cid, {"checkpoint_id": cid, "turn": 5, "messages": [], "state": {}, "prompt": "implement the feature"})
+    ck.write_checkpoint(
+        cid,
+        {
+            "checkpoint_id": cid,
+            "turn": 5,
+            "messages": [],
+            "state": {},
+            "prompt": "implement the feature",
+        },
+    )
     loaded = ck.load_checkpoint(cid)
     assert loaded is not None
     assert loaded["checkpoint_id"] == cid
@@ -127,12 +145,28 @@ async def test_delete_only_on_accepted_final_real_l1_placeholder(tmp_path):
     svc = AgentServiceV2()
     state = _CallState()
     cid = ck.checkpoint_id("code_analyzer", "analyze the codebase for bugs")
-    ck.write_checkpoint(cid, {"turn": 3, "messages": [], "state": {}, "prompt": "analyze the codebase for bugs"})
+    ck.write_checkpoint(
+        cid,
+        {
+            "turn": 3,
+            "messages": [],
+            "state": {},
+            "prompt": "analyze the codebase for bugs",
+        },
+    )
 
     messages = [{"role": "user", "content": "hi"}]
     gen = svc._handle_final(
-        {"action": "final", "response": "Task completed."}, "code_analyzer", "m", "p",
-        messages, 0.0, "analyze the codebase for bugs", True, state)
+        {"action": "final", "response": "Task completed."},
+        "code_analyzer",
+        "m",
+        "p",
+        messages,
+        0.0,
+        "analyze the codebase for bugs",
+        True,
+        state,
+    )
     async for _ in gen:
         pass
     assert state.handler_status == "CONTINUE"  # L1 rejected it
@@ -146,13 +180,25 @@ async def test_delete_only_on_accepted_final_real_l1_unread_file(tmp_path):
     svc = AgentServiceV2()
     state = _CallState()
     cid = ck.checkpoint_id("code_analyzer", "analyze the codebase")
-    ck.write_checkpoint(cid, {"turn": 2, "messages": [], "state": {}, "prompt": "analyze the codebase"})
+    ck.write_checkpoint(
+        cid, {"turn": 2, "messages": [], "state": {}, "prompt": "analyze the codebase"}
+    )
 
     messages = [{"role": "user", "content": "hi"}]
     gen = svc._handle_final(
-        {"action": "final", "response": "I audited swarm_os/core/orchestrator.py and it has a bug."},
-        "code_analyzer", "m", "p",
-        messages, 0.0, "analyze the codebase", True, state)
+        {
+            "action": "final",
+            "response": "I audited swarm_os/core/orchestrator.py and it has a bug.",
+        },
+        "code_analyzer",
+        "m",
+        "p",
+        messages,
+        0.0,
+        "analyze the codebase",
+        True,
+        state,
+    )
     async for _ in gen:
         pass
     assert state.handler_status == "CONTINUE"
@@ -167,13 +213,25 @@ async def test_delete_happens_on_accepted_final(tmp_path):
     state = _CallState()
     state.read_paths.add("swarm_os/api/routes.py")
     cid = ck.checkpoint_id("code_analyzer", "analyze the codebase")
-    ck.write_checkpoint(cid, {"turn": 2, "messages": [], "state": {}, "prompt": "analyze the codebase"})
+    ck.write_checkpoint(
+        cid, {"turn": 2, "messages": [], "state": {}, "prompt": "analyze the codebase"}
+    )
 
     messages = [{"role": "user", "content": "hi"}]
     gen = svc._handle_final(
-        {"action": "final", "response": "swarm_os/api/routes.py hosts the router; the memory integration is sound."},
-        "code_analyzer", "m", "p",
-        messages, 0.0, "analyze the codebase", True, state)
+        {
+            "action": "final",
+            "response": "swarm_os/api/routes.py hosts the router; the memory integration is sound.",
+        },
+        "code_analyzer",
+        "m",
+        "p",
+        messages,
+        0.0,
+        "analyze the codebase",
+        True,
+        state,
+    )
     events = [e async for e in gen]
     assert state.handler_status == "DONE"
     assert any(e.get("type") == "final" for e in events)
@@ -189,6 +247,7 @@ def test_checkpoint_invisible_to_watch_loop_budget(monkeypatch, tmp_path):
     repair breaker — a resumed run is invisible to the daily ceiling."""
     from types import SimpleNamespace
     import swarm_os.services.watch_loop as wl
+
     monkeypatch.setattr(wl, "_EVENTS_FILE", tmp_path / "events.jsonl")
     monkeypatch.setattr(wl, "_HEARTBEAT_FILE", tmp_path / "heartbeat.json")
     monkeypatch.setattr(wl, "_AUDIT_FILE", tmp_path / "auto_repairs.jsonl")
@@ -202,6 +261,7 @@ def test_checkpoint_invisible_to_watch_loop_budget(monkeypatch, tmp_path):
     ck.write_checkpoint("some-run", {"turn": 1, "messages": []})
     ck.load_checkpoint("some-run")
     assert loop._repairs_in_window == 1
+
 
 @pytest.mark.asyncio
 async def test_loop_level_delete_after_response_delivered(monkeypatch, tmp_path):
@@ -222,7 +282,11 @@ async def test_loop_level_delete_after_response_delivered(monkeypatch, tmp_path)
 
     # Drive the loop with exactly one real final decision (code_analyzer).
     async def _fake_decision(*args, **kwargs):
-        return {"action": "final", "response": "swarm_os/api/routes.py hosts the router; the memory integration is sound."}
+        return {
+            "action": "final",
+            "response": "swarm_os/api/routes.py hosts the router; the memory integration is sound.",
+        }
+
     monkeypatch.setattr(mod.AgentServiceV2, "_get_decision", _fake_decision)
 
     # Pre-seed state.read_paths so the REAL _handle_final accepts the final (L1
@@ -235,11 +299,14 @@ async def test_loop_level_delete_after_response_delivered(monkeypatch, tmp_path)
         s = orig_call()
         s.read_paths.add("swarm_os/api/routes.py")
         return s
+
     monkeypatch.setattr(mod, "_CallState", _patched_state)
 
     cid = ck.checkpoint_id("code_analyzer", "analyze the codebase")
     events = []
-    async for chunk in svc.step_agent_stream("code_analyzer", "analyze the codebase", resume=None):
+    async for chunk in svc.step_agent_stream(
+        "code_analyzer", "analyze the codebase", resume=None
+    ):
         events.append(chunk)
 
     finals = [e for e in events if e.get("type") == "final"]

@@ -4,6 +4,7 @@ On Windows, a native balloon toast is fired through PowerShell's WinForms
 NotifyIcon — no third-party module required. Everything runs in a daemon
 thread and swallows failures so a headless/CI session never blocks or crashes.
 """
+
 from __future__ import annotations
 
 import subprocess
@@ -51,7 +52,13 @@ def notify(title: str, body: str = "") -> None:
     def _fire() -> None:
         try:
             subprocess.Popen(
-                ["powershell", "-NoProfile", "-NonInteractive", "-Command", _toast_script(title, body)],
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    _toast_script(title, body),
+                ],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),

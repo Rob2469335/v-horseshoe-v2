@@ -30,7 +30,10 @@ def check_qdrant() -> HealthCheckResult:
         )
 
     try:
-        response = requests.get(f"{settings.qdrant_url}/collections", timeout=settings.health_timeout_seconds)
+        response = requests.get(
+            f"{settings.qdrant_url}/collections",
+            timeout=settings.health_timeout_seconds,
+        )
         response.raise_for_status()
         return HealthCheckResult(
             component="qdrant",
@@ -52,7 +55,9 @@ def check_cache() -> HealthCheckResult:
     return HealthCheckResult(
         component="cache",
         status="ok" if flags.cache_enabled else "disabled",
-        detail="Cache enabled" if flags.cache_enabled else "Cache disabled by feature flag",
+        detail="Cache enabled"
+        if flags.cache_enabled
+        else "Cache disabled by feature flag",
         checked_at=time.time(),
     )
 
@@ -68,9 +73,14 @@ def check_background_jobs() -> HealthCheckResult:
         checked_at=time.time(),
     )
 
+
 def check_llm_local() -> HealthCheckResult:
     try:
-        response = requests.get("http://127.0.0.1:8080/v1/models", headers={"Authorization": "Bearer llama"}, timeout=2.0)
+        response = requests.get(
+            "http://127.0.0.1:8080/v1/models",
+            headers={"Authorization": "Bearer llama"},
+            timeout=2.0,
+        )
         response.raise_for_status()
         return HealthCheckResult(
             component="llm_local",

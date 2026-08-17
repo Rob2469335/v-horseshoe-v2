@@ -9,17 +9,17 @@ class EventStore:
     def __init__(self, root: Path) -> None:
         self.root = root
         self.root.mkdir(parents=True, exist_ok=True)
-        self.path = self.root / 'events.jsonl'
+        self.path = self.root / "events.jsonl"
 
     def append(self, event: EventEnvelope) -> None:
-        line = json.dumps(event.to_dict(), ensure_ascii=False) + '\n'
+        line = json.dumps(event.to_dict(), ensure_ascii=False) + "\n"
         import logging
         from filelock import FileLock
-        
-        lock_path = self.path.with_suffix('.lock')
+
+        lock_path = self.path.with_suffix(".lock")
         try:
             with FileLock(lock_path, timeout=5.0):
-                with self.path.open('a', encoding='utf-8') as f:
+                with self.path.open("a", encoding="utf-8") as f:
                     f.write(line)
                     f.flush()
         except Exception as e:
@@ -29,7 +29,7 @@ class EventStore:
         if not self.path.exists():
             return []
         items = []
-        with self.path.open('r', encoding='utf-8') as f:
+        with self.path.open("r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if line:
@@ -40,8 +40,9 @@ class EventStore:
                         items.append(json.loads(line))
                     except json.JSONDecodeError:
                         import logging
-                        logging.getLogger(__name__).warning("Skipping corrupted event line: %r", line[:80])
+
+                        logging.getLogger(__name__).warning(
+                            "Skipping corrupted event line: %r", line[:80]
+                        )
                         continue
         return items
-
-

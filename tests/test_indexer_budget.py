@@ -6,6 +6,7 @@ large for the model's context makes /v1/embeddings reject the WHOLE batch
 landed). `_fit_token_budget()` derives a character budget from the model's LIVE
 n_ctx (so it always fits the server) and must never let a chunk exceed it.
 """
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock
@@ -16,9 +17,7 @@ def _mock_models(monkeypatch, n_ctx: int):
     import runtime_v2.services.indexer as idx
 
     fake = MagicMock()
-    fake.json = MagicMock(
-        return_value={"data": [{"meta": {"n_ctx": n_ctx}}]}
-    )
+    fake.json = MagicMock(return_value={"data": [{"meta": {"n_ctx": n_ctx}}]})
     monkeypatch.setattr(idx.requests, "get", lambda *a, **k: fake)
 
 
@@ -31,7 +30,9 @@ def test_budget_tracks_live_n_ctx(monkeypatch):
     # boots at n_ctx=8192 -> raw formula ~24k chars, too slow per char) and
     # FLOORED at 1024 (never below a workable chunk).
     _mock_models(monkeypatch, 2048)
-    assert _embed_context_budget_chars() == min(int(2048 * 3.5 * 0.85), idx._MAX_BUDGET_CHARS)
+    assert _embed_context_budget_chars() == min(
+        int(2048 * 3.5 * 0.85), idx._MAX_BUDGET_CHARS
+    )
     _mock_models(monkeypatch, 512)
     assert _embed_context_budget_chars() == int(512 * 3.5 * 0.85)
     _mock_models(monkeypatch, 100)

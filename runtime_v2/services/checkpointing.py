@@ -24,6 +24,7 @@ DESIGN (locked with the reviewer):
 - The checkpoint is INVISIBLE to the watch-loop repair budget: it stores agent-
   run state only, never touches repair_breaker.json / auto_repairs.jsonl.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -47,7 +48,9 @@ def canonicalize(text: str) -> str:
 
 
 def checkpoint_id(agent_id: str, prompt: str) -> str:
-    return hashlib.sha256(f"{agent_id}|{canonicalize(prompt)}".encode("utf-8")).hexdigest()[:16]
+    return hashlib.sha256(
+        f"{agent_id}|{canonicalize(prompt)}".encode("utf-8")
+    ).hexdigest()[:16]
 
 
 def _checkpoint_path(cid: str) -> Path:

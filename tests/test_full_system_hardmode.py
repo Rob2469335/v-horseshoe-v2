@@ -115,7 +115,9 @@ def test_full_system_hardmode_end_to_end(tmp_path: Path):
     assert pending["status"] == "pending"
 
     # 2. Reject non-approved execution.
-    execute_before_approval = client.post(f"/features/healing-approvals/{request_id}/execute")
+    execute_before_approval = client.post(
+        f"/features/healing-approvals/{request_id}/execute"
+    )
     assert execute_before_approval.status_code == 200
     body = execute_before_approval.json()
     assert body["status"] == "error"

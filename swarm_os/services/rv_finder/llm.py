@@ -4,6 +4,7 @@ Cloud DeepSeek (OpenRouter) is attempted first, with the local qwen3.5-4b as a
 fallback. Both run inside the same try/except chain so a failed provider
 degrades to the next instead of failing the whole search.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -69,34 +70,44 @@ async def _llm_deep_dive(listings: list[RVListing], budget: int) -> str:
         # for this prompt), so max_tokens must be high enough to leave room for
         # the actual report — 1200 gets eaten entirely by reasoning.
         if os.environ.get("DEEPSEEK_API_KEY"):
-            attempts.append({
-                "model": "deepseek/deepseek-v4-flash",
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 3000,
-                "timeout": 120.0,
-                "num_retries": 0,
-            })
+            attempts.append(
+                {
+                    "model": "deepseek/deepseek-v4-flash",
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 3000,
+                    "timeout": 120.0,
+                    "num_retries": 0,
+                }
+            )
         if os.environ.get("OPENAI_API_KEY"):
-            attempts.append({
-                "model": "openai/deepseek-v4-flash",
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 3000,
-                "timeout": 90.0,
+            attempts.append(
+                {
+                    "model": "openai/deepseek-v4-flash",
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 3000,
+                    "timeout": 90.0,
+                    "num_retries": 0,
+                    "api_base": os.getenv(
+                        "OPENAI_API_BASE", "https://opencode.ai/zen/go/v1"
+                    ),
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                }
+            )
+        attempts.append(
+            {
+                "model": "qwen3.5-4b",
+                "messages": [
+                    {"role": "system", "content": "/no_think\n\n"},
+                    {"role": "user", "content": prompt},
+                ],
+                "api_base": "http://127.0.0.1:8080/v1",
+                "api_key": "llama",
+                "custom_llm_provider": "openai",
+                "max_tokens": 1200,
+                "timeout": 300.0,
                 "num_retries": 0,
-                "api_base": os.getenv("OPENAI_API_BASE", "https://opencode.ai/zen/go/v1"),
-                "api_key": os.getenv("OPENAI_API_KEY"),
-            })
-        attempts.append({
-            "model": "qwen3.5-4b",
-            "messages": [{"role": "system", "content": "/no_think\n\n"},
-                         {"role": "user", "content": prompt}],
-            "api_base": "http://127.0.0.1:8080/v1",
-            "api_key": "llama",
-            "custom_llm_provider": "openai",
-            "max_tokens": 1200,
-            "timeout": 300.0,
-            "num_retries": 0,
-        })
+            }
+        )
         for cfg in attempts:
             try:
                 async with asyncio.timeout(cfg["timeout"]):
@@ -105,7 +116,10 @@ async def _llm_deep_dive(listings: list[RVListing], budget: int) -> str:
                 if content.strip():
                     try:
                         from runtime_v2.services.usage_log import record_response
-                        record_response(res, cfg.get("model", ""), source="rv_finder_deep_dive")
+
+                        record_response(
+                            res, cfg.get("model", ""), source="rv_finder_deep_dive"
+                        )
                     except Exception as usage_err:  # noqa: BLE001
                         logger.debug("usage log skipped: %s", usage_err)
                     return content.strip()

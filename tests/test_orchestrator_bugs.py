@@ -1,7 +1,8 @@
 """Tests for orchestrator bug fixes:
-  1. Duplicate slash-command loop detection
-  2. Cloud provider routing (openrouter/free should NOT go to Ollama)
+1. Duplicate slash-command loop detection
+2. Cloud provider routing (openrouter/free should NOT go to Ollama)
 """
+
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 from swarm_os.core.orchestrator import Orchestrator
@@ -10,11 +11,13 @@ from swarm_os.core.orchestrator import Orchestrator
 @pytest.fixture
 def orch():
     """Build an Orchestrator with mocked-out dependencies."""
-    with patch("swarm_os.core.orchestrator.LlamaClient") as MockLlama, \
-         patch("swarm_os.core.orchestrator.MemoryBridge") as MockBridge, \
-         patch("swarm_os.core.orchestrator.mcp_registry") as MockMCP, \
-         patch("swarm_os.core.orchestrator.EventStore"), \
-         patch("swarm_os.core.orchestrator.TraceCollector"):
+    with (
+        patch("swarm_os.core.orchestrator.LlamaClient") as MockLlama,
+        patch("swarm_os.core.orchestrator.MemoryBridge") as MockBridge,
+        patch("swarm_os.core.orchestrator.mcp_registry") as MockMCP,
+        patch("swarm_os.core.orchestrator.EventStore"),
+        patch("swarm_os.core.orchestrator.TraceCollector"),
+    ):
         MockBridge.return_value.get_memory_context = AsyncMock(return_value="")
         MockMCP.get_tools_schema.return_value = []
         o = Orchestrator()
@@ -33,6 +36,7 @@ def orch():
 # successes stayed 0, and a model that failed once could never recover its
 # standing: strategy.py scores success_rate = successes / total_requests)
 # ─────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_generate_records_success_and_recovers_model_standing(orch):
@@ -61,11 +65,10 @@ async def test_generate_records_success_and_recovers_model_standing(orch):
     )
     assert after.total_requests == 2
     success_rate = after.successes / after.total_requests
-    assert success_rate == 0.5, (
-        f"success_rate did not recover from 0.0: {success_rate}"
-    )
+    assert success_rate == 0.5, f"success_rate did not recover from 0.0: {success_rate}"
     # Cooldown from the prior failure must have been cleared by the success
     import time as _time
+
     assert after.cooldown_until <= _time.time()
 
 
@@ -125,13 +128,17 @@ async def test_duplicate_tool_call_breaks_loop(orch):
 # BUG #2: Provider detection / routing
 # ─────────────────────────────────────────────────────────
 
+
 def test_detect_provider_openrouter_free(orch):
     assert orch._detect_provider("openrouter/free") in ("openrouter", "llama")
     # If OPENROUTER_API_KEY is set, it should be openrouter
 
 
 def test_detect_provider_nvidia(orch):
-    assert orch._detect_provider("nvidia/llama-3.1-nemotron-nano-8b-v1") in ("nvidia", "llama")
+    assert orch._detect_provider("nvidia/llama-3.1-nemotron-nano-8b-v1") in (
+        "nvidia",
+        "llama",
+    )
 
 
 def test_detect_provider_local_model(orch):
@@ -143,7 +150,10 @@ def test_detect_provider_meta_model(orch):
 
 
 def test_detect_provider_deepseek(orch):
-    assert orch._detect_provider("deepseek/deepseek-v4-flash") in ("openrouter", "llama")
+    assert orch._detect_provider("deepseek/deepseek-v4-flash") in (
+        "openrouter",
+        "llama",
+    )
 
 
 @pytest.mark.asyncio
@@ -154,7 +164,9 @@ async def test_openrouter_free_not_sent_to_llm(orch, monkeypatch):
 
     # _cloud_generate should be called instead of llm.generate
     orch._cloud_generate = AsyncMock(return_value="Cloud response OK")
-    orch.llm.generate = AsyncMock(side_effect=AssertionError("LLM should not be called for openrouter/free"))
+    orch.llm.generate = AsyncMock(
+        side_effect=AssertionError("LLM should not be called for openrouter/free")
+    )
 
     result, model = await orch.generate(
         model="openrouter/free",
@@ -184,6 +196,7 @@ async def test_generate_fallback_when_no_api_key(orch, monkeypatch):
     orch.llm.generate.assert_called_once()
     # Model should have been changed to local fallback
     call_args = orch.llm.generate.call_args
-    call_model = call_args.kwargs.get("model") or (call_args.args[0] if call_args.args else "")
+    call_model = call_args.kwargs.get("model") or (
+        call_args.args[0] if call_args.args else ""
+    )
     assert call_model != "openrouter/free", f"Expected local fallback, got {call_model}"
-

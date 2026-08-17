@@ -1,5 +1,6 @@
 # swarm_os/tests/unit/test_selection.py
 """Updated to use new Genome dataclass and kernel import paths."""
+
 import unittest
 import random
 from swarm_os.kernel.genetics import Genome, normalize_affinities
@@ -11,10 +12,18 @@ def _make_org(org_id: str, fitness: float = 0.0) -> Organism:
     """Create organism without touching disk — no mocking needed."""
     g = Genome()
     normalize_affinities(g)
+
     def brain(ctx):
-        return {"content": "test", "elapsed": 1.0,
-                "finish_reason": "stop", "cost": 0.1,
-                "tools_used": [], "model": "test", "total_tokens": 10}
+        return {
+            "content": "test",
+            "elapsed": 1.0,
+            "finish_reason": "stop",
+            "cost": 0.1,
+            "tools_used": [],
+            "model": "test",
+            "total_tokens": 10,
+        }
+
     # Create organism directly, bypass MemoryBank disk writes
     org = object.__new__(Organism)
     org.id = org_id
@@ -22,20 +31,36 @@ def _make_org(org_id: str, fitness: float = 0.0) -> Organism:
     org.genome = g
     org.fitness = fitness
     org._action_count = 0
+
     # Stub memory so writes are no-ops
     class _NullMemory:
-        def write(self, *a, **kw): pass
-        def recent(self, n=20): return []
+        def write(self, *a, **kw):
+            pass
+
+        def recent(self, n=20):
+            return []
+
     org.memory = _NullMemory()
-    g.record_fitness({"composite": fitness, "quality": fitness, "speed": fitness, "efficiency": fitness})
+    g.record_fitness(
+        {
+            "composite": fitness,
+            "quality": fitness,
+            "speed": fitness,
+            "efficiency": fitness,
+        }
+    )
     return org
 
 
 class TestScoreResponse(unittest.TestCase):
     def test_good_coding_response(self):
         g = Genome()
-        action = {"content": "```python\ndef f(): pass\n```\nSolid answer.",
-                  "elapsed": 5.0, "finish_reason": "stop", "error": None}
+        action = {
+            "content": "```python\ndef f(): pass\n```\nSolid answer.",
+            "elapsed": 5.0,
+            "finish_reason": "stop",
+            "error": None,
+        }
         scores = score_response(action, g, "coding")
         self.assertGreater(scores["quality"], 0)
         self.assertGreater(scores["composite"], 0)
@@ -47,8 +72,12 @@ class TestScoreResponse(unittest.TestCase):
 
     def test_upwork_response_scores_fields(self):
         g = Genome()
-        action = {"content": "Budget: $500. Client rating: 4.8. Fit score: 8/10. Recommend: Apply.",
-                  "elapsed": 3.0, "finish_reason": "stop", "error": None}
+        action = {
+            "content": "Budget: $500. Client rating: 4.8. Fit score: 8/10. Recommend: Apply.",
+            "elapsed": 3.0,
+            "finish_reason": "stop",
+            "error": None,
+        }
         scores = score_response(action, g, "upwork")
         self.assertGreater(scores["quality"], 0.3)
 
@@ -96,6 +125,3 @@ class TestSelectionEngine(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-
-

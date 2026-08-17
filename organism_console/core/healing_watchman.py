@@ -1,13 +1,14 @@
 """Background healing watchman for the CLI.
- 
+
 Ticks the backend healing loop (FailureDetector -> Governor -> RecoveryEngine)
 on a fixed cadence so infrastructure health is self-healed even when no goal
 loop is running. Only governor-approved modes (auto_execute / sandbox_first)
 trigger an actual recovery; approval_required asks the user via a yes/no prompt.
- 
+
 Every executed recovery is finalized back through Governor.finalize() so the
 learner records the true outcome (previously the outcome-learning loop was dead).
 """
+
 import logging
 import threading
 import time
@@ -28,6 +29,7 @@ class HealingWatchman:
 
     def _get_loop(self):
         from swarm_os.healing.healing_loop import HealingLoop
+
         if self._loop is None:
             self._loop = HealingLoop()
         return self._loop
@@ -36,7 +38,9 @@ class HealingWatchman:
         if self._running:
             return
         self._running = True
-        self._thread = threading.Thread(target=self._run, name="healing-watchman", daemon=True)
+        self._thread = threading.Thread(
+            target=self._run, name="healing-watchman", daemon=True
+        )
         self._thread.start()
 
     def stop(self):
@@ -64,13 +68,18 @@ class HealingWatchman:
         if self.console is None:
             return False
         try:
-            from organism_console.permissions import blocked as _perm_blocked, should_ask as _perm_should_ask
+            from organism_console.permissions import (
+                blocked as _perm_blocked,
+                should_ask as _perm_should_ask,
+            )
+
             if _perm_blocked("healing"):
                 return False
             if not _perm_should_ask("healing"):
                 return True
             from rich.prompt import Confirm
             from organism_console.renderer import INPUT_LOCK
+
             with INPUT_LOCK:
                 return Confirm.ask(
                     f"[bold yellow]⚕ Self-healing wants to fix [cyan]{component}[/cyan][/bold yellow]\n"
@@ -94,26 +103,38 @@ class HealingWatchman:
         reasoning = decision.get("mode_reason", "")
 
         if mode in ("auto_execute", "sandbox_first"):
-            self._notify(f"[bold yellow]⚕ Self-healing:[/bold yellow] issue detected in [cyan]{component}[/cyan] — auto-recovering...")
+            self._notify(
+                f"[bold yellow]⚕ Self-healing:[/bold yellow] issue detected in [cyan]{component}[/cyan] — auto-recovering..."
+            )
         elif mode == "approval_required":
             if not self._ask_approval(component, reasoning):
                 self._notify(f"[dim]  ✗ Skipped heal for {component}[/dim]")
                 return
         else:
-            self._notify(f"[bold red]⛔ Rejected by Governor:[/bold red] [{component}] {reasoning}")
+            self._notify(
+                f"[bold red]⛔ Rejected by Governor:[/bold red] [{component}] {reasoning}"
+            )
             return
 
-        symptom = (heal_result.get("all_signals") or [{}])[0] or {"component": component}
+        symptom = (heal_result.get("all_signals") or [{}])[0] or {
+            "component": component
+        }
         try:
             result = run_coro_sync(RecoveryEngine().recover(symptom), timeout=300.0)
         except Exception as exc:
             log.warning("Background recovery failed to run: %s", exc)
             result = {"ok": False, "error": str(exc)}
         if result and result.get("ok"):
-            self._notify(f"[bold green]✓ Auto-recovered:[/bold green] {result.get('action')}")
+            self._notify(
+                f"[bold green]✓ Auto-recovered:[/bold green] {result.get('action')}"
+            )
             self._store_system_lesson(component, symptom, result)
         else:
-            detail = (result or {}).get("error") or (result or {}).get("reason") or "no recovery result"
+            detail = (
+                (result or {}).get("error")
+                or (result or {}).get("reason")
+                or "no recovery result"
+            )
             self._notify(f"[bold red]✗ Auto-recovery failed:[/bold red] {detail}")
         try:
             loop.finalize(decision, result)
@@ -135,7 +156,10 @@ class HealingWatchman:
             "temp_growth": "Check temp folder growth; remove stale files older than 24h outside protected cache subdirs.",
             "stopped_service": "Restart the stopped Windows service by its exact service_name from the signal detail.",
         }
-        correction = corrections.get(issue, f"Recurring system issue '{issue}' was resolved via {action}; re-check the machine before proceeding.")
+        correction = corrections.get(
+            issue,
+            f"Recurring system issue '{issue}' was resolved via {action}; re-check the machine before proceeding.",
+        )
         do_not = f"Do NOT ignore repeated '{issue}' signals — a prior recovery used {action}."
         try:
             from swarm_os.services.reflection_loop import get_reflection_service
@@ -151,6 +175,7 @@ class HealingWatchman:
                     component=f"system:{issue}",
                     confidence=0.75,
                 )
+
             run_coro_sync(_store(), timeout=30.0)
             log.info("Stored system healing lesson for '%s'", issue)
         except Exception as exc:

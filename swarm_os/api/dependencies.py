@@ -5,12 +5,14 @@ import asyncio
 
 logger = logging.getLogger(__name__)
 
+
 def runtime_dep(request: Request) -> Any:
     runtime = getattr(request.app.state, "runtime", None)
     if runtime is None:
         logger.error("Runtime is unavailable")
         raise HTTPException(status_code=503, detail="runtime unavailable")
     return runtime
+
 
 def get_orchestrator(request: Request) -> Any:
     orchestrator = getattr(request.app.state, "orchestrator", None)
@@ -22,6 +24,7 @@ def get_orchestrator(request: Request) -> Any:
         logger.error("Orchestrator is unavailable")
         raise HTTPException(status_code=503, detail="orchestrator unavailable")
     return orchestrator
+
 
 async def _safe_events(runtime: Any) -> list[Any]:
     try:

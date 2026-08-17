@@ -1,4 +1,3 @@
-
 import pytest
 
 from swarm_os.capabilities.chat_search import ChatSearchHandler
@@ -7,6 +6,7 @@ from swarm_os.events.envelope import EventEnvelope
 from swarm_os.events.store import EventStore
 
 pytestmark = pytest.mark.anyio
+
 
 @pytest.fixture(scope="session")
 def anyio_backend():

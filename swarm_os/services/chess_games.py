@@ -154,7 +154,9 @@ def _accuracy_of(game: dict[str, Any]) -> float:
     # Clamp each move's contribution to [0, 1]: a Best move can improve win%
     # by more than the starting point (e.g. +5% -> 1.05), which would push a
     # perfect game's accuracy ABOVE 100. 100 is a ceiling, not a suggestion.
-    kept = [max(0.0, min(1.0, 1.0 + m.get("win_delta_pct", 0.0) / 100.0)) for m in moves]
+    kept = [
+        max(0.0, min(1.0, 1.0 + m.get("win_delta_pct", 0.0) / 100.0)) for m in moves
+    ]
     return round(sum(kept) / len(kept) * 100.0, 1)
 
 

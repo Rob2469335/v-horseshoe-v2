@@ -1,4 +1,5 @@
 """AST-based dependency analysis for forward/reverse import resolution."""
+
 import ast
 from pathlib import Path
 from typing import List, Optional, Set, Tuple
@@ -21,7 +22,9 @@ class ImportVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
 
-def resolve_module_path(module_name: str, level: int, current_file: Path, project_root: Path) -> Optional[Path]:
+def resolve_module_path(
+    module_name: str, level: int, current_file: Path, project_root: Path
+) -> Optional[Path]:
     try:
         if level > 0:
             base_dir = current_file.parent
@@ -30,19 +33,19 @@ def resolve_module_path(module_name: str, level: int, current_file: Path, projec
                     break
                 base_dir = base_dir.parent
             if module_name:
-                rel_path = base_dir / module_name.replace('.', '/')
+                rel_path = base_dir / module_name.replace(".", "/")
             else:
                 rel_path = base_dir
         else:
             if not module_name:
                 return None
-            rel_path = project_root / module_name.replace('.', '/')
+            rel_path = project_root / module_name.replace(".", "/")
 
-        py_file = rel_path.with_suffix('.py')
+        py_file = rel_path.with_suffix(".py")
         if py_file.exists() and py_file.is_file():
             return py_file.resolve()
 
-        init_file = rel_path / '__init__.py'
+        init_file = rel_path / "__init__.py"
         if init_file.exists() and init_file.is_file():
             return init_file.resolve()
 
@@ -53,7 +56,13 @@ def resolve_module_path(module_name: str, level: int, current_file: Path, projec
     return None
 
 
-def get_forward_dependencies(file_path: Path, project_root: Path, depth: int = 1, max_depth: int = 3, visited: Optional[Set[Path]] = None) -> List[Tuple[Path, int]]:
+def get_forward_dependencies(
+    file_path: Path,
+    project_root: Path,
+    depth: int = 1,
+    max_depth: int = 3,
+    visited: Optional[Set[Path]] = None,
+) -> List[Tuple[Path, int]]:
     if visited is None:
         visited = set()
     if file_path in visited or depth > max_depth:
@@ -62,7 +71,7 @@ def get_forward_dependencies(file_path: Path, project_root: Path, depth: int = 1
 
     deps = []
     try:
-        content = file_path.read_text(encoding='utf-8', errors='ignore')
+        content = file_path.read_text(encoding="utf-8", errors="ignore")
         tree = ast.parse(content)
         visitor = ImportVisitor()
         visitor.visit(tree)
@@ -70,7 +79,11 @@ def get_forward_dependencies(file_path: Path, project_root: Path, depth: int = 1
             resolved = resolve_module_path(mod, lvl, file_path, project_root)
             if resolved and resolved.exists() and resolved != file_path:
                 deps.append((resolved, depth))
-                deps.extend(get_forward_dependencies(resolved, project_root, depth + 1, max_depth, visited))
+                deps.extend(
+                    get_forward_dependencies(
+                        resolved, project_root, depth + 1, max_depth, visited
+                    )
+                )
     except Exception:
         pass
     return deps
@@ -81,13 +94,17 @@ def get_reverse_dependencies(target_file: Path, project_root: Path) -> List[Path
     target_resolved = target_file.resolve()
     target_stem = target_file.stem
 
-    for py_file in project_root.rglob('*.py'):
-        if '.venv' in py_file.parts or 'tests' in py_file.parts or '__pycache__' in py_file.parts:
+    for py_file in project_root.rglob("*.py"):
+        if (
+            ".venv" in py_file.parts
+            or "tests" in py_file.parts
+            or "__pycache__" in py_file.parts
+        ):
             continue
         if py_file.resolve() == target_resolved:
             continue
         try:
-            content = py_file.read_text(encoding='utf-8', errors='ignore')
+            content = py_file.read_text(encoding="utf-8", errors="ignore")
             if target_stem not in content:
                 continue
 

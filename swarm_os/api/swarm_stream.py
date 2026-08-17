@@ -6,6 +6,7 @@ from swarm_os.core.event_bus import event_bus
 
 router = APIRouter()
 
+
 async def event_generator():
     """
     Subscribes to the live EventBus and yields events for SSE.
@@ -25,6 +26,7 @@ async def event_generator():
     finally:
         await subscriber.aclose()
 
+
 @router.get("/swarm/v10/stream")
 async def swarm_v10_stream():
     """
@@ -38,5 +40,5 @@ async def swarm_v10_stream():
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
             "Content-Type": "text/event-stream",
-        }
+        },
     )

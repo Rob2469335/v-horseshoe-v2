@@ -20,6 +20,7 @@ Deadlines computed (FRAP + 2d Cir. L.R.):
 
 Never raises — a docket-fetch outage returns the triggers it has with a clear
 `error` flag. Deterministic and unit-testable with a synthetic docket."""
+
 from __future__ import annotations
 
 import datetime as dt
@@ -49,9 +50,20 @@ DOCKET_ENTRIES_URL = os.getenv(
 # ones that matter for a federal appeal; a holiday not listed is a conservative
 # miss (deadline computed slightly earlier, never later).
 _FED_HOLIDAYS = frozenset(
-    (m, d) for (m, d) in [
-        (1, 1), (1, 15), (1, 19), (2, 17), (5, 25), (6, 19),
-        (7, 4), (9, 1), (10, 13), (11, 11), (11, 27), (12, 25),
+    (m, d)
+    for (m, d) in [
+        (1, 1),
+        (1, 15),
+        (1, 19),
+        (2, 17),
+        (5, 25),
+        (6, 19),
+        (7, 4),
+        (9, 1),
+        (10, 13),
+        (11, 11),
+        (11, 27),
+        (12, 25),
     ]
 )
 
@@ -66,7 +78,7 @@ def _next_business_day(d: dt.date) -> dt.date:
 
 @dataclass
 class DocketTrigger:
-    kind: str               # judgment_entered / docketed / appellant_brief_served / ...
+    kind: str  # judgment_entered / docketed / appellant_brief_served / ...
     date: dt.date | None
 
 
@@ -108,7 +120,11 @@ def extract_triggers(docket_entries: list[dict[str, Any]]) -> list[DocketTrigger
     available. Returns an ordered list of triggers."""
     triggers: list[DocketTrigger] = []
     for entry in docket_entries:
-        desc = (entry.get("description") or "") + " " + (entry.get("document_number") or "")
+        desc = (
+            (entry.get("description") or "")
+            + " "
+            + (entry.get("document_number") or "")
+        )
         low = desc.lower()
         date = _parse_date(entry.get("date_filed"))
         if "judgment" in low and "entered" in low and date:
@@ -126,8 +142,9 @@ def extract_triggers(docket_entries: list[dict[str, Any]]) -> list[DocketTrigger
     return triggers
 
 
-def compute_deadlines(triggers: list[DocketTrigger],
-                      today: dt.date | None = None) -> list[Deadline]:
+def compute_deadlines(
+    triggers: list[DocketTrigger], today: dt.date | None = None
+) -> list[Deadline]:
     """Compute the FRAP/2d Cir. deadline ledger from the extracted triggers.
 
     RULE TEXT (Federal Rules of Appellate Procedure, current; source: LII,
@@ -158,10 +175,15 @@ def compute_deadlines(triggers: list[DocketTrigger],
             remaining = (due - today).days
         else:
             remaining = None
-        deadlines.append(Deadline(
-            label=label, due=due, days_remaining=remaining,
-            rule=rule, trigger=trigger,
-        ))
+        deadlines.append(
+            Deadline(
+                label=label,
+                due=due,
+                days_remaining=remaining,
+                rule=rule,
+                trigger=trigger,
+            )
+        )
 
     deadlines: list[Deadline] = []
     judgment = _latest("judgment_entered")
@@ -175,32 +197,52 @@ def compute_deadlines(triggers: list[DocketTrigger],
     # we don't carry; judgment entry is the conservative anchor for the
     # defendant — a later government NOA only EXTENDS the defendant's time).
     if judgment:
-        _add("Notice of appeal (criminal)", judgment + dt.timedelta(days=14),
-             "FRAP 4(b)(1)(A)", "judgment_entered")
+        _add(
+            "Notice of appeal (criminal)",
+            judgment + dt.timedelta(days=14),
+            "FRAP 4(b)(1)(A)",
+            "judgment_entered",
+        )
     # FRAP 31(a)(1): appellant brief = 40 days after the record is filed.
     if record:
-        _add("Appellant brief due", record + dt.timedelta(days=40),
-             "FRAP 31(a)(1)", "record_filed")
+        _add(
+            "Appellant brief due",
+            record + dt.timedelta(days=40),
+            "FRAP 31(a)(1)",
+            "record_filed",
+        )
     elif notice:
         # No record-filed trigger yet; the NOA anchor is the earliest reliable
         # proxy but is NOT the rule's trigger — flag it as a proxy in the rule.
-        _add("Appellant brief due", notice + dt.timedelta(days=40),
-             "FRAP 31(a)(1) [proxy: record not filed]",
-             "notice_of_appeal (proxy)")
+        _add(
+            "Appellant brief due",
+            notice + dt.timedelta(days=40),
+            "FRAP 31(a)(1) [proxy: record not filed]",
+            "notice_of_appeal (proxy)",
+        )
     # FRAP 31(a)(1): appellee brief = 30 days after the appellant's brief is
     # served (we anchor on the appellant's brief FILED date).
     if app_brief:
-        _add("Appellee brief due", app_brief + dt.timedelta(days=30),
-             "FRAP 31(a)(1)", "appellant_brief_filed")
+        _add(
+            "Appellee brief due",
+            app_brief + dt.timedelta(days=30),
+            "FRAP 31(a)(1)",
+            "appellant_brief_filed",
+        )
     # FRAP 31(a)(1): reply = 21 days after service of the appellee's brief.
     if appee_brief:
-        _add("Reply brief due", appee_brief + dt.timedelta(days=21),
-             "FRAP 31(a)(1)", "appellee_brief_filed")
+        _add(
+            "Reply brief due",
+            appee_brief + dt.timedelta(days=21),
+            "FRAP 31(a)(1)",
+            "appellee_brief_filed",
+        )
     return deadlines
 
 
-async def fetch_docket(docket_number: str,
-                       entries_url: str | None = None) -> DocketLedger:
+async def fetch_docket(
+    docket_number: str, entries_url: str | None = None
+) -> DocketLedger:
     """Fetch a RECAP docket + entries from CourtListener and compute the ledger.
 
     Two-step seam (VERIFIED live 2026-08-11): the dockets endpoint does NOT
@@ -210,7 +252,9 @@ async def fetch_docket(docket_number: str,
     URL); otherwise the module resolves by docket_number.
     Returns a DocketLedger. Never raises — a fetch outage returns an error flag
     with empty triggers/deadlines."""
-    ledger = DocketLedger(docket_number=docket_number, fetched_at=dt.datetime.now().isoformat())
+    ledger = DocketLedger(
+        docket_number=docket_number, fetched_at=dt.datetime.now().isoformat()
+    )
     headers = {}
     if os.getenv("COURTLISTENER_API_TOKEN"):
         headers["Authorization"] = f"Token {os.getenv('COURTLISTENER_API_TOKEN')}"
@@ -219,7 +263,9 @@ async def fetch_docket(docket_number: str,
             if entries_url:
                 # Direct entries URL supplied — use it as-is.
                 ledger.docket_number = entries_url
-                eresp = await client.get(entries_url, params={"format": "json"}, timeout=30.0)
+                eresp = await client.get(
+                    entries_url, params={"format": "json"}, timeout=30.0
+                )
                 if eresp.status_code != 200:
                     ledger.error = f"http:{eresp.status_code}"
                 else:
@@ -240,7 +286,7 @@ async def fetch_docket(docket_number: str,
                         ledger.error = "not_found"
                     else:
                         docket = results[0]
-                        ledger.case_name = (docket.get("case_name") or "")
+                        ledger.case_name = docket.get("case_name") or ""
                         docket_id = docket.get("id")
                         if not docket_id:
                             ledger.error = "no_docket_id"
@@ -248,7 +294,11 @@ async def fetch_docket(docket_number: str,
                             # Step 2: fetch entries from the dedicated endpoint.
                             eresp = await client.get(
                                 DOCKET_ENTRIES_URL,
-                                params={"docket": docket_id, "format": "json", "page_size": 50},
+                                params={
+                                    "docket": docket_id,
+                                    "format": "json",
+                                    "page_size": 50,
+                                },
                                 timeout=30.0,
                             )
                             if eresp.status_code != 200:
@@ -274,9 +324,13 @@ def render_docket_ledger(ledger: DocketLedger) -> str:
         out.append("\nNo deadlines computable yet (triggers pending).")
     for d in ledger.deadlines:
         if d.due:
-            urgency = "⏰ " if d.days_remaining is not None and d.days_remaining <= 7 else ""
-            out.append(f"- {urgency}{d.label}: **{d.due.isoformat()}** "
-                       f"({d.days_remaining} days) — {d.rule} (trigger: {d.trigger})")
+            urgency = (
+                "⏰ " if d.days_remaining is not None and d.days_remaining <= 7 else ""
+            )
+            out.append(
+                f"- {urgency}{d.label}: **{d.due.isoformat()}** "
+                f"({d.days_remaining} days) — {d.rule} (trigger: {d.trigger})"
+            )
         else:
             out.append(f"- {d.label}: not started — {d.rule} (trigger: {d.trigger})")
     return "\n".join(out)
@@ -284,4 +338,5 @@ def render_docket_ledger(ledger: DocketLedger) -> str:
 
 if __name__ == "__main__":
     import asyncio
+
     asyncio.run(fetch_docket("20-3459"))

@@ -1,6 +1,7 @@
 """Tests that `/status` reports the LIVE cloud fallback chain in `fallback_pool`,
 so the console banner's FALLBACKS row shows real readiness counts instead of
 "Checking status..." forever."""
+
 from unittest.mock import MagicMock
 
 from fastapi import FastAPI
@@ -24,6 +25,7 @@ def _app():
 def test_status_reports_fallback_pool(monkeypatch):
     """The live fallback chain must be bucketed into the fallback_pool dict the
     banner reads (total + per-provider counts)."""
+
     async def _fake_chain(mode="auto"):
         return [
             {"model": "deepseek/deepseek-v4-flash"},
@@ -55,6 +57,7 @@ def test_status_fallback_pool_empty_on_chain_failure(monkeypatch):
     """If the fallback chain is unavailable, /status must still succeed with an
     empty fallback_pool (the banner falls back to 'Checking status...') — never
     a 500."""
+
     async def _boom(_mode="auto"):
         raise RuntimeError("chain down")
 

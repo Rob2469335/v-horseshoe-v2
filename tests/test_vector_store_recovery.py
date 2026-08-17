@@ -18,9 +18,13 @@ def test_vector_store_restart_and_verify(tmp_path: Path):
         return True, "vector store recovered"
 
     probe = HealthProbe(check_fn=health_hook)
-    executor = RepairExecutor(action_map={("vector_store", "restart_vector_layer"): restart_hook})
+    executor = RepairExecutor(
+        action_map={("vector_store", "restart_vector_layer"): restart_hook}
+    )
     verifier = RepairVerifier(probe=probe)
-    engine = HealingEngine(state_path=tmp_path / "healing.json", executor=executor, verifier=verifier)
+    engine = HealingEngine(
+        state_path=tmp_path / "healing.json", executor=executor, verifier=verifier
+    )
 
     result = engine.execute({"component": "vector_store", "status": "failed"})
 

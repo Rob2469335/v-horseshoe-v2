@@ -4,6 +4,7 @@ Human-control mode is the DEFAULT: the swarm may screenshot and read the screen,
 but any mouse/keyboard input action is blocked until SWARM_SCREEN_AUTONOMOUS=1
 (or set_screen_autonomous(True)). An action cap stops runaway loops.
 """
+
 from __future__ import annotations
 import sys
 import pytest
@@ -57,8 +58,17 @@ def test_human_control_blocks_input_by_default():
 
 
 def test_all_input_actions_gated():
-    for action in ("mouse_move", "right_click", "double_click", "scroll", "type", "key"):
-        res = screen_handler({"action": action, "x": 5, "y": 5, "text": "x", "name": "enter"})
+    for action in (
+        "mouse_move",
+        "right_click",
+        "double_click",
+        "scroll",
+        "type",
+        "key",
+    ):
+        res = screen_handler(
+            {"action": action, "x": 5, "y": 5, "text": "x", "name": "enter"}
+        )
         assert res.get("ok") is False, f"{action} should be blocked"
         assert "HUMAN-CONTROL MODE" in res.get("error", "")
 

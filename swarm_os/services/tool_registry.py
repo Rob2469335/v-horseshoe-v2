@@ -53,7 +53,7 @@ TOOL_SCHEMAS: Dict[str, dict] = {
                 "type": "object",
                 "properties": {
                     "library": {"type": "string"},
-                    "query":   {"type": "string"},
+                    "query": {"type": "string"},
                 },
                 "required": ["library", "query"],
             },
@@ -84,7 +84,10 @@ TOOL_SCHEMAS: Dict[str, dict] = {
             "description": "Search past chat history and system logs",
             "parameters": {
                 "type": "object",
-                "properties": {"query": {"type": "string"}, "max_results": {"type": "integer"}},
+                "properties": {
+                    "query": {"type": "string"},
+                    "max_results": {"type": "integer"},
+                },
                 "required": ["query"],
             },
         },
@@ -108,7 +111,10 @@ TOOL_SCHEMAS: Dict[str, dict] = {
             "description": "Automate VS Code workspace actions",
             "parameters": {
                 "type": "object",
-                "properties": {"action": {"type": "string"}, "args": {"type": "object"}},
+                "properties": {
+                    "action": {"type": "string"},
+                    "args": {"type": "object"},
+                },
                 "required": ["action"],
             },
         },
@@ -120,7 +126,10 @@ TOOL_SCHEMAS: Dict[str, dict] = {
             "description": "Automated code refactoring tool",
             "parameters": {
                 "type": "object",
-                "properties": {"file_path": {"type": "string"}, "instructions": {"type": "string"}},
+                "properties": {
+                    "file_path": {"type": "string"},
+                    "instructions": {"type": "string"},
+                },
                 "required": ["file_path", "instructions"],
             },
         },
@@ -144,7 +153,10 @@ TOOL_SCHEMAS: Dict[str, dict] = {
             "description": "Execute code in a secure sandbox REPL",
             "parameters": {
                 "type": "object",
-                "properties": {"language": {"type": "string"}, "code": {"type": "string"}},
+                "properties": {
+                    "language": {"type": "string"},
+                    "code": {"type": "string"},
+                },
                 "required": ["language", "code"],
             },
         },
@@ -156,7 +168,10 @@ TOOL_SCHEMAS: Dict[str, dict] = {
             "description": "Interact with Language Server Protocol for code intelligence",
             "parameters": {
                 "type": "object",
-                "properties": {"command": {"type": "string"}, "file_uri": {"type": "string"}},
+                "properties": {
+                    "command": {"type": "string"},
+                    "file_uri": {"type": "string"},
+                },
                 "required": ["command", "file_uri"],
             },
         },
@@ -168,7 +183,23 @@ TOOL_SCHEMAS: Dict[str, dict] = {
             "description": "Spawn a subagent to delegate a task",
             "parameters": {
                 "type": "object",
-                "properties": {"agent_id": {"type": "string", "enum": ["coordinator", "planner", "researcher", "executor", "coder", "tool-runner", "reviewer", "debugger"]}, "prompt": {"type": "string"}, "history": {"type": "array"}},
+                "properties": {
+                    "agent_id": {
+                        "type": "string",
+                        "enum": [
+                            "coordinator",
+                            "planner",
+                            "researcher",
+                            "executor",
+                            "coder",
+                            "tool-runner",
+                            "reviewer",
+                            "debugger",
+                        ],
+                    },
+                    "prompt": {"type": "string"},
+                    "history": {"type": "array"},
+                },
                 "required": ["agent_id", "prompt"],
             },
         },
@@ -184,11 +215,11 @@ TOOL_SCHEMAS: Dict[str, dict] = {
                     "action": {"type": "string", "enum": ["list", "add", "remove"]},
                     "task_id": {"type": "string"},
                     "goal": {"type": "string"},
-                    "schedule": {"type": "string"}
+                    "schedule": {"type": "string"},
                 },
-                "required": ["action"]
-            }
-        }
+                "required": ["action"],
+            },
+        },
     },
     "skill_manage": {
         "type": "function",
@@ -200,19 +231,24 @@ TOOL_SCHEMAS: Dict[str, dict] = {
                 "properties": {
                     "action": {"type": "string", "enum": ["list", "add", "remove"]},
                     "skill_name": {"type": "string"},
-                    "skill_content": {"type": "string"}
+                    "skill_content": {"type": "string"},
                 },
-                "required": ["action"]
-            }
-        }
+                "required": ["action"],
+            },
+        },
     },
 }
 
 import asyncio
 from qdrant_client import AsyncQdrantClient
 
+
 class SemanticToolRegistry:
-    def __init__(self, qdrant_url: str = "http://127.0.0.1:6333", collection_name: str = "agent_tools_registry"):
+    def __init__(
+        self,
+        qdrant_url: str = "http://127.0.0.1:6333",
+        collection_name: str = "agent_tools_registry",
+    ):
         self.client = AsyncQdrantClient(url=qdrant_url)
         self.collection = collection_name
         self.embedder = EmbeddingService()
@@ -246,7 +282,7 @@ class SemanticToolRegistry:
             if not any(c.name == self.collection for c in collections):
                 await self.client.create_collection(
                     collection_name=self.collection,
-                    vectors_config=VectorParams(size=768, distance=Distance.COSINE)
+                    vectors_config=VectorParams(size=768, distance=Distance.COSINE),
                 )
                 await self._populate_tools()
             self.initialized = True
@@ -261,16 +297,24 @@ class SemanticToolRegistry:
             description = schema.get("function", {}).get("description", "")
             text_to_embed = f"tool: {tool_name} desc: {description}"
             vector = await self.embedder.embed(text_to_embed)
-            point_id = str(uuid.UUID(hex=hashlib.sha256(tool_name.encode()).hexdigest()[:32]))
+            point_id = str(
+                uuid.UUID(hex=hashlib.sha256(tool_name.encode()).hexdigest()[:32])
+            )
             points.append(
                 PointStruct(
                     id=point_id,
                     vector=vector,
-                    payload={"tool_name": tool_name, "schema": schema, "pheromone_level": 1.0}
+                    payload={
+                        "tool_name": tool_name,
+                        "schema": schema,
+                        "pheromone_level": 1.0,
+                    },
                 )
             )
         if points:
-            await self.client.upsert(collection_name=self.collection, points=points, wait=True)
+            await self.client.upsert(
+                collection_name=self.collection, points=points, wait=True
+            )
             log.info("Populated SemanticToolRegistry with %d tools.", len(points))
 
     async def discover_tools(self, task_intent: str, top_k: int = 3) -> Dict[str, dict]:
@@ -284,14 +328,16 @@ class SemanticToolRegistry:
                 limit=top_k * 2,
             )
             results = getattr(response, "points", response)
-            
+
             # Rerank combining semantic similarity score and pheromone multiplier
             reranked = sorted(
-                results, 
-                key=lambda x: ((x.score + 1) / 2) * float(x.payload.get('pheromone_level', 1.0)), 
-                reverse=True
+                results,
+                key=lambda x: (
+                    ((x.score + 1) / 2) * float(x.payload.get("pheromone_level", 1.0))
+                ),
+                reverse=True,
             )
-            
+
             discovered = {}
             for hit in reranked[:top_k]:
                 tool_name = hit.payload.get("tool_name")
@@ -299,43 +345,58 @@ class SemanticToolRegistry:
                 if tool_name and schema:
                     discovered[tool_name] = schema
             if not discovered:
-                return {k: v for i, (k, v) in enumerate(TOOL_SCHEMAS.items()) if i < top_k}
+                return {
+                    k: v for i, (k, v) in enumerate(TOOL_SCHEMAS.items()) if i < top_k
+                }
             return discovered
         except Exception as e:
-            log.warning("SemanticToolRegistry search failed: %s. Returning default tools.", e)
+            log.warning(
+                "SemanticToolRegistry search failed: %s. Returning default tools.", e
+            )
             return {k: v for i, (k, v) in enumerate(TOOL_SCHEMAS.items()) if i < top_k}
-            
-    async def update_tool_pheromone(self, tool_name: str, success: bool, alpha: float = 0.15, decay: float = 0.05):
+
+    async def update_tool_pheromone(
+        self, tool_name: str, success: bool, alpha: float = 0.15, decay: float = 0.05
+    ):
         await self._wait_init()
         try:
-            point_id = str(uuid.UUID(hex=hashlib.sha256(tool_name.encode()).hexdigest()[:32]))
+            point_id = str(
+                uuid.UUID(hex=hashlib.sha256(tool_name.encode()).hexdigest()[:32])
+            )
             records = await self.client.retrieve(
-                collection_name=self.collection,
-                ids=[point_id]
+                collection_name=self.collection, ids=[point_id]
             )
             if not records:
                 return
-            
+
             record = records[0]
             current_weight = float(record.payload.get("pheromone_level", 1.0))
-            
+
             if success:
                 new_weight = min(2.0, current_weight + alpha)
             else:
                 new_weight = max(0.1, current_weight - decay)
-                
+
             await self.client.set_payload(
                 collection_name=self.collection,
                 payload={"pheromone_level": new_weight},
                 points=[record.id],
-                wait=True
+                wait=True,
             )
-            log.debug("Updated pheromone for %s: %.2f -> %.2f", tool_name, current_weight, new_weight)
+            log.debug(
+                "Updated pheromone for %s: %.2f -> %.2f",
+                tool_name,
+                current_weight,
+                new_weight,
+            )
         except Exception as e:
             log.warning("Failed to update tool pheromone for %s: %s", tool_name, e)
 
+
 # Global registry instance
 registry = None
+
+
 def get_tool_registry() -> SemanticToolRegistry:
     global registry
     if registry is None:

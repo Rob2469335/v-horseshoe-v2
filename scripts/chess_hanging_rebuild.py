@@ -80,6 +80,7 @@ _PIECE_VALUE = {
 # Deterministic core (pure functions — no network, no engine)
 # ---------------------------------------------------------------------------
 
+
 def _attackers(board: chess.Board, sq: int, color: bool) -> int:
     return len(board.attackers(color, sq))
 
@@ -204,7 +205,9 @@ def _find_hangs_after_move(
             # Heuristic (deterministic): the opponent defends the destination
             # at least as well as the mover supports the grab (defenders >=
             # the mover's attackers on that square BEFORE the capture).
-            if was_capture and _defenders(pre_board, sq) >= _attackers(pre_board, sq, me):
+            if was_capture and _defenders(pre_board, sq) >= _attackers(
+                pre_board, sq, me
+            ):
                 family = "F3"
             else:
                 family = "F1"
@@ -245,7 +248,9 @@ def replay_game(headers: dict[str, Any], board: chess.Board) -> list[dict[str, A
         was_capture = replay.is_capture(mv)
         mover = replay.turn
         replay.push(mv)
-        for cand in _find_hangs_after_move(replay, mover, mv.to_square, was_capture, pre):
+        for cand in _find_hangs_after_move(
+            replay, mover, mv.to_square, was_capture, pre
+        ):
             ev = HangEvent(
                 move_index=i,
                 side="white" if mover == chess.WHITE else "black",
@@ -304,6 +309,7 @@ def _parse_pgn(pgn_text: str) -> tuple[dict[str, Any], chess.Board] | None:
 # Archive fetch + cache (network layer — the ONLY non-deterministic step)
 # ---------------------------------------------------------------------------
 
+
 def _cache_path(url: str) -> Path:
     parts = url.rstrip("/").split("/")
     return _CACHE_DIR / f"{parts[-2]}-{parts[-1]}.json"
@@ -345,6 +351,7 @@ def _sha256(payload: str) -> str:
 # ---------------------------------------------------------------------------
 # Aggregation + report
 # ---------------------------------------------------------------------------
+
 
 def _aggregate(all_events: list[dict[str, Any]]) -> dict[str, Any]:
     real = [e for e in all_events if e["see_gain"] > 0]
@@ -438,7 +445,7 @@ def main() -> int:
         ),
         "aggregate": agg,
         "payload_sha256": digest,
-        "generated_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        "generated_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
 
     out = Path(args.out)

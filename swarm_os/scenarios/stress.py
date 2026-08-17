@@ -4,6 +4,7 @@ from swarm_os.kernel.genetics import Genome
 from swarm_os.kernel.organism import Organism
 import swarm_os.brain as brain_module
 
+
 def build_stress_population():
     genome_x = Genome(0.8)
     genome_x.smoke = True
@@ -27,6 +28,3 @@ def build_stress_population():
         Organism("W", brain_module.simple_brain(genome_w, "general"), genome_w),
         Organism("V", brain_module.simple_brain(genome_v, "general"), genome_v),
     ]
-
-
-

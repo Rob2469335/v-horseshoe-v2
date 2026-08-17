@@ -9,6 +9,7 @@ LOG_DIR = Path("swarm_os/logs")
 TEXT_LOG = LOG_DIR / "swarm.log"
 JSON_LOG = LOG_DIR / "swarm.jsonl"
 
+
 class JsonLineFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         payload = {
@@ -18,6 +19,7 @@ class JsonLineFormatter(logging.Formatter):
             "message": record.getMessage(),
         }
         return json.dumps(payload, ensure_ascii=False)
+
 
 def setup_logging():
     LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -33,11 +35,15 @@ def setup_logging():
     console.setFormatter(text_fmt)
     console.setLevel(logging.INFO)
 
-    file_handler = RotatingFileHandler(TEXT_LOG, maxBytes=1_000_000, backupCount=3, encoding="utf-8")
+    file_handler = RotatingFileHandler(
+        TEXT_LOG, maxBytes=1_000_000, backupCount=3, encoding="utf-8"
+    )
     file_handler.setFormatter(text_fmt)
     file_handler.setLevel(logging.INFO)
 
-    json_handler = RotatingFileHandler(JSON_LOG, maxBytes=1_000_000, backupCount=3, encoding="utf-8")
+    json_handler = RotatingFileHandler(
+        JSON_LOG, maxBytes=1_000_000, backupCount=3, encoding="utf-8"
+    )
     json_handler.setFormatter(JsonLineFormatter())
     json_handler.setLevel(logging.INFO)
 
@@ -45,8 +51,8 @@ def setup_logging():
     root.addHandler(file_handler)
     root.addHandler(json_handler)
 
+
 if __name__ == "__main__":
     setup_logging()
     logging.getLogger(__name__).info("Starting swarm OS")
     main()
-

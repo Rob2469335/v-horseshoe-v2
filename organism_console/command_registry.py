@@ -21,18 +21,27 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from organism_console._command_context import CommandContext
-from organism_console._command_routing import route_natural_language_keywords, classify_intent_with_llm
+from organism_console._command_routing import (
+    route_natural_language_keywords,
+    classify_intent_with_llm,
+)
 
 
 def run_syntax_checks(root: Path) -> tuple[bool, str]:
     try:
         git_diff = subprocess.run(
             ["git", "diff", "--name-only"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace",
-            cwd=root, timeout=5
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            cwd=root,
+            timeout=5,
         )
         if git_diff.returncode == 0:
-            modified_files = [line.strip() for line in git_diff.stdout.splitlines() if line.strip()]
+            modified_files = [
+                line.strip() for line in git_diff.stdout.splitlines() if line.strip()
+            ]
             for f in modified_files:
                 file_path = root / f
                 if file_path.suffix == ".py" and file_path.exists():
@@ -49,8 +58,11 @@ def run_syntax_checks(root: Path) -> tuple[bool, str]:
                             end = min(len(lines), err_line + 3)
                             for idx in range(start, end):
                                 prefix = ">>> " if idx + 1 == err_line else "    "
-                                context_lines.append(f"{prefix}{idx+1}: {lines[idx]}")
-                        return False, f"File: {f}\nError: {exc.msg} at line {exc.lineno}\nCode Context:\n```python\n{chr(10).join(context_lines)}\n```"
+                                context_lines.append(f"{prefix}{idx + 1}: {lines[idx]}")
+                        return (
+                            False,
+                            f"File: {f}\nError: {exc.msg} at line {exc.lineno}\nCode Context:\n```python\n{chr(10).join(context_lines)}\n```",
+                        )
     except Exception as e:
         return False, f"Syntax checks crashed: {e}"
     return True, ""
@@ -60,13 +72,20 @@ class CommandRegistry:
     def __init__(self) -> None:
         self.commands: Dict[str, Dict[str, Any]] = {}
 
-    def register(self, name: str, description: str, aliases: Optional[List[str]] = None) -> Callable:
+    def register(
+        self, name: str, description: str, aliases: Optional[List[str]] = None
+    ) -> Callable:
         def decorator(func: Callable) -> Callable:
-            cmd_info = {"func": func, "description": description, "aliases": aliases or []}
+            cmd_info = {
+                "func": func,
+                "description": description,
+                "aliases": aliases or [],
+            }
             self.commands[name] = cmd_info
             for alias in cmd_info["aliases"]:
                 self.commands[alias] = cmd_info
             return func
+
         return decorator
 
     def handle_line(self, line: str, ctx: CommandContext) -> Optional[str]:
@@ -84,7 +103,9 @@ class CommandRegistry:
                 if cmd_name == "chat":
                     return raw
                 if cmd_name in self.commands:
-                    ctx.console.print(f"[bold cyan]Auto-Routing intent to command: [green]/{cmd_name} {' '.join(args)}[/green][/bold cyan]")
+                    ctx.console.print(
+                        f"[bold cyan]Auto-Routing intent to command: [green]/{cmd_name} {' '.join(args)}[/green][/bold cyan]"
+                    )
                     ctx.state.command_history.append(f"/{cmd_name} {' '.join(args)}")
                     ctx.state.save()
                     try:
@@ -95,7 +116,9 @@ class CommandRegistry:
                         ctx.state.save()
                         return None
                 else:
-                    ctx.console.print(f"[bold red]Unknown command:[/bold red] /{cmd_name}. Type `/help` to list commands.")
+                    ctx.console.print(
+                        f"[bold red]Unknown command:[/bold red] /{cmd_name}. Type `/help` to list commands."
+                    )
                     return None
             else:
                 return raw
@@ -107,7 +130,9 @@ class CommandRegistry:
         ctx.state.save()
 
         if cmd_name not in self.commands:
-            ctx.console.print(f"[bold red]Unknown command:[/bold red] /{cmd_name}. Type `/help` to list commands.")
+            ctx.console.print(
+                f"[bold red]Unknown command:[/bold red] /{cmd_name}. Type `/help` to list commands."
+            )
             return None
 
         try:
@@ -121,6 +146,7 @@ class CommandRegistry:
 
 registry = CommandRegistry()
 
+
 def _ensure_commands_loaded() -> None:
     """Lazy-import command modules to avoid circular imports.
     Each _commands_*.py imports `registry` from this module — importing
@@ -129,8 +155,8 @@ def _ensure_commands_loaded() -> None:
     if not getattr(_ensure_commands_loaded, "_loaded", False):
         _ensure_commands_loaded._loaded = True
         from organism_console import _commands_system  # noqa: F401
-        from organism_console import _commands_dev     # noqa: F401
-        from organism_console import _commands_ai      # noqa: F401
+        from organism_console import _commands_dev  # noqa: F401
+        from organism_console import _commands_ai  # noqa: F401
         from organism_console import _commands_opencode  # noqa: F401
 
 

@@ -41,7 +41,9 @@ def atomic_write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
     directory). If the process dies mid-write the tmp file is orphaned but the
     previous committed archive is untouched. Raises on IO failure."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
+    fd, tmp = tempfile.mkstemp(
+        dir=str(path.parent), prefix=path.name + ".", suffix=".tmp"
+    )
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             for r in rows:
@@ -72,7 +74,9 @@ def write_manifest(store_path: Path, rows: list[dict[str, Any]]) -> None:
         "updated_at": time.time(),
     }
     mpath = manifest_path(store_path)
-    fd, tmp = tempfile.mkstemp(dir=str(mpath.parent), prefix=mpath.name + ".", suffix=".tmp")
+    fd, tmp = tempfile.mkstemp(
+        dir=str(mpath.parent), prefix=mpath.name + ".", suffix=".tmp"
+    )
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(json.dumps(manifest, indent=2) + "\n")

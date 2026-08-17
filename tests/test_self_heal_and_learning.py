@@ -34,5 +34,9 @@ def test_healing_engine_enters_cooldown_after_repeated_failures(tmp_path: Path):
     assert first["executed"] is False
     assert first["repair"]["status"] == "skipped"
 
-    assert second["action"] in {"restart_vector_layer", "switch_to_fallback_search", "cooldown"}
+    assert second["action"] in {
+        "restart_vector_layer",
+        "switch_to_fallback_search",
+        "cooldown",
+    }
     assert third["action"] in {"cooldown", "switch_to_fallback_search"}

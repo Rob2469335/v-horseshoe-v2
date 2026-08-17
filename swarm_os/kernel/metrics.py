@@ -2,6 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable
 
+
 @dataclass(frozen=True)
 class RunMetrics:
     organism_count: int
@@ -9,6 +10,7 @@ class RunMetrics:
     best_fitness: float
     worst_fitness: float
     generation: int
+
 
 def summarize(organisms: Iterable, generation: int) -> RunMetrics:
     orgs = list(organisms)
@@ -22,4 +24,3 @@ def summarize(organisms: Iterable, generation: int) -> RunMetrics:
         worst_fitness=min(fitness),
         generation=generation,
     )
-

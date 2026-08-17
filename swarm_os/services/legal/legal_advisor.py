@@ -27,6 +27,7 @@ full sections stay stored in Qdrant and remain retrievable via /legal/search).
 If synthesis output is ever audited for grounding, check whether an answer
 over-relies on section openings before trusting it.
 """
+
 from __future__ import annotations
 
 import logging
@@ -43,7 +44,14 @@ JURISDICTION_KEYWORDS: dict[str, tuple[str, ...]] = {
     "nj": ("new jersey", " nj ", "n.j.", "jersey"),
     "ga": ("georgia", " ga ", "ga.", "atlanta"),
     "nc": ("north carolina", " nc ", "n.c.", "carolina"),
-    "federal": ("federal", "us code", "united states code", "usc", "cfr", "federal court"),
+    "federal": (
+        "federal",
+        "us code",
+        "united states code",
+        "usc",
+        "cfr",
+        "federal court",
+    ),
 }
 EXPECTED_SECTIONS: dict[str, int] = {}  # populated lazily from the Parquets
 
@@ -60,10 +68,12 @@ def _expected_sections() -> dict[str, int]:
             continue
         try:
             import pyarrow.parquet as pq
+
             t = pq.read_table(str(f))
             rows = t.to_pylist()
             EXPECTED_SECTIONS[jur] = sum(
-                1 for r in rows
+                1
+                for r in rows
                 if r.get("act_status") == "in_force"
                 and r.get("document_type") in (None, "statute")
             )
@@ -81,13 +91,16 @@ async def corpus_scope() -> dict[str, Any]:
     try:
         from qdrant_client import AsyncQdrantClient
         import os
+
         client = AsyncQdrantClient(url=os.getenv("QDRANT_URL", "http://127.0.0.1:6333"))
         # Qdrant doesn't expose per-value counts directly; scroll is the honest
         # way for a small corpus (a fully-ingested corpus here is ~190k points,
         # scrollable in one pass).
         offset: Any = None
         while True:
-            r = await client.scroll("legal_statutes", limit=5000, with_payload=True, offset=offset)
+            r = await client.scroll(
+                "legal_statutes", limit=5000, with_payload=True, offset=offset
+            )
             pts = r[0]
             for p in pts:
                 j = (p.payload or {}).get("jurisdiction")
@@ -115,7 +128,9 @@ async def corpus_scope() -> dict[str, Any]:
             # STATUTE CURRENCY (rec 10): which OpenUSLaw snapshot the ingested
             # sections came from — the "as of WHAT law" answer. A jurisdiction
             # with no snapshot is pre-currency (older ingest).
-            "snapshot": sorted(snapshots.get(jur) or [])[-1] if snapshots.get(jur) else "",
+            "snapshot": sorted(snapshots.get(jur) or [])[-1]
+            if snapshots.get(jur)
+            else "",
         }
     return {
         "jurisdictions": jurisdictions,
@@ -147,7 +162,9 @@ class AdvisorResult:
     fail_closed: bool = False
 
 
-def _requires_min_coverage(scope: dict[str, Any], jurisdiction: str, minimum_pct: float = 5.0) -> bool:
+def _requires_min_coverage(
+    scope: dict[str, Any], jurisdiction: str, minimum_pct: float = 5.0
+) -> bool:
     """True if the jurisdiction has at least `minimum_pct` of its expected
     sections ingested — enough to synthesize about it without being misleading.
     Below the floor we fail closed (we don't know enough yet)."""
@@ -166,7 +183,9 @@ async def advise(question: str) -> AdvisorResult:
 
     if jur is None:
         return AdvisorResult(
-            ok=False, fail_closed=True, corpus_scope=scope,
+            ok=False,
+            fail_closed=True,
+            corpus_scope=scope,
             message=(
                 "I couldn't determine the jurisdiction. Please say which state "
                 "(New York, New Jersey, Georgia, North Carolina) or federal law applies."
@@ -176,7 +195,10 @@ async def advise(question: str) -> AdvisorResult:
     if not _requires_min_coverage(scope, jur):
         got = scope["jurisdictions"].get(jur, {})
         return AdvisorResult(
-            ok=False, fail_closed=True, jurisdiction=jur, corpus_scope=scope,
+            ok=False,
+            fail_closed=True,
+            jurisdiction=jur,
+            corpus_scope=scope,
             message=(
                 f"I don't have {jur.upper()} law ingested yet "
                 f"({got.get('ingested', 0)}/{got.get('expected', 0)} sections, "
@@ -190,18 +212,26 @@ async def advise(question: str) -> AdvisorResult:
     # the curated case-law manifest (case_corpus) so the advisor answers from
     # BOTH what the LAW says and what the COURTS have held.
     from swarm_os.services.legal.legal_search import search_cases
+
     results = await search_statutes(question, jurisdiction=jur, top_k=6)
     case_results = await search_cases(question, top_k=4)
     if not results:
         return AdvisorResult(
-            ok=False, fail_closed=True, jurisdiction=jur, corpus_scope=scope,
+            ok=False,
+            fail_closed=True,
+            jurisdiction=jur,
+            corpus_scope=scope,
             message="Retrieval returned nothing for that question — no sections matched.",
         )
 
     citations = [
-        {"citation": r.get("citation", ""), "title": r.get("section_title", ""),
-         "jurisdiction": r.get("jurisdiction", jur),
-         "rerank_score": r.get("rerank_score"), "content": (r.get("content") or "")[:600]}
+        {
+            "citation": r.get("citation", ""),
+            "title": r.get("section_title", ""),
+            "jurisdiction": r.get("jurisdiction", jur),
+            "rerank_score": r.get("rerank_score"),
+            "content": (r.get("content") or "")[:600],
+        }
         for r in results
     ]
     # Case-law citations: manifest authority retrieved for the same question.
@@ -211,12 +241,18 @@ async def advise(question: str) -> AdvisorResult:
     # cite this case) and `treatment` (followed/distinguished/...) come from the
     # citation-graph layer (rec 7/9).
     case_citations = [
-        {"citation": c.get("citation", ""), "title": c.get("section_title", ""),
-         "court": c.get("court", ""), "circuit": c.get("circuit", ""),
-         "year": c.get("year", 0), "tier": c.get("tier", 0),
-         "rerank_score": c.get("rerank_score"), "content": (c.get("content") or "")[:600],
-         "graph_cited_by_count": c.get("graph_cited_by_count", 0),
-         "graph_expanded": c.get("graph_expanded", False)}
+        {
+            "citation": c.get("citation", ""),
+            "title": c.get("section_title", ""),
+            "court": c.get("court", ""),
+            "circuit": c.get("circuit", ""),
+            "year": c.get("year", 0),
+            "tier": c.get("tier", 0),
+            "rerank_score": c.get("rerank_score"),
+            "content": (c.get("content") or "")[:600],
+            "graph_cited_by_count": c.get("graph_cited_by_count", 0),
+            "graph_expanded": c.get("graph_expanded", False),
+        }
         for c in case_results
     ]
     # Treatment annotation: for each retrieved case, find the citing context
@@ -225,8 +261,11 @@ async def advise(question: str) -> AdvisorResult:
     # absent (never fabricate a treatment).
     try:
         from swarm_os.services.legal.case_graph import (
-            case_citation_key, citing_sentence_for, label_treatment,
+            case_citation_key,
+            citing_sentence_for,
+            label_treatment,
         )
+
         case_text = "\n\n".join(
             f"{c.get('citation', '')} — {c.get('section_title', '')}\n{c.get('content', '')}"
             for c in case_results
@@ -251,8 +290,15 @@ async def advise(question: str) -> AdvisorResult:
         )
 
     # Verification seam: parse the answer's citations, check existence.
-    verify = {"checked": False, "fabricated": 0, "ambiguous": 0,
-              "shape_mismatch": 0, "unverified": 0, "unparsed": 0, "score": None}
+    verify = {
+        "checked": False,
+        "fabricated": 0,
+        "ambiguous": 0,
+        "shape_mismatch": 0,
+        "unverified": 0,
+        "unparsed": 0,
+        "score": None,
+    }
     try:
         vres = await verify_citations(answer)
         fabricated = vres.stats.get("fabricated", 0)
@@ -274,9 +320,12 @@ async def advise(question: str) -> AdvisorResult:
             "shape_mismatch": shape_mismatch,
             "unverified": unverified,
             "unparsed": unparsed,
-            "score": round(1.0 - (
-                fabricated + ambiguous + shape_mismatch + unverified + unparsed
-            ) / checked, 2),
+            "score": round(
+                1.0
+                - (fabricated + ambiguous + shape_mismatch + unverified + unparsed)
+                / checked,
+                2,
+            ),
         }
     except Exception as exc:
         log.warning("verification seam failed: %s", exc)
@@ -287,6 +336,7 @@ async def advise(question: str) -> AdvisorResult:
     # cited section is the statutory-fabrication signal.
     try:
         from swarm_os.services.legal.citation_verify import align_citations
+
         retrieved_cites = [r.get("citation", "") for r in results]
         align = align_citations(answer, retrieved_cites)
         verify["alignment"] = {
@@ -305,15 +355,21 @@ async def advise(question: str) -> AdvisorResult:
         # exactly like the other failure signals.
         if verify.get("checked"):
             penalties = (
-                verify["fabricated"] + verify["ambiguous"] + verify["shape_mismatch"]
-                + verify["unverified"] + verify["unparsed"] + verify["unaligned"]
+                verify["fabricated"]
+                + verify["ambiguous"]
+                + verify["shape_mismatch"]
+                + verify["unverified"]
+                + verify["unparsed"]
+                + verify["unaligned"]
             )
             # Every examined citation gets a denominator slot so the score can
             # never go negative: count covers the case-lookup set, unparsed the
             # citation-shaped-but-unparseable passages, and unaligned the cited
             # statute sections absent from the corpus — each contributes to
             # penalties and each must appear in checked.
-            checked = max(1, (vres.stats.get("count", 0) or 0) + unparsed + verify["unaligned"])
+            checked = max(
+                1, (vres.stats.get("count", 0) or 0) + unparsed + verify["unaligned"]
+            )
             verify["score"] = round(1.0 - penalties / checked, 2)
     except Exception as exc:
         log.warning("alignment seam failed: %s", exc)
@@ -325,6 +381,7 @@ async def advise(question: str) -> AdvisorResult:
     # absent from the WHOLE manifest is the case-law fabrication signal.
     try:
         from swarm_os.services.legal.citation_verify import align_case_citations
+
         retrieved_case_cites = [c.get("citation", "") for c in case_results]
         case_align = align_case_citations(answer, retrieved_case_cites)
         verify["case_alignment"] = {
@@ -337,19 +394,28 @@ async def advise(question: str) -> AdvisorResult:
         # it to the same penalty pool as the statutory unaligned signal.
         if verify.get("checked"):
             penalties = (
-                verify["fabricated"] + verify["ambiguous"] + verify["shape_mismatch"]
-                + verify["unverified"] + verify["unparsed"] + verify["unaligned"]
+                verify["fabricated"]
+                + verify["ambiguous"]
+                + verify["shape_mismatch"]
+                + verify["unverified"]
+                + verify["unparsed"]
+                + verify["unaligned"]
                 + len(case_align["unaligned"])
             )
             checked = max(
                 1,
                 (vres.stats.get("count", 0) or 0)
-                + unparsed + verify["unaligned"] + len(case_align["unaligned"]),
+                + unparsed
+                + verify["unaligned"]
+                + len(case_align["unaligned"]),
             )
             verify["score"] = round(1.0 - penalties / checked, 2)
     except Exception as exc:
         log.warning("case-alignment seam failed: %s", exc)
-        verify.setdefault("case_alignment", {"count": 0, "aligned": [], "in_corpus": [], "unaligned": []})
+        verify.setdefault(
+            "case_alignment",
+            {"count": 0, "aligned": [], "in_corpus": [], "unaligned": []},
+        )
 
     # FAIL-CLOSED: a fabricated OR unaligned citation downgrades the answer —
     # we surface it, and if fabrication is present we mark the answer as
@@ -364,7 +430,14 @@ async def advise(question: str) -> AdvisorResult:
     unparsed = verify.get("unparsed", 0)
     shape_mismatch = verify.get("shape_mismatch", 0)
     case_unaligned = len(verify.get("case_alignment", {}).get("unaligned", []))
-    if fabricated or unaligned or unverified or unparsed or shape_mismatch or case_unaligned:
+    if (
+        fabricated
+        or unaligned
+        or unverified
+        or unparsed
+        or shape_mismatch
+        or case_unaligned
+    ):
         answer += (
             f"\n\n[VERIFICATION] {fabricated} citation(s) could not be verified "
             f"(fabricated or misaligned), and {unaligned} cited section(s) are not "
@@ -387,9 +460,7 @@ async def advise(question: str) -> AdvisorResult:
                 f"be an alteration of a real case). "
             )
         if unparsed:
-            answer += (
-                f"{unparsed} citation-shaped passage(s) could not be parsed. "
-            )
+            answer += f"{unparsed} citation-shaped passage(s) could not be parsed. "
         answer += "Do not rely on this answer until checked."
 
     # STATUTE CURRENCY (rec 10): every statutory answer names the OpenUSLaw
@@ -422,8 +493,12 @@ async def advise(question: str) -> AdvisorResult:
     )
 
 
-async def _synthesize(question: str, jurisdiction: str, results: list[dict[str, Any]],
-                      case_results: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+async def _synthesize(
+    question: str,
+    jurisdiction: str,
+    results: list[dict[str, Any]],
+    case_results: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Cloud synthesis grounded ONLY in the retrieved sections (statutes) and
     case-law chunks (cases). Falls back to a no-LLM scaffold if the cloud call
     fails.
@@ -457,14 +532,23 @@ async def _synthesize(question: str, jurisdiction: str, results: list[dict[str, 
         system += f"\n\n{std}"
     messages = [
         {"role": "system", "content": system},
-        {"role": "user", "content": f"Question ({jurisdiction.upper()}): {question}\n\nRetrieved statutes:\n{ctx}"},
+        {
+            "role": "user",
+            "content": f"Question ({jurisdiction.upper()}): {question}\n\nRetrieved statutes:\n{ctx}",
+        },
     ]
     try:
-        model = llm._analysis_cloud_model() if llm._analysis_cloud_enabled() else "qwen3.5-4b"
+        model = (
+            llm._analysis_cloud_model()
+            if llm._analysis_cloud_enabled()
+            else "qwen3.5-4b"
+        )
         parts: list[str] = []
         # stream_content yields (content, kind) — content FIRST. Unpack in that
         # order; the reversed unpack (kind, chunk) silently produced zero parts.
-        async for chunk, kind in llm.stream_content(model, messages, agent_id="rob_lawyer"):
+        async for chunk, kind in llm.stream_content(
+            model, messages, agent_id="rob_lawyer"
+        ):
             if kind == "content":
                 parts.append(chunk or "")
         return {"content": "".join(parts).strip()}
@@ -485,10 +569,14 @@ async def _synthesize(question: str, jurisdiction: str, results: list[dict[str, 
 #      the retrieved corpus — the "verifier accepts only traceable paths"
 #      pattern, mapped onto the existing align/unaligned machinery.
 # ---------------------------------------------------------------------------
-_IRAC_HEADING_RE = re.compile(r"^(Issue|Rule|Application|Conclusion)\s*[:#]?\s*(.*)$", re.IGNORECASE)
+_IRAC_HEADING_RE = re.compile(
+    r"^(Issue|Rule|Application|Conclusion)\s*[:#]?\s*(.*)$", re.IGNORECASE
+)
 
 # Deconstructive connectors that mark a compound legal question into issues.
-_ISSUE_SPLIT_RE = re.compile(r"\b(?:and|also|plus|moreover|additionally)\b", re.IGNORECASE)
+_ISSUE_SPLIT_RE = re.compile(
+    r"\b(?:and|also|plus|moreover|additionally)\b", re.IGNORECASE
+)
 
 # Standard-of-review conditioning (rec 8, flagged unverified in research — treat
 # as prompt-engineering to measure, not a proven lever). Detects which review
@@ -499,7 +587,10 @@ _ISSUE_SPLIT_RE = re.compile(r"\b(?:and|also|plus|moreover|additionally)\b", re.
 _STANDARD_OF_REVIEW = (
     ("de_novo", ("de novo", "plenary review", "independent review")),
     ("abuse_of_discretion", ("abuse of discretion", "arbitrary and capricious")),
-    ("clear_error", ("clear error", "clearly erroneous", "definite and firm conviction")),
+    (
+        "clear_error",
+        ("clear error", "clearly erroneous", "definite and firm conviction"),
+    ),
     ("plain_error", ("plain error", "obvious error", "substantial rights")),
     ("substantial_evidence", ("substantial evidence", "reasonable evidence")),
 )
@@ -568,7 +659,9 @@ def split_issues(question: str, max_issues: int = 4) -> list[str]:
     q = (question or "").strip()
     if not q:
         return []
-    parts = [p.strip(" .,;:") for p in _ISSUE_SPLIT_RE.split(q) if p and p.strip(" .,;:")]
+    parts = [
+        p.strip(" .,;:") for p in _ISSUE_SPLIT_RE.split(q) if p and p.strip(" .,;:")
+    ]
     # Collapse: keep the connector word for readability is NOT worth the risk —
     # the split parts are the discrete issues.
     parts = parts or [q]
@@ -607,18 +700,22 @@ def _irac_sections(text: str) -> dict[str, str]:
     return {k: "\n".join(v) for k, v in out.items() if v}
 
 
-def _application_grounding(application: str, retrieved_citations: list[str],
-                           case_citations: list[str]) -> dict[str, Any]:
+def _application_grounding(
+    application: str, retrieved_citations: list[str], case_citations: list[str]
+) -> dict[str, Any]:
     """Deterministic post-check: every citation the Application cites must be
     traceable to the retrieved corpus (statute sections + case chunks). Returns
     {count, grounded: [...], ungrounded: [...]}. A citation absent from BOTH
     corpora is ungrounded — the IRAC 'verifier accepts only traceable paths'."""
     from swarm_os.services.legal.citation_verify import (
-        extract_statute_sections, _normalize_section, extract_case_citations,
+        extract_statute_sections,
+        _normalize_section,
+        extract_case_citations,
         case_citation_key,
     )
+
     stat_corpus: set[str] = set()
-    for s in (retrieved_citations or []):
+    for s in retrieved_citations or []:
         if not isinstance(s, str):
             continue
         for sid in extract_statute_sections(s):
@@ -627,7 +724,9 @@ def _application_grounding(application: str, retrieved_citations: list[str],
         if re.fullmatch(r"[0-9A-Za-z:.\-]+", s) and re.search(r"[0-9]", s):
             stat_corpus.add(_normalize_section(s))
     stat_corpus.discard("")
-    case_corpus = {case_citation_key(c) for c in (case_citations or []) if case_citation_key(c)}
+    case_corpus = {
+        case_citation_key(c) for c in (case_citations or []) if case_citation_key(c)
+    }
 
     grounded: list[str] = []
     ungrounded: list[str] = []
@@ -645,12 +744,19 @@ def _application_grounding(application: str, retrieved_citations: list[str],
             continue
         seen.add(k)
         (grounded if k in case_corpus else ungrounded).append(cite)
-    return {"count": len(grounded) + len(ungrounded), "grounded": grounded, "ungrounded": ungrounded}
+    return {
+        "count": len(grounded) + len(ungrounded),
+        "grounded": grounded,
+        "ungrounded": ungrounded,
+    }
 
 
-async def synthesize_irac(question: str, jurisdiction: str,
-                          results: list[dict[str, Any]],
-                          case_results: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+async def synthesize_irac(
+    question: str,
+    jurisdiction: str,
+    results: list[dict[str, Any]],
+    case_results: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """IRAC-structured synthesis with a deterministic grounding post-check.
 
     Splits the question into issues, asks the LLM for an IRAC answer, parses the
@@ -690,15 +796,24 @@ async def synthesize_irac(question: str, jurisdiction: str,
         system += f"\n\n{std}"
     messages = [
         {"role": "system", "content": system},
-        {"role": "user", "content": (
-            f"Question ({jurisdiction.upper()}): {question}\n\n"
-            f"Discrete issues: {len(issues)} — {'; '.join(issues)}\n\nRetrieved:\n{ctx}"
-        )},
+        {
+            "role": "user",
+            "content": (
+                f"Question ({jurisdiction.upper()}): {question}\n\n"
+                f"Discrete issues: {len(issues)} — {'; '.join(issues)}\n\nRetrieved:\n{ctx}"
+            ),
+        },
     ]
     try:
-        model = llm._analysis_cloud_model() if llm._analysis_cloud_enabled() else "qwen3.5-4b"
+        model = (
+            llm._analysis_cloud_model()
+            if llm._analysis_cloud_enabled()
+            else "qwen3.5-4b"
+        )
         parts: list[str] = []
-        async for chunk, kind in llm.stream_content(model, messages, agent_id="rob_lawyer"):
+        async for chunk, kind in llm.stream_content(
+            model, messages, agent_id="rob_lawyer"
+        ):
             if kind == "content":
                 parts.append(chunk or "")
         content = "".join(parts).strip()

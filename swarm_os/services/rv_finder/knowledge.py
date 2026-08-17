@@ -5,6 +5,7 @@ positive signals, brand weak spots, MPG ranges, motorhome models, life-ease
 feature spec) in one data-only module means the analyzers stay reviewable and
 domain logic can be unit-tested without touching parsers or the network.
 """
+
 from __future__ import annotations
 
 BROWSER_HEADERS = {
@@ -18,7 +19,8 @@ BROWSER_HEADERS = {
 
 PPL_BASE = "https://www.pplmotorhomes.com"
 PPL_INVENTORY = (
-    PPL_BASE + "/used-rvs-for-sale/all-available-vehicles?facetValueFilter=price%3a%5b0+TO+{budget}%5d"
+    PPL_BASE
+    + "/used-rvs-for-sale/all-available-vehicles?facetValueFilter=price%3a%5b0+TO+{budget}%5d"
 )
 
 # --------------------------------------------------------------------------
@@ -28,7 +30,12 @@ RV_TYPE_TERMS = {
     "Class A Motorhome": ["class a", "class-a", "diesel pusher", "gas class a"],
     "Class B Motorhome": ["class b", "class-b", "van camper", "camper van", "sprinter"],
     "Class C Motorhome": ["class c", "class-c", "mini motorhome", "mini-motorhome"],
-    "Travel Trailer": ["travel trailer", "travel-trailer", "bumper pull", "camper trailer"],
+    "Travel Trailer": [
+        "travel trailer",
+        "travel-trailer",
+        "bumper pull",
+        "camper trailer",
+    ],
     "Fifth Wheel": ["fifth wheel", "fifth-wheel", "5th wheel"],
     "Toy Hauler": ["toy hauler", "toy-hauler"],
     "Truck Camper": ["truck camper", "truck-camper", "slide-in camper"],
@@ -49,69 +56,206 @@ BASE_NEW_PRICE = {
 }
 
 RV_MAKES = [
-    "airstream", "winnebago", "thor", "jayco", "forest river", "keystone",
-    "grand design", "coachmen", "fleetwood", "gulf stream", "heartland",
-    "dutchmen", "kz", "tiffin", "newmar", "roadtrek", "pleasure-way",
-    "lazy daze", "classic", "northwood", "lance", "artic fox", "palomino",
-    "rockwood", "freedom", "ace", "shasta", "starcraft", "crossroads",
-    "camplite", "casita", "scamp", "oliver", "ethos", "aliner", "taxa",
+    "airstream",
+    "winnebago",
+    "thor",
+    "jayco",
+    "forest river",
+    "keystone",
+    "grand design",
+    "coachmen",
+    "fleetwood",
+    "gulf stream",
+    "heartland",
+    "dutchmen",
+    "kz",
+    "tiffin",
+    "newmar",
+    "roadtrek",
+    "pleasure-way",
+    "lazy daze",
+    "classic",
+    "northwood",
+    "lance",
+    "artic fox",
+    "palomino",
+    "rockwood",
+    "freedom",
+    "ace",
+    "shasta",
+    "starcraft",
+    "crossroads",
+    "camplite",
+    "casita",
+    "scamp",
+    "oliver",
+    "ethos",
+    "aliner",
+    "taxa",
 ]
 
 # Condition red flags (critical) — hard penalties, verdict capped.
 CRITICAL_RED_FLAGS = [
-    "water damage", "water intrusion", "leak", "leaking", "roof leak",
-    "mold", "mildew", "soft floor", "soft spot", "frame damage", "frame rot",
-    "cracked frame", "flood", "fire damage", "salvage", "rebuilt title",
-    "no title", "blown", "smoke damage", "deer hit", "collision damage",
-    "inoperable", "does not run", "not running", "needs work", "as-is",
-    "as is", "mice", "rodent", "wrecked", "totaled", "tow away", "junk",
+    "water damage",
+    "water intrusion",
+    "leak",
+    "leaking",
+    "roof leak",
+    "mold",
+    "mildew",
+    "soft floor",
+    "soft spot",
+    "frame damage",
+    "frame rot",
+    "cracked frame",
+    "flood",
+    "fire damage",
+    "salvage",
+    "rebuilt title",
+    "no title",
+    "blown",
+    "smoke damage",
+    "deer hit",
+    "collision damage",
+    "inoperable",
+    "does not run",
+    "not running",
+    "needs work",
+    "as-is",
+    "as is",
+    "mice",
+    "rodent",
+    "wrecked",
+    "totaled",
+    "tow away",
+    "junk",
 ]
 
 # Positive condition / feature signals.
 POSITIVE_SIGNALS = [
-    "no leaks", "clean title", "low miles", "new tires", "new roof",
-    "new battery", "solar", "lithium", "inverter", "leveling jacks",
-    "awning", "slide", "generator", "serviced", "well maintained",
-    "one owner", "non-smoker", "nonsmoker", "no pets", "garage kept",
-    "excellent condition", "good condition", "king bed", "dry bath",
-    "queen bed", "bunks", "furnace", "ac", "air conditioning",
-    "hot water", "newer", "upgraded", "recently",
+    "no leaks",
+    "clean title",
+    "low miles",
+    "new tires",
+    "new roof",
+    "new battery",
+    "solar",
+    "lithium",
+    "inverter",
+    "leveling jacks",
+    "awning",
+    "slide",
+    "generator",
+    "serviced",
+    "well maintained",
+    "one owner",
+    "non-smoker",
+    "nonsmoker",
+    "no pets",
+    "garage kept",
+    "excellent condition",
+    "good condition",
+    "king bed",
+    "dry bath",
+    "queen bed",
+    "bunks",
+    "furnace",
+    "ac",
+    "air conditioning",
+    "hot water",
+    "newer",
+    "upgraded",
+    "recently",
 ]
 
 # Known weak spots per RV make (community consensus). Each entry is
 # (weak_spot, how_to_check_during_inspection).
 KNOWN_WEAK_SPOTS: dict[str, list[tuple[str, str]]] = {
     "keystone": [
-        ("Slide-out / window seal leaks", "Run a hose over the slide seals; check interior for water stains around the slide"),
-        ("Cheap exterior siding (delamination/peeling gel-coat)", "Look for bubbles or delamination on the sidewalls"),
-        ("Frame & suspension on heavy models", "Inspect the frame rails and axles for rust or sag"),
+        (
+            "Slide-out / window seal leaks",
+            "Run a hose over the slide seals; check interior for water stains around the slide",
+        ),
+        (
+            "Cheap exterior siding (delamination/peeling gel-coat)",
+            "Look for bubbles or delamination on the sidewalls",
+        ),
+        (
+            "Frame & suspension on heavy models",
+            "Inspect the frame rails and axles for rust or sag",
+        ),
     ],
     "grand design": [
-        ("Smaller axles / bearing wear on some floorplans", "Check bearing condition and any grease around hubs"),
-        ("Rear-cap delamination on certain years", "Tap the rear cap for hollow/delaminated spots"),
-        ("Higher resale = often priced above 'low retail'", "Compare against national comps before offering"),
+        (
+            "Smaller axles / bearing wear on some floorplans",
+            "Check bearing condition and any grease around hubs",
+        ),
+        (
+            "Rear-cap delamination on certain years",
+            "Tap the rear cap for hollow/delaminated spots",
+        ),
+        (
+            "Higher resale = often priced above 'low retail'",
+            "Compare against national comps before offering",
+        ),
     ],
     "forest river": [
-        ("Roof & seam leaks if not maintained", "Inspect roof membrane, EPDM/TPO seams, and lap seals"),
-        ("Quality varies by sub-brand and plant", "Research the exact line (Rockwood/Palomino/etc.) on owner forums"),
-        ("Slide-seal issues on Rockwood lines", "Open/close slides and check for seal wear"),
+        (
+            "Roof & seam leaks if not maintained",
+            "Inspect roof membrane, EPDM/TPO seams, and lap seals",
+        ),
+        (
+            "Quality varies by sub-brand and plant",
+            "Research the exact line (Rockwood/Palomino/etc.) on owner forums",
+        ),
+        (
+            "Slide-seal issues on Rockwood lines",
+            "Open/close slides and check for seal wear",
+        ),
     ],
     "dutchmen": [
-        ("Fit/finish quality-control complaints", "Check door alignment, cabinet gaps, and trim"),
-        ("Leak/delamination risk on older units", "Probe floors and walls for soft spots and water stains"),
-        ("Cheap entry materials; low resale", "Expect harder resale; negotiate accordingly"),
+        (
+            "Fit/finish quality-control complaints",
+            "Check door alignment, cabinet gaps, and trim",
+        ),
+        (
+            "Leak/delamination risk on older units",
+            "Probe floors and walls for soft spots and water stains",
+        ),
+        (
+            "Cheap entry materials; low resale",
+            "Expect harder resale; negotiate accordingly",
+        ),
     ],
     "heartland": [
-        ("Slide-out seal issues on older models", "Exercise slides and check seals + interior water marks"),
-        ("Axle/bearing issues on heavy fifth wheels", "Have the running gear inspected before purchase"),
+        (
+            "Slide-out seal issues on older models",
+            "Exercise slides and check seals + interior water marks",
+        ),
+        (
+            "Axle/bearing issues on heavy fifth wheels",
+            "Have the running gear inspected before purchase",
+        ),
     ],
     "winnebago": [
-        ("Some 2010s Class C units had roof/seam issues", "Inspect roof and clearance lights for leaks"),
-        ("Ford E-series chassis needs transmission attention", "Check trans service records; test-drive up to temp"),
+        (
+            "Some 2010s Class C units had roof/seam issues",
+            "Inspect roof and clearance lights for leaks",
+        ),
+        (
+            "Ford E-series chassis needs transmission attention",
+            "Check trans service records; test-drive up to temp",
+        ),
     ],
     "airstream": [
-        ("Leaks around windows/skylights if seals fail", "Check window gaskets and interior corners for staining"),
-        ("Axle/suspension age on older units", "Inspect axle condition; replacements are costly"),
+        (
+            "Leaks around windows/skylights if seals fail",
+            "Check window gaskets and interior corners for staining",
+        ),
+        (
+            "Axle/suspension age on older units",
+            "Inspect axle condition; replacements are costly",
+        ),
         ("High parts/maintenance cost", "Budget for specialty airstream-only parts"),
     ],
     "coachmen": [
@@ -119,39 +263,66 @@ KNOWN_WEAK_SPOTS: dict[str, list[tuple[str, str]]] = {
         ("Leak risk if not maintained", "Check roof seals and windows"),
     ],
     "fleetwood": [
-        ("Lap-seal/roof issues on older units", "Inspect the entire roof perimeter and seams"),
+        (
+            "Lap-seal/roof issues on older units",
+            "Inspect the entire roof perimeter and seams",
+        ),
     ],
     "country coach": [
-        ("Expensive, aging parts (wiring/harness)", "Have an RV tech inspect the 12V/120V systems"),
+        (
+            "Expensive, aging parts (wiring/harness)",
+            "Have an RV tech inspect the 12V/120V systems",
+        ),
         ("Air-ride suspension maintenance", "Check air bags and compressor operation"),
     ],
     "tiffin": [
-        ("Some slide mechanisms need attention", "Exercise slides fully; listen for grinding"),
+        (
+            "Some slide mechanisms need attention",
+            "Exercise slides fully; listen for grinding",
+        ),
         ("Expensive parts", "Budget for premium maintenance"),
     ],
     "thor": [
-        ("Quality varies by sub-brand", "Research the specific floorplan on owner forums"),
-        ("Cheap-ish interior materials", "Expect wear; inspect cabinets and upholstery"),
+        (
+            "Quality varies by sub-brand",
+            "Research the specific floorplan on owner forums",
+        ),
+        (
+            "Cheap-ish interior materials",
+            "Expect wear; inspect cabinets and upholstery",
+        ),
     ],
     "jayco": [
-        ("Frame/axle issues on some lighter trailers", "Inspect axles and wheel bearings"),
+        (
+            "Frame/axle issues on some lighter trailers",
+            "Inspect axles and wheel bearings",
+        ),
         ("Seal maintenance critical", "Re-caulk roof/seams annually"),
     ],
     "kz": [
-        ("Lesser insulation; budget build", "Check climate suitability; inspect build quality"),
+        (
+            "Lesser insulation; budget build",
+            "Check climate suitability; inspect build quality",
+        ),
         ("Some build-quality complaints", "Probe for fit/finish issues"),
     ],
     "gulf stream": [
         ("Mid-tier QC; some complaints", "Inspect thoroughly unit by unit"),
     ],
     "palomino": [
-        ("Soft-floor issues on older popups", "Probe floors thoroughly, especially near walls"),
+        (
+            "Soft-floor issues on older popups",
+            "Probe floors thoroughly, especially near walls",
+        ),
     ],
     "lance": [
         ("Rear-cap delamination on some models", "Tap the rear cap for hollow spots"),
     ],
     "roadtrek": [
-        ("Electrical gremlins / cabinet cracking in some years", "Test all house systems; check for cracks"),
+        (
+            "Electrical gremlins / cabinet cracking in some years",
+            "Test all house systems; check for cracks",
+        ),
     ],
 }
 

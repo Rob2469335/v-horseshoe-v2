@@ -9,6 +9,7 @@ from typing import Any, Dict, List
 
 log = logging.getLogger(__name__)
 
+
 class LearningService:
     def __init__(self, store_path: Path | str | None = None) -> None:
         self.store_path = Path(store_path) if store_path is not None else None
@@ -33,11 +34,16 @@ class LearningService:
             try:
                 self.store_path.parent.mkdir(parents=True, exist_ok=True)
                 with open(self.store_path, "w", encoding="utf-8") as fh:
-                    json.dump({
-                        "outcomes": self._outcomes,
-                        "repairs": self._repairs,
-                        "stats": self._stats
-                    }, fh, default=str, indent=2)
+                    json.dump(
+                        {
+                            "outcomes": self._outcomes,
+                            "repairs": self._repairs,
+                            "stats": self._stats,
+                        },
+                        fh,
+                        default=str,
+                        indent=2,
+                    )
             except Exception as e:
                 log.warning("Failed to persist learning outcomes: %s", e)
                 pass
@@ -87,10 +93,10 @@ class LearningService:
         action: str,
         success: bool | None = None,
         result: str | None = None,
-        reason: str | None = None
+        reason: str | None = None,
     ) -> None:
         if success is None and result is not None:
-            success = (result == "success" or result is True)
+            success = result == "success" or result is True
         elif success is not None and result is None:
             result = "success" if success else "failed"
         elif success is None and result is None:
@@ -99,13 +105,15 @@ class LearningService:
 
         if component not in self._repairs:
             self._repairs[component] = []
-        self._repairs[component].append({
-            "action": action,
-            "success": success,
-            "result": result,
-            "reason": reason,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
+        self._repairs[component].append(
+            {
+                "action": action,
+                "success": success,
+                "result": result,
+                "reason": reason,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        )
 
         if component not in self._stats:
             self._stats[component] = {"failures": 0, "successes": 0}

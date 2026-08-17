@@ -407,7 +407,9 @@ class WatchLoop:
                         return True
             return False
         except Exception as exc:
-            log.warning("WatchLoop: signal-2 check failed (%s); treating as no breakage.", exc)
+            log.warning(
+                "WatchLoop: signal-2 check failed (%s); treating as no breakage.", exc
+            )
             return False
 
     def _soft_case_elevated_failure_rate(
@@ -644,7 +646,9 @@ class WatchLoop:
 
                 expired = await asyncio.to_thread(clear_expired_old_flags)
                 if expired:
-                    log.info("WatchLoop: expired %d never-reviewed canary flag(s).", expired)
+                    log.info(
+                        "WatchLoop: expired %d never-reviewed canary flag(s).", expired
+                    )
             except Exception as exc:
                 log.debug("WatchLoop: flag GC skipped (%s).", exc)
 

@@ -7,6 +7,7 @@ s2_scholar, seq_thinking, code_review, ...) are missing when they are actually
 loaded (verified live: 79 external tools). The endpoint must merge the loaded
 MCP tools via the non-spawning accessor.
 """
+
 from unittest.mock import MagicMock
 
 from fastapi import FastAPI
@@ -30,12 +31,21 @@ def _app():
 def test_tools_reports_external_mcp_tools(monkeypatch):
     """When external MCP tools are loaded, /tools must include them (mcp:<server>:<name>)
     in both capabilities and the count — the startup banner reads this."""
+
     def _fake_mcp_tools():
         return [
             {"server": "github", "name": "get_file_contents", "description": "x"},
-            {"server": "s2_scholar", "name": "semantic_scholar_search_papers", "description": "y"},
+            {
+                "server": "s2_scholar",
+                "name": "semantic_scholar_search_papers",
+                "description": "y",
+            },
             {"server": "code_review", "name": "scan_diff", "description": "z"},
-            {"server": "seq_thinking", "name": "sequentialthinking", "description": "w"},
+            {
+                "server": "seq_thinking",
+                "name": "sequentialthinking",
+                "description": "w",
+            },
         ]
 
     monkeypatch.setattr(
@@ -59,6 +69,7 @@ def test_tools_with_no_mcp_returns_builtin_only(monkeypatch):
     """With no MCP tools loaded (manager still initializing / failed), /tools
     must still return the built-in agent tools and a consistent count — never
     raise and never spawn processes."""
+
     def _fake_mcp_tools():
         return []
 

@@ -14,8 +14,17 @@ class Governor:
     on an action: auto, sandbox, approval_required, or reject.
     """
 
-    def __init__(self, diagnostician: Optional[Diagnostician] = None, policy_engine: Optional[object] = None, learner: Optional[Learner] = None, strategy_stats: Optional[dict] = None, strategy_registry: Optional[object] = None):
-        self.diagnostician = diagnostician or Diagnostician(memory=(learner.learning if learner else None))
+    def __init__(
+        self,
+        diagnostician: Optional[Diagnostician] = None,
+        policy_engine: Optional[object] = None,
+        learner: Optional[Learner] = None,
+        strategy_stats: Optional[dict] = None,
+        strategy_registry: Optional[object] = None,
+    ):
+        self.diagnostician = diagnostician or Diagnostician(
+            memory=(learner.learning if learner else None)
+        )
         self.policy_engine = policy_engine
         self.learner = learner or Learner()
         # strategy stats map: id -> config (approval_required_threshold etc.)
@@ -61,7 +70,11 @@ class Governor:
                 try:
                     self.learner.persist_failure(fr)
                 except Exception as e:
-                    log.warning("Failed to persist failure record for incident %s: %s", incident_id, e)
+                    log.warning(
+                        "Failed to persist failure record for incident %s: %s",
+                        incident_id,
+                        e,
+                    )
                     pass
                 return decision
         except Exception as exc:
@@ -98,12 +111,19 @@ class Governor:
             if comp:
                 if self._strategy_registry is None:
                     from .strategy_registry import StrategyRegistry
+
                     self._strategy_registry = StrategyRegistry()
                 all_stats = self._strategy_registry.list_all()
-                entries = {k: v for k, v in all_stats.items() if k.startswith(f"{comp}:")}
+                entries = {
+                    k: v for k, v in all_stats.items() if k.startswith(f"{comp}:")
+                }
                 if entries:
-                    total_succ = sum(e.get("success_count", 0) for e in entries.values())
-                    total_fail = sum(e.get("failure_count", 0) for e in entries.values())
+                    total_succ = sum(
+                        e.get("success_count", 0) for e in entries.values()
+                    )
+                    total_fail = sum(
+                        e.get("failure_count", 0) for e in entries.values()
+                    )
                     total = total_succ + total_fail
                     if total >= 5:
                         strat_win_rate = total_succ / total
@@ -122,10 +142,14 @@ class Governor:
 
         if forced_approval:
             decision["mode"] = "approval_required"
-            decision["mode_reason"] = f"low strategy win-rate ({strat_win_rate:.0%}) for component — human oversight required"
+            decision["mode_reason"] = (
+                f"low strategy win-rate ({strat_win_rate:.0%}) for component — human oversight required"
+            )
         elif hypotheses and hypotheses[0].get("fix_class") == "model_variability":
             decision["mode"] = "approval_required"
-            decision["mode_reason"] = "model variability detected (not fixable by prompt/rules) — human or cloud escalation required"
+            decision["mode_reason"] = (
+                "model variability detected (not fixable by prompt/rules) — human or cloud escalation required"
+            )
         elif top_conf >= auto_threshold:
             decision["mode"] = "auto_execute"
         elif top_conf < approval_threshold:
@@ -151,7 +175,9 @@ class Governor:
         try:
             self.learner.persist_failure(fr)
         except Exception as e:
-            log.warning("Failed to persist failure record for incident %s: %s", incident_id, e)
+            log.warning(
+                "Failed to persist failure record for incident %s: %s", incident_id, e
+            )
             pass
 
         return decision
@@ -168,13 +194,18 @@ class Governor:
                     # update success/failure
                     if outcome.get("outcome") == "SUCCESS":
                         f["successful_fix"] = outcome.get("repair")
-                        f["confidence"] = outcome.get("confidence", f.get("confidence", 0.0))
+                        f["confidence"] = outcome.get(
+                            "confidence", f.get("confidence", 0.0)
+                        )
                     # write back
                     # for simplicity learner.persist_failure inserts a new item; we directly save cache
-                    if hasattr(self.learner, "_cache") and self.learner._cache is not None:
+                    if (
+                        hasattr(self.learner, "_cache")
+                        and self.learner._cache is not None
+                    ):
                         # replace matching entry
                         lst = self.learner._cache.get("failures", [])
-                        for i,entry in enumerate(lst):
+                        for i, entry in enumerate(lst):
                             if entry.get("incident_id") == incident_id:
                                 lst[i] = f
                                 break
@@ -188,25 +219,37 @@ class Governor:
         # update strategy stats if provided
         try:
             from .strategy_registry import StrategyRegistry
+
             # naive strategy id based on component+repair action
             strat = StrategyRegistry()
-            comp = outcome.get('repair', {}).get('component') if outcome.get('repair') else None
+            comp = (
+                outcome.get("repair", {}).get("component")
+                if outcome.get("repair")
+                else None
+            )
             if not comp:
-                comp = outcome.get('component')
+                comp = outcome.get("component")
             if not comp:
                 # try to find service from stored failure
                 try:
                     failures = self.learner.list_failures()
-                    match = next((x for x in failures if x.get('incident_id') == incident_id), None)
+                    match = next(
+                        (x for x in failures if x.get("incident_id") == incident_id),
+                        None,
+                    )
                     if match:
-                        comp = match.get('service')
+                        comp = match.get("service")
                 except Exception:
                     comp = None
-            action = outcome.get('repair', {}).get('action') if outcome.get('repair') else None
+            action = (
+                outcome.get("repair", {}).get("action")
+                if outcome.get("repair")
+                else None
+            )
             if comp and action:
                 strategy_id = f"{comp}:{action}"
-                success = outcome.get('outcome') == 'SUCCESS'
-                duration = outcome.get('duration', 0.0) or 0.0
+                success = outcome.get("outcome") == "SUCCESS"
+                duration = outcome.get("duration", 0.0) or 0.0
                 strat.update(strategy_id, success=success, duration=duration)
         except Exception as e:
             log.warning("Failed to update strategy stats: %s", e)

@@ -17,6 +17,7 @@ Key upgrades over the old scrape-only handler:
 - Gated input ops (click/type on the user's real browser) are the agent's job to
   route through the approval gate at the tool_executor level.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -64,6 +65,7 @@ def _redact(value: Any) -> Any:
         return {k: _redact(v) for k, v in value.items()}
     return value
 
+
 _PROFILE_DIR = Path(os.getenv("ZENITH_BROWSER_PROFILE", "data/browser_profile"))
 
 # A single persistent browser+context shared across calls (module-level lazy).
@@ -74,7 +76,9 @@ _pages: dict[str, Any] = {}
 
 
 def _get_project_root() -> Path:
-    return Path(os.getenv("ZENITH_PROJECT_ROOT", Path(__file__).resolve().parent.parent.parent))
+    return Path(
+        os.getenv("ZENITH_PROJECT_ROOT", Path(__file__).resolve().parent.parent.parent)
+    )
 
 
 async def _ensure_browser():
@@ -85,6 +89,7 @@ async def _ensure_browser():
         if _context is not None:
             return
         from playwright.async_api import async_playwright
+
         _browser = await async_playwright().start()
         _PROFILE_DIR.mkdir(parents=True, exist_ok=True)
         try:
@@ -150,9 +155,15 @@ async def _find_element(page, role: str, name: str):
         if await loc.count() > 0:
             return loc
     except Exception as exc:
-        logger.debug("role+name locator probe failed (role=%r name=%r): %s", role, name, exc)
+        logger.debug(
+            "role+name locator probe failed (role=%r name=%r): %s", role, name, exc
+        )
     # 2) CSS: [name=...] (raw attribute) then [placeholder=...] (visible label).
-    for sel in (f'[name="{name}"]', f'[placeholder="{name}"]', f'[aria-label="{name}"]'):
+    for sel in (
+        f'[name="{name}"]',
+        f'[placeholder="{name}"]',
+        f'[aria-label="{name}"]',
+    ):
         try:
             loc = page.locator(sel)
             if await loc.count() > 0:
@@ -175,6 +186,7 @@ def active_domain() -> str:
             return ""
         url = pages[-1].url
         import urllib.parse
+
         return urllib.parse.urlparse(url).netloc.lower()
     except Exception:
         return ""
@@ -204,7 +216,10 @@ async def _playwright_impl(params: Dict[str, Any], trace_hook=None) -> Dict[str,
     try:
         from playwright.async_api import TimeoutError as PWTimeout
     except ImportError:
-        return {"ok": False, "error": "Playwright is not installed. Run 'pip install playwright'."}
+        return {
+            "ok": False,
+            "error": "Playwright is not installed. Run 'pip install playwright'.",
+        }
 
     try:
         await _ensure_browser()
@@ -223,8 +238,11 @@ async def _playwright_impl(params: Dict[str, Any], trace_hook=None) -> Dict[str,
             title = await page.title()
             a11y = await _a11y_snapshot(page)
             return {
-                "ok": True, "url": page.url, "title": title,
-                "a11y": a11y[:60], "a11y_count": len(a11y),
+                "ok": True,
+                "url": page.url,
+                "title": title,
+                "a11y": a11y[:60],
+                "a11y_count": len(a11y),
                 "hint": "Use browser_a11y for the full tree, browser_click/browser_type to act.",
             }
 
@@ -234,7 +252,10 @@ async def _playwright_impl(params: Dict[str, Any], trace_hook=None) -> Dict[str,
 
         elif operation == "browser_click" or operation == "click":
             if not name and not role:
-                return {"ok": False, "error": "browser_click needs name (and optional role)"}
+                return {
+                    "ok": False,
+                    "error": "browser_click needs name (and optional role)",
+                }
             a11y = await _a11y_snapshot(page)
             target = None
             for node in a11y:
@@ -242,12 +263,18 @@ async def _playwright_impl(params: Dict[str, Any], trace_hook=None) -> Dict[str,
                     target = node
                     break
             if target is None:
-                return {"ok": False, "error": f"no a11y node named '{name}' found; try browser_a11y first",
-                        "available": [n.get("name") for n in a11y[:20]]}
+                return {
+                    "ok": False,
+                    "error": f"no a11y node named '{name}' found; try browser_a11y first",
+                    "available": [n.get("name") for n in a11y[:20]],
+                }
             locator = await _find_element(page, target.get("role", "button"), name)
             if locator is None:
-                return {"ok": False, "error": f"could not resolve click target '{name}'",
-                        "available": [n.get("name") for n in a11y[:20]]}
+                return {
+                    "ok": False,
+                    "error": f"could not resolve click target '{name}'",
+                    "available": [n.get("name") for n in a11y[:20]],
+                }
             await locator.click(timeout=8000)
             await page.wait_for_load_state("domcontentloaded")
             return {"ok": True, "clicked": target.get("name"), "url": page.url}
@@ -266,8 +293,11 @@ async def _playwright_impl(params: Dict[str, Any], trace_hook=None) -> Dict[str,
                     locator = await _find_element(page, "searchbox", name)
             if locator is None:
                 a11y = await _a11y_snapshot(page)
-                return {"ok": False, "error": f"no input named '{name}' found; try browser_a11y first",
-                        "available": [n.get("name") for n in a11y[:20]]}
+                return {
+                    "ok": False,
+                    "error": f"no input named '{name}' found; try browser_a11y first",
+                    "available": [n.get("name") for n in a11y[:20]],
+                }
             await locator.fill(value or text, timeout=8000)
             return {"ok": True, "typed_into": name or selector}
 
@@ -279,7 +309,10 @@ async def _playwright_impl(params: Dict[str, Any], trace_hook=None) -> Dict[str,
             browser_fill_form): never guess selectors, verify before submit."""
             fields = params.get("fields") or []
             if not isinstance(fields, list) or not fields:
-                return {"ok": False, "error": "browser_fill_form needs fields=[{name, value}]"}
+                return {
+                    "ok": False,
+                    "error": "browser_fill_form needs fields=[{name, value}]",
+                }
             filled, failed = [], []
             for f in fields:
                 fname = f.get("name", "")
@@ -297,11 +330,15 @@ async def _playwright_impl(params: Dict[str, Any], trace_hook=None) -> Dict[str,
                 try:
                     await locator.fill(fvalue, timeout=6000)
                     # Verify the value actually landed.
-                    actual = await locator.input_value() if await locator.count() else ""
+                    actual = (
+                        await locator.input_value() if await locator.count() else ""
+                    )
                     if str(actual) == str(fvalue):
                         filled.append(fname)
                     else:
-                        failed.append({"name": fname, "error": f"value mismatch: got {actual!r}"})
+                        failed.append(
+                            {"name": fname, "error": f"value mismatch: got {actual!r}"}
+                        )
                 except Exception as exc:
                     failed.append({"name": fname, "error": str(exc)})
             # 2026 form-fill hardening: after filling, run the form's OWN
@@ -324,12 +361,22 @@ async def _playwright_impl(params: Dict[str, Any], trace_hook=None) -> Dict[str,
                   return out;
                 }""")
                 if validity and not failed:
-                    return {"ok": False, "filled": filled, "failed": failed,
-                            "incomplete": validity, "url": page.url,
-                            "error": "form has required/invalid fields after fill"}
+                    return {
+                        "ok": False,
+                        "filled": filled,
+                        "failed": failed,
+                        "incomplete": validity,
+                        "url": page.url,
+                        "error": "form has required/invalid fields after fill",
+                    }
             except Exception as exc:
                 logger.debug("form validity check skipped (best-effort): %s", exc)
-            return {"ok": not failed, "filled": filled, "failed": failed, "url": page.url}
+            return {
+                "ok": not failed,
+                "filled": filled,
+                "failed": failed,
+                "url": page.url,
+            }
 
         elif operation == "browser_verify" or operation == "verify":
             """Read a field's current value back to confirm a prior fill landed —
@@ -368,14 +415,23 @@ async def _playwright_impl(params: Dict[str, Any], trace_hook=None) -> Dict[str,
 
         elif operation == "browser_wait" or operation == "wait":
             import asyncio as _asyncio
+
             ms = int(params.get("ms", 1500))
             await _asyncio.sleep(ms / 1000.0)
             a11y = await _a11y_snapshot(page)
             return {"ok": True, "waited_ms": ms, "a11y": a11y[:40]}
 
         elif operation == "browser_state":
-            tabs = [{"title": (await p.title()) if p else "", "url": p.url} for p in _context.pages]
-            return {"ok": True, "tab_count": len(tabs), "tabs": tabs, "profile": str(_PROFILE_DIR)}
+            tabs = [
+                {"title": (await p.title()) if p else "", "url": p.url}
+                for p in _context.pages
+            ]
+            return {
+                "ok": True,
+                "tab_count": len(tabs),
+                "tabs": tabs,
+                "profile": str(_PROFILE_DIR),
+            }
 
         elif operation == "browser_describe" or operation == "describe":
             """Vision fallback: screenshot the page and ask the local vision model
@@ -386,22 +442,34 @@ async def _playwright_impl(params: Dict[str, Any], trace_hook=None) -> Dict[str,
             await page.screenshot(path=str(shot_path))
             try:
                 import base64
+
                 b64 = base64.b64encode(shot_path.read_bytes()).decode()
                 # llama.cpp vision: OpenAI-compatible multimodal message with an
                 # image_url data URI. Requires the vision server (:8083) to be up;
                 # degrades gracefully (ok:False) if not.
                 from swarm_os.infra.llama_client import LlamaClient
+
                 vision = LlamaClient(base_url="http://127.0.0.1:8083")
                 async with asyncio.timeout(60.0):
                     text = await vision.generate(
                         model="qwen3-vl",
-                        messages=[{
-                            "role": "user",
-                            "content": [
-                                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
-                                {"type": "text", "text": "Describe what is on this webpage, focusing on interactive elements (buttons, links, inputs) and their visible labels."},
-                            ],
-                        }],
+                        messages=[
+                            {
+                                "role": "user",
+                                "content": [
+                                    {
+                                        "type": "image_url",
+                                        "image_url": {
+                                            "url": f"data:image/png;base64,{b64}"
+                                        },
+                                    },
+                                    {
+                                        "type": "text",
+                                        "text": "Describe what is on this webpage, focusing on interactive elements (buttons, links, inputs) and their visible labels.",
+                                    },
+                                ],
+                            }
+                        ],
                     )
                 return {"ok": True, "described": True, "description": str(text)[:2000]}
             except Exception as exc:
@@ -421,6 +489,7 @@ async def _playwright_impl(params: Dict[str, Any], trace_hook=None) -> Dict[str,
                 await page.goto(url, wait_until="domcontentloaded", timeout=30000)
             try:
                 import markdownify
+
                 html = await page.content()
                 text_ = markdownify.markdownify(html, heading_style="ATX").strip()
             except Exception:

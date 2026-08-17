@@ -12,11 +12,14 @@ SCENARIOS: dict[str, PopulationBuilder] = {
     "stress": build_stress_population,
 }
 
+
 def register_scenario(name: str, builder: PopulationBuilder) -> None:
     SCENARIOS[name] = builder
 
+
 def build_population(name: str):
     return SCENARIOS.get(name, build_default_population)()
+
 
 # -------------------------------------------------------------------
 # Legacy compatibility surface
@@ -30,7 +33,3 @@ __all__ = [
     "build_population",
     "build",
 ]
-
-
-
-

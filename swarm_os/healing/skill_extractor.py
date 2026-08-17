@@ -12,7 +12,13 @@ class SkillExtractor:
     recent M failures, create or update a SkillRecord.
     """
 
-    def __init__(self, learner=None, min_occurrences: int = 3, lookback: int = 50, store_path: Optional[str] = None):
+    def __init__(
+        self,
+        learner=None,
+        min_occurrences: int = 3,
+        lookback: int = 50,
+        store_path: Optional[str] = None,
+    ):
         self.learner = learner
         self.min_occurrences = min_occurrences
         self.lookback = lookback
@@ -26,7 +32,8 @@ class SkillExtractor:
         if self.store_path:
             try:
                 import json
-                with open(self.store_path, 'r', encoding='utf-8') as fh:
+
+                with open(self.store_path, "r", encoding="utf-8") as fh:
                     self._skills = json.load(fh) or {}
             except Exception:
                 self._skills = {}
@@ -38,7 +45,8 @@ class SkillExtractor:
             return
         try:
             import json
-            with open(self.store_path, 'w', encoding='utf-8') as fh:
+
+            with open(self.store_path, "w", encoding="utf-8") as fh:
                 json.dump(self._skills, fh, indent=2)
         except Exception:
             pass
@@ -49,24 +57,38 @@ class SkillExtractor:
         # map sequence signature -> occurrences and example
         seq_map: Dict[str, Dict[str, Any]] = {}
         for f in recent:
-            attempts = f.get('repair_attempts', []) or []
+            attempts = f.get("repair_attempts", []) or []
             # signature: comma-separated actions
-            sig = ','.join([a.get('action') for a in attempts if a.get('action')])
+            sig = ",".join([a.get("action") for a in attempts if a.get("action")])
             if not sig:
                 continue
-            entry = seq_map.setdefault(sig, {'count': 0, 'examples': [], 'total_duration': 0.0})
-            entry['count'] += 1
-            entry['examples'].append(f)
+            entry = seq_map.setdefault(
+                sig, {"count": 0, "examples": [], "total_duration": 0.0}
+            )
+            entry["count"] += 1
+            entry["examples"].append(f)
         created: List[SkillRecord] = []
         for sig, info in seq_map.items():
-            if info['count'] >= self.min_occurrences:
+            if info["count"] >= self.min_occurrences:
                 # create or update skill
                 skill_name = f"skill-{sig[:40]}"
                 repair_sequence = []
-                first = info['examples'][0]
-                for a in first.get('repair_attempts', []):
-                    repair_sequence.append({'action': a.get('action'), 'reason': a.get('reason')})
-                sr = SkillRecord(skill_name=skill_name, trigger_conditions=[{'signature': sig}], repair_sequence=repair_sequence, prerequisites=[], success_count=info['count'], failure_count=0, confidence=0.9, average_duration=0.0, last_used_at=time.time())
+                first = info["examples"][0]
+                for a in first.get("repair_attempts", []):
+                    repair_sequence.append(
+                        {"action": a.get("action"), "reason": a.get("reason")}
+                    )
+                sr = SkillRecord(
+                    skill_name=skill_name,
+                    trigger_conditions=[{"signature": sig}],
+                    repair_sequence=repair_sequence,
+                    prerequisites=[],
+                    success_count=info["count"],
+                    failure_count=0,
+                    confidence=0.9,
+                    average_duration=0.0,
+                    last_used_at=time.time(),
+                )
                 self._load_skills()
                 self._skills[skill_name] = sr.to_dict()
                 created.append(sr)

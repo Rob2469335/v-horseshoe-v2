@@ -5,6 +5,7 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+
 @dataclass(slots=True)
 class TraceEvent:
     trace_id: str
@@ -21,9 +22,11 @@ class TraceEvent:
     summary: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
 
+
 class TraceCollector:
     def __init__(self) -> None:
         from collections import deque
+
         self._events: deque[TraceEvent] = deque(maxlen=2000)
 
     def new_trace_id(self) -> str:
@@ -43,7 +46,7 @@ class TraceCollector:
         tokens: int = 0,
         cost: float = 0.0,
         summary: str = "",
-        metadata: dict[str, Any] | None = None
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         event = TraceEvent(
             trace_id=trace_id,
@@ -72,4 +75,3 @@ class TraceCollector:
 
     def clear(self) -> None:
         self._events.clear()
-

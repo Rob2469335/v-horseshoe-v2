@@ -11,6 +11,7 @@ Safety rails:
   - Temp cleanup only deletes stale files (>24h) inside the OS temp folder.
   - Kills are SIGTERM-first (graceful) with a short grace window before force.
 """
+
 from __future__ import annotations
 
 import logging
@@ -28,6 +29,7 @@ _KILL_GRACE_SECONDS = 3.0
 
 def _process_name(pid: int) -> str:
     import psutil
+
     try:
         return (psutil.Process(pid).name() or "").lower()
     except Exception:
@@ -53,7 +55,9 @@ def free_memory(anomaly: Dict[str, Any]) -> Dict[str, Any]:
             if _is_never_touch(pid, name) or pid == os.getpid():
                 skipped += 1
                 continue
-            handle = ctypes.windll.kernel32.OpenProcess(0x0200, False, pid)  # PROCESS_SET_QUOTA
+            handle = ctypes.windll.kernel32.OpenProcess(
+                0x0200, False, pid
+            )  # PROCESS_SET_QUOTA
             if not handle:
                 skipped += 1
                 continue
@@ -62,10 +66,19 @@ def free_memory(anomaly: Dict[str, Any]) -> Dict[str, Any]:
                 emptied.append({"pid": pid, "name": proc.info["name"]})
             finally:
                 ctypes.windll.kernel32.CloseHandle(handle)
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
+        except psutil.NoSuchProcess, psutil.AccessDenied:
             continue
-    log.info("Freed working sets of %d non-critical processes (skipped %d)", len(emptied), skipped)
-    return {"ok": True, "action": "free_memory", "emptied": len(emptied), "skipped": skipped}
+    log.info(
+        "Freed working sets of %d non-critical processes (skipped %d)",
+        len(emptied),
+        skipped,
+    )
+    return {
+        "ok": True,
+        "action": "free_memory",
+        "emptied": len(emptied),
+        "skipped": skipped,
+    }
 
 
 def clean_temp_files(anomaly: Dict[str, Any]) -> Dict[str, Any]:
@@ -73,6 +86,7 @@ def clean_temp_files(anomaly: Dict[str, Any]) -> Dict[str, Any]:
     the OS temp root, never project/cache/data dirs. Non-destructive to anything
     actively used (stale-only)."""
     import tempfile
+
     roots = {tempfile.gettempdir()}
     if os.name == "nt":
         roots |= {os.environ.get("TEMP", ""), os.environ.get("TMP", "")}
@@ -96,9 +110,14 @@ def clean_temp_files(anomaly: Dict[str, Any]) -> Dict[str, Any]:
                         freed_bytes += size
                 except OSError as exc:
                     errors.append(str(exc))
-    log.info("Cleaned %d stale temp files (%s)", removed, f"{freed_bytes/1e6:.1f} MB")
-    return {"ok": True, "action": "clean_temp_files", "removed_files": removed,
-            "freed_mb": round(freed_bytes / 1e6, 1), "errors": len(errors)}
+    log.info("Cleaned %d stale temp files (%s)", removed, f"{freed_bytes / 1e6:.1f} MB")
+    return {
+        "ok": True,
+        "action": "clean_temp_files",
+        "removed_files": removed,
+        "freed_mb": round(freed_bytes / 1e6, 1),
+        "errors": len(errors),
+    }
 
 
 def kill_runaway_process(anomaly: Dict[str, Any]) -> Dict[str, Any]:
@@ -106,6 +125,7 @@ def kill_runaway_process(anomaly: Dict[str, Any]) -> Dict[str, Any]:
     terminate first, then force after a short grace window. NEVER touches
     _NEVER_TOUCH processes."""
     import psutil
+
     detail = anomaly.get("detail") or {}
     processes = detail.get("processes", []) if isinstance(detail, dict) else []
     targets = []
@@ -119,7 +139,11 @@ def kill_runaway_process(anomaly: Dict[str, Any]) -> Dict[str, Any]:
             targets.append((pid, name))
 
     if not targets:
-        return {"ok": False, "action": "kill_runaway_process", "reason": "no safe kill targets in signal detail"}
+        return {
+            "ok": False,
+            "action": "kill_runaway_process",
+            "reason": "no safe kill targets in signal detail",
+        }
 
     killed = []
     for pid, name in targets:
@@ -143,19 +167,35 @@ def restart_stopped_service(anomaly: Dict[str, Any]) -> Dict[str, Any]:
     detail = anomaly.get("detail") or {}
     service_name = detail.get("service_name") if isinstance(detail, dict) else None
     if not service_name:
-        return {"ok": False, "action": "restart_stopped_service", "reason": "no service_name in signal detail"}
+        return {
+            "ok": False,
+            "action": "restart_stopped_service",
+            "reason": "no service_name in signal detail",
+        }
     try:
         import win32serviceutil
+
         status = win32serviceutil.QueryServiceStatus(service_name)
         log.info("Restarting service %s (current state %s)", service_name, status[1])
         win32serviceutil.RestartService(service_name)
-        return {"ok": True, "action": "restart_stopped_service", "service": service_name}
+        return {
+            "ok": True,
+            "action": "restart_stopped_service",
+            "service": service_name,
+        }
     except Exception as exc:
         log.error("Failed to restart service %s: %s", service_name, exc)
-        return {"ok": False, "action": "restart_stopped_service", "service": service_name, "error": str(exc)}
+        return {
+            "ok": False,
+            "action": "restart_stopped_service",
+            "service": service_name,
+            "error": str(exc),
+        }
 
 
-def tail_event_log(window_minutes: int = 60, max_events: int = 500) -> list[Dict[str, Any]]:
+def tail_event_log(
+    window_minutes: int = 60, max_events: int = 500
+) -> list[Dict[str, Any]]:
     """Read recent Windows Event Log entries (System + Application). Used by the
     event-log probe; report-only, never remediates."""
     try:
@@ -164,11 +204,15 @@ def tail_event_log(window_minutes: int = 60, max_events: int = 500) -> list[Dict
         return []
     events = []
     from datetime import datetime, timedelta
+
     cutoff = datetime.now() - timedelta(minutes=int(window_minutes))
     for log_name in ("System", "Application"):
         try:
             handle = win32evtlog.OpenEventLog(None, log_name)
-            flags = win32evtlog.EVENTLOG_BACKWARDS_READ | win32evtlog.EVENTLOG_SEQUENTIAL_READ
+            flags = (
+                win32evtlog.EVENTLOG_BACKWARDS_READ
+                | win32evtlog.EVENTLOG_SEQUENTIAL_READ
+            )
             while len(events) < max_events:
                 batch = win32evtlog.ReadEventLog(handle, flags, 0)
                 if not batch:
@@ -178,14 +222,24 @@ def tail_event_log(window_minutes: int = 60, max_events: int = 500) -> list[Dict
                         ts = evt.TimeGenerated
                         if ts < cutoff:
                             break  # backwards read — older than window
-                        level = {1: "Error", 2: "Warning", 4: "Information", 8: "Success", 16: "Failure"}.get(evt.EventType, "Unknown")
-                        events.append({
-                            "time": ts.strftime("%Y-%m-%d %H:%M:%S"),
-                            "level": level,
-                            "event_id": evt.EventID,
-                            "source": evt.SourceName,
-                            "message": str(evt.StringInserts)[:200] if evt.StringInserts else str(evt.SourceName),
-                        })
+                        level = {
+                            1: "Error",
+                            2: "Warning",
+                            4: "Information",
+                            8: "Success",
+                            16: "Failure",
+                        }.get(evt.EventType, "Unknown")
+                        events.append(
+                            {
+                                "time": ts.strftime("%Y-%m-%d %H:%M:%S"),
+                                "level": level,
+                                "event_id": evt.EventID,
+                                "source": evt.SourceName,
+                                "message": str(evt.StringInserts)[:200]
+                                if evt.StringInserts
+                                else str(evt.SourceName),
+                            }
+                        )
                     except Exception as exc:
                         log.debug("event-log entry skipped: %s", exc)
                         continue
@@ -208,4 +262,9 @@ SYSTEM_RECOVERY_ACTIONS: Dict[str, Any] = {
 }
 
 # Which system issues are safe enough to auto-run when the governor says so.
-DESTRUCTIVE_SYSTEM_ACTIONS = {"disk_space", "runaway_process", "stopped_service", "temp_growth"}
+DESTRUCTIVE_SYSTEM_ACTIONS = {
+    "disk_space",
+    "runaway_process",
+    "stopped_service",
+    "temp_growth",
+}

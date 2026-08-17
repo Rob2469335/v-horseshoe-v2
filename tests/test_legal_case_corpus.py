@@ -9,6 +9,7 @@ All fixture-shaped — no live CourtListener, Qdrant, or embed calls. Covers:
   (with embed + Qdrant mocked)
 - legal_search.search_cases filter building + candidate shaping + degrade paths
 """
+
 from __future__ import annotations
 
 import pytest
@@ -78,7 +79,7 @@ def test_chunk_case_very_long_single_paragraph_is_chopped():
     multiple budget-sized chunks — the full opinion retained, never truncated
     to the opening (the old code emitted one mega-chunk that _fit_budget
     silently trimmed)."""
-    text = ("Long paragraph. " * 5000)  # one giant line, no \n\n
+    text = "Long paragraph. " * 5000  # one giant line, no \n\n
     chunks = case_corpus.chunk_case(text, chunk_chars=3000)
     assert len(chunks) > 1
     for c in chunks:
@@ -90,7 +91,7 @@ def test_chunk_case_very_long_single_paragraph_is_chopped():
 
 
 def test_fit_budget_whole_words():
-    long = ("word " * 4000)  # ~20k chars
+    long = "word " * 4000  # ~20k chars
     chopped = case_corpus._fit_budget(long)
     assert len(chopped) <= case_corpus._CASE_CHUNK_CHARS
     assert chopped.endswith("word")  # no mid-word cut
@@ -109,9 +110,16 @@ def test_chunk_embed_text_header():
 # INGEST (embed + Qdrant mocked — no live services)
 # ---------------------------------------------------------------------------
 def test_ingest_one_case_payload_shape_and_ids():
-    entry = {"cite": "476 U.S. 79", "name": "Batson v. Kentucky",
-             "court": "U.S. Supreme Court", "circuit": "scotus", "year": 1986,
-             "issues": ["batson", "equal protection"], "tier": 4, "batson": True}
+    entry = {
+        "cite": "476 U.S. 79",
+        "name": "Batson v. Kentucky",
+        "court": "U.S. Supreme Court",
+        "circuit": "scotus",
+        "year": 1986,
+        "issues": ["batson", "equal protection"],
+        "tier": 4,
+        "batson": True,
+    }
     text = ("Para. " * 30) + "\n\n" + ("Para2. " * 30)
 
     captured: dict = {}
@@ -121,12 +129,19 @@ def test_ingest_one_case_payload_shape_and_ids():
             captured["points"] = json["points"]
         return MagicMock(raise_for_status=lambda: None)
 
-    with patch.object(case_corpus, "_embed",
-                      new=AsyncMock(side_effect=lambda texts: [[0.1] * 768 for _ in texts])):
+    with patch.object(
+        case_corpus,
+        "_embed",
+        new=AsyncMock(side_effect=lambda texts: [[0.1] * 768 for _ in texts]),
+    ):
         with patch.object(case_corpus.requests, "post", side_effect=fake_put) as mpost:
             with patch.object(case_corpus.requests, "put", side_effect=fake_put):
-                with patch.object(case_corpus, "ensure_cases_collection", return_value=None):
-                    n = __import__("asyncio").run(case_corpus.ingest_one_case(entry, text, batch_size=16))
+                with patch.object(
+                    case_corpus, "ensure_cases_collection", return_value=None
+                ):
+                    n = __import__("asyncio").run(
+                        case_corpus.ingest_one_case(entry, text, batch_size=16)
+                    )
 
     assert n > 0, "chunks should have been ingested"
     pts = captured["points"]
@@ -142,7 +157,9 @@ def test_ingest_one_case_payload_shape_and_ids():
     # point ids are deterministic UUIDv5
     assert len(str(pts[0]["id"])) == 36
     # idempotent re-run: the delete endpoint was called scoped to this cite
-    delete_calls = [c for c in mpost.call_args_list if c.args[0].endswith("/points/delete")]
+    delete_calls = [
+        c for c in mpost.call_args_list if c.args[0].endswith("/points/delete")
+    ]
     assert len(delete_calls) == 1
     filt = delete_calls[0].kwargs["json"]["filter"]
     assert filt == {"must": [{"key": "cite", "match": {"value": "476 U.S. 79"}}]}
@@ -151,7 +168,9 @@ def test_ingest_one_case_payload_shape_and_ids():
 def test_ingest_one_case_empty_text_no_upsert():
     with patch.object(case_corpus.requests, "post"):
         with patch.object(case_corpus.requests, "put") as mput:
-            with patch.object(case_corpus, "ensure_cases_collection", return_value=None):
+            with patch.object(
+                case_corpus, "ensure_cases_collection", return_value=None
+            ):
                 n = __import__("asyncio").run(
                     case_corpus.ingest_one_case(
                         {"cite": "X", "name": "Y", "tier": 1}, "   "
@@ -166,9 +185,16 @@ def test_ingest_one_case_embed_failure_raises_not_skips():
     partial `total` and let the caller mark the case `done` — the truncated
     corpus was never re-fetched). It now raises, so the manifest loop records
     `error` and a later run retries the whole case."""
-    entry = {"cite": "999 F.3d 888", "name": "Test v. Cases",
-             "court": "U.S. Court of Appeals", "circuit": "9th", "year": 2020,
-             "issues": [], "tier": 1, "batson": False}
+    entry = {
+        "cite": "999 F.3d 888",
+        "name": "Test v. Cases",
+        "court": "U.S. Court of Appeals",
+        "circuit": "9th",
+        "year": 2020,
+        "issues": [],
+        "tier": 1,
+        "batson": False,
+    }
     # One paragraph longer than the 3000-char chunk budget -> word-chopped into
     # 2+ chunks; batch_size=1 makes each chunk its own batch so _embed is called
     # at least twice (the flaky embed fails on the second call).
@@ -191,21 +217,38 @@ def test_ingest_one_case_embed_failure_raises_not_skips():
     with patch.object(case_corpus, "_embed", new=flaky_embed):
         with patch.object(case_corpus.requests, "post"):
             with patch.object(case_corpus.requests, "put", side_effect=fake_put):
-                with patch.object(case_corpus, "ensure_cases_collection", return_value=None):
-                    with pytest.raises(RuntimeError, match="embed failed for 999 F.3d 888"):
-                        __import__("asyncio").run(case_corpus.ingest_one_case(entry, text, batch_size=1))
+                with patch.object(
+                    case_corpus, "ensure_cases_collection", return_value=None
+                ):
+                    with pytest.raises(
+                        RuntimeError, match="embed failed for 999 F.3d 888"
+                    ):
+                        __import__("asyncio").run(
+                            case_corpus.ingest_one_case(entry, text, batch_size=1)
+                        )
 
 
 # ---------------------------------------------------------------------------
 # RETRIEVAL
 # ---------------------------------------------------------------------------
 def test_case_result_shapes_payload_for_reranker():
-    point = {"id": "p1", "score": 0.9, "payload": {
-        "cite": "476 U.S. 79", "case_name": "Batson v. Kentucky",
-        "court": "U.S. Supreme Court", "circuit": "scotus", "year": 1986,
-        "issues": ["batson"], "tier": 4, "batson": True,
-        "content": "The Equal Protection Clause forbids.",
-        "chunk_index": 0, "chunk_count": 2}}
+    point = {
+        "id": "p1",
+        "score": 0.9,
+        "payload": {
+            "cite": "476 U.S. 79",
+            "case_name": "Batson v. Kentucky",
+            "court": "U.S. Supreme Court",
+            "circuit": "scotus",
+            "year": 1986,
+            "issues": ["batson"],
+            "tier": 4,
+            "batson": True,
+            "content": "The Equal Protection Clause forbids.",
+            "chunk_index": 0,
+            "chunk_count": 2,
+        },
+    }
     r = legal_search._case_result(point)
     assert r["citation"] == "476 U.S. 79"
     assert r["section_title"] == "Batson v. Kentucky"
@@ -217,12 +260,23 @@ def test_case_result_shapes_payload_for_reranker():
 @pytest.mark.asyncio
 async def test_search_cases_builds_filter_and_shapes():
     dense = [
-        {"id": "p1", "score": 0.9, "payload": {
-            "cite": "476 U.S. 79", "case_name": "Batson v. Kentucky",
-            "court": "U.S. Supreme Court", "circuit": "scotus", "year": 1986,
-            "issues": ["batson"], "tier": 4, "batson": True,
-            "content": "The Equal Protection Clause forbids.",
-            "chunk_index": 0, "chunk_count": 1}}
+        {
+            "id": "p1",
+            "score": 0.9,
+            "payload": {
+                "cite": "476 U.S. 79",
+                "case_name": "Batson v. Kentucky",
+                "court": "U.S. Supreme Court",
+                "circuit": "scotus",
+                "year": 1986,
+                "issues": ["batson"],
+                "tier": 4,
+                "batson": True,
+                "content": "The Equal Protection Clause forbids.",
+                "chunk_index": 0,
+                "chunk_count": 1,
+            },
+        }
     ]
     seen = {}
 
@@ -232,14 +286,20 @@ async def test_search_cases_builds_filter_and_shapes():
         return dense
 
     with patch.object(legal_search, "_search_cases_with_filter", new=fake_dense):
-        with patch.object(legal_search, "rerank", new=AsyncMock(side_effect=lambda q, c, top_k: c)):
-            res = await legal_search.search_cases("peremptory strikes", tier=4, circuit="scotus", batson=True, top_k=3)
+        with patch.object(
+            legal_search, "rerank", new=AsyncMock(side_effect=lambda q, c, top_k: c)
+        ):
+            res = await legal_search.search_cases(
+                "peremptory strikes", tier=4, circuit="scotus", batson=True, top_k=3
+            )
 
-    assert seen["qfilter"] == {"must": [
-        {"key": "tier", "match": {"value": 4}},
-        {"key": "circuit", "match": {"value": "scotus"}},
-        {"key": "batson", "match": {"value": True}},
-    ]}
+    assert seen["qfilter"] == {
+        "must": [
+            {"key": "tier", "match": {"value": 4}},
+            {"key": "circuit", "match": {"value": "scotus"}},
+            {"key": "batson", "match": {"value": True}},
+        ]
+    }
     assert seen["top_k"] == 16  # dense net = max(3*4, 16)
     assert res[0]["citation"] == "476 U.S. 79"
     assert res[0]["batson"] is True
@@ -247,7 +307,9 @@ async def test_search_cases_builds_filter_and_shapes():
 
 @pytest.mark.asyncio
 async def test_search_cases_no_filter_when_none():
-    with patch.object(legal_search, "_search_cases_with_filter", new=AsyncMock(return_value=[])) as m:
+    with patch.object(
+        legal_search, "_search_cases_with_filter", new=AsyncMock(return_value=[])
+    ) as m:
         await legal_search.search_cases("loss estimate")
     assert m.await_args.args[1] is None
 

@@ -8,6 +8,7 @@ from runtime_v2.services.memory_core import remember_fact
 
 MODEL = "openai/deepseek-v4-flash"  # rule extraction = correction reasoning → cloud DeepSeek (funded)
 
+
 async def extract_and_inject_rules():
     print("[Offline Learner] Reading events.jsonl...")
     event_file = "data/events/events.jsonl"
@@ -18,7 +19,7 @@ async def extract_and_inject_rules():
     agent_stats = defaultdict(lambda: {"success": 0, "fail": 0})
     tool_stats = defaultdict(lambda: {"success": 0, "fail": 0})
     recent_failures = deque(maxlen=20)
-    
+
     with open(event_file, "r", encoding="utf-8") as f:
         for line in f:
             try:
@@ -30,7 +31,7 @@ async def extract_and_inject_rules():
                     tool = payload.get("tool", "unknown")
                     result = payload.get("result", {})
                     success = result.get("ok", False)
-                    
+
                     if success:
                         agent_stats[agent]["success"] += 1
                         tool_stats[tool]["success"] += 1
@@ -38,7 +39,9 @@ async def extract_and_inject_rules():
                         agent_stats[agent]["fail"] += 1
                         tool_stats[tool]["fail"] += 1
                         error = result.get("error", "unknown error")
-                        recent_failures.append(f"Agent {agent} called {tool} which failed with: {error}")
+                        recent_failures.append(
+                            f"Agent {agent} called {tool} which failed with: {error}"
+                        )
                 elif event_type in ("AGENT_ERROR", "CRASH"):
                     payload = data.get("payload", {})
                     agent = payload.get("agent_id", data.get("agent_id", "unknown"))
@@ -47,7 +50,7 @@ async def extract_and_inject_rules():
                     recent_failures.append(f"Agent {agent} CRASHED: {error}")
             except Exception:
                 continue
-    
+
     print("[Offline Learner] Aggregating historical statistics...")
     stats_summary = "Historical Performance Summary:\n\n"
     stats_summary += "Agent Stats:\n"
@@ -55,17 +58,17 @@ async def extract_and_inject_rules():
         total = st["success"] + st["fail"]
         rate = (st["success"] / total) * 100 if total > 0 else 0
         stats_summary += f" - {ag}: {st['success']} successes, {st['fail']} failures ({rate:.1f}% success rate)\n"
-        
+
     stats_summary += "\nTool Stats:\n"
     for tl, st in tool_stats.items():
         total = st["success"] + st["fail"]
         rate = (st["success"] / total) * 100 if total > 0 else 0
         stats_summary += f" - {tl}: {st['success']} successes, {st['fail']} failures ({rate:.1f}% success rate)\n"
-        
+
     stats_summary += "\nRecent Notable Failures:\n"
     for f in recent_failures:
         stats_summary += f" - {f}\n"
-        
+
     print("[Offline Learner] Prompting LLM to deduce meta-rules...")
     prompt = f"""
 You are the Swarm OS Offline Meta-Learner.
@@ -75,7 +78,7 @@ Format your output as a simple list of rules, one per line. No markdown formatti
 
 {stats_summary}
 """
-    
+
     try:
         _kwargs = {
             "model": MODEL,
@@ -90,7 +93,11 @@ Format your output as a simple list of rules, one per line. No markdown formatti
             if _key:
                 _kwargs["api_key"] = _key
         else:
-            _kwargs.update(api_base="http://127.0.0.1:8080/v1", api_key="llama", custom_llm_provider="openai")
+            _kwargs.update(
+                api_base="http://127.0.0.1:8080/v1",
+                api_key="llama",
+                custom_llm_provider="openai",
+            )
         async with asyncio.timeout(90.0):
             response = await acompletion(**_kwargs)
         rules_text = response.choices[0].message.content.strip()
@@ -100,17 +107,19 @@ Format your output as a simple list of rules, one per line. No markdown formatti
 
     print("\n[Offline Learner] Deduced Rules:\n")
     print(rules_text)
-    
+
     # Inject into Qdrant
     print("\n[Offline Learner] Injecting rules into Qdrant memory core...")
     for rule in rules_text.split("\n"):
         rule = rule.strip()
-        rule = re.sub(r'^\d+\.\s*', '', rule)
-        rule = rule.replace('**', '').strip('-* \t')
+        rule = re.sub(r"^\d+\.\s*", "", rule)
+        rule = rule.replace("**", "").strip("-* \t")
         if not rule:
             continue
         try:
-            success = await asyncio.to_thread(remember_fact, rule, category="system_rules")
+            success = await asyncio.to_thread(
+                remember_fact, rule, category="system_rules"
+            )
             if success:
                 print(f"  [+] Injected: {rule[:60]}...")
             else:
@@ -119,6 +128,7 @@ Format your output as a simple list of rules, one per line. No markdown formatti
             print(f"  [-] Error injecting: {e}")
 
     print("[Offline Learner] Offline learning pass complete.")
+
 
 if __name__ == "__main__":
     asyncio.run(extract_and_inject_rules())

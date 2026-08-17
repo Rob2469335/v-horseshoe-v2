@@ -50,9 +50,10 @@ async def test_route_model_fallback_no_candidates():
 @pytest.mark.asyncio
 async def test_orchestrator_trace_preserves_strategy(monkeypatch):
     orchestrator = Orchestrator()
-    
+
     async def mock_generate(*args, **kwargs):
         return "mocked response"
+
     monkeypatch.setattr(orchestrator.llm, "generate", mock_generate)
 
     await orchestrator.generate(model="qwen3.5-4b", prompt="hello")
@@ -122,18 +123,26 @@ def test_strategy_tolerates_none_and_missing_metadata_fields():
     router = Router(
         profiles=[
             ModelProfile(
-                name="none-fields", role="fast", max_tokens=32000,
+                name="none-fields",
+                role="fast",
+                max_tokens=32000,
                 metadata={"priority": None, "tg128": None, "pp512": None},
             ),
             ModelProfile(
-                name="missing-fields", role="fast", max_tokens=32000,
+                name="missing-fields",
+                role="fast",
+                max_tokens=32000,
                 metadata={"some_unrelated_key": "x"},
             ),
             ModelProfile(
-                name="no-metadata", role="fast", max_tokens=32000,
+                name="no-metadata",
+                role="fast",
+                max_tokens=32000,
             ),
             ModelProfile(
-                name="non-dict-metadata", role="fast", max_tokens=32000,
+                name="non-dict-metadata",
+                role="fast",
+                max_tokens=32000,
                 metadata=None,
             ),
         ],
@@ -145,5 +154,3 @@ def test_strategy_tolerates_none_and_missing_metadata_fields():
         )
         assert decision.model == name
         assert decision.fallback is False
-
-

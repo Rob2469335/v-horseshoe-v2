@@ -9,12 +9,15 @@ from swarm_os.config.settings import settings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 log = logging.getLogger("zenith_cli")
 
+
 def _auth_headers() -> dict:
     """Attach the loopback API token if SWARM_API_TOKEN is set (mirrors the
     backend's opt-in token guard in swarm_os/app/main.py)."""
     import os
+
     token = os.getenv("SWARM_API_TOKEN", "").strip()
     return {"Authorization": f"Bearer {token}"} if token else {}
+
 
 def call_api(
     endpoint: str,
@@ -29,14 +32,33 @@ def call_api(
         url = f"{BACKEND_URL}{endpoint}"
         headers = _auth_headers()
         if method == "GET":
-            return requests.get(url, timeout=(timeout, read_timeout), verify=settings.ssl_verify, headers=headers)
+            return requests.get(
+                url,
+                timeout=(timeout, read_timeout),
+                verify=settings.ssl_verify,
+                headers=headers,
+            )
 
         if stream:
-            return requests.post(url, json=payload, timeout=(timeout, None), stream=True, verify=settings.ssl_verify, headers=headers)
-        return requests.post(url, json=payload, timeout=(timeout, read_timeout), verify=settings.ssl_verify, headers=headers)
+            return requests.post(
+                url,
+                json=payload,
+                timeout=(timeout, None),
+                stream=True,
+                verify=settings.ssl_verify,
+                headers=headers,
+            )
+        return requests.post(
+            url,
+            json=payload,
+            timeout=(timeout, read_timeout),
+            verify=settings.ssl_verify,
+            headers=headers,
+        )
     except requests.exceptions.RequestException as e:
         log.debug(f"API call failed: {e}")
         return None
+
 
 import httpx
 
@@ -68,4 +90,3 @@ async def call_api_async_stream(
     except httpx.RequestError as e:
         log.debug(f"Async API stream failed: {e}")
         return None
-

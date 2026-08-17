@@ -6,7 +6,8 @@ IMPORTANT:
 - Prevent circular initialization chains
 """
 
+
 def get_orchestrator():
     from .orchestrator import Orchestrator
-    return Orchestrator
 
+    return Orchestrator

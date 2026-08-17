@@ -18,24 +18,44 @@ def test_readiness_score_calculates_from_operational_state(tmp_path: Path):
     escalation = EscalationService(store_path=tmp_path / "escalations.json")
     runbooks = RunbookService()
 
-    metrics.record(component="vector_store", action="restart_vector_layer", executed=True, verified=True, escalated=False)
-    metrics.record(component="chat_model", action="rotate_model_provider", executed=True, verified=False, escalated=True)
+    metrics.record(
+        component="vector_store",
+        action="restart_vector_layer",
+        executed=True,
+        verified=True,
+        escalated=False,
+    )
+    metrics.record(
+        component="chat_model",
+        action="rotate_model_provider",
+        executed=True,
+        verified=False,
+        escalated=True,
+    )
 
-    audit.record({
-        "component": "vector_store",
-        "action": "restart_vector_layer",
-        "executed": True,
-        "verified": True,
-        "escalated": False,
-    })
-    audit.record({
-        "component": "chat_model",
-        "action": "rotate_model_provider",
-        "executed": True,
-        "verified": False,
-        "escalated": True,
-    })
-    escalation.escalate(component="chat_model", action="rotate_model_provider", detail="provider still unstable")
+    audit.record(
+        {
+            "component": "vector_store",
+            "action": "restart_vector_layer",
+            "executed": True,
+            "verified": True,
+            "escalated": False,
+        }
+    )
+    audit.record(
+        {
+            "component": "chat_model",
+            "action": "rotate_model_provider",
+            "executed": True,
+            "verified": False,
+            "escalated": True,
+        }
+    )
+    escalation.escalate(
+        component="chat_model",
+        action="rotate_model_provider",
+        detail="provider still unstable",
+    )
 
     result = HealingReadinessService(
         metrics=metrics,

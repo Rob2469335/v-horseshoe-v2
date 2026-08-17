@@ -12,11 +12,20 @@ def test_local_file_fallback(monkeypatch):
     # The api_features module imports search from swarm_os.lib.vector.qdrant_store
     # inside the handler, so patch that symbol instead.
     import swarm_os.lib.vector.qdrant_store as qstore
+
     monkeypatch.setattr(qstore, "search", fake_search)
     # Also patch the local_docs_search helper to return a deterministic result
     import swarm_os.api._fallbacks as fb
+
     def fake_local(repo_root, tokens, top_k=5):
-        return [{"id": "local-doc", "score": 1.0, "payload": {"path": "AGENTS.md", "excerpt": "doc"}}]
+        return [
+            {
+                "id": "local-doc",
+                "score": 1.0,
+                "payload": {"path": "AGENTS.md", "excerpt": "doc"},
+            }
+        ]
+
     monkeypatch.setattr(fb, "local_docs_search", fake_local)
 
     class FakeQdrantClient:
@@ -32,15 +41,20 @@ def test_local_file_fallback(monkeypatch):
             type(self).closed = True
 
     import qdrant_client
+
     monkeypatch.setattr(qdrant_client, "AsyncQdrantClient", FakeQdrantClient)
 
     # Create a minimal FastAPI app mounting the router.
     from fastapi import FastAPI
+
     app = FastAPI()
     app.include_router(api_features.router)
 
     client = TestClient(app)
-    res = client.post("/features/search", json={"query": "swarm", "collection": "chat_archive", "top_k": 3})
+    res = client.post(
+        "/features/search",
+        json={"query": "swarm", "collection": "chat_archive", "top_k": 3},
+    )
     assert res.status_code == 200
     body = res.json()
     assert body == {
@@ -82,7 +96,10 @@ def test_keyword_fallback_follows_next_page_offset(monkeypatch):
             if len(calls) == 1:
                 # Page 1: 200 points that do NOT match the query, plus a
                 # continuation offset so the loop must read page 2.
-                page1 = [make_point(f"miss-{i}", "irrelevant content here") for i in range(200)]
+                page1 = [
+                    make_point(f"miss-{i}", "irrelevant content here")
+                    for i in range(200)
+                ]
                 return (page1, "page-2-cursor")
             # Page 2: the only matching point. Terminates the pagination.
             return ([make_point("hit-on-page2", "zzqxvw target payload")], None)
@@ -91,13 +108,16 @@ def test_keyword_fallback_follows_next_page_offset(monkeypatch):
             type(self).closed = True
 
     import qdrant_client
+
     monkeypatch.setattr(qdrant_client, "AsyncQdrantClient", FakeQdrantClient)
     # Never let the local-doc scan mask a missed page: it must stay empty so the
     # only way the match surfaces is via the pagination loop.
     import swarm_os.api._fallbacks as fb
+
     monkeypatch.setattr(fb, "local_docs_search", lambda repo_root, tokens, top_k=5: [])
 
     from fastapi import FastAPI
+
     app = FastAPI()
     app.include_router(api_features.router)
 

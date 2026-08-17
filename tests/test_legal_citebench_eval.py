@@ -13,13 +13,18 @@ the REAL LegalCiteBench Cat3 corpus (fixture = vendored sample of 48 rows, 24
 This file intentionally ships without a network dependency: the fixture is a
 static JSONL vendored under tests/fixtures/.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
 
 import scripts.legal_citebench_eval as ev
 
-FIXTURE = Path(__file__).resolve().parent / "fixtures" / "cat3_citation_verification_sample.jsonl"
+FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "cat3_citation_verification_sample.jsonl"
+)
 
 
 def test_fixture_loads_with_both_styles():

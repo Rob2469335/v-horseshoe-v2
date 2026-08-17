@@ -91,7 +91,9 @@ class Organism:
         # organism can never crash the whole generation's `gather`.
         content = _read_field(action, "content", "")
         if not isinstance(content, str):
-            content = json.dumps(content, ensure_ascii=False, default=str) if content else ""
+            content = (
+                json.dumps(content, ensure_ascii=False, default=str) if content else ""
+            )
 
         try:
             self.memory.write(
@@ -141,7 +143,9 @@ class Organism:
 
                 def _flush() -> None:
                     for tool in tools_used:
-                        asyncio.run(registry.update_tool_pheromone(tool, success=success))
+                        asyncio.run(
+                            registry.update_tool_pheromone(tool, success=success)
+                        )
 
                 async def _flush_with_timeout() -> None:
                     async with asyncio.timeout(2.0):
@@ -161,4 +165,3 @@ class Organism:
             f"avg={self.genome.average_fitness:.3f}, "
             f"model={self.genome.model!r}, gen={self.genome.generation})"
         )
-

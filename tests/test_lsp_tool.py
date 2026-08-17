@@ -5,6 +5,7 @@ per-call cold start. Tests cover the language-correct languageId mapping, the
 pool's reuse/eviction behavior, and (when pylsp is installed) a real
 diagnostics round-trip.
 """
+
 from __future__ import annotations
 import asyncio
 import importlib.util
@@ -43,7 +44,9 @@ def test_handler_rejects_missing_file_path():
 
 def test_handler_rejects_missing_file():
     res = asyncio.run(
-        LSPToolHandler().execute({"operation": "diagnostics", "file_path": "nope_does_not_exist.py"})
+        LSPToolHandler().execute(
+            {"operation": "diagnostics", "file_path": "nope_does_not_exist.py"}
+        )
     )
     assert "File not found" in res["error"]
 
@@ -51,7 +54,9 @@ def test_handler_rejects_missing_file():
 def test_handler_rejects_unsupported_extension(tmp_path):
     f = tmp_path / "foo.txt"
     f.write_text("hi")
-    res = asyncio.run(LSPToolHandler().execute({"operation": "diagnostics", "file_path": str(f)}))
+    res = asyncio.run(
+        LSPToolHandler().execute({"operation": "diagnostics", "file_path": str(f)})
+    )
     assert res["error"] == "Unsupported language extension: .txt"
 
 

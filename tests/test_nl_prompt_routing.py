@@ -7,7 +7,9 @@ from organism_console.cli import build_command_context
 
 
 def test_route_natural_language_keywords_analyze_prompt():
-    prompt = "analyze my codebase for bugs and search internet for improvments and upgrades"
+    prompt = (
+        "analyze my codebase for bugs and search internet for improvments and upgrades"
+    )
     cmd, args = route_natural_language_keywords(prompt)
     assert cmd == "goal"
     assert args == [prompt]
@@ -22,7 +24,18 @@ def test_every_keyword_route_targets_a_registered_command():
     from organism_console.command_registry import registry as _registry
 
     registered = set(_registry.commands.keys())
-    phrases = ("learn", "fix yourself", "known fixes", "repair stats", "picker", "performance", "diff", "status", "exit", "benchmark")
+    phrases = (
+        "learn",
+        "fix yourself",
+        "known fixes",
+        "repair stats",
+        "picker",
+        "performance",
+        "diff",
+        "status",
+        "exit",
+        "benchmark",
+    )
     for phrase in phrases:
         cmd, _ = route_natural_language_keywords(phrase)
         assert cmd is not None, f"{phrase!r} routed to None"
@@ -34,7 +47,9 @@ def test_handle_line_end_to_end_routing():
     mock_goal_loop = MagicMock()
     ctx.run_goal_loop = mock_goal_loop
 
-    prompt = "analyze my codebase for bugs and search internet for improvments and upgrades"
+    prompt = (
+        "analyze my codebase for bugs and search internet for improvments and upgrades"
+    )
     registry.handle_line(prompt, ctx)
 
     mock_goal_loop.assert_called_once_with(prompt)

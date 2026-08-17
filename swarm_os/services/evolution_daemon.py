@@ -9,6 +9,7 @@ keep elites unchanged (elitism), breed via crossover+mutate, persist the next
 generation. Off by default (SWARM_EVOLUTION=1); the agent loop only feeds
 outcomes when the same gate is on, so there is zero overhead otherwise.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -55,7 +56,7 @@ def _load_population(path: Path | None = None) -> list[dict]:
                     continue
     except OSError:
         return []
-    return pop[-POPULATION_SIZE * 4:]  # bound
+    return pop[-POPULATION_SIZE * 4 :]  # bound
 
 
 def _persist_population(pop: list[dict], path: Path) -> None:
@@ -75,13 +76,15 @@ def list_staged_generations() -> list[dict]:
         try:
             pop = _load_population(p)
             best = max((g.get("fitness", 0.0) for g in pop), default=0.0)
-            out.append({
-                "gen": p.stem.replace("gen_", ""),
-                "path": str(p),
-                "best_fitness": round(best, 4),
-                "elites": [g.get("id") for g in pop[:ELITE_COUNT]],
-                "population": len(pop),
-            })
+            out.append(
+                {
+                    "gen": p.stem.replace("gen_", ""),
+                    "path": str(p),
+                    "best_fitness": round(best, 4),
+                    "elites": [g.get("id") for g in pop[:ELITE_COUNT]],
+                    "population": len(pop),
+                }
+            )
         except Exception:
             continue
     out.reverse()  # newest first
@@ -102,12 +105,19 @@ def promote_staged_generation(gen: str | int) -> dict:
         # Atomic: write .tmp then os.replace so a crash mid-promotion never
         # leaves a torn active population.
         import os
+
         GENOMES_PATH.parent.mkdir(parents=True, exist_ok=True)
         tmp = GENOMES_PATH.with_suffix(".jsonl.tmp")
         _persist_population(staged, tmp)
         os.replace(tmp, GENOMES_PATH)
-        return {"ok": True, "gen": str(gen), "population": len(staged),
-                "best_fitness": round(max((g.get("fitness", 0.0) for g in staged), default=0.0), 4)}
+        return {
+            "ok": True,
+            "gen": str(gen),
+            "population": len(staged),
+            "best_fitness": round(
+                max((g.get("fitness", 0.0) for g in staged), default=0.0), 4
+            ),
+        }
     except Exception as exc:
         return {"ok": False, "reason": f"promotion failed: {exc}"}
 
@@ -117,19 +127,21 @@ def _seed_population() -> list[dict]:
     so the kernel's crossover/mutate can consume them)."""
     pop = []
     for i in range(POPULATION_SIZE):
-        pop.append({
-            "id": f"genome_{i}",
-            "model_tier": round(random.uniform(0.2, 0.8), 3),
-            "temperature": round(random.uniform(0.3, 0.8), 3),
-            "tool_genes": {
-                "web_search": round(random.uniform(0.3, 0.8), 3),
-                "filesystem": round(random.uniform(0.3, 0.8), 3),
-                "sandbox_repl": round(random.uniform(0.2, 0.7), 3),
-                "semantic_search": round(random.uniform(0.2, 0.7), 3),
-            },
-            "generation": 0,
-            "fitness": 0.0,
-        })
+        pop.append(
+            {
+                "id": f"genome_{i}",
+                "model_tier": round(random.uniform(0.2, 0.8), 3),
+                "temperature": round(random.uniform(0.3, 0.8), 3),
+                "tool_genes": {
+                    "web_search": round(random.uniform(0.3, 0.8), 3),
+                    "filesystem": round(random.uniform(0.3, 0.8), 3),
+                    "sandbox_repl": round(random.uniform(0.2, 0.7), 3),
+                    "semantic_search": round(random.uniform(0.2, 0.7), 3),
+                },
+                "generation": 0,
+                "fitness": 0.0,
+            }
+        )
     return pop
 
 
@@ -143,7 +155,11 @@ def _score_genome(genome: dict) -> float:
     flat 0.05 prior and the population freezes (0.0425 elite plateau). 0.05 is
     returned only when there is no real signal at all."""
     try:
-        from swarm_os.services.outcome_fitness import best_fitness, best_aggregate_fitness
+        from swarm_os.services.outcome_fitness import (
+            best_fitness,
+            best_aggregate_fitness,
+        )
+
         exact = best_fitness(genome.get("id", ""))
         f = exact
         if f is None:
@@ -156,7 +172,11 @@ def _score_genome(genome: dict) -> float:
             # vacating the elite slots to random children and killing selection
             # pressure on tool_genes. Decay's purpose (prevent immortal elites)
             # only applies once a genome has its OWN recorded signal to fade.
-            decay = FITNESS_DECAY ** genome.get("decay_generations", 0) if exact is not None else 1.0
+            decay = (
+                FITNESS_DECAY ** genome.get("decay_generations", 0)
+                if exact is not None
+                else 1.0
+            )
             return round(f * decay, 4)
         return 0.05
     except Exception:
@@ -170,14 +190,15 @@ def _best_genome_tool_weights() -> dict:
     _, weights = get_active_genome(explore=False)
     return weights
 
+
 def get_active_genome(explore: bool = True) -> tuple[str, dict]:
-    """Return (genome_id, tool_weights) for the agent loop to evaluate. 
+    """Return (genome_id, tool_weights) for the agent loop to evaluate.
     Uses epsilon-greedy to balance exploitation (best genome) with exploration (random newborn)."""
     try:
         pop = _load_population(GENOMES_PATH)
         if not pop:
             return "", {}
-        
+
         # 20% exploration of other genomes so newborns can be evaluated
         if explore and random.random() < 0.2:
             g = random.choice(pop)
@@ -198,8 +219,11 @@ def get_active_genome(explore: bool = True) -> tuple[str, dict]:
 
 def _crossover_mutate(a: dict, b: dict, generation: int) -> dict:
     """Blend two parent genomes (per-gene uniform crossover) + small mutation."""
-    child = {"id": f"genome_{int(time.time()*1000)%100000}_{random.randint(0,999)}",
-             "generation": generation, "fitness": 0.0}
+    child = {
+        "id": f"genome_{int(time.time() * 1000) % 100000}_{random.randint(0, 999)}",
+        "generation": generation,
+        "fitness": 0.0,
+    }
     # Numeric scalar genes
     for key in ("model_tier", "temperature"):
         va = a.get(key, 0.5)
@@ -242,7 +266,7 @@ def evolve_one_generation() -> dict:
         for p in STAGED_DIR.glob("gen_*.jsonl"):
             try:
                 staged_gens.append(int(p.stem.split("_")[1]))
-            except (IndexError, ValueError):
+            except IndexError, ValueError:
                 log.warning(f"Malformed staged file ignored in gen calc: {p}")
         gen = max(staged_gens, default=0) + 1
 
@@ -270,15 +294,27 @@ def evolve_one_generation() -> dict:
         _persist_population(new_pop, _staged_path)
 
         best = max((g.get("fitness", 0.0) for g in new_pop), default=0.0)
-        return {"generation": gen, "population": len(new_pop),
-                "best_fitness": round(best, 4), "elites": [e.get("id") for e in elites],
-                "staged": True, "staged_path": str(_staged_path)}
+        return {
+            "generation": gen,
+            "population": len(new_pop),
+            "best_fitness": round(best, 4),
+            "elites": [e.get("id") for e in elites],
+            "staged": True,
+            "staged_path": str(_staged_path),
+        }
     except Exception as exc:
         log.warning("evolution generation failed: %s", exc)
-        return {"generation": -1, "population": 0, "best_fitness": 0.0, "error": str(exc)}
+        return {
+            "generation": -1,
+            "population": 0,
+            "best_fitness": 0.0,
+            "error": str(exc),
+        }
 
 
-async def evolution_daemon(interval_seconds: float = GENERATION_TICK, first_delay: float = 0.0):
+async def evolution_daemon(
+    interval_seconds: float = GENERATION_TICK, first_delay: float = 0.0
+):
     """Background daemon tick: run one generation each interval. Called from
     main.py when SWARM_EVOLUTION=1. The agent loop feeds real outcomes into
     outcome_fitness (same gate), so this selects on grounded fitness.
@@ -291,10 +327,12 @@ async def evolution_daemon(interval_seconds: float = GENERATION_TICK, first_dela
     while True:
         try:
             summary = await asyncio.to_thread(evolve_one_generation)
-            log.info("[evolution] generation=%s pop=%s best_fitness=%s",
-                     summary.get("generation"), summary.get("population"),
-                     summary.get("best_fitness"))
+            log.info(
+                "[evolution] generation=%s pop=%s best_fitness=%s",
+                summary.get("generation"),
+                summary.get("population"),
+                summary.get("best_fitness"),
+            )
         except Exception as exc:
             log.warning("[evolution] daemon tick failed: %s", exc)
         await asyncio.sleep(interval_seconds)
-

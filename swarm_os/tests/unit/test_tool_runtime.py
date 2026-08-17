@@ -4,6 +4,7 @@ from swarm_os.capabilities.models import ChatSearchRequest
 
 pytestmark = pytest.mark.anyio
 
+
 async def test_tool_executor_lists_capabilities():
     executor = CapabilityToolExecutor()
     caps = executor.get_capabilities()
@@ -11,11 +12,13 @@ async def test_tool_executor_lists_capabilities():
     assert "upwork_analyzer" in caps
     assert "vscode_automation" in caps
 
+
 async def test_tool_executor_chat_search():
     executor = CapabilityToolExecutor()
     req = ChatSearchRequest(query="system setup")
     response = await executor.execute_tool("chat_search", req)
     assert response.status == "success"
+
 
 async def test_tool_executor_caches_results():
     executor = CapabilityToolExecutor()
@@ -25,6 +28,7 @@ async def test_tool_executor_caches_results():
     assert result1 is result2
     assert executor.cache_size() == 1
 
+
 async def test_tool_executor_clears_cache():
     executor = CapabilityToolExecutor()
     req = ChatSearchRequest(query="test")
@@ -32,4 +36,3 @@ async def test_tool_executor_clears_cache():
     assert executor.cache_size() == 1
     executor.clear_cache()
     assert executor.cache_size() == 0
-

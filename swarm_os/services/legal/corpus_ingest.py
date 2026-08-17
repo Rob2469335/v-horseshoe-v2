@@ -15,6 +15,7 @@ Verified data seam (downloaded + inspected real Parquet):
 Deliberately NOT all 2M sections: we scope to the operator's jurisdictions
 (NY, NJ, GA, NC + federal) at download time, so the corpus is small and fast.
 """
+
 from __future__ import annotations
 
 import logging
@@ -46,8 +47,8 @@ OSS_BASE = "https://oss-data-us.vaquill.ai"
 # per text. For statutes (full sections can be thousands of tokens) we must
 # BOTH chop each text to a per-text budget AND keep the batch small enough that
 # batch × budget stays under 8192 tokens.
-_EMBED_BATCH_BUDGET_CHARS = 4000   # ~1k tokens per text at ~4 chars/token
-_MAX_BATCH_TOKENS = 8192           # llama.cpp physical batch size (verified)
+_EMBED_BATCH_BUDGET_CHARS = 4000  # ~1k tokens per text at ~4 chars/token
+_MAX_BATCH_TOKENS = 8192  # llama.cpp physical batch size (verified)
 
 # Jurisdiction scope: NY, NJ, GA, NC + federal (USC).
 SCOPE_FILES = {
@@ -73,6 +74,7 @@ def _fit_budget(text: str) -> str:
         out.append(w)
         n += len(w) + 1
     return " ".join(out)
+
 
 _embed_client: httpx.AsyncClient | None = None
 _qdrant_client: httpx.AsyncClient | None = None
@@ -168,11 +170,18 @@ def build_context(payload: dict[str, Any]) -> str:
     that a bare section chunk lacks, so dense retrieval can match a question
     that describes the topic without naming the section."""
     jur = payload.get("jurisdiction", "")
-    jur_upper = {"ny": "New York", "nj": "New Jersey", "ga": "Georgia",
-                 "nc": "North Carolina", "federal": "Federal (U.S. Code)"}.get(jur, jur.upper())
+    jur_upper = {
+        "ny": "New York",
+        "nj": "New Jersey",
+        "ga": "Georgia",
+        "nc": "North Carolina",
+        "federal": "Federal (U.S. Code)",
+    }.get(jur, jur.upper())
     act_title = payload.get("title_name") or payload.get("title_number") or "law"
     chapter_path = payload.get("display_path") or payload.get("chapter") or ""
-    topic = (payload.get("section_title") or payload.get("section_number") or "this area").strip()
+    topic = (
+        payload.get("section_title") or payload.get("section_number") or "this area"
+    ).strip()
     return _CONTEXT_TEMPLATE.format(
         jurisdiction_upper=jur_upper,
         citation=payload.get("citation", ""),
@@ -190,6 +199,7 @@ async def build_context_llm(payload: dict[str, Any], section_text: str) -> str:
     the deterministic build_context on any failure (never raises)."""
     try:
         from runtime_v2.services import _llm_client as llm
+
         system = (
             "You situate a statute section within its governing law. In <context> "
             "write 2-3 sentences: what jurisdiction, what act/chapter, and what "
@@ -198,29 +208,43 @@ async def build_context_llm(payload: dict[str, Any], section_text: str) -> str:
         snippet = (section_text or "")[:600]
         messages = [
             {"role": "system", "content": system},
-            {"role": "user", "content": (
-                f"Jurisdiction: {payload.get('jurisdiction', '')}\n"
-                f"Citation: {payload.get('citation', '')}\n"
-                f"Title/act: {payload.get('title_name', '')} {payload.get('title_number', '')}\n"
-                f"Chapter: {payload.get('chapter', '')}\n"
-                f"Section text:\n<chunk>\n{snippet}\n</chunk>"
-            )},
+            {
+                "role": "user",
+                "content": (
+                    f"Jurisdiction: {payload.get('jurisdiction', '')}\n"
+                    f"Citation: {payload.get('citation', '')}\n"
+                    f"Title/act: {payload.get('title_name', '')} {payload.get('title_number', '')}\n"
+                    f"Chapter: {payload.get('chapter', '')}\n"
+                    f"Section text:\n<chunk>\n{snippet}\n</chunk>"
+                ),
+            },
         ]
-        model = llm._analysis_cloud_model() if llm._analysis_cloud_enabled() else "qwen3.5-4b"
+        model = (
+            llm._analysis_cloud_model()
+            if llm._analysis_cloud_enabled()
+            else "qwen3.5-4b"
+        )
         parts: list[str] = []
-        async for chunk, kind in llm.stream_content(model, messages, agent_id="legal_context"):
+        async for chunk, kind in llm.stream_content(
+            model, messages, agent_id="legal_context"
+        ):
             if kind == "content":
                 parts.append(chunk or "")
         ctx = "".join(parts).strip()
         if ctx:
             return f"This is a statute section from {payload.get('jurisdiction', '').upper()} law. {ctx}"
     except Exception as exc:
-        log.debug("LLM context failed for %s, using metadata: %s",
-                  payload.get("citation", ""), exc)
+        log.debug(
+            "LLM context failed for %s, using metadata: %s",
+            payload.get("citation", ""),
+            exc,
+        )
     return build_context(payload)
 
 
-async def iter_in_force_rows(parquet_path: Path, jurisdiction: str, title_filter: str | None = None):
+async def iter_in_force_rows(
+    parquet_path: Path, jurisdiction: str, title_filter: str | None = None
+):
     """Async generator of (act_id, payload) for every in-force statute section in
     one file. Never holds the whole file's rows in memory (bounded batches) and
     never blocks the event loop: pq.read_table (a full disk read of the parquet)
@@ -229,6 +253,7 @@ async def iter_in_force_rows(parquet_path: Path, jurisdiction: str, title_filter
     high-value ingest (Title 18 criminal code) without embedding all ~46K
     federal sections."""
     import pyarrow.parquet as pq
+
     table = await asyncio.to_thread(pq.read_table, str(parquet_path))
     for batch in table.to_batches(max_chunksize=1024):
         for row in batch.to_pylist():
@@ -246,7 +271,9 @@ async def iter_in_force_rows(parquet_path: Path, jurisdiction: str, title_filter
             # string ids like "nc:STATE_NC_..." are rejected with HTTP 400). Use a
             # deterministic UUIDv5 from the act_id so re-runs are idempotent and
             # cross-jurisdiction sections never collide.
-            point_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"openuslaw:{jurisdiction}:{act_id}"))
+            point_id = str(
+                uuid.uuid5(uuid.NAMESPACE_URL, f"openuslaw:{jurisdiction}:{act_id}")
+            )
             yield point_id, payload
 
 
@@ -268,10 +295,14 @@ async def _embed(texts: list[str]) -> list[list[float]] | None:
             resp = await _get_embed_client().post(
                 "/embeddings",
                 json={"model": EMBED_MODEL, "input": fit_texts},
-                headers={"Authorization": "Bearer llama"},  # llama.cpp serve --api-key llama
+                headers={
+                    "Authorization": "Bearer llama"
+                },  # llama.cpp serve --api-key llama
             )
             if resp.status_code >= 500:
-                last_exc = RuntimeError(f"embed server {resp.status_code}: {resp.text[:200]}")
+                last_exc = RuntimeError(
+                    f"embed server {resp.status_code}: {resp.text[:200]}"
+                )
                 await asyncio.sleep(1.0 + attempt)
                 continue
             resp.raise_for_status()
@@ -279,16 +310,24 @@ async def _embed(texts: list[str]) -> list[list[float]] | None:
             return [d["embedding"] for d in sorted(data, key=lambda d: d["index"])]
         except Exception as exc:
             last_exc = exc
-            if isinstance(exc, httpx.HTTPStatusError) and exc.response is not None \
-                    and exc.response.status_code < 500:
+            if (
+                isinstance(exc, httpx.HTTPStatusError)
+                and exc.response is not None
+                and exc.response.status_code < 500
+            ):
                 break  # 4xx: real error, don't retry
             await asyncio.sleep(1.0 + attempt)
     log.warning("embed failed for batch of %d after retries: %s", len(texts), last_exc)
     return None
 
 
-async def ingest_one_file(parquet_path: Path, jurisdiction: str, batch_size: int = 16,
-                          title_filter: str | None = None, contextualize: bool = True) -> int:
+async def ingest_one_file(
+    parquet_path: Path,
+    jurisdiction: str,
+    batch_size: int = 16,
+    title_filter: str | None = None,
+    contextualize: bool = True,
+) -> int:
     """Ingest one jurisdiction's in-force sections into Qdrant. Returns the
     number of sections indexed. Re-embedding is idempotent: we delete the
     jurisdiction's (or title-scoped) points first, then upsert fresh.
@@ -309,9 +348,13 @@ async def ingest_one_file(parquet_path: Path, jurisdiction: str, batch_size: int
     await ensure_collection()
     # Remove existing points for this jurisdiction (or title) so re-runs don't
     # duplicate — scoped to the filter so a title-scoped run is additive.
-    delete_filter: dict = {"must": [{"key": "jurisdiction", "match": {"value": jurisdiction}}]}
+    delete_filter: dict = {
+        "must": [{"key": "jurisdiction", "match": {"value": jurisdiction}}]
+    }
     if title_filter:
-        delete_filter["must"].append({"key": "title_number", "match": {"value": title_filter}})
+        delete_filter["must"].append(
+            {"key": "title_number", "match": {"value": title_filter}}
+        )
     try:
         await _get_qdrant_client().post(
             f"/collections/{COLLECTION}/points/delete",
@@ -352,7 +395,8 @@ async def ingest_one_file(parquet_path: Path, jurisdiction: str, batch_size: int
                     )
                     if resp.status_code >= 500:
                         last_exc = RuntimeError(
-                            f"qdrant upsert {resp.status_code}: {resp.text[:200]}")
+                            f"qdrant upsert {resp.status_code}: {resp.text[:200]}"
+                        )
                         await asyncio.sleep(1.0 + attempt)
                         continue
                     resp.raise_for_status()
@@ -362,16 +406,22 @@ async def ingest_one_file(parquet_path: Path, jurisdiction: str, batch_size: int
                     last_exc = exc
                     await asyncio.sleep(1.0 + attempt)
             else:
-                log.warning("qdrant upsert failed for batch of %d after retries: %s",
-                            len(points), last_exc)
+                log.warning(
+                    "qdrant upsert failed for batch of %d after retries: %s",
+                    len(points),
+                    last_exc,
+                )
                 raise RuntimeError(
-                    f"qdrant upsert failed after retries: {last_exc}") from last_exc
+                    f"qdrant upsert failed after retries: {last_exc}"
+                ) from last_exc
         batch_ids.clear()
         batch_texts.clear()
         batch_payloads.clear()
         batch_chars = 0
 
-    async for point_id, payload in iter_in_force_rows(parquet_path, jurisdiction, title_filter=title_filter):
+    async for point_id, payload in iter_in_force_rows(
+        parquet_path, jurisdiction, title_filter=title_filter
+    ):
         # CONTEXTUAL RETRIEVAL: situate the section before embedding so a bare
         # chunk is retrievable for a topic-described question. The context is
         # ALSO stored in the payload (retrieval can surface it) and prepended
@@ -389,7 +439,9 @@ async def ingest_one_file(parquet_path: Path, jurisdiction: str, batch_size: int
         text = f"{payload['context']}\n{payload['citation']} — {payload['section_title']}\n{payload['content']}"
         # ~4 chars/token; keep a 15% headroom under the 8192 physical batch size.
         approx_tokens = max(1, len(text) // 4)
-        if batch_ids and batch_chars // 4 + approx_tokens >= int(_MAX_BATCH_TOKENS * 0.85):
+        if batch_ids and batch_chars // 4 + approx_tokens >= int(
+            _MAX_BATCH_TOKENS * 0.85
+        ):
             await flush()
         batch_texts.append(text)
         batch_ids.append(point_id)
@@ -402,8 +454,11 @@ async def ingest_one_file(parquet_path: Path, jurisdiction: str, batch_size: int
     return total
 
 
-async def ingest_all(parquet_dir: Path, jurisdictions: list[str] | None = None,
-                     contextualize: bool = True) -> dict[str, int]:
+async def ingest_all(
+    parquet_dir: Path,
+    jurisdictions: list[str] | None = None,
+    contextualize: bool = True,
+) -> dict[str, int]:
     """Ingest the scoped jurisdictions. `jurisdictions` defaults to the full
     SCOPE_FILES set. Files must already be downloaded into `parquet_dir` (we do
     NOT download here — the download is a separate step so the corpus is
@@ -442,14 +497,16 @@ async def backfill_payloads(batch_size: int = 2000) -> dict[str, Any]:
     """
     from swarm_os.lib.vector.qdrant_store import QDRANT_URL
     from qdrant_client import AsyncQdrantClient
+
     client = AsyncQdrantClient(url=QDRANT_URL)
     updated = 0
     by_jur: dict[str, int] = {}
     offset: Any = None
     try:
         while True:
-            resp = await client.scroll(COLLECTION, limit=batch_size, with_payload=True,
-                                       offset=offset)
+            resp = await client.scroll(
+                COLLECTION, limit=batch_size, with_payload=True, offset=offset
+            )
             points = resp[0]
             ids: list[Any] = []
             for point in points:
@@ -458,7 +515,9 @@ async def backfill_payloads(batch_size: int = 2000) -> dict[str, Any]:
                     continue  # already currency-stamped
                 ids.append(point.id)
                 updated += 1
-                by_jur[payload.get("jurisdiction", "?")] = by_jur.get(payload.get("jurisdiction", "?"), 0) + 1
+                by_jur[payload.get("jurisdiction", "?")] = (
+                    by_jur.get(payload.get("jurisdiction", "?"), 0) + 1
+                )
             if ids:
                 await client.set_payload(
                     collection_name=COLLECTION,
@@ -473,7 +532,9 @@ async def backfill_payloads(batch_size: int = 2000) -> dict[str, Any]:
     return {"updated": updated, "jurisdictions": by_jur}
 
 
-def download_parquet(jurisdictions: list[str] | None = None, out_dir: Path = Path("./data/legal")) -> dict[str, Path]:
+def download_parquet(
+    jurisdictions: list[str] | None = None, out_dir: Path = Path("./data/legal")
+) -> dict[str, Path]:
     """Download the scoped Parquet files to out_dir. Returns {jurisdiction: path}.
     Downloads only the jurisdictions in scope (not all 50 states)."""
     out_dir.mkdir(parents=True, exist_ok=True)

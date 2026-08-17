@@ -7,6 +7,7 @@ HTML, and snippet text munging, but never scoring/analysis (see analysis.py).
 Registered in `DISCOVERY_PARSERS` so the service can enable/disable sources
 and future sources (RV Trader direct, Craigslist, etc.) just register here.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -43,6 +44,7 @@ def _get_http() -> httpx.AsyncClient:
         # by a fetched listing URL or a redirect off it). Mirrors the web_fetch
         # guard in swarm_os/lib/mcp/web_search.py.
         from swarm_os.lib.mcp.web_search import _ssrf_redirect_hook
+
         _HTTP_CLIENT = httpx.AsyncClient(
             timeout=httpx.Timeout(connect=8.0, read=45.0, write=20.0, pool=12.0),
             headers=BROWSER_HEADERS,
@@ -56,6 +58,7 @@ def _assert_public_url(url: str) -> None:
     """Pre-flight SSRF check: refuse to fetch a URL pointing at loopback/private/
     link-local/reserved addresses (or hostnames resolving to them)."""
     from swarm_os.lib.mcp.web_search import _ssrf_check
+
     blocked = _ssrf_check(url)
     if blocked:
         raise ValueError(f"SSRF blocked: {blocked}")
@@ -82,6 +85,7 @@ async def aclose():
         _HTTP_CLIENT = None
     try:
         from .geo import aclose_geo
+
         await aclose_geo()
     except Exception:
         pass
@@ -104,11 +108,13 @@ def parse_ppl_attributes(html: str) -> dict[str, list]:
     decoder = json.JSONDecoder()
     for m in re.finditer(r'\{"attributeFQN":"tenant~rv-[^"]+"', html or ""):
         try:
-            obj, _ = decoder.raw_decode(html[m.start():m.start() + 1200])
+            obj, _ = decoder.raw_decode(html[m.start() : m.start() + 1200])
         except Exception:
             continue
         detail = obj.get("attributeDetail") or {}
-        name = detail.get("name") or obj.get("attributeFQN", "").replace("tenant~rv-", "")
+        name = detail.get("name") or obj.get("attributeFQN", "").replace(
+            "tenant~rv-", ""
+        )
         vals = []
         for v in (obj.get("values") or [])[:8]:
             if isinstance(v, dict):
@@ -117,7 +123,9 @@ def parse_ppl_attributes(html: str) -> dict[str, list]:
                 elif "value" in v:
                     vals.append(str(v["value"]))
         if vals:
-            attrs.setdefault(name, []).extend(v for v in vals if v and v not in ("False", "false"))
+            attrs.setdefault(name, []).extend(
+                v for v in vals if v and v not in ("False", "false")
+            )
     return attrs
 
 
@@ -163,7 +171,9 @@ def _extract_location(text: str) -> str:
     def _fmt(g1: str, g2: str) -> str:
         return f"{g1.strip().title()}, {g2.upper()}" if g2.upper() in _US_STATES else ""
 
-    m = re.search(r"\b(?:in|near)\s+([A-Z][A-Za-z .]{2,30}?)\s*[,.]?\s*([A-Z]{2})\b", text or "")
+    m = re.search(
+        r"\b(?:in|near)\s+([A-Z][A-Za-z .]{2,30}?)\s*[,.]?\s*([A-Z]{2})\b", text or ""
+    )
     if m:
         loc = _fmt(m.group(1), m.group(2))
         if loc:
@@ -201,7 +211,7 @@ def _extract_make_model(title: str, url: str = "") -> tuple[str, str]:
     for make in RV_MAKES:
         if make in text:
             idx = text.find(make)
-            rest = re.sub(r"[^a-z0-9 .\-]", " ", text[idx + len(make):]).strip()
+            rest = re.sub(r"[^a-z0-9 .\-]", " ", text[idx + len(make) :]).strip()
             # drop craigslist/url noise tokens before taking the model
             rest = re.sub(r"\b(craigslist|www|http|org|com|view|d)\b", " ", rest)
             # take up to 4 tokens as the model, stop at digits that look like lengths/ids
@@ -219,7 +229,9 @@ def _extract_make_model(title: str, url: str = "") -> tuple[str, str]:
 # --------------------------------------------------------------------------
 # PPL Motorhomes parser
 # --------------------------------------------------------------------------
-async def _discover_ppl(budget: int, rv_type: str = "all", max_results: int = 40) -> list[RVListing]:
+async def _discover_ppl(
+    budget: int, rv_type: str = "all", max_results: int = 40
+) -> list[RVListing]:
     """Scrape the PPL consignment inventory page filtered to `budget`."""
     html = await _fetch_text(PPL_INVENTORY.format(budget=int(budget)))
     if not html:
@@ -285,11 +297,16 @@ async def _discover_ppl(budget: int, rv_type: str = "all", max_results: int = 40
             lst.description = text[:3000]
             lst.mileage = _extract_mileage(text) or _attr_int(attrs, "Mileage")
             if not lst.location:
-                lst.location = _extract_location(text) or _attr_str(attrs, "RV Location")
+                lst.location = _extract_location(text) or _attr_str(
+                    attrs, "RV Location"
+                )
             if not lst.year:
                 lst.year = _attr_int(attrs, "Year") or 0
             if not lst.rv_type or lst.rv_type == "unknown":
-                lst.rv_type = _classify_rv_type(_attr_str(attrs, "RV Type") or type_slug.replace("-", " "), lst.title)
+                lst.rv_type = _classify_rv_type(
+                    _attr_str(attrs, "RV Type") or type_slug.replace("-", " "),
+                    lst.title,
+                )
             if attrs.get("Brand"):
                 lst.make = lst.make or " ".join(attrs["Brand"]).title()
             if attrs.get("Model"):
@@ -369,7 +386,10 @@ _JUNK_TITLE_RES = [
     re.compile(r"\bmotorhomes?\s+(?:under|for\s*sale|near)\b", re.I),
     re.compile(r"\bcall\s+(?:dealer|for\s+price|seller)\b", re.I),
     re.compile(r"\bnear\s+me\b", re.I),
-    re.compile(r"\b(?:used|new)\s+(?:[a-z0-9]+\s+){0,3}class\s+[abc]\s+(?:rvs?|motorhomes?)\b", re.I),
+    re.compile(
+        r"\b(?:used|new)\s+(?:[a-z0-9]+\s+){0,3}class\s+[abc]\s+(?:rvs?|motorhomes?)\b",
+        re.I,
+    ),
     re.compile(r"\b(?:search|results?)\b", re.I),  # "Search Results" furniture
     re.compile(r"\bpage\s+\d+\b", re.I),  # "Page 3" furniture
     re.compile(r"(?:\b\d{1,3}\b\s+){4,}"),  # tabular run like "12 24 48 96"
@@ -377,9 +397,26 @@ _JUNK_TITLE_RES = [
 
 # Model tokens that are page furniture, not an actual model name.
 _JUNK_MODELS = {
-    "motor", "coach", "rv", "rvs", "camper", "van", "class", "dealer",
-    "motorhome", "motorhomes", "sale", "price", "units", "inventory",
-    "listing", "vehicles", "special", "stock", "miles", "campervan",
+    "motor",
+    "coach",
+    "rv",
+    "rvs",
+    "camper",
+    "van",
+    "class",
+    "dealer",
+    "motorhome",
+    "motorhomes",
+    "sale",
+    "price",
+    "units",
+    "inventory",
+    "listing",
+    "vehicles",
+    "special",
+    "stock",
+    "miles",
+    "campervan",
 }
 
 
@@ -425,11 +462,17 @@ def _looks_like_real_listing(url: str, parsed: dict, snippet_text: str = "") -> 
         return False
     # "for sale" is common on real listings; only reject it as category
     # furniture when it reads like a heading ("... for sale" / "... for sale by owner").
-    if re.search(r"\bfor\s*sale\b\s*(?:$|by\s+owner\b|near\s+me\b|under\s*\$?)", title, re.I):
+    if re.search(
+        r"\bfor\s*sale\b\s*(?:$|by\s+owner\b|near\s+me\b|under\s*\$?)", title, re.I
+    ):
         return False
     if re.search(r"\beBay\b|\bbid\b|\bauction\b|\bwatchers?\b", title, re.I):
         return False
-    if re.search(r"\bnew\s*[&]?\s*used\s*rvs?\b|\bcall\s*seller\b|\bin\s*or\s*near\b|\brvusa\b|\brvtrader\b|\blistings?\s+in\b", title, re.I):
+    if re.search(
+        r"\bnew\s*[&]?\s*used\s*rvs?\b|\bcall\s*seller\b|\bin\s*or\s*near\b|\brvusa\b|\brvtrader\b|\blistings?\s+in\b",
+        title,
+        re.I,
+    ):
         return False
     # A real listing title should carry a year or the make-derived model token.
     if not re.search(r"\b(19[89]\d|20[0-2]\d)\b", title):
@@ -437,12 +480,18 @@ def _looks_like_real_listing(url: str, parsed: dict, snippet_text: str = "") -> 
             return False
     # A motorhome call needs a motorhome signal in the actual text (not only a URL slug).
     if parsed["rv_type"] != "unknown" and "Motorhome" in parsed["rv_type"]:
-        if not re.search(r"\bmotorhome\b|\bclass [abc]\b|\bmotor coach\b|\bcamper van\b|\bsprinter\b|\bvan\b", snippet_text, re.I):
+        if not re.search(
+            r"\bmotorhome\b|\bclass [abc]\b|\bmotor coach\b|\bcamper van\b|\bsprinter\b|\bvan\b",
+            snippet_text,
+            re.I,
+        ):
             parsed["rv_type"] = "unknown"
     return True
 
 
-async def _discover_web(budget: int, rv_type: str = "all", max_results: int = 40) -> list[RVListing]:
+async def _discover_web(
+    budget: int, rv_type: str = "all", max_results: int = 40
+) -> list[RVListing]:
     from swarm_os.lib.mcp.web_search import web_search_handler
 
     listings: list[RVListing] = []
@@ -512,7 +561,19 @@ def _build_craigslist_queries(budget: int, rv_type: str) -> list[str]:
         rv_type == "all"
         or rv_type == "unknown"
         or "motorhome" in t
-        or t in ("class a/b/c", "class a/b", "class b/c", "class b or c", "b/c", "van", "camper van", "sprinter", "rv", "camper")
+        or t
+        in (
+            "class a/b/c",
+            "class a/b",
+            "class b/c",
+            "class b or c",
+            "b/c",
+            "van",
+            "camper van",
+            "sprinter",
+            "rv",
+            "camper",
+        )
     )
     if want_motorhome:
         # Campervan = Class B (van conversions); motorhome = Class A/C + B.
@@ -546,13 +607,15 @@ def _parse_craigslist_content(content: str, budget: int) -> list[RVListing]:
     # price follows as "| {MM/DD}{Area} | $N". Image thumbnails precede the real
     # link in markdown ([![alt](img.jpg)](view-url)), so read the title as the
     # LAST "[...]" before "(view-url)" and strip any inner image markdown.
-    for m in re.finditer(r"\(https://www\.craigslist\.org/view/d/([^)]+)\)", content or ""):
+    for m in re.finditer(
+        r"\(https://www\.craigslist\.org/view/d/([^)]+)\)", content or ""
+    ):
         slug = m.group(1)
         url = f"https://www.craigslist.org/view/d/{slug}"
-        pre = content[max(0, m.start() - 200):m.start()]
+        pre = content[max(0, m.start() - 200) : m.start()]
         lb = pre.rfind("[")
         lc = pre.rfind("]")
-        title = pre[lb + 1:lc] if lb != -1 and lc > lb else ""
+        title = pre[lb + 1 : lc] if lb != -1 and lc > lb else ""
         # Drop any "](image-url)" that rode along inside the alt text.
         title = re.sub(r"\]\(https?://\S+\)?", "", title)
         title = re.sub(r"[_!]+", "", title).strip()
@@ -568,7 +631,7 @@ def _parse_craigslist_content(content: str, budget: int) -> list[RVListing]:
         if len(title) < 6:
             continue
         # Price follows within the next ~160 chars as "$N,NNN"
-        tail = content[m.end():m.end() + 160]
+        tail = content[m.end() : m.end() + 160]
         price_m = re.search(r"\$\s?([\d,]{3,7}(?:\.\d{2})?)", tail)
         if not price_m:
             continue
@@ -611,7 +674,9 @@ def _parse_craigslist_content(content: str, budget: int) -> list[RVListing]:
     return listings
 
 
-async def _discover_craigslist(budget: int, rv_type: str = "all", max_results: int = 40) -> list[RVListing]:
+async def _discover_craigslist(
+    budget: int, rv_type: str = "all", max_results: int = 40
+) -> list[RVListing]:
     """Discover used-RV listings from Craigslist via the Crawl4AI browser fetch."""
     from swarm_os.lib.mcp.web_search import web_fetch_handler
 

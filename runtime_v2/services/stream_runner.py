@@ -72,7 +72,9 @@ async def _store_decision_reflexion(
                 category="self_reflection",
             )
         )
-        log.debug("[%s] Scheduled background episodic memory write for reflexion", agent_id)
+        log.debug(
+            "[%s] Scheduled background episodic memory write for reflexion", agent_id
+        )
     except Exception as exc:
         log.debug("reflexion episodic memory write skipped: %s", exc)
     try:

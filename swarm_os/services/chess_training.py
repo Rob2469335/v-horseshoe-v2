@@ -93,7 +93,11 @@ def _ladder_for(stage: str) -> list[int]:
             if days:
                 return days
         except Exception as exc:  # noqa: BLE001
-            log.warning("CHESS_SR_LADDER %r isn't a comma-separated int list; using defaults: %s", env, exc)
+            log.warning(
+                "CHESS_SR_LADDER %r isn't a comma-separated int list; using defaults: %s",
+                env,
+                exc,
+            )
     return _LADDER_STAGES.get(stage, _DEFAULT_LADDER)
 
 
@@ -146,7 +150,7 @@ def _build_item(
         "pre_fen": pre_fen,
         "solution_uci": solution_uci,
         "solution_san": solution_san,
-        "source": source,          # "own_game" | "gm"
+        "source": source,  # "own_game" | "gm"
         "source_ref": source_ref,  # mistake id / "game:ply"
         "prompt": prompt,
         "difficulty": difficulty,
@@ -155,7 +159,7 @@ def _build_item(
         "last_seen": now,
         "attempts": 0,
         "corrects": 0,
-        "clean_solves": 0,          # consecutive corrects with no intervening miss
+        "clean_solves": 0,  # consecutive corrects with no intervening miss
         "mastered": False,
         "confidence_history": [],
         "correct_history": [],
@@ -169,13 +173,18 @@ def build_items_from_mistakes(force: bool = False) -> dict[str, Any]:
 
     with _LOCK:
         existing = _load()
-        existing_keys = {it.get("source_ref") for it in existing if it.get("stage") == "repair"}
+        existing_keys = {
+            it.get("source_ref") for it in existing if it.get("stage") == "repair"
+        }
     new_items: list[dict[str, Any]] = []
     for e in cm._load():
         if e.get("id") in existing_keys:
             continue
         concept = cm._classify_concept(
-            e.get("pre_fen", ""), e.get("played_uci", ""), e.get("best_uci"), e.get("classification", "")
+            e.get("pre_fen", ""),
+            e.get("played_uci", ""),
+            e.get("best_uci"),
+            e.get("classification", ""),
         )
         if not concept or concept == "imprecise move":
             continue  # imprecise moves are not a clean training concept
@@ -222,7 +231,11 @@ def build_items_from_gm(force: bool = False) -> dict[str, Any]:
 
     with _LOCK:
         existing = _load()
-        existing_refs = {(it.get("source_ref"), it.get("stage")) for it in existing if it.get("source") == "gm"}
+        existing_refs = {
+            (it.get("source_ref"), it.get("stage"))
+            for it in existing
+            if it.get("source") == "gm"
+        }
 
     # Collect distinct critical moments per concept.
     moments_by_concept: dict[str, list[dict[str, Any]]] = {}
@@ -261,23 +274,37 @@ def build_items_from_gm(force: bool = False) -> dict[str, Any]:
             m = moments[0]
             new_items.append(
                 _build_item(
-                    concept, "reinforce", m["fen"], m["uci"], m["san"], "gm",
+                    concept,
+                    "reinforce",
+                    m["fen"],
+                    m["uci"],
+                    m["san"],
+                    "gm",
                     "Same idea, different game — find the strongest move.",
-                    difficulty=m["difficulty"], source_ref=m["ref"],
+                    difficulty=m["difficulty"],
+                    source_ref=m["ref"],
                 )
             )
             existing_refs.add((m["ref"], "reinforce"))
         # Transfer from a DIFFERENT position (a different FEN/moment).
         # Prefer the structurally most different moment (last distinct).
-        transfer_candidates = [m for m in moments if m["fen"] != moments[0]["fen"]] if moments else []
+        transfer_candidates = (
+            [m for m in moments if m["fen"] != moments[0]["fen"]] if moments else []
+        )
         if transfer_candidates:
             t = transfer_candidates[-1]
             if (t["ref"], "transfer") not in existing_refs:
                 new_items.append(
                     _build_item(
-                        concept, "transfer", t["fen"], t["uci"], t["san"], "gm",
+                        concept,
+                        "transfer",
+                        t["fen"],
+                        t["uci"],
+                        t["san"],
+                        "gm",
                         "What should you consider before moving here? Play the move you think is best.",
-                        difficulty=min(3, t["difficulty"] + 1), source_ref=t["ref"],
+                        difficulty=min(3, t["difficulty"] + 1),
+                        source_ref=t["ref"],
                     )
                 )
                 existing_refs.add((t["ref"], "transfer"))
@@ -313,7 +340,13 @@ def training_due(limit: int = 10, concept: str | None = None) -> dict[str, Any]:
     with _LOCK:
         items = _load()
     if concept:
-        pool = [it for it in items if it.get("concept") == concept and it.get("due_at", 0) <= now and not it.get("retired")]
+        pool = [
+            it
+            for it in items
+            if it.get("concept") == concept
+            and it.get("due_at", 0) <= now
+            and not it.get("retired")
+        ]
     else:
         # Weakness priority drives scheduling (frequency x severity x recurrence
         # x trend), not raw count.
@@ -321,15 +354,28 @@ def training_due(limit: int = 10, concept: str | None = None) -> dict[str, Any]:
 
         report = cm.coach_report()
         scores = report.get("concept_scores", {})
+
         def _prio(it):
             c = it.get("concept", "")
-            return (scores.get(c, {}).get("priority", 0.0), it.get("box", 0), it.get("due_at", 0))
-        pool = [it for it in items if it.get("due_at", 0) <= now and not it.get("retired")]
+            return (
+                scores.get(c, {}).get("priority", 0.0),
+                it.get("box", 0),
+                it.get("due_at", 0),
+            )
+
+        pool = [
+            it for it in items if it.get("due_at", 0) <= now and not it.get("retired")
+        ]
         pool.sort(key=_prio, reverse=True)  # highest priority (weakest) first
     if not concept:
         # Within equal priority, older box + sooner due first.
         pool.sort(key=lambda it: (it.get("box", 0), it.get("due_at", 0)))
-    return {"ok": True, "due": pool[:limit], "due_count": len(pool), "total": len(items)}
+    return {
+        "ok": True,
+        "due": pool[:limit],
+        "due_count": len(pool),
+        "total": len(items),
+    }
 
 
 def record_answer(
@@ -365,11 +411,17 @@ def record_answer(
         ladder = _ladder_for(it.get("stage", "repair"))
         it["attempts"] = (it.get("attempts", 0) or 0) + 1
         it["correct_history"] = (it.get("correct_history", []) or []) + [bool(correct)]
-        it["confidence_history"] = (it.get("confidence_history", []) or []) + [confidence]
-        it["confidence_times"] = (it.get("confidence_times", []) or []) + [confidence_captured_at]
+        it["confidence_history"] = (it.get("confidence_history", []) or []) + [
+            confidence
+        ]
+        it["confidence_times"] = (it.get("confidence_times", []) or []) + [
+            confidence_captured_at
+        ]
         it["answer_times"] = (it.get("answer_times", []) or []) + [answer_time]
         if post_hoc:
-            it["calibration_flags"] = (it.get("calibration_flags", []) or []) + ["post-hoc-confidence"]
+            it["calibration_flags"] = (it.get("calibration_flags", []) or []) + [
+                "post-hoc-confidence"
+            ]
         if correct:
             it["corrects"] = (it.get("corrects", 0) or 0) + 1
             it["clean_solves"] = (it.get("clean_solves", 0) or 0) + 1
@@ -382,20 +434,34 @@ def record_answer(
                 it["retired"] = True
                 it["due_at"] = 0  # never due again
                 _save(items)
-                return {"ok": True, "retired": True, "mastered": True, "item": dict(it), "concept": it["concept"], "stage": it["stage"]}
+                return {
+                    "ok": True,
+                    "retired": True,
+                    "mastered": True,
+                    "item": dict(it),
+                    "concept": it["concept"],
+                    "stage": it["stage"],
+                }
             if box >= len(ladder):
                 # Cleared the ladder but not enough clean solves yet — hold at
                 # the top box rather than retire without mastery.
                 box = len(ladder) - 1
             it["box"] = box
-            it["due_at"] = _now() + ladder[box - 1] * 86400 if box > 0 else _now() + 3600
+            it["due_at"] = (
+                _now() + ladder[box - 1] * 86400 if box > 0 else _now() + 3600
+            )
         else:
             it["box"] = 0
             it["clean_solves"] = 0
             it["due_at"] = _now() + 3600  # retry soon after a miss
         it["last_seen"] = _now()
         _save(items)
-        return {"ok": True, "retired": False, "mastered": bool(it.get("mastered")), "item": dict(it)}
+        return {
+            "ok": True,
+            "retired": False,
+            "mastered": bool(it.get("mastered")),
+            "item": dict(it),
+        }
 
 
 def concept_progress() -> dict[str, Any]:
@@ -408,11 +474,19 @@ def concept_progress() -> dict[str, Any]:
     by_concept: dict[str, dict[str, Any]] = {}
     for it in items:
         c = it.get("concept", "?")
-        entry = by_concept.setdefault(c, {
-            "repair": 0, "reinforce": 0, "transfer": 0,
-            "repair_mastered": False, "reinforce_mastered": False, "transfer_mastered": False,
-            "attempts": 0, "corrects": 0,
-        })
+        entry = by_concept.setdefault(
+            c,
+            {
+                "repair": 0,
+                "reinforce": 0,
+                "transfer": 0,
+                "repair_mastered": False,
+                "reinforce_mastered": False,
+                "transfer_mastered": False,
+                "attempts": 0,
+                "corrects": 0,
+            },
+        )
         stage = it.get("stage")
         if stage in entry:
             entry[stage] += 1
@@ -423,10 +497,29 @@ def concept_progress() -> dict[str, Any]:
         entry["corrects"] += it.get("corrects", 0)
     out = {}
     for c, v in by_concept.items():
-        concept_mastered = bool(v.get("reinforce_mastered") and v.get("transfer_mastered"))
-        rate = round(100.0 * v["corrects"] / max(1, v["attempts"]), 1) if v["attempts"] else 0.0
-        status = "mastered" if concept_mastered else ("seeding" if v["repair"] + v["reinforce"] + v["transfer"] == 0 else "practicing")
-        out[c] = {**v, "success_rate": rate, "concept_mastered": concept_mastered, "mastery": status}
+        concept_mastered = bool(
+            v.get("reinforce_mastered") and v.get("transfer_mastered")
+        )
+        rate = (
+            round(100.0 * v["corrects"] / max(1, v["attempts"]), 1)
+            if v["attempts"]
+            else 0.0
+        )
+        status = (
+            "mastered"
+            if concept_mastered
+            else (
+                "seeding"
+                if v["repair"] + v["reinforce"] + v["transfer"] == 0
+                else "practicing"
+            )
+        )
+        out[c] = {
+            **v,
+            "success_rate": rate,
+            "concept_mastered": concept_mastered,
+            "mastery": status,
+        }
     return {"ok": True, "concepts": out, "total_items": len(items)}
 
 
@@ -491,8 +584,9 @@ def calibration_report() -> dict[str, Any]:
             ct_ = conf_times[i] if i < len(conf_times) else None
             at_ = answer_times[i] if i < len(answer_times) else None
             is_posthoc = (
-                (flags[i] if i < len(flags) else None) == "post-hoc-confidence"
-                or (ct_ is not None and at_ is not None and ct_ > at_ + 5.0)
+                flags[i] if i < len(flags) else None
+            ) == "post-hoc-confidence" or (
+                ct_ is not None and at_ is not None and ct_ > at_ + 5.0
             )
             if is_posthoc:
                 rejected += 1
@@ -518,7 +612,11 @@ def calibration_report() -> dict[str, Any]:
         elif level == "guess":
             interpretation = "well-calibrated" if rate <= 40 else "underconfident"
         else:  # idea
-            interpretation = "well-calibrated" if 40 <= rate <= 80 else ("overconfident" if rate < 40 else "underconfident")
+            interpretation = (
+                "well-calibrated"
+                if 40 <= rate <= 80
+                else ("overconfident" if rate < 40 else "underconfident")
+            )
         stages[level] = {
             "n": n,
             "solve_rate": rate,

@@ -49,4 +49,5 @@ def test_default_routing_mode_is_auto():
     with patch.dict(os.environ, {}, clear=False):
         os.environ.pop("SWARM_ROUTING_MODE", None)
         from runtime_v2.services._llm_client import get_routing_mode
+
         assert get_routing_mode() == "auto"

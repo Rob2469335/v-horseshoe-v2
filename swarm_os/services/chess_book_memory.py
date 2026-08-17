@@ -115,7 +115,9 @@ async def index_books(force: bool = False) -> dict:
             if COLLECTION not in names:
                 await client.create_collection(
                     collection_name=COLLECTION,
-                    vectors_config=VectorParams(size=EMBED_DIM, distance=Distance.COSINE),
+                    vectors_config=VectorParams(
+                        size=EMBED_DIM, distance=Distance.COSINE
+                    ),
                 )
 
         if not force:

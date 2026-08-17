@@ -19,6 +19,7 @@ DESIGN (reviewer-locked):
 - Distinct terminal states, all audited: rolled_back / refused_conflict /
   unavailable. Never a silent no-op.
 """
+
 from __future__ import annotations
 
 import base64
@@ -46,8 +47,12 @@ def _encode_snapshot(snapshot: dict) -> dict:
         out["untracked"] = sorted(out["untracked"])
     for key in ("tracked", "untracked_content"):
         if key in out and isinstance(out[key], dict):
-            out[key] = {rel: base64.b64encode(content).decode("ascii") if isinstance(content, bytes) else content
-                        for rel, content in out[key].items()}
+            out[key] = {
+                rel: base64.b64encode(content).decode("ascii")
+                if isinstance(content, bytes)
+                else content
+                for rel, content in out[key].items()
+            }
     return out
 
 
@@ -59,8 +64,10 @@ def _decode_snapshot(snapshot: dict) -> dict:
         out["untracked"] = set(out["untracked"])
     for key in ("tracked", "untracked_content"):
         if key in out and isinstance(out[key], dict):
-            out[key] = {rel: base64.b64decode(content) if isinstance(content, str) else content
-                        for rel, content in out[key].items()}
+            out[key] = {
+                rel: base64.b64decode(content) if isinstance(content, str) else content
+                for rel, content in out[key].items()
+            }
     return out
 
 
@@ -77,7 +84,10 @@ def write_run_snapshot(snapshot: dict, snapshot_id: str | None = None) -> str:
         tmp = path.with_suffix(".json.tmp")
         lock = FileLock(str(path) + ".lock", timeout=5.0)
         with lock:
-            tmp.write_text(json.dumps(_encode_snapshot(snapshot), ensure_ascii=False), encoding="utf-8")
+            tmp.write_text(
+                json.dumps(_encode_snapshot(snapshot), ensure_ascii=False),
+                encoding="utf-8",
+            )
             os.replace(tmp, path)
     except Exception as exc:
         log.warning("Run-snapshot write failed (%s): %s", sid, exc)
@@ -110,7 +120,9 @@ def build_repair_snapshot(worktree_snapshot: dict, scope: list[str]) -> dict:
     }
 
 
-def restore_run_snapshot(snap: dict, scope: list[str] | None = None, root: Path | None = None) -> dict:
+def restore_run_snapshot(
+    snap: dict, scope: list[str] | None = None, root: Path | None = None
+) -> dict:
     """Restore a snapshot. With scope, restores ONLY the scoped relpaths (the
     evidence-justified diff). Without scope, restores the full captured delta
     (the /undo behavior). `root` overrides the project root (test seam).
@@ -118,5 +130,9 @@ def restore_run_snapshot(snap: dict, scope: list[str] | None = None, root: Path 
     from organism_console._commands_opencode import restore_snapshot
 
     snapshot = snap.get("snapshot") or snap
-    restored = restore_snapshot(snapshot, scope=scope, root=root) if root else restore_snapshot(snapshot, scope=scope)
+    restored = (
+        restore_snapshot(snapshot, scope=scope, root=root)
+        if root
+        else restore_snapshot(snapshot, scope=scope)
+    )
     return {"ok": True, "restored": restored, "refused": []}

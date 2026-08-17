@@ -13,6 +13,7 @@ Layered package (infrastructure → domain → service):
 
 Public API: `find_best_rv_deals(...)` (async) and `aclose()` (client shutdown).
 """
+
 from .parsers import aclose
 from .service import find_best_rv_deals
 

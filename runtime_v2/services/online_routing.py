@@ -14,6 +14,7 @@ Design:
   - Off by default (SWARM_WINRATE_ROUTING=1 to enable) to preserve current
     behavior; any I/O error defaults to the legacy "allow" rule (never blocks).
 """
+
 from __future__ import annotations
 
 import json
@@ -81,7 +82,9 @@ def cloud_allowed_for_agent(agent_id: str) -> bool:
     if not allowed:
         log.info(
             "[winrate] %s win-rate %.0f%% below floor %.0f%% — routing analysis back to local",
-            agent_id, winrate * 100, _FLOOR * 100,
+            agent_id,
+            winrate * 100,
+            _FLOOR * 100,
         )
     return allowed
 

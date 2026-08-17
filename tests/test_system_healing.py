@@ -6,20 +6,30 @@
 - RecoveryEngine dispatches system actions
 - System recovery actions refuse to touch protected processes
 """
+
 from __future__ import annotations
 import sys
 
 import pytest
 
 from swarm_os.healing.system_probes import run_system_probes, _NEVER_TOUCH
-from swarm_os.healing.system_recovery import SYSTEM_RECOVERY_ACTIONS, DESTRUCTIVE_SYSTEM_ACTIONS
+from swarm_os.healing.system_recovery import (
+    SYSTEM_RECOVERY_ACTIONS,
+    DESTRUCTIVE_SYSTEM_ACTIONS,
+)
 from swarm_os.healing.governor import Governor
 from swarm_os.healing.recovery_engine import RecoveryEngine
 
 
 def test_system_probes_all_run():
     results = run_system_probes()
-    for name in ("disk_space", "memory_pressure", "runaway_process", "temp_growth", "event_log_storm"):
+    for name in (
+        "disk_space",
+        "memory_pressure",
+        "runaway_process",
+        "temp_growth",
+        "event_log_storm",
+    ):
         assert name in results
         assert "ok" in results[name]
         assert "detail" in results[name]
@@ -54,14 +64,18 @@ def test_system_probes_no_cache_stampede():
         results = [None] * 6
         threads = []
         for i in range(6):
-            t = threading.Thread(target=lambda i=i: results.__setitem__(i, run_system_probes()))
+            t = threading.Thread(
+                target=lambda i=i: results.__setitem__(i, run_system_probes())
+            )
             threads.append(t)
             t.start()
         for t in threads:
             t.join()
         for r in results:
             assert r == {"fake": {"ok": True, "detail": "fake"}}
-        assert len(calls) == 1, f"probe ran {len(calls)} times under concurrency, expected 1"
+        assert len(calls) == 1, (
+            f"probe ran {len(calls)} times under concurrency, expected 1"
+        )
     finally:
         sp._SYSTEM_PROBES = orig_probes
         sp._probe_cache = orig_cache
@@ -69,9 +83,15 @@ def test_system_probes_no_cache_stampede():
 
 def test_destructive_signal_forces_approval():
     gov = Governor()
-    symptom = {"component": "runaway_process", "ok": False,
-               "detail": {"issue": "runaway_process", "destructive": True,
-                          "processes": [{"pid": 99999, "name": "test.exe"}]}}
+    symptom = {
+        "component": "runaway_process",
+        "ok": False,
+        "detail": {
+            "issue": "runaway_process",
+            "destructive": True,
+            "processes": [{"pid": 99999, "name": "test.exe"}],
+        },
+    }
     decision = gov.decide(symptom)
     assert decision["mode"] == "approval_required"
     assert "destructive" in decision.get("mode_reason", "")
@@ -79,8 +99,11 @@ def test_destructive_signal_forces_approval():
 
 def test_safe_memory_signal_auto_executes():
     gov = Governor()
-    symptom = {"component": "memory_pressure", "ok": False,
-               "detail": {"issue": "memory_pressure", "destructive": False}}
+    symptom = {
+        "component": "memory_pressure",
+        "ok": False,
+        "detail": {"issue": "memory_pressure", "destructive": False},
+    }
     assert gov.decide(symptom)["mode"] == "auto_execute"
 
 
@@ -100,6 +123,7 @@ def test_system_recovery_action_registry():
 
 def test_kill_refuses_protected_process():
     from swarm_os.healing.system_recovery import kill_runaway_process
+
     # Simulate a runaway detection that somehow named a protected process
     symptom = {"detail": {"processes": [{"pid": sys.maxsize, "name": "explorer.exe"}]}}
     res = kill_runaway_process(symptom)
@@ -107,9 +131,12 @@ def test_kill_refuses_protected_process():
     assert "no safe kill targets" in res.get("reason", "")
 
 
-@pytest.mark.skipif(sys.platform != "win32", reason="free_memory uses ctypes.windll (Windows-only)")
+@pytest.mark.skipif(
+    sys.platform != "win32", reason="free_memory uses ctypes.windll (Windows-only)"
+)
 def test_free_memory_is_safe_and_runs():
     from swarm_os.healing.system_recovery import free_memory
+
     res = free_memory({})
     assert res.get("ok") is True
     assert res.get("action") == "free_memory"

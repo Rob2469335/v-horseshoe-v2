@@ -8,7 +8,7 @@ class _RunResult:
         self.returncode = returncode
         self.stdout = stdout.encode("utf-8")
         self.stderr = stderr.encode("utf-8")
-    
+
     async def communicate(self):
         return self.stdout, self.stderr
 
@@ -29,7 +29,8 @@ async def test_workspace_changes_parses_git_output(monkeypatch):
 
     async def fake_run(*args, **kwargs):
         cmd = " ".join(str(a) for a in args) if args else kwargs.get("program", "")
-        if isinstance(cmd, list): cmd = " ".join(cmd)
+        if isinstance(cmd, list):
+            cmd = " ".join(cmd)
         if "--stat" in cmd:
             return _RunResult(0, fake_stat)
         return _RunResult(0, fake_diff)
@@ -48,7 +49,8 @@ async def test_workspace_changes_parses_git_output(monkeypatch):
 async def test_workspace_changes_respects_cap(monkeypatch):
     async def fake_run(*args, **kwargs):
         cmd = " ".join(str(a) for a in args) if args else kwargs.get("program", "")
-        if isinstance(cmd, list): cmd = " ".join(cmd)
+        if isinstance(cmd, list):
+            cmd = " ".join(cmd)
         body = "-" * 2000
         return _RunResult(0, body if "--stat" in cmd else body)
 
@@ -62,7 +64,9 @@ async def test_workspace_changes_respects_cap(monkeypatch):
 @pytest.mark.asyncio
 async def test_workspace_changes_not_git(monkeypatch):
     async def fake_run(*args, **kwargs):
-        return _RunResult(128, "fatal: not a git repository (or any of the parent directories)")
+        return _RunResult(
+            128, "fatal: not a git repository (or any of the parent directories)"
+        )
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_run)
     result = await workspace_changes()

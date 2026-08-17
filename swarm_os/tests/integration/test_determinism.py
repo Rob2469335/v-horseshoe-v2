@@ -45,4 +45,3 @@ async def test_same_seed_same_first_step():
 
     assert len(ids1) == len(ids2)
     assert k1.generation == k2.generation
-

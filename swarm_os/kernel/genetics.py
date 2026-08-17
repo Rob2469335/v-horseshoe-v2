@@ -126,8 +126,19 @@ class Genome:
     parent_id: Optional[str] = None
     generation: int = 0
     cognition: CognitivePolicy = field(default_factory=CognitivePolicy)
-    tool_genes: Dict[str, float] = field(default_factory=lambda: {t: random.uniform(0.25, 0.75) for t in MCP_TOOL_REGISTRY})
-    lifetime_fitness: Dict[str, float] = field(default_factory=lambda: {"composite": 0.0, "quality": 0.0, "speed": 0.0, "efficiency": 0.0})
+    tool_genes: Dict[str, float] = field(
+        default_factory=lambda: {
+            t: random.uniform(0.25, 0.75) for t in MCP_TOOL_REGISTRY
+        }
+    )
+    lifetime_fitness: Dict[str, float] = field(
+        default_factory=lambda: {
+            "composite": 0.0,
+            "quality": 0.0,
+            "speed": 0.0,
+            "efficiency": 0.0,
+        }
+    )
     evaluations: int = 0
     pareto_rank: int = 0
     crowding_distance: float = 0.0
@@ -151,19 +162,35 @@ class Genome:
 
     @property
     def average_fitness(self) -> float:
-        return 0.0 if self.evaluations == 0 else self.lifetime_fitness.get("composite", 0.0) / self.evaluations
+        return (
+            0.0
+            if self.evaluations == 0
+            else self.lifetime_fitness.get("composite", 0.0) / self.evaluations
+        )
 
     @property
     def average_quality(self) -> float:
-        return 0.0 if self.evaluations == 0 else self.lifetime_fitness.get("quality", 0.0) / self.evaluations
+        return (
+            0.0
+            if self.evaluations == 0
+            else self.lifetime_fitness.get("quality", 0.0) / self.evaluations
+        )
 
     @property
     def average_speed(self) -> float:
-        return 0.0 if self.evaluations == 0 else self.lifetime_fitness.get("speed", 0.0) / self.evaluations
+        return (
+            0.0
+            if self.evaluations == 0
+            else self.lifetime_fitness.get("speed", 0.0) / self.evaluations
+        )
 
     @property
     def average_efficiency(self) -> float:
-        return 0.0 if self.evaluations == 0 else self.lifetime_fitness.get("efficiency", 0.0) / self.evaluations
+        return (
+            0.0
+            if self.evaluations == 0
+            else self.lifetime_fitness.get("efficiency", 0.0) / self.evaluations
+        )
 
     def active_tools(self, seed: Optional[int] = None) -> List[str]:
         rng = tool_activation_rng(seed)
@@ -183,7 +210,12 @@ class Genome:
         child = copy.deepcopy(self)
         child.parent_id = new_parent_id
         child.generation += 1
-        child.lifetime_fitness = {"composite": 0.0, "quality": 0.0, "speed": 0.0, "efficiency": 0.0}
+        child.lifetime_fitness = {
+            "composite": 0.0,
+            "quality": 0.0,
+            "speed": 0.0,
+            "efficiency": 0.0,
+        }
         child.evaluations = 0
         child.pareto_rank = 0
         child.crowding_distance = 0.0
@@ -223,9 +255,17 @@ class Genome:
     def from_dict(cls, data: dict) -> "Genome":
         payload = dict(data)
         cog_data = payload.pop("cognition", {})
-        for k in ("model", "average_fitness", "average_quality", "average_speed", "average_efficiency"):
+        for k in (
+            "model",
+            "average_fitness",
+            "average_quality",
+            "average_speed",
+            "average_efficiency",
+        ):
             payload.pop(k, None)
-        genome = cls(**{k: v for k, v in payload.items() if k in cls.__dataclass_fields__})
+        genome = cls(
+            **{k: v for k, v in payload.items() if k in cls.__dataclass_fields__}
+        )
         genome.cognition = CognitivePolicy.from_dict(cog_data)
         return genome
 
@@ -234,20 +274,38 @@ def mutate(genome: Genome) -> None:
     fitness_modifier = 1.0 - clamp(genome.average_fitness)
     adaptive_delta = clamp(genome.mutation_rate * (0.5 + fitness_modifier), 0.01, 0.5)
     for fname in [
-        "model_tier", "temperature", "reasoning_depth", "verbosity",
-        "coding_affinity", "research_affinity", "upwork_affinity",
-        "context_budget", "retrieval_top_k", "memory_window",
+        "model_tier",
+        "temperature",
+        "reasoning_depth",
+        "verbosity",
+        "coding_affinity",
+        "research_affinity",
+        "upwork_affinity",
+        "context_budget",
+        "retrieval_top_k",
+        "memory_window",
         "crossover_stability",
     ]:
-        setattr(genome, fname, clamp(getattr(genome, fname) + random.uniform(-adaptive_delta, adaptive_delta)))
+        setattr(
+            genome,
+            fname,
+            clamp(
+                getattr(genome, fname) + random.uniform(-adaptive_delta, adaptive_delta)
+            ),
+        )
     genome.cognition.mutate(adaptive_delta)
     for tool in genome.tool_genes:
         if random.random() < genome.mutation_rate:
-            genome.tool_genes[tool] = clamp(genome.tool_genes[tool] + random.uniform(-adaptive_delta, adaptive_delta))
+            genome.tool_genes[tool] = clamp(
+                genome.tool_genes[tool]
+                + random.uniform(-adaptive_delta, adaptive_delta)
+            )
     if random.random() < 0.03:
         tool = random.choice(MCP_TOOL_REGISTRY)
         genome.tool_genes[tool] = random.uniform(0.3, 0.7)
-    genome.mutation_rate = clamp(genome.mutation_rate + random.uniform(-0.01, 0.01), 0.01, 0.4)
+    genome.mutation_rate = clamp(
+        genome.mutation_rate + random.uniform(-0.01, 0.01), 0.01, 0.4
+    )
     normalize_affinities(genome)
 
 
@@ -272,9 +330,16 @@ def crossover(a: Genome, b: Genome) -> Genome:
         crossover_stability=stability,
         generation=max(a.generation, b.generation) + 1,
     )
-    child.tool_genes = {t: inherit(a.tool_genes.get(t, 0.5), b.tool_genes.get(t, 0.5)) for t in MCP_TOOL_REGISTRY}
+    child.tool_genes = {
+        t: inherit(a.tool_genes.get(t, 0.5), b.tool_genes.get(t, 0.5))
+        for t in MCP_TOOL_REGISTRY
+    }
     for fname in child.cognition.__dataclass_fields__:
-        setattr(child.cognition, fname, inherit(getattr(a.cognition, fname), getattr(b.cognition, fname)))
+        setattr(
+            child.cognition,
+            fname,
+            inherit(getattr(a.cognition, fname), getattr(b.cognition, fname)),
+        )
     normalize_affinities(child)
     return child
 
@@ -282,14 +347,19 @@ def crossover(a: Genome, b: Genome) -> Genome:
 def normalize_affinities(genome: Genome) -> Genome:
     total = genome.coding_affinity + genome.research_affinity + genome.upwork_affinity
     if total <= 0:
-        genome.coding_affinity = genome.research_affinity = genome.upwork_affinity = 1 / 3
+        genome.coding_affinity = genome.research_affinity = genome.upwork_affinity = (
+            1 / 3
+        )
         return genome
     genome.coding_affinity /= total
     genome.research_affinity /= total
     genome.upwork_affinity /= total
     return genome
 
-async def llm_guided_mutate(genome: Genome, trace_context: str, memory_bridge=None) -> None:
+
+async def llm_guided_mutate(
+    genome: Genome, trace_context: str, memory_bridge=None
+) -> None:
     """Uses an LLM to surgically mutate the genome based on failure traces."""
     historical_context = ""
     if memory_bridge:
@@ -298,9 +368,13 @@ async def llm_guided_mutate(genome: Genome, trace_context: str, memory_bridge=No
         except Exception as exc:
             log.debug("Failed to fetch mutation memory context: %s", exc)
 
-    history_section = f"\n\nHistorical Context of past runs (GraphRAG):\n{historical_context}\nAvoid repeating past mistakes." if historical_context else ""
+    history_section = (
+        f"\n\nHistorical Context of past runs (GraphRAG):\n{historical_context}\nAvoid repeating past mistakes."
+        if historical_context
+        else ""
+    )
 
-    prompt = f'''You are a genetic algorithm mutator for an AI agent. 
+    prompt = f"""You are a genetic algorithm mutator for an AI agent. 
 The agent failed a task. Review the context and mutate the agent's CognitivePolicy to fix its behavior.
 Failure Context: {trace_context}{history_section}
 
@@ -311,20 +385,20 @@ Output a JSON object with the updated cognitive parameters (between 0.0 and 1.0)
 Only include the keys you want to change.
 Example: {{"hallucination_sensitivity": 0.8, "verification_bias": 0.9}}
 Do not include markdown blocks, just raw JSON.
-'''
+"""
     try:
         async with asyncio.timeout(90.0):
             res = await acompletion(
-                model=MODEL_TIERS["fast"], 
+                model=MODEL_TIERS["fast"],
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.7
+                temperature=0.7,
             )
         content = res.choices[0].message.content.strip()
         if content.startswith("```json"):
             content = content[7:-3]
         elif content.startswith("```"):
             content = content[3:-3]
-        
+
         patch = json.loads(content.strip())
         for k, v in patch.items():
             if hasattr(genome.cognition, k) and isinstance(v, (int, float)):
@@ -348,15 +422,18 @@ def ast_slice(source_code: str, target_func: str) -> str:
         tree = ast.parse(source_code)
         lines = source_code.splitlines(keepends=True)
         for node in ast.walk(tree):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == target_func:
+            if (
+                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name == target_func
+            ):
                 start_line = node.lineno - 1
                 end_line = node.end_lineno
                 slice_lines = lines[start_line:end_line]
                 if not slice_lines:
                     continue
-                slice_lines[0] = slice_lines[0][node.col_offset:]
+                slice_lines[0] = slice_lines[0][node.col_offset :]
                 if node.end_col_offset is not None:
-                    slice_lines[-1] = slice_lines[-1][:node.end_col_offset]
+                    slice_lines[-1] = slice_lines[-1][: node.end_col_offset]
                 return "".join(slice_lines)
     except Exception as exc:
         log.debug("ast_slice failed for %r: %s", target_func, exc)
@@ -365,12 +442,15 @@ def ast_slice(source_code: str, target_func: str) -> str:
     # would replace the ENTIRE file with just the mutated function, wiping out the whole engine.
     return ""
 
-async def ast_crossover(parent_a_code: str, parent_b_code: str, target_func: str) -> str:
+
+async def ast_crossover(
+    parent_a_code: str, parent_b_code: str, target_func: str
+) -> str:
     """Intelligently splices compatible AST nodes from two parent variants."""
     slice_a = ast_slice(parent_a_code, target_func)
     slice_b = ast_slice(parent_b_code, target_func)
-    
-    prompt = f'''You are an advanced Genetic Programming AST meta-controller.
+
+    prompt = f"""You are an advanced Genetic Programming AST meta-controller.
 We have two successful variants of the function `{target_func}`.
 Parent A slice:
 ```python
@@ -381,22 +461,22 @@ Parent B slice:
 {slice_b}
 ```
 Intelligently splice the best sub-trees from both variants (e.g. combine a speed optimization from A with a memory optimization from B). Ensure the resulting AST is syntactically valid. Output only the raw python code.
-'''
+"""
     try:
         async with asyncio.timeout(90.0):
             res = await acompletion(
-                model=MODEL_TIERS["fast"], 
+                model=MODEL_TIERS["fast"],
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.3
+                temperature=0.3,
             )
         content = res.choices[0].message.content.strip()
         if content.startswith("```python"):
             content = content[9:-3]
         elif content.startswith("```"):
             content = content[3:-3]
-        
+
         # Verify it parses correctly
         ast.parse(content.strip())
         return content.strip()
     except Exception:
-        return slice_a # fallback to parent A
+        return slice_a  # fallback to parent A

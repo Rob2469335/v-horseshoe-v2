@@ -5,6 +5,7 @@ from swarm_os.main import app
 
 client = TestClient(app)
 
+
 def test_generation():
     response = client.get("/api/admin/generation")
     # 503 means backend isn't running — accept it as offline
@@ -17,5 +18,3 @@ def test_generation():
     assert "current_run" in data
     assert "population" in data
     assert isinstance(data["population"], list)
-
-

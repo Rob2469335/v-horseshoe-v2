@@ -7,6 +7,7 @@ The root path existed as a divergent copy. Keeping it as a thin re-export means
 the CLI runner (`simulation_runner.py`), the live API (`SimulationService`), and
 tests all share ONE engine, so the two stacks can never drift apart again.
 """
+
 from __future__ import annotations
 
 from .kernel.swarm_kernel import (  # noqa: F401

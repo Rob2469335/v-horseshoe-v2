@@ -20,6 +20,7 @@ def make_brain():
             "model": "test",
             "total_tokens": 10,
         }
+
     return brain
 
 
@@ -58,6 +59,7 @@ async def test_population_stays_bounded():
 @pytest.mark.anyio
 async def test_elite_clones_do_not_alias_parent_fitness():
     from swarm_os.kernel.swarm_kernel import _clone_organism
+
     _env = Environment()
     org = Organism("parent", make_brain(), Genome())
     clone = _clone_organism(org, "elite_parent_g0", generate_fn=None)
@@ -102,15 +104,16 @@ def test_ast_slice_returns_verbatim_source():
     replace() can find it). Regression for the ast.unparse() normalization bug
     which de-indented/requoted the slice so core_code.replace() silently no-opped."""
     from swarm_os.kernel.genetics import ast_slice
+
     src = (
-        'class Foo:\n'
-        '    def target(self, x: int) -> int:\n'
-        '        if x > 0:\n'
-        '            return x * 2\n'
-        '        return 0\n'
-        '\n'
-        'def other():\n'
-        '    return 1\n'
+        "class Foo:\n"
+        "    def target(self, x: int) -> int:\n"
+        "        if x > 0:\n"
+        "            return x * 2\n"
+        "        return 0\n"
+        "\n"
+        "def other():\n"
+        "    return 1\n"
     )
     slice_text = ast_slice(src, "target")
     assert "target" in slice_text
@@ -122,6 +125,7 @@ def test_ast_slice_returns_verbatim_source():
 
 def test_ast_slice_missing_func_returns_empty():
     from swarm_os.kernel.genetics import ast_slice
+
     assert ast_slice("def a():\n    pass\n", "nonexistent") == ""
 
 

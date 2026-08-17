@@ -14,6 +14,7 @@ It is OFF by default (env SWARM_SEMANTIC_CACHE=1 to enable) because the earlier
 pure-exact in-dict cache was deliberately disabled. All failures degrade to
 "no hit" - this layer never blocks the real LLM decision.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -40,9 +41,11 @@ _stats = {"hits": 0, "semantic_hits": 0, "misses": 0, "errors": 0, "lookups": 0}
 # Cosine threshold above which a candidate is treated as a safe semantic hit.
 SEMANTIC_THRESHOLD = float(os.environ.get("SWARM_SEMANTIC_CACHE_THRESHOLD", "0.85"))
 
+
 def _contains_secrets(text: str) -> bool:
     """Return True if the text contains patterns that look like obvious secrets."""
     import re
+
     # Match common secret prefixes or formats (e.g. Bearer tokens, API keys)
     # This is a lightweight heuristic as recommended by SOTA to bypass cache for sensitive data.
     secret_patterns = [
@@ -150,6 +153,7 @@ async def get_semantic_cached_decision(messages: list, agent_id: str) -> Optiona
         query = f"agent:{agent_id} decision {last_msg[:400]}"
         emb = await _embedder.embed(query)
         from qdrant_client.models import Filter, FieldCondition, MatchValue
+
         resp = await _client.query_points(
             collection_name=_collection,
             query=emb,
@@ -189,7 +193,9 @@ async def cache_tool_decision(messages: list, agent_id: str, decision: dict):
         return
     try:
         last_msg = _last_user_text(messages)
-        if _contains_secrets(str(decision)) or (last_msg and _contains_secrets(last_msg)):
+        if _contains_secrets(str(decision)) or (
+            last_msg and _contains_secrets(last_msg)
+        ):
             log.debug("Skipping semantic cache write: obvious secret detected")
             return
 
@@ -200,21 +206,25 @@ async def cache_tool_decision(messages: list, agent_id: str, decision: dict):
             return
 
         await _ensure_components()
-        emb = await _embedder.embed(f"agent:{agent_id} decision: {last_msg[:400]}".rstrip())
+        emb = await _embedder.embed(
+            f"agent:{agent_id} decision: {last_msg[:400]}".rstrip()
+        )
         from qdrant_client.models import PointStruct
         from datetime import datetime as _dt
 
         await _client.upsert(
             collection_name=_collection,
-            points=[PointStruct(
-                id=_hash_point_id(cache_key),
-                vector=emb,
-                payload={
-                    "agent_id": agent_id,
-                    "decision": decision,
-                    "ts": _dt.utcnow().isoformat(),
-                },
-            )],
+            points=[
+                PointStruct(
+                    id=_hash_point_id(cache_key),
+                    vector=emb,
+                    payload={
+                        "agent_id": agent_id,
+                        "decision": decision,
+                        "ts": _dt.utcnow().isoformat(),
+                    },
+                )
+            ],
             wait=False,
         )
     except Exception as exc:

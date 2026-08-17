@@ -26,6 +26,7 @@ free tier, so the module supports a `max_authorities` cap and resumes from
 state. Never raises — a poll failure records `error` for that authority and
 continues.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -40,7 +41,10 @@ from typing import Any
 import httpx
 
 from swarm_os.services.legal.case_graph import label_treatment, citing_sentence_for
-from swarm_os.services.legal.citation_verify import CITATION_LOOKUP_URL, case_citation_key
+from swarm_os.services.legal.citation_verify import (
+    CITATION_LOOKUP_URL,
+    case_citation_key,
+)
 
 log = logging.getLogger(__name__)
 
@@ -95,7 +99,9 @@ async def _resolve_opinion_id(client: httpx.AsyncClient, cite: str) -> int | Non
     await _pace()
     try:
         resp = await client.post(
-            CITATION_LOOKUP_URL, data={"text": cite}, timeout=30.0,
+            CITATION_LOOKUP_URL,
+            data={"text": cite},
+            timeout=30.0,
         )
     except Exception as exc:
         log.warning("citator lookup failed for %s: %s", cite, exc)
@@ -115,7 +121,9 @@ async def _resolve_opinion_id(client: httpx.AsyncClient, cite: str) -> int | Non
     await _pace()
     try:
         opin = await client.get(
-            OPINIONS_URL, params={"cluster": cluster_id, "format": "json"}, timeout=30.0,
+            OPINIONS_URL,
+            params={"cluster": cluster_id, "format": "json"},
+            timeout=30.0,
         )
     except Exception as exc:
         log.warning("citator opinions fetch failed for %s: %s", cite, exc)
@@ -152,19 +160,26 @@ async def _forward_citing(client: httpx.AsyncClient, opinion_id: int) -> list[di
     except Exception:
         return []
     return [
-        {"citing_opinion": int(r.get("citing_opinion") or 0),
-         "depth": int(r.get("depth") or 1)}
-        for r in results if r.get("citing_opinion")
+        {
+            "citing_opinion": int(r.get("citing_opinion") or 0),
+            "depth": int(r.get("depth") or 1),
+        }
+        for r in results
+        if r.get("citing_opinion")
     ]
 
 
-async def _citing_opinion_text(client: httpx.AsyncClient, citing_id: int) -> tuple[str, str]:
+async def _citing_opinion_text(
+    client: httpx.AsyncClient, citing_id: int
+) -> tuple[str, str]:
     """Fetch a citing opinion's text + case name (for treatment classification).
     Returns (text, case_name); empty on outage."""
     await _pace()
     try:
         resp = await client.get(
-            OPINIONS_URL, params={"id": citing_id, "format": "json"}, timeout=30.0,
+            OPINIONS_URL,
+            params={"id": citing_id, "format": "json"},
+            timeout=30.0,
         )
     except Exception as exc:
         log.warning("citing opinion fetch failed id %s: %s", citing_id, exc)
@@ -181,7 +196,11 @@ async def _citing_opinion_text(client: httpx.AsyncClient, citing_id: int) -> tup
     text = (item.get("plain_text") or "").strip()
     if not text:
         text = (item.get("html_with_citations") or "").strip()
-    name = (item.get("cluster") or {}).get("case_name", "") if isinstance(item.get("cluster"), dict) else ""
+    name = (
+        (item.get("cluster") or {}).get("case_name", "")
+        if isinstance(item.get("cluster"), dict)
+        else ""
+    )
     return text, name
 
 
@@ -209,9 +228,11 @@ def _save_state(state: dict[str, Any]) -> None:
     STATE_FILE.write_text(json.dumps(state, indent=2), encoding="utf-8")
 
 
-async def poll_authority(manifest_cases: list[dict[str, Any]],
-                         max_authorities: int | None = None,
-                         refresh: bool = False) -> CitatorReport:
+async def poll_authority(
+    manifest_cases: list[dict[str, Any]],
+    max_authorities: int | None = None,
+    refresh: bool = False,
+) -> CitatorReport:
     """Poll the forward-citing monitor for the manifest authorities.
 
     For each authority not yet polled (or `refresh=True`): resolve its opinion
@@ -236,12 +257,15 @@ async def poll_authority(manifest_cases: list[dict[str, Any]],
             info = state.get(cite, {})
             if not refresh and info.get("opinion_id") and info.get("polled"):
                 # Already polled; keep its treatments in the report.
-                report.authorities.append({
-                    "cite": cite, "name": case.get("name", ""),
-                    "treatments": info.get("treatments", {}),
-                    "adverse": info.get("adverse", []),
-                    "error": info.get("error", ""),
-                })
+                report.authorities.append(
+                    {
+                        "cite": cite,
+                        "name": case.get("name", ""),
+                        "treatments": info.get("treatments", {}),
+                        "adverse": info.get("adverse", []),
+                        "error": info.get("error", ""),
+                    }
+                )
                 continue
             if max_authorities is not None and processed >= max_authorities:
                 break
@@ -251,11 +275,20 @@ async def poll_authority(manifest_cases: list[dict[str, Any]],
             if not opinion_id:
                 opinion_id = await _resolve_opinion_id(client, cite)
                 if not opinion_id:
-                    state[cite] = {**info, "error": "resolve_failed",
-                                   "polled": time.time()}
+                    state[cite] = {
+                        **info,
+                        "error": "resolve_failed",
+                        "polled": time.time(),
+                    }
                     _save_state(state)
-                    report.authorities.append({"cite": cite, "name": case.get("name", ""),
-                                               "error": "resolve_failed", "treatments": {}})
+                    report.authorities.append(
+                        {
+                            "cite": cite,
+                            "name": case.get("name", ""),
+                            "error": "resolve_failed",
+                            "treatments": {},
+                        }
+                    )
                     processed += 1
                     continue
                 state[cite] = {**info, "opinion_id": opinion_id}
@@ -271,26 +304,40 @@ async def poll_authority(manifest_cases: list[dict[str, Any]],
                 text, name = await _citing_opinion_text(client, citing_id)
                 label = _classify_treatment(text, cited_key or "")
                 treatments[str(citing_id)] = label
-            adverse = [cid for cid, lab in treatments.items() if lab in ADVERSE_TREATMENTS]
-            state[cite] = {**state.get(cite, {}), "opinion_id": opinion_id,
-                           "treatments": treatments, "adverse": adverse,
-                           "polled": time.time()}
+            adverse = [
+                cid for cid, lab in treatments.items() if lab in ADVERSE_TREATMENTS
+            ]
+            state[cite] = {
+                **state.get(cite, {}),
+                "opinion_id": opinion_id,
+                "treatments": treatments,
+                "adverse": adverse,
+                "polled": time.time(),
+            }
             _save_state(state)
-            report.authorities.append({
-                "cite": cite, "name": case.get("name", ""),
-                "treatments": treatments, "adverse": adverse,
-                "error": "",
-            })
+            report.authorities.append(
+                {
+                    "cite": cite,
+                    "name": case.get("name", ""),
+                    "treatments": treatments,
+                    "adverse": adverse,
+                    "error": "",
+                }
+            )
             processed += 1
 
     # Build the alerts list.
     for a in report.authorities:
         for cid, lab in a.get("treatments", {}).items():
             if lab in ADVERSE_TREATMENTS:
-                report.alerts.append({
-                    "authority": a["cite"], "authority_name": a.get("name", ""),
-                    "citing_opinion_id": cid, "treatment": lab,
-                })
+                report.alerts.append(
+                    {
+                        "authority": a["cite"],
+                        "authority_name": a.get("name", ""),
+                        "citing_opinion_id": cid,
+                        "treatment": lab,
+                    }
+                )
     report.message = (
         f"Monitored {len(report.authorities)} authorities; "
         f"{len(report.alerts)} adverse-treatment alert(s). "
@@ -308,8 +355,10 @@ def render_citator_report(report: CitatorReport) -> str:
     if report.alerts:
         out.append("## ⚠ ADVERSE ALERTS (candor disclosure required)")
         for a in report.alerts:
-            out.append(f"- **{a['authority']}** ({a['authority_name']}) — "
-                       f"{a['treatment']} by citing opinion {a['citing_opinion_id']}")
+            out.append(
+                f"- **{a['authority']}** ({a['authority_name']}) — "
+                f"{a['treatment']} by citing opinion {a['citing_opinion_id']}"
+            )
         out.append("")
     else:
         out.append("## No adverse treatment detected on the polled authorities\n")
@@ -319,7 +368,9 @@ def render_citator_report(report: CitatorReport) -> str:
         for lab in a.get("treatments", {}).values():
             counts[lab] = counts.get(lab, 0) + 1
         err = f" [error: {a.get('error')}]" if a.get("error") else ""
-        out.append(f"- {a['cite']} ({a.get('name','')}) — {counts or 'no forward cites'}{err}")
+        out.append(
+            f"- {a['cite']} ({a.get('name', '')}) — {counts or 'no forward cites'}{err}"
+        )
     return "\n".join(out)
 
 
@@ -327,11 +378,13 @@ async def run_citator_cli() -> None:
     """Detached CLI entrypoint: poll all manifest authorities and write the
     report to data/legal/citator_report.md."""
     from swarm_os.services.legal.case_corpus import CASE_MANIFEST
+
     report = await poll_authority(CASE_MANIFEST)
     out_dir = Path("data/legal")
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "citator_report.md").write_text(
-        render_citator_report(report), encoding="utf-8")
+        render_citator_report(report), encoding="utf-8"
+    )
     log.info("citator poll complete: %s", report.message)
 
 

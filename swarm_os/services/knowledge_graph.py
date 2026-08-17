@@ -5,6 +5,7 @@ import logging
 
 logger = logging.getLogger("KnowledgeGraph")
 
+
 class DependencyVisitor(ast.NodeVisitor):
     def __init__(self, current_module):
         self.current_module = current_module
@@ -27,6 +28,7 @@ class DependencyVisitor(ast.NodeVisitor):
                     self.submodule_candidates.append(f"{node.module}.{alias.name}")
         self.generic_visit(node)
 
+
 class KnowledgeGraph:
     def __init__(self, root_dir: str):
         self.root_dir = Path(root_dir).resolve()
@@ -40,7 +42,12 @@ class KnowledgeGraph:
         for path in self.root_dir.rglob("*.py"):
             if "site-packages" in path.parts or ".venv" in path.parts:
                 continue
-            module_name = path.relative_to(self.root_dir).with_suffix('').as_posix().replace('/', '.')
+            module_name = (
+                path.relative_to(self.root_dir)
+                .with_suffix("")
+                .as_posix()
+                .replace("/", ".")
+            )
             self._modules.add(module_name)
             self.graph.add_node(module_name, type="module", path=str(path))
 
@@ -50,7 +57,12 @@ class KnowledgeGraph:
             if "site-packages" in path.parts or ".venv" in path.parts:
                 continue
             try:
-                module_name = path.relative_to(self.root_dir).with_suffix('').as_posix().replace('/', '.')
+                module_name = (
+                    path.relative_to(self.root_dir)
+                    .with_suffix("")
+                    .as_posix()
+                    .replace("/", ".")
+                )
                 with open(path, "r", encoding="utf-8") as f:
                     tree = ast.parse(f.read(), filename=str(path))
 
@@ -69,29 +81,31 @@ class KnowledgeGraph:
             except Exception as e:
                 logger.debug(f"Failed to parse {path}: {e}")
 
-        logger.info(f"Graph built with {self.graph.number_of_nodes()} nodes and {self.graph.number_of_edges()} edges.")
+        logger.info(
+            f"Graph built with {self.graph.number_of_nodes()} nodes and {self.graph.number_of_edges()} edges."
+        )
 
     def query_dependencies(self, module_name: str, depth: int = 1):
         if not self.graph.has_node(module_name):
             return f"Node {module_name} not found in Knowledge Graph."
-            
+
         result = []
         edges = nx.bfs_edges(self.graph, source=module_name, depth_limit=depth)
         for u, v in edges:
             result.append(f"{u} -> imports -> {v}")
-            
+
         return "\n".join(result) if result else "No outgoing dependencies found."
 
     def query_dependents(self, module_name: str, depth: int = 1):
         if not self.graph.has_node(module_name):
             return f"Node {module_name} not found in Knowledge Graph."
-            
+
         result = []
         reversed_graph = self.graph.reverse()
         edges = nx.bfs_edges(reversed_graph, source=module_name, depth_limit=depth)
         for u, v in edges:
             result.append(f"{v} -> is imported by -> {u}")
-            
+
         return "\n".join(result) if result else "No incoming dependents found."
 
     def list_dependents(self, module_name: str, depth: int = 1) -> list[str]:

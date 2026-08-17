@@ -6,6 +6,7 @@ the next action from the durable record, and only an explicit
 EVIDENCE_CAPTURE transition (after validation + security both recorded
 success) can ever reach ACCEPTED.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -35,8 +36,15 @@ def _make_record(tmp_path, phase: str, **kw) -> RepairRecord:
         baseline_revision="abc",
     )
     # Move through a legal path TO the desired phase (inclusive).
-    chain = ["INSPECTING", "DIAGNOSING", "PATCHING", "VALIDATING",
-             "REVALIDATING", "SECURITY_CHECK", "EVIDENCE_CAPTURE"]
+    chain = [
+        "INSPECTING",
+        "DIAGNOSING",
+        "PATCHING",
+        "VALIDATING",
+        "REVALIDATING",
+        "SECURITY_CHECK",
+        "EVIDENCE_CAPTURE",
+    ]
     idx = chain.index(phase)
     for p in chain[: idx + 1]:
         rec = transition(rec, p)
@@ -45,11 +53,21 @@ def _make_record(tmp_path, phase: str, **kw) -> RepairRecord:
 
 def test_legal_positive_path_reaches_accepted(tmp_path):
     rec = create_record(tmp_path / "bug.py", "err", "import_resolution", "abc")
-    for p in ("INSPECTING", "DIAGNOSING", "PATCHING", "VALIDATING",
-              "SECURITY_CHECK", "EVIDENCE_CAPTURE"):
+    for p in (
+        "INSPECTING",
+        "DIAGNOSING",
+        "PATCHING",
+        "VALIDATING",
+        "SECURITY_CHECK",
+        "EVIDENCE_CAPTURE",
+    ):
         rec = transition(rec, p)
-    rec.validation_result = {"initial_result": "fail", "retry_result": "pass",
-                             "flaky": True, "outcome": "accepted"}
+    rec.validation_result = {
+        "initial_result": "fail",
+        "retry_result": "pass",
+        "flaky": True,
+        "outcome": "accepted",
+    }
     rec.security_result = {"ok": True, "reason": "clean"}
     rec = transition(rec, "ACCEPTED")
     assert rec.phase == "ACCEPTED"

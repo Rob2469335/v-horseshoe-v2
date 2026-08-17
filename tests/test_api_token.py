@@ -1,4 +1,5 @@
 """Opt-in loopback API token (SWARM_API_TOKEN) tests."""
+
 import os
 import pytest
 
@@ -8,8 +9,10 @@ def token_app():
     os.environ["SWARM_API_TOKEN"] = "test-token-123"
     try:
         from swarm_os.app.main import create_app
+
         app = create_app()
         from fastapi.testclient import TestClient
+
         with TestClient(app) as client:
             yield client
     finally:
@@ -39,6 +42,7 @@ def test_protected_route_rejects_wrong_token(token_app):
 
 def test_cli_auth_headers():
     from organism_console.api_client import _auth_headers
+
     os.environ["SWARM_API_TOKEN"] = "cli-token"
     try:
         assert _auth_headers() == {"Authorization": "Bearer cli-token"}

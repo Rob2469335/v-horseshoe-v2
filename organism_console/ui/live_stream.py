@@ -19,34 +19,49 @@ log = logging.getLogger("zenith_cli")
 _AGENT_PERF: dict = {}
 _AGENT_PERF_MAX = 256
 
+
 def update_token_metrics(ctx, prompt, history, output_content, model):
     input_tokens = estimate_tokens(prompt + json.dumps(history))
     output_tokens = estimate_tokens(output_content)
     ctx.total_input_tokens += input_tokens
     ctx.total_output_tokens += output_tokens
     model_name = (model or "unknown").lower()
-    is_cloud = "cloud" in model_name or "groq" in model_name or "openrouter" in model_name
-    if is_cloud or getattr(ctx, "last_provider", "llama.cpp") not in ("llama.cpp", "local"):
+    is_cloud = (
+        "cloud" in model_name or "groq" in model_name or "openrouter" in model_name
+    )
+    if is_cloud or getattr(ctx, "last_provider", "llama.cpp") not in (
+        "llama.cpp",
+        "local",
+    ):
         ctx.cloud_input_tokens += input_tokens
         ctx.cloud_output_tokens += output_tokens
 
+
 RE_TOOL_CALL = re.compile(r'<tool_call name="([^"]+)">')
 RE_TOPIC_UPDATE = re.compile(r'<topic_update title="(.*?)" summary="(.*?)"')
-RE_INTENT = re.compile(r'<strategic_intent>(.*?)</strategic_intent>', re.DOTALL)
+RE_INTENT = re.compile(r"<strategic_intent>(.*?)</strategic_intent>", re.DOTALL)
 RE_PLAN_CLEAN = re.compile(r"<plan>.*?(?:</plan>|$)", re.DOTALL)
-RE_INTENT_CLEAN = re.compile(r"<strategic_intent>.*?(?:</strategic_intent>|$)", re.DOTALL)
+RE_INTENT_CLEAN = re.compile(
+    r"<strategic_intent>.*?(?:</strategic_intent>|$)", re.DOTALL
+)
 RE_TOPIC_CLEAN = re.compile(r"<topic_update.*?>")
 RE_TOOL_CLEAN = re.compile(r"<tool_call[^>]*>.*?(?:</tool_call>|$)", re.DOTALL)
 RE_THINK_CLEAN = re.compile(r"<think>.*?(?:</think>|$)", re.DOTALL)
 RE_PLAN_MATCH = re.compile(r"<plan>(.*?)</plan>", re.DOTALL)
 RE_THINK_MATCH = re.compile(r"<think>(.*?)(?:</think>|$)", re.DOTALL)
 
+
 def status_footer(ctx, agent, model, phase, ram_pct, tps: float = 0.0):
     stats = get_system_stats()
     phase_colors = {
-        "thinking": "white", "planning": "yellow", "sensing": "cyan",
-        "repair": "red", "swarm": "magenta", "resume": "blue",
-        "ocular": "bright_cyan", "executing": "bright_green",
+        "thinking": "white",
+        "planning": "yellow",
+        "sensing": "cyan",
+        "repair": "red",
+        "swarm": "magenta",
+        "resume": "blue",
+        "ocular": "bright_cyan",
+        "executing": "bright_green",
     }
     pc = phase_colors.get(phase, "white")
     tps_str = f" tps:{tps:.1f}" if tps > 0 else ""
@@ -58,14 +73,18 @@ def status_footer(ctx, agent, model, phase, ram_pct, tps: float = 0.0):
         f"[bright_green]{tps_str}[/bright_green]"
     )
 
+
 import asyncio
 from organism_console.api_client import call_api_async_stream
+
 
 async def _stream_prompt_async(ctx, agent_id, prompt, history):
     while True:
         stats = get_system_stats()
         if stats["ram_pct"] > 90:
-            ctx.console.print("[bold red]WARNING:[/bold red] RAM critical, expect slower response.")
+            ctx.console.print(
+                "[bold red]WARNING:[/bold red] RAM critical, expect slower response."
+            )
 
         payload = {
             "agent_id": agent_id,
@@ -75,7 +94,9 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
             "delegation_chain": getattr(ctx, "delegation_chain", [agent_id]),
         }
         try:
-            resp = await call_api_async_stream(f"/agents/{agent_id}/step/stream", "POST", payload)
+            resp = await call_api_async_stream(
+                f"/agents/{agent_id}/step/stream", "POST", payload
+            )
         except Exception as e:
             ctx.console.print(f"[bold red]ERROR:[/bold red] API call failed: {e}")
             return history
@@ -103,6 +124,7 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
         _approval_triggered = False
 
         with Live(console=ctx.console, refresh_per_second=15) as live:
+
             def safe_print(*args, **kwargs):
                 live.console.print(*args, **kwargs)
 
@@ -136,16 +158,22 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                     err_msg = chunk.get("error")
                     if not err_msg and chunk_type == "error":
                         err_msg = chunk.get("content") or "Unknown error"
-                    if not err_msg and isinstance(chunk.get("result"), dict) and "error" in chunk.get("result", {}):
+                    if (
+                        not err_msg
+                        and isinstance(chunk.get("result"), dict)
+                        and "error" in chunk.get("result", {})
+                    ):
                         err_msg = chunk["result"]["error"]
 
                     if err_msg:
                         err_agent = chunk.get("agent_id", ctx.active_agent)
                         err_tool = chunk.get("tool", "unknown")
-                        safe_print(Panel(
-                            f"[bold red]Error in {err_agent} (Tool: {err_tool}):[/bold red]\n{err_msg}",
-                            border_style="red"
-                        ))
+                        safe_print(
+                            Panel(
+                                f"[bold red]Error in {err_agent} (Tool: {err_tool}):[/bold red]\n{err_msg}",
+                                border_style="red",
+                            )
+                        )
                         continue
 
                     if chunk_type == "model_plan":
@@ -156,12 +184,22 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                         if ctx.trace_mode:
                             panel = render_trace_panel(
                                 "Router Decision & Path Planning",
-                                {"requested_role": requested_role, "delegation_path": " -> ".join(ctx.delegation_chain)},
-                                "cyan"
+                                {
+                                    "requested_role": requested_role,
+                                    "delegation_path": " -> ".join(
+                                        ctx.delegation_chain
+                                    ),
+                                },
+                                "cyan",
                             )
                             safe_print(panel)
                         else:
-                            safe_print(render_step_micro_ui("planning", f"Formulating plan for role: {requested_role}"))
+                            safe_print(
+                                render_step_micro_ui(
+                                    "planning",
+                                    f"Formulating plan for role: {requested_role}",
+                                )
+                            )
                         continue
 
                     if chunk_type == "model_selected":
@@ -171,24 +209,39 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                         if ctx.trace_mode:
                             panel = render_trace_panel(
                                 "Model Selection",
-                                {"model": model, "role": chunk.get("requested_role", "unknown"),
-                                 "attempt": chunk.get("attempt", 1), "temperature": chunk.get("temperature", 0.7)},
-                                "green"
+                                {
+                                    "model": model,
+                                    "role": chunk.get("requested_role", "unknown"),
+                                    "attempt": chunk.get("attempt", 1),
+                                    "temperature": chunk.get("temperature", 0.7),
+                                },
+                                "green",
                             )
                             safe_print(panel)
                         else:
                             resolved = chunk.get("resolved_model")
                             if resolved and resolved != model:
-                                safe_print(render_step_micro_ui("model_selected", f"selected {model} → [cyan]{resolved}[/cyan]"))
+                                safe_print(
+                                    render_step_micro_ui(
+                                        "model_selected",
+                                        f"selected {model} → [cyan]{resolved}[/cyan]",
+                                    )
+                                )
                             else:
-                                safe_print(render_step_micro_ui("model_selected", f"selected {model}"))
+                                safe_print(
+                                    render_step_micro_ui(
+                                        "model_selected", f"selected {model}"
+                                    )
+                                )
                         continue
 
                     if chunk_type == "model_escalation":
                         from_model = chunk.get("from_model")
                         reason = chunk.get("reason")
-                        safe_print(f"[bold yellow]  Fallback:[/bold yellow] [dim]{from_model}[/dim] timed out "
-                                   f"[bold yellow]→ Escalating to cloud[/bold yellow] [dim]({reason})[/dim]")
+                        safe_print(
+                            f"[bold yellow]  Fallback:[/bold yellow] [dim]{from_model}[/dim] timed out "
+                            f"[bold yellow]→ Escalating to cloud[/bold yellow] [dim]({reason})[/dim]"
+                        )
                         continue
 
                     if chunk_type == "agent_handoff":
@@ -198,16 +251,22 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                         ctx.delegation_chain.append(to_a)
                         ctx.save()
                         handoffs_list.append({"from": from_a, "to": to_a, "task": task})
-                        safe_print(f"  [bold magenta]→[/bold magenta] [cyan]{from_a}[/cyan] [dim]handing off to[/dim] [bold]{to_a}[/bold] [dim]{task}[/dim]")
+                        safe_print(
+                            f"  [bold magenta]→[/bold magenta] [cyan]{from_a}[/cyan] [dim]handing off to[/dim] [bold]{to_a}[/bold] [dim]{task}[/dim]"
+                        )
                         continue
 
                     if chunk_type in ("tool_call", "tool_start"):
                         tool_name = chunk.get("tool") or chunk.get("name")
                         args_dict = chunk.get("arguments", {})
                         if args_dict:
-                            safe_print(f"  [bold cyan]⚡[/bold cyan] [white]{tool_name}[/white]({json.dumps(args_dict, default=str)[:120]})")
+                            safe_print(
+                                f"  [bold cyan]⚡[/bold cyan] [white]{tool_name}[/white]({json.dumps(args_dict, default=str)[:120]})"
+                            )
                         else:
-                            safe_print(f"  [bold cyan]⚡[/bold cyan] [white]{tool_name}[/white]")
+                            safe_print(
+                                f"  [bold cyan]⚡[/bold cyan] [white]{tool_name}[/white]"
+                            )
                         continue
 
                     if chunk_type == "critic_update":
@@ -216,13 +275,27 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                     if chunk_type == "tool_result":
                         tool = chunk.get("tool")
                         result = chunk.get("result", {})
-                        ok = result.get("ok", False) if isinstance(result, dict) else True
+                        ok = (
+                            result.get("ok", False)
+                            if isinstance(result, dict)
+                            else True
+                        )
                         icon = "[green]✓[/green]" if ok else "[red]✗[/red]"
-                        result_str = str(result.get("result", result))[:100] if isinstance(result, dict) else str(result)[:100]
-                        safe_print(f"  {icon} [bold]{tool}[/bold] [dim]{escape(result_str)}[/dim]")
+                        result_str = (
+                            str(result.get("result", result))[:100]
+                            if isinstance(result, dict)
+                            else str(result)[:100]
+                        )
+                        safe_print(
+                            f"  {icon} [bold]{tool}[/bold] [dim]{escape(result_str)}[/dim]"
+                        )
                         continue
 
-                    if ("content" in chunk or "thinking" in chunk or chunk_type == "ping") and chunk_type != "final":
+                    if (
+                        "content" in chunk
+                        or "thinking" in chunk
+                        or chunk_type == "ping"
+                    ) and chunk_type != "final":
                         piece = chunk.get("content") or chunk.get("thinking") or ""
                         model = chunk.get("model") or model
                         full_content += piece
@@ -262,11 +335,19 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                         layout = Table.grid(padding=(0, 0))
                         layout.add_column()
 
-                        footer = status_footer(ctx, agent_id, model, phase, stats["ram_pct"], tps)
+                        footer = status_footer(
+                            ctx, agent_id, model, phase, stats["ram_pct"], tps
+                        )
                         layout.add_row(Text.from_markup(footer))
 
                         if display:
-                            layout.add_row(Panel(Markdown(display), border_style="dim", padding=(0, 1)))
+                            layout.add_row(
+                                Panel(
+                                    Markdown(display),
+                                    border_style="dim",
+                                    padding=(0, 1),
+                                )
+                            )
 
                         live.update(layout)
                         continue
@@ -277,23 +358,45 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                         ctx.last_provider = chunk.get("provider", "llama.cpp")
 
                         if isinstance(final_content, dict):
-                            ctx.console.print(Panel(json.dumps(final_content, indent=2), title="[bold]Response[/bold]", border_style="bold #00f0ff"))
+                            ctx.console.print(
+                                Panel(
+                                    json.dumps(final_content, indent=2),
+                                    title="[bold]Response[/bold]",
+                                    border_style="bold #00f0ff",
+                                )
+                            )
                         elif final_content:
-                            ctx.console.print(Panel(Markdown(str(final_content)), title="", border_style="green", padding=(1, 2)))
+                            ctx.console.print(
+                                Panel(
+                                    Markdown(str(final_content)),
+                                    title="",
+                                    border_style="green",
+                                    padding=(1, 2),
+                                )
+                            )
 
                         new_history = list(history)
                         if prompt:
                             new_history.append({"role": "user", "content": prompt})
-                        new_history.append({"role": "assistant", "content": final_content or full_content})
+                        new_history.append(
+                            {
+                                "role": "assistant",
+                                "content": final_content or full_content,
+                            }
+                        )
                         ctx.history = new_history
                         ctx.history_pointer = len(ctx.history) - 1
 
                         elapsed_total = time.time() - start_time
-                        update_token_metrics(ctx, prompt, history, final_content or full_content, model)
+                        update_token_metrics(
+                            ctx, prompt, history, final_content or full_content, model
+                        )
 
                         if len(_AGENT_PERF) > _AGENT_PERF_MAX:
                             _AGENT_PERF.clear()
-                        perf = _AGENT_PERF.setdefault(agent_id, {"total": 0.0, "count": 0, "last": 0.0})
+                        perf = _AGENT_PERF.setdefault(
+                            agent_id, {"total": 0.0, "count": 0, "last": 0.0}
+                        )
                         perf["total"] += elapsed_total
                         perf["count"] += 1
                         perf["last"] = elapsed_total
@@ -310,49 +413,86 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
 
                         if getattr(ctx, "toasts_enabled", True):
                             from organism_console.notifications import notify
+
                             notify("ZENITH needs your input", question[:120])
 
                         live.stop()
                         ctx.console.print()
 
                         if "APPROVAL REQUIRED" in question:
-                            ctx.console.print(Panel(Markdown(question), title="🛡️ [bold yellow]Approval Required[/bold yellow]", border_style="yellow", padding=(1, 2)))
+                            ctx.console.print(
+                                Panel(
+                                    Markdown(question),
+                                    title="🛡️ [bold yellow]Approval Required[/bold yellow]",
+                                    border_style="yellow",
+                                    padding=(1, 2),
+                                )
+                            )
                         else:
-                            ctx.console.print(Panel(Markdown(question), title="❓ [bold cyan]Question[/bold cyan]", border_style="cyan", padding=(0, 1)))
+                            ctx.console.print(
+                                Panel(
+                                    Markdown(question),
+                                    title="❓ [bold cyan]Question[/bold cyan]",
+                                    border_style="cyan",
+                                    padding=(0, 1),
+                                )
+                            )
 
                         auto_answer = None
                         if "APPROVAL REQUIRED" in question:
-                            from organism_console.permissions import blocked as _perm_blocked, should_ask as _perm_should_ask
+                            from organism_console.permissions import (
+                                blocked as _perm_blocked,
+                                should_ask as _perm_should_ask,
+                            )
+
                             if _perm_blocked("approval"):
                                 auto_answer = "no"
                             elif not _perm_should_ask("approval"):
                                 auto_answer = "yes"
                             if auto_answer is not None:
-                                ctx.console.print(f"[dim]auto-approve: {auto_answer}[/dim]")
+                                ctx.console.print(
+                                    f"[dim]auto-approve: {auto_answer}[/dim]"
+                                )
 
                         if auto_answer is not None:
                             answer = auto_answer
                         elif options:
                             from rich.prompt import Prompt
                             from organism_console.renderer import INPUT_LOCK
+
                             choices = []
                             for i, o in enumerate(options):
                                 if isinstance(o, dict):
-                                    choices.append(str(o.get("label", o.get("value", i))))
+                                    choices.append(
+                                        str(o.get("label", o.get("value", i)))
+                                    )
                                 else:
                                     choices.append(str(o))
                             with INPUT_LOCK:
-                                answer = Prompt.ask("[bold cyan]Choose option[/bold cyan]", choices=choices)
+                                answer = Prompt.ask(
+                                    "[bold cyan]Choose option[/bold cyan]",
+                                    choices=choices,
+                                )
                         else:
                             from organism_console.renderer import INPUT_LOCK
+
                             with INPUT_LOCK:
-                                answer = ctx.console.input("[bold cyan]Your response:[/bold cyan] ").strip()
+                                answer = ctx.console.input(
+                                    "[bold cyan]Your response:[/bold cyan] "
+                                ).strip()
 
                         new_history = list(history)
                         if prompt:
                             new_history.append({"role": "user", "content": prompt})
-                        new_history.append({"role": "assistant", "content": full_content})
-                        new_history.append({"role": "user", "content": f"Observation: {json.dumps({'answer': answer})}"})
+                        new_history.append(
+                            {"role": "assistant", "content": full_content}
+                        )
+                        new_history.append(
+                            {
+                                "role": "user",
+                                "content": f"Observation: {json.dumps({'answer': answer})}",
+                            }
+                        )
 
                         history = new_history
                         prompt = ""
@@ -384,9 +524,7 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                         live.stop()
                         ctx.console.print()
 
-                        preview_lines = [
-                            f"**{tool}** · **{action}**"
-                        ]
+                        preview_lines = [f"**{tool}** · **{action}**"]
                         if path:
                             preview_lines.append(f"`{path}`")
                         if auth_tier:
@@ -414,7 +552,9 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                         new_history = list(history)
                         if prompt:
                             new_history.append({"role": "user", "content": prompt})
-                        new_history.append({"role": "assistant", "content": full_content})
+                        new_history.append(
+                            {"role": "assistant", "content": full_content}
+                        )
                         new_history.append(
                             {
                                 "role": "user",
@@ -456,7 +596,14 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
 
         if full_content and full_content.strip():
             ctx.console.print()
-            ctx.console.print(Panel(Markdown(str(full_content)), title="", border_style="green", padding=(1, 2)))
+            ctx.console.print(
+                Panel(
+                    Markdown(str(full_content)),
+                    title="",
+                    border_style="green",
+                    padding=(1, 2),
+                )
+            )
 
         if not _tokens_counted:
             update_token_metrics(ctx, prompt, history, full_content, model)
@@ -466,6 +613,7 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
 
         return history
 
+
 def stream_prompt(ctx, agent_id, prompt, history):
     # BUG FIX: asyncio.run() raises RuntimeError if called from an already-running event loop.
     # This can happen when stream_prompt is invoked from Jupyter, tests, or certain frameworks.
@@ -474,12 +622,16 @@ def stream_prompt(ctx, agent_id, prompt, history):
         _ = asyncio.get_running_loop()
         # A loop is already running — run in a separate thread to avoid nesting
         import concurrent.futures
+
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(asyncio.run, _stream_prompt_async(ctx, agent_id, prompt, history))
+            future = pool.submit(
+                asyncio.run, _stream_prompt_async(ctx, agent_id, prompt, history)
+            )
             return future.result()
     except RuntimeError:
         # No running loop — safe to use asyncio.run() directly
         return asyncio.run(_stream_prompt_async(ctx, agent_id, prompt, history))
+
 
 def stream_prompt_with_retry(ctx, agent_id, prompt, history, max_retries=3):
     ctx.delegation_chain = [agent_id]
@@ -489,6 +641,7 @@ def stream_prompt_with_retry(ctx, agent_id, prompt, history, max_retries=3):
         if len(result) > len(history):
             if getattr(ctx, "speech_enabled", False):
                 from organism_console.speech import speak_async, play_chime_async
+
                 last_msg = result[-1].get("content", "") if result else ""
                 if last_msg:
                     speak_async(last_msg)
@@ -497,15 +650,16 @@ def stream_prompt_with_retry(ctx, agent_id, prompt, history, max_retries=3):
         if attempt < max_retries - 1:
             delay = delays[attempt]
             ctx.console.print(
-                f"[bold yellow]  Retry {attempt+1}/{max_retries - 1}[/bold yellow] "
+                f"[bold yellow]  Retry {attempt + 1}/{max_retries - 1}[/bold yellow] "
                 f"[dim]in {delay}s...[/dim]"
             )
             # BUG FIX: Use a single time.sleep(delay) instead of a busy-loop of 0.1s sleeps
             time.sleep(delay)
-                
+
     if getattr(ctx, "speech_enabled", False):
         from organism_console.speech import play_chime_async
+
         play_chime_async("error")
-        
+
     ctx.console.print("[bold red]All retry attempts exhausted.[/bold red]")
     return history

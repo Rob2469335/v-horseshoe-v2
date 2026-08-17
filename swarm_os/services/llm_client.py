@@ -13,6 +13,7 @@ async def close_global_client() -> None:
     """Close the module-level shared httpx client on shutdown."""
     await global_httpx_client.aclose()
 
+
 class CloudLLMClient:
     """Service to handle Cloud LLM providers (OpenRouter, NVIDIA)."""
 
@@ -25,18 +26,32 @@ class CloudLLMClient:
             return "openrouter"
         if model_name.startswith("nvidia/"):
             return "nvidia"
-        
+
         # Models known to be local via llama.cpp
-        local_prefixes = ["qwen", "llama", "phi", "mistral", "gemma", "llava", "moondream", "deepseek", "nomic"]
+        local_prefixes = [
+            "qwen",
+            "llama",
+            "phi",
+            "mistral",
+            "gemma",
+            "llava",
+            "moondream",
+            "deepseek",
+            "nomic",
+        ]
         if any(model_name.startswith(p) for p in local_prefixes):
             return "llama"
         return "llama"
 
     @staticmethod
-    async def generate(model: str, messages: list[dict], provider: str, stream: bool = False):
+    async def generate(
+        model: str, messages: list[dict], provider: str, stream: bool = False
+    ):
         if provider == "openrouter":
             api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
-            base_url = os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").strip()
+            base_url = os.environ.get(
+                "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
+            ).strip()
             url = f"{base_url}/chat/completions"
             headers = {
                 "Authorization": f"Bearer {api_key}",
@@ -46,7 +61,9 @@ class CloudLLMClient:
             }
         elif provider == "nvidia":
             api_key = os.environ.get("NVIDIA_API_KEY", "").strip()
-            base_url = os.environ.get("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1").strip()
+            base_url = os.environ.get(
+                "NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"
+            ).strip()
             url = f"{base_url}/chat/completions"
             headers = {
                 "Authorization": f"Bearer {api_key}",
@@ -57,9 +74,12 @@ class CloudLLMClient:
 
         # Strip prefixes from model name for the cloud API
         clean_model = model.replace("openrouter/", "").replace("nvidia/", "")
-        if provider == "openrouter" and any(forbidden in clean_model.lower() for forbidden in ("claude", "anthropic", "sonnet", "opus", "gpt-4")):
+        if provider == "openrouter" and any(
+            forbidden in clean_model.lower()
+            for forbidden in ("claude", "anthropic", "sonnet", "opus", "gpt-4")
+        ):
             clean_model = "deepseek/deepseek-v4-flash"
-        
+
         payload = {
             "model": clean_model,
             "messages": messages,
@@ -78,7 +98,9 @@ class CloudLLMClient:
 
     @staticmethod
     async def stream_generate(url: str, payload: dict, headers: dict):
-        async with global_httpx_client.stream("POST", url, json=payload, headers=headers) as response:
+        async with global_httpx_client.stream(
+            "POST", url, json=payload, headers=headers
+        ) as response:
             response.raise_for_status()
             async for line in response.aiter_lines():
                 if line.startswith("data: "):
@@ -93,9 +115,12 @@ class CloudLLMClient:
                 except Exception as e:
                     log.warning("JSON decode failed in fallback parser: %s", e)
                     continue
+
+
 import time
 import random
 from typing import Any, Dict, List, Optional
+
 
 class SwarmBrainClient:
     def __init__(self, swarm_url: str = "http://127.0.0.1:8000/generate"):
@@ -180,7 +205,9 @@ class SwarmBrainClient:
         body_text = ""
         t0 = time.perf_counter()
 
-        with httpx.Client(timeout=timeout, headers={"Authorization": "Bearer llama"}) as client:
+        with httpx.Client(
+            timeout=timeout, headers={"Authorization": "Bearer llama"}
+        ) as client:
             for attempt in range(1, attempts + 1):
                 resp = client.post(self.swarm_url, json=payload)
                 elapsed = time.perf_counter() - t0
@@ -192,35 +219,66 @@ class SwarmBrainClient:
                     break
 
                 if attempt < attempts:
-                    delay = min(2.0, 0.35 * (2 ** (attempt - 1))) + random.uniform(0.0, 0.15)
-                    log.warning("brain rate limited org=%s model=%s attempt=%d/%d", org_id, requested_model, attempt, attempts)
+                    delay = min(2.0, 0.35 * (2 ** (attempt - 1))) + random.uniform(
+                        0.0, 0.15
+                    )
+                    log.warning(
+                        "brain rate limited org=%s model=%s attempt=%d/%d",
+                        org_id,
+                        requested_model,
+                        attempt,
+                        attempts,
+                    )
                     time.sleep(delay)
 
         if status >= 400:
             log.error("brain http error org=%s status=%s", org_id, status)
             return {
-                "error": f"http_{status}", "cost": 5.0, "elapsed": elapsed, "content": "",
-                "model": requested_model or default_model, "tools_used": active_tools,
-                "finish_reason": f"http_{status}", "response_preview": body_text[:1000],
+                "error": f"http_{status}",
+                "cost": 5.0,
+                "elapsed": elapsed,
+                "content": "",
+                "model": requested_model or default_model,
+                "tools_used": active_tools,
+                "finish_reason": f"http_{status}",
+                "response_preview": body_text[:1000],
             }
 
         if not body_text.strip():
             return {
-                "error": "empty_response", "cost": 5.0, "elapsed": elapsed, "content": "",
-                "model": requested_model or default_model, "tools_used": active_tools,
-                "finish_reason": "empty_response", "response_preview": "",
+                "error": "empty_response",
+                "cost": 5.0,
+                "elapsed": elapsed,
+                "content": "",
+                "model": requested_model or default_model,
+                "tools_used": active_tools,
+                "finish_reason": "empty_response",
+                "response_preview": "",
             }
 
         if "text/event-stream" in content_type.lower():
-            return self.parse_sse_stream(body_text, requested_model, default_model, active_tools, elapsed, top_k, system_prompt_len)
+            return self.parse_sse_stream(
+                body_text,
+                requested_model,
+                default_model,
+                active_tools,
+                elapsed,
+                top_k,
+                system_prompt_len,
+            )
 
         try:
             data = resp.json()
         except Exception:
             return {
-                "error": "invalid_json", "cost": 5.0, "elapsed": elapsed, "content": "",
-                "model": requested_model or default_model, "tools_used": active_tools,
-                "finish_reason": "invalid_json", "response_preview": body_text[:1000],
+                "error": "invalid_json",
+                "cost": 5.0,
+                "elapsed": elapsed,
+                "content": "",
+                "model": requested_model or default_model,
+                "tools_used": active_tools,
+                "finish_reason": "invalid_json",
+                "response_preview": body_text[:1000],
             }
 
         choice = data.get("choices", [{}])[0]

@@ -10,6 +10,7 @@ from textual.widgets import Header, Footer, OptionList, Input, Static, Label
 from textual.widgets.option_list import Option
 from textual.binding import Binding
 import urllib3
+
 urllib3.disable_warnings()
 
 from organism_console.config import BACKEND_URL
@@ -17,26 +18,34 @@ from swarm_os.config.settings import settings
 
 FAVORITES_FILE = Path(__file__).parent.parent / "config" / "favorites.json"
 
+
 def push_model_override(agent_id: str, model_name: str, backend: str) -> bool:
     try:
         import urllib3
+
         urllib3.disable_warnings()
         r = requests.post(
             f"{BACKEND_URL}/agents/{agent_id}/model",
             json={"model_name": model_name, "backend": backend},
             timeout=15,
-            verify=settings.ssl_verify
+            verify=settings.ssl_verify,
         )
         return r.status_code == 200
     except Exception:
         return False
 
+
 def parse_backend(model: str) -> tuple[str, str]:
-    if model.startswith("openrouter/"): return "openrouter", model[11:]
-    if model.startswith("groq/"): return "groq", model[5:]
-    if model.startswith("llama/"): return "llama", model[6:]
-    if model.startswith("ollama/"): return "llama", model[7:]
+    if model.startswith("openrouter/"):
+        return "openrouter", model[11:]
+    if model.startswith("groq/"):
+        return "groq", model[5:]
+    if model.startswith("llama/"):
+        return "llama", model[6:]
+    if model.startswith("ollama/"):
+        return "llama", model[7:]
     return "llama", model
+
 
 class ModelPickerApp(App):
     CSS = """
@@ -86,7 +95,9 @@ class ModelPickerApp(App):
         self.agent_models = {}
         self.favorites = self.load_favorites()
         self.selected_agent_id = None
-        self.cloud_enabled = os.environ.get("SWARM_ROUTING_MODE", "cloud_allowed") != "local_only"
+        self.cloud_enabled = (
+            os.environ.get("SWARM_ROUTING_MODE", "cloud_allowed") != "local_only"
+        )
 
     def load_favorites(self):
         if FAVORITES_FILE.exists():
@@ -129,25 +140,43 @@ class ModelPickerApp(App):
 
     def fetch_data(self):
         try:
-            r = requests.get(f"{BACKEND_URL}/agents", timeout=15, verify=settings.ssl_verify)
+            r = requests.get(
+                f"{BACKEND_URL}/agents", timeout=15, verify=settings.ssl_verify
+            )
             self.agents = r.json() if r.status_code == 200 else []
         except Exception:
             self.agents = []
 
         try:
-            r = requests.get(f"{BACKEND_URL}/agents/models", timeout=15, verify=settings.ssl_verify)
+            r = requests.get(
+                f"{BACKEND_URL}/agents/models", timeout=15, verify=settings.ssl_verify
+            )
             self.agent_models = r.json() if r.status_code == 200 else {}
         except Exception:
             self.agent_models = {}
 
-
         self.models = []
         try:
-            endpoint = self.get_models_endpoint() if self.cloud_enabled else "http://127.0.0.1:8080/v1/models"
+            endpoint = (
+                self.get_models_endpoint()
+                if self.cloud_enabled
+                else "http://127.0.0.1:8080/v1/models"
+            )
             verify_ssl = settings.ssl_verify if self.cloud_enabled else False
-            r = requests.get(endpoint, headers={"Authorization": "Bearer llama"} if not self.cloud_enabled else None, timeout=15, verify=verify_ssl)
+            r = requests.get(
+                endpoint,
+                headers={"Authorization": "Bearer llama"}
+                if not self.cloud_enabled
+                else None,
+                timeout=15,
+                verify=verify_ssl,
+            )
             if r.status_code == 200:
-                self.models = r.json().get("data", []) if not self.cloud_enabled else r.json().get("models", [])
+                self.models = (
+                    r.json().get("data", [])
+                    if not self.cloud_enabled
+                    else r.json().get("models", [])
+                )
         except Exception:
             self.models = []
 
@@ -156,17 +185,29 @@ class ModelPickerApp(App):
                 {
                     "model": m.get("id") or m.get("model") or m.get("name"),
                     "name": m.get("id") or m.get("name") or m.get("model"),
-                    "context_length": ((m.get("details") or {}).get("context_length", 8192)),
+                    "context_length": (
+                        (m.get("details") or {}).get("context_length", 8192)
+                    ),
                     "pricing": "Local",
-                    "provider": "llama.cpp"
+                    "provider": "llama.cpp",
                 }
                 for m in self.models
-                if not any(x in str((m.get("id") or m.get("model") or m.get("name") or "")).lower() for x in ("embed","rerank","vl","moondream"))
+                if not any(
+                    x
+                    in str(
+                        (m.get("id") or m.get("model") or m.get("name") or "")
+                    ).lower()
+                    for x in ("embed", "rerank", "vl", "moondream")
+                )
             ]
 
     def update_routing_status(self) -> None:
         status = self.query_one("#routing_status", Static)
-        mode_text = "[#00ff66]LOCAL ONLY[/#00ff66]" if not self.cloud_enabled else "[#00ccff]CLOUD ENABLED[/#00ccff]"
+        mode_text = (
+            "[#00ff66]LOCAL ONLY[/#00ff66]"
+            if not self.cloud_enabled
+            else "[#00ccff]CLOUD ENABLED[/#00ccff]"
+        )
         status.update(f"Routing: {mode_text}")
 
     def reload_picker_data(self):
@@ -192,12 +233,16 @@ class ModelPickerApp(App):
 
         model_list = self.query_one("#model_list", OptionList)
         if model_list.option_count == 0:
-            self.query_one("#specs_display", Static).update("No models available for current routing mode.")
+            self.query_one("#specs_display", Static).update(
+                "No models available for current routing mode."
+            )
         else:
-            highlighted = model_list.highlighted if model_list.highlighted is not None else 0
+            highlighted = (
+                model_list.highlighted if model_list.highlighted is not None else 0
+            )
             option = model_list.get_option_at_index(highlighted)
             model_id = option.id
-            specs = next((m for m in self.models if m['model'] == model_id), None)
+            specs = next((m for m in self.models if m["model"] == model_id), None)
             display = self.query_one("#specs_display", Static)
             if specs:
                 md = f"**Model:**\n[#00ffcc]{specs['model']}[/#00ffcc]\n\n"
@@ -213,7 +258,7 @@ class ModelPickerApp(App):
     def populate_agents(self):
         agent_list = self.query_one("#agent_list", OptionList)
         for a in self.agents:
-            agent_id = a['id']
+            agent_id = a["id"]
             current_assignment = self.agent_models.get(agent_id, {})
             current_model = current_assignment.get("model", "Unknown")
             label = f"{agent_id.upper():<12} - {a.get('model_role', '')}\n[dim]Current: {current_model}[/dim]"
@@ -224,23 +269,25 @@ class ModelPickerApp(App):
             self.selected_agent_id = agent_list.get_option_at_index(0).id
 
     def sort_models(self, m):
-        return (0 if m['model'] in self.favorites else 1, m['model'])
+        return (0 if m["model"] in self.favorites else 1, m["model"])
 
     def populate_models(self, query: str):
         model_list = self.query_one("#model_list", OptionList)
         model_list.clear_options()
 
-        free_models = [m for m in self.models if m.get("pricing", "").lower() != "premium"]
-        filtered = [m for m in free_models if query.lower() in m['model'].lower()]
+        free_models = [
+            m for m in self.models if m.get("pricing", "").lower() != "premium"
+        ]
+        filtered = [m for m in free_models if query.lower() in m["model"].lower()]
         filtered.sort(key=self.sort_models)
 
         seen = set()
         for m in filtered:
-            if m['model'] in seen:
+            if m["model"] in seen:
                 continue
-            seen.add(m['model'])
-            fav = "★ " if m['model'] in self.favorites else "  "
-            model_list.add_option(Option(f"{fav}{m['model']}", id=m['model']))
+            seen.add(m["model"])
+            fav = "★ " if m["model"] in self.favorites else "  "
+            model_list.add_option(Option(f"{fav}{m['model']}", id=m["model"]))
 
         if model_list.option_count > 0:
             model_list.highlighted = 0
@@ -255,12 +302,14 @@ class ModelPickerApp(App):
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         self.action_submit()
 
-    def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
+    def on_option_list_option_highlighted(
+        self, event: OptionList.OptionHighlighted
+    ) -> None:
         if event.option_list.id == "agent_list":
             self.selected_agent_id = event.option_id
         elif event.option_list.id == "model_list":
             model_id = event.option_id
-            specs = next((m for m in self.models if m['model'] == model_id), None)
+            specs = next((m for m in self.models if m["model"] == model_id), None)
             display = self.query_one("#specs_display", Static)
             if specs:
                 md = f"**Model:**\n[#00ffcc]{specs['model']}[/#00ffcc]\n\n"
@@ -288,7 +337,9 @@ class ModelPickerApp(App):
 
     def action_toggle_cloud_mode(self) -> None:
         self.cloud_enabled = not self.cloud_enabled
-        os.environ["SWARM_ROUTING_MODE"] = "cloud_allowed" if self.cloud_enabled else "local_only"
+        os.environ["SWARM_ROUTING_MODE"] = (
+            "cloud_allowed" if self.cloud_enabled else "local_only"
+        )
         mode_label = "CLOUD ENABLED" if self.cloud_enabled else "LOCAL ONLY"
         self.ctx.console.print(f"[bold cyan]Picker routing:[/bold cyan] {mode_label}")
         self.reload_picker_data()
@@ -311,17 +362,21 @@ class ModelPickerApp(App):
             if success:
                 if hasattr(self.ctx.state, "reset_router"):
                     self.ctx.state.reset_router()
-                self.ctx.console.print(f"[bold green]✓ LIVE OVERRIDE ACTIVE[/bold green] | {a_id.upper()} → [cyan]{clean_name}[/cyan] [dim]({backend})[/dim]")
+                self.ctx.console.print(
+                    f"[bold green]✓ LIVE OVERRIDE ACTIVE[/bold green] | {a_id.upper()} → [cyan]{clean_name}[/cyan] [dim]({backend})[/dim]"
+                )
             else:
-                self.ctx.console.print("[bold red]✗ Failed to sync override to backend.[/bold red]")
+                self.ctx.console.print(
+                    "[bold red]✗ Failed to sync override to backend.[/bold red]"
+                )
         except Exception as e:
-            self.ctx.console.print(f"[bold red]✗ Failed to sync override to backend:[/bold red] {e}")
+            self.ctx.console.print(
+                f"[bold red]✗ Failed to sync override to backend:[/bold red] {e}"
+            )
 
         self.exit()
+
 
 def launch_picker(ctx):
     app = ModelPickerApp(ctx)
     app.run()
-
-
-

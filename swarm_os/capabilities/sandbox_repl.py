@@ -2,6 +2,7 @@ from __future__ import annotations
 import asyncio
 import sys
 
+
 class SandboxReplHandler:
     async def execute(self, payload) -> dict:
         if isinstance(payload, dict):
@@ -28,7 +29,10 @@ class SandboxReplHandler:
             # an explicit reason (never a generic "passed").
             try:
                 from swarm_os.services.security_gate import scan_code_isolated
-                scan_ok, scan_reason = await asyncio.to_thread(scan_code_isolated, str(code))
+
+                scan_ok, scan_reason = await asyncio.to_thread(
+                    scan_code_isolated, str(code)
+                )
                 if not scan_ok:
                     return {
                         "ok": False,
@@ -55,11 +59,37 @@ class SandboxReplHandler:
             # command string with a conservative denylist of destructive/system-
             # mutating verbs (Remove/Stop/Set/Fmt/New-Service/reg/disk/...).
             blocked_ps = (
-                "remove-", "stop-", "set-", "format-", "new-", "start-", "restart-",
-                "del ", "rm ", "rd ", "erase", "kill", "taskkill", "shutdown",
-                "format", "reg delete", "diskpart", "takeown", "icacls", "attrib +",
-                "install-", "uninstall-", "out-file", "set-content", "add-content",
-                "copy-item", "move-item", "rename-item", ">", ">>", "|",
+                "remove-",
+                "stop-",
+                "set-",
+                "format-",
+                "new-",
+                "start-",
+                "restart-",
+                "del ",
+                "rm ",
+                "rd ",
+                "erase",
+                "kill",
+                "taskkill",
+                "shutdown",
+                "format",
+                "reg delete",
+                "diskpart",
+                "takeown",
+                "icacls",
+                "attrib +",
+                "install-",
+                "uninstall-",
+                "out-file",
+                "set-content",
+                "add-content",
+                "copy-item",
+                "move-item",
+                "rename-item",
+                ">",
+                ">>",
+                "|",
             )
             ps_lower = str(command or "").lower()
             if any(b in ps_lower for b in blocked_ps):
@@ -79,12 +109,15 @@ class SandboxReplHandler:
                 "ok": False,
                 "stdout": "",
                 "stderr": f"Unsupported language: {language}",
-                "returncode": 1
+                "returncode": 1,
             }
 
         import os
         from swarm_os.services.security_gate import clean_sandbox_env
-        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+        project_root = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "..", "..")
+        )
 
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -101,7 +134,7 @@ class SandboxReplHandler:
                     "ok": proc.returncode == 0,
                     "stdout": stdout_bytes.decode("utf-8", errors="replace"),
                     "stderr": stderr_bytes.decode("utf-8", errors="replace"),
-                    "returncode": proc.returncode if proc.returncode is not None else 0
+                    "returncode": proc.returncode if proc.returncode is not None else 0,
                 }
             except TimeoutError:
                 try:
@@ -113,12 +146,7 @@ class SandboxReplHandler:
                     "ok": False,
                     "stdout": "",
                     "stderr": f"Execution timed out ({timeout}s limit).",
-                    "returncode": -1
+                    "returncode": -1,
                 }
         except Exception as e:
-            return {
-                "ok": False,
-                "stdout": "",
-                "stderr": str(e),
-                "returncode": 1
-            }
+            return {"ok": False, "stdout": "", "stderr": str(e), "returncode": 1}

@@ -4,6 +4,7 @@ from pathlib import Path
 from swarm_os.services.legal.transcript_search import parse_transcript
 from swarm_os.services.legal.transcript_analysis import build_analysis
 
+
 def test_build_analysis_comprehensive(tmp_path: Path):
     transcript_text = """
 SOUTHERN DISTRICT REPORTERS, P.C.
@@ -37,13 +38,13 @@ SOUTHERN DISTRICT REPORTERS, P.C.
     idx = parse_transcript(transcript_text, case="Test Case", source="test.txt")
     out_file = tmp_path / "report.md"
     build_analysis([idx], str(out_file))
-    
+
     assert out_file.exists()
     content = out_file.read_text("utf-8")
-    
+
     # Check that basic formatting and labels exist
     assert "## Day 1 (test.txt) - Chronology" in content
-    
+
     # Chronology checks
     assert "Examination by MS. AL-SHABAZZ begins (Page 620)" in content
     assert "Objection by MR. FOLLY (Page 620)" in content
@@ -51,27 +52,28 @@ SOUTHERN DISTRICT REPORTERS, P.C.
     assert "Ruling: Sustained (Stricken) by THE COURT (Page 620)" in content
     assert "Jury Instructions / Charge" in content
     assert "Adjournment/Recess mentioned by MR. FOLLY (Page 621)" in content
-    
+
     # Witness Matrix checks
     assert "Unnamed Witness" in content
     assert "MS. AL-SHABAZZ" in content
     # The summary should extract the longest answer
     assert "distinctive blue sedan" in content
     assert "not assessed; see page 620" in content
-    
+
     # Objections Log checks - pending objection mapping
     assert "Objection** by MR. FOLLY on Page 620" in content
     assert "Objection, leading." in content
     assert "Overruled (Allowed) (Page 620)" in content
     assert "Objection, narrative." in content
     assert "Sustained / Sustained (Stricken) (Page 620)" in content
-    
+
     # Batson Challenge Pass checks
     assert "Batson doctrine" in content
     assert "MR. FOLLY" in content
     assert "peremptory strikes in a pattern of discrimination" in content
     assert "not assessed; see page 621" in content
-    
+
+
 def test_false_positives(tmp_path: Path):
     transcript_text = """
 SOUTHERN DISTRICT REPORTERS, P.C.
@@ -90,7 +92,7 @@ SOUTHERN DISTRICT REPORTERS, P.C.
     assert idx.passages, "fixture must produce passages (page number survived)"
     out_file = tmp_path / "report.md"
     build_analysis([idx], str(out_file))
-    
+
     content = out_file.read_text("utf-8")
     # "Mr. Batson" (a person) must NOT trigger the Batson challenge pass.
     assert "No Batson challenge detected." in content
@@ -129,9 +131,13 @@ SOUTHERN DISTRICT REPORTERS, P.C.
 def _page_block(page: int, vol: str, header: str, lines: list[str]) -> str:
     """A single SDNY-format page: number + (optional) named page-header +
     content lines. Used to build named-header fixtures for the matrix tests."""
-    hdr = f"              {vol}" + (f"                 {header}" if header else "") + "\n"
-    body = "".join(f"    {i+1:<4} {ln}\n" for i, ln in enumerate(lines))
-    return f"\n{page}\n{hdr}\n{body}\nSOUTHERN DISTRICT REPORTERS, P.C.\n(212) 805-0300\n"
+    hdr = (
+        f"              {vol}" + (f"                 {header}" if header else "") + "\n"
+    )
+    body = "".join(f"    {i + 1:<4} {ln}\n" for i, ln in enumerate(lines))
+    return (
+        f"\n{page}\n{hdr}\n{body}\nSOUTHERN DISTRICT REPORTERS, P.C.\n(212) 805-0300\n"
+    )
 
 
 def test_witness_matrix_groups_by_name_across_gaps(tmp_path: Path):
@@ -141,17 +147,27 @@ def test_witness_matrix_groups_by_name_across_gaps(tmp_path: Path):
     transcript shape into ~40 "Unnamed Witness" rows."""
     filler = ["THE COURT:  Proceed, counsel." for _ in range(55)]
     text = (
-        _page_block(620, "J5ATDUN1", "Mueller - Cross", [
-            "MS. AL-SHABAZZ:  Did you see the car?",
-            "THE WITNESS:  Yes, I did.",
-            "THE COURT:  Thank you.",
-        ])
+        _page_block(
+            620,
+            "J5ATDUN1",
+            "Mueller - Cross",
+            [
+                "MS. AL-SHABAZZ:  Did you see the car?",
+                "THE WITNESS:  Yes, I did.",
+                "THE COURT:  Thank you.",
+            ],
+        )
         + _page_block(630, "J5ATDUN1", "Mueller - Cross", filler)
-        + _page_block(631, "J5ATDUN1", "Mueller - Cross", [
-            "MS. AL-SHABAZZ:  What color was it?",
-            "THE WITNESS:  A distinctive blue sedan.",
-            "THE COURT:  Continue.",
-        ])
+        + _page_block(
+            631,
+            "J5ATDUN1",
+            "Mueller - Cross",
+            [
+                "MS. AL-SHABAZZ:  What color was it?",
+                "THE WITNESS:  A distinctive blue sedan.",
+                "THE COURT:  Continue.",
+            ],
+        )
     )
     idx = parse_transcript(text, case="Test", source="test.txt")
     assert idx.witness_names == {620: "Mueller", 630: "Mueller", 631: "Mueller"}
@@ -169,17 +185,24 @@ def test_witness_matrix_groups_by_name_across_gaps(tmp_path: Path):
 def test_witness_matrix_separates_distinct_witnesses_by_name(tmp_path: Path):
     """A different witness name in the page header starts a NEW matrix row —
     identity is the page-header name, not silence."""
-    text = (
-        _page_block(620, "J5ATDUN1", "Mueller - Cross", [
+    text = _page_block(
+        620,
+        "J5ATDUN1",
+        "Mueller - Cross",
+        [
             "MS. AL-SHABAZZ:  Did you see the car?",
             "THE WITNESS:  Yes, I did.",
             "THE COURT:  Thank you.",
-        ])
-        + _page_block(640, "J5ATDUN1", "Dewitt - Direct", [
+        ],
+    ) + _page_block(
+        640,
+        "J5ATDUN1",
+        "Dewitt - Direct",
+        [
             "MR. FOLLY:  And then what happened?",
             "THE WITNESS:  We left the building.",
             "THE COURT:  Proceed.",
-        ])
+        ],
     )
     idx = parse_transcript(text, case="Test", source="test.txt")
     assert idx.witness_names == {620: "Mueller", 640: "Dewitt"}
@@ -201,17 +224,27 @@ def test_witness_matrix_unnamed_fallback_keeps_gap_split(tmp_path: Path):
     behavior the comprehensive test pins."""
     filler = ["THE COURT:  Proceed, counsel." for _ in range(55)]
     text = (
-        _page_block(620, "J59TDUN2", "", [
-            "MS. AL-SHABAZZ:  Did you see the car?",
-            "THE WITNESS:  Yes, I did.",
-            "THE COURT:  Thank you.",
-        ])
+        _page_block(
+            620,
+            "J59TDUN2",
+            "",
+            [
+                "MS. AL-SHABAZZ:  Did you see the car?",
+                "THE WITNESS:  Yes, I did.",
+                "THE COURT:  Thank you.",
+            ],
+        )
         + _page_block(630, "J59TDUN2", "", filler)
-        + _page_block(631, "J59TDUN2", "", [
-            "MR. FOLLY:  And then what?",
-            "THE WITNESS:  A blue sedan.",
-            "THE COURT:  Continue.",
-        ])
+        + _page_block(
+            631,
+            "J59TDUN2",
+            "",
+            [
+                "MR. FOLLY:  And then what?",
+                "THE WITNESS:  A blue sedan.",
+                "THE COURT:  Continue.",
+            ],
+        )
     )
     idx = parse_transcript(text, case="Test", source="test.txt")
     assert idx.witness_names == {}
@@ -231,20 +264,35 @@ def test_counsel_declining_to_object_is_not_an_objection(tmp_path: Path):
     both declined while real objections from MR. FOLLY stay logged. A narration
     ("there were no objections to") is also not an objection."""
     text = (
-        _page_block(165, "J5ATDUN1", "", [
-            "MR. CHIUCHIOLO:  These are the self-authenticating exhibits that there were no objections to.",
-            "THE COURT:  Received.",
-        ])
-        + _page_block(167, "J5ATDUN1", "", [
-            "MS. AL-SHABAZZ:  I have no objection.",
-            "THE COURT:  Then the exhibit is received.",
-        ])
-        + _page_block(223, "J5ATDUN1", "", [
-            "MR. FOLLY:  Objection, leading.",
-            "THE COURT:  Overruled.",
-            "MR. DINNERSTEIN:  I have no objection.",
-            "THE COURT:  Proceed.",
-        ])
+        _page_block(
+            165,
+            "J5ATDUN1",
+            "",
+            [
+                "MR. CHIUCHIOLO:  These are the self-authenticating exhibits that there were no objections to.",
+                "THE COURT:  Received.",
+            ],
+        )
+        + _page_block(
+            167,
+            "J5ATDUN1",
+            "",
+            [
+                "MS. AL-SHABAZZ:  I have no objection.",
+                "THE COURT:  Then the exhibit is received.",
+            ],
+        )
+        + _page_block(
+            223,
+            "J5ATDUN1",
+            "",
+            [
+                "MR. FOLLY:  Objection, leading.",
+                "THE COURT:  Overruled.",
+                "MR. DINNERSTEIN:  I have no objection.",
+                "THE COURT:  Proceed.",
+            ],
+        )
     )
     idx = parse_transcript(text, case="Test", source="test.txt")
     out_file = tmp_path / "report.md"
@@ -272,7 +320,9 @@ def test_negation_inside_real_objection_still_logged(tmp_path: Path):
     The affirmative objection act ("...I object to the characterization") keeps
     it logged even though it also says "I have no objection to the exhibit."."""
     text = _page_block(
-        300, "J5ATDUN1", "",
+        300,
+        "J5ATDUN1",
+        "",
         [
             "MS. AL-SHABAZZ:  Objection. I have no objection to the exhibit itself, but I do object to the characterization.",
             "THE COURT:  Overruled.",
@@ -297,17 +347,24 @@ def test_chronology_logs_same_attorney_witness_transition(tmp_path: Path):
     questions Dewitt) produced NO "begins" line for the second witness — a
     preservation artifact. The page-header witness identity (idx.witness_names)
     is the discriminator, exactly as in the witness matrix."""
-    text = (
-        _page_block(620, "J5ATDUN1", "Mueller - Cross", [
+    text = _page_block(
+        620,
+        "J5ATDUN1",
+        "Mueller - Cross",
+        [
             "MS. AL-SHABAZZ:  Did you see the car?",
             "THE WITNESS:  Yes, I did.",
             "THE COURT:  Thank you.",
-        ])
-        + _page_block(640, "J5ATDUN1", "Dewitt - Direct", [
+        ],
+    ) + _page_block(
+        640,
+        "J5ATDUN1",
+        "Dewitt - Direct",
+        [
             "MS. AL-SHABAZZ:  And then what happened?",
             "THE WITNESS:  We left the building.",
             "THE COURT:  Proceed.",
-        ])
+        ],
     )
     idx = parse_transcript(text, case="Test", source="test.txt")
     assert idx.witness_names == {620: "Mueller", 640: "Dewitt"}

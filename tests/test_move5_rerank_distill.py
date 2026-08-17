@@ -8,6 +8,7 @@
 5b: _distill's cloud chain is 2026-aligned (OpenCode Go flash leads; stale
     `deepseek-chat` string gone) and the model_variability short-circuit stays.
 """
+
 from types import SimpleNamespace
 
 from swarm_os.services import reflection_loop as rl
@@ -20,10 +21,14 @@ def _make_service(monkeypatch, client, rerank_fn):
     svc._init_task = None
     svc._ensured = True
     svc.collection = "ReflexionMemory"
-    svc.embedder = SimpleNamespace(embed=lambda *a, **k: __import__("asyncio").sleep(0) or [0.1] * 768)
+    svc.embedder = SimpleNamespace(
+        embed=lambda *a, **k: __import__("asyncio").sleep(0) or [0.1] * 768
+    )
+
     # embed is async; use a coroutine-returning stub
     async def _embed(*a, **k):
         return [0.1] * 768
+
     svc.embedder.embed = _embed
     svc.client = client
     if rerank_fn is not None:
@@ -37,9 +42,30 @@ def test_rerank_score_is_primary_rank_when_reranker_runs(monkeypatch):
     score must win — not the dense score (which would defeat the whole fix)."""
     # Three stored rules. Dense-nearest = rule A (wrong); reranker says rule B.
     dense_rules = {
-        "a": {"id": "a", "payload": {"correction": "list parent dir first", "confidence": 0.9, "timestamp": 2000000000}},
-        "b": {"id": "b", "payload": {"correction": "never reuse a stale cache key", "confidence": 0.9, "timestamp": 2000000000}},
-        "c": {"id": "c", "payload": {"correction": "reset cooldowns", "confidence": 0.9, "timestamp": 2000000000}},
+        "a": {
+            "id": "a",
+            "payload": {
+                "correction": "list parent dir first",
+                "confidence": 0.9,
+                "timestamp": 2000000000,
+            },
+        },
+        "b": {
+            "id": "b",
+            "payload": {
+                "correction": "never reuse a stale cache key",
+                "confidence": 0.9,
+                "timestamp": 2000000000,
+            },
+        },
+        "c": {
+            "id": "c",
+            "payload": {
+                "correction": "reset cooldowns",
+                "confidence": 0.9,
+                "timestamp": 2000000000,
+            },
+        },
     }
     dense_scores = {"a": 0.95, "b": 0.60, "c": 0.55}  # dense-nearest = A
     rerank_scores = {"a": 0.20, "b": 0.90, "c": 0.10}  # reranker says B
@@ -48,40 +74,68 @@ def test_rerank_score_is_primary_rank_when_reranker_runs(monkeypatch):
         async def query_points(self, **kwargs):
             pts = []
             for key, score in dense_scores.items():
-                pts.append(SimpleNamespace(id=key, score=score, payload=dense_rules[key]["payload"]))
+                pts.append(
+                    SimpleNamespace(
+                        id=key, score=score, payload=dense_rules[key]["payload"]
+                    )
+                )
             return SimpleNamespace(points=pts)
+
     svc = _make_service(monkeypatch, _FakeClient(), None)
 
     def _fake_rerank(query, memories):
         out = []
         for mem in memories:
             mid = mem.get("id")
-            out.append({"id": mid, "score": rerank_scores.get(mid, 0.0),
-                        "fact": (mem.get("payload") or {}).get("correction", "")})
+            out.append(
+                {
+                    "id": mid,
+                    "score": rerank_scores.get(mid, 0.0),
+                    "fact": (mem.get("payload") or {}).get("correction", ""),
+                }
+            )
         out.sort(key=lambda x: x["score"], reverse=True)
         return out
+
     monkeypatch.setattr(mc, "rerank_memories", _fake_rerank)
 
     import asyncio
-    hint = asyncio.run(svc.check_for_past_mistakes("the cache keeps returning stale data"))
+
+    hint = asyncio.run(
+        svc.check_for_past_mistakes("the cache keeps returning stale data")
+    )
     # The reranker's top pick (B: stale cache key) must surface — NOT dense-nearest A.
     assert "stale cache key" in hint
 
 
 def test_rerank_outage_falls_back_to_dense(monkeypatch):
     """Reranker outage (raises) must not crash — fall back to dense ordering."""
+
     class _FakeClient:
         async def query_points(self, **kwargs):
-            return SimpleNamespace(points=[
-                SimpleNamespace(id="a", score=0.9, payload={"correction": "rule A", "confidence": 0.9, "timestamp": 2000000000}),
-            ])
+            return SimpleNamespace(
+                points=[
+                    SimpleNamespace(
+                        id="a",
+                        score=0.9,
+                        payload={
+                            "correction": "rule A",
+                            "confidence": 0.9,
+                            "timestamp": 2000000000,
+                        },
+                    ),
+                ]
+            )
+
     svc = _make_service(monkeypatch, _FakeClient(), None)
 
     def _boom(query, memories):
         raise RuntimeError("reranker down")
+
     monkeypatch.setattr(mc, "rerank_memories", _boom)
 
     import asyncio
+
     hint = asyncio.run(svc.check_for_past_mistakes("any query"))
     assert "rule A" in hint  # graceful dense fallback
 
@@ -89,23 +143,38 @@ def test_rerank_outage_falls_back_to_dense(monkeypatch):
 def test_rerank_respects_confidence_decay_minimum_filter(monkeypatch):
     """Confidence*decay is a MINIMUM FILTER: a rerank-top candidate whose rule has
     decayed below the floor must NOT surface (even if the reranker ranks it #1)."""
-    stale_payload = {"correction": "old stale rule", "confidence": 0.2, "timestamp": 0}  # decayed
-    fresh_payload = {"correction": "fresh rule", "confidence": 0.9, "timestamp": 2000000000}
+    stale_payload = {
+        "correction": "old stale rule",
+        "confidence": 0.2,
+        "timestamp": 0,
+    }  # decayed
+    fresh_payload = {
+        "correction": "fresh rule",
+        "confidence": 0.9,
+        "timestamp": 2000000000,
+    }
 
     class _FakeClient:
         async def query_points(self, **kwargs):
-            return SimpleNamespace(points=[
-                SimpleNamespace(id="stale", score=0.99, payload=stale_payload),
-                SimpleNamespace(id="fresh", score=0.8, payload=fresh_payload),
-            ])
+            return SimpleNamespace(
+                points=[
+                    SimpleNamespace(id="stale", score=0.99, payload=stale_payload),
+                    SimpleNamespace(id="fresh", score=0.8, payload=fresh_payload),
+                ]
+            )
+
     svc = _make_service(monkeypatch, _FakeClient(), None)
 
     def _fake_rerank(query, memories):
-        return [{"id": "stale", "score": 0.99, "fact": "old stale rule"},
-                {"id": "fresh", "score": 0.5, "fact": "fresh rule"}]
+        return [
+            {"id": "stale", "score": 0.99, "fact": "old stale rule"},
+            {"id": "fresh", "score": 0.5, "fact": "fresh rule"},
+        ]
+
     monkeypatch.setattr(mc, "rerank_memories", _fake_rerank)
 
     import asyncio
+
     hint = asyncio.run(svc.check_for_past_mistakes("q"))
     # The decayed rerank-#1 candidate is filtered out; the fresh one surfaces.
     assert "fresh rule" in hint
@@ -123,13 +192,22 @@ def test_distill_uses_deepseek_v4_flash_when_openai_key(monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     try:
         import asyncio
+
         captured = {"models": []}
 
         async def _fake_acompletion(**cfg):
             captured["models"].append(cfg.get("model"))
             return SimpleNamespace(
-                choices=[SimpleNamespace(message=SimpleNamespace(content="<reflection>captured</reflection>", reasoning_content=None))],
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content="<reflection>captured</reflection>",
+                            reasoning_content=None,
+                        )
+                    )
+                ],
             )
+
         monkeypatch.setattr(rl, "acompletion", _fake_acompletion)
 
         asyncio.run(rl._distill("content", fix_class="prompt_sensitivity"))
@@ -142,10 +220,21 @@ def test_distill_uses_deepseek_v4_flash_when_openai_key(monkeypatch):
 def test_distill_model_variability_still_short_circuits(monkeypatch):
     """Regression guard: fix_class == model_variability must skip the LLM call."""
     import asyncio
+
     called = {"n": 0}
+
     async def _fake_acompletion(**cfg):
         called["n"] += 1
-        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="<reflection>x</reflection>", reasoning_content=None))])
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content="<reflection>x</reflection>", reasoning_content=None
+                    )
+                )
+            ]
+        )
+
     monkeypatch.setattr(rl, "acompletion", _fake_acompletion)
     out = asyncio.run(rl._distill("content", fix_class="model_variability"))
     assert out == ""
@@ -169,6 +258,7 @@ def test_init_memory_qdrant_no_duplicate_put_under_concurrency(monkeypatch):
 
     class _Resp:
         status_code = 200
+
         def json(self):
             return {}
 
@@ -183,6 +273,7 @@ def test_init_memory_qdrant_no_duplicate_put_under_concurrency(monkeypatch):
         # Sleep releases the GIL so concurrent callers genuinely interleave;
         # pre-fix they all see the empty verified-shards cache and all PUT.
         import time
+
         time.sleep(0.05)
         return _Missing()
 
@@ -197,9 +288,11 @@ def test_init_memory_qdrant_no_duplicate_put_under_concurrency(monkeypatch):
     results = [None] * 6
     threads = []
     for i in range(6):
+
         def _run(i=i):
             start_gate.wait(timeout=5)
             results[i] = _mc.init_memory_qdrant("test")
+
         t = threading.Thread(target=_run)
         threads.append(t)
         t.start()
@@ -209,4 +302,3 @@ def test_init_memory_qdrant_no_duplicate_put_under_concurrency(monkeypatch):
     assert all(results), f"all callers must succeed, got {results}"
     assert put_calls["n"] == 1, f"PUT fired {put_calls['n']} times, expected 1"
     assert "agent_memory_test_v2" in _mc._verified_shards
-

@@ -18,6 +18,7 @@ import pytest
 
 from swarm_os.services import chess_training as ct
 
+
 @pytest.fixture(autouse=True)
 def _isolate(monkeypatch, tmp_path):
     monkeypatch.setattr(ct, "_STORE_FILE", tmp_path / "training.jsonl")
@@ -130,7 +131,12 @@ def test_weakness_priority_drives_scheduling():
     # adding a few classified hanging mistakes.
     cm.record_mistake(
         "rnbqkbnr/pppp1ppp/2n5/4p2Q/4P3/8/PPPP1PPP/RNB1KBNR w KQkq - 1 2",
-        "h5f7", "Qxf7", None, None, "Blunder", concept="imported",
+        "h5f7",
+        "Qxf7",
+        None,
+        None,
+        "Blunder",
+        concept="imported",
     )
     due = ct.training_due(limit=10)
     concepts_served = [it["concept"] for it in due["due"]]
@@ -215,7 +221,12 @@ def test_confidence_never_reorders_scheduling():
     for _ in range(5):
         cm.record_mistake(
             "rnbqkbnr/pppp1ppp/2n5/4p2Q/4P3/8/PPPP1PPP/RNB1KBNR w KQkq - 1 2",
-            "h5f7", "Qxf7", None, None, "Blunder", concept="imported",
+            "h5f7",
+            "Qxf7",
+            None,
+            None,
+            "Blunder",
+            concept="imported",
         )
     # Record MANY confident answers (including failures) on hanging piece.
     for i in range(6):
@@ -244,9 +255,13 @@ def test_post_hoc_confidence_rejected_from_calibration():
     it = _seed_item()
     t = time.time()
     # Post-hoc: confidence captured AFTER the answer time.
-    ct.record_answer(it["id"], correct=True, confidence="confident", confidence_captured_at=t + 100.0)
+    ct.record_answer(
+        it["id"], correct=True, confidence="confident", confidence_captured_at=t + 100.0
+    )
     # Valid: confidence captured BEFORE the answer.
-    ct.record_answer(it["id"], correct=True, confidence="confident", confidence_captured_at=t - 5.0)
+    ct.record_answer(
+        it["id"], correct=True, confidence="confident", confidence_captured_at=t - 5.0
+    )
     cal = ct.calibration_report()
     # Only the valid entry is in calibration; the post-hoc one is rejected.
     assert cal["rejected_post_hoc"] == 1
@@ -301,7 +316,9 @@ def test_manifest_survives_answer_mutations():
     it = _seed_item()
     ct.record_answer(it["id"], correct=True)
     assert _manifest()["total"] == len(ct._load())
-    assert _manifest()["sha256"] == hashlib.sha256(ct._STORE_FILE.read_bytes()).hexdigest()
+    assert (
+        _manifest()["sha256"] == hashlib.sha256(ct._STORE_FILE.read_bytes()).hexdigest()
+    )
 
 
 def test_reset_all_removes_manifest():

@@ -5,6 +5,7 @@ allowlist may be stored with scope='shared'. Retrieval of shared rules is
 env-gated (SWARM_SHARED_REFLEXION=1, off by default) so existing behavior is
 preserved exactly when the variable is unset.
 """
+
 from __future__ import annotations
 import time
 import pytest
@@ -33,6 +34,7 @@ def _make_service() -> tuple[ReflectionService, MagicMock]:
     # not reranking — so force the rerank to a deterministic no-op (dense
     # fallback ordering), which is exactly what a reranker outage produces.
     import runtime_v2.services.memory_core as _mc
+
     _mc.rerank_memories = lambda q, m: []
     return service, service.client
 
@@ -78,7 +80,10 @@ def _point(pid: str, payload: dict, score: float):
 
 
 def test_auto_scope_requires_confidence_floor():
-    assert _auto_scope(SHARED_SCOPE_MIN_CONFIDENCE - 0.01, "File not found: x.py") == "agent"
+    assert (
+        _auto_scope(SHARED_SCOPE_MIN_CONFIDENCE - 0.01, "File not found: x.py")
+        == "agent"
+    )
     assert _auto_scope(0.3, "timeout") == "agent"
 
 
@@ -93,16 +98,24 @@ def test_auto_scope_requires_generic_failure_marker():
 async def test_store_auto_assigns_scope():
     service, client = _make_service()
     await service.store_reflexion(
-        "agent:code_analyzer audit", "read", "File not found: x.py",
-        "list the parent dir first", component="code_analyzer", confidence=0.75,
+        "agent:code_analyzer audit",
+        "read",
+        "File not found: x.py",
+        "list the parent dir first",
+        component="code_analyzer",
+        confidence=0.75,
     )
     kwargs = client.upsert.await_args.kwargs
     payload = kwargs["points"][0].payload
     assert payload["scope"] == "shared"
 
     await service.store_reflexion(
-        "agent:code_analyzer audit", "read", "User is asking for a vague summary",
-        "ask for clarification", component="code_analyzer", confidence=0.9,
+        "agent:code_analyzer audit",
+        "read",
+        "User is asking for a vague summary",
+        "ask for clarification",
+        component="code_analyzer",
+        confidence=0.9,
     )
     kwargs = client.upsert.await_args.kwargs
     payload = kwargs["points"][0].payload
@@ -113,21 +126,35 @@ async def test_store_auto_assigns_scope():
 async def test_store_deterministic_id_overwrites_duplicate_failure():
     service, client = _make_service()
     await service.store_reflexion(
-        "agent:code_analyzer audit", "read", "File not found: x.py",
-        "list the parent dir first", component="code_analyzer", confidence=0.7,
+        "agent:code_analyzer audit",
+        "read",
+        "File not found: x.py",
+        "list the parent dir first",
+        component="code_analyzer",
+        confidence=0.7,
     )
     first_id = client.upsert.await_args.kwargs["points"][0].id
     await service.store_reflexion(
-        "agent:code_analyzer audit", "read", "File not found: x.py",
-        "list the parent dir first", component="code_analyzer", confidence=0.7,
+        "agent:code_analyzer audit",
+        "read",
+        "File not found: x.py",
+        "list the parent dir first",
+        component="code_analyzer",
+        confidence=0.7,
     )
     second_id = client.upsert.await_args.kwargs["points"][0].id
-    assert first_id == second_id, "repeated identical failure must reuse the same point id"
+    assert first_id == second_id, (
+        "repeated identical failure must reuse the same point id"
+    )
     assert client.upsert.await_count == 2
     # different failure_reason -> different point id
     await service.store_reflexion(
-        "agent:code_analyzer audit", "read", "File not found: y.py",
-        "list the parent dir first", component="code_analyzer", confidence=0.7,
+        "agent:code_analyzer audit",
+        "read",
+        "File not found: y.py",
+        "list the parent dir first",
+        component="code_analyzer",
+        confidence=0.7,
     )
     third_id = client.upsert.await_args.kwargs["points"][0].id
     assert third_id != first_id, "different failure must map to a distinct point id"
@@ -137,8 +164,13 @@ async def test_store_deterministic_id_overwrites_duplicate_failure():
 async def test_store_respects_explicit_scope():
     service, client = _make_service()
     await service.store_reflexion(
-        "agent:a task", "x", "some agent-specific failure", "advice",
-        component="a", confidence=0.9, scope="shared",
+        "agent:a task",
+        "x",
+        "some agent-specific failure",
+        "advice",
+        component="a",
+        confidence=0.9,
+        scope="shared",
     )
     kwargs = client.upsert.await_args.kwargs
     assert kwargs["points"][0].payload["scope"] == "shared"
@@ -149,10 +181,15 @@ async def test_shared_retrieval_merged_when_env_enabled(monkeypatch):
     monkeypatch.setenv("SWARM_SHARED_REFLEXION", "1")
     service, client = _make_service()
     own = _point("own-1", {"correction": "own rule", "confidence": 1.0}, 0.5)
-    shared = _point("shared-1", {
-        "correction": "list parent dir before reading (learned by debugger)",
-        "do_not_repeat": "never guess paths", "confidence": 1.0,
-    }, 0.9)
+    shared = _point(
+        "shared-1",
+        {
+            "correction": "list parent dir before reading (learned by debugger)",
+            "do_not_repeat": "never guess paths",
+            "confidence": 1.0,
+        },
+        0.9,
+    )
     client.query_points.side_effect = [
         SimpleNamespace(points=[own]),
         SimpleNamespace(points=[shared]),
@@ -198,32 +235,63 @@ async def test_shared_retrieval_respects_max_chars_cap(monkeypatch):
     service, client = _make_service()
     long_correction = "long " * 500
     shared = _point("shared-1", {"correction": long_correction, "confidence": 1.0}, 0.9)
-    client.query_points.side_effect = [SimpleNamespace(points=[_point("own", {"correction": "x", "confidence": 1.0}, 0.1)]), SimpleNamespace(points=[shared])]
+    client.query_points.side_effect = [
+        SimpleNamespace(
+            points=[_point("own", {"correction": "x", "confidence": 1.0}, 0.1)]
+        ),
+        SimpleNamespace(points=[shared]),
+    ]
     hint = await service.check_for_past_mistakes("agent:b some task", max_chars=700)
     assert len(hint) <= 700
 
+
 def test_corrections_similar_content_based():
     from swarm_os.services.reflection_loop import _corrections_similar
-    assert _corrections_similar("list the parent dir first", "list the parent directory first")
-    assert _corrections_similar("use filesystem read before patch", "use the filesystem read operation before patching a file")
-    assert not _corrections_similar("list the parent dir first", "reset the model cooldowns")
-    assert not _corrections_similar("call web_search for every goal", "never call web_search, use semantic_search instead")
+
+    assert _corrections_similar(
+        "list the parent dir first", "list the parent directory first"
+    )
+    assert _corrections_similar(
+        "use filesystem read before patch",
+        "use the filesystem read operation before patching a file",
+    )
+    assert not _corrections_similar(
+        "list the parent dir first", "reset the model cooldowns"
+    )
+    assert not _corrections_similar(
+        "call web_search for every goal",
+        "never call web_search, use semantic_search instead",
+    )
     # Either side empty -> ambiguous -> treated as same (reinforce)
     assert _corrections_similar("advice", "")
     assert _corrections_similar("", "advice")
 
 
 def test_classify_rule_same_vs_conflict():
-    from swarm_os.services.reflection_loop import (_classify_rule, _RULE_SAME, _RULE_CONFLICT)
-    assert _classify_rule(None, "anything") == _RULE_SAME          # first write
-    assert _classify_rule({"correction": "list parent dir"}, "list the parent directory first") == _RULE_SAME
-    assert _classify_rule({"correction": "list parent dir"}, "reset the model cooldowns") == _RULE_CONFLICT
+    from swarm_os.services.reflection_loop import (
+        _classify_rule,
+        _RULE_SAME,
+        _RULE_CONFLICT,
+    )
+
+    assert _classify_rule(None, "anything") == _RULE_SAME  # first write
+    assert (
+        _classify_rule(
+            {"correction": "list parent dir"}, "list the parent directory first"
+        )
+        == _RULE_SAME
+    )
+    assert (
+        _classify_rule({"correction": "list parent dir"}, "reset the model cooldowns")
+        == _RULE_CONFLICT
+    )
 
 
 def _make_service_with_retrieve(existing_payload):
     from types import SimpleNamespace
     from unittest.mock import AsyncMock, MagicMock
     from swarm_os.services.reflection_loop import ReflectionService
+
     service = ReflectionService.__new__(ReflectionService)
     service.collection = "ReflexionMemory"
     service._init_task = None
@@ -237,7 +305,9 @@ def _make_service_with_retrieve(existing_payload):
     if existing_payload is None:
         service.client.retrieve.return_value = []
     else:
-        service.client.retrieve.return_value = [SimpleNamespace(payload=existing_payload)]
+        service.client.retrieve.return_value = [
+            SimpleNamespace(payload=existing_payload)
+        ]
     return service
 
 
@@ -246,11 +316,25 @@ async def test_store_reinforces_same_correction():
     """L5: writing the SAME (rephrased) correction twice must REINFORCE — count
     increments and confidence rises, not a flat reset."""
     service = _make_service_with_retrieve(None)
-    await service.store_reflexion("task", "x", "File not found: x.py", "list the parent dir first", component="c", confidence=0.7)
+    await service.store_reflexion(
+        "task",
+        "x",
+        "File not found: x.py",
+        "list the parent dir first",
+        component="c",
+        confidence=0.7,
+    )
     # Seed the existing point from the first write, then write the rephrased same.
     prev = service.client.upsert.await_args.kwargs["points"][0].payload
     service.client.retrieve.return_value = [SimpleNamespace(payload=prev)]
-    await service.store_reflexion("task", "x", "File not found: x.py", "list the parent directory first", component="c", confidence=0.7)
+    await service.store_reflexion(
+        "task",
+        "x",
+        "File not found: x.py",
+        "list the parent directory first",
+        component="c",
+        confidence=0.7,
+    )
     last = service.client.upsert.await_args.kwargs["points"][0].payload
     assert last["count"] == 2
     assert last["confidence"] > 0.7
@@ -261,10 +345,21 @@ async def test_store_conflict_overwrites_and_logs():
     """L5: a genuinely DIFFERENT correction on the same failure must OVERWRITE the
     old content (supersede, not silently lost) with the new correction; count
     carries as recurrence evidence; confidence is not inflated from old content."""
-    service = _make_service_with_retrieve({"correction": "list the parent dir first", "count": 3, "confidence": 0.8})
-    await service.store_reflexion("task", "x", "File not found: x.py", "reset the model cooldowns then retry", component="c", confidence=0.7)
+    service = _make_service_with_retrieve(
+        {"correction": "list the parent dir first", "count": 3, "confidence": 0.8}
+    )
+    await service.store_reflexion(
+        "task",
+        "x",
+        "File not found: x.py",
+        "reset the model cooldowns then retry",
+        component="c",
+        confidence=0.7,
+    )
     last = service.client.upsert.await_args.kwargs["points"][0].payload
-    assert last["correction"] == "reset the model cooldowns then retry"  # new content wins
+    assert (
+        last["correction"] == "reset the model cooldowns then retry"
+    )  # new content wins
     assert last["count"] >= 3  # recurrence evidence carried, not reset to 1
     assert last["confidence"] < 0.8  # new content gets modest confidence, not inflated
 
@@ -277,13 +372,23 @@ async def test_store_repeated_identical_write_reinforces():
         if i > 0:
             prev = service.client.upsert.await_args.kwargs["points"][0].payload
             service.client.retrieve.return_value = [SimpleNamespace(payload=prev)]
-        await service.store_reflexion("t", "x", "File not found: q.py", "always verify first", component="c", confidence=0.7)
+        await service.store_reflexion(
+            "t",
+            "x",
+            "File not found: q.py",
+            "always verify first",
+            component="c",
+            confidence=0.7,
+        )
     last = service.client.upsert.await_args.kwargs["points"][0].payload
     assert last["count"] == 3
     assert last["confidence"] > 0.7
 
+
 @pytest.mark.asyncio
-async def test_store_retrieve_failure_flagged_distinctly_from_first_write(tmp_path, monkeypatch, caplog):
+async def test_store_retrieve_failure_flagged_distinctly_from_first_write(
+    tmp_path, monkeypatch, caplog
+):
     """L5 (trust-gated consolidation): a GENUINE retrieve failure (raise) must be
     distinguishable from a legitimate first write — it must (a) log a distinct
     warning and (b) flag the stored payload `retrieve_failed=True` so history-not-
@@ -302,13 +407,22 @@ async def test_store_retrieve_failure_flagged_distinctly_from_first_write(tmp_pa
     service.client = MagicMock()
     service.client.query_points = AsyncMock()
     service.client.upsert = AsyncMock()
+
     # retrieve RAISES a real exception (simulating a DB/vector-store failure)
     async def _boom(*a, **k):
         raise RuntimeError("qdrant timeout")
+
     service.client.retrieve = _boom
 
     with caplog.at_level(logging.WARNING, logger="ReflectionLoop"):
-        await service.store_reflexion("t", "x", "File not found: z.py", "list the parent dir first", component="c", confidence=0.7)
+        await service.store_reflexion(
+            "t",
+            "x",
+            "File not found: z.py",
+            "list the parent dir first",
+            component="c",
+            confidence=0.7,
+        )
 
     last = service.client.upsert.await_args.kwargs["points"][0].payload
     # Flagged as unclassified, NOT silently presented as a normal first-write.
@@ -320,6 +434,13 @@ async def test_store_retrieve_failure_flagged_distinctly_from_first_write(tmp_pa
     # Contrast: a service whose retrieve returns [] (no prior record) must NOT
     # set the flag.
     service2 = _make_service_with_retrieve(None)
-    await service2.store_reflexion("t", "x", "File not found: zz.py", "list parent dir", component="c", confidence=0.7)
+    await service2.store_reflexion(
+        "t",
+        "x",
+        "File not found: zz.py",
+        "list parent dir",
+        component="c",
+        confidence=0.7,
+    )
     last2 = service2.client.upsert.await_args.kwargs["points"][0].payload
     assert last2["retrieve_failed"] is False

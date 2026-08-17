@@ -333,7 +333,7 @@ async def deep_research(
     try:
         max_sub_questions = max(1, min(int(max_sub_questions), 20))
         max_iterations = max(0, min(int(max_iterations), 3))
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return {"status": "error", "error": "invalid research parameters"}
 
     sem = asyncio.Semaphore(_MAX_CONCURRENCY)

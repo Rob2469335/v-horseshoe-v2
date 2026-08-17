@@ -111,7 +111,11 @@ class BasicLSPClient:
                 line = await self.process.stderr.readline()
                 if not line:
                     return
-                log.debug("lsp[%s] stderr: %s", self.command[0], line.decode("utf-8", "replace").rstrip())
+                log.debug(
+                    "lsp[%s] stderr: %s",
+                    self.command[0],
+                    line.decode("utf-8", "replace").rstrip(),
+                )
         except Exception:
             log.debug("LSP stderr drain error", exc_info=True)
             pass
@@ -154,7 +158,9 @@ class BasicLSPClient:
         fut = asyncio.get_running_loop().create_future()
         self._pending[msg_id] = fut
         try:
-            await self._send({"jsonrpc": "2.0", "id": msg_id, "method": method, "params": params})
+            await self._send(
+                {"jsonrpc": "2.0", "id": msg_id, "method": method, "params": params}
+            )
             async with asyncio.timeout(timeout):
                 return await fut
         except TimeoutError:
@@ -187,7 +193,10 @@ class BasicLSPClient:
                 except TimeoutError:
                     return []
                 params = msg.get("params", {}) if isinstance(msg, dict) else {}
-                if msg.get("method") == "textDocument/publishDiagnostics" and params.get("uri") == uri:
+                if (
+                    msg.get("method") == "textDocument/publishDiagnostics"
+                    and params.get("uri") == uri
+                ):
                     return params.get("diagnostics", [])
         finally:
             await self._notify("textDocument/didClose", {"textDocument": {"uri": uri}})
@@ -254,7 +263,9 @@ async def _acquire_client(ext: str) -> BasicLSPClient:
                     pass
         if client is None:
             cfg = LANGUAGE_SERVERS[ext]
-            client = BasicLSPClient(cfg["cmd"], str(Path.cwd().resolve()), cfg["languageId"])
+            client = BasicLSPClient(
+                cfg["cmd"], str(Path.cwd().resolve()), cfg["languageId"]
+            )
             await client.start()
             _pool[ext] = client
         client.last_used = now

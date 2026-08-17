@@ -14,4 +14,3 @@ async def test_simulation_service_saves_snapshots():
     assert len(repo.saved) == 2
     assert metrics.organism_count == len(kernel.organisms)
     assert metrics.generation == kernel.generation
-

@@ -3,6 +3,7 @@ tool_runtime.py - Tool execution framework for Horseshoe Swarm.
 Provides the CapabilityToolExecutor that routes tool calls to capability
 handlers via CapabilityRouter, with caching and error handling.
 """
+
 from __future__ import annotations
 
 import logging
@@ -18,7 +19,14 @@ class CapabilityToolExecutor:
     """
     Executes tool calls by routing to capability handlers with namespace-isolated caching.
     """
-    MCP_CAPABILITIES = {"filesystem", "playwright", "context7", "qdrant_recall", "web_search"}
+
+    MCP_CAPABILITIES = {
+        "filesystem",
+        "playwright",
+        "context7",
+        "qdrant_recall",
+        "web_search",
+    }
 
     def __init__(self, config: Dict[str, Any] = None):
         self.config = config or {}
@@ -40,17 +48,11 @@ class CapabilityToolExecutor:
         if hasattr(payload, "dict"):
             return payload.dict()
         if hasattr(payload, "__dict__"):
-            return {
-                k: v for k, v in vars(payload).items()
-                if not k.startswith("_")
-            }
+            return {k: v for k, v in vars(payload).items() if not k.startswith("_")}
         return {"value": payload}
 
     async def execute_tool(
-        self,
-        capability_name: str,
-        payload: Any,
-        cache_key: Optional[str] = None
+        self, capability_name: str, payload: Any, cache_key: Optional[str] = None
     ) -> Any:
         capability_name = capability_name.lower().strip()
         safe_key = f"{capability_name}:{cache_key}" if cache_key else None
@@ -91,4 +93,3 @@ class CapabilityToolExecutor:
 
     def cache_size(self) -> int:
         return len(self._tool_cache)
-

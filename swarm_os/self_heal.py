@@ -1,5 +1,6 @@
 import importlib
 
+
 class SelfHeal:
     def __init__(self):
         self.failed_modules = {}
@@ -20,4 +21,3 @@ class SelfHeal:
             else:
                 recovered[m] = "quarantined"
         return recovered
-

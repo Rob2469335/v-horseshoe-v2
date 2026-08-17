@@ -336,7 +336,9 @@ async def _run_job(job: dict[str, Any]) -> None:
             # continue. The lock-acquire timeout in chess_trainer makes the
             # next eval fail-open, so we don't stay wedged.
             job["errors"] = job.get("errors", [])
-            job["errors"].append(f"game {global_i}: timed out after {_GAME_TIMEOUT_S}s (skipped)")
+            job["errors"].append(
+                f"game {global_i}: timed out after {_GAME_TIMEOUT_S}s (skipped)"
+            )
             job["done_games"] = global_i + 1
         except Exception as exc:
             job["errors"] = job.get("errors", [])

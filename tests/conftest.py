@@ -1,4 +1,5 @@
 import ssl
+
 try:
     ssl._create_default_https_context = ssl._create_unverified_context
     ssl.create_default_context = ssl._create_unverified_context
@@ -6,6 +7,7 @@ except AttributeError:
     pass
 try:
     import truststore
+
     truststore.inject_into_ssl()
 except ImportError:
     pass
@@ -55,6 +57,7 @@ def harden_testclient_shutdown():
 from unittest.mock import patch, AsyncMock, MagicMock
 from qdrant_client import AsyncQdrantClient
 
+
 @pytest.fixture(autouse=True)
 def global_qdrant_mock():
     # Intercept any AsyncQdrantClient instantiation and force it to be an in-memory client.
@@ -62,9 +65,19 @@ def global_qdrant_mock():
     def mock_init(*args, **kwargs):
         return AsyncQdrantClient(":memory:")
 
-    with patch("swarm_os.services.vector_store.AsyncQdrantClient", side_effect=mock_init):
-        with patch("swarm_os.services.reflection_loop.AsyncQdrantClient", side_effect=mock_init, create=True):
-            with patch("swarm_os.services.tool_registry.AsyncQdrantClient", side_effect=mock_init, create=True):
+    with patch(
+        "swarm_os.services.vector_store.AsyncQdrantClient", side_effect=mock_init
+    ):
+        with patch(
+            "swarm_os.services.reflection_loop.AsyncQdrantClient",
+            side_effect=mock_init,
+            create=True,
+        ):
+            with patch(
+                "swarm_os.services.tool_registry.AsyncQdrantClient",
+                side_effect=mock_init,
+                create=True,
+            ):
                 yield
 
 
@@ -85,9 +98,18 @@ def global_mcp_manager_mock():
     mock_mgr.call_tool = AsyncMock(return_value="mock mcp result")
     mock_mgr.start = AsyncMock()
     mock_mgr.stop = AsyncMock()
-    with patch("runtime_v2.services.tool_executor.get_mcp_manager", AsyncMock(return_value=mock_mgr)):
-        with patch("runtime_v2.services.tool_executor._mcp_manager", mock_mgr, create=True):
-            with patch("swarm_os.app.main.get_mcp_manager", AsyncMock(return_value=mock_mgr), create=True):
+    with patch(
+        "runtime_v2.services.tool_executor.get_mcp_manager",
+        AsyncMock(return_value=mock_mgr),
+    ):
+        with patch(
+            "runtime_v2.services.tool_executor._mcp_manager", mock_mgr, create=True
+        ):
+            with patch(
+                "swarm_os.app.main.get_mcp_manager",
+                AsyncMock(return_value=mock_mgr),
+                create=True,
+            ):
                 yield
 
 
@@ -95,7 +117,9 @@ def global_mcp_manager_mock():
 def global_system_probe_mock():
     """Block system probes from running during tests — they call psutil and
     may take seconds or raise on CI environments without full OS access."""
-    with patch("swarm_os.healing.system_probes.run_system_probes", return_value={}, create=True):
+    with patch(
+        "swarm_os.healing.system_probes.run_system_probes", return_value={}, create=True
+    ):
         with patch("swarm_os.app.main.run_system_probes", return_value={}, create=True):
             yield
 
@@ -125,4 +149,3 @@ async def run_approved(tool_executor_run, tool_name: str, payload: dict) -> dict
     from runtime_v2.services.tool_executor import execute_approved
 
     return await execute_approved(pending_id)
-

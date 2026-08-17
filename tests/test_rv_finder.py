@@ -4,6 +4,7 @@ These cover the pure logic the user relies on daily: junk-title rejection,
 RV-type filtering (including motorhome aliases), the low-info deal-score cap,
 life-ease feature detection, and MPG/livability readouts. No network / LLM.
 """
+
 from __future__ import annotations
 
 import re
@@ -48,7 +49,9 @@ class TestJunkTitleFilter:
 
     @pytest.mark.parametrize("title", REAL_TITLES)
     def test_accepts_real_titles(self, title: str):
-        assert not _is_junk_title(title, model="view" if "View" in title else "leprechaun")
+        assert not _is_junk_title(
+            title, model="view" if "View" in title else "leprechaun"
+        )
 
     def test_rejects_junk_model_tokens(self):
         assert _is_junk_title("2016 Thor Motor Coach", model="Motor")
@@ -58,7 +61,9 @@ class TestJunkTitleFilter:
         assert _is_junk_title("Some listing 12 24 48 96 2016 Thor")
 
     def test_accepts_trailer_with_slide_count(self):
-        assert not _is_junk_title("2018 Coachmen Leprechaun 260DS 2 Slides Used", model="Leprechaun")
+        assert not _is_junk_title(
+            "2018 Coachmen Leprechaun 260DS 2 Slides Used", model="Leprechaun"
+        )
 
 
 class TestTypeFilter:
@@ -114,29 +119,47 @@ class TestMotorhomeDetection:
     def test_classified_trailer_wins_over_model_keyword(self):
         # "Aurora" is a known-motorhome model token, but the source classified
         # this unit as a Fifth Wheel — that must take precedence.
-        lst = RVListing(title="2024 Forest River Aurora 31KDS", model="Aurora",
-                        rv_type="Fifth Wheel", make="Forest River")
+        lst = RVListing(
+            title="2024 Forest River Aurora 31KDS",
+            model="Aurora",
+            rv_type="Fifth Wheel",
+            make="Forest River",
+        )
         assert not _title_motorhome(lst)
 
     def test_trailer_brand_model_is_not_headline_motorhome(self):
         # Coachmen Freedom is a travel trailer; no headline motorhome claim.
-        lst = RVListing(title="2023 Coachmen Freedom 29SE", model="Freedom 29SE",
-                        rv_type="unknown", make="Coachmen")
+        lst = RVListing(
+            title="2023 Coachmen Freedom 29SE",
+            model="Freedom 29SE",
+            rv_type="unknown",
+            make="Coachmen",
+        )
         assert not _title_motorhome(lst)
 
     def test_motorhome_only_brand_with_year_is_motorhome(self):
-        lst = RVListing(title="2015 Roadtrek 190 Popular", model="190 Popular",
-                        rv_type="unknown", make="Roadtrek")
+        lst = RVListing(
+            title="2015 Roadtrek 190 Popular",
+            model="190 Popular",
+            rv_type="unknown",
+            make="Roadtrek",
+        )
         assert _title_motorhome(lst)
         assert _is_motorhome_like(lst)
 
     def test_known_motorhome_model_without_type_keyword(self):
-        lst = RVListing(title="2015 Roadtrek 190 Popular", model="190 Popular", rv_type="unknown")
+        lst = RVListing(
+            title="2015 Roadtrek 190 Popular", model="190 Popular", rv_type="unknown"
+        )
         assert _is_motorhome_like(lst)
 
     def test_unknown_type_but_unambiguous_description(self):
-        lst = RVListing(title="2016 Winnebago View", model="View", rv_type="unknown",
-                        description="Class C motorhome, sleeps 4, Ford E-450")
+        lst = RVListing(
+            title="2016 Winnebago View",
+            model="View",
+            rv_type="unknown",
+            description="Class C motorhome, sleeps 4, Ford E-450",
+        )
         assert _is_motorhome_like(lst)
 
 

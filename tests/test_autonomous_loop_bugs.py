@@ -185,7 +185,8 @@ class TestBug1ReadOnlyDetection:
         # It must NOT have gone down the verification-loop path (which would
         # print the 'Autonomous Verification Loop' rule).
         assert not any(
-            "Verification Loop" in str(c.return_value) for c in cmd_ctx.console.print.call_args_list
+            "Verification Loop" in str(c.return_value)
+            for c in cmd_ctx.console.print.call_args_list
         ), "read-only goal must skip the fix-verification loop"
 
 
@@ -616,9 +617,7 @@ class TestGoalLoopSecurityGate:
     def test_non_py_ignored(self, tmp_path, monkeypatch):
         mod = _reload_autonomous()
         # A non-.py file with suspicious content must not be scanned at all.
-        (tmp_path / "notes.txt").write_text(
-            "import subprocess\n", encoding="utf-8"
-        )
+        (tmp_path / "notes.txt").write_text("import subprocess\n", encoding="utf-8")
         monkeypatch.setattr(mod, "PROJECT_ROOT", tmp_path)
         ok, msg = mod._scan_changed_for_security({"notes.txt"})
         assert ok is True, "non-.py files must not be security-scanned"
@@ -631,4 +630,3 @@ class TestGoalLoopSecurityGate:
         assert "_scan_changed_for_security" in src
         # The scan must be invoked on the files-changed path (before run_test_suite).
         assert "Running security gate on changed files" in src
-

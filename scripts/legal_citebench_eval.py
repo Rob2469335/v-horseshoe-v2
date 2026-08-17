@@ -40,6 +40,7 @@ Usage:
   --path   path to a cat3 jsonl (default: auto — GitHub raw, else temp fallback)
   --sample cap rows to process (default: all)
 """
+
 from __future__ import annotations
 
 import argparse
@@ -64,7 +65,9 @@ _CAT3_URL = (
     "https://raw.githubusercontent.com/Sijia711/LegalCiteBench/master/data/"
     "cat3/cat3_citation_verification.jsonl"
 )
-_LOCAL_FALLBACK = Path(r"C:\Users\rober\AppData\Local\Temp\cat3_citation_verification.jsonl")
+_LOCAL_FALLBACK = Path(
+    r"C:\Users\rober\AppData\Local\Temp\cat3_citation_verification.jsonl"
+)
 
 
 def read_cat3(path: str | None) -> list[dict]:
@@ -111,7 +114,7 @@ def gt_corrected_key(ground_truth: str) -> str | None:
         "the citation is incorrect, the correct citation is ",
     ):
         if gt.lower().startswith(prefix):
-            frag = gt[len(prefix):].strip().strip(".")
+            frag = gt[len(prefix) :].strip().strip(".")
             for key in (frag, frag.split("(", 1)[0].strip()):
                 ck = case_citation_key(key)
                 if ck:
@@ -121,9 +124,13 @@ def gt_corrected_key(ground_truth: str) -> str | None:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("--path", default=None, help="path to a cat3 jsonl (default: auto)")
-    ap.add_argument("--sample", type=int, default=0, help="cap a subset for a smoke run")
+    ap.add_argument(
+        "--sample", type=int, default=0, help="cap a subset for a smoke run"
+    )
     args = ap.parse_args()
 
     rows = read_cat3(args.path)

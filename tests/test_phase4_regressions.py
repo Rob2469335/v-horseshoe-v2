@@ -7,6 +7,7 @@
 - orchestrator stream_generate dedups concurrent identical streams (parity
   with generate)
 """
+
 from __future__ import annotations
 import asyncio
 import json
@@ -18,6 +19,7 @@ def test_event_log_repo_save_state_is_class_method(tmp_path):
     """save_state must be a method on EventLogRepository (it was accidentally
     nested inside _atomic_write_text -> AttributeError)."""
     from swarm_os.repositories.event_log_repo import EventLogRepository
+
     assert callable(EventLogRepository.save_state)
     repo = EventLogRepository(
         event_log_path=tmp_path / "events.jsonl",
@@ -33,6 +35,7 @@ def test_event_log_repo_read_events_bounded_tail(tmp_path):
     """read_events with max_events keeps only the most recent N while still
     advancing the offset past the whole file (no OOM on an offset-0 fresh file)."""
     from swarm_os.repositories.event_log_repo import EventLogRepository
+
     lines = "\n".join(json.dumps({"i": i}) for i in range(10)) + "\n"
     path = tmp_path / "events.jsonl"
     path.write_text(lines, encoding="utf-8")
@@ -55,6 +58,7 @@ def test_anomaly_tracker_prunes_least_recently_updated():
     arbitrarily deleted long-running ACTIVE components)."""
     import time
     from swarm_os.healing.anomaly_tracker import AnomalyTracker, MAX_TRACKED_SOURCES
+
     tracker = AnomalyTracker()
     # Insert more than the cap so pruning kicks in.
     for i in range(MAX_TRACKED_SOURCES + 10):
@@ -90,11 +94,14 @@ async def test_stream_generate_dedups_concurrent_identical():
     orch.trace = MagicMock()
     orch.trace.new_trace_id = MagicMock(return_value="t1")
     orch.router = MagicMock()
-    orch.router.route_model = AsyncMock(return_value=MagicMock(model="qwen3.5-4b", reason="r"))
+    orch.router.route_model = AsyncMock(
+        return_value=MagicMock(model="qwen3.5-4b", reason="r")
+    )
     orch._fetch_installed_models = AsyncMock(return_value=["qwen3.5-4b"])
     orch._detect_provider = MagicMock(return_value="llama")
     orch.events = MagicMock()
     from swarm_os.core.orchestrator import Orchestrator as RealOrchestrator
+
     real = RealOrchestrator.__new__(RealOrchestrator)
     real.__dict__.update(orch.__dict__)
     real._infer_task_role = MagicMock(return_value="reasoning")
@@ -102,8 +109,15 @@ async def test_stream_generate_dedups_concurrent_identical():
     real.trace.add = MagicMock()
 
     # Simulate an identical stream already running: acquire returns True.
-    with patch.object(orch_mod, "_acquire_generation_slot", AsyncMock(return_value=True)) as acq:
-        chunks = [c async for c in real.stream_generate(None, messages=[{"role": "user", "content": "same prompt"}])]
+    with patch.object(
+        orch_mod, "_acquire_generation_slot", AsyncMock(return_value=True)
+    ) as acq:
+        chunks = [
+            c
+            async for c in real.stream_generate(
+                None, messages=[{"role": "user", "content": "same prompt"}]
+            )
+        ]
         assert chunks and "Duplicate generation suppressed" in chunks[0][0]
         # The slot was NOT released for the suppressed (never-started) run.
         acq.assert_awaited_once()
@@ -136,11 +150,14 @@ async def test_stream_generate_releases_slot_when_abandoned():
     orch.trace = MagicMock()
     orch.trace.new_trace_id = MagicMock(return_value="t2")
     orch.router = MagicMock()
-    orch.router.route_model = AsyncMock(return_value=MagicMock(model="qwen3.5-4b", reason="r"))
+    orch.router.route_model = AsyncMock(
+        return_value=MagicMock(model="qwen3.5-4b", reason="r")
+    )
     orch._fetch_installed_models = AsyncMock(return_value=["qwen3.5-4b"])
     orch._detect_provider = MagicMock(return_value="llama")
     orch.events = MagicMock()
     from swarm_os.core.orchestrator import Orchestrator as RealOrchestrator
+
     real = RealOrchestrator.__new__(RealOrchestrator)
     real.__dict__.update(orch.__dict__)
     real._infer_task_role = MagicMock(return_value="reasoning")
@@ -149,11 +166,15 @@ async def test_stream_generate_releases_slot_when_abandoned():
 
     # Use the REAL acquire/release (not mocked) so the leak is observable.
     assert not orch_mod._active_generations, "suite must start with empty slot registry"
-    gen = real.stream_generate(None, messages=[{"role": "user", "content": "abandon me"}])
+    gen = real.stream_generate(
+        None, messages=[{"role": "user", "content": "abandon me"}]
+    )
     agen = gen.__aiter__()
     await agen.__anext__()
     # The stream IS in-flight and holding a slot now.
-    assert len(orch_mod._active_generations) == 1, "stream should hold the generation slot"
+    assert len(orch_mod._active_generations) == 1, (
+        "stream should hold the generation slot"
+    )
     stored_hash = next(iter(orch_mod._active_generations))
     # Client disconnects: abandon the stream without draining it.
     await gen.aclose()
@@ -183,7 +204,9 @@ async def test_generate_releases_slot_when_cancelled():
         orch.token_manager.check_budget = AsyncMock()
         orch.token_manager.add_usage = AsyncMock()
         orch.router = MagicMock()
-        orch.router.route_model = AsyncMock(return_value=MagicMock(model="qwen3.5-4b", reason="r"))
+        orch.router.route_model = AsyncMock(
+            return_value=MagicMock(model="qwen3.5-4b", reason="r")
+        )
         orch.router.record_failure = MagicMock()
         orch._fetch_installed_models = AsyncMock(return_value=["qwen3.5-4b"])
         orch._detect_provider = MagicMock(return_value="llama")
@@ -195,7 +218,8 @@ async def test_generate_releases_slot_when_cancelled():
         orch.mcp.get_tools_schema = MagicMock(return_value=[])
         if cancel_at == "routing":
             orch._fetch_installed_models = AsyncMock(
-                side_effect=asyncio.CancelledError("cancel routing"))
+                side_effect=asyncio.CancelledError("cancel routing")
+            )
         real = RealOrchestrator.__new__(RealOrchestrator)
         real.__dict__.update(orch.__dict__)
         real._infer_task_role = MagicMock(return_value="reasoning")
@@ -206,7 +230,9 @@ async def test_generate_releases_slot_when_cancelled():
         assert not orch_mod._active_generations
         real = build_real(window)
         with pytest.raises(asyncio.CancelledError):
-            await real.generate(None, messages=[{"role": "user", "content": f"cancel {window}"}])
+            await real.generate(
+                None, messages=[{"role": "user", "content": f"cancel {window}"}]
+            )
         assert not orch_mod._active_generations, (
             f"generation slot leaked after {window}-window cancellation"
         )
@@ -231,7 +257,9 @@ async def test_generate_releases_slot_when_cancelled_in_epilogue():
     orch._parse_tool_call = MagicMock(return_value=None)
     orch.events = MagicMock()
     orch.router = MagicMock()
-    orch.router.route_model = AsyncMock(return_value=MagicMock(model="qwen3.5-4b", reason="r"))
+    orch.router.route_model = AsyncMock(
+        return_value=MagicMock(model="qwen3.5-4b", reason="r")
+    )
     orch.router.record_failure = MagicMock()
     orch.router.record_success = MagicMock()
     orch.trace = MagicMock()
@@ -256,8 +284,12 @@ async def test_generate_releases_slot_when_cancelled_in_epilogue():
     orch_mod._active_generations.clear()
     try:
         with pytest.raises(asyncio.CancelledError):
-            await real.generate(None, messages=[{"role": "user", "content": "cancel epilogue"}])
-        assert not orch_mod._active_generations, "slot leaked after epilogue cancellation"
+            await real.generate(
+                None, messages=[{"role": "user", "content": "cancel epilogue"}]
+            )
+        assert not orch_mod._active_generations, (
+            "slot leaked after epilogue cancellation"
+        )
     finally:
         orch_mod.asyncio.to_thread = orig_to_thread
 
@@ -287,12 +319,15 @@ async def test_stream_generate_records_success_and_recovers_standing():
     orch.trace = MagicMock()
     orch.trace.new_trace_id = MagicMock(return_value="t3")
     orch.router = MagicMock()
-    orch.router.route_model = AsyncMock(return_value=MagicMock(model="qwen3.5-4b", reason="r"))
+    orch.router.route_model = AsyncMock(
+        return_value=MagicMock(model="qwen3.5-4b", reason="r")
+    )
     orch.router.record_success = MagicMock()
     orch._fetch_installed_models = AsyncMock(return_value=["qwen3.5-4b"])
     orch._detect_provider = MagicMock(return_value="llama")
     orch.events = MagicMock()
     from swarm_os.core.orchestrator import Orchestrator as RealOrchestrator
+
     real = RealOrchestrator.__new__(RealOrchestrator)
     real.__dict__.update(orch.__dict__)
     real._infer_task_role = MagicMock(return_value="reasoning")

@@ -5,11 +5,18 @@ from typing import List
 
 logger = logging.getLogger("SecurityGate")
 
+
 class SecurityGateViolation(Exception):
     pass
 
+
 class BannedNodeVisitor(ast.NodeVisitor):
-    def __init__(self, banned_calls: List[str], banned_modules: List[str], banned_os_attrs: frozenset):
+    def __init__(
+        self,
+        banned_calls: List[str],
+        banned_modules: List[str],
+        banned_os_attrs: frozenset,
+    ):
         self.banned_calls = banned_calls
         self.banned_modules = banned_modules
         self.banned_os_attrs = banned_os_attrs
@@ -24,9 +31,13 @@ class BannedNodeVisitor(ast.NodeVisitor):
     def visit_Call(self, node):
         if isinstance(node.func, ast.Name):
             if node.func.id in self.banned_calls:
-                self.violations.append(f"Banned built-in call found: '{node.func.id}' at line {node.lineno}")
+                self.violations.append(
+                    f"Banned built-in call found: '{node.func.id}' at line {node.lineno}"
+                )
             elif node.func.id in self._os_func_aliases:
-                self.violations.append(f"Banned os call found: '{node.func.id}' at line {node.lineno}")
+                self.violations.append(
+                    f"Banned os call found: '{node.func.id}' at line {node.lineno}"
+                )
             # Reflection that lifts a dangerous os attribute WITHOUT a Name call
             # or a direct os.attr scan: `getattr(os, 'system')('rm -rf /')`.
             # The attr name rides as a string argument, so visit_Attribute
@@ -43,13 +54,17 @@ class BannedNodeVisitor(ast.NodeVisitor):
                     or node.args[1].value in self.banned_os_attrs
                 )
             ):
-                self.violations.append(f"Banned reflection on os module: '{node.func.id}' at line {node.lineno}")
+                self.violations.append(
+                    f"Banned reflection on os module: '{node.func.id}' at line {node.lineno}"
+                )
         self.generic_visit(node)
 
     def visit_Import(self, node):
         for alias in node.names:
             if alias.name in self.banned_modules:
-                self.violations.append(f"Banned module import found: '{alias.name}' at line {node.lineno}")
+                self.violations.append(
+                    f"Banned module import found: '{alias.name}' at line {node.lineno}"
+                )
             elif alias.name == "os":
                 # os is allowed wholesale; dangerous ATTRIBUTES are checked in
                 # visit_Attribute. Track the bound name so `import os as o`
@@ -59,11 +74,15 @@ class BannedNodeVisitor(ast.NodeVisitor):
 
     def visit_ImportFrom(self, node):
         if node.module in self.banned_modules:
-            self.violations.append(f"Banned module import found: '{node.module}' at line {node.lineno}")
+            self.violations.append(
+                f"Banned module import found: '{node.module}' at line {node.lineno}"
+            )
         elif node.module == "os":
             for alias in node.names:
                 if alias.name in self.banned_os_attrs:
-                    self.violations.append(f"Banned os import found: 'os.{alias.name}' at line {node.lineno}")
+                    self.violations.append(
+                        f"Banned os import found: 'os.{alias.name}' at line {node.lineno}"
+                    )
                     self._os_func_aliases.add(alias.asname or alias.name)
         self.generic_visit(node)
 
@@ -73,7 +92,9 @@ class BannedNodeVisitor(ast.NodeVisitor):
             and node.value.id in self._os_names
             and node.attr in self.banned_os_attrs
         ):
-            self.violations.append(f"Banned os call found: 'os.{node.attr}' at line {node.lineno}")
+            self.violations.append(
+                f"Banned os call found: 'os.{node.attr}' at line {node.lineno}"
+            )
         elif (
             isinstance(node.value, ast.Name)
             and node.value.id == "__builtins__"
@@ -93,7 +114,9 @@ class BannedNodeVisitor(ast.NodeVisitor):
         # back __import__ without a Name-call / os-attr scan ever matching. The
         # `__builtins__` name is never a legit sandbox target.
         if isinstance(node.value, ast.Name) and node.value.id == "__builtins__":
-            self.violations.append(f"Banned builtins access found: '__builtins__' at line {node.lineno}")
+            self.violations.append(
+                f"Banned builtins access found: '__builtins__' at line {node.lineno}"
+            )
         # `sys.modules['os'].system('rm -rf /')` — sys.modules yields a live os
         # module whose .system attr scan never fires (value is a Subscript, not
         # a Name tracked in _os_names).
@@ -103,13 +126,15 @@ class BannedNodeVisitor(ast.NodeVisitor):
             and node.value.value.id == "sys"
             and node.value.attr == "modules"
         ):
-            self.violations.append(f"Banned sys.modules access found at line {node.lineno}")
+            self.violations.append(
+                f"Banned sys.modules access found at line {node.lineno}"
+            )
         self.generic_visit(node)
 
 
 class SecurityGate:
     """Deterministic, immutable AST security gate for mutated code."""
-    
+
     # BUG FIX: Expanded security banlists.
     # The original list missed dangerous builtin calls and several critical modules
     # that allow for arbitrary execution or network exfiltration.
@@ -119,7 +144,15 @@ class SecurityGate:
     # under a module-name Attribute (the Name-call scan never fires). The
     # already-special-cased __builtins__ attribute/subscript access stays
     # blocked independently (see visit_Attribute/visit_Subscript).
-    BANNED_MODULES = ["subprocess", "socket", "ctypes", "pty", "shlex", "importlib", "builtins"]
+    BANNED_MODULES = [
+        "subprocess",
+        "socket",
+        "ctypes",
+        "pty",
+        "shlex",
+        "importlib",
+        "builtins",
+    ]
     # os/sys are NOT wholesale-banned: the debugger/coder agents legitimately run
     # `import os; os.walk('.')` / `import sys` in sandbox_repl to explore and test.
     # Only os's dangerous attributes (process exec, file destruction/mutation,
@@ -127,27 +160,73 @@ class SecurityGate:
     # level. sys exposes nothing dangerous inside the isolated `python -I`
     # subprocess (exit/argv/print routing only). subprocess/socket/ctypes/pty/
     # shlex stay wholesale-banned — they have no safe use in a sandbox snippet.
-    BANNED_OS_ATTRS = frozenset({
-        # process/command execution
-        "system", "popen", "posix_spawn", "posix_spawnp", "spawnl", "spawnle",
-        "spawnlp", "spawnlpe", "spawnv", "spawnve", "spawnvp", "spawnvpe",
-        "execv", "execve", "execvp", "execvpe", "execl", "execle", "execlp",
-        "execlpe", "fork", "forkpty", "kill", "killpg", "startfile",
-        # file destruction / mutation (read + list + walk stay allowed)
-        "remove", "unlink", "rmdir", "removedirs", "rename", "replace",
-        "chmod", "chown", "lchown", "truncate", "link", "symlink", "mkfifo",
-        "mknod", "utime",
-        # privilege / process control
-        "setuid", "setgid", "seteuid", "setegid", "setreuid", "setregid",
-        "setgroups", "setpgid", "setsid", "nice",
-        # environment mutation
-        "putenv", "unsetenv",
-    })
+    BANNED_OS_ATTRS = frozenset(
+        {
+            # process/command execution
+            "system",
+            "popen",
+            "posix_spawn",
+            "posix_spawnp",
+            "spawnl",
+            "spawnle",
+            "spawnlp",
+            "spawnlpe",
+            "spawnv",
+            "spawnve",
+            "spawnvp",
+            "spawnvpe",
+            "execv",
+            "execve",
+            "execvp",
+            "execvpe",
+            "execl",
+            "execle",
+            "execlp",
+            "execlpe",
+            "fork",
+            "forkpty",
+            "kill",
+            "killpg",
+            "startfile",
+            # file destruction / mutation (read + list + walk stay allowed)
+            "remove",
+            "unlink",
+            "rmdir",
+            "removedirs",
+            "rename",
+            "replace",
+            "chmod",
+            "chown",
+            "lchown",
+            "truncate",
+            "link",
+            "symlink",
+            "mkfifo",
+            "mknod",
+            "utime",
+            # privilege / process control
+            "setuid",
+            "setgid",
+            "seteuid",
+            "setegid",
+            "setreuid",
+            "setregid",
+            "setgroups",
+            "setpgid",
+            "setsid",
+            "nice",
+            # environment mutation
+            "putenv",
+            "unsetenv",
+        }
+    )
 
     @classmethod
     def _scan_visitor(cls, code: str) -> BannedNodeVisitor:
         tree = ast.parse(code, mode="exec")
-        visitor = BannedNodeVisitor(cls.BANNED_CALLS, cls.BANNED_MODULES, cls.BANNED_OS_ATTRS)
+        visitor = BannedNodeVisitor(
+            cls.BANNED_CALLS, cls.BANNED_MODULES, cls.BANNED_OS_ATTRS
+        )
         visitor.visit(tree)
         return visitor
 
@@ -174,15 +253,17 @@ class SecurityGate:
                 tree = ast.parse(f.read(), filename=str(filepath))
         except SyntaxError as e:
             raise SecurityGateViolation(f"Syntax Error in {filepath}: {e}")
-            
-        visitor = BannedNodeVisitor(cls.BANNED_CALLS, cls.BANNED_MODULES, cls.BANNED_OS_ATTRS)
+
+        visitor = BannedNodeVisitor(
+            cls.BANNED_CALLS, cls.BANNED_MODULES, cls.BANNED_OS_ATTRS
+        )
         visitor.visit(tree)
-        
+
         if visitor.violations:
             violation_msg = "; ".join(visitor.violations)
             logger.error(f"Security Gate triggered on {filepath}: {violation_msg}")
             raise SecurityGateViolation(violation_msg)
-            
+
         logger.info(f"Security scan passed for {filepath}.")
         return True
 
@@ -193,8 +274,10 @@ def clean_sandbox_env(extra: dict | None = None) -> dict:
     cannot exfiltrate credentials or trigger daemon loops. Keeps PATH and the
     standard library. PYTHONNOUSERSITE=1 keeps -I isolated mode strict."""
     import os
+
     clean = {
-        k: v for k, v in os.environ.items()
+        k: v
+        for k, v in os.environ.items()
         if not any(s in k.upper() for s in ("API_KEY", "TOKEN", "SECRET", "PASSWORD"))
         and not k.startswith("SWARM_")
     }
@@ -225,8 +308,9 @@ sys.exit(0)
 """
 
 
-def scan_code_isolated(code: str, project_root: str | None = None,
-                       timeout: float = 20.0) -> tuple[bool, str]:
+def scan_code_isolated(
+    code: str, project_root: str | None = None, timeout: float = 20.0
+) -> tuple[bool, str]:
     """Run the AST security scan for untrusted code in a SEPARATE process and
     return (ok, reason).
 
@@ -236,8 +320,11 @@ def scan_code_isolated(code: str, project_root: str | None = None,
     import os
     import subprocess
     import sys
+
     if project_root is None:
-        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        project_root = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "..", "..")
+        )
     runner = _SCAN_RUNNER.format(project_root=project_root)
     cmd = [sys.executable, "-I", "-c", runner]
     try:
@@ -251,7 +338,9 @@ def scan_code_isolated(code: str, project_root: str | None = None,
     except Exception as exc:
         return (False, f"Security gate scan process could not start: {exc}")
     try:
-        _, err_bytes = proc.communicate(input=code.encode("utf-8", errors="replace"), timeout=timeout)
+        _, err_bytes = proc.communicate(
+            input=code.encode("utf-8", errors="replace"), timeout=timeout
+        )
     except subprocess.TimeoutExpired:
         try:
             proc.kill()

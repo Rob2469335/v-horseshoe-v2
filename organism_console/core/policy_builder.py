@@ -41,18 +41,27 @@ class PolicyBuilder:
         constraints: list[str] = []
         constraint_rules: list[dict[str, Any]] = []
 
-        for bucket in [success_memories, pattern_memories, heuristic_memories, policy_memories]:
+        for bucket in [
+            success_memories,
+            pattern_memories,
+            heuristic_memories,
+            policy_memories,
+        ]:
             for m in bucket:
                 weight = max(float(m.get("importance", 0.1)), 0.1)
                 for tool in m.get("tool_sequence", []):
-                    positive_counts[tool] = round(positive_counts.get(tool, 0.0) + weight, 3)
+                    positive_counts[tool] = round(
+                        positive_counts.get(tool, 0.0) + weight, 3
+                    )
 
         for bucket in [failure_memories, constraint_memories]:
             for m in bucket:
                 weight = max(float(m.get("importance", 0.1)), 0.1)
                 summary = str(m.get("summary", ""))
                 for tool in m.get("tool_sequence", []):
-                    negative_counts[tool] = round(negative_counts.get(tool, 0.0) + weight, 3)
+                    negative_counts[tool] = round(
+                        negative_counts.get(tool, 0.0) + weight, 3
+                    )
                     if negative_counts[tool] >= 0.25:
                         blocked_tools.add(tool)
                         rule = {
@@ -67,10 +76,15 @@ class PolicyBuilder:
         tool_bias_vector: dict[str, float] = {}
         all_tools = set(positive_counts.keys()) | set(negative_counts.keys())
         for tool in all_tools:
-            tool_bias_vector[tool] = round(positive_counts.get(tool, 0.0) - negative_counts.get(tool, 0.0), 3)
+            tool_bias_vector[tool] = round(
+                positive_counts.get(tool, 0.0) - negative_counts.get(tool, 0.0), 3
+            )
 
         preferred_tools = [
-            tool for tool, score in sorted(tool_bias_vector.items(), key=lambda kv: kv[1], reverse=True)
+            tool
+            for tool, score in sorted(
+                tool_bias_vector.items(), key=lambda kv: kv[1], reverse=True
+            )
             if score > 0
         ]
 

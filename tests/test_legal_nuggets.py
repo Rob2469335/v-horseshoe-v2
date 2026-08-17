@@ -5,10 +5,14 @@ The research-backed guarantee: a transcript summary's value is verifiability,
 not generation. Nuggets make every summary claim traceable to a page; QA pairs
 are canonicalized to declarative statements. All deterministic — no LLM.
 """
+
 from __future__ import annotations
 
 from swarm_os.services.legal.nuggets import (
-    build_nuggets, sentence_support, _is_fragment, _answer_to_declarative,
+    build_nuggets,
+    sentence_support,
+    _is_fragment,
+    _answer_to_declarative,
 )
 from swarm_os.services.legal.transcript_search import Passage
 
@@ -42,7 +46,12 @@ def test_answer_to_declarative_bare_confirmation_uses_question_verb():
 
 def test_build_nuggets_splits_sentences_with_page_anchors():
     passages = [
-        _p("MS. AL-SHABAZZ", 503, "You met him in October of 2012, right? You were at his house.", kind="q"),
+        _p(
+            "MS. AL-SHABAZZ",
+            503,
+            "You met him in October of 2012, right? You were at his house.",
+            kind="q",
+        ),
     ]
     idx = build_nuggets(passages)
     # "You were at his house." is a full sentence nugget; the leading question
@@ -64,7 +73,11 @@ def test_build_nuggets_canonicalizes_qa_pair():
 
 def test_sentence_support_maps_summary_sentence_to_nugget():
     passages = [
-        _p("THE WITNESS", 503, "I met Reginald Dewitt in October of 2012. He was my landlord."),
+        _p(
+            "THE WITNESS",
+            503,
+            "I met Reginald Dewitt in October of 2012. He was my landlord.",
+        ),
     ]
     idx = build_nuggets(passages)
     support = sentence_support("The witness met Reginald Dewitt in October 2012.", idx)
@@ -73,8 +86,10 @@ def test_sentence_support_maps_summary_sentence_to_nugget():
 
 
 def test_sentence_support_returns_empty_for_unverifiable_sentence():
-    idx = build_nuggets([
-        _p("THE WITNESS", 503, "I met Reginald Dewitt in October of 2012."),
-    ])
+    idx = build_nuggets(
+        [
+            _p("THE WITNESS", 503, "I met Reginald Dewitt in October of 2012."),
+        ]
+    )
     support = sentence_support("The defendant confessed on television.", idx)
     assert support == [], "an unsupported summary sentence must have no nugget anchor"

@@ -110,10 +110,13 @@ def run_test_suite(
         # re-run means the failure was a flaky test, NOT a broken agent patch —
         # do not reject a sound patch on a transient failure (same semantics as
         # repair_engine._run_related_tests).
-        retry_cmd = (
-            [sys.executable, "-m", "pytest", "--tb=short", "--lf"]
-            + test_targets
-        )
+        retry_cmd = [
+            sys.executable,
+            "-m",
+            "pytest",
+            "--tb=short",
+            "--lf",
+        ] + test_targets
         retry_result = subprocess.run(
             retry_cmd,
             capture_output=True,
@@ -124,12 +127,19 @@ def run_test_suite(
             errors="replace",
         )
         combined = (
-            result.stdout + "\n" + result.stderr
+            result.stdout
+            + "\n"
+            + result.stderr
             + "\n--- last-failed re-run ---\n"
-            + retry_result.stdout + "\n" + retry_result.stderr
+            + retry_result.stdout
+            + "\n"
+            + retry_result.stderr
         )
         if retry_result.returncode == 0:
-            return True, "[flaky] first run failed, last-failed re-run passed:\n" + combined
+            return (
+                True,
+                "[flaky] first run failed, last-failed re-run passed:\n" + combined,
+            )
         return False, combined
     except subprocess.TimeoutExpired:
         return False, "Test execution timed out after 120 seconds."
@@ -204,9 +214,10 @@ def _record_verification_reflexion(
         from swarm_os.services.reflection_loop import get_reflection_service
         import asyncio as _asyncio
 
-        head = " | ".join(
-            s.strip()[:120] for s in (trace_preview or "").splitlines()[:5]
-        ) or (final_msg or "")[:200]
+        head = (
+            " | ".join(s.strip()[:120] for s in (trace_preview or "").splitlines()[:5])
+            or (final_msg or "")[:200]
+        )
         reason = f"goal verification failed: {head[:400]}"
 
         async def _record():
@@ -232,9 +243,7 @@ def _record_verification_reflexion(
 
             def _consume(_t: _asyncio.Task) -> None:
                 if not _t.cancelled() and _t.exception() and console is not None:
-                    console.print(
-                        f"[dim]reflexion task failed: {_t.exception()}[/dim]"
-                    )
+                    console.print(f"[dim]reflexion task failed: {_t.exception()}[/dim]")
 
             _record_task.add_done_callback(_consume)
         except RuntimeError:
@@ -670,7 +679,9 @@ def run_autonomous_goal_loop(
                     )
                     passed, logs = _verify_goal_with_reviewer(goal, final_msg)
                 else:
-                    console.print("[dim]Running security gate on changed files...[/dim]")
+                    console.print(
+                        "[dim]Running security gate on changed files...[/dim]"
+                    )
                     sec_ok, sec_logs = _scan_changed_for_security(changed_this_attempt)
                     if not sec_ok:
                         passed = False
@@ -685,7 +696,9 @@ def run_autonomous_goal_loop(
                     else:
                         console.print("[dim]Running test verification suite...[/dim]")
                         test_passed, test_logs = run_test_suite(
-                            goal, baseline=attempt_baseline, changed=changed_this_attempt
+                            goal,
+                            baseline=attempt_baseline,
+                            changed=changed_this_attempt,
                         )
                         if test_passed is None:
                             # No tests cover this attempt's changes — do NOT pass on

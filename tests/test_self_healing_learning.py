@@ -25,16 +25,25 @@ class PersistentLearningOrchestrator:
         if not state["learned_fallback"]:
             state["learned_fallback"] = True
             state["events"] = [
-                {"event": "failure_detected", "detail": "primary runtime orchestrator unavailable"},
+                {
+                    "event": "failure_detected",
+                    "detail": "primary runtime orchestrator unavailable",
+                },
                 {"event": "repair_applied", "detail": "persisted fallback decision"},
-                {"event": "verification_passed", "detail": "recovery succeeded and was stored"},
+                {
+                    "event": "verification_passed",
+                    "detail": "recovery succeeded and was stored",
+                },
             ]
             self._save_state(state)
             return state["events"][:limit]
 
         learned_events = list(state["events"])
         learned_events.append(
-            {"event": "learned_reuse", "detail": "fresh app instance reused persisted repair"}
+            {
+                "event": "learned_reuse",
+                "detail": "fresh app instance reused persisted repair",
+            }
         )
         return learned_events[:limit]
 

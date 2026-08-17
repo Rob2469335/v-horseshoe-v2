@@ -5,6 +5,7 @@ answers shipped with a confident citation, what fraction carry a misleading
 one. Faithfulness is the reference-free claim-support check (ALCE-style).
 These pin the deterministic metric functions (no LLM, no network).
 """
+
 from __future__ import annotations
 
 import sys
@@ -16,31 +17,59 @@ from legal_rag_eval import mar_from_verification, faithfulness, evaluate_answer 
 
 
 def test_mar_zero_when_clean():
-    v = {"checked": True, "count": 2, "fabricated": 0, "unaligned": 0,
-         "shape_mismatch": 0, "unverified": 0, "unparsed": 0,
-         "case_alignment": {"unaligned": []}}
+    v = {
+        "checked": True,
+        "count": 2,
+        "fabricated": 0,
+        "unaligned": 0,
+        "shape_mismatch": 0,
+        "unverified": 0,
+        "unparsed": 0,
+        "case_alignment": {"unaligned": []},
+    }
     assert mar_from_verification(v) == 0.0
 
 
 def test_mar_penalizes_fabrication():
-    v = {"checked": True, "count": 2, "fabricated": 1, "unaligned": 0,
-         "shape_mismatch": 0, "unverified": 0, "unparsed": 0,
-         "case_alignment": {"unaligned": []}}
+    v = {
+        "checked": True,
+        "count": 2,
+        "fabricated": 1,
+        "unaligned": 0,
+        "shape_mismatch": 0,
+        "unverified": 0,
+        "unparsed": 0,
+        "case_alignment": {"unaligned": []},
+    }
     assert mar_from_verification(v) == 0.5
 
 
 def test_mar_penalizes_case_alignment_unaligned():
-    v = {"checked": True, "count": 1, "fabricated": 0, "unaligned": 0,
-         "shape_mismatch": 0, "unverified": 0, "unparsed": 0,
-         "case_alignment": {"unaligned": [{"cite": "999 F.3d 123"}]}}
+    v = {
+        "checked": True,
+        "count": 1,
+        "fabricated": 0,
+        "unaligned": 0,
+        "shape_mismatch": 0,
+        "unverified": 0,
+        "unparsed": 0,
+        "case_alignment": {"unaligned": [{"cite": "999 F.3d 123"}]},
+    }
     assert mar_from_verification(v) == 1.0
 
 
 def test_mar_zero_when_nothing_shipped():
     # Zero citations shipped -> nothing misleading was shipped -> MAR 0.
-    v = {"checked": True, "count": 0, "fabricated": 0, "unaligned": 0,
-         "shape_mismatch": 0, "unverified": 0, "unparsed": 0,
-         "case_alignment": {"unaligned": []}}
+    v = {
+        "checked": True,
+        "count": 0,
+        "fabricated": 0,
+        "unaligned": 0,
+        "shape_mismatch": 0,
+        "unverified": 0,
+        "unparsed": 0,
+        "case_alignment": {"unaligned": []},
+    }
     assert mar_from_verification(v) == 0.0
 
 
@@ -92,11 +121,18 @@ async def test_evaluate_answer_runs_full_seam():
     must count every penalty against the single shipped citation."""
     with patch("legal_rag_eval.verify_citations") as mock_vc:
         mock_vc.return_value.stats = {
-            "count": 1, "verified": 0, "fabricated": 0, "ambiguous": 0,
-            "shape_mismatch": 0, "unverified": 1, "unparsed": 0, "skipped": 0,
+            "count": 1,
+            "verified": 0,
+            "fabricated": 0,
+            "ambiguous": 0,
+            "shape_mismatch": 0,
+            "unverified": 1,
+            "unparsed": 0,
+            "skipped": 0,
         }
-        res = await evaluate_answer("q", "The answer cites 576 U.S. 644.",
-                                    ["576 U.S. 644 Obergefell"])
+        res = await evaluate_answer(
+            "q", "The answer cites 576 U.S. 644.", ["576 U.S. 644 Obergefell"]
+        )
     assert res["verify"]["unverified"] == 1
     # 576 U.S. 644 is not in the curated case manifest -> also case_unaligned.
     assert len(res["verify"]["case_alignment"]["unaligned"]) == 1

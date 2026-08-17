@@ -35,7 +35,9 @@ class HealthyVerifier:
 
 def test_policy_engine_denies_unknown_high_risk_action():
     engine = RemediationPolicyEngine()
-    decision = engine.evaluate(component="system", action="restart_component", attempt_count=1)
+    decision = engine.evaluate(
+        component="system", action="restart_component", attempt_count=1
+    )
 
     assert decision["permitted"] is False
     assert "approval required" in decision["reasons"]
@@ -78,6 +80,8 @@ def test_policy_endpoints_return_policy_data():
     assert component_response.status_code == 200
     assert component_response.json()["status"] == "ok"
 
-    check_response = client.get("/features/healing-policy-check?component=chat_model&action=retry_request&attempt_count=1")
+    check_response = client.get(
+        "/features/healing-policy-check?component=chat_model&action=retry_request&attempt_count=1"
+    )
     assert check_response.status_code == 200
     assert check_response.json()["decision"]["permitted"] is True

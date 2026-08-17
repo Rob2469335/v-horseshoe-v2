@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+
 class MockSnapshotRepository:
     def __init__(self):
         self.saved = []
@@ -19,4 +20,3 @@ class MockSnapshotRepository:
 
     def latest(self) -> Path | None:
         return None
-

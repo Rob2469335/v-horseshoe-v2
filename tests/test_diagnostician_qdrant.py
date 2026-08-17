@@ -11,7 +11,7 @@ def test_diagnostician_boosts_with_qdrant():
     sym = {"component": "worker", "detail": "Out of memory: OOM killed process"}
     hyps = diag.diagnose(sym)
     # find memory_pressure hypothesis
-    mem = next((h for h in hyps if h.get('hypothesis') == 'memory_pressure'), None)
+    mem = next((h for h in hyps if h.get("hypothesis") == "memory_pressure"), None)
     assert mem is not None
     # confidence should have been boosted above base 0.75
-    assert mem.get('confidence', 0) > 0.75
+    assert mem.get("confidence", 0) > 0.75

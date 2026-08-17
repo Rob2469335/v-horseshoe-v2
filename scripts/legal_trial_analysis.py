@@ -15,6 +15,7 @@ The report is derived entirely from the transcript text — it reports WHAT is o
 a page and WHERE, never asserted legal significance (the same discipline as
 build_analysis: pure, synchronous, offline, page-grounded).
 """
+
 from __future__ import annotations
 
 import argparse
@@ -38,9 +39,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", default=str(DEFAULT_OUT), help="report output path")
     parser.add_argument(
-        "--files", nargs="*", default=None,
+        "--files",
+        nargs="*",
+        default=None,
         help="specific transcript files (relative to data/legal/transcripts); "
-             "default: every *.txt in the transcripts dir, sorted by name",
+        "default: every *.txt in the transcripts dir, sorted by name",
     )
     args = parser.parse_args()
 
@@ -50,21 +53,28 @@ def main() -> None:
         files = sorted(TRANSCRIPTS_DIR.glob("*.txt"))
 
     if not files:
-        print(f"No transcripts found in {TRANSCRIPTS_DIR}. "
-              "Copy your trial transcript .txt files there first.", file=sys.stderr)
+        print(
+            f"No transcripts found in {TRANSCRIPTS_DIR}. "
+            "Copy your trial transcript .txt files there first.",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     indices = []
     for f in files:
         try:
             idx = ingest_transcript_file(f, case=CASE)
-            print(f"  {f.name}: {len(idx.passages)} passages, "
-                  f"{len({p.page for p in idx.passages})} pages, "
-                  f"{len(idx.speakers())} speakers")
+            print(
+                f"  {f.name}: {len(idx.passages)} passages, "
+                f"{len({p.page for p in idx.passages})} pages, "
+                f"{len(idx.speakers())} speakers"
+            )
             indices.append(idx)
         except Exception as exc:
-            print(f"  {f.name}: FAILED to parse — {type(exc).__name__}: {exc}",
-                  file=sys.stderr)
+            print(
+                f"  {f.name}: FAILED to parse — {type(exc).__name__}: {exc}",
+                file=sys.stderr,
+            )
 
     # Merge same-day segments (files sharing a YYYY-MM-DD prefix) into one
     # logical trial day — e.g. the 5/6/19 pre-trial day split across 4 PDFs.
@@ -91,7 +101,9 @@ def main() -> None:
     out_path = Path(args.out)
     build_analysis(merged, str(out_path))
     print(f"\nAnalysis written to {out_path}")
-    print(f"  {len(merged)} day(s), {sum(len(i.passages) for i in merged)} passages total")
+    print(
+        f"  {len(merged)} day(s), {sum(len(i.passages) for i in merged)} passages total"
+    )
 
 
 if __name__ == "__main__":

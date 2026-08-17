@@ -21,6 +21,7 @@ traceable to transcript pages:
 Pure and deterministic — no LLM in the nugget core (the research supports a
 deterministic core with optional LLM assist; we keep the core offline).
 """
+
 from __future__ import annotations
 
 import re
@@ -94,7 +95,9 @@ def _is_fragment(part: str) -> bool:
     return bool(_FRAGMENT_ONLY_RE.fullmatch(part.strip().rstrip(".!?")))
 
 
-def _answer_to_declarative(question: str, answer: str, witness: str = "the witness") -> str:
+def _answer_to_declarative(
+    question: str, answer: str, witness: str = "the witness"
+) -> str:
     """QA-pair -> declarative statement (the 2009.04485 canonical-form
     transform). 'Q. Did you meet him? A. Yes.' -> 'The witness met him.'
     Deterministic: strips the answer lead, and when the answer is a bare
@@ -121,19 +124,33 @@ def _answer_to_declarative(question: str, answer: str, witness: str = "the witne
         # declarative keeps the substance ("the witness did meet him").
         m = re.match(
             r"(?:did|do|does|was|were|is|are|have|has|had)\s+(\w+)\s+(.+?)[?.]?$",
-            q, re.IGNORECASE,
+            q,
+            re.IGNORECASE,
         )
         if m:
             aux = m.group(0).split()[0].lower()
             subj, rest = m.group(1), m.group(2)
-            negation = " not" if a.lower().startswith(("no", "nope", "i don't", "i didn't")) else ""
+            negation = (
+                " not"
+                if a.lower().startswith(("no", "nope", "i don't", "i didn't"))
+                else ""
+            )
             # Map the question's 2nd-person subject to the witness; "you"/"your"
             # reference the witness in a deposition.
             if subj.lower() in ("you", "your"):
                 subj = witness
-            aux_decl = {"did": "did", "do": "does", "does": "does",
-                        "was": "was", "were": "was", "is": "is", "are": "is",
-                        "have": "has", "has": "has", "had": "had"}.get(aux, aux)
+            aux_decl = {
+                "did": "did",
+                "do": "does",
+                "does": "does",
+                "was": "was",
+                "were": "was",
+                "is": "is",
+                "are": "is",
+                "have": "has",
+                "has": "has",
+                "had": "had",
+            }.get(aux, aux)
             return f"{subj} {aux_decl}{negation} {rest}".strip()
         return f"{witness} answered: {a}"
     return a_no_lead or a
@@ -163,13 +180,13 @@ def build_nuggets(passages: list[Passage], witness: str = "the witness") -> Nugg
             q_pass = passages[i - 1]
             decl = _answer_to_declarative(q_pass.text, p.text, witness=witness)
             if decl:
-                idx.declarative_statements.append(
-                    f"[p.{p.page}] {decl}"
-                )
+                idx.declarative_statements.append(f"[p.{p.page}] {decl}")
     return idx
 
 
-def sentence_support(sentence: str, index: NuggetIndex, threshold: float = 0.6) -> list[Nugget]:
+def sentence_support(
+    sentence: str, index: NuggetIndex, threshold: float = 0.6
+) -> list[Nugget]:
     """Return the nuggets supporting a summary sentence (token-overlap based,
     deterministic). A sentence is verifiable iff it maps to >= 1 nugget. This
     is the transcript analog of ALCE per-sentence citation support."""

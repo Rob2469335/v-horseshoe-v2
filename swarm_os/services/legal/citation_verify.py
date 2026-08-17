@@ -25,6 +25,7 @@ Two-stage hybrid, grounded in the SOTA research (no LLM guessing in the check):
 This is the primary safety mechanism (LegalCiteBench Cat3/Cat4 analog): a
 fabricated citation is blocked (status 404), an ambiguous one flagged (300).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -64,19 +65,19 @@ _NOT_FOUND_STATUSES = {404, 400, 300}
 
 @dataclass
 class CitationResult:
-    raw: str                 # the citation text as parsed by Eyecite
-    kind: str                # FullCaseCitation / FullLawCitation / IdCitation / ...
-    verified: bool           # True if CourtListener returned 200 (exists) AND the
-                             #   lookup's normalized shape matches the cited shape
-    status: int | None       # CourtListener lookup status (200/404/400/300/429/None)
+    raw: str  # the citation text as parsed by Eyecite
+    kind: str  # FullCaseCitation / FullLawCitation / IdCitation / ...
+    verified: bool  # True if CourtListener returned 200 (exists) AND the
+    #   lookup's normalized shape matches the cited shape
+    status: int | None  # CourtListener lookup status (200/404/400/300/429/None)
     error_message: str = ""
     normalized: list[str] = field(default_factory=list)
     case_name: str = ""
     clusters: int = 0
     skipped_reason: str = ""
     shape_mismatch: bool = False  # 200 but normalized citation differs from ours
-    match_class: str = ""    # M6 3-class verdict: "exact" / "minor" / "major" /
-                             #   "" (not a 200 match — fabricated/unverified/skipped)
+    match_class: str = ""  # M6 3-class verdict: "exact" / "minor" / "major" /
+    #   "" (not a 200 match — fabricated/unverified/skipped)
 
 
 # M6 3-class comparison: after a 200 (the cite maps to a real cluster), the sent
@@ -115,8 +116,13 @@ class VerifyResponse:
     message: str = ""
 
 
-async def _lookup_one(client: httpx.AsyncClient, vol: str | None, reporter: str | None,
-                      page: str | None, text: str | None) -> dict[str, Any]:
+async def _lookup_one(
+    client: httpx.AsyncClient,
+    vol: str | None,
+    reporter: str | None,
+    page: str | None,
+    text: str | None,
+) -> dict[str, Any]:
     """POST one citation to CourtListener's citation-lookup. Returns the first
     result item (or {}). Never raises — callers get a 429/error dict on failure."""
     payload: dict[str, str] = {}
@@ -263,6 +269,7 @@ def _normalize_section(section: Any) -> str:
     s = re.sub(r"[^0-9A-Za-z]+", "-", str(section or "")).strip("-").lower()
     return s
 
+
 # Reporter continuation segments may start with a digit: the CourtListener
 # canonical form of a series reporter is SPACED ("Ohio St. 3d 57") while the
 # passage form is NOT ("Ohio St.3d 57"). Both must canonicalize to the same
@@ -308,6 +315,7 @@ def extract_case_citations(text: str) -> list[str]:
     if _EYECITE_OK:
         try:
             from eyecite.models import FullCaseCitation
+
             for c in get_citations(text):
                 if isinstance(c, FullCaseCitation):
                     out.append(getattr(c, "matched_text", lambda: "")() or "")
@@ -325,9 +333,11 @@ def extract_case_citations(text: str) -> list[str]:
     return clean
 
 
-def align_case_citations(answer_text: str,
-                         retrieved_case_cites: list[str],
-                         corpus_case_cites: list[str] | None = None) -> dict[str, Any]:
+def align_case_citations(
+    answer_text: str,
+    retrieved_case_cites: list[str],
+    corpus_case_cites: list[str] | None = None,
+) -> dict[str, Any]:
     """The M6 CASE-LAW alignment seam — the case-law analog of align_citations.
 
     A case citation in the answer is canonical-keyed (case_citation_key) and
@@ -357,6 +367,7 @@ def align_case_citations(answer_text: str,
     if corpus_case_cites is None:
         try:
             from swarm_os.services.legal.case_corpus import CASE_MANIFEST
+
             corpus_case_cites = [c["cite"] for c in CASE_MANIFEST]
         except Exception:
             corpus_case_cites = []
@@ -439,7 +450,9 @@ def align_citations(answer_text: str, retrieved_sections: list[str]) -> dict[str
     }
 
 
-async def verify_citations(blob: str, courtlistener_key: str | None = None) -> VerifyResponse:
+async def verify_citations(
+    blob: str, courtlistener_key: str | None = None
+) -> VerifyResponse:
     """Verify every case citation in `blob` against CourtListener.
 
     Statutory / id. / supra citations are PARSED and listed but skipped for
@@ -456,9 +469,14 @@ async def verify_citations(blob: str, courtlistener_key: str | None = None) -> V
     """
     shapes = count_citation_shapes(blob)
     if not _EYECITE_OK:
-        return VerifyResponse(ok=False, citations=[], stats={
-            "error": "eyecite not installed", "unparsed": shapes,
-        })
+        return VerifyResponse(
+            ok=False,
+            citations=[],
+            stats={
+                "error": "eyecite not installed",
+                "unparsed": shapes,
+            },
+        )
     strings, kinds = _resolve_to_full(blob)
     # `unparsed` = citation-SHAPED passages eyecite could not parse AT ALL.
     # Every successfully-parsed citation (of ANY kind — FullCaseCitation,
@@ -469,15 +487,19 @@ async def verify_citations(blob: str, courtlistener_key: str | None = None) -> V
     # reported "unparsed" even though the parser handled it.
     unparsed = max(0, shapes - len(strings))
     if not strings:
-        return VerifyResponse(ok=True, citations=[], stats={
-            "count": 0,
-            "unparsed": unparsed,
-            "unverified": 0,
-            "verified": 0,
-            "fabricated": 0,
-            "ambiguous": 0,
-            "skipped": 0,
-        })
+        return VerifyResponse(
+            ok=True,
+            citations=[],
+            stats={
+                "count": 0,
+                "unparsed": unparsed,
+                "unverified": 0,
+                "verified": 0,
+                "fabricated": 0,
+                "ambiguous": 0,
+                "skipped": 0,
+            },
+        )
 
     headers = {}
     if courtlistener_key:
@@ -488,14 +510,24 @@ async def verify_citations(blob: str, courtlistener_key: str | None = None) -> V
     async with httpx.AsyncClient(headers=headers, timeout=25.0) as client:
         results: list[CitationResult] = []
         for raw, kind in zip(strings, kinds):
-            if kind in ("FullLawCitation", "IdCitation", "SupraCitation", "LawJournalCitation"):
-                results.append(CitationResult(
-                    raw=raw, kind=kind, verified=False, status=None,
-                    skipped_reason=(
-                        "statutory/id./supra/law-journal citations are parsed but not "
-                        "externally verified (CourtListener citation-lookup skips them)"
-                    ),
-                ))
+            if kind in (
+                "FullLawCitation",
+                "IdCitation",
+                "SupraCitation",
+                "LawJournalCitation",
+            ):
+                results.append(
+                    CitationResult(
+                        raw=raw,
+                        kind=kind,
+                        verified=False,
+                        status=None,
+                        skipped_reason=(
+                            "statutory/id./supra/law-journal citations are parsed but not "
+                            "externally verified (CourtListener citation-lookup skips them)"
+                        ),
+                    )
+                )
                 continue
             # Case citation: look up by volume/reporter/page via a text POST.
             # Eyecite gives us the matched string; hand it to the API as text.
@@ -521,7 +553,11 @@ async def verify_citations(blob: str, courtlistener_key: str | None = None) -> V
                     # would never match the sent key, false-flagging a REAL
                     # citation as shape-mismatched. Only compare canonical
                     # citations that carry all three parts.
-                    vol, rep, page = cite.get("volume"), cite.get("reporter"), cite.get("page")
+                    vol, rep, page = (
+                        cite.get("volume"),
+                        cite.get("reporter"),
+                        cite.get("page"),
+                    )
                     if not (vol and rep and page):
                         continue
                     c_key = case_citation_key(f"{vol} {rep} {page}")
@@ -535,24 +571,27 @@ async def verify_citations(blob: str, courtlistener_key: str | None = None) -> V
             )
             verified = status == 200 and not shape_mismatch
             match_class = classify_match(sent_key, canonical_keys)
-            results.append(CitationResult(
-                raw=raw,
-                kind=kind,
-                verified=verified,
-                status=status,
-                error_message=lookup.get("error_message", ""),
-                normalized=normalized,
-                case_name=(lookup.get("clusters") or [{}])[0].get("case_name", ""),
-                clusters=len(lookup.get("clusters") or []),
-                shape_mismatch=shape_mismatch,
-                match_class=match_class,
-            ))
+            results.append(
+                CitationResult(
+                    raw=raw,
+                    kind=kind,
+                    verified=verified,
+                    status=status,
+                    error_message=lookup.get("error_message", ""),
+                    normalized=normalized,
+                    case_name=(lookup.get("clusters") or [{}])[0].get("case_name", ""),
+                    clusters=len(lookup.get("clusters") or []),
+                    shape_mismatch=shape_mismatch,
+                    match_class=match_class,
+                )
+            )
 
     fabricated = [r for r in results if r.status == 404]
     ambiguous = [r for r in results if r.status == 300]
     shape_mismatched = [r for r in results if r.shape_mismatch]
-    unverified = [r for r in results
-                  if not r.skipped_reason and r.status not in (200, 404, 300)]
+    unverified = [
+        r for r in results if not r.skipped_reason and r.status not in (200, 404, 300)
+    ]
     ok = not fabricated  # fabricated citations are a hard stop; ambiguous are flagged
     # Coverage-aware split of "unverified" (M6, "Citation Grounding Measures the
     # Oracle"): a parsed case citation with status None is UNVERIFIED — but WHY?

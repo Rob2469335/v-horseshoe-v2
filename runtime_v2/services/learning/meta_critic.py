@@ -1,4 +1,3 @@
-
 class MetaCritic:
     """
     Self-adjusting critic.
@@ -9,7 +8,7 @@ class MetaCritic:
         self.weights = weights or {
             "success_weight": 0.8,
             "confidence_weight": 0.2,
-            "failure_penalty": 0.4
+            "failure_penalty": 0.4,
         }
 
     @classmethod
@@ -20,12 +19,12 @@ class MetaCritic:
         critic = cls()
         if not entries:
             return critic
-            
+
         last_entry = entries[-1]
         if "weights" in last_entry and last_entry["weights"]:
             critic.weights = last_entry["weights"].copy()
             return critic
-            
+
         lr = 0.05  # match live learning rate
         for entry in entries:
             predicted = entry.get("predicted", 0.5)
@@ -37,8 +36,8 @@ class MetaCritic:
         base = 1.0 if success else 0.0
 
         score = (
-            base * self.weights["success_weight"] +
-            confidence * self.weights["confidence_weight"]
+            base * self.weights["success_weight"]
+            + confidence * self.weights["confidence_weight"]
         )
 
         if not success:
@@ -46,7 +45,9 @@ class MetaCritic:
 
         return max(0.0, min(1.0, score))
 
-    def learn(self, predicted_score: float, actual_success: bool, learning_rate: float = 0.05):
+    def learn(
+        self, predicted_score: float, actual_success: bool, learning_rate: float = 0.05
+    ):
         """
         Adjust weights based on error between prediction and reality.
         """

@@ -288,7 +288,9 @@ class TrainingAnswerRequest(BaseModel):
 
 
 @router.get("/review/training")
-async def trainer_training(limit: int = 10, concept: str | None = None) -> dict[str, Any]:
+async def trainer_training(
+    limit: int = 10, concept: str | None = None
+) -> dict[str, Any]:
     """Concept-level spaced-repetition training items (Repair / Reinforce /
     Transfer). Prioritizes your weakest concept first."""
     from ..services import chess_training
@@ -303,7 +305,12 @@ async def trainer_training_build(force: bool = False) -> dict[str, Any]:
 
     own = chess_training.build_items_from_mistakes(force=force)
     gm = chess_training.build_items_from_gm(force=force)
-    return {"ok": True, "own_game": own, "gm": gm, "progress": chess_training.concept_progress()}
+    return {
+        "ok": True,
+        "own_game": own,
+        "gm": gm,
+        "progress": chess_training.concept_progress(),
+    }
 
 
 @router.post("/review/training/answer")
@@ -311,7 +318,9 @@ async def trainer_training_answer(req: TrainingAnswerRequest) -> dict[str, Any]:
     """Record a training answer and advance/fall back the item's box."""
     from ..services import chess_training
 
-    return chess_training.record_answer(req.item_id, req.correct, req.confidence, req.confidence_captured_at)
+    return chess_training.record_answer(
+        req.item_id, req.correct, req.confidence, req.confidence_captured_at
+    )
 
 
 @router.get("/review/training/progress")

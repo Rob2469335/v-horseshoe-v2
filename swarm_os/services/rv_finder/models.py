@@ -4,6 +4,7 @@ The dataclass is the internal, trusted representation of a discovered listing.
 Serialization to plain dicts happens here so callers (API, renderers) never
 touch the internal shape.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -51,7 +52,9 @@ def serialize_listing(lst: RVListing | None) -> dict[str, Any] | None:
         "mileage": lst.mileage,
         "size_ft": lst.size_ft,
         "sleeps": lst.sleeps,
-        "distance_miles": round(lst.distance_miles, 1) if lst.distance_miles is not None else None,
+        "distance_miles": round(lst.distance_miles, 1)
+        if lst.distance_miles is not None
+        else None,
         "description": (lst.description or "")[:2000],
         "analysis": {
             "fair_value_range": lst.analysis.get("fair_value_range"),

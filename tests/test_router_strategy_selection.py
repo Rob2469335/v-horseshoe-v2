@@ -41,5 +41,3 @@ async def test_router_keeps_default_strategy_for_fast_role():
     assert decision.strategy == "default"
     assert decision.model == "qwen3.5-4b"
     assert decision.fallback is False
-
-

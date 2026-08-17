@@ -9,6 +9,7 @@ log = logging.getLogger(__name__)
 
 LOG_PATH = os.path.join(os.getcwd(), ".swarm", "patch_log.jsonl")
 
+
 class EventBus:
     def __init__(self):
         self.subscribers: List[asyncio.Queue] = []
@@ -21,9 +22,9 @@ class EventBus:
             "event": event_type,
             "id": patch_id,
             "timestamp": time.time(),
-            "payload": payload
+            "payload": payload,
         }
-        
+
         # 1. Persist to Disk (for history/recovery)
         try:
             with open(self.persistent_path, "a", encoding="utf-8") as f:
@@ -31,7 +32,7 @@ class EventBus:
         except Exception as e:
             log.error(f"Failed to persist event to disk: {e}")
             pass  # Prevent race conditions or serialization errors from crashing the app
-            
+
         # 2. Dispatch to SSE Subscribers (Real-time)
         self._dispatch_to_subscribers(event)
 
@@ -45,7 +46,7 @@ class EventBus:
         """Creates a new queue for a subscriber and yields events."""
         if self.main_loop is None or self.main_loop.is_closed():
             self.main_loop = asyncio.get_running_loop()
-            
+
         queue = asyncio.Queue()
         self.subscribers.append(queue)
         try:
@@ -54,6 +55,7 @@ class EventBus:
                 yield event
         finally:
             self.subscribers.remove(queue)
+
 
 # Global Singleton
 event_bus = EventBus()

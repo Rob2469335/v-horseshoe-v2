@@ -13,6 +13,7 @@ docket *entries* (what exists, when), never transcript content. A transcript is
 obtained from the court reporter / party PACER access, then searched with
 transcript_search.py.
 """
+
 from __future__ import annotations
 
 import json
@@ -94,7 +95,7 @@ def load_case(docket_id: str) -> CaseRecord | None:
     try:
         with _LOCK:
             data = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+    except json.JSONDecodeError, OSError:
         return None
     return CaseRecord(
         docket_id=data.get("docket_id", docket_id),

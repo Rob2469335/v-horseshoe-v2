@@ -11,6 +11,7 @@ Covers:
      with the live TOOL_CALL_SCHEMA in _llm_parser.py (same action enum length +
      values, additionalProperties:false), so silent divergence fails loudly.
 """
+
 import asyncio
 
 from unittest.mock import patch
@@ -27,8 +28,10 @@ def _run_complete(env_on: bool, local_model: bool) -> dict:
         def __init__(self):
             class Msg:
                 content = '{"action": "final"}'
+
             class Choice:
                 message = Msg()
+
             self.choices = [Choice()]
 
     async def fake_acompletion(**kwargs):
@@ -45,6 +48,7 @@ def _run_complete(env_on: bool, local_model: bool) -> dict:
     model = "openai/qwen3.5-4b" if local_model else "openrouter/deepseek/deepseek-chat"
 
     import os
+
     if env_on:
         os.environ["SWARM_GRAMMAR_DECODE"] = "1"
     else:
@@ -52,11 +56,15 @@ def _run_complete(env_on: bool, local_model: bool) -> dict:
     # Reset the once-only log flag.
     llm_client._grammar_decoded_logged = False
 
-    with patch.object(llm_client.litellm, "acompletion", side_effect=fake_acompletion), \
-         patch.object(llm_client, "build_router", return_value=_FakeRouter()):
-        asyncio.run(llm_client.complete_for_tool_decision(
-            model, [{"role": "user", "content": "list files"}], []
-        ))
+    with (
+        patch.object(llm_client.litellm, "acompletion", side_effect=fake_acompletion),
+        patch.object(llm_client, "build_router", return_value=_FakeRouter()),
+    ):
+        asyncio.run(
+            llm_client.complete_for_tool_decision(
+                model, [{"role": "user", "content": "list files"}], []
+            )
+        )
     return dict(captured)
 
 

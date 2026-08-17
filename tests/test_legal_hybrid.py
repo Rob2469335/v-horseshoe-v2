@@ -6,10 +6,15 @@ legal queries are phrase/citation-exact where dense embeddings miss exact
 tokens, so lexical + dense fused with RRF beats either alone. These tests pin
 the deterministic lexical leg, the RRF fusion, and the exact-citation recall.
 """
+
 from __future__ import annotations
 
 from swarm_os.services.legal.hybrid_search import (
-    bm25_score, rrf_fuse, hybrid_fuse, lexical_rank, tokenize,
+    bm25_score,
+    rrf_fuse,
+    hybrid_fuse,
+    lexical_rank,
+    tokenize,
 )
 
 
@@ -21,7 +26,9 @@ def test_tokenize_splits_legal_shapes():
 
 def test_bm25_score_ranks_relevant_doc_higher():
     q = tokenize("tenant notice deposit return")
-    relevant = tokenize("the tenant must receive notice before the landlord keeps the deposit")
+    relevant = tokenize(
+        "the tenant must receive notice before the landlord keeps the deposit"
+    )
     irrelevant = tokenize("the contractor must finish the roof by Friday")
     assert bm25_score(q, relevant) > bm25_score(q, irrelevant)
 
@@ -66,8 +73,14 @@ def test_lexical_rank_exact_citation_recall():
     document containing that citation at the top even when dense might bury it
     (the "576 U.S. 644" exact-token case)."""
     pool = [
-        {"id": 1, "content": "The rule from Obergefell v. Hodges, 576 U.S. 644 (2015) controls."},
-        {"id": 2, "content": "A discussion of marriage equality generally, no citation."},
+        {
+            "id": 1,
+            "content": "The rule from Obergefell v. Hodges, 576 U.S. 644 (2015) controls.",
+        },
+        {
+            "id": 2,
+            "content": "A discussion of marriage equality generally, no citation.",
+        },
     ]
     ranked = lexical_rank("576 U.S. 644", pool)
     assert ranked[0]["id"] == 1, "the exact citation doc must rank first lexically"

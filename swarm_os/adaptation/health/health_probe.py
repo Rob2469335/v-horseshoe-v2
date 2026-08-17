@@ -14,12 +14,13 @@ class HealthProbe:
         start = time.time()
         if self.check_fn:
             ok, detail = self.check_fn(component)
-            status = 'healthy' if ok else 'unhealthy'
+            status = "healthy" if ok else "unhealthy"
         else:
             # default healthy
             ok = True
-            detail = 'ok'
-            status = 'healthy'
+            detail = "ok"
+            status = "healthy"
         latency_ms = max(0.0, (time.time() - start) * 1000.0)
-        return SimpleNamespace(component=component, status=status, latency_ms=latency_ms, detail=detail)
-
+        return SimpleNamespace(
+            component=component, status=status, latency_ms=latency_ms, detail=detail
+        )

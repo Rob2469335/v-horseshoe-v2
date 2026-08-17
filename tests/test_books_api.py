@@ -304,7 +304,10 @@ def test_synthesize_returns_fragments(tmp_path):
     with _make_client(tmp_path) as c:
         r = c.post(
             "/books/synthesize",
-            json={"question": "how do I productize an AI automation service?", "generate": False},
+            json={
+                "question": "how do I productize an AI automation service?",
+                "generate": False,
+            },
         )
     assert r.status_code == 200
     j = r.json()

@@ -1,6 +1,7 @@
 from runtime_v2.services.learning.meta_critic import MetaCritic
 from runtime_v2.services.learning.critic_journal import CriticJournal
 
+
 class EvolvingCritic:
     def __init__(self):
         self.journal = CriticJournal()
@@ -20,21 +21,27 @@ class EvolvingCritic:
             "predicted": predicted,
             "actual": success,
             "score": score,
-            "weights": self.critic.weights.copy()
+            "weights": self.critic.weights.copy(),
         }
 
         # BUG FIX: Retain the journal future so exceptions don't vanish silently,
         # and avoid unhandled-future warnings on GC.
         try:
             import asyncio
+
             loop = asyncio.get_running_loop()
             future = loop.run_in_executor(None, self.journal.log, data)
             self._bg_tasks.add(future)
             future.add_done_callback(self._bg_tasks.discard)
+
             def _log_exc(f):
                 if not f.cancelled() and f.exception():
                     import logging
-                    logging.getLogger(__name__).warning("Journal log failed: %s", f.exception())
+
+                    logging.getLogger(__name__).warning(
+                        "Journal log failed: %s", f.exception()
+                    )
+
             future.add_done_callback(_log_exc)
         except RuntimeError:
             self.journal.log(data)

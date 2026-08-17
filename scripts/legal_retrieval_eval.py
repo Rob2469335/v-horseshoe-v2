@@ -21,6 +21,7 @@ Usage:
 Golden item shape: {question, jurisdiction, expected_cites: [str, ...],
                     corpus: "statutes"|"cases"}
 """
+
 from __future__ import annotations
 
 import argparse
@@ -40,33 +41,39 @@ from swarm_os.services.legal.citation_verify import case_citation_key  # noqa: E
 GOLDEN = [
     {
         "question": "What notice must a New York landlord give before withholding a security deposit?",
-        "jurisdiction": "ny", "corpus": "statutes",
+        "jurisdiction": "ny",
+        "corpus": "statutes",
         "expected_cites": ["N.Y. GOL Law § 7-103"],
     },
     {
         "question": "tenant rights when the apartment becomes uninhabitable",
-        "jurisdiction": "ny", "corpus": "statutes",
+        "jurisdiction": "ny",
+        "corpus": "statutes",
         "expected_cites": [],  # topic-described, no exact cite — any relevant hit counts
         "expected_keywords": ["warranty", "habitability"],
     },
     {
         "question": "what is the standard for plain error review of an unpreserved objection",
-        "jurisdiction": "federal", "corpus": "cases",
+        "jurisdiction": "federal",
+        "corpus": "cases",
         "expected_cites": ["507 U.S. 725"],
     },
     {
         "question": "Batson peremptory challenge racial discrimination equal protection",
-        "jurisdiction": "federal", "corpus": "cases",
+        "jurisdiction": "federal",
+        "corpus": "cases",
         "expected_cites": ["476 U.S. 79"],
     },
     {
         "question": "restitution award abuse of discretion review standard",
-        "jurisdiction": "federal", "corpus": "cases",
+        "jurisdiction": "federal",
+        "corpus": "cases",
         "expected_cites": ["446 F.3d 65"],
     },
     {
         "question": "substitute counsel waiver 252 F.3d 238",
-        "jurisdiction": "federal", "corpus": "cases",
+        "jurisdiction": "federal",
+        "corpus": "cases",
         "expected_cites": ["252 F.3d 238"],
     },
 ]
@@ -92,7 +99,9 @@ async def evaluate_item(item: dict, top_k: int = 5) -> dict:
         results = await search_cases(q, top_k=top_k)
         hit_field = "citation"
     else:
-        results = await search_statutes(q, jurisdiction=item.get("jurisdiction"), top_k=top_k)
+        results = await search_statutes(
+            q, jurisdiction=item.get("jurisdiction"), top_k=top_k
+        )
         hit_field = "citation"
 
     surfaced = [_normalize_cite(r.get(hit_field, "") or "") for r in results]
@@ -114,18 +123,27 @@ async def evaluate_item(item: dict, top_k: int = 5) -> dict:
     elif expected_keywords:
         # Topic-described with no exact cite: score by keyword presence in the
         # top result's content.
-        recall = 1.0 if results and any(
-            kw.lower() in (results[0].get("content", "") or "").lower()
-            for kw in expected_keywords
-        ) else 0.0
+        recall = (
+            1.0
+            if results
+            and any(
+                kw.lower() in (results[0].get("content", "") or "").lower()
+                for kw in expected_keywords
+            )
+            else 0.0
+        )
         mrr = 1.0 if recall else 0.0
     else:
         recall, mrr = 1.0, 1.0  # nothing expected -> trivially satisfied
 
     return {
-        "question": q, "corpus": corpus, "surfaced": surfaced,
-        "expected": item.get("expected_cites", []), "recall@k": recall,
-        "mrr": mrr, "top_result": (results[0].get(hit_field, "") if results else ""),
+        "question": q,
+        "corpus": corpus,
+        "surfaced": surfaced,
+        "expected": item.get("expected_cites", []),
+        "recall@k": recall,
+        "mrr": mrr,
+        "top_result": (results[0].get(hit_field, "") if results else ""),
     }
 
 
@@ -135,8 +153,15 @@ async def run_eval(gold: list[dict], top_k: int = 5) -> dict:
         try:
             results.append(await evaluate_item(item, top_k=top_k))
         except Exception as exc:
-            results.append({"question": item.get("question", ""), "error": str(exc),
-                            "recall@k": 0.0, "mrr": 0.0, "surfaced": []})
+            results.append(
+                {
+                    "question": item.get("question", ""),
+                    "error": str(exc),
+                    "recall@k": 0.0,
+                    "mrr": 0.0,
+                    "surfaced": [],
+                }
+            )
     recalls = [r["recall@k"] for r in results]
     mrrs = [r["mrr"] for r in results]
     return {
@@ -148,15 +173,19 @@ async def run_eval(gold: list[dict], top_k: int = 5) -> dict:
 
 
 def render_report(report: dict) -> str:
-    out = [f"# Legal Retrieval Eval — mean recall@{len(report.get('results', [])) and 5}: {report['mean_recall@k']}",
-           f"MRR: {report['mean_mrr']}"]
+    out = [
+        f"# Legal Retrieval Eval — mean recall@{len(report.get('results', [])) and 5}: {report['mean_recall@k']}",
+        f"MRR: {report['mean_mrr']}",
+    ]
     for r in report.get("results", []):
         if r.get("error"):
             out.append(f"- [ERR] {r['question']}: {r['error']}")
             continue
         top = r.get("top_result", "")
-        out.append(f"- [{r['corpus']}] recall={r['recall@k']:.2f} mrr={r['mrr']:.2f} "
-                   f"| {r['question'][:60]} | top={top[:40]} | expected={r['expected']}")
+        out.append(
+            f"- [{r['corpus']}] recall={r['recall@k']:.2f} mrr={r['mrr']:.2f} "
+            f"| {r['question'][:60]} | top={top[:40]} | expected={r['expected']}"
+        )
     return "\n".join(out)
 
 

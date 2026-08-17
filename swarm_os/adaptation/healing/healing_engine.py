@@ -9,10 +9,12 @@ from typing import Any, Dict
 
 log = logging.getLogger(__name__)
 
+
 class HealingAction:
     def __init__(self, action: str, reason: str) -> None:
         self.action = action
         self.reason = reason
+
 
 class HealingEngine:
     def __init__(
@@ -73,7 +75,11 @@ class HealingEngine:
 
         # Determine the action to take
         actions = {
-            "vector_store": ["restart_vector_layer", "switch_to_fallback_search", "cooldown"],
+            "vector_store": [
+                "restart_vector_layer",
+                "switch_to_fallback_search",
+                "cooldown",
+            ],
             "chat_model": ["retry_request", "rotate_model_provider", "cooldown"],
             "system": ["restart_component", "cooldown"],
         }
@@ -104,9 +110,9 @@ class HealingEngine:
                 req = self.approval_queue.create_request(
                     component=component,
                     action=action,
-                    reason="policy gated: " + ", ".join(reasons)
+                    reason="policy gated: " + ", ".join(reasons),
                 )
-            
+
             # Record policy block in metrics if metrics configured
             if self.metrics:
                 # Gated: not executed, not verified, not escalated (yet)
@@ -115,18 +121,23 @@ class HealingEngine:
                     action=action,
                     executed=False,
                     verified=False,
-                    escalated=False
+                    escalated=False,
                 )
             if self.audit:
-                self.audit.record({
-                    "component": component,
-                    "action": action,
-                    "executed": False,
-                    "repair": {"status": "approval_required", "detail": "policy gated"},
-                    "verification": {"verified": False, "detail": "skipped"},
-                    "escalated": False,
-                    "timestamp": datetime.now(timezone.utc).isoformat()
-                })
+                self.audit.record(
+                    {
+                        "component": component,
+                        "action": action,
+                        "executed": False,
+                        "repair": {
+                            "status": "approval_required",
+                            "detail": "policy gated",
+                        },
+                        "verification": {"verified": False, "detail": "skipped"},
+                        "escalated": False,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    }
+                )
 
             res = {
                 "action": action,
@@ -161,7 +172,7 @@ class HealingEngine:
             else:
                 success = getattr(exec_res, "status", "success") == "success"
                 detail = getattr(exec_res, "detail", str(exec_res))
-            
+
             if not success:
                 repair_status = "failed"
                 repair_detail = detail
@@ -191,7 +202,7 @@ class HealingEngine:
             escalation_res = self.escalation.escalate(
                 component=component,
                 action=action,
-                detail=f"Verification failed: {verification_detail}"
+                detail=f"Verification failed: {verification_detail}",
             )
             escalated = True
 
@@ -202,41 +213,40 @@ class HealingEngine:
                 action=action,
                 executed=executed,
                 verified=verified,
-                escalated=escalated
+                escalated=escalated,
             )
 
         # Record audit
         if self.audit:
-            self.audit.record({
-                "component": component,
-                "action": action,
-                "executed": executed,
-                "repair": {"status": repair_status, "detail": repair_detail},
-                "verification": {"verified": verified, "detail": verification_detail},
-                "escalated": escalated,
-                "timestamp": datetime.now(timezone.utc).isoformat()
-            })
+            self.audit.record(
+                {
+                    "component": component,
+                    "action": action,
+                    "executed": executed,
+                    "repair": {"status": repair_status, "detail": repair_detail},
+                    "verification": {
+                        "verified": verified,
+                        "detail": verification_detail,
+                    },
+                    "escalated": escalated,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+            )
 
         # Record learning
         if self.learning:
             self.learning.record_repair(
                 component=component,
                 action=action,
-                success=(repair_status == "success" and verified)
+                success=(repair_status == "success" and verified),
             )
 
         result = {
             "action": action,
             "executed": executed,
-            "repair": {
-                "status": repair_status,
-                "detail": repair_detail
-            },
-            "verification": {
-                "verified": verified,
-                "detail": verification_detail
-            },
-            "policy": {"permitted": permitted, "reasons": reasons}
+            "repair": {"status": repair_status, "detail": repair_detail},
+            "verification": {"verified": verified, "detail": verification_detail},
+            "policy": {"permitted": permitted, "reasons": reasons},
         }
         if escalated:
             result["escalation"] = escalation_res

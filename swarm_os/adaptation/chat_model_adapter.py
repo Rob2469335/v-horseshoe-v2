@@ -12,7 +12,9 @@ class GenerateResult:
 
 
 class ChatModelAdapter:
-    def __init__(self, primary_provider: str, providers: Dict[str, Callable[[str], str]]):
+    def __init__(
+        self, primary_provider: str, providers: Dict[str, Callable[[str], str]]
+    ):
         self.primary_provider = primary_provider
         self.providers = dict(providers)
 
@@ -22,13 +24,21 @@ class ChatModelAdapter:
             try:
                 fn = self.providers.get(self.primary_provider)
                 if fn is None:
-                    return GenerateResult(ok=False, provider=self.primary_provider, content="no provider")
+                    return GenerateResult(
+                        ok=False, provider=self.primary_provider, content="no provider"
+                    )
                 content = fn(prompt)
-                return GenerateResult(ok=True, provider=self.primary_provider, content=content)
+                return GenerateResult(
+                    ok=True, provider=self.primary_provider, content=content
+                )
             except Exception as e:
-                return GenerateResult(ok=False, provider=self.primary_provider, content=str(e))
+                return GenerateResult(
+                    ok=False, provider=self.primary_provider, content=str(e)
+                )
 
-        providers_to_try = [self.primary_provider] + [p for p in self.providers if p != self.primary_provider]
+        providers_to_try = [self.primary_provider] + [
+            p for p in self.providers if p != self.primary_provider
+        ]
         last_exc = None
         for provider in providers_to_try:
             try:
@@ -40,7 +50,9 @@ class ChatModelAdapter:
             except Exception as e:
                 last_exc = e
                 continue
-        return GenerateResult(ok=False, provider=self.primary_provider, content=str(last_exc))
+        return GenerateResult(
+            ok=False, provider=self.primary_provider, content=str(last_exc)
+        )
 
     def rotate_provider(self) -> str:
         # naive rotate: pick any provider not equal to primary
@@ -49,4 +61,3 @@ class ChatModelAdapter:
                 self.primary_provider = p
                 return p
         return self.primary_provider
-

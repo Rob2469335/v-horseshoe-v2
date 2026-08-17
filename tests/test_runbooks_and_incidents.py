@@ -25,32 +25,56 @@ def test_incident_summary_builds_from_recent_state(tmp_path: Path):
     audit = HealingAudit(store_path=tmp_path / "audit.json")
     escalation = EscalationService(store_path=tmp_path / "escalations.json")
 
-    metrics.record(component="chat_model", action="rotate_model_provider", executed=True, verified=False, escalated=True)
-    metrics.record(component="vector_store", action="restart_vector_layer", executed=True, verified=True, escalated=False)
+    metrics.record(
+        component="chat_model",
+        action="rotate_model_provider",
+        executed=True,
+        verified=False,
+        escalated=True,
+    )
+    metrics.record(
+        component="vector_store",
+        action="restart_vector_layer",
+        executed=True,
+        verified=True,
+        escalated=False,
+    )
 
-    audit.record({
-        "component": "chat_model",
-        "action": "rotate_model_provider",
-        "executed": True,
-        "verified": False,
-        "escalated": True,
-    })
-    audit.record({
-        "component": "vector_store",
-        "action": "restart_vector_layer",
-        "executed": True,
-        "verified": True,
-        "escalated": False,
-    })
+    audit.record(
+        {
+            "component": "chat_model",
+            "action": "rotate_model_provider",
+            "executed": True,
+            "verified": False,
+            "escalated": True,
+        }
+    )
+    audit.record(
+        {
+            "component": "vector_store",
+            "action": "restart_vector_layer",
+            "executed": True,
+            "verified": True,
+            "escalated": False,
+        }
+    )
 
-    escalation.escalate(component="chat_model", action="rotate_model_provider", detail="provider still unhealthy")
+    escalation.escalate(
+        component="chat_model",
+        action="rotate_model_provider",
+        detail="provider still unhealthy",
+    )
 
-    summary = IncidentSummaryService(metrics=metrics, audit=audit, escalation=escalation).build_summary()
+    summary = IncidentSummaryService(
+        metrics=metrics, audit=audit, escalation=escalation
+    ).build_summary()
 
     assert summary["status"] == "ok"
     assert summary["recent_escalation_count"] >= 1
     assert summary["recent_failed_verification_count"] >= 1
-    assert any(item["component"] == "chat_model" for item in summary["top_failing_components"])
+    assert any(
+        item["component"] == "chat_model" for item in summary["top_failing_components"]
+    )
 
 
 def test_runbook_and_incident_endpoints():

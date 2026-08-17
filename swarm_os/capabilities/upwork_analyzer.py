@@ -1,21 +1,35 @@
 import logging
 from typing import Dict, Any, List
-from swarm_os.capabilities.models import UpworkAnalysisRequest, UpworkAnalysisResponse, RecommendedBid
+from swarm_os.capabilities.models import (
+    UpworkAnalysisRequest,
+    UpworkAnalysisResponse,
+    RecommendedBid,
+)
 
 logger = logging.getLogger(__name__)
+
 
 class UpworkAnalyzerHandler:
     def __init__(self, rules: Dict[str, Any] = None):
         self.rules = rules or {
             "domains": {
-                "coding": ["python", "development", "backend", "api", "pytest", "automation"],
-                "general": ["management", "writing", "virtual assistant", "support"]
+                "coding": [
+                    "python",
+                    "development",
+                    "backend",
+                    "api",
+                    "pytest",
+                    "automation",
+                ],
+                "general": ["management", "writing", "virtual assistant", "support"],
             },
-            "min_score_to_bid": 0.4
+            "min_score_to_bid": 0.4,
         }
         logger.info("Initialized operational UpworkAnalyzerHandler.")
 
-    async def analyze_job(self, payload: UpworkAnalysisRequest) -> UpworkAnalysisResponse:
+    async def analyze_job(
+        self, payload: UpworkAnalysisRequest
+    ) -> UpworkAnalysisResponse:
         desc_lower = payload.job_description.lower().strip()
 
         if not desc_lower:
@@ -26,7 +40,7 @@ class UpworkAnalyzerHandler:
                 fit_metrics={"coding": 0.0, "general": 0.0},
                 domain_matches={"coding": [], "general": []},
                 should_bid=False,
-                recommended_bid=None
+                recommended_bid=None,
             )
 
         matches: Dict[str, List[str]] = {}
@@ -46,7 +60,7 @@ class UpworkAnalyzerHandler:
                 fit_metrics={},
                 domain_matches=matches,
                 should_bid=False,
-                recommended_bid=None
+                recommended_bid=None,
             )
 
         primary_domain = max(scores, key=scores.get)
@@ -57,8 +71,7 @@ class UpworkAnalyzerHandler:
         if should_bid:
             projected_rate = "$75/hr" if primary_domain == "coding" else "$25/hr"
             rec_bid = RecommendedBid(
-                projected_rate=projected_rate,
-                required_tokens_estimate=1200
+                projected_rate=projected_rate, required_tokens_estimate=1200
             )
 
         return UpworkAnalysisResponse(
@@ -68,6 +81,5 @@ class UpworkAnalyzerHandler:
             fit_metrics=scores,
             domain_matches=matches,
             should_bid=should_bid,
-            recommended_bid=rec_bid
+            recommended_bid=rec_bid,
         )
-

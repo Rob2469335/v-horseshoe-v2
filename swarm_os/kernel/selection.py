@@ -11,6 +11,7 @@ Key fixes from simulation analysis:
   - diversity bonus: organisms with rare dominant domain get small bonus
   - stagnation detection: organism that hasn't improved in N evals gets penalty
 """
+
 from __future__ import annotations
 
 import logging
@@ -25,10 +26,10 @@ from .environment import Environment
 log = logging.getLogger(__name__)
 
 DOMAIN_WEIGHTS: Dict[str, List[float]] = {
-    "coding":   [0.6, 0.2, 0.2],
+    "coding": [0.6, 0.2, 0.2],
     "research": [0.5, 0.3, 0.2],
-    "upwork":   [0.4, 0.1, 0.5],
-    "general":  [0.5, 0.25, 0.25],
+    "upwork": [0.4, 0.1, 0.5],
+    "general": [0.5, 0.25, 0.25],
 }
 
 # Selection pressure — higher = more exploitation, lower = more exploration
@@ -38,15 +39,19 @@ SOFTMAX_TEMPERATURE = 1.5
 
 # ── Quality proxies ────────────────────────────────────────────────────────────
 
+
 def _coding_quality(content: str) -> float:
     if not content:
         return 0.0
     score = 0.0
-    if re.search(r"```[\w]*\n", content):   score += 0.5
-    if len(content) > 100:                  score += 0.2
+    if re.search(r"```[\w]*\n", content):
+        score += 0.5
+    if len(content) > 100:
+        score += 0.2
     if any(kw in content for kw in ["def ", "class ", "import ", "return ", "async "]):
         score += 0.2
-    if not content.lower().startswith("error"): score += 0.1
+    if not content.lower().startswith("error"):
+        score += 0.1
     return min(1.0, score)
 
 
@@ -54,14 +59,29 @@ def _research_quality(content: str) -> float:
     if not content:
         return 0.0
     score = 0.0
-    if len(content) > 200: score += 0.3
-    if len(content) > 500: score += 0.2
-    if content.count(". ") >= 3: score += 0.2
-    if any(kw in content.lower() for kw in
-           ["because", "however", "therefore", "according", "research",
-            "study", "evidence", "compared", "difference"]):
+    if len(content) > 200:
+        score += 0.3
+    if len(content) > 500:
         score += 0.2
-    if re.search(r"\d{4}", content): score += 0.1
+    if content.count(". ") >= 3:
+        score += 0.2
+    if any(
+        kw in content.lower()
+        for kw in [
+            "because",
+            "however",
+            "therefore",
+            "according",
+            "research",
+            "study",
+            "evidence",
+            "compared",
+            "difference",
+        ]
+    ):
+        score += 0.2
+    if re.search(r"\d{4}", content):
+        score += 0.1
     return min(1.0, score)
 
 
@@ -69,19 +89,33 @@ def _upwork_quality(content: str) -> float:
     if not content:
         return 0.0
     score = 0.0
-    fields = ["budget", "skill", "rating", "client", "fit", "score",
-              "recommend", "apply", "pass", "hire", "worth", "avoid"]
+    fields = [
+        "budget",
+        "skill",
+        "rating",
+        "client",
+        "fit",
+        "score",
+        "recommend",
+        "apply",
+        "pass",
+        "hire",
+        "worth",
+        "avoid",
+    ]
     found = sum(1 for f in fields if f in content.lower())
     score += min(0.6, found * 0.08)
-    if re.search(r"\d+(\.\d+)?/10|\d+%|\$\d+", content): score += 0.2
-    if len(content) > 80: score += 0.2
+    if re.search(r"\d+(\.\d+)?/10|\d+%|\$\d+", content):
+        score += 0.2
+    if len(content) > 80:
+        score += 0.2
     return min(1.0, score)
 
 
 QUALITY_PROXIES = {
-    "coding":   _coding_quality,
+    "coding": _coding_quality,
     "research": _research_quality,
-    "upwork":   _upwork_quality,
+    "upwork": _upwork_quality,
 }
 
 
@@ -118,26 +152,37 @@ def _cognition_bonus(action: Dict[str, Any], genome) -> float:
     content = action.get("content", "")
     if not content:
         return 0.0
-    cog   = genome.cognition
+    cog = genome.cognition
     bonus = 0.0
-    if cog.reflection_depth > 0.65     and _REFLECTION_PATTERNS.search(content):       bonus += 0.05
-    if cog.verification_bias > 0.65    and _VERIFICATION_PATTERNS.search(content):     bonus += 0.05
-    if cog.summarization_bias > 0.65   and _SUMMARY_PATTERNS.search(content):          bonus += 0.04
-    if cog.hallucination_sensitivity > 0.65 and _HALLUCINATION_GUARD_PATTERNS.search(content): bonus += 0.04
-    if cog.self_critique_bias > 0.65   and _SELF_CRITIQUE_PATTERNS.search(content):    bonus += 0.04
+    if cog.reflection_depth > 0.65 and _REFLECTION_PATTERNS.search(content):
+        bonus += 0.05
+    if cog.verification_bias > 0.65 and _VERIFICATION_PATTERNS.search(content):
+        bonus += 0.05
+    if cog.summarization_bias > 0.65 and _SUMMARY_PATTERNS.search(content):
+        bonus += 0.04
+    if cog.hallucination_sensitivity > 0.65 and _HALLUCINATION_GUARD_PATTERNS.search(
+        content
+    ):
+        bonus += 0.04
+    if cog.self_critique_bias > 0.65 and _SELF_CRITIQUE_PATTERNS.search(content):
+        bonus += 0.04
     return min(0.2, bonus)
 
 
 # ── Diversity bonus ────────────────────────────────────────────────────────────
+
 
 def _diversity_bonus(organism: Organism, population: List[Organism]) -> float:
     """
     Small fitness bonus for organisms whose dominant domain affinity
     is rare in the current population. Prevents monoculture.
     """
+
     def dominant(o: Organism) -> str:
-        return max(["coding", "research", "upwork"],
-                   key=lambda d: getattr(o.genome, f"{d}_affinity"))
+        return max(
+            ["coding", "research", "upwork"],
+            key=lambda d: getattr(o.genome, f"{d}_affinity"),
+        )
 
     my_dom = dominant(organism)
     dom_counts = {}
@@ -157,6 +202,7 @@ def _diversity_bonus(organism: Organism, population: List[Organism]) -> float:
 
 # ── Stagnation penalty ─────────────────────────────────────────────────────────
 
+
 def _stagnation_penalty(genome, window: int = 5) -> float:
     """
     Small penalty if average_fitness hasn't improved recently.
@@ -173,6 +219,7 @@ def _stagnation_penalty(genome, window: int = 5) -> float:
 
 # ── Core scoring ───────────────────────────────────────────────────────────────
 
+
 def score_response(
     action: Dict[str, Any],
     genome,
@@ -181,14 +228,20 @@ def score_response(
 ) -> Dict[str, float]:
     content = action.get("content", "")
     elapsed = float(action.get("elapsed", 30.0))
-    error   = action.get("error")
-    finish  = action.get("finish_reason", "")
+    error = action.get("error")
+    finish = action.get("finish_reason", "")
 
     total_tokens = float(action.get("total_tokens", 1000.0))
 
     if error or not content:
-        return {"quality": 0.0, "speed": 0.0, "completion": 0.0,
-                "cognition_bonus": 0.0, "composite": 0.0, "efficiency": 0.0}
+        return {
+            "quality": 0.0,
+            "speed": 0.0,
+            "completion": 0.0,
+            "cognition_bonus": 0.0,
+            "composite": 0.0,
+            "efficiency": 0.0,
+        }
 
     quality = (
         max(0.0, min(1.0, human_score))
@@ -196,29 +249,31 @@ def score_response(
         else QUALITY_PROXIES.get(task_domain, lambda c: 0.5 if c else 0.0)(content)
     )
 
-    speed      = max(0.0, 1.0 - (elapsed / 120.0))
+    speed = max(0.0, 1.0 - (elapsed / 120.0))
     efficiency = max(0.0, 1.0 - (total_tokens / 8000.0))
     completion = 0.0
-    if content and len(content) > 20: completion += 0.5
-    if finish == "stop":              completion += 0.5
-    elif finish == "length":          completion += 0.2
+    if content and len(content) > 20:
+        completion += 0.5
+    if finish == "stop":
+        completion += 0.5
+    elif finish == "length":
+        completion += 0.2
 
     cog_bonus = _cognition_bonus(action, genome)
-    w         = DOMAIN_WEIGHTS.get(task_domain, DOMAIN_WEIGHTS["general"])
+    w = DOMAIN_WEIGHTS.get(task_domain, DOMAIN_WEIGHTS["general"])
     composite = w[0] * quality + w[1] * speed + w[2] * completion + cog_bonus
 
     return {
-        "quality":         round(quality,    4),
-        "speed":           round(speed,      4),
-        "completion":      round(completion, 4),
-        "cognition_bonus": round(cog_bonus,  4),
-        "composite":       round(composite,  4),
-        "efficiency":      round(efficiency, 4),
+        "quality": round(quality, 4),
+        "speed": round(speed, 4),
+        "completion": round(completion, 4),
+        "cognition_bonus": round(cog_bonus, 4),
+        "composite": round(composite, 4),
+        "efficiency": round(efficiency, 4),
     }
 
 
 class SelectionEngine:
-
     def evaluate(
         self,
         organisms: List[Organism],
@@ -231,21 +286,25 @@ class SelectionEngine:
 
         for i, o in enumerate(organisms):
             action = actions[i] if (actions and i < len(actions)) else {}
-            human  = (human_scores or {}).get(o.id)
+            human = (human_scores or {}).get(o.id)
 
-            scores    = score_response(action, o.genome, task_domain, human_score=human)
+            scores = score_response(action, o.genome, task_domain, human_score=human)
             composite = scores["composite"]
 
             # ── Affinity multiplier — rescaled to reduce dominance ────────────
             # Old: (0.5 + affinity) → range 0.5x–1.5x  (too extreme)
             # New: (0.7 + affinity * 0.6) → range 0.7x–1.3x (balanced)
-            affinity   = getattr(o.genome, f"{task_domain}_affinity", 0.33)
-            composite *= (0.7 + affinity * 0.6)
+            affinity = getattr(o.genome, f"{task_domain}_affinity", 0.33)
+            composite *= 0.7 + affinity * 0.6
 
             # ── Environment penalties ─────────────────────────────────────────
             composite -= env.entropy * 0.02
             resource_press_func = getattr(env, "resource_pressure", None)
-            res_pressure = resource_press_func() if callable(resource_press_func) else getattr(env, "resource_pressure", 0.0)
+            res_pressure = (
+                resource_press_func()
+                if callable(resource_press_func)
+                else getattr(env, "resource_pressure", 0.0)
+            )
             composite -= res_pressure * 0.05
 
             # ── Diversity bonus — rewards rare domain specialists ─────────────
@@ -258,35 +317,45 @@ class SelectionEngine:
             o.genome.record_fitness(scores)
             o.fitness += composite
 
-            o.memory.write({
-                "event":              "evaluation",
-                "generation":         env.t,
-                "task_domain":        task_domain,
-                "scores":             scores,
-                "affinity":           round(affinity, 3),
-                "fitness_delta":      round(composite, 4),
-                "total_fitness":      round(o.fitness, 4),
-                "avg_genome_fitness": round(o.genome.average_fitness, 4),
-                "model":              action.get("model", o.genome.model),
-                "tools_used":         action.get("tools_used", []),
-                "elapsed":            action.get("elapsed", 0),
-                "total_tokens":       action.get("total_tokens", 0),
-                "cognition": {
-                    "decomposition": round(o.genome.cognition.decomposition_bias, 3),
-                    "reflection":    round(o.genome.cognition.reflection_depth, 3),
-                    "verification":  round(o.genome.cognition.verification_bias, 3),
-                },
-            })
+            o.memory.write(
+                {
+                    "event": "evaluation",
+                    "generation": env.t,
+                    "task_domain": task_domain,
+                    "scores": scores,
+                    "affinity": round(affinity, 3),
+                    "fitness_delta": round(composite, 4),
+                    "total_fitness": round(o.fitness, 4),
+                    "avg_genome_fitness": round(o.genome.average_fitness, 4),
+                    "model": action.get("model", o.genome.model),
+                    "tools_used": action.get("tools_used", []),
+                    "elapsed": action.get("elapsed", 0),
+                    "total_tokens": action.get("total_tokens", 0),
+                    "cognition": {
+                        "decomposition": round(
+                            o.genome.cognition.decomposition_bias, 3
+                        ),
+                        "reflection": round(o.genome.cognition.reflection_depth, 3),
+                        "verification": round(o.genome.cognition.verification_bias, 3),
+                    },
+                }
+            )
 
             log.debug(
                 "eval org=%s domain=%s q=%.3f spd=%.3f cmp=%.3f cog=%.3f Δfit=%.4f avg=%.4f",
-                o.id, task_domain,
-                scores["quality"], scores["speed"], scores["completion"],
-                scores["cognition_bonus"], composite, o.genome.average_fitness,
+                o.id,
+                task_domain,
+                scores["quality"],
+                scores["speed"],
+                scores["completion"],
+                scores["cognition_bonus"],
+                composite,
+                o.genome.average_fitness,
             )
 
-    def softmax(self, organisms: List[Organism],
-                temperature: float = SOFTMAX_TEMPERATURE) -> List[float]:
+    def softmax(
+        self, organisms: List[Organism], temperature: float = SOFTMAX_TEMPERATURE
+    ) -> List[float]:
         """
         Temperature-scaled softmax over average_fitness.
         Higher temperature = more uniform (exploration).
@@ -295,9 +364,9 @@ class SelectionEngine:
         vals = [o.genome.average_fitness * temperature for o in organisms]
         if not vals:
             return []
-        m    = max(vals)
+        m = max(vals)
         exps = [math.exp(min(v - m, 500)) for v in vals]
-        s    = sum(exps) + 1e-9
+        s = sum(exps) + 1e-9
         return [e / s for e in exps]
 
     def select(self, organisms: List[Organism], k: int) -> List[Organism]:
@@ -307,8 +376,9 @@ class SelectionEngine:
         log.debug("selected parents: %s", [o.id for o in picked])
         return picked
 
-    def tournament_select(self, organisms: List[Organism],
-                          k: int, tournament_size: int = 3) -> List[Organism]:
+    def tournament_select(
+        self, organisms: List[Organism], k: int, tournament_size: int = 3
+    ) -> List[Organism]:
         """
         Alternative: tournament selection.
         Randomly picks tournament_size candidates, returns the best.
@@ -332,7 +402,7 @@ class SelectionEngine:
 
     def nsga2_select(self, organisms: List[Organism], k: int) -> List[Organism]:
         """
-        NSGA-II Selection: Ranks organisms based on Pareto dominance across 
+        NSGA-II Selection: Ranks organisms based on Pareto dominance across
         Quality, Speed, and Efficiency. Uses crowding distance for diversity.
         """
         if not organisms:
@@ -348,9 +418,17 @@ class SelectionEngine:
 
         def dominates(a: Organism, b: Organism) -> bool:
             # We want to maximize all three
-            a_q, a_s, a_e = a.genome.average_quality, a.genome.average_speed, a.genome.average_efficiency
-            b_q, b_s, b_e = b.genome.average_quality, b.genome.average_speed, b.genome.average_efficiency
-            
+            a_q, a_s, a_e = (
+                a.genome.average_quality,
+                a.genome.average_speed,
+                a.genome.average_efficiency,
+            )
+            b_q, b_s, b_e = (
+                b.genome.average_quality,
+                b.genome.average_speed,
+                b.genome.average_efficiency,
+            )
+
             better_or_equal = (a_q >= b_q) and (a_s >= b_s) and (a_e >= b_e)
             strictly_better = (a_q > b_q) or (a_s > b_s) or (a_e > b_e)
             return better_or_equal and strictly_better
@@ -366,9 +444,9 @@ class SelectionEngine:
             if domination_counts[p.id] == 0:
                 p.genome.pareto_rank = 1
                 current_front.append(p)
-        
+
         fronts.append(current_front)
-        
+
         rank = 1
         while len(current_front) > 0:
             next_front = []
@@ -385,25 +463,28 @@ class SelectionEngine:
 
         # 2. Crowding Distance Calculation
         for front in fronts:
-            if not front: continue
+            if not front:
+                continue
             for o in front:
                 o.genome.crowding_distance = 0.0
-            
-            for attr in ['average_quality', 'average_speed', 'average_efficiency']:
+
+            for attr in ["average_quality", "average_speed", "average_efficiency"]:
                 front.sort(key=lambda o: getattr(o.genome, attr))
-                front[0].genome.crowding_distance = float('inf')
-                front[-1].genome.crowding_distance = float('inf')
-                
+                front[0].genome.crowding_distance = float("inf")
+                front[-1].genome.crowding_distance = float("inf")
+
                 min_val = getattr(front[0].genome, attr)
                 max_val = getattr(front[-1].genome, attr)
                 if max_val == min_val:
                     continue
-                    
+
                 for i in range(1, len(front) - 1):
-                    if front[i].genome.crowding_distance != float('inf'):
-                        next_val = getattr(front[i+1].genome, attr)
-                        prev_val = getattr(front[i-1].genome, attr)
-                        front[i].genome.crowding_distance += (next_val - prev_val) / (max_val - min_val)
+                    if front[i].genome.crowding_distance != float("inf"):
+                        next_val = getattr(front[i + 1].genome, attr)
+                        prev_val = getattr(front[i - 1].genome, attr)
+                        front[i].genome.crowding_distance += (next_val - prev_val) / (
+                            max_val - min_val
+                        )
 
         # 3. Select best k
         selected = []
@@ -412,8 +493,7 @@ class SelectionEngine:
                 selected.extend(front)
             else:
                 front.sort(key=lambda o: o.genome.crowding_distance, reverse=True)
-                selected.extend(front[:k - len(selected)])
+                selected.extend(front[: k - len(selected)])
                 break
-                
-        return selected
 
+        return selected

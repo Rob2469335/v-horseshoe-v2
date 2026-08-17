@@ -18,6 +18,7 @@ where the daily quota cut it off (free tier ~125/day, verified live 2026-08-09).
 No case is fabricated: if the API cannot produce text for a cite, the case is
 recorded `not_found`/`no_text` in state, never ingested with placeholder text.
 """
+
 from __future__ import annotations
 
 import html
@@ -80,6 +81,7 @@ async def _pace_api() -> None:
     """Sleep so at least _API_MIN_GAP_S elapses since the last API request."""
     global _LAST_API_TS
     import time as _time
+
     elapsed = _time.monotonic() - _LAST_API_TS
     gap = _API_MIN_GAP_S - elapsed
     if gap > 0:
@@ -96,211 +98,620 @@ _CASE = dict[str, Any]
 
 CASE_MANIFEST: list[_CASE] = [
     # -- Tier 1: controlling / directly applied to Locust (2d Cir + SCOTUS) --
-    {"cite": "252 F.3d 238", "name": "United States v. Simeonov",
-     "court": "2d Cir.", "circuit": "2d", "year": 2001,
-     "issues": ["substitute counsel", "abuse of discretion"], "tier": 1},
-    {"cite": "669 F.3d 112", "name": "United States v. Hsu",
-     "court": "2d Cir.", "circuit": "2d", "year": 2012,
-     "issues": ["substitute counsel", "four-factor test"], "tier": 1},
-    {"cite": "564 F.3d 142", "name": "United States v. Polouizzi",
-     "court": "2d Cir.", "circuit": "2d", "year": 2009,
-     "issues": ["waiver", "intentional relinquishment"], "tier": 1},
-    {"cite": "507 U.S. 725", "name": "United States v. Olano",
-     "court": "U.S. Supreme Court", "circuit": "scotus", "year": 1993,
-     "issues": ["waiver", "forfeiture", "plain error"], "tier": 1},
-    {"cite": "808 F.3d 585", "name": "United States v. Spruill",
-     "court": "2d Cir.", "circuit": "2d", "year": 2015,
-     "issues": ["forfeiture", "discretion to correct"], "tier": 1},
-    {"cite": "272 F.3d 116", "name": "United States v. John Doe No. 1",
-     "court": "2d Cir.", "circuit": "2d", "year": 2001,
-     "issues": ["substitute counsel", "right to reject counsel"], "tier": 1},
-    {"cite": "190 F.3d 71", "name": "United States v. Shareef",
-     "court": "2d Cir.", "circuit": "2d", "year": 1999,
-     "issues": ["prosecutorial misconduct", "egregious misconduct"], "tier": 1},
-    {"cite": "285 F.3d 183", "name": "United States v. Elias",
-     "court": "2d Cir.", "circuit": "2d", "year": 2002,
-     "issues": ["prosecutorial misconduct", "closing argument", "prejudice test"], "tier": 1},
-    {"cite": "377 F.3d 232", "name": "United States v. Thomas",
-     "court": "2d Cir.", "circuit": "2d", "year": 2004,
-     "issues": ["prosecutorial misconduct", "substantial prejudice"], "tier": 1},
-    {"cite": "777 F.3d 597", "name": "United States v. Cramer",
-     "court": "2d Cir.", "circuit": "2d", "year": 2015,
-     "issues": ["guidelines de novo review", "clear error"], "tier": 1},
-    {"cite": "516 F.3d 122", "name": "United States v. Verkhoglyad",
-     "court": "2d Cir.", "circuit": "2d", "year": 2008,
-     "issues": ["plain error", "unobjected guidelines error"], "tier": 1},
-    {"cite": "508 U.S. 36", "name": "Stinson v. United States",
-     "court": "U.S. Supreme Court", "circuit": "scotus", "year": 1993,
-     "issues": ["guidelines commentary", "deference"], "tier": 1},
-    {"cite": "588 U.S. 558", "name": "Kisor v. Wilkie",
-     "court": "U.S. Supreme Court", "circuit": "scotus", "year": 2019,
-     "issues": ["agency interpretation", "deference", "commentary"], "tier": 1},
-    {"cite": "699 F.3d 710", "name": "United States v. Lacey",
-     "court": "2d Cir.", "circuit": "2d", "year": 2012,
-     "issues": ["loss", "reasonable estimate"], "tier": 1},
-    {"cite": "945 F.3d 687", "name": "United States v. Flores",
-     "court": "2d Cir.", "circuit": "2d", "year": 2019,
-     "issues": ["specific findings", "meaningful appellate review"], "tier": 1},
-    {"cite": "551 F.3d 176", "name": "United States v. Uddin",
-     "court": "2d Cir.", "circuit": "2d", "year": 2009,
-     "issues": ["loss", "extrapolation", "reasonable estimate", "forfeiture"], "tier": 1},
-    {"cite": "980 F.3d 9", "name": "United States v. Moseley",
-     "court": "2d Cir.", "circuit": "2d", "year": 2020,
-     "issues": ["loss methodology", "not too crude"], "tier": 1},
-    {"cite": "252 F.3d 230", "name": "United States v. Carpenter",
-     "court": "2d Cir.", "circuit": "2d", "year": 2001,
-     "issues": ["minor role", "minimal role", "average participant"], "tier": 1},
-    {"cite": "62 F.3d 43", "name": "United States v. Borst",
-     "court": "2d Cir.", "circuit": "2d", "year": 1995,
-     "issues": ["victim", "vulnerable victim", "controlling"], "tier": 1},
-    {"cite": "174 F.3d 47", "name": "United States v. McCall",
-     "court": "2d Cir.", "circuit": "2d", "year": 1998,
-     "issues": ["vulnerable victim", "nexus", "singled out"], "tier": 1},
-    {"cite": "446 F.3d 65", "name": "United States v. Reifler",
-     "court": "2d Cir.", "circuit": "2d", "year": 2006,
-     "issues": ["MVRA", "co-conspirator victims", "restitution"], "tier": 1},
-    {"cite": "671 F.3d 149", "name": "United States v. Archer",
-     "court": "2d Cir.", "circuit": "2d", "year": 2011,
-     "issues": ["co-conspirators", "not victims", "restitution"], "tier": 1},
-    {"cite": "545 F.3d 220", "name": "United States v. Ojeikere",
-     "court": "2d Cir.", "circuit": "2d", "year": 2008,
-     "issues": ["restitution", "abuse of discretion"], "tier": 1},
-    {"cite": "235 F.3d 95", "name": "United States v. Grant",
-     "court": "2d Cir.", "circuit": "2d", "year": 2000,
-     "issues": ["restitution", "extremely deferential"], "tier": 1},
-    {"cite": "728 F.3d 184", "name": "United States v. Gushlak",
-     "court": "2d Cir.", "circuit": "2d", "year": 2013,
-     "issues": ["restitution", "reasonable approximation", "sound methodology"], "tier": 1},
-    {"cite": "639 F.3d 32", "name": "United States v. Treacy",
-     "court": "2d Cir.", "circuit": "2d", "year": 2011,
-     "issues": ["forfeiture", "government word is not evidence", "reasonable extrapolation"], "tier": 1},
-    {"cite": "503 F.3d 103", "name": "United States v. Capoccia",
-     "court": "2d Cir.", "circuit": "2d", "year": 2007,
-     "issues": ["forfeiture", "preponderance"], "tier": 1},
-
+    {
+        "cite": "252 F.3d 238",
+        "name": "United States v. Simeonov",
+        "court": "2d Cir.",
+        "circuit": "2d",
+        "year": 2001,
+        "issues": ["substitute counsel", "abuse of discretion"],
+        "tier": 1,
+    },
+    {
+        "cite": "669 F.3d 112",
+        "name": "United States v. Hsu",
+        "court": "2d Cir.",
+        "circuit": "2d",
+        "year": 2012,
+        "issues": ["substitute counsel", "four-factor test"],
+        "tier": 1,
+    },
+    {
+        "cite": "564 F.3d 142",
+        "name": "United States v. Polouizzi",
+        "court": "2d Cir.",
+        "circuit": "2d",
+        "year": 2009,
+        "issues": ["waiver", "intentional relinquishment"],
+        "tier": 1,
+    },
+    {
+        "cite": "507 U.S. 725",
+        "name": "United States v. Olano",
+        "court": "U.S. Supreme Court",
+        "circuit": "scotus",
+        "year": 1993,
+        "issues": ["waiver", "forfeiture", "plain error"],
+        "tier": 1,
+    },
+    {
+        "cite": "808 F.3d 585",
+        "name": "United States v. Spruill",
+        "court": "2d Cir.",
+        "circuit": "2d",
+        "year": 2015,
+        "issues": ["forfeiture", "discretion to correct"],
+        "tier": 1,
+    },
+    {
+        "cite": "272 F.3d 116",
+        "name": "United States v. John Doe No. 1",
+        "court": "2d Cir.",
+        "circuit": "2d",
+        "year": 2001,
+        "issues": ["substitute counsel", "right to reject counsel"],
+        "tier": 1,
+    },
+    {
+        "cite": "190 F.3d 71",
+        "name": "United States v. Shareef",
+        "court": "2d Cir.",
+        "circuit": "2d",
+        "year": 1999,
+        "issues": ["prosecutorial misconduct", "egregious misconduct"],
+        "tier": 1,
+    },
+    {
+        "cite": "285 F.3d 183",
+        "name": "United States v. Elias",
+        "court": "2d Cir.",
+        "circuit": "2d",
+        "year": 2002,
+        "issues": ["prosecutorial misconduct", "closing argument", "prejudice test"],
+        "tier": 1,
+    },
+    {
+        "cite": "377 F.3d 232",
+        "name": "United States v. Thomas",
+        "court": "2d Cir.",
+        "circuit": "2d",
+        "year": 2004,
+        "issues": ["prosecutorial misconduct", "substantial prejudice"],
+        "tier": 1,
+    },
+    {
+        "cite": "777 F.3d 597",
+        "name": "United States v. Cramer",
+        "court": "2d Cir.",
+        "circuit": "2d",
+        "year": 2015,
+        "issues": ["guidelines de novo review", "clear error"],
+        "tier": 1,
+    },
+    {
+        "cite": "516 F.3d 122",
+        "name": "United States v. Verkhoglyad",
+        "court": "2d Cir.",
+        "circuit": "2d",
+        "year": 2008,
+        "issues": ["plain error", "unobjected guidelines error"],
+        "tier": 1,
+    },
+    {
+        "cite": "508 U.S. 36",
+        "name": "Stinson v. United States",
+        "court": "U.S. Supreme Court",
+        "circuit": "scotus",
+        "year": 1993,
+        "issues": ["guidelines commentary", "deference"],
+        "tier": 1,
+    },
+    {
+        "cite": "588 U.S. 558",
+        "name": "Kisor v. Wilkie",
+        "court": "U.S. Supreme Court",
+        "circuit": "scotus",
+        "year": 2019,
+        "issues": ["agency interpretation", "deference", "commentary"],
+        "tier": 1,
+    },
+    {
+        "cite": "699 F.3d 710",
+        "name": "United States v. Lacey",
+        "court": "2d Cir.",
+        "circuit": "2d",
+        "year": 2012,
+        "issues": ["loss", "reasonable estimate"],
+        "tier": 1,
+    },
+    {
+        "cite": "945 F.3d 687",
+        "name": "United States v. Flores",
+        "court": "2d Cir.",
+        "circuit": "2d",
+        "year": 2019,
+        "issues": ["specific findings", "meaningful appellate review"],
+        "tier": 1,
+    },
+    {
+        "cite": "551 F.3d 176",
+        "name": "United States v. Uddin",
+        "court": "2d Cir.",
+        "circuit": "2d",
+        "year": 2009,
+        "issues": ["loss", "extrapolation", "reasonable estimate", "forfeiture"],
+        "tier": 1,
+    },
+    {
+        "cite": "980 F.3d 9",
+        "name": "United States v. Moseley",
+        "court": "2d Cir.",
+        "circuit": "2d",
+        "year": 2020,
+        "issues": ["loss methodology", "not too crude"],
+        "tier": 1,
+    },
+    {
+        "cite": "252 F.3d 230",
+        "name": "United States v. Carpenter",
+        "court": "2d Cir.",
+        "circuit": "2d",
+        "year": 2001,
+        "issues": ["minor role", "minimal role", "average participant"],
+        "tier": 1,
+    },
+    {
+        "cite": "62 F.3d 43",
+        "name": "United States v. Borst",
+        "court": "2d Cir.",
+        "circuit": "2d",
+        "year": 1995,
+        "issues": ["victim", "vulnerable victim", "controlling"],
+        "tier": 1,
+    },
+    {
+        "cite": "174 F.3d 47",
+        "name": "United States v. McCall",
+        "court": "2d Cir.",
+        "circuit": "2d",
+        "year": 1998,
+        "issues": ["vulnerable victim", "nexus", "singled out"],
+        "tier": 1,
+    },
+    {
+        "cite": "446 F.3d 65",
+        "name": "United States v. Reifler",
+        "court": "2d Cir.",
+        "circuit": "2d",
+        "year": 2006,
+        "issues": ["MVRA", "co-conspirator victims", "restitution"],
+        "tier": 1,
+    },
+    {
+        "cite": "671 F.3d 149",
+        "name": "United States v. Archer",
+        "court": "2d Cir.",
+        "circuit": "2d",
+        "year": 2011,
+        "issues": ["co-conspirators", "not victims", "restitution"],
+        "tier": 1,
+    },
+    {
+        "cite": "545 F.3d 220",
+        "name": "United States v. Ojeikere",
+        "court": "2d Cir.",
+        "circuit": "2d",
+        "year": 2008,
+        "issues": ["restitution", "abuse of discretion"],
+        "tier": 1,
+    },
+    {
+        "cite": "235 F.3d 95",
+        "name": "United States v. Grant",
+        "court": "2d Cir.",
+        "circuit": "2d",
+        "year": 2000,
+        "issues": ["restitution", "extremely deferential"],
+        "tier": 1,
+    },
+    {
+        "cite": "728 F.3d 184",
+        "name": "United States v. Gushlak",
+        "court": "2d Cir.",
+        "circuit": "2d",
+        "year": 2013,
+        "issues": ["restitution", "reasonable approximation", "sound methodology"],
+        "tier": 1,
+    },
+    {
+        "cite": "639 F.3d 32",
+        "name": "United States v. Treacy",
+        "court": "2d Cir.",
+        "circuit": "2d",
+        "year": 2011,
+        "issues": [
+            "forfeiture",
+            "government word is not evidence",
+            "reasonable extrapolation",
+        ],
+        "tier": 1,
+    },
+    {
+        "cite": "503 F.3d 103",
+        "name": "United States v. Capoccia",
+        "court": "2d Cir.",
+        "circuit": "2d",
+        "year": 2007,
+        "issues": ["forfeiture", "preponderance"],
+        "tier": 1,
+    },
     # -- Tier 2: sentencing-law backbone (2d Cir + SCOTUS) --
-    {"cite": "899 F.3d 135", "name": "United States v. Alston",
-     "court": "2d Cir.", "circuit": "2d", "year": 2018,
-     "issues": ["false testimony", "due process"], "tier": 2},
-    {"cite": "257 F.3d 210", "name": "United States v. Monteleone",
-     "court": "2d Cir.", "circuit": "2d", "year": 2001,
-     "issues": ["perjury", "false testimony"], "tier": 2},
-    {"cite": "541 U.S. 36", "name": "Crawford v. Washington",
-     "court": "U.S. Supreme Court", "circuit": "scotus", "year": 2004,
-     "issues": ["confrontation clause", "testimonial"], "tier": 2},
-    {"cite": "679 F.3d 83", "name": "United States v. Wagner-Dano",
-     "court": "2d Cir.", "circuit": "2d", "year": 2012,
-     "issues": ["findings", "PSR adoption"], "tier": 2},
-    {"cite": "577 F.3d 442", "name": "United States v. Ware",
-     "court": "2d Cir.", "circuit": "2d", "year": 2009,
-     "issues": ["findings", "PSR adoption insufficient"], "tier": 2},
-    {"cite": "963 F.3d 285", "name": "United States v. Mattis",
-     "court": "2d Cir.", "circuit": "2d", "year": 2020,
-     "issues": ["clear error", "entire evidence"], "tier": 2},
-    {"cite": "776 F.3d 67", "name": "United States v. Norman",
-     "court": "2d Cir.", "circuit": "2d", "year": 2015,
-     "issues": ["clear error", "two permissible views"], "tier": 2},
-    {"cite": "317 F.3d 107", "name": "United States v. Thorn",
-     "court": "2d Cir.", "circuit": "2d", "year": 2003,
-     "issues": ["sentencing facts", "preponderance"], "tier": 2},
-    {"cite": "616 F.3d 174", "name": "United States v. Dorvee",
-     "court": "2d Cir.", "circuit": "2d", "year": 2010,
-     "issues": ["preservation", "distinctness of objection"], "tier": 2},
-    {"cite": "592 F.3d 372", "name": "United States v. Rossi",
-     "court": "2d Cir.", "circuit": "2d", "year": 2010,
-     "issues": ["restitution", "VWPA", "guesswork"], "tier": 2},
-    {"cite": "828 F.3d 91", "name": "United States v. Rivernider",
-     "court": "2d Cir.", "circuit": "2d", "year": 2016,
-     "issues": ["restitution", "not mathematically precise", "preponderance"], "tier": 2},
-    {"cite": "481 F.3d 132", "name": "United States v. Milstein",
-     "court": "2d Cir.", "circuit": "2d", "year": 2007,
-     "issues": ["restitution", "reasonable estimate"], "tier": 2},
-    {"cite": "677 F.3d 86", "name": "United States v. Zangari",
-     "court": "2d Cir.", "circuit": "2d", "year": 2012,
-     "issues": ["MVRA", "actual loss", "gain vs loss"], "tier": 2},
-    {"cite": "654 F.3d 310", "name": "United States v. Marino",
-     "court": "2d Cir.", "circuit": "2d", "year": 2011,
-     "issues": ["MVRA", "causation", "actual loss"], "tier": 2},
-    {"cite": "353 F.3d 130", "name": "United States v. Walker",
-     "court": "2d Cir.", "circuit": "2d", "year": 2003,
-     "issues": ["MVRA", "victim identification", "charged scheme"], "tier": 2},
-    {"cite": "326 F.3d 323", "name": "United States v. Catoggio",
-     "court": "2d Cir.", "circuit": "2d", "year": 2003,
-     "issues": ["MVRA", "identify victims", "actual losses"], "tier": 2},
-    {"cite": "634 F.3d 668", "name": "United States v. Paul",
-     "court": "2d Cir.", "circuit": "2d", "year": 2011,
-     "issues": ["restitution", "loss result of fraud"], "tier": 2},
-    {"cite": "347 F.3d 45", "name": "United States v. Lucien",
-     "court": "2d Cir.", "circuit": "2d", "year": 2003,
-     "issues": ["risk of death or serious injury", "obvious risk"], "tier": 2},
-    {"cite": "532 U.S. 234", "name": "Easley v. Cromartie",
-     "court": "U.S. Supreme Court", "circuit": "scotus", "year": 2001,
-     "issues": ["clear error", "definite and firm conviction"], "tier": 2},
-    {"cite": "333 U.S. 364", "name": "United States v. U.S. Gypsum Co.",
-     "court": "U.S. Supreme Court", "circuit": "scotus", "year": 1948,
-     "issues": ["clear error", "definite and firm conviction"], "tier": 2},
-    {"cite": "67 F.4th 520", "name": "United States v. Montague",
-     "court": "2d Cir.", "circuit": "2d", "year": 2023,
-     "issues": ["plain error", "four prongs"], "tier": 2},
-    {"cite": "690 F.3d 70", "name": "United States v. Williams",
-     "court": "2d Cir.", "circuit": "2d", "year": 2012,
-     "issues": ["prosecutorial misconduct", "flagrant abuse", "vouching"], "tier": 2},
-
+    {
+        "cite": "899 F.3d 135",
+        "name": "United States v. Alston",
+        "court": "2d Cir.",
+        "circuit": "2d",
+        "year": 2018,
+        "issues": ["false testimony", "due process"],
+        "tier": 2,
+    },
+    {
+        "cite": "257 F.3d 210",
+        "name": "United States v. Monteleone",
+        "court": "2d Cir.",
+        "circuit": "2d",
+        "year": 2001,
+        "issues": ["perjury", "false testimony"],
+        "tier": 2,
+    },
+    {
+        "cite": "541 U.S. 36",
+        "name": "Crawford v. Washington",
+        "court": "U.S. Supreme Court",
+        "circuit": "scotus",
+        "year": 2004,
+        "issues": ["confrontation clause", "testimonial"],
+        "tier": 2,
+    },
+    {
+        "cite": "679 F.3d 83",
+        "name": "United States v. Wagner-Dano",
+        "court": "2d Cir.",
+        "circuit": "2d",
+        "year": 2012,
+        "issues": ["findings", "PSR adoption"],
+        "tier": 2,
+    },
+    {
+        "cite": "577 F.3d 442",
+        "name": "United States v. Ware",
+        "court": "2d Cir.",
+        "circuit": "2d",
+        "year": 2009,
+        "issues": ["findings", "PSR adoption insufficient"],
+        "tier": 2,
+    },
+    {
+        "cite": "963 F.3d 285",
+        "name": "United States v. Mattis",
+        "court": "2d Cir.",
+        "circuit": "2d",
+        "year": 2020,
+        "issues": ["clear error", "entire evidence"],
+        "tier": 2,
+    },
+    {
+        "cite": "776 F.3d 67",
+        "name": "United States v. Norman",
+        "court": "2d Cir.",
+        "circuit": "2d",
+        "year": 2015,
+        "issues": ["clear error", "two permissible views"],
+        "tier": 2,
+    },
+    {
+        "cite": "317 F.3d 107",
+        "name": "United States v. Thorn",
+        "court": "2d Cir.",
+        "circuit": "2d",
+        "year": 2003,
+        "issues": ["sentencing facts", "preponderance"],
+        "tier": 2,
+    },
+    {
+        "cite": "616 F.3d 174",
+        "name": "United States v. Dorvee",
+        "court": "2d Cir.",
+        "circuit": "2d",
+        "year": 2010,
+        "issues": ["preservation", "distinctness of objection"],
+        "tier": 2,
+    },
+    {
+        "cite": "592 F.3d 372",
+        "name": "United States v. Rossi",
+        "court": "2d Cir.",
+        "circuit": "2d",
+        "year": 2010,
+        "issues": ["restitution", "VWPA", "guesswork"],
+        "tier": 2,
+    },
+    {
+        "cite": "828 F.3d 91",
+        "name": "United States v. Rivernider",
+        "court": "2d Cir.",
+        "circuit": "2d",
+        "year": 2016,
+        "issues": ["restitution", "not mathematically precise", "preponderance"],
+        "tier": 2,
+    },
+    {
+        "cite": "481 F.3d 132",
+        "name": "United States v. Milstein",
+        "court": "2d Cir.",
+        "circuit": "2d",
+        "year": 2007,
+        "issues": ["restitution", "reasonable estimate"],
+        "tier": 2,
+    },
+    {
+        "cite": "677 F.3d 86",
+        "name": "United States v. Zangari",
+        "court": "2d Cir.",
+        "circuit": "2d",
+        "year": 2012,
+        "issues": ["MVRA", "actual loss", "gain vs loss"],
+        "tier": 2,
+    },
+    {
+        "cite": "654 F.3d 310",
+        "name": "United States v. Marino",
+        "court": "2d Cir.",
+        "circuit": "2d",
+        "year": 2011,
+        "issues": ["MVRA", "causation", "actual loss"],
+        "tier": 2,
+    },
+    {
+        "cite": "353 F.3d 130",
+        "name": "United States v. Walker",
+        "court": "2d Cir.",
+        "circuit": "2d",
+        "year": 2003,
+        "issues": ["MVRA", "victim identification", "charged scheme"],
+        "tier": 2,
+    },
+    {
+        "cite": "326 F.3d 323",
+        "name": "United States v. Catoggio",
+        "court": "2d Cir.",
+        "circuit": "2d",
+        "year": 2003,
+        "issues": ["MVRA", "identify victims", "actual losses"],
+        "tier": 2,
+    },
+    {
+        "cite": "634 F.3d 668",
+        "name": "United States v. Paul",
+        "court": "2d Cir.",
+        "circuit": "2d",
+        "year": 2011,
+        "issues": ["restitution", "loss result of fraud"],
+        "tier": 2,
+    },
+    {
+        "cite": "347 F.3d 45",
+        "name": "United States v. Lucien",
+        "court": "2d Cir.",
+        "circuit": "2d",
+        "year": 2003,
+        "issues": ["risk of death or serious injury", "obvious risk"],
+        "tier": 2,
+    },
+    {
+        "cite": "532 U.S. 234",
+        "name": "Easley v. Cromartie",
+        "court": "U.S. Supreme Court",
+        "circuit": "scotus",
+        "year": 2001,
+        "issues": ["clear error", "definite and firm conviction"],
+        "tier": 2,
+    },
+    {
+        "cite": "333 U.S. 364",
+        "name": "United States v. U.S. Gypsum Co.",
+        "court": "U.S. Supreme Court",
+        "circuit": "scotus",
+        "year": 1948,
+        "issues": ["clear error", "definite and firm conviction"],
+        "tier": 2,
+    },
+    {
+        "cite": "67 F.4th 520",
+        "name": "United States v. Montague",
+        "court": "2d Cir.",
+        "circuit": "2d",
+        "year": 2023,
+        "issues": ["plain error", "four prongs"],
+        "tier": 2,
+    },
+    {
+        "cite": "690 F.3d 70",
+        "name": "United States v. Williams",
+        "court": "2d Cir.",
+        "circuit": "2d",
+        "year": 2012,
+        "issues": ["prosecutorial misconduct", "flagrant abuse", "vouching"],
+        "tier": 2,
+    },
     # -- Tier 3: general backbone + non-2d circuit context --
-    {"cite": "74 F.4th 378", "name": "United States v. You",
-     "court": "6th Cir.", "circuit": "6th", "year": 2023,
-     "issues": ["loss", "intended loss", "commentary deference"], "tier": 3},
-    {"cite": "55 F.4th 246", "name": "United States v. Banks",
-     "court": "3d Cir.", "circuit": "3d", "year": 2022,
-     "issues": ["loss", "ordinary meaning", "no deference"], "tier": 3},
-    {"cite": "23 F.4th 347", "name": "United States v. Moses",
-     "court": "4th Cir.", "circuit": "4th", "year": 2022,
-     "issues": ["guidelines commentary", "reticulated whole"], "tier": 3},
-    {"cite": "521 U.S. 203", "name": "Agostini v. Felton",
-     "court": "U.S. Supreme Court", "circuit": "scotus", "year": 1997,
-     "issues": ["stare decisis", "directly controlling precedent"], "tier": 3},
-    {"cite": "490 U.S. 477", "name": "Rodriguez de Quijas v. Shearson/Am. Exp., Inc.",
-     "court": "U.S. Supreme Court", "circuit": "scotus", "year": 1989,
-     "issues": ["stare decisis", "overruling"], "tier": 3},
-
+    {
+        "cite": "74 F.4th 378",
+        "name": "United States v. You",
+        "court": "6th Cir.",
+        "circuit": "6th",
+        "year": 2023,
+        "issues": ["loss", "intended loss", "commentary deference"],
+        "tier": 3,
+    },
+    {
+        "cite": "55 F.4th 246",
+        "name": "United States v. Banks",
+        "court": "3d Cir.",
+        "circuit": "3d",
+        "year": 2022,
+        "issues": ["loss", "ordinary meaning", "no deference"],
+        "tier": 3,
+    },
+    {
+        "cite": "23 F.4th 347",
+        "name": "United States v. Moses",
+        "court": "4th Cir.",
+        "circuit": "4th",
+        "year": 2022,
+        "issues": ["guidelines commentary", "reticulated whole"],
+        "tier": 3,
+    },
+    {
+        "cite": "521 U.S. 203",
+        "name": "Agostini v. Felton",
+        "court": "U.S. Supreme Court",
+        "circuit": "scotus",
+        "year": 1997,
+        "issues": ["stare decisis", "directly controlling precedent"],
+        "tier": 3,
+    },
+    {
+        "cite": "490 U.S. 477",
+        "name": "Rodriguez de Quijas v. Shearson/Am. Exp., Inc.",
+        "court": "U.S. Supreme Court",
+        "circuit": "scotus",
+        "year": 1989,
+        "issues": ["stare decisis", "overruling"],
+        "tier": 3,
+    },
     # -- Batson authorities (NOT litigated in the appeal; added for the
     #    transcript analysis surface) --
-    {"cite": "476 U.S. 79", "name": "Batson v. Kentucky",
-     "court": "U.S. Supreme Court", "circuit": "scotus", "year": 1986,
-     "issues": ["batson", "peremptory", "equal protection"], "tier": 4, "batson": True},
-    {"cite": "588 U.S. 284", "name": "Flowers v. Mississippi",
-     "court": "U.S. Supreme Court", "circuit": "scotus", "year": 2019,
-     "issues": ["batson", "peremptory", "pattern of discrimination"], "tier": 4, "batson": True},
-    {"cite": "500 U.S. 352", "name": "Hernandez v. New York",
-     "court": "U.S. Supreme Court", "circuit": "scotus", "year": 1991,
-     "issues": ["batson", "pretext", "neutral explanation"], "tier": 4, "batson": True},
-    {"cite": "514 U.S. 765", "name": "Purkett v. Elem",
-     "court": "U.S. Supreme Court", "circuit": "scotus", "year": 1995,
-     "issues": ["batson", "three-step framework"], "tier": 4, "batson": True},
-    {"cite": "499 U.S. 400", "name": "Powers v. Ohio",
-     "court": "U.S. Supreme Court", "circuit": "scotus", "year": 1991,
-     "issues": ["batson", "third-party standing"], "tier": 4, "batson": True},
-    {"cite": "545 U.S. 162", "name": "Johnson v. California",
-     "court": "U.S. Supreme Court", "circuit": "scotus", "year": 2005,
-     "issues": ["batson", "prima facie", "inference standard"], "tier": 4, "batson": True},
-    {"cite": "545 U.S. 231", "name": "Miller-El v. Dretke",
-     "court": "U.S. Supreme Court", "circuit": "scotus", "year": 2005,
-     "issues": ["batson", "comparative analysis", "procedures"], "tier": 4, "batson": True},
-    {"cite": "552 U.S. 472", "name": "Snyder v. Louisiana",
-     "court": "U.S. Supreme Court", "circuit": "scotus", "year": 2008,
-     "issues": ["batson", "pretext", "demeanor"], "tier": 4, "batson": True},
-    {"cite": "578 U.S. 488", "name": "Foster v. Chatman",
-     "court": "U.S. Supreme Court", "circuit": "scotus", "year": 2016,
-     "issues": ["batson", "pretext", "systematic exclusion"], "tier": 4, "batson": True},
-    {"cite": "528 F.3d 110", "name": "United States v. Thompson",
-     "court": "2d Cir.", "circuit": "2d", "year": 2008,
-     "issues": ["batson", "peremptory", "second circuit"], "tier": 4, "batson": True},
-    {"cite": "82 F.3d 1243", "name": "McCrory v. Henderson",
-     "court": "2d Cir.", "circuit": "2d", "year": 1996,
-     "issues": ["batson", "peremptory", "second circuit"], "tier": 4, "batson": True},
-    {"cite": "352 F.3d 654", "name": "United States v. Brown",
-     "court": "2d Cir.", "circuit": "2d", "year": 2003,
-     "issues": ["batson", "peremptory", "second circuit"], "tier": 4, "batson": True},
+    {
+        "cite": "476 U.S. 79",
+        "name": "Batson v. Kentucky",
+        "court": "U.S. Supreme Court",
+        "circuit": "scotus",
+        "year": 1986,
+        "issues": ["batson", "peremptory", "equal protection"],
+        "tier": 4,
+        "batson": True,
+    },
+    {
+        "cite": "588 U.S. 284",
+        "name": "Flowers v. Mississippi",
+        "court": "U.S. Supreme Court",
+        "circuit": "scotus",
+        "year": 2019,
+        "issues": ["batson", "peremptory", "pattern of discrimination"],
+        "tier": 4,
+        "batson": True,
+    },
+    {
+        "cite": "500 U.S. 352",
+        "name": "Hernandez v. New York",
+        "court": "U.S. Supreme Court",
+        "circuit": "scotus",
+        "year": 1991,
+        "issues": ["batson", "pretext", "neutral explanation"],
+        "tier": 4,
+        "batson": True,
+    },
+    {
+        "cite": "514 U.S. 765",
+        "name": "Purkett v. Elem",
+        "court": "U.S. Supreme Court",
+        "circuit": "scotus",
+        "year": 1995,
+        "issues": ["batson", "three-step framework"],
+        "tier": 4,
+        "batson": True,
+    },
+    {
+        "cite": "499 U.S. 400",
+        "name": "Powers v. Ohio",
+        "court": "U.S. Supreme Court",
+        "circuit": "scotus",
+        "year": 1991,
+        "issues": ["batson", "third-party standing"],
+        "tier": 4,
+        "batson": True,
+    },
+    {
+        "cite": "545 U.S. 162",
+        "name": "Johnson v. California",
+        "court": "U.S. Supreme Court",
+        "circuit": "scotus",
+        "year": 2005,
+        "issues": ["batson", "prima facie", "inference standard"],
+        "tier": 4,
+        "batson": True,
+    },
+    {
+        "cite": "545 U.S. 231",
+        "name": "Miller-El v. Dretke",
+        "court": "U.S. Supreme Court",
+        "circuit": "scotus",
+        "year": 2005,
+        "issues": ["batson", "comparative analysis", "procedures"],
+        "tier": 4,
+        "batson": True,
+    },
+    {
+        "cite": "552 U.S. 472",
+        "name": "Snyder v. Louisiana",
+        "court": "U.S. Supreme Court",
+        "circuit": "scotus",
+        "year": 2008,
+        "issues": ["batson", "pretext", "demeanor"],
+        "tier": 4,
+        "batson": True,
+    },
+    {
+        "cite": "578 U.S. 488",
+        "name": "Foster v. Chatman",
+        "court": "U.S. Supreme Court",
+        "circuit": "scotus",
+        "year": 2016,
+        "issues": ["batson", "pretext", "systematic exclusion"],
+        "tier": 4,
+        "batson": True,
+    },
+    {
+        "cite": "528 F.3d 110",
+        "name": "United States v. Thompson",
+        "court": "2d Cir.",
+        "circuit": "2d",
+        "year": 2008,
+        "issues": ["batson", "peremptory", "second circuit"],
+        "tier": 4,
+        "batson": True,
+    },
+    {
+        "cite": "82 F.3d 1243",
+        "name": "McCrory v. Henderson",
+        "court": "2d Cir.",
+        "circuit": "2d",
+        "year": 1996,
+        "issues": ["batson", "peremptory", "second circuit"],
+        "tier": 4,
+        "batson": True,
+    },
+    {
+        "cite": "352 F.3d 654",
+        "name": "United States v. Brown",
+        "court": "2d Cir.",
+        "circuit": "2d",
+        "year": 2003,
+        "issues": ["batson", "peremptory", "second circuit"],
+        "tier": 4,
+        "batson": True,
+    },
 ]
 
 
@@ -466,7 +877,11 @@ async def _get_opinion_text(client: httpx.AsyncClient, cite: str) -> dict[str, A
                 timeout=30.0,
             )
         else:
-            log.warning("429 lookup for %s — Retry-After %ss too long, stopping run", cite, retry_after)
+            log.warning(
+                "429 lookup for %s — Retry-After %ss too long, stopping run",
+                cite,
+                retry_after,
+            )
             return {"error": "throttled", "retry_after": retry_after}
     if resp.status_code != 200:
         return {"error": f"http:{resp.status_code}"}
@@ -505,7 +920,11 @@ async def _get_opinion_text(client: httpx.AsyncClient, cite: str) -> dict[str, A
                 timeout=30.0,
             )
         else:
-            log.warning("429 opinion for %s — Retry-After %ss too long, stopping run", cite, retry_after)
+            log.warning(
+                "429 opinion for %s — Retry-After %ss too long, stopping run",
+                cite,
+                retry_after,
+            )
             return {"error": "throttled", "retry_after": retry_after}
     if opin.status_code != 200:
         return {"error": f"http:{opin.status_code}"}
@@ -529,7 +948,7 @@ async def _get_opinion_text(client: httpx.AsyncClient, cite: str) -> dict[str, A
     # /opinions-cited/ edge API (cited_opinion=<id>, field `depth`). Both feed
     # the offline cite-follow graph; capture the backward edges here.
     opinions_cited = []
-    for oc in (item.get("opinions_cited") or []):
+    for oc in item.get("opinions_cited") or []:
         if isinstance(oc, dict) and oc.get("id"):
             opinions_cited.append({"id": oc["id"]})
     return {"text": text, "case_name": case_name, "opinions_cited": opinions_cited}
@@ -561,7 +980,9 @@ async def _embed(texts: list[str]) -> list[list[float]] | None:
                 headers={"Authorization": "Bearer llama"},
             )
             if resp.status_code >= 500:
-                last_exc = RuntimeError(f"embed server {resp.status_code}: {resp.text[:200]}")
+                last_exc = RuntimeError(
+                    f"embed server {resp.status_code}: {resp.text[:200]}"
+                )
                 await asyncio.sleep(1.0 + attempt)
                 continue
             resp.raise_for_status()
@@ -569,16 +990,23 @@ async def _embed(texts: list[str]) -> list[list[float]] | None:
             return [d["embedding"] for d in sorted(data, key=lambda d: d["index"])]
         except Exception as exc:
             last_exc = exc
-            if isinstance(exc, httpx.HTTPStatusError) and exc.response is not None \
-                    and exc.response.status_code < 500:
+            if (
+                isinstance(exc, httpx.HTTPStatusError)
+                and exc.response is not None
+                and exc.response.status_code < 500
+            ):
                 break
             await asyncio.sleep(1.0 + attempt)
     log.warning("embed failed for batch of %d after retries: %s", len(texts), last_exc)
     return None
 
 
-async def ingest_one_case(entry: _CASE, text: str, batch_size: int = 16,
-                          opinions_cited: list[dict] | None = None) -> int:
+async def ingest_one_case(
+    entry: _CASE,
+    text: str,
+    batch_size: int = 16,
+    opinions_cited: list[dict] | None = None,
+) -> int:
     """Chunk + embed + upsert one case's full opinion into legal_cases.
     Idempotent: deletes the cite's existing points first (scoped to this cite,
     so re-runs never duplicate and never touch other cases). Returns chunk count.
@@ -616,7 +1044,7 @@ async def ingest_one_case(entry: _CASE, text: str, batch_size: int = 16,
     }
     total = 0
     for start in range(0, len(chunks), batch_size):
-        batch = chunks[start:start + batch_size]
+        batch = chunks[start : start + batch_size]
         embed_texts = [_chunk_embed_text(entry, c) for c in batch]
         vectors = await _embed(embed_texts)
         if not vectors or len(vectors) != len(batch):
@@ -653,6 +1081,7 @@ def _load_state() -> dict[str, Any]:
     if STATE_FILE.exists():
         try:
             import json
+
             return json.loads(STATE_FILE.read_text(encoding="utf-8"))
         except Exception:
             return {}
@@ -661,6 +1090,7 @@ def _load_state() -> dict[str, Any]:
 
 def _save_state(state: dict[str, Any]) -> None:
     import json
+
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     STATE_FILE.write_text(json.dumps(state, indent=2), encoding="utf-8")
 
@@ -670,8 +1100,14 @@ async def _ingest_manifest_cli() -> dict[str, Any]:
     stop, saves state and returns so a later run resumes. Returns the summary."""
     ensure_cases_collection()
     state = _load_state()
-    summary: dict[str, Any] = {"done": 0, "not_found": 0, "no_text": 0,
-                               "error": 0, "throttled": False, "by_tier": {}}
+    summary: dict[str, Any] = {
+        "done": 0,
+        "not_found": 0,
+        "no_text": 0,
+        "error": 0,
+        "throttled": False,
+        "by_tier": {},
+    }
     client = httpx.AsyncClient(headers=_headers(), timeout=30.0)
     try:
         for entry in CASE_MANIFEST:
@@ -680,7 +1116,9 @@ async def _ingest_manifest_cli() -> dict[str, Any]:
             if prior.get("status") == "done":
                 summary["done"] += 1
                 summary.setdefault("by_tier", {}).setdefault(entry["tier"], 0)
-                summary["by_tier"][entry["tier"]] = summary["by_tier"].get(entry["tier"], 0) + 1
+                summary["by_tier"][entry["tier"]] = (
+                    summary["by_tier"].get(entry["tier"], 0) + 1
+                )
                 continue
             got = await _get_opinion_text(client, cite)
             if got.get("error") == "throttled":
@@ -695,7 +1133,9 @@ async def _ingest_manifest_cli() -> dict[str, Any]:
                 _save_state(state)
                 continue
             try:
-                n = await ingest_one_case(entry, got["text"], opinions_cited=got.get("opinions_cited"))
+                n = await ingest_one_case(
+                    entry, got["text"], opinions_cited=got.get("opinions_cited")
+                )
             except Exception as exc:
                 log.warning("ingest failed for %s: %s", cite, exc)
                 state[cite] = {"status": "error", "detail": str(exc)[:200]}
@@ -705,7 +1145,9 @@ async def _ingest_manifest_cli() -> dict[str, Any]:
             state[cite] = {"status": "done", "chunks": n}
             summary["done"] += 1
             summary.setdefault("by_tier", {}).setdefault(entry["tier"], 0)
-            summary["by_tier"][entry["tier"]] = summary["by_tier"].get(entry["tier"], 0) + 1
+            summary["by_tier"][entry["tier"]] = (
+                summary["by_tier"].get(entry["tier"], 0) + 1
+            )
             _save_state(state)
             log.info("ingested %s (%s) — %d chunks", cite, entry["name"], n)
             await asyncio.sleep(0.5)  # gentle pacing; Retry-After governs the rest
@@ -719,8 +1161,10 @@ def run_ingest_cli() -> None:
     # Load .env (CourtListener token etc.) the same quote-stripping way the
     # rest of the stack does — running the module directly skips settings.
     from swarm_os.config.settings import _load_dotenv
+
     _load_dotenv()
     import logging
+
     log_dir = Path("./data/legal")
     log_dir.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(

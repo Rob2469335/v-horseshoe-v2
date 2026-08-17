@@ -13,13 +13,13 @@ class HealingAudit:
             self.store_path.parent.mkdir(parents=True, exist_ok=True)
             if self.store_path.exists():
                 try:
-                    with open(self.store_path, 'r', encoding='utf-8') as fh:
+                    with open(self.store_path, "r", encoding="utf-8") as fh:
                         self._events = json.load(fh)
                 except Exception:
                     self._events = []
             else:
                 try:
-                    with open(self.store_path, 'w', encoding='utf-8') as fh:
+                    with open(self.store_path, "w", encoding="utf-8") as fh:
                         json.dump([], fh)
                 except Exception:
                     pass
@@ -27,9 +27,8 @@ class HealingAudit:
     def record(self, event: Dict[str, Any]) -> None:
         self._events.append(event)
         if self.store_path:
-            with open(self.store_path, 'w', encoding='utf-8') as fh:
+            with open(self.store_path, "w", encoding="utf-8") as fh:
                 json.dump(self._events, fh, default=str, indent=2)
 
     def recent(self, limit: int = 10) -> List[Dict[str, Any]]:
         return list(self._events[-limit:])
-

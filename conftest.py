@@ -26,7 +26,7 @@ def global_reflexion_service_mock():
     service.get_relevant_memories = AsyncMock(return_value=[])
     service.store_reflexion = AsyncMock(return_value=None)
 
-    with patch("swarm_os.services.reflection_loop.get_reflection_service",
-               return_value=service):
+    with patch(
+        "swarm_os.services.reflection_loop.get_reflection_service", return_value=service
+    ):
         yield service
-

@@ -3,6 +3,7 @@ from swarm_os.memory.intelligence.skill_memory_engine import SkillMemoryEngine
 import numpy as np
 from typing import List
 
+
 class SkillGeneralizer:
     def __init__(self):
         self.memory = SkillMemoryEngine()
@@ -22,7 +23,7 @@ class SkillGeneralizer:
             group = [skill_a]
             emb_a = self.memory.embed(skill_a.pattern)
 
-            for skill_b in all_skills[i+1:]:
+            for skill_b in all_skills[i + 1 :]:
                 if skill_b.id in merged_ids:
                     continue
 
@@ -45,10 +46,11 @@ class SkillGeneralizer:
         total_success = sum(s.success_count for s in skills)
         total_failure = sum(s.failure_count for s in skills)
 
-        merged_id = str(__import__('uuid').uuid5(
-            __import__('uuid').NAMESPACE_DNS,
-            skills[0].pattern
-        ))
+        merged_id = str(
+            __import__("uuid").uuid5(
+                __import__("uuid").NAMESPACE_DNS, skills[0].pattern
+            )
+        )
 
         # 🔥 weighted pattern instead of winner-takes-all
         patterns = [s.pattern for s in skills]
@@ -59,7 +61,7 @@ class SkillGeneralizer:
             pattern=pattern,
             success_count=total_success,
             failure_count=total_failure,
-            confidence=self.memory.bayesian_confidence(total_success, total_failure)
+            confidence=self.memory.bayesian_confidence(total_success, total_failure),
         )
 
         repo = self.memory._get_repo()

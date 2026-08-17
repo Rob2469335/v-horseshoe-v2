@@ -19,6 +19,7 @@ Run against a real failure from each category. Usage:
   (no query -> uses the default filesystem-not-found failure)
 Requires the stack up (:8081 embed, :8082 rerank, :6333 qdrant).
 """
+
 import asyncio
 import sys
 
@@ -43,9 +44,12 @@ CATEGORY_QUERIES = {
 
 async def probe(query: str) -> dict:
     c = AsyncQdrantClient(url="http://127.0.0.1:6333", timeout=10)
-    r = requests.post(f"{EMBED_URL}/v1/embeddings",
-                      headers={"Authorization": "Bearer llama"},
-                      json={"model": EMBED_MODEL, "input": query}, timeout=30)
+    r = requests.post(
+        f"{EMBED_URL}/v1/embeddings",
+        headers={"Authorization": "Bearer llama"},
+        json={"model": EMBED_MODEL, "input": query},
+        timeout=30,
+    )
     vec = r.json()["data"][0]["embedding"]
 
     q = await c.query_points(collection_name="ReflexionMemory", query=vec, limit=5)
@@ -57,18 +61,27 @@ async def probe(query: str) -> dict:
     dense_rows = []
     for p in dense:
         pl = p.payload or {}
-        dense_rows.append({
-            "id": p.id,
-            "dense": round(float(p.score), 3),
-            "reason": str(pl.get("failure_reason", ""))[:55],
-            "correction": str(pl.get("correction", ""))[:70],
-            "confidence": pl.get("confidence"),
-        })
+        dense_rows.append(
+            {
+                "id": p.id,
+                "dense": round(float(p.score), 3),
+                "reason": str(pl.get("failure_reason", ""))[:55],
+                "correction": str(pl.get("correction", ""))[:70],
+                "confidence": pl.get("confidence"),
+            }
+        )
 
-    texts = [str((p.payload or {}).get("correction", "")) or str((p.payload or {}).get("failure_reason", "")) for p in dense]
-    rr = requests.post(f"{RERANK_URL}/v1/rerank",
-                       headers={"Authorization": "Bearer llama"},
-                       json={"model": RERANK_MODEL, "query": query, "documents": texts, "top_n": 5}, timeout=30)
+    texts = [
+        str((p.payload or {}).get("correction", ""))
+        or str((p.payload or {}).get("failure_reason", ""))
+        for p in dense
+    ]
+    rr = requests.post(
+        f"{RERANK_URL}/v1/rerank",
+        headers={"Authorization": "Bearer llama"},
+        json={"model": RERANK_MODEL, "query": query, "documents": texts, "top_n": 5},
+        timeout=30,
+    )
     rres = sorted(rr.json()["results"], key=lambda x: -x["relevance_score"])
     reranked_rows = []
     for item in rres:
@@ -81,10 +94,14 @@ def show(result: dict) -> None:
     print(f"\nQUERY: {result['query'][:90]}")
     print("  DENSE top-5 (dense-nearest first):")
     for d in result["dense"]:
-        print(f"    dense={d['dense']:.3f} [{d['id'][:8]}] {d['reason']} || {d['correction']}")
+        print(
+            f"    dense={d['dense']:.3f} [{d['id'][:8]}] {d['reason']} || {d['correction']}"
+        )
     print("  RERANKED (same 5, rerank primary):")
     for d in result["reranked"]:
-        print(f"    rerank={d['rerank']:+.2f} (dense {d['dense']:.3f}) {d['reason']} || {d['correction']}")
+        print(
+            f"    rerank={d['rerank']:+.2f} (dense {d['dense']:.3f}) {d['reason']} || {d['correction']}"
+        )
 
 
 async def main() -> None:

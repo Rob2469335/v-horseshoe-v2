@@ -4,6 +4,7 @@ Geocodes the user's location and each listing's "City, ST" to lat/lng using
 OpenStreetMap Nominatim (no API key, ~1 req/s), computes great-circle miles,
 and persists a JSON cache so daily runs only geocode new cities.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -23,7 +24,9 @@ logger = logging.getLogger(__name__)
 DEFAULT_LOCATION = os.environ.get("RV_FINDER_LOCATION", "Roosevelt, NY 11575")
 DEFAULT_RADIUS_MILES = int(os.environ.get("RV_FINDER_RADIUS_MILES", "50"))
 
-_CACHE_PATH = Path(os.environ.get("RV_FINDER_GEO_CACHE", "data/rv_finder_geo_cache.json"))
+_CACHE_PATH = Path(
+    os.environ.get("RV_FINDER_GEO_CACHE", "data/rv_finder_geo_cache.json")
+)
 
 _GEO_CLIENT: "httpx.AsyncClient | None" = None
 _GEO_LOCK = asyncio.Lock()
@@ -35,6 +38,7 @@ def _get_geo_client():
     global _GEO_CLIENT
     if _GEO_CLIENT is None or _GEO_CLIENT.is_closed:
         import httpx
+
         _GEO_CLIENT = httpx.AsyncClient(
             timeout=httpx.Timeout(connect=8.0, read=20.0, write=10.0, pool=12.0),
             headers={
@@ -61,8 +65,12 @@ def haversine_miles(lat1: float, lng1: float, lat2: float, lng2: float) -> float
     r = 3958.7613  # Earth radius in miles
     dlat = math.radians(lat2 - lat1)
     dlng = math.radians(lng2 - lng1)
-    a = (math.sin(dlat / 2) ** 2
-         + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlng / 2) ** 2)
+    a = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(math.radians(lat1))
+        * math.cos(math.radians(lat2))
+        * math.sin(dlng / 2) ** 2
+    )
     return 2 * r * math.asin(math.sqrt(a))
 
 
@@ -71,7 +79,9 @@ def _load_cache() -> dict[str, list[float]]:
         if _CACHE_PATH.exists():
             data = json.loads(_CACHE_PATH.read_text(encoding="utf-8"))
             if isinstance(data, dict):
-                return {k: v for k, v in data.items() if isinstance(v, list) and len(v) == 2}
+                return {
+                    k: v for k, v in data.items() if isinstance(v, list) and len(v) == 2
+                }
     except Exception as e:
         logger.warning("geo cache load failed: %s", e)
     return {}
@@ -92,7 +102,7 @@ def _normalize(loc: str) -> str:
     # "City, ST" and bare zip stay as-is; drop "near"/"in" prefixes.
     for prefix in ("in ", "near "):
         if s.startswith(prefix):
-            s = s[len(prefix):]
+            s = s[len(prefix) :]
             break
     # If it contains a 5-digit zip, prefer just the zip (most precise, stable).
     m = __import__("re").search(r"\b(\d{5})\b", s)
@@ -101,7 +111,9 @@ def _normalize(loc: str) -> str:
     return s.strip(", .")[:60]
 
 
-async def resolve_lat_lng(loc: str, cache: dict[str, list[float]] | None = None) -> tuple[float, float] | None:
+async def resolve_lat_lng(
+    loc: str, cache: dict[str, list[float]] | None = None
+) -> tuple[float, float] | None:
     """Resolve a location string (zip or "City, ST") to (lat, lng).
 
     Uses the shared cache first, then Nominatim, rate-limited to ~1 req/s.

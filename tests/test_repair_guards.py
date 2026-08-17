@@ -1,5 +1,6 @@
 """Tests for the autonomous-repair constitutional guards (path allowlist,
 anti-truncation, circuit breaker, and related-test discovery)."""
+
 from pathlib import Path
 
 import organism_console.core.repair_engine as repair_engine
@@ -7,8 +8,11 @@ import organism_console.core.repair_engine as repair_engine
 
 def test_is_repairable_path_allows_source_trees():
     # App-code source trees are repairable (src/ was deleted 2026-08; not listed).
-    for p in ("swarm_os/services/tool_registry.py", "runtime_v2/services/x.py",
-              "organism_console/core/y.py"):
+    for p in (
+        "swarm_os/services/tool_registry.py",
+        "runtime_v2/services/x.py",
+        "organism_console/core/y.py",
+    ):
         assert repair_engine._is_repairable_path(Path(p)), p
 
 
@@ -64,12 +68,14 @@ def test_circuit_breaker_trips_after_three_failures(tmp_path, monkeypatch):
     breaker_file = tmp_path / "repair_breaker.json"
     monkeypatch.setattr(repair_engine, "BREAKER_FILE", breaker_file)
     monkeypatch.setattr(repair_engine, "date", _FakeDate)
-    repair_engine._save_breaker({
-        "date": _FakeDate.today_iso,
-        "repairs": 0,
-        "consecutive_failures": 0,
-        "open_until": 0.0,
-    })
+    repair_engine._save_breaker(
+        {
+            "date": _FakeDate.today_iso,
+            "repairs": 0,
+            "consecutive_failures": 0,
+            "open_until": 0.0,
+        }
+    )
 
     for _ in range(3):
         allowed, reason = repair_engine._circuit_allows_repair()
@@ -86,12 +92,14 @@ def test_circuit_breaker_daily_cap(tmp_path, monkeypatch):
     monkeypatch.setattr(repair_engine, "BREAKER_FILE", breaker_file)
     monkeypatch.setattr(repair_engine, "MAX_DAILY_REPAIRS", 2)
     monkeypatch.setattr(repair_engine, "date", _FakeDate)
-    repair_engine._save_breaker({
-        "date": _FakeDate.today_iso,
-        "repairs": 0,
-        "consecutive_failures": 0,
-        "open_until": 0.0,
-    })
+    repair_engine._save_breaker(
+        {
+            "date": _FakeDate.today_iso,
+            "repairs": 0,
+            "consecutive_failures": 0,
+            "open_until": 0.0,
+        }
+    )
     assert repair_engine._circuit_allows_repair()[0]
     repair_engine._record_repair_result(True)
     assert repair_engine._circuit_allows_repair()[0]
@@ -109,34 +117,53 @@ def test_handle_event_line_null_payloads_no_crash():
     events = [
         {"event_type": "tool_result", "payload": None},
         {"event_type": "tool_result", "payload": {"result": None}},
-        {"event_type": "tool_result", "payload": {"result": {"ok": False, "error": None}}},
+        {
+            "event_type": "tool_result",
+            "payload": {"result": {"ok": False, "error": None}},
+        },
         {"event_type": "turn_budget_exhausted", "payload": None},
-        {"event_type": "turn_budget_exhausted", "payload": {"agent_id": None, "prompt": None}},
+        {
+            "event_type": "turn_budget_exhausted",
+            "payload": {"agent_id": None, "prompt": None},
+        },
         {"event_type": "agent_action", "payload": {"action": "final", "turn": 1}},
         "not-a-dict",
         None,
     ]
     for d in events:
         repair_engine._handle_event_line(None, d)
+
     # Also: a real failing tool_result should NOT crash and should attempt a repair.
     class FakeEngine:
         def __init__(self):
             self.calls = []
+
         def repair(self, error_text, file_path=None):
             self.calls.append(("repair", error_text, file_path))
+
         def diagnose_and_repair(self, error_text, file_path=None):
             self.calls.append(("diagnose", error_text, file_path))
 
     eng = FakeEngine()
-    repair_engine._handle_event_line(eng, {
-        "event_type": "tool_result",
-        "payload": {"result": {"ok": False, "error": "File not found: runtime_v2/services/agent_service.py"}},
-    })
+    repair_engine._handle_event_line(
+        eng,
+        {
+            "event_type": "tool_result",
+            "payload": {
+                "result": {
+                    "ok": False,
+                    "error": "File not found: runtime_v2/services/agent_service.py",
+                }
+            },
+        },
+    )
     assert eng.calls, "engine should have been invoked for a real failure"
     assert "agent_service.py" in eng.calls[0][1]
     # Null-payload tool_result must NOT invoke the engine (nothing to repair).
     eng.calls.clear()
-    repair_engine._handle_event_line(eng, {"event_type": "tool_result", "payload": None})
+    repair_engine._handle_event_line(
+        eng, {"event_type": "tool_result", "payload": None}
+    )
     assert not eng.calls
 
 
@@ -146,6 +173,7 @@ def test_watchman_invokes_handle_event_line(tmp_path, monkeypatch):
     # Can't easily create the real path; instead verify the method wiring via
     # the module: _watch calls _handle_event_line(self.engine, data).
     import inspect
+
     src = inspect.getsource(repair_engine.RepairWatchman._watch)
     assert "_handle_event_line(self.engine, data)" in src
 
@@ -168,6 +196,7 @@ def test_run_related_tests_treats_flaky_pass_as_sound(monkeypatch):
     broken repair — the repair must be treated as sound (True) so a good fix is
     not rolled back on a transient failure."""
     import subprocess as _sp
+
     calls = []
 
     def fake_run(cmd, **kwargs):
@@ -177,8 +206,9 @@ def test_run_related_tests_treats_flaky_pass_as_sound(monkeypatch):
         return _FakeProc(0, "1 passed")
 
     monkeypatch.setattr(_sp, "run", fake_run)
-    monkeypatch.setattr(repair_engine, "_find_related_tests",
-                        lambda path: [Path("tests/test_x.py")])
+    monkeypatch.setattr(
+        repair_engine, "_find_related_tests", lambda path: [Path("tests/test_x.py")]
+    )
     res = repair_engine._run_related_tests(Path("swarm_os/services/x.py"))
     assert res["ok"] is True, f"flaky re-run must count as sound: {res}"
     assert res["flaky"] is True, "flake must be a machine-readable field"
@@ -193,6 +223,7 @@ def test_run_related_tests_flaky_rerun_still_failing_is_broken(monkeypatch):
     """If the --lf re-run ALSO fails, the repair is genuinely broken (False) —
     a flake retry must never mask a real regression."""
     import subprocess as _sp
+
     calls = []
 
     def fake_run(cmd, **kwargs):
@@ -200,8 +231,9 @@ def test_run_related_tests_flaky_rerun_still_failing_is_broken(monkeypatch):
         return _FakeProc(1, "FAILED still failing")
 
     monkeypatch.setattr(_sp, "run", fake_run)
-    monkeypatch.setattr(repair_engine, "_find_related_tests",
-                        lambda path: [Path("tests/test_x.py")])
+    monkeypatch.setattr(
+        repair_engine, "_find_related_tests", lambda path: [Path("tests/test_x.py")]
+    )
     res = repair_engine._run_related_tests(Path("swarm_os/services/x.py"))
     assert res["ok"] is False, "repeated failure must remain broken"
     assert res["flaky"] is False, "a repeated failure is NOT flaky"
@@ -219,10 +251,16 @@ class _FakeDate:
     def isoformat(self):
         return self.today_iso
 
+
 def test_classify_fix_class_prompt_sensitivity_default():
     # Explicit rule/format violations -> prompt_sensitivity (cheap to patch)
-    assert repair_engine.classify_fix_class("Output was malformed JSON: expected, got garbage")
-    assert repair_engine.classify_fix_class("syntax error at line 3: unexpected indent") == "prompt_sensitivity"
+    assert repair_engine.classify_fix_class(
+        "Output was malformed JSON: expected, got garbage"
+    )
+    assert (
+        repair_engine.classify_fix_class("syntax error at line 3: unexpected indent")
+        == "prompt_sensitivity"
+    )
 
 
 def test_classify_fix_class_real_tracebacks_are_patchable():
@@ -267,13 +305,24 @@ def test_unmatched_traceback_falls_through_to_patchable_default():
 def test_classify_fix_class_model_variability_only_without_structural_signal():
     # Genuinely model-limitation language, with NO structural/schema signal,
     # -> model_variability (skip LLM patch).
-    assert repair_engine.classify_fix_class("The model hallucinated and gave a wrong answer") == "model_variability"
-    assert repair_engine.classify_fix_class("I don't know how to do this, it's out of scope") == "model_variability"
+    assert (
+        repair_engine.classify_fix_class(
+            "The model hallucinated and gave a wrong answer"
+        )
+        == "model_variability"
+    )
+    assert (
+        repair_engine.classify_fix_class(
+            "I don't know how to do this, it's out of scope"
+        )
+        == "model_variability"
+    )
 
 
 def test_should_attempt_llm_patch_skips_mv():
     assert repair_engine._should_attempt_llm_patch("malformed json: expected value")
     assert not repair_engine._should_attempt_llm_patch("hallucinated answer")
+
 
 def test_tier2_skips_llm_patch_for_model_variability(tmp_path, monkeypatch):
     # Diagnose-before-patch: an MV failure must NOT make the /generate call even
@@ -282,19 +331,26 @@ def test_tier2_skips_llm_patch_for_model_variability(tmp_path, monkeypatch):
     # early-return path.
     monkeypatch.setattr(repair_engine, "BREAKER_FILE", tmp_path / "breaker.json")
     called = {"n": 0}
+
     def fake_call(*a, **k):
         called["n"] += 1
         raise AssertionError("should not call LLM for model_variability")
+
     monkeypatch.setattr("organism_console.api_client.call_api", fake_call)
 
     class _FakeCtx:
         def __init__(self):
-            self.console = type("C", (), {"print": staticmethod(lambda *a, **k: None)})()
+            self.console = type(
+                "C", (), {"print": staticmethod(lambda *a, **k: None)}
+            )()
             self.state = type("S", (), {"active_agent": "coder"})()
+
     orch = repair_engine.TieredRepairOrchestrator(cmd_ctx=_FakeCtx())
     f = tmp_path / "bug.py"
     f.write_text("x = 1\n", encoding="utf-8")
-    res = orch.repair("The model gave a wrong answer and it's out of scope", file_path=f)
+    res = orch.repair(
+        "The model gave a wrong answer and it's out of scope", file_path=f
+    )
     assert res["fix_class"] == "model_variability"
     assert not res["fixed"]
     assert "model_variability" in (res.get("validation_error") or "")
@@ -303,11 +359,13 @@ def test_tier2_skips_llm_patch_for_model_variability(tmp_path, monkeypatch):
     # (regeneration is the agent loop's job upstream). Make that explicit.
     assert res.get("retry_dispatched") is False
 
+
 def test_save_breaker_uses_filelock(tmp_path, monkeypatch):
     """2026 coexistence: the shared breaker file must be written under filelock so
     two engines can never lose an increment or race the trip threshold — the
     write path is never the weak link."""
     import inspect
+
     src = inspect.getsource(repair_engine._save_breaker)
     assert "FileLock" in src
     assert "BREAKER_FILE" in src
@@ -333,7 +391,9 @@ def test_repair_security_gate_reverts_banned_construct(tmp_path, monkeypatch):
     assert ok is False, "repair introducing a banned construct must be reverted"
     assert result["fixed"] is False
     assert "security gate" in (result.get("validation_error") or "").lower()
-    assert f.read_text(encoding="utf-8") == original, "file must be reverted to original"
+    assert f.read_text(encoding="utf-8") == original, (
+        "file must be reverted to original"
+    )
     # A clean repair still passes the gate.
     f.write_text("def helper(x):\n    return x + 1\n", encoding="utf-8")
     result2 = {"fixed": True}
@@ -392,14 +452,32 @@ def test_repair_records_durable_state_on_success_and_failure(tmp_path, monkeypat
 
     monkeypatch.setattr(rs, "_REPAIR_STATE_DIR", tmp_path / "states")
     monkeypatch.setattr(repair_engine, "BREAKER_FILE", tmp_path / "breaker.json")
-    monkeypatch.setattr(repair_engine, "_circuit_allows_repair", lambda *a, **k: (True, None))
-    monkeypatch.setattr(repair_engine, "_run_related_tests",
-                        lambda *a, **k: {"ok": True, "output": "ok", "flaky": False,
-                                         "initial_result": "pass", "retry_result": None})
+    monkeypatch.setattr(
+        repair_engine, "_circuit_allows_repair", lambda *a, **k: (True, None)
+    )
+    monkeypatch.setattr(
+        repair_engine,
+        "_run_related_tests",
+        lambda *a, **k: {
+            "ok": True,
+            "output": "ok",
+            "flaky": False,
+            "initial_result": "pass",
+            "retry_result": None,
+        },
+    )
     monkeypatch.setattr(repair_engine, "_is_repairable_path", lambda p: True)
-    for fn in ("save_budget", "load_budget", "append_lesson", "_record_repair_result",
-               "save_budget", "load_budget"):
-        monkeypatch.setattr(repair_engine, fn, lambda *a, **k: ({} if fn == "load_budget" else None))
+    for fn in (
+        "save_budget",
+        "load_budget",
+        "append_lesson",
+        "_record_repair_result",
+        "save_budget",
+        "load_budget",
+    ):
+        monkeypatch.setattr(
+            repair_engine, fn, lambda *a, **k: {} if fn == "load_budget" else None
+        )
 
     class FakeT0:
         @staticmethod
@@ -410,10 +488,12 @@ def test_repair_records_durable_state_on_success_and_failure(tmp_path, monkeypat
     class _FakeCtx:
         class S:
             active_agent = "coder"
+
         state = S()
 
         def __init__(self):
             from types import SimpleNamespace
+
             self.console = SimpleNamespace(print=lambda *a, **k: None)
 
     monkeypatch.setattr(repair_engine, "T0PatternRepair", FakeT0)
@@ -424,7 +504,9 @@ def test_repair_records_durable_state_on_success_and_failure(tmp_path, monkeypat
     assert ok_res.get("fixed") is True
     assert ok_res.get("repair_state_id")
     ok_rec = st_load(ok_res["repair_state_id"])
-    assert ok_rec.phase == "ACCEPTED", f"successful repair must be ACCEPTED, got {ok_rec.phase}"
+    assert ok_rec.phase == "ACCEPTED", (
+        f"successful repair must be ACCEPTED, got {ok_rec.phase}"
+    )
     assert ok_rec.next_action == "none"
     # Machine-readable flake evidence lands in the durable validation result.
     assert ok_rec.validation_result == {
@@ -432,14 +514,24 @@ def test_repair_records_durable_state_on_success_and_failure(tmp_path, monkeypat
         "initial_result": "pass",
         "retry_result": None,
         "flaky": False,
-    }, f"durable validation_result missing structured flake field: {ok_rec.validation_result}"
+    }, (
+        f"durable validation_result missing structured flake field: {ok_rec.validation_result}"
+    )
 
     # A flaky repair (first run fail, --lf re-run pass) is ACCEPTED and the
     # durable record carries flaky=True — the exact {initial, retry, flaky,
     # outcome} shape, not a string marker.
-    monkeypatch.setattr(repair_engine, "_run_related_tests",
-                        lambda *a, **k: {"ok": True, "output": "[flaky] ...", "flaky": True,
-                                         "initial_result": "fail", "retry_result": "pass"})
+    monkeypatch.setattr(
+        repair_engine,
+        "_run_related_tests",
+        lambda *a, **k: {
+            "ok": True,
+            "output": "[flaky] ...",
+            "flaky": True,
+            "initial_result": "fail",
+            "retry_result": "pass",
+        },
+    )
     flaky_res = orch.repair("SyntaxError: invalid syntax", file_path=f)
     assert flaky_res.get("fixed") is True
     flaky_rec = st_load(flaky_res["repair_state_id"])
@@ -452,14 +544,16 @@ def test_repair_records_durable_state_on_success_and_failure(tmp_path, monkeypat
     }, f"flaky evidence must be structured: {flaky_rec.validation_result}"
 
     # Failure path: no T0 patch found -> REPAIR_FAILED, never ACCEPTED.
-    monkeypatch.setattr(repair_engine, "T0PatternRepair",
-                        type("F", (), {"try_repair": staticmethod(lambda *a, **k: None)}))
+    monkeypatch.setattr(
+        repair_engine,
+        "T0PatternRepair",
+        type("F", (), {"try_repair": staticmethod(lambda *a, **k: None)}),
+    )
     fail_res = orch.repair("SyntaxError: invalid syntax", file_path=f)
     assert fail_res.get("fixed") is False
     assert fail_res.get("repair_state_id")
     fail_rec = st_load(fail_res["repair_state_id"])
-    assert fail_rec.phase == "REPAIR_FAILED", f"failed repair must be REPAIR_FAILED, got {fail_rec.phase}"
+    assert fail_rec.phase == "REPAIR_FAILED", (
+        f"failed repair must be REPAIR_FAILED, got {fail_rec.phase}"
+    )
     assert fail_rec.phase != "ACCEPTED"
-
-
-

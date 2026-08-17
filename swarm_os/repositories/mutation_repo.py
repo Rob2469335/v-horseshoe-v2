@@ -4,6 +4,7 @@ import shutil
 from pathlib import Path
 from typing import Dict, Any
 
+
 class MutationRepository:
     def __init__(self, root_dir: str | Path = ".data/pending_mutations"):
         self.root_dir = Path(root_dir)
@@ -22,7 +23,9 @@ class MutationRepository:
         Reject any path that resolves outside the allowed base.
         """
         resolved = Path(raw).expanduser().resolve()
-        base = (self.root_dir if not allow_project_root else self.root_dir.parents[1]).resolve()
+        base = (
+            self.root_dir if not allow_project_root else self.root_dir.parents[1]
+        ).resolve()
         if not resolved.is_relative_to(base):
             raise ValueError(f"Path outside allowed root: {raw}")
         return resolved
@@ -30,17 +33,21 @@ class MutationRepository:
     def approve(self, mutation_id: str) -> Dict[str, Any]:
         target_dir = self.get_mutation_path(mutation_id)
         meta_path = target_dir / "metadata.json"
-        
+
         if not meta_path.exists():
             raise FileNotFoundError(f"Mutation {mutation_id} not found")
 
         metadata = json.loads(meta_path.read_text(encoding="utf-8"))
 
         # pending_file lives inside the mutation's own staging dir.
-        pending_file = self._resolve_within_root(metadata["pending_file"], allow_project_root=False)
+        pending_file = self._resolve_within_root(
+            metadata["pending_file"], allow_project_root=False
+        )
         # target_path is the live project file being replaced — allow it anywhere
         # under the project root, but never outside it.
-        target_path = self._resolve_within_root(metadata["target_path"], allow_project_root=True)
+        target_path = self._resolve_within_root(
+            metadata["target_path"], allow_project_root=True
+        )
 
         if not pending_file.exists():
             raise FileNotFoundError(f"Pending mutation file not found: {pending_file}")
@@ -84,38 +91,71 @@ class MutationRepository:
         target_dir = self.get_mutation_path(mutation_id)
         meta_path = target_dir / "metadata.json"
         if not meta_path.exists():
-            return {"ok": False, "reason": "unavailable", "detail": "mutation metadata not found"}
+            return {
+                "ok": False,
+                "reason": "unavailable",
+                "detail": "mutation metadata not found",
+            }
         try:
             metadata = json.loads(meta_path.read_text(encoding="utf-8"))
         except Exception as exc:
-            return {"ok": False, "reason": "unavailable", "detail": f"metadata unreadable: {exc}"}
+            return {
+                "ok": False,
+                "reason": "unavailable",
+                "detail": f"metadata unreadable: {exc}",
+            }
         if not metadata.get("approved"):
-            return {"ok": False, "reason": "unavailable", "detail": "mutation not approved"}
-        target_path = self._resolve_within_root(metadata["target_path"], allow_project_root=True)
+            return {
+                "ok": False,
+                "reason": "unavailable",
+                "detail": "mutation not approved",
+            }
+        target_path = self._resolve_within_root(
+            metadata["target_path"], allow_project_root=True
+        )
         backup_path = metadata.get("backup_path")
         if not backup_path or not Path(backup_path).exists():
-            return {"ok": False, "reason": "unavailable", "detail": "backup .bak missing"}
+            return {
+                "ok": False,
+                "reason": "unavailable",
+                "detail": "backup .bak missing",
+            }
         approved_hex = metadata.get("approved_bytes_hex")
         try:
             current = target_path.read_bytes()
         except Exception as exc:
-            return {"ok": False, "reason": "unavailable", "detail": f"target unreadable: {exc}"}
+            return {
+                "ok": False,
+                "reason": "unavailable",
+                "detail": f"target unreadable: {exc}",
+            }
         if approved_hex is None:
             # Legacy metadata without the approval-time capture: refuse rather
             # than guess (cannot distinguish a later write from the approved one).
-            return {"ok": False, "reason": "refused_conflict", "detail": "approval-time bytes not recorded; cannot verify unchanged-since-repair"}
+            return {
+                "ok": False,
+                "reason": "refused_conflict",
+                "detail": "approval-time bytes not recorded; cannot verify unchanged-since-repair",
+            }
         if current.hex() != approved_hex:
-            return {"ok": False, "reason": "refused_conflict", "detail": "file modified since repair; refusing to clobber a later write"}
-        backup_path_resolved = self._resolve_within_root(backup_path, allow_project_root=True)
+            return {
+                "ok": False,
+                "reason": "refused_conflict",
+                "detail": "file modified since repair; refusing to clobber a later write",
+            }
+        backup_path_resolved = self._resolve_within_root(
+            backup_path, allow_project_root=True
+        )
         shutil.copy2(backup_path_resolved, target_path)
         return {"ok": True, "rolled_back": str(target_path), "reason": "rolled_back"}
-        
+
     def reject(self, mutation_id: str) -> bool:
         target_dir = self.get_mutation_path(mutation_id)
         if not target_dir.exists():
             return False
         shutil.rmtree(target_dir)
         return True
+
     def list_pending(self) -> list[Dict[str, Any]]:
         mutations = []
         if not self.root_dir.exists():

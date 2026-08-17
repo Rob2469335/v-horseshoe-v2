@@ -15,6 +15,7 @@ SECURITY MODEL:
     stop runaway loops (Rosply-style); `reset_screen_action_count()` resets.
   - Loopback-only: this module never opens a network port.
 """
+
 from __future__ import annotations
 
 import logging
@@ -45,12 +46,25 @@ else:
 # Mode & guards
 # ---------------------------------------------------------------------------
 
-SCREEN_AUTONOMOUS = os.getenv("SWARM_SCREEN_AUTONOMOUS", "").lower() in ("1", "true", "yes", "on")
+SCREEN_AUTONOMOUS = os.getenv("SWARM_SCREEN_AUTONOMOUS", "").lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
 _SCREEN_MAX_ACTIONS = int(os.getenv("SWARM_SCREEN_MAX_ACTIONS", "200"))
 _screen_action_count = 0
 
 # Input actions that change machine state; gated by autonomous mode.
-_INPUT_ACTIONS = {"mouse_move", "left_click", "right_click", "double_click", "scroll", "type", "key"}
+_INPUT_ACTIONS = {
+    "mouse_move",
+    "left_click",
+    "right_click",
+    "double_click",
+    "scroll",
+    "type",
+    "key",
+}
 
 # Risk-tiered authorization (2026 computer-use best practice — systemshardening
 # "Computer Use Sandboxing", JARVIS survey): even in AUTONOMOUS mode, high-risk
@@ -58,11 +72,20 @@ _INPUT_ACTIONS = {"mouse_move", "left_click", "right_click", "double_click", "sc
 # system shortcuts, destructive keystrokes. They are routed to human approval
 # unless SWARM_SCREEN_AUTO_APPROVE_RISKY=1 (operator explicitly opts in).
 _RISKY_KEY_COMBOS = {
-    ("ctrl", "alt", "del"), ("ctrl", "alt", "delete"),
-    ("win", "l"), ("cmd", "l"), ("win", "r"), ("cmd", "r"),
-    ("alt", "f4"), ("ctrl", "shift", "esc"),
-    ("win", "e"), ("cmd", "e"), ("win", "x"), ("cmd", "x"),
-    ("super", "l"), ("super", "r"),
+    ("ctrl", "alt", "del"),
+    ("ctrl", "alt", "delete"),
+    ("win", "l"),
+    ("cmd", "l"),
+    ("win", "r"),
+    ("cmd", "r"),
+    ("alt", "f4"),
+    ("ctrl", "shift", "esc"),
+    ("win", "e"),
+    ("cmd", "e"),
+    ("win", "x"),
+    ("cmd", "x"),
+    ("super", "l"),
+    ("super", "r"),
 }
 _RISKY_TEXT_PATTERNS = (
     ("password", "typing a password-like value"),
@@ -71,7 +94,9 @@ _RISKY_TEXT_PATTERNS = (
     ("secret", "typing a secret"),
     ("apikey", "typing an API key"),
 )
-_SCREEN_AUTO_APPROVE_RISKY = os.getenv("SWARM_SCREEN_AUTO_APPROVE_RISKY", "").lower() in ("1", "true", "yes", "on")
+_SCREEN_AUTO_APPROVE_RISKY = os.getenv(
+    "SWARM_SCREEN_AUTO_APPROVE_RISKY", ""
+).lower() in ("1", "true", "yes", "on")
 
 # Append-only audit log of every input action + authorization decision.
 _AUDIT_LOG_PATH = os.path.join(os.getcwd(), "logs", "screen_audit.jsonl")
@@ -80,7 +105,9 @@ _AUDIT_LOG_PATH = os.path.join(os.getcwd(), "logs", "screen_audit.jsonl")
 _RUNAWAY_WINDOW_S = int(os.getenv("SWARM_SCREEN_RUNAWAY_WINDOW_S", "180"))
 _first_input_ts = 0.0
 
-_SCREENSHOT_DIR = os.getenv("SWARM_SCREENSHOT_DIR", os.path.join(os.getcwd(), "logs", "screenshots"))
+_SCREENSHOT_DIR = os.getenv(
+    "SWARM_SCREENSHOT_DIR", os.path.join(os.getcwd(), "logs", "screenshots")
+)
 
 
 def _ok(result: Any) -> Dict[str, Any]:
@@ -95,6 +122,7 @@ def _audit(entry: Dict[str, Any]) -> None:
     """Append one authorization/execution record to the audit log (best-effort)."""
     try:
         import json
+
         os.makedirs(os.path.dirname(_AUDIT_LOG_PATH), exist_ok=True)
         entry["ts"] = time.time()
         with open(_AUDIT_LOG_PATH, "a", encoding="utf-8") as f:
@@ -107,7 +135,12 @@ def set_screen_autonomous(value: bool) -> Dict[str, Any]:
     global SCREEN_AUTONOMOUS
     SCREEN_AUTONOMOUS = bool(value)
     _audit({"decision": "autonomous_set", "value": SCREEN_AUTONOMOUS})
-    return _ok({"screen_autonomous": SCREEN_AUTONOMOUS, "note": "All input actions enabled. THIS CONTROLS YOUR REAL MOUSE AND KEYBOARD."})
+    return _ok(
+        {
+            "screen_autonomous": SCREEN_AUTONOMOUS,
+            "note": "All input actions enabled. THIS CONTROLS YOUR REAL MOUSE AND KEYBOARD.",
+        }
+    )
 
 
 def reset_screen_action_count() -> Dict[str, Any]:
@@ -122,7 +155,9 @@ def _risk_reason(action: str, kwargs: Dict[str, Any]) -> str | None:
     """Return a human-readable risk reason if the action is risky, else None.
     Applies on top of the autonomous gate — risky actions need explicit opt-in."""
     if action == "key":
-        parts = sorted(p.lower() for p in str(kwargs.get("name", "")).split("+") if p.strip())
+        parts = sorted(
+            p.lower() for p in str(kwargs.get("name", "")).split("+") if p.strip()
+        )
         for combo in _RISKY_KEY_COMBOS:
             if parts == sorted(combo):
                 return f"system shortcut '{kwargs.get('name')}'"
@@ -135,7 +170,9 @@ def _risk_reason(action: str, kwargs: Dict[str, Any]) -> str | None:
     return None
 
 
-def _spend_action(action: str, kwargs: Dict[str, Any] | None = None) -> Dict[str, Any] | None:
+def _spend_action(
+    action: str, kwargs: Dict[str, Any] | None = None
+) -> Dict[str, Any] | None:
     """Check human-control gate + risk gate + caps. Returns an error result if
     blocked, else None."""
     global _screen_action_count, _first_input_ts
@@ -144,7 +181,14 @@ def _spend_action(action: str, kwargs: Dict[str, Any] | None = None) -> Dict[str
         risk = _risk_reason(action, kwargs)
         # Risk gate applies even in autonomous mode — unless operator opted in.
         if risk and not _SCREEN_AUTO_APPROVE_RISKY:
-            _audit({"action": action, "decision": "approval_required", "reason": risk, "kwargs": kwargs})
+            _audit(
+                {
+                    "action": action,
+                    "decision": "approval_required",
+                    "reason": risk,
+                    "kwargs": kwargs,
+                }
+            )
             return _err(
                 f"RISK GATE: '{action}' would {risk} — this requires human approval even in "
                 "autonomous mode. Set SWARM_SCREEN_AUTO_APPROVE_RISKY=1 to allow, or describe "
@@ -175,7 +219,13 @@ def _spend_action(action: str, kwargs: Dict[str, Any] | None = None) -> Dict[str
             )
         now = time.time()
         if _first_input_ts and (now - _first_input_ts) > _RUNAWAY_WINDOW_S:
-            _audit({"action": action, "decision": "blocked_runaway", "window_s": _RUNAWAY_WINDOW_S})
+            _audit(
+                {
+                    "action": action,
+                    "decision": "blocked_runaway",
+                    "window_s": _RUNAWAY_WINDOW_S,
+                }
+            )
             return _err(
                 f"RUNAWAY GUARD: screen input has been running continuously for >{_RUNAWAY_WINDOW_S}s "
                 "without a reset. Call reset_screen_action_count() to continue. Sustained input is a loop risk."
@@ -194,6 +244,7 @@ def _spend_action(action: str, kwargs: Dict[str, Any] | None = None) -> Dict[str
 # ---------------------------------------------------------------------------
 # Screen capture
 # ---------------------------------------------------------------------------
+
 
 def _screen_size() -> tuple[int, int]:
     w = user32.GetSystemMetrics(0)
@@ -224,7 +275,15 @@ def screenshot(save: bool = True) -> Dict[str, Any]:
 
             bmpinfo = bitmap.GetInfo()
             bmpdata = bitmap.GetBitmapBits(True)
-            img = Image.frombuffer("RGB", (bmpinfo["bmWidth"], bmpinfo["bmHeight"]), bmpdata, "raw", "BGRX", 0, 1)
+            img = Image.frombuffer(
+                "RGB",
+                (bmpinfo["bmWidth"], bmpinfo["bmHeight"]),
+                bmpdata,
+                "raw",
+                "BGRX",
+                0,
+                1,
+            )
 
             save_dc.DeleteDC()
             mfc_dc.DeleteDC()
@@ -236,27 +295,37 @@ def screenshot(save: bool = True) -> Dict[str, Any]:
         fg = foreground_window()
         if save:
             os.makedirs(_SCREENSHOT_DIR, exist_ok=True)
-            path = os.path.join(_SCREENSHOT_DIR, time.strftime("screen_%Y%m%d_%H%M%S.png"))
+            path = os.path.join(
+                _SCREENSHOT_DIR, time.strftime("screen_%Y%m%d_%H%M%S.png")
+            )
             img.save(path, "PNG")
-            return _ok({
-                "path": path,
-                "width": w,
-                "height": h,
-                "mode": "RGBA",
-                "foreground_window": fg.get("result", {}).get("title", "") if fg.get("ok") else "",
-            })
+            return _ok(
+                {
+                    "path": path,
+                    "width": w,
+                    "height": h,
+                    "mode": "RGBA",
+                    "foreground_window": fg.get("result", {}).get("title", "")
+                    if fg.get("ok")
+                    else "",
+                }
+            )
         # No-save mode: describe pixels only (no binary in the result).
         px = img.convert("L")
         cols = []
         for cx in (w * i // 4 for i in range(1, 4)):
             cols.append(px.getpixel((cx, h // 2)))
-        return _ok({
-            "width": w,
-            "height": h,
-            "center_luma_columns": cols,
-            "note": "Screenshot not saved; call screenshot(save=true) to get a PNG path.",
-            "foreground_window": fg.get("result", {}).get("title", "") if fg.get("ok") else "",
-        })
+        return _ok(
+            {
+                "width": w,
+                "height": h,
+                "center_luma_columns": cols,
+                "note": "Screenshot not saved; call screenshot(save=true) to get a PNG path.",
+                "foreground_window": fg.get("result", {}).get("title", "")
+                if fg.get("ok")
+                else "",
+            }
+        )
     except Exception as exc:
         return _err(exc)
 
@@ -265,9 +334,11 @@ def screenshot(save: bool = True) -> Dict[str, Any]:
 # Window introspection (read-only)
 # ---------------------------------------------------------------------------
 
+
 def _window_title(hwnd: int) -> str:
     try:
         import win32gui
+
         return win32gui.GetWindowText(hwnd)
     except Exception:
         return ""
@@ -278,11 +349,16 @@ def _app_name_from_hwnd(hwnd) -> str:
     try:
         import win32process
         import win32api
+
         _, pid = win32process.GetWindowThreadProcessId(hwnd)
         import win32con
-        proc = win32api.OpenProcess(win32con.PROCESS_QUERY_INFORMATION | win32con.PROCESS_VM_READ, False, pid)
+
+        proc = win32api.OpenProcess(
+            win32con.PROCESS_QUERY_INFORMATION | win32con.PROCESS_VM_READ, False, pid
+        )
         try:
             import win32process as _wp
+
             exe = _wp.GetModuleFileNameEx(proc)
             return exe.split("\\")[-1].lower() if exe else ""
         finally:
@@ -302,15 +378,18 @@ def _app_tier() -> str:
     contexts are fail-closed to 'view-only'."""
     try:
         import win32gui
+
         hwnd = win32gui.GetForegroundWindow()
         app = _app_name_from_hwnd(hwnd) if hwnd else ""
         if not app:
             return "view-only"
         try:
             from swarm_os.services.permission_tiers import tier_for, has_grant
+
             # Browser contexts key on the active tab's domain, not the exe.
             if app in ("chrome.exe", "msedge.exe", "firefox.exe", "brave.exe"):
                 from swarm_os.lib.mcp.playwright import active_domain
+
                 target = active_domain() or app
             else:
                 target = app
@@ -337,6 +416,7 @@ def _app_tier() -> str:
 def foreground_window() -> Dict[str, Any]:
     try:
         import win32gui
+
         hwnd = win32gui.GetForegroundWindow()
         if not hwnd:
             return _ok({"hwnd": 0, "title": "", "rect": [0, 0, 0, 0]})
@@ -356,6 +436,7 @@ def foreground_window() -> Dict[str, Any]:
 def list_windows(max_results: int = 30) -> Dict[str, Any]:
     try:
         import win32gui
+
         windows = []
 
         def _cb(hwnd, _extra):
@@ -373,7 +454,9 @@ def list_windows(max_results: int = 30) -> Dict[str, Any]:
         try:
             win32gui.EnumWindows(_cb, None)
         except Exception:
-            windows = [{"hwnd": 0, "title": "Background Desktop Session", "rect": [0, 0, 0, 0]}]
+            windows = [
+                {"hwnd": 0, "title": "Background Desktop Session", "rect": [0, 0, 0, 0]}
+            ]
 
         windows = windows[: int(max_results)]
         return _ok({"count": len(windows), "windows": windows})
@@ -394,19 +477,24 @@ def cursor_position() -> Dict[str, Any]:
 # Input actions (gated by human-control mode)
 # ---------------------------------------------------------------------------
 
+
 def mouse_move(x: int, y: int) -> Dict[str, Any]:
     blocked = _spend_action("mouse_move", {"x": x, "y": y})
     if blocked:
         return blocked
     try:
         user32.SetCursorPos(int(x), int(y))
-        _audit({"action": "mouse_move", "decision": "executed", "x": int(x), "y": int(y)})
+        _audit(
+            {"action": "mouse_move", "decision": "executed", "x": int(x), "y": int(y)}
+        )
         return _ok({"action": "mouse_move", "x": int(x), "y": int(y)})
     except Exception as exc:
         return _err(exc)
 
 
-def _click(button: int, x: int | None, y: int | None, double: bool = False) -> Dict[str, Any]:
+def _click(
+    button: int, x: int | None, y: int | None, double: bool = False
+) -> Dict[str, Any]:
     if x is not None and y is not None:
         user32.SetCursorPos(int(x), int(y))
         time.sleep(0.05)
@@ -454,8 +542,12 @@ def double_click(x: int | None = None, y: int | None = None) -> Dict[str, Any]:
         return _err(exc)
 
 
-def scroll(direction: str = "down", amount: int = 3, x: int | None = None, y: int | None = None) -> Dict[str, Any]:
-    blocked = _spend_action("scroll", {"direction": direction, "amount": amount, "x": x, "y": y})
+def scroll(
+    direction: str = "down", amount: int = 3, x: int | None = None, y: int | None = None
+) -> Dict[str, Any]:
+    blocked = _spend_action(
+        "scroll", {"direction": direction, "amount": amount, "x": x, "y": y}
+    )
     if blocked:
         return blocked
     try:
@@ -464,7 +556,14 @@ def scroll(direction: str = "down", amount: int = 3, x: int | None = None, y: in
             time.sleep(0.05)
         delta = int(amount) * (120 if str(direction).lower() == "up" else -120)
         user32.mouse_event(0x0800, 0, 0, delta, 0)
-        _audit({"action": "scroll", "decision": "executed", "direction": direction, "amount": int(amount)})
+        _audit(
+            {
+                "action": "scroll",
+                "decision": "executed",
+                "direction": direction,
+                "amount": int(amount),
+            }
+        )
         return _ok({"action": "scroll", "direction": direction, "amount": int(amount)})
     except Exception as exc:
         return _err(exc)
@@ -472,16 +571,32 @@ def scroll(direction: str = "down", amount: int = 3, x: int | None = None, y: in
 
 def _send_unicode(text: str) -> None:
     """Type text via SendInput with KEYEVENTF_UNICODE — handles any charset."""
+
     class KEYBDINPUT(ctypes.Structure):
-        _fields_ = [("wVk", wintypes.WORD), ("wScan", wintypes.WORD), ("dwFlags", wintypes.DWORD),
-                    ("time", wintypes.DWORD), ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong))]
+        _fields_ = [
+            ("wVk", wintypes.WORD),
+            ("wScan", wintypes.WORD),
+            ("dwFlags", wintypes.DWORD),
+            ("time", wintypes.DWORD),
+            ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
+        ]
 
     class MOUSEINPUT(ctypes.Structure):
-        _fields_ = [("dx", wintypes.LONG), ("dy", wintypes.LONG), ("mouseData", wintypes.DWORD),
-                    ("dwFlags", wintypes.DWORD), ("time", wintypes.DWORD), ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong))]
+        _fields_ = [
+            ("dx", wintypes.LONG),
+            ("dy", wintypes.LONG),
+            ("mouseData", wintypes.DWORD),
+            ("dwFlags", wintypes.DWORD),
+            ("time", wintypes.DWORD),
+            ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
+        ]
 
     class HARDWAREINPUT(ctypes.Structure):
-        _fields_ = [("uMsg", wintypes.DWORD), ("wParamL", wintypes.WORD), ("wParamH", wintypes.WORD)]
+        _fields_ = [
+            ("uMsg", wintypes.DWORD),
+            ("wParamL", wintypes.WORD),
+            ("wParamH", wintypes.WORD),
+        ]
 
     class INPUTUNION(ctypes.Union):
         _fields_ = [("ki", KEYBDINPUT), ("mi", MOUSEINPUT), ("hi", HARDWAREINPUT)]
@@ -492,7 +607,13 @@ def _send_unicode(text: str) -> None:
     extra = ctypes.c_ulong(0)
     for ch in str(text):
         for down in (True, False):
-            ki = KEYBDINPUT(0, ord(ch), 0x0004 if down else (0x0004 | 0x0002), 0, ctypes.pointer(extra))
+            ki = KEYBDINPUT(
+                0,
+                ord(ch),
+                0x0004 if down else (0x0004 | 0x0002),
+                0,
+                ctypes.pointer(extra),
+            )
             inp = INPUT(1, INPUTUNION(ki=ki))
             user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(inp))
             time.sleep(0.01)
@@ -517,26 +638,85 @@ def key(name: str) -> Dict[str, Any]:
         return blocked
     try:
         _VK = {
-            "enter": 0x0D, "return": 0x0D, "tab": 0x09, "esc": 0x1B, "escape": 0x1B,
-            "space": 0x20, "backspace": 0x08, "delete": 0x2E, "del": 0x2E,
-            "up": 0x26, "down": 0x28, "left": 0x25, "right": 0x27,
-            "home": 0x24, "end": 0x23, "pageup": 0x21, "pagedown": 0x22,
-            "ctrl": 0x11, "control": 0x11, "alt": 0x12, "shift": 0x10,
-            "win": 0x5B, "cmd": 0x5B, "menu": 0x5D,
-            "f1": 0x70, "f2": 0x71, "f3": 0x72, "f4": 0x73, "f5": 0x74, "f6": 0x75,
-            "f7": 0x76, "f8": 0x77, "f9": 0x78, "f10": 0x79, "f11": 0x7A, "f12": 0x7B,
-            "a": 0x41, "b": 0x42, "c": 0x43, "d": 0x44, "e": 0x45, "f": 0x46,
-            "g": 0x47, "h": 0x48, "i": 0x49, "j": 0x4A, "k": 0x4B, "l": 0x4C,
-            "m": 0x4D, "n": 0x4E, "o": 0x4F, "p": 0x50, "q": 0x51, "r": 0x52,
-            "s": 0x53, "t": 0x54, "u": 0x55, "v": 0x56, "w": 0x57, "x": 0x58,
-            "y": 0x59, "z": 0x5A,
-            "0": 0x30, "1": 0x31, "2": 0x32, "3": 0x33, "4": 0x34, "5": 0x35,
-            "6": 0x36, "7": 0x37, "8": 0x38, "9": 0x39,
+            "enter": 0x0D,
+            "return": 0x0D,
+            "tab": 0x09,
+            "esc": 0x1B,
+            "escape": 0x1B,
+            "space": 0x20,
+            "backspace": 0x08,
+            "delete": 0x2E,
+            "del": 0x2E,
+            "up": 0x26,
+            "down": 0x28,
+            "left": 0x25,
+            "right": 0x27,
+            "home": 0x24,
+            "end": 0x23,
+            "pageup": 0x21,
+            "pagedown": 0x22,
+            "ctrl": 0x11,
+            "control": 0x11,
+            "alt": 0x12,
+            "shift": 0x10,
+            "win": 0x5B,
+            "cmd": 0x5B,
+            "menu": 0x5D,
+            "f1": 0x70,
+            "f2": 0x71,
+            "f3": 0x72,
+            "f4": 0x73,
+            "f5": 0x74,
+            "f6": 0x75,
+            "f7": 0x76,
+            "f8": 0x77,
+            "f9": 0x78,
+            "f10": 0x79,
+            "f11": 0x7A,
+            "f12": 0x7B,
+            "a": 0x41,
+            "b": 0x42,
+            "c": 0x43,
+            "d": 0x44,
+            "e": 0x45,
+            "f": 0x46,
+            "g": 0x47,
+            "h": 0x48,
+            "i": 0x49,
+            "j": 0x4A,
+            "k": 0x4B,
+            "l": 0x4C,
+            "m": 0x4D,
+            "n": 0x4E,
+            "o": 0x4F,
+            "p": 0x50,
+            "q": 0x51,
+            "r": 0x52,
+            "s": 0x53,
+            "t": 0x54,
+            "u": 0x55,
+            "v": 0x56,
+            "w": 0x57,
+            "x": 0x58,
+            "y": 0x59,
+            "z": 0x5A,
+            "0": 0x30,
+            "1": 0x31,
+            "2": 0x32,
+            "3": 0x33,
+            "4": 0x34,
+            "5": 0x35,
+            "6": 0x36,
+            "7": 0x37,
+            "8": 0x38,
+            "9": 0x39,
         }
         parts = [p.strip().lower() for p in str(name).split("+") if p.strip()]
         codes = [_VK.get(p, ord(p[0]) if len(p) == 1 else None) for p in parts]
         if any(c is None for c in codes):
-            return _err(f"Unknown key '{name}'. Use one of: enter, tab, esc, space, backspace, delete, arrows, ctrl+s, alt+tab, a-z, 0-9, f1-f12.")
+            return _err(
+                f"Unknown key '{name}'. Use one of: enter, tab, esc, space, backspace, delete, arrows, ctrl+s, alt+tab, a-z, 0-9, f1-f12."
+            )
         for c in codes:
             user32.keybd_event(c, 0, 0, 0)
         for c in reversed(codes):
@@ -575,7 +755,9 @@ def screen_handler(payload: Dict[str, Any]) -> Dict[str, Any]:
     action = str(payload.get("action", "") or "").lower().strip()
     handler = _HANDLERS.get(action)
     if not handler:
-        return _err(f"Unknown screen action '{action}'. Available: {', '.join(sorted(_HANDLERS))}")
+        return _err(
+            f"Unknown screen action '{action}'. Available: {', '.join(sorted(_HANDLERS))}"
+        )
     # Enforce the human-control gate BEFORE argument validation so blocked
     # input actions always report the mode guard, not a kwarg error.
     if action in _INPUT_ACTIONS and not SCREEN_AUTONOMOUS:
@@ -590,13 +772,18 @@ def screen_handler(payload: Dict[str, Any]) -> Dict[str, Any]:
     # flip itself into autonomous mode (real mouse/keyboard takeover) or reset the
     # runaway-action cap. Both are only honored when the OPERATOR already enabled
     # autonomous mode via SWARM_SCREEN_AUTONOMOUS=1.
-    if action in ("set_screen_autonomous", "reset_screen_action_count") and not SCREEN_AUTONOMOUS:
+    if (
+        action in ("set_screen_autonomous", "reset_screen_action_count")
+        and not SCREEN_AUTONOMOUS
+    ):
         return _err(
             "HUMAN-CONTROL MODE: you cannot enable autonomous input or reset the "
             "action cap yourself. An operator must set SWARM_SCREEN_AUTONOMOUS=1. "
             f"Proposed action: '{action}' — describe what you would do and wait for approval."
         )
-    kwargs = {k: v for k, v in payload.items() if k not in ("action", "tool", "capability")}
+    kwargs = {
+        k: v for k, v in payload.items() if k not in ("action", "tool", "capability")
+    }
     try:
         return handler(**kwargs)
     except TypeError as exc:

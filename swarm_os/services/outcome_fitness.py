@@ -15,6 +15,7 @@ Fitness is persisted per genome-id to `data/evolution/fitness.jsonl` so the
 kernel can select on real outcomes, and only a frozen/deterministic signal is
 used (never self-judged by the proposing model).
 """
+
 from __future__ import annotations
 
 import json
@@ -30,8 +31,13 @@ FITNESS_PATH = Path("data/evolution/fitness.jsonl")
 _LOCK = threading.Lock()
 
 # Composite weights (research-grounded, completion gating).
-_W = {"completion": 0.40, "test_pass": 0.25, "tool_success": 0.20,
-      "efficiency": 0.10, "human": 0.05}
+_W = {
+    "completion": 0.40,
+    "test_pass": 0.25,
+    "tool_success": 0.20,
+    "efficiency": 0.10,
+    "human": 0.05,
+}
 _COMPLETION_GATE_CAP = 0.4
 
 
@@ -39,9 +45,13 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def compute_fitness(completion: float = 0.0, test_pass: float = 0.0,
-                    tool_success: float = 0.0, efficiency: float = 0.0,
-                    human: float = 0.0) -> dict:
+def compute_fitness(
+    completion: float = 0.0,
+    test_pass: float = 0.0,
+    tool_success: float = 0.0,
+    efficiency: float = 0.0,
+    human: float = 0.0,
+) -> dict:
     """Compute the composite fitness from real outcome signals. All inputs in
     [0,1]. Completion gates: if the goal was unmet, cap the composite at 0.4 so
     an agent that never finished cannot outrank one that did."""
@@ -71,14 +81,23 @@ def compute_fitness(completion: float = 0.0, test_pass: float = 0.0,
     }
 
 
-def record_outcome(genome_id: str, *, completion: float = 0.0,
-                   test_pass: float = 0.0, tool_success: float = 0.0,
-                   efficiency: float = 0.0, human: float = 0.0,
-                   task: str = "", agent_id: str = "") -> dict:
+def record_outcome(
+    genome_id: str,
+    *,
+    completion: float = 0.0,
+    test_pass: float = 0.0,
+    tool_success: float = 0.0,
+    efficiency: float = 0.0,
+    human: float = 0.0,
+    task: str = "",
+    agent_id: str = "",
+) -> dict:
     """Persist a real outcome for a genome and return the computed fitness.
     Thread-safe append to data/evolution/fitness.jsonl. Never raises."""
     try:
-        fitness = compute_fitness(completion, test_pass, tool_success, efficiency, human)
+        fitness = compute_fitness(
+            completion, test_pass, tool_success, efficiency, human
+        )
         record = {
             "ts": _now(),
             "genome_id": genome_id,

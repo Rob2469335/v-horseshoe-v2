@@ -25,6 +25,7 @@ All handlers reuse the LIVE repo seams (web_search_handler / web_fetch_handler /
 verify_citations / align_citations / align_case_citations) — no new network
 stack, no third-party MCP. Offline-safe: no web tools => corpus-only research.
 """
+
 from __future__ import annotations
 
 import logging
@@ -36,9 +37,16 @@ log = logging.getLogger(__name__)
 # Authoritative legal domains the researcher prefers for fetches (LII, Oyez,
 # GovInfo, CourtListener, Justia). Others are still fetched but scored lower.
 AUTHORITATIVE_DOMAINS = (
-    "law.cornell.edu", "api.oyez.org", "oyez.org", "govinfo.gov",
-    "courtlistener.com", "supreme.justia.com", "law.justia.com",
-    "casetext.com", "findlaw.com", "courts.gov",
+    "law.cornell.edu",
+    "api.oyez.org",
+    "oyez.org",
+    "govinfo.gov",
+    "courtlistener.com",
+    "supreme.justia.com",
+    "law.justia.com",
+    "casetext.com",
+    "findlaw.com",
+    "courts.gov",
 )
 
 _PERSONA = (
@@ -90,8 +98,14 @@ def _is_authoritative(url: str) -> bool:
 def _pick_fetch_urls(search_results: list[dict], max_urls: int = 3) -> list[str]:
     """Pick the most authoritative URLs from web-search results to deep-fetch.
     Prefers authoritative legal domains, then https, then any. Bounded."""
-    auth = [r.get("url", "") for r in search_results if _is_authoritative(r.get("url", ""))]
-    rest = [r.get("url", "") for r in search_results if not _is_authoritative(r.get("url", ""))]
+    auth = [
+        r.get("url", "") for r in search_results if _is_authoritative(r.get("url", ""))
+    ]
+    rest = [
+        r.get("url", "")
+        for r in search_results
+        if not _is_authoritative(r.get("url", ""))
+    ]
     out = auth + rest
     seen: set[str] = set()
     picked: list[str] = []
@@ -105,7 +119,9 @@ def _pick_fetch_urls(search_results: list[dict], max_urls: int = 3) -> list[str]
     return picked
 
 
-async def _web_research(question: str, max_results: int = 5, max_fetches: int = 3) -> dict[str, Any]:
+async def _web_research(
+    question: str, max_results: int = 5, max_fetches: int = 3
+) -> dict[str, Any]:
     """Run the web leg: search the question, then deep-fetch the authoritative
     URLs. Returns {ok, web_sources: [{url, title, content}], search: [...]}.
     Never raises — any web failure returns ok=False with an empty source list
@@ -132,37 +148,55 @@ async def _web_research(question: str, max_results: int = 5, max_fetches: int = 
         content = (fetched.get("content") or fetched.get("markdown") or "")[:6000]
         if not content.strip():
             continue
-        web_sources.append({
-            "url": url,
-            "title": fetched.get("title", ""),
-            "content": content,
-            "authoritative": _is_authoritative(url),
-        })
-    return {"ok": bool(web_sources), "web_sources": web_sources, "search": search_results}
+        web_sources.append(
+            {
+                "url": url,
+                "title": fetched.get("title", ""),
+                "content": content,
+                "authoritative": _is_authoritative(url),
+            }
+        )
+    return {
+        "ok": bool(web_sources),
+        "web_sources": web_sources,
+        "search": search_results,
+    }
 
 
 def _law_as_of(scope: dict[str, Any], jurisdiction: str) -> str:
     """The law-as-of date for a jurisdiction from corpus_scope (the snapshot),
     or a clear 'unverified' marker — the temporal-grounding value threaded
     through synthesis (LegalSearch-R1)."""
-    snap = (scope.get("jurisdictions", {}).get(jurisdiction, {}) or {}).get("snapshot", "")
+    snap = (scope.get("jurisdictions", {}).get(jurisdiction, {}) or {}).get(
+        "snapshot", ""
+    )
     if snap:
         return snap
     return "unknown (corpus predates snapshot tracking)"
 
 
-async def deep_research(question: str, jurisdiction: str | None = None,
-                        web: bool = True, max_fetches: int = 3) -> DeepResearchResult:
+async def deep_research(
+    question: str,
+    jurisdiction: str | None = None,
+    web: bool = True,
+    max_fetches: int = 3,
+) -> DeepResearchResult:
     """Full deep-research flow. Runs the persona-conditioned multi-source loop:
     local corpora + web (LII/Oyez/GovInfo/CourtListener via web_fetch) + the
     CourtListener citation-lookup seam, then citation-verified synthesis with
     temporal grounding. Fail-closed: web outage => corpus-only answer; synthesis
     outage => scaffold. Never raises."""
     from swarm_os.services.legal.legal_advisor import (
-        corpus_scope, _detect_jurisdiction, _requires_min_coverage,
+        corpus_scope,
+        _detect_jurisdiction,
+        _requires_min_coverage,
     )
     from swarm_os.services.legal.legal_search import search_statutes, search_cases
-    from swarm_os.services.legal.citation_verify import verify_citations, align_citations, align_case_citations
+    from swarm_os.services.legal.citation_verify import (
+        verify_citations,
+        align_citations,
+        align_case_citations,
+    )
 
     scope = await corpus_scope()
     jur = jurisdiction or _detect_jurisdiction(question)
@@ -171,14 +205,17 @@ async def deep_research(question: str, jurisdiction: str | None = None,
     # different state's law.
     if jur is None:
         return DeepResearchResult(
-            ok=False, corpus_scope=scope,
+            ok=False,
+            corpus_scope=scope,
             message="Couldn't determine the jurisdiction. Say which state (NY/NJ/GA/NC) or federal law applies.",
         )
     if not _requires_min_coverage(scope, jur):
         return DeepResearchResult(
-            ok=False, jurisdiction=jur, corpus_scope=scope,
+            ok=False,
+            jurisdiction=jur,
+            corpus_scope=scope,
             message=f"I don't have {jur.upper()} law ingested enough to answer from the corpus. "
-                    "Deep research can still pull live web sources — enable web=yes, or ingest the jurisdiction first.",
+            "Deep research can still pull live web sources — enable web=yes, or ingest the jurisdiction first.",
         )
 
     # LEG 1 — local corpora.
@@ -199,17 +236,29 @@ async def deep_research(question: str, jurisdiction: str | None = None,
     # cases (authority chain). Best-effort; outage degrades silently.
     courtlistener_cites: list[str] = []
     try:
-        from swarm_os.services.legal.case_graph import graph_expand, build_case_graph, case_citation_key
+        from swarm_os.services.legal.case_graph import (
+            graph_expand,
+            build_case_graph,
+            case_citation_key,
+        )
         from swarm_os.services.legal.case_corpus import CASE_MANIFEST
         import os
         from qdrant_client import AsyncQdrantClient
+
         client = AsyncQdrantClient(url=os.getenv("QDRANT_URL", "http://127.0.0.1:6333"))
         offset: Any = None
         chunks: list = []
         while True:
-            resp = await client.scroll("legal_cases", limit=2000, with_payload=True, offset=offset)
+            resp = await client.scroll(
+                "legal_cases", limit=2000, with_payload=True, offset=offset
+            )
             for point in resp[0]:
-                chunks.append({"id": getattr(point, "id", None), "payload": getattr(point, "payload", None)})
+                chunks.append(
+                    {
+                        "id": getattr(point, "id", None),
+                        "payload": getattr(point, "payload", None),
+                    }
+                )
             if resp[1] is None:
                 break
             offset = resp[1]
@@ -218,7 +267,9 @@ async def deep_research(question: str, jurisdiction: str | None = None,
         seed_keys = [case_citation_key(str(c.get("citation") or "")) for c in cases]
         seed_keys = [k for k in seed_keys if k]
         expanded = graph_expand(G, seed_keys, depth=1, max_nodes=4, include_seeds=False)
-        cite_by_key = {case_citation_key(str(c["cite"])): c["cite"] for c in CASE_MANIFEST}
+        cite_by_key = {
+            case_citation_key(str(c["cite"])): c["cite"] for c in CASE_MANIFEST
+        }
         for k in expanded:
             if k in cite_by_key:
                 courtlistener_cites.append(cite_by_key[k])
@@ -230,20 +281,26 @@ async def deep_research(question: str, jurisdiction: str | None = None,
     ctx_parts: list[str] = []
     ctx_parts.append(f"[LAW AS OF] {jur.upper()} statutory corpus: {law_as_of}.")
     for i, s in enumerate(statutes):
-        ctx_parts.append(f"[STATUTE {i+1}] {s.get('citation','')} — {s.get('section_title','')}\n{(s.get('content') or '')[:800]}")
+        ctx_parts.append(
+            f"[STATUTE {i + 1}] {s.get('citation', '')} — {s.get('section_title', '')}\n{(s.get('content') or '')[:800]}"
+        )
     for i, c in enumerate(cases):
-        ctx_parts.append(f"[CASE {i+1}] {c.get('citation','')} — {c.get('section_title','')} ({c.get('court','')}, {c.get('year','')})\n{(c.get('content') or '')[:800]}")
+        ctx_parts.append(
+            f"[CASE {i + 1}] {c.get('citation', '')} — {c.get('section_title', '')} ({c.get('court', '')}, {c.get('year', '')})\n{(c.get('content') or '')[:800]}"
+        )
     for ws in web_sources:
         ctx_parts.append(f"[WEB {ws['url']}]\n{ws['content'][:800]}")
     # Surface the search-result HITS (titles+URLs+snippets) even when deep-fetch
     # failed — a web outage must not hide that the search found sources.
     if search_results:
         hits = "; ".join(
-            f"{r.get('title','')} ({r.get('url','')})" for r in search_results[:5]
+            f"{r.get('title', '')} ({r.get('url', '')})" for r in search_results[:5]
         )
         ctx_parts.append(f"[WEB SEARCH HITS] {hits}")
     if courtlistener_cites:
-        ctx_parts.append(f"[CITATION-GRAPH AUTHORITIES] {', '.join(courtlistener_cites)}")
+        ctx_parts.append(
+            f"[CITATION-GRAPH AUTHORITIES] {', '.join(courtlistener_cites)}"
+        )
     ctx = "\n\n".join(ctx_parts)
 
     # Persona-conditioned synthesis (restrained expertise role + checklist +
@@ -251,13 +308,21 @@ async def deep_research(question: str, jurisdiction: str | None = None,
     answer = await _persona_synthesize(question, jur, ctx)
 
     # Verification seam — same fail-closed contract as advise().
-    verify: dict[str, Any] = {"checked": False, "fabricated": 0, "ambiguous": 0,
-                              "shape_mismatch": 0, "unverified": 0, "unparsed": 0,
-                              "score": None}
+    verify: dict[str, Any] = {
+        "checked": False,
+        "fabricated": 0,
+        "ambiguous": 0,
+        "shape_mismatch": 0,
+        "unverified": 0,
+        "unparsed": 0,
+        "score": None,
+    }
     try:
         vres = await verify_citations(answer)
         stat_align = align_citations(answer, [s.get("citation", "") for s in statutes])
-        case_align = align_case_citations(answer, [c.get("citation", "") for c in cases])
+        case_align = align_case_citations(
+            answer, [c.get("citation", "") for c in cases]
+        )
         verify = {
             "checked": True,
             "fabricated": vres.stats.get("fabricated", 0),
@@ -267,13 +332,26 @@ async def deep_research(question: str, jurisdiction: str | None = None,
             "unparsed": vres.stats.get("unparsed", 0),
             "unaligned": len(stat_align["unaligned"]),
             "case_alignment": {"unaligned": case_align["unaligned"]},
-            "score": round(1.0 - (
-                vres.stats.get("fabricated", 0) + vres.stats.get("ambiguous", 0)
-                + vres.stats.get("shape_mismatch", 0) + vres.stats.get("unverified", 0)
-                + vres.stats.get("unparsed", 0) + len(stat_align["unaligned"])
-                + len(case_align["unaligned"])
-            ) / max(1, (vres.stats.get("count", 0) or 0) + vres.stats.get("unparsed", 0)
-                    + len(stat_align["unaligned"]) + len(case_align["unaligned"])), 2),
+            "score": round(
+                1.0
+                - (
+                    vres.stats.get("fabricated", 0)
+                    + vres.stats.get("ambiguous", 0)
+                    + vres.stats.get("shape_mismatch", 0)
+                    + vres.stats.get("unverified", 0)
+                    + vres.stats.get("unparsed", 0)
+                    + len(stat_align["unaligned"])
+                    + len(case_align["unaligned"])
+                )
+                / max(
+                    1,
+                    (vres.stats.get("count", 0) or 0)
+                    + vres.stats.get("unparsed", 0)
+                    + len(stat_align["unaligned"])
+                    + len(case_align["unaligned"]),
+                ),
+                2,
+            ),
         }
     except Exception as exc:
         log.warning("deep-research verification failed: %s", exc)
@@ -285,9 +363,16 @@ async def deep_research(question: str, jurisdiction: str | None = None,
         f"Web research: {'on' if web and web_ok else ('off' if not web else 'degraded (no fetchable sources)')}."
     )
     return DeepResearchResult(
-        ok=True, answer=answer, jurisdiction=jur, issue="deep-research",
-        sources=[*statutes, *cases], web_sources=web_sources,
-        verification=verify, corpus_scope=scope, law_as_of=law_as_of, message=message,
+        ok=True,
+        answer=answer,
+        jurisdiction=jur,
+        issue="deep-research",
+        sources=[*statutes, *cases],
+        web_sources=web_sources,
+        verification=verify,
+        corpus_scope=scope,
+        law_as_of=law_as_of,
+        message=message,
     )
 
 
@@ -302,20 +387,29 @@ async def _persona_synthesize(question: str, jurisdiction: str, context: str) ->
         + "\n\n"
         + _ISSUE_CHECKLIST
         + "\n\nAnswer the question as a senior criminal-defense appellate lawyer "
-          "would, using ONLY the authorities and web sources provided below. "
-          "Ground every proposition in a specific citation or source. If the "
-          "provided materials don't cover an issue, say so plainly. "
-          "Note the law-as-of date explicitly. This is research assistance, not "
-          "legal advice."
+        "would, using ONLY the authorities and web sources provided below. "
+        "Ground every proposition in a specific citation or source. If the "
+        "provided materials don't cover an issue, say so plainly. "
+        "Note the law-as-of date explicitly. This is research assistance, not "
+        "legal advice."
     )
     messages = [
         {"role": "system", "content": system},
-        {"role": "user", "content": f"Question ({jurisdiction.upper()}): {question}\n\nResearch materials:\n{context}"},
+        {
+            "role": "user",
+            "content": f"Question ({jurisdiction.upper()}): {question}\n\nResearch materials:\n{context}",
+        },
     ]
     try:
-        model = llm._analysis_cloud_model() if llm._analysis_cloud_enabled() else "qwen3.5-4b"
+        model = (
+            llm._analysis_cloud_model()
+            if llm._analysis_cloud_enabled()
+            else "qwen3.5-4b"
+        )
         parts: list[str] = []
-        async for chunk, kind in llm.stream_content(model, messages, agent_id="legal_deep_research"):
+        async for chunk, kind in llm.stream_content(
+            model, messages, agent_id="legal_deep_research"
+        ):
             if kind == "content":
                 parts.append(chunk or "")
         return "".join(parts).strip()

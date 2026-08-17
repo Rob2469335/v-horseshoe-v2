@@ -22,14 +22,20 @@ class ApprovalExecutionService:
 
         # execute via executor
         if not self.executor:
+
             class MockSuccessResult:
                 status = "success"
                 detail = "mock execution success (no executor registered)"
+
             result = MockSuccessResult()
         else:
             result = self.executor.execute(req["component"], req["action"])
         # persist execution
-        self.queue.mark_executed(request_id, execution_result=vars(result) if hasattr(result, '__dict__') else str(result))
+        self.queue.mark_executed(
+            request_id,
+            execution_result=vars(result)
+            if hasattr(result, "__dict__")
+            else str(result),
+        )
         updated = self.queue.get_request(request_id)
         return {"status": "ok", "idempotent": False, "request": updated}
-

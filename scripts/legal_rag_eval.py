@@ -26,6 +26,7 @@ Usage:
 The golden set is small (curated questions over the operator's jurisdictions);
 MAR + faithfulness are deterministic given a set of answers.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -41,7 +42,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 logging.basicConfig(level=logging.WARNING)
 
 from swarm_os.services.legal.citation_verify import (  # noqa: E402
-    verify_citations, align_citations, align_case_citations,
+    verify_citations,
+    align_citations,
+    align_case_citations,
 )
 
 
@@ -72,8 +75,9 @@ def mar_from_verification(verification: dict[str, Any]) -> float:
     return round(penalties / shipped, 4)
 
 
-def faithfulness(claims: list[str], retrieved: list[str],
-                 threshold: float = 0.5) -> dict[str, Any]:
+def faithfulness(
+    claims: list[str], retrieved: list[str], threshold: float = 0.5
+) -> dict[str, Any]:
     """Reference-free claim-support check (ALCE-style): each claim must share
     >= `threshold` of its tokens with at least one retrieved chunk. Returns
     {supported, unsupported, rate}. Deterministic — no LLM judge."""
@@ -104,8 +108,9 @@ def faithfulness(claims: list[str], retrieved: list[str],
     }
 
 
-async def evaluate_answer(question: str, answer: str,
-                          retrieved: list[str]) -> dict[str, Any]:
+async def evaluate_answer(
+    question: str, answer: str, retrieved: list[str]
+) -> dict[str, Any]:
     """Run the FULL verification seam on one answer and fold it into MAR +
     faithfulness. Mirrors what legal_advisor.advise() does per answer."""
     vres = await verify_citations(answer)
@@ -126,6 +131,7 @@ async def evaluate_answer(question: str, answer: str,
     # Claim-level faithfulness: split the answer into sentences, check each
     # against the retrieved chunks.
     import re
+
     claims = [c.strip() for c in re.split(r"(?<=[.!?])\s+", answer) if c.strip()]
     faith = faithfulness(claims, retrieved)
     return {"question": question, "mar": mar, "verify": verify, "faithfulness": faith}
@@ -138,7 +144,8 @@ async def run_golden(gold: list[dict[str, Any]]) -> dict[str, Any]:
     results = []
     for item in gold:
         res = await evaluate_answer(
-            item.get("question", ""), item.get("answer", ""),
+            item.get("question", ""),
+            item.get("answer", ""),
             item.get("retrieved", []) or [item.get("retrieved_text", "")],
         )
         results.append(res)
@@ -160,20 +167,28 @@ def _builtin_golden() -> list[dict[str, Any]]:
     return [
         {
             "question": "What notice must a NY landlord give before eviction?",
-            "answer": ("The tenant is entitled to notice under N.Y. RPA Law § 235-b. "
-                       "See United States v. Simeonov, 252 F.3d 238 (2d Cir. 2001)."),
-            "retrieved": ["N.Y. RPA Law § 235-b tenant notice provision",
-                          "252 F.3d 238 substitute counsel"],
+            "answer": (
+                "The tenant is entitled to notice under N.Y. RPA Law § 235-b. "
+                "See United States v. Simeonov, 252 F.3d 238 (2d Cir. 2001)."
+            ),
+            "retrieved": [
+                "N.Y. RPA Law § 235-b tenant notice provision",
+                "252 F.3d 238 substitute counsel",
+            ],
         },
         {
             "question": "When is restitution subject to abuse-of-discretion review?",
-            "answer": ("Restitution awards are reviewed for abuse of discretion "
-                       "(446 F.3d 65). The invented 999 F.4th 1 is not a real cite."),
+            "answer": (
+                "Restitution awards are reviewed for abuse of discretion "
+                "(446 F.3d 65). The invented 999 F.4th 1 is not a real cite."
+            ),
             "retrieved": ["446 F.3d 65 restitution abuse of discretion"],
         },
         {
             "question": "Is there a Batson issue in the peremptory strikes?",
-            "answer": ("Batson v. Kentucky, 476 U.S. 79 governs peremptory challenges."),
+            "answer": (
+                "Batson v. Kentucky, 476 U.S. 79 governs peremptory challenges."
+            ),
             "retrieved": ["476 U.S. 79 Batson peremptory equal protection"],
         },
     ]
@@ -181,8 +196,16 @@ def _builtin_golden() -> list[dict[str, Any]]:
 
 async def _main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--gold", default=None, help="path to JSON list of golden {question, answer, retrieved}")
-    ap.add_argument("--live", action="store_true", help="query the real /legal/ask per golden question")
+    ap.add_argument(
+        "--gold",
+        default=None,
+        help="path to JSON list of golden {question, answer, retrieved}",
+    )
+    ap.add_argument(
+        "--live",
+        action="store_true",
+        help="query the real /legal/ask per golden question",
+    )
     args = ap.parse_args()
 
     gold = _builtin_golden()
@@ -192,15 +215,20 @@ async def _main() -> None:
 
     if args.live:
         import urllib.request
+
         for item in gold:
             body = json.dumps({"question": item["question"]}).encode()
             req = urllib.request.Request(
-                "http://127.0.0.1:8000/legal/ask", data=body,
-                headers={"Content-Type": "application/json"})
+                "http://127.0.0.1:8000/legal/ask",
+                data=body,
+                headers={"Content-Type": "application/json"},
+            )
             with urllib.request.urlopen(req, timeout=120) as resp:
                 data = json.loads(resp.read().decode())
             item["answer"] = data.get("answer", "")
-            item["retrieved"] = [c.get("content", "") for c in data.get("citations", [])]
+            item["retrieved"] = [
+                c.get("content", "") for c in data.get("citations", [])
+            ]
 
     report = await run_golden(gold)
     print(json.dumps(report, indent=2))

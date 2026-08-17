@@ -9,6 +9,7 @@ auto-promoting this whole time. These tests prove the fix: generations stage,
 the active population is untouched until a human approves, and approval is the
 only path that changes the active tool policy.
 """
+
 from pathlib import Path
 
 import pytest
@@ -27,8 +28,18 @@ def _isolate_paths(monkeypatch, tmp_path):
 
 def _seed_active(tmp_path, fitness=0.5):
     pop = [
-        {"id": "genome_0", "tool_genes": {"web_search": 0.7}, "fitness": fitness, "generation": 0},
-        {"id": "genome_1", "tool_genes": {"web_search": 0.3}, "fitness": fitness, "generation": 0},
+        {
+            "id": "genome_0",
+            "tool_genes": {"web_search": 0.7},
+            "fitness": fitness,
+            "generation": 0,
+        },
+        {
+            "id": "genome_1",
+            "tool_genes": {"web_search": 0.3},
+            "fitness": fitness,
+            "generation": 0,
+        },
     ]
     ev._persist_population(pop, ev.GENOMES_PATH)
     return pop
@@ -127,8 +138,18 @@ def test_evolve_increments_gen_from_staged_not_active(tmp_path, monkeypatch):
     ev.STAGED_DIR.mkdir(parents=True, exist_ok=True)
     # A pending staged generation (active pop still at generation 0).
     pending = [
-        {"id": "g5a", "tool_genes": {"web_search": 0.8}, "fitness": 0.7, "generation": 5},
-        {"id": "g5b", "tool_genes": {"web_search": 0.6}, "fitness": 0.6, "generation": 5},
+        {
+            "id": "g5a",
+            "tool_genes": {"web_search": 0.8},
+            "fitness": 0.7,
+            "generation": 5,
+        },
+        {
+            "id": "g5b",
+            "tool_genes": {"web_search": 0.6},
+            "fitness": 0.6,
+            "generation": 5,
+        },
     ]
     ev._persist_population(pending, ev.STAGED_DIR / "gen_5.jsonl")
 

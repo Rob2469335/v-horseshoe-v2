@@ -14,4 +14,3 @@ def test_registry_returns_default_for_empty_context():
 def test_registry_can_select_deep_strategy():
     strategy = strategy_registry.get_active({"role": "deep"})
     assert strategy.name == "deep"
-

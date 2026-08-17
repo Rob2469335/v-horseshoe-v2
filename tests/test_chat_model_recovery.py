@@ -47,12 +47,17 @@ def test_chat_model_repair_and_verify(tmp_path: Path):
     executor = RepairExecutor(
         action_map={
             ("chat_model", "retry_request"): lambda c, a: (False, "retry failed"),
-            ("chat_model", "rotate_model_provider"): lambda c, a: (True, f"rotated_to={adapter.rotate_provider()}"),
+            ("chat_model", "rotate_model_provider"): lambda c, a: (
+                True,
+                f"rotated_to={adapter.rotate_provider()}",
+            ),
         }
     )
 
     verifier = RepairVerifier(probe=HealthProbe(), chat_adapter=adapter)
-    engine = HealingEngine(state_path=tmp_path / "chat-healing.json", executor=executor, verifier=verifier)
+    engine = HealingEngine(
+        state_path=tmp_path / "chat-healing.json", executor=executor, verifier=verifier
+    )
 
     engine.execute({"component": "chat_model", "status": "failed"})
     result = engine.execute({"component": "chat_model", "status": "failed"})

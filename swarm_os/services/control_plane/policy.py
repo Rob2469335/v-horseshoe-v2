@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .models import StepBudget
 
+
 class PolicyEngine:
     def __init__(self, max_steps: int = 12) -> None:
         if max_steps < 1:
@@ -26,4 +27,3 @@ class PolicyEngine:
 
     def reset(self) -> None:
         self.steps_used = 0
-

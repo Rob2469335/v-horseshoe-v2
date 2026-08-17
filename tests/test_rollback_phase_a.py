@@ -11,6 +11,7 @@ The critical behaviors:
   4. Distinct terminal states (rolled_back / refused_conflict / unavailable) —
      never a silent no-op.
 """
+
 import json
 
 import pytest
@@ -44,13 +45,17 @@ def _isolate_snapshot_dir(monkeypatch, tmp_path):
     # _AGENTS_MD/_CANARY_HUMAN_REVIEW_FILE) is already tmp-isolated per-test;
     # _REGISTRY_FILE is the one that leaked.
     monkeypatch.setattr(cr, "_REGISTRY_FILE", tmp_path / "canary_pending.json")
-    monkeypatch.setattr(wl, "_CANARY_HUMAN_REVIEW_FILE", tmp_path / "human_review.jsonl")
+    monkeypatch.setattr(
+        wl, "_CANARY_HUMAN_REVIEW_FILE", tmp_path / "human_review.jsonl"
+    )
     return tmp_path
 
 
 # ── durable + atomic snapshot ───────────────────────────────────────────────
 def test_snapshot_durable_and_atomic(tmp_path):
-    sid = rs.write_run_snapshot({"scope": ["a.py"], "snapshot": {"tracked": {"a.py": b"x"}}})
+    sid = rs.write_run_snapshot(
+        {"scope": ["a.py"], "snapshot": {"tracked": {"a.py": b"x"}}}
+    )
     loaded = rs.load_run_snapshot(sid)
     assert loaded is not None
     assert loaded["scope"] == ["a.py"]
@@ -63,7 +68,9 @@ def test_snapshot_durable_and_atomic(tmp_path):
 
 
 def test_build_repair_snapshot_records_scope():
-    snap = rs.build_repair_snapshot({"tracked": {"a.py": b"x", "b.py": b"y"}}, scope=["a.py"])
+    snap = rs.build_repair_snapshot(
+        {"tracked": {"a.py": b"x", "b.py": b"y"}}, scope=["a.py"]
+    )
     assert snap["kind"] == "repair"
     assert snap["scope"] == ["a.py"]
 
@@ -85,17 +92,23 @@ def test_restore_run_snapshot_scope_only(tmp_path, monkeypatch):
     # Write both files on disk to their pre-repair (to-be-restored) state.
     root = tmp_path / "repo"
     (root / "swarm_os" / "services").mkdir(parents=True, exist_ok=True)
-    (root / "swarm_os" / "services" / "vector_store.py").write_bytes(b"PRE-REPAIR vector_store")
+    (root / "swarm_os" / "services" / "vector_store.py").write_bytes(
+        b"PRE-REPAIR vector_store"
+    )
     (root / "swarm_os" / "services" / "other.py").write_bytes(b"PRE-REPAIR other")
     # Now the repair changed them on disk to the post-repair content.
     (root / "swarm_os" / "services" / "vector_store.py").write_bytes(b"FIXED content")
     (root / "swarm_os" / "services" / "other.py").write_bytes(b"also changed")
 
     # Scope = only vector_store.py: restore must revert it but NOT other.py.
-    restored = rs.restore_run_snapshot({"snapshot": snap_payload, "scope": ["swarm_os/services/vector_store.py"]},
-                                       scope=["swarm_os/services/vector_store.py"],
-                                       root=root)
-    assert (root / "swarm_os" / "services" / "vector_store.py").read_bytes() == b"PRE-REPAIR vector_store"
+    restored = rs.restore_run_snapshot(
+        {"snapshot": snap_payload, "scope": ["swarm_os/services/vector_store.py"]},
+        scope=["swarm_os/services/vector_store.py"],
+        root=root,
+    )
+    assert (
+        root / "swarm_os" / "services" / "vector_store.py"
+    ).read_bytes() == b"PRE-REPAIR vector_store"
     # other.py keeps its post-repair content (outside scope, untouched).
     assert (root / "swarm_os" / "services" / "other.py").read_bytes() == b"also changed"
     assert "swarm_os/services/vector_store.py" in restored["restored"]
@@ -117,7 +130,9 @@ def _make_mutation(tmp_path, mutation_id="m1", target_rel="swarm_os/services/x.p
         "target_path": str(target),
     }
     (mdir / "metadata.json").write_text(json.dumps(meta), encoding="utf-8")
-    return MutationRepository(root_dir=str(tmp_path / ".data" / "pending_mutations")), target
+    return MutationRepository(
+        root_dir=str(tmp_path / ".data" / "pending_mutations")
+    ), target
 
 
 def test_rollback_clean_restores_bak(tmp_path):
@@ -193,7 +208,10 @@ def test_rollback_legacy_metadata_without_approved_bytes_refuses(tmp_path):
     result = repo.rollback("m1")
     assert result["ok"] is False
     assert result["reason"] == "refused_conflict"
-    assert "approved_bytes_hex" in result["detail"] or "approval-time" in result["detail"]
+    assert (
+        "approved_bytes_hex" in result["detail"] or "approval-time" in result["detail"]
+    )
+
 
 # ── Phase A wiring: snapshot captured BEFORE the repair writes ──────────────
 @pytest.mark.asyncio
@@ -229,29 +247,54 @@ async def test_watch_loop_captures_snapshot_before_repair_write(monkeypatch, tmp
     monkeypatch.setattr(wl, "_AUDIT_FILE", tmp_path / "auto_repairs.jsonl")
     monkeypatch.setattr(wl, "_AGENTS_MD", tmp_path / "AGENTS.md")
     monkeypatch.setattr(rs, "_SNAPSHOT_DIR", tmp_path / "run_snapshots")
-    monkeypatch.setattr(_ap_mod, "get_autonomy_policy", lambda **k: SimpleNamespace(daily_budget=50))
+    monkeypatch.setattr(
+        _ap_mod, "get_autonomy_policy", lambda **k: SimpleNamespace(daily_budget=50)
+    )
 
     # Fake engine: writes POST-REPAIR (simulating the repair write). The snapshot
     # must be captured BEFORE this call runs.
     def _fake_repair(err, file_path=None):
         target.write_bytes(b"POST-REPAIR\n")
         return {"fixed": True, "tier_used": 0}
-    loop = wl.WatchLoop(SimpleNamespace(diagnose_and_repair=_fake_repair), interval_seconds=0.01)
+
+    loop = wl.WatchLoop(
+        SimpleNamespace(diagnose_and_repair=_fake_repair), interval_seconds=0.01
+    )
     loop._load_policy()
 
     # Patch snapshot_worktree to use our git repo as root.
     def _fake_worktree(root):
         from organism_console._commands_opencode import snapshot_worktree
-        return snapshot_worktree(repo)
-    monkeypatch.setattr(wl.WatchLoop, "_capture_repair_snapshot",
-                        lambda self, fp: rs.write_run_snapshot(
-                            rs.build_repair_snapshot(_fake_worktree(None), scope=["pkg/bug.py"])))
 
-    _write = json.dumps({"event_type": "tool_result", "payload": {
-        "result": {"ok": False, "error": "boom"}, "arguments": {"file_path": "pkg/bug.py"}}}) + "\n"
+        return snapshot_worktree(repo)
+
+    monkeypatch.setattr(
+        wl.WatchLoop,
+        "_capture_repair_snapshot",
+        lambda self, fp: rs.write_run_snapshot(
+            rs.build_repair_snapshot(_fake_worktree(None), scope=["pkg/bug.py"])
+        ),
+    )
+
+    _write = (
+        json.dumps(
+            {
+                "event_type": "tool_result",
+                "payload": {
+                    "result": {"ok": False, "error": "boom"},
+                    "arguments": {"file_path": "pkg/bug.py"},
+                },
+            }
+        )
+        + "\n"
+    )
     with (tmp_path / "events.jsonl").open("a", encoding="utf-8") as f:
         f.write(_write)
-    loop._handle(json.loads((tmp_path / "events.jsonl").read_text(encoding="utf-8").splitlines()[-1]))
+    loop._handle(
+        json.loads(
+            (tmp_path / "events.jsonl").read_text(encoding="utf-8").splitlines()[-1]
+        )
+    )
 
     # The repair wrote POST; but the durable snapshot must hold PRE.
     assert target.read_bytes() == b"POST-REPAIR\n"
@@ -260,5 +303,6 @@ async def test_watch_loop_captures_snapshot_before_repair_write(monkeypatch, tmp
     loaded = rs.load_run_snapshot(snaps[0].stem)
     assert loaded is not None
     tracked = (loaded.get("snapshot") or {}).get("tracked", {})
-    assert tracked.get("pkg/bug.py") == b"PRE-REPAIR\n", "snapshot must hold PRE-repair bytes"
-
+    assert tracked.get("pkg/bug.py") == b"PRE-REPAIR\n", (
+        "snapshot must hold PRE-repair bytes"
+    )

@@ -9,6 +9,7 @@ Covers:
 - security: web_fetch SSRF denylist
 - developer: cooldown keys are per-model (no :free collision)
 """
+
 import asyncio
 import sys
 
@@ -34,6 +35,7 @@ def global_subprocess_mock(request):
         yield  # real subprocess.Popen stays intact for the scan subprocess
         return
     from unittest.mock import patch
+
     with patch("subprocess.Popen") as mock_popen:
         mock_popen.return_value.communicate.return_value = (b"", b"")
         mock_popen.return_value.returncode = 0
@@ -52,6 +54,7 @@ def _brain_returning_dict_content():
             "elapsed": 1.0,
             "total_tokens": 10,
         }
+
     return brain
 
 
@@ -59,6 +62,7 @@ def _brain_returning_dict_content():
 async def test_organism_act_coerces_dict_content(monkeypatch):
     from swarm_os.kernel.organism import Organism
     from swarm_os.kernel.genetics import Genome
+
     # Skip the pheromone path entirely (no tools_used).
     org = Organism("org1", _brain_returning_dict_content(), Genome())
     act = org.act({"task": "t"})
@@ -73,7 +77,14 @@ async def test_organism_act_dict_content_does_not_break_gather(monkeypatch):
     from swarm_os.kernel.genetics import Genome
 
     def healthy_brain(ctx):
-        return {"content": "ok", "error": None, "tools_used": [], "model": "t", "elapsed": 1.0, "total_tokens": 5}
+        return {
+            "content": "ok",
+            "error": None,
+            "tools_used": [],
+            "model": "t",
+            "elapsed": 1.0,
+            "total_tokens": 5,
+        }
 
     orgs = [
         Organism("bad", _brain_returning_dict_content(), Genome()),
@@ -92,14 +103,25 @@ async def test_memory_bridge_read_timeout_falls_back_quietly(monkeypatch):
 
     class FakeVS:
         collection_name = "mem"
-        async def count(self, **kw): return 0
-        async def search(self, **kw): return []
-        async def upsert(self, **kw): return True
-        async def delete(self, **kw): return True
-        async def create_collection(self, **kw): return None
+
+        async def count(self, **kw):
+            return 0
+
+        async def search(self, **kw):
+            return []
+
+        async def upsert(self, **kw):
+            return True
+
+        async def delete(self, **kw):
+            return True
+
+        async def create_collection(self, **kw):
+            return None
 
     class FakeGraphRepo:
-        def get_node_count(self): return 0
+        def get_node_count(self):
+            return 0
 
     bridge = MemoryBridge.__new__(MemoryBridge)
     bridge.vs = FakeVS()
@@ -116,7 +138,10 @@ async def test_memory_bridge_read_timeout_falls_back_quietly(monkeypatch):
 @pytest.mark.asyncio
 async def test_sandbox_repl_blocks_banned_code():
     from swarm_os.capabilities.sandbox_repl import SandboxReplHandler
-    r = await SandboxReplHandler().execute({"language": "python", "code": "import subprocess; subprocess.run(['whoami'])"})
+
+    r = await SandboxReplHandler().execute(
+        {"language": "python", "code": "import subprocess; subprocess.run(['whoami'])"}
+    )
     assert r.get("ok") is False
     assert "Security Gate" in r.get("stderr", "")
 
@@ -127,6 +152,7 @@ async def test_sandbox_repl_allows_safe_code():
     # module-scoped global_subprocess_mock fixture keeps Popen real for
     # test_sandbox_repl_* so the L6 wiring is verified on every CI run.
     from swarm_os.capabilities.sandbox_repl import SandboxReplHandler
+
     r = await SandboxReplHandler().execute({"language": "python", "code": "print(2+2)"})
     assert r.get("ok") is True
     assert "4" in r.get("stdout", "")
@@ -135,25 +161,39 @@ async def test_sandbox_repl_allows_safe_code():
 @pytest.mark.asyncio
 async def test_sandbox_repl_blocks_destructive_powershell():
     from swarm_os.capabilities.sandbox_repl import SandboxReplHandler
-    for bad in ("Remove-Item C:\\x -Recurse", "Stop-Service spooler", "rm -rf /", "shutdown /s"):
-        r = await SandboxReplHandler().execute({"language": "powershell", "command": bad})
+
+    for bad in (
+        "Remove-Item C:\\x -Recurse",
+        "Stop-Service spooler",
+        "rm -rf /",
+        "shutdown /s",
+    ):
+        r = await SandboxReplHandler().execute(
+            {"language": "powershell", "command": bad}
+        )
         assert r.get("ok") is False
         assert "Security Gate" in r.get("stderr", ""), bad
 
 
 # ── security: screen self-promotion blocked ─────────────────────────────────
-@pytest.mark.skipif(sys.platform != "win32", reason="screen-control is Windows-only (ctypes.windll)")
+@pytest.mark.skipif(
+    sys.platform != "win32", reason="screen-control is Windows-only (ctypes.windll)"
+)
 def test_screen_self_promote_blocked_in_human_mode(monkeypatch):
     from swarm_os.lib.mcp import screen as s
+
     s.SCREEN_AUTONOMOUS = False
     r = s.screen_handler({"action": "set_screen_autonomous", "value": True})
     assert "HUMAN-CONTROL" in r.get("error", "")
     assert s.SCREEN_AUTONOMOUS is False
 
 
-@pytest.mark.skipif(sys.platform != "win32", reason="screen-control is Windows-only (ctypes.windll)")
+@pytest.mark.skipif(
+    sys.platform != "win32", reason="screen-control is Windows-only (ctypes.windll)"
+)
 def test_screen_reset_blocked_in_human_mode(monkeypatch):
     from swarm_os.lib.mcp import screen as s
+
     s.SCREEN_AUTONOMOUS = False
     r = s.screen_handler({"action": "reset_screen_action_count"})
     assert "HUMAN-CONTROL" in r.get("error", "")
@@ -163,7 +203,12 @@ def test_screen_reset_blocked_in_human_mode(monkeypatch):
 @pytest.mark.asyncio
 async def test_mcp_register_rejects_shell_metachars(monkeypatch):
     from runtime_v2.services.tool_executor import run
-    payload = {"server_name": "evil", "command": "python -c 'import os' && rm -rf /", "args": []}
+
+    payload = {
+        "server_name": "evil",
+        "command": "python -c 'import os' && rm -rf /",
+        "args": [],
+    }
     result = await run_approved(run, "mcp_register", payload)
     assert result.get("ok") is False
     assert "Security Gate" in result.get("error", "")
@@ -172,6 +217,7 @@ async def test_mcp_register_rejects_shell_metachars(monkeypatch):
 @pytest.mark.asyncio
 async def test_mcp_register_rejects_non_allowlisted_launcher(monkeypatch):
     from runtime_v2.services.tool_executor import run
+
     payload = {"server_name": "evil", "command": "powershell -c whoami", "args": []}
     result = await run_approved(run, "mcp_register", payload)
     assert result.get("ok") is False
@@ -184,6 +230,7 @@ async def test_mcp_register_rejects_non_list_args(monkeypatch, tmp_path):
     # per-element guards (string iteration checks characters, not arguments).
     # Deliberately metachar-free so the old char-iteration check cannot catch it.
     import runtime_v2.services.tool_executor as te
+
     monkeypatch.setattr(te, "_ROOT", tmp_path)
     payload = {"server_name": "evil", "command": "python", "args": "-c print('pwn')"}
     result = await run_approved(te.run, "mcp_register", payload)
@@ -196,6 +243,7 @@ async def test_mcp_register_rejects_non_list_args(monkeypatch, tmp_path):
 async def test_mcp_register_rejects_non_string_args(monkeypatch, tmp_path):
     # args as a dict or int must also fail closed, not pass the guards.
     import runtime_v2.services.tool_executor as te
+
     monkeypatch.setattr(te, "_ROOT", tmp_path)
     for bad_args in ({"key": "value"}, 42):
         payload = {"server_name": "evil", "command": "python", "args": bad_args}
@@ -208,19 +256,26 @@ async def test_mcp_register_rejects_non_string_args(monkeypatch, tmp_path):
 # ── security: web_fetch SSRF ────────────────────────────────────────────────
 def test_ssrf_blocks_internal_and_metadata():
     from swarm_os.lib.mcp.web_search import _ssrf_check
-    for url in ("http://127.0.0.1:6333/x", "http://localhost:8080/v1/models",
-                "http://169.254.169.254/latest/", "http://192.168.1.10/x"):
+
+    for url in (
+        "http://127.0.0.1:6333/x",
+        "http://localhost:8080/v1/models",
+        "http://169.254.169.254/latest/",
+        "http://192.168.1.10/x",
+    ):
         assert _ssrf_check(url) is not None, url
 
 
 def test_ssrf_allows_public():
     from swarm_os.lib.mcp.web_search import _ssrf_check
+
     assert _ssrf_check("https://example.com/docs") is None
 
 
 # ── developer: cooldown keys are per-model ──────────────────────────────────
 def test_cooldown_keys_are_per_model(monkeypatch):
     from runtime_v2.services import fallback_manager as fm
+
     fm.record_model_failure("openrouter/foo:free", "boom")
     assert fm.is_model_cooled_down("openrouter/foo:free") is True
     # A DIFFERENT :free model must NOT be cooled by the first model's failure.
@@ -235,12 +290,15 @@ def test_permanent_error_pins_until_manual_clear():
     part of the time and mask a billing problem. The exit is the manual,
     model-scoped `clear_model_cooldown` after a human tops up."""
     from runtime_v2.services import fallback_manager as fm
-    fm.record_model_failure("openrouter/bill:free", "402 Insufficient Balance", permanent=True)
+
+    fm.record_model_failure(
+        "openrouter/bill:free", "402 Insufficient Balance", permanent=True
+    )
     try:
         key = fm._cooldown_key("openrouter/bill:free")
         entry = fm._cooldowns.get(key)
         assert entry is not None
-        assert entry["until"] == float('inf')
+        assert entry["until"] == float("inf")
         # Still cooled down (never auto-recovers).
         assert fm.is_model_cooled_down("openrouter/bill:free") is True
     finally:
@@ -252,8 +310,11 @@ def test_clear_model_cooldown_is_scoped_to_one_model():
     legitimate exponential-backoff cooldowns of OTHER transiently
     rate-limited models."""
     from runtime_v2.services import fallback_manager as fm
-    fm.record_model_failure("openrouter/a:free", "boom")          # transient backoff
-    fm.record_model_failure("openrouter/bill:free", "402 Insufficient Balance", permanent=True)
+
+    fm.record_model_failure("openrouter/a:free", "boom")  # transient backoff
+    fm.record_model_failure(
+        "openrouter/bill:free", "402 Insufficient Balance", permanent=True
+    )
     try:
         assert fm.is_model_cooled_down("openrouter/a:free")
         assert fm.is_model_cooled_down("openrouter/bill:free")
@@ -280,7 +341,10 @@ def test_success_does_not_clear_permanent_pin():
     retrying a broken key and the billing problem disappears. Only the manual,
     model-scoped clear_model_cooldown lifts a permanent pin."""
     from runtime_v2.services import fallback_manager as fm
-    fm.record_model_failure("openrouter/billpin:free", "402 Insufficient Balance", permanent=True)
+
+    fm.record_model_failure(
+        "openrouter/billpin:free", "402 Insufficient Balance", permanent=True
+    )
     try:
         assert fm.is_model_cooled_down("openrouter/billpin:free") is True
         # A success arriving after the pin must NOT clear it.
@@ -290,7 +354,7 @@ def test_success_does_not_clear_permanent_pin():
             "billing contract is broken"
         )
         entry = fm._cooldowns.get(fm._cooldown_key("openrouter/billpin:free"))
-        assert entry is not None and entry["until"] == float('inf')
+        assert entry is not None and entry["until"] == float("inf")
         # The manual clear is still the only exit.
         assert fm.clear_model_cooldown("openrouter/billpin:free") is True
         assert not fm.is_model_cooled_down("openrouter/billpin:free")
@@ -302,6 +366,7 @@ def test_success_clears_transient_cooldown():
     """A NON-permanent (finite-window) cooldown IS cleared by success — that
     behavior is unchanged; only the permanent pin is protected."""
     from runtime_v2.services import fallback_manager as fm
+
     fm.record_model_failure("openrouter/transient:free", "boom")
     try:
         assert fm.is_model_cooled_down("openrouter/transient:free") is True
@@ -314,6 +379,7 @@ def test_success_clears_transient_cooldown():
 # ── security gate scan_code ─────────────────────────────────────────────────
 def test_security_gate_scan_code():
     from swarm_os.services.security_gate import SecurityGate, SecurityGateViolation
+
     SecurityGate.scan_code("x = 1 + 2")
     with pytest.raises(SecurityGateViolation):
         SecurityGate.scan_code("import os; os.system('x')")
@@ -327,6 +393,7 @@ def test_security_gate_scan_code():
 # privilege, env mutation) are blocked — not the module itself.
 def test_security_gate_allows_readonly_os_usage():
     from swarm_os.services.security_gate import SecurityGate
+
     for safe in (
         "import os\nfor _, dirs, files in os.walk('.'):\n    pass",
         "import os\npaths = [os.path.join('.', f) for f in os.listdir('.')]",
@@ -341,6 +408,7 @@ def test_security_gate_allows_readonly_os_usage():
 
 def test_security_gate_blocks_dangerous_os_attributes():
     from swarm_os.services.security_gate import SecurityGate, SecurityGateViolation
+
     for bad in (
         "import os\nos.system('whoami')",
         "import os as o\no.system('whoami')",
@@ -360,6 +428,7 @@ def test_security_gate_blocks_dangerous_os_attributes():
 # the dangerous name rides in as a string argument or via the builtins dict.
 def test_security_gate_blocks_reflection_on_os():
     from swarm_os.services.security_gate import SecurityGate, SecurityGateViolation
+
     for bad in (
         "import os\ngetattr(os, 'system')('rm -rf /')",
         "import os as o\ngetattr(o, 'system')('whoami')",
@@ -372,6 +441,7 @@ def test_security_gate_blocks_reflection_on_os():
 
 def test_security_gate_allows_reflection_on_non_os():
     from swarm_os.services.security_gate import SecurityGate
+
     for safe in (
         "x = {}\ngetattr(x, 'get', lambda: 1)()",
         "obj = str()\nsetattr(obj, 'name', 'v')",
@@ -381,6 +451,7 @@ def test_security_gate_allows_reflection_on_non_os():
 
 def test_security_gate_blocks_importlib_and_builtins_and_sys_modules():
     from swarm_os.services.security_gate import SecurityGate, SecurityGateViolation
+
     for bad in (
         "import importlib\nimportlib.import_module('os').system('rm -rf /')",
         "__builtins__['__import__']('os').system('whoami')",
@@ -392,6 +463,7 @@ def test_security_gate_blocks_importlib_and_builtins_and_sys_modules():
 
 def test_security_gate_allows_plain_sys_usage():
     from swarm_os.services.security_gate import SecurityGate
+
     SecurityGate.scan_code("import sys\nprint(sys.argv)")
     SecurityGate.scan_code("import os\ngetattr(os, 'walk')('.')")
 
@@ -402,9 +474,15 @@ async def test_sandbox_repl_allows_readonly_os_code():
     # must pass the gate so the debugger path doesn't loop-trip on it. Runs the
     # real isolated scan subprocess (module fixture keeps Popen real for this).
     from swarm_os.services.security_gate import SecurityGate
-    SecurityGate.scan_code("import os\nfor _, dirs, files in os.walk('.'):\n    print(dirs)")
+
+    SecurityGate.scan_code(
+        "import os\nfor _, dirs, files in os.walk('.'):\n    print(dirs)"
+    )
     from swarm_os.capabilities.sandbox_repl import SandboxReplHandler
-    r = await SandboxReplHandler().execute({"language": "python", "code": "import os; print(len(list(os.walk('.'))))"})
+
+    r = await SandboxReplHandler().execute(
+        {"language": "python", "code": "import os; print(len(list(os.walk('.'))))"}
+    )
     assert r.get("ok") is True
 
 
@@ -413,6 +491,7 @@ async def test_sandbox_repl_allows_readonly_os_code():
 async def test_lsp_accepts_path_alias_for_file_path():
     from swarm_os.capabilities.lsp_tool import LSPToolHandler
     import tempfile, os
+
     with tempfile.TemporaryDirectory() as tmp:
         py = os.path.join(tmp, "t.py")
         with open(py, "w", encoding="utf-8") as f:
@@ -424,12 +503,16 @@ async def test_lsp_accepts_path_alias_for_file_path():
         handler = LSPToolHandler()
         # swap the actual LSP client acquisition so this test doesn't spawn pylsp
         import swarm_os.capabilities.lsp_tool as lt
+
         async def _fake_acquire(ext):
             class _FakeClient:
                 last_used = 0.0
+
                 async def get_diagnostics(self, fp):
                     return [{"source": "pylint", "code": "C0114"}]
+
             return _FakeClient()
+
         lt._acquire_client = _fake_acquire
         r = await handler.execute(payload)
         assert "Missing 'file_path'" not in r.get("error", "")
@@ -454,6 +537,7 @@ def _popen_side_effect(returncode: int, stderr: str = "", timeout_raise: bool = 
 
 def test_scan_code_isolated_allows_clean_code(monkeypatch):
     from swarm_os.services.security_gate import scan_code_isolated
+
     proc = _popen_side_effect(0)
     monkeypatch.setattr(_subprocess, "Popen", lambda *a, **k: proc)
     ok, reason = scan_code_isolated("x = 1 + 2")
@@ -463,6 +547,7 @@ def test_scan_code_isolated_allows_clean_code(monkeypatch):
 
 def test_scan_code_isolated_denies_on_detected_threat(monkeypatch):
     from swarm_os.services.security_gate import scan_code_isolated
+
     # Simulate the scanner process detecting a banned call: exit 1 + stderr reason.
     proc = _popen_side_effect(1, stderr="DENY: Banned built-in call found: 'eval'")
     monkeypatch.setattr(_subprocess, "Popen", lambda *a, **k: proc)
@@ -477,6 +562,7 @@ def test_scan_code_isolated_denies_on_crashed_scanner(monkeypatch):
     on stderr — i.e. it died rather than reporting) must DENY with a clear
     reason, never degrade to 'scan passed, nothing to report'."""
     from swarm_os.services.security_gate import scan_code_isolated
+
     proc = _popen_side_effect(2, stderr="")  # crashed, no reason
     monkeypatch.setattr(_subprocess, "Popen", lambda *a, **k: proc)
     ok, reason = scan_code_isolated("x = 1")
@@ -491,6 +577,7 @@ def test_scan_code_isolated_denies_on_spawn_failure(monkeypatch):
 
     def _boom(*a, **k):
         raise OSError("no such executable")
+
     monkeypatch.setattr(_subprocess, "Popen", _boom)
     ok, reason = scan_code_isolated("x = 1")
     assert ok is False
@@ -501,6 +588,7 @@ def test_scan_code_isolated_denies_on_timeout(monkeypatch):
     """L6: a scan subprocess that hangs past the timeout must DENY (fail closed),
     not fall through to execution."""
     from swarm_os.services.security_gate import scan_code_isolated
+
     proc = _popen_side_effect(0, timeout_raise=True)
     monkeypatch.setattr(_subprocess, "Popen", lambda *a, **k: proc)
     ok, reason = scan_code_isolated("x = 1", timeout=5)
@@ -513,8 +601,11 @@ def test_scan_code_isolated_denial_is_not_misread_as_pass(monkeypatch):
     (e.g. exit code 99, meaning 'crashed') must be treated as a denial, never as
     a pass — the channel is binary (exit 0 = allow, anything else = deny)."""
     from swarm_os.services.security_gate import scan_code_isolated
+
     for bad_rc in (1, 2, 99, -1, 130, 255):
-        proc = _popen_side_effect(bad_rc, stderr="some random output that is not a verdict")
+        proc = _popen_side_effect(
+            bad_rc, stderr="some random output that is not a verdict"
+        )
 
         def _fake_popen(*a, **k):
             return proc
@@ -531,9 +622,13 @@ async def test_sandbox_repl_denies_exec_when_scan_unavailable(monkeypatch):
 
     def _scan_boom(*a, **k):
         raise RuntimeError("scanner subprocess vanished")
+
     import swarm_os.services.security_gate as sg_mod
+
     monkeypatch.setattr(sg_mod, "scan_code_isolated", _scan_boom)
-    r = await SandboxReplHandler().execute({"language": "python", "code": "print('DANGER')"})
+    r = await SandboxReplHandler().execute(
+        {"language": "python", "code": "print('DANGER')"}
+    )
     assert r.get("ok") is False
     assert "denied" in (r.get("stderr", "") + r.get("error", "")).lower()
     assert "print('DANGER')" not in r.get("stdout", "")  # never executed
@@ -543,7 +638,10 @@ async def test_sandbox_repl_powershell_guard_still_fires_after_l6(monkeypatch):
     """L6 regression: the existing PowerShell destructive-command guard must
     still run (it was NOT bypassed by the process-boundary change)."""
     from swarm_os.capabilities.sandbox_repl import SandboxReplHandler
-    r = await SandboxReplHandler().execute({"language": "powershell", "command": "Remove-Item C:\\x -Recurse"})
+
+    r = await SandboxReplHandler().execute(
+        {"language": "powershell", "command": "Remove-Item C:\\x -Recurse"}
+    )
     assert r.get("ok") is False
     assert "Security Gate" in r.get("stderr", "")
 
@@ -554,6 +652,7 @@ def test_security_gate_blocks_builtins_exec():
     `__builtins__.exec(...)` all resolve the exec builtin under an Attribute
     (never a Name call), escaping the original visit_Call scan."""
     from swarm_os.services.security_gate import SecurityGate, SecurityGateViolation
+
     cases = [
         "import builtins; builtins.exec('import subprocess')",
         "import builtins; getattr(builtins, 'exec')('import subprocess')",
@@ -574,6 +673,7 @@ def test_security_gate_object_method_named_exec_not_blocked():
     method named 'exec') must NOT trigger the gate — the fix targets the
     builtins namespace only, not every `.exec` in the codebase."""
     from swarm_os.services.security_gate import SecurityGate
+
     SecurityGate.scan_code("x = obj.exec")
     SecurityGate.scan_code("result = my_object.exec(argument)")
 
@@ -602,16 +702,19 @@ async def test_dangerroom_rejects_pytest_flags(monkeypatch):
     monkeypatch.setattr("asyncio.create_subprocess_exec", fake_create_subprocess_exec)
     import tempfile
     from pathlib import Path
+
     tmp_path = Path(tempfile.mkdtemp())
     try:
         dr = DangerRoom(tmp_path)
         dr.is_active = True
         dr.sandbox_dir = tmp_path
-        res = await dr.run_tests(test_targets=[
-            "--junitxml=/tmp/pwned.xml",          # flag -> rejected
-            "-x",                                 # flag -> rejected
-            str(tmp_path / "tests" / "test_a.py"),  # inside sandbox -> kept
-        ])
+        res = await dr.run_tests(
+            test_targets=[
+                "--junitxml=/tmp/pwned.xml",  # flag -> rejected
+                "-x",  # flag -> rejected
+                str(tmp_path / "tests" / "test_a.py"),  # inside sandbox -> kept
+            ]
+        )
         assert res["ok"] is True
         cmd = captured_cmd["cmd"]
         assert "--junitxml=/tmp/pwned.xml" not in cmd
@@ -620,6 +723,7 @@ async def test_dangerroom_rejects_pytest_flags(monkeypatch):
         assert "--" in cmd  # separator: remaining args are files, not options
     finally:
         import shutil
+
         shutil.rmtree(tmp_path, ignore_errors=True)
 
 
@@ -632,6 +736,7 @@ async def test_dangerroom_kills_proc_on_cancel(monkeypatch):
     from swarm_os.services.danger_room import DangerRoom
     import tempfile
     from pathlib import Path
+
     tmp_path = Path(tempfile.mkdtemp())
     try:
         dr = DangerRoom(tmp_path)
@@ -659,7 +764,9 @@ async def test_dangerroom_kills_proc_on_cancel(monkeypatch):
             created.append(p)
             return p
 
-        monkeypatch.setattr("asyncio.create_subprocess_exec", fake_create_subprocess_exec)
+        monkeypatch.setattr(
+            "asyncio.create_subprocess_exec", fake_create_subprocess_exec
+        )
         target = tmp_path / "tests" / "test_a.py"
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("def test_ok():\n    assert True\n", encoding="utf-8")
@@ -669,6 +776,7 @@ async def test_dangerroom_kills_proc_on_cancel(monkeypatch):
         assert created[0].killed is True
     finally:
         import shutil
+
         shutil.rmtree(tmp_path, ignore_errors=True)
 
 
@@ -690,9 +798,11 @@ def test_swarm_config_mcp_servers_are_valid():
     for name, s in servers.items():
         assert s.get("command"), f"server {name} missing command"
         cmd = s["command"].strip().lower()
-        assert (
-            cmd in allowed or cmd.endswith(".exe")
-        ), f"{name}: launcher {s['command']} not allowlisted and not an executable path"
+        assert cmd in allowed or cmd.endswith(".exe"), (
+            f"{name}: launcher {s['command']} not allowlisted and not an executable path"
+        )
         args = s.get("args", [])
-        assert isinstance(args, list) and all(isinstance(a, str) for a in args), f"{name}: args must be list[str]"
+        assert isinstance(args, list) and all(isinstance(a, str) for a in args), (
+            f"{name}: args must be list[str]"
+        )
         assert not any(ch in "".join(args) for ch in meta), f"{name}: metachar in args"

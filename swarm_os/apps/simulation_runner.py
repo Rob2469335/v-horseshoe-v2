@@ -10,7 +10,9 @@ from swarm_os.kernel.status import build_status
 from swarm_os.services.simulation_service import SimulationService
 
 from swarm_os.repositories.file_snapshot_repository import FileSnapshotRepository
+
 service = SimulationService(FileSnapshotRepository())
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -37,14 +39,6 @@ def main():
 
     asyncio.run(service.run(resume_path=args.resume))
 
+
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-
-
-

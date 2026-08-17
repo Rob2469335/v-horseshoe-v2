@@ -15,9 +15,8 @@ def init_collection(vector_size: int):
         client.create_collection(
             collection_name=COLLECTION,
             vectors_config=rest.VectorParams(
-                size=vector_size,
-                distance=rest.Distance.COSINE
-            )
+                size=vector_size, distance=rest.Distance.COSINE
+            ),
         )
 
 
@@ -32,10 +31,10 @@ def store_proposal(job_vector, proposal_vector, payload: dict):
                 payload={
                     **payload,
                     "proposal_vector": proposal_vector,
-                    "created_at": datetime.utcnow().isoformat()
-                }
+                    "created_at": datetime.utcnow().isoformat(),
+                },
             )
-        ]
+        ],
     )
 
 
@@ -46,7 +45,7 @@ def search_similar(vector, limit=30):
                 collection_name=COLLECTION,
                 query_vector=vector,
                 limit=limit,
-                with_payload=True
+                with_payload=True,
             )
         response = client.query_points(
             collection_name=COLLECTION,

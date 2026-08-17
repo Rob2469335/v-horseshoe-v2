@@ -26,6 +26,7 @@ Three capabilities:
      the treatment taxonomy is a homemade Shepard's/KeyCite substitute given we
      can't license the citators.
 """
+
 from __future__ import annotations
 
 import logging
@@ -70,8 +71,9 @@ def extract_cited_keys(text: str) -> set[str]:
     return keys
 
 
-def build_case_graph(case_chunks: list[dict[str, Any]],
-                     manifest_cases: list[dict[str, Any]]) -> nx.DiGraph:
+def build_case_graph(
+    case_chunks: list[dict[str, Any]], manifest_cases: list[dict[str, Any]]
+) -> nx.DiGraph:
     """Build the intra-manifest citation graph from stored case chunks.
 
     `case_chunks` is the Qdrant legal_cases scroll (each point has payload with
@@ -94,8 +96,10 @@ def build_case_graph(case_chunks: list[dict[str, Any]],
         k = case_citation_key(str(c["cite"]))
         if k:
             node_info[k] = {
-                "cite": c["cite"], "case_name": c.get("name", ""),
-                "year": int(c.get("year") or 0), "tier": int(c.get("tier") or 0),
+                "cite": c["cite"],
+                "case_name": c.get("name", ""),
+                "year": int(c.get("year") or 0),
+                "tier": int(c.get("tier") or 0),
             }
     # Aggregate citing -> cited edges from the chunk text + opinions_cited.
     edge_counts: dict[tuple[str, str], int] = {}
@@ -104,12 +108,10 @@ def build_case_graph(case_chunks: list[dict[str, Any]],
         citing = case_citation_key(str(payload.get("cite") or ""))
         if not citing or citing not in node_info:
             continue
-        text = " ".join(
-            str(payload.get(k) or "") for k in ("content", "case_name")
-        )
+        text = " ".join(str(payload.get(k) or "") for k in ("content", "case_name"))
         cited_set: set[str] = extract_cited_keys(text)
         # Stored CourtListener authorities table (backward edges).
-        for oc in (payload.get("opinions_cited") or []):
+        for oc in payload.get("opinions_cited") or []:
             # opinions_cited ids are CourtListener opinion ids — we can't map
             # them to manifest cite keys directly; the text scan covers the
             # intra-manifest subset. (Kept as a documented cross-check seam.)
@@ -144,8 +146,13 @@ def _node_importance(G: nx.DiGraph, node: str) -> float:
     return indeg + 0.25 * recency
 
 
-def graph_expand(G: nx.DiGraph, seeds: list[str], depth: int = 1,
-                 max_nodes: int = 8, include_seeds: bool = True) -> list[str]:
+def graph_expand(
+    G: nx.DiGraph,
+    seeds: list[str],
+    depth: int = 1,
+    max_nodes: int = 8,
+    include_seeds: bool = True,
+) -> list[str]:
     """Expand a set of retrieved case keys along the citation graph.
 
     Returns an ordered list of case keys: the seeds (if include_seeds) followed
@@ -219,32 +226,60 @@ def classify_holding(passage: str) -> str:
 # cited case. Conservative signal words per class; a mismatch falls through to
 # "neutral" (cited-but-unclassified) rather than guessing a treatment.
 _TREATMENT_PATTERNS: list[tuple[str, tuple[str, ...]]] = [
-    ("followed", (
-        r"\bwe\s+follow\b", r"\bconsistent\s+with\b", r"\bwe\s+agree\s+with\b",
-        r"\bwe\s+adopt\b", r"\bas\s+we\s+held\b", r"\bwe\s+reaffirm\b",
-        r"\bthe\s+rule\s+of\b", r"\bwe\s+apply\b", r"\bwe\s+rely\s+on\b",
-        # "we held that [cite] ..." / "we concluded in [cite] that" — applying
-        # the cited case's holding as controlling (the most common appellate
-        # disposition; was MISSING from the taxonomy, so real 'followed'
-        # citations classified neutral in the hand-walk).
-        r"\bwe\s+(?:held|concluded|decided)\b",
-        r"\bin\s+[A-Z][a-z]+,\s+\d+\s+U\.?S\.?\s+\d+\s+\([0-9]{4}\)\s*,\s*we\s+held\b",
-        r"\bwe\s+held\s+in\b",
-    )),
-    ("distinguished", (
-        r"\bdistinguish(?:ed|ing|able)?\b", r"\bnot\s+controlling\b",
-        r"\binapposite\b", r"\bunlike\b", r"\bwe\s+do\s+not\s+find\s+controlling\b",
-        r"\bwe\s+decline\s+to\s+extend\b",
-    )),
-    ("overruled", (
-        r"\boverruled\b", r"\babrogated\b", r"\bdisapproved\b",
-        r"\bwe\s+decline\s+to\s+follow\b", r"\brejected\b",
-        r"\bno\s+longer\s+good\s+law\b", r"\bwe\s+no\s+longer\b",
-    )),
-    ("questioned", (
-        r"\bquestioned\b", r"\bcast\s+doubt\b", r"\bwe\s+doubt\b",
-        r"\bnote\s+tension\b", r"\bwe\s+note\s+that\b.*\bbut\b",
-    )),
+    (
+        "followed",
+        (
+            r"\bwe\s+follow\b",
+            r"\bconsistent\s+with\b",
+            r"\bwe\s+agree\s+with\b",
+            r"\bwe\s+adopt\b",
+            r"\bas\s+we\s+held\b",
+            r"\bwe\s+reaffirm\b",
+            r"\bthe\s+rule\s+of\b",
+            r"\bwe\s+apply\b",
+            r"\bwe\s+rely\s+on\b",
+            # "we held that [cite] ..." / "we concluded in [cite] that" — applying
+            # the cited case's holding as controlling (the most common appellate
+            # disposition; was MISSING from the taxonomy, so real 'followed'
+            # citations classified neutral in the hand-walk).
+            r"\bwe\s+(?:held|concluded|decided)\b",
+            r"\bin\s+[A-Z][a-z]+,\s+\d+\s+U\.?S\.?\s+\d+\s+\([0-9]{4}\)\s*,\s*we\s+held\b",
+            r"\bwe\s+held\s+in\b",
+        ),
+    ),
+    (
+        "distinguished",
+        (
+            r"\bdistinguish(?:ed|ing|able)?\b",
+            r"\bnot\s+controlling\b",
+            r"\binapposite\b",
+            r"\bunlike\b",
+            r"\bwe\s+do\s+not\s+find\s+controlling\b",
+            r"\bwe\s+decline\s+to\s+extend\b",
+        ),
+    ),
+    (
+        "overruled",
+        (
+            r"\boverruled\b",
+            r"\babrogated\b",
+            r"\bdisapproved\b",
+            r"\bwe\s+decline\s+to\s+follow\b",
+            r"\brejected\b",
+            r"\bno\s+longer\s+good\s+law\b",
+            r"\bwe\s+no\s+longer\b",
+        ),
+    ),
+    (
+        "questioned",
+        (
+            r"\bquestioned\b",
+            r"\bcast\s+doubt\b",
+            r"\bwe\s+doubt\b",
+            r"\bnote\s+tension\b",
+            r"\bwe\s+note\s+that\b.*\bbut\b",
+        ),
+    ),
 ]
 
 
@@ -302,8 +337,9 @@ def citing_sentence_for(text: str, cited_key: str) -> str:
     return sentences[0] if sentences else ""
 
 
-def enrich_chunks_with_treatment(case_chunks: list[dict[str, Any]],
-                                 G: nx.DiGraph) -> list[dict[str, Any]]:
+def enrich_chunks_with_treatment(
+    case_chunks: list[dict[str, Any]], G: nx.DiGraph
+) -> list[dict[str, Any]]:
     """For each stored case chunk, add `cited_by_count` (how many manifest
     authorities cite this case — an authority signal) to the payload. Returns
     the enriched chunk list (payload mutated in place)."""

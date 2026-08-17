@@ -1,4 +1,5 @@
 """OpenCode Go/Zen cloud-chain ordering + routing tests."""
+
 import asyncio
 import os
 from unittest.mock import AsyncMock
@@ -53,7 +54,11 @@ def test_zen_and_go_are_cloud_not_local():
 
 def test_build_kwargs_routes_zen_free_and_go_paid():
     from runtime_v2.services._llm_client import build_kwargs
-    monkeypatch_env = {"OPENAI_API_BASE": "https://opencode.ai/zen/go/v1", "OPENAI_API_KEY": "sk-test"}
+
+    monkeypatch_env = {
+        "OPENAI_API_BASE": "https://opencode.ai/zen/go/v1",
+        "OPENAI_API_KEY": "sk-test",
+    }
     old = {k: os.environ.get(k) for k in monkeypatch_env}
     os.environ.update(monkeypatch_env)
     try:
@@ -81,9 +86,16 @@ def test_chain_leads_with_free_flash_zen_go_paid(monkeypatch):
 
     fm._fetch_openrouter_models = AsyncMock(return_value=[])
     fm._fetch_groq_models = AsyncMock(return_value=[])
-    fm._fetch_nvidia_models = AsyncMock(return_value=[
-        {"model": "nvidia_nim/deepseek-ai/deepseek-v4-flash", "context_length": 8192, "pricing": "API", "provider": "NVIDIA"},
-    ])
+    fm._fetch_nvidia_models = AsyncMock(
+        return_value=[
+            {
+                "model": "nvidia_nim/deepseek-ai/deepseek-v4-flash",
+                "context_length": 8192,
+                "pricing": "API",
+                "provider": "NVIDIA",
+            },
+        ]
+    )
     fm._fetch_gemini_models = AsyncMock(return_value=[])
     fm._fetch_llama_models = AsyncMock(return_value=[])
 
@@ -98,7 +110,9 @@ def test_chain_leads_with_free_flash_zen_go_paid(monkeypatch):
     assert models[2] == "openai/deepseek-v4-flash"
     # DeepSeek direct (paid api.deepseek.com) is the LAST cloud entry.
     assert "deepseek/deepseek-v4-flash" in models
-    assert models.index("deepseek/deepseek-v4-flash") > models.index("openai/deepseek-v4-flash")
+    assert models.index("deepseek/deepseek-v4-flash") > models.index(
+        "openai/deepseek-v4-flash"
+    )
 
 
 def test_cache_is_keyed_by_routing_mode(monkeypatch):
@@ -110,6 +124,7 @@ def test_cache_is_keyed_by_routing_mode(monkeypatch):
     window (a `/local` session could be handed the cloud chain and vice-versa).
     """
     import time
+
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     monkeypatch.setenv("OPENAI_API_BASE", "https://opencode.ai/zen/go/v1")
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or")
@@ -126,13 +141,25 @@ def test_cache_is_keyed_by_routing_mode(monkeypatch):
 
     async def _auto_fetch(*_args, **_kwargs):
         fetch_calls["auto"] += 1
-        return [{"model": "nvidia_nim/deepseek-ai/deepseek-v4-flash", "context_length": 8192, "pricing": "API", "provider": "NVIDIA"}]
+        return [
+            {
+                "model": "nvidia_nim/deepseek-ai/deepseek-v4-flash",
+                "context_length": 8192,
+                "pricing": "API",
+                "provider": "NVIDIA",
+            }
+        ]
 
     async def _empty_fetch(*_args, **_kwargs):
         return []
 
     monkeypatch.setattr(fm, "_fetch_nvidia_models", _auto_fetch)
-    for name in ("_fetch_openrouter_models", "_fetch_groq_models", "_fetch_gemini_models", "_fetch_llama_models"):
+    for name in (
+        "_fetch_openrouter_models",
+        "_fetch_groq_models",
+        "_fetch_gemini_models",
+        "_fetch_llama_models",
+    ):
         monkeypatch.setattr(fm, name, _empty_fetch)
 
     async def _run():
@@ -140,9 +167,13 @@ def test_cache_is_keyed_by_routing_mode(monkeypatch):
         return list(fm._cached_fallbacks)
 
     models = asyncio.run(_run())
-    assert fetch_calls["auto"] == 1, "auto mode must refetch, not reuse the local_only cache"
+    assert fetch_calls["auto"] == 1, (
+        "auto mode must refetch, not reuse the local_only cache"
+    )
     assert fm._cached_mode == "auto"
-    assert any("nvidia" in m["model"] for m in models), "cache must now hold the cloud chain, not llama-only"
+    assert any("nvidia" in m["model"] for m in models), (
+        "cache must now hold the cloud chain, not llama-only"
+    )
 
     # A second `auto` refresh within TTL with the SAME mode reuses the cache.
     async def _run2():
@@ -159,7 +190,11 @@ def test_fallbacks_scoped_to_own_endpoint_no_cross_provider_leak():
     key). Native providers must carry NO explicit api_base/api_key so litellm
     uses its own provider config; OpenCode entries carry their own endpoint."""
     from runtime_v2.services._llm_client import build_kwargs
-    monkeypatch_env = {"OPENAI_API_BASE": "https://opencode.ai/zen/go/v1", "OPENAI_API_KEY": "sk-opencode"}
+
+    monkeypatch_env = {
+        "OPENAI_API_BASE": "https://opencode.ai/zen/go/v1",
+        "OPENAI_API_KEY": "sk-opencode",
+    }
     old = {k: os.environ.get(k) for k in monkeypatch_env}
     os.environ.update(monkeypatch_env)
     try:

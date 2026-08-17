@@ -11,6 +11,7 @@ Build 2 — per-app OS tiers folded into Build 1's domain-scoped grants: a
 Builds 3 + 4 are NOT built (scheduler + takeover deferred pending review / a
 real threat model) — their code does not exist in the tree.
 """
+
 import asyncio
 import time
 
@@ -57,8 +58,12 @@ def test_channel_fail_closed_unknown_is_human():
     assert pt.channel_for("x", "read") == "agent"
     assert pt.channel_for("x", "browser_fill_form") == "agent"
     # Login/payment are human even with an agent tool name.
-    assert pt.channel_for("bank.com", "browser_type", "type into login field") == "human"
-    assert pt.channel_for("shop.com", "browser_fill_form", "fill payment card") == "human"
+    assert (
+        pt.channel_for("bank.com", "browser_type", "type into login field") == "human"
+    )
+    assert (
+        pt.channel_for("shop.com", "browser_fill_form", "fill payment card") == "human"
+    )
     assert pt.channel_for("gmail.com", "email_send") == "human"
 
 
@@ -90,6 +95,7 @@ def test_app_tier_resolves_grant(monkeypatch):
     import sys
     import types
     import swarm_os.lib.mcp.screen as sc
+
     # _app_tier does a LOCAL `import win32gui`, so inject a fake into sys.modules
     # so the local import resolves to it (then _app_name_from_hwnd is stubbed).
     fake_wg = types.ModuleType("win32gui")
@@ -112,6 +118,7 @@ def test_browser_tier_keys_on_domain_not_exe(monkeypatch):
     import types
     import swarm_os.lib.mcp.screen as sc
     import swarm_os.lib.mcp.playwright as pw
+
     fake_wg = types.ModuleType("win32gui")
     fake_wg.GetForegroundWindow = lambda: 123
     monkeypatch.setitem(sys.modules, "win32gui", fake_wg)
@@ -123,6 +130,7 @@ def test_browser_tier_keys_on_domain_not_exe(monkeypatch):
     # Bank tab: chrome.exe still no grant, domain bank.com no grant -> view-only.
     monkeypatch.setattr(pw, "active_domain", lambda: "bank.com")
     assert sc._app_tier() == "view-only"
+
 
 # ── Build 3: recurring task scheduler ───────────────────────────────────────
 import datetime as _dt
@@ -146,14 +154,18 @@ def test_is_due_daily(monkeypatch, tmp_path):
     t = ts.create_task("summarize my inbox", "daily 08:00")
     with ts._LOCK:
         data = ts._load()
-        data[t["id"]]["last_run"] = (_dt.datetime.now() - _dt.timedelta(days=1)).isoformat()
+        data[t["id"]]["last_run"] = (
+            _dt.datetime.now() - _dt.timedelta(days=1)
+        ).isoformat()
         ts._save(data)
+
     # Monkeypatch datetime.now to a fixed 09:00 today so the daily window passes.
     class _FakeDT(_dt.datetime):
         @classmethod
         def now(cls, tz=None):
             real = _dt.datetime.now()
             return cls(real.year, real.month, real.day, 9, 0)
+
     monkeypatch.setattr(ts, "datetime", _FakeDT)
     with ts._LOCK:
         data = ts._load()
@@ -180,12 +192,16 @@ def test_unmapped_goal_refuses_not_dispatched(monkeypatch, tmp_path):
     t = ts.create_task("optimize my local database indexes", "hourly", enabled=True)
     with ts._LOCK:
         data = ts._load()
-        data[t["id"]]["last_run"] = (_dt.datetime.now() - _dt.timedelta(hours=2)).isoformat()
+        data[t["id"]]["last_run"] = (
+            _dt.datetime.now() - _dt.timedelta(hours=2)
+        ).isoformat()
         ts._save(data)
     calls = {"n": 0}
+
     async def runner(task):
         calls["n"] += 1
         return {"ok": True}
+
     ran = asyncio.run(ts.run_due_tasks(runner=runner))
     assert ran == []
     assert calls["n"] == 0  # runner never called
@@ -199,12 +215,16 @@ def test_safe_goal_dispatches(monkeypatch, tmp_path):
     t = ts.create_task("summarize my email inbox", "hourly", enabled=True)
     with ts._LOCK:
         data = ts._load()
-        data[t["id"]]["last_run"] = (_dt.datetime.now() - _dt.timedelta(hours=2)).isoformat()
+        data[t["id"]]["last_run"] = (
+            _dt.datetime.now() - _dt.timedelta(hours=2)
+        ).isoformat()
         ts._save(data)
     calls = {"n": 0}
+
     async def runner(task):
         calls["n"] += 1
         return {"ok": True, "type": "email_summary"}
+
     ran = asyncio.run(ts.run_due_tasks(runner=runner))
     assert calls["n"] == 1
     assert ran == [t["id"]]
@@ -216,12 +236,16 @@ def test_important_goal_blocked_at_scheduler(monkeypatch, tmp_path):
     t = ts.create_task("send an email to my boss", "hourly", enabled=True)
     with ts._LOCK:
         data = ts._load()
-        data[t["id"]]["last_run"] = (_dt.datetime.now() - _dt.timedelta(hours=2)).isoformat()
+        data[t["id"]]["last_run"] = (
+            _dt.datetime.now() - _dt.timedelta(hours=2)
+        ).isoformat()
         ts._save(data)
     calls = {"n": 0}
+
     async def runner(task):
         calls["n"] += 1
         return {"ok": True}
+
     ran = asyncio.run(ts.run_due_tasks(runner=runner))
     assert ran == []
     assert calls["n"] == 0
@@ -240,7 +264,9 @@ def test_run_due_tasks_loads_synchronously_under_lock(monkeypatch, tmp_path):
     t = ts.create_task("summarize my email inbox", "hourly", enabled=True)
     with ts._LOCK:
         data = ts._load()
-        data[t["id"]]["last_run"] = (_dt.datetime.now() - _dt.timedelta(hours=2)).isoformat()
+        data[t["id"]]["last_run"] = (
+            _dt.datetime.now() - _dt.timedelta(hours=2)
+        ).isoformat()
         ts._save(data)
 
     class _FakeAsyncio:
@@ -254,16 +280,20 @@ def test_run_due_tasks_loads_synchronously_under_lock(monkeypatch, tmp_path):
     monkeypatch.setattr(ts, "asyncio", _FakeAsyncio)
 
     calls = {"n": 0}
+
     async def runner(task):
         calls["n"] += 1
         return {"ok": True}
+
     ran = asyncio.run(ts.run_due_tasks(runner=runner))
     assert ran == [t["id"]]
     assert calls["n"] == 1
 
 
 def test_daemon_heartbeat_written(monkeypatch, tmp_path):
-    monkeypatch.setattr(ts.TaskSchedulerDaemon, "_HEARTBEAT_FILE", tmp_path / "heartbeat.json")
+    monkeypatch.setattr(
+        ts.TaskSchedulerDaemon, "_HEARTBEAT_FILE", tmp_path / "heartbeat.json"
+    )
     daemon = ts.TaskSchedulerDaemon(interval_seconds=0.1)
     daemon._write_heartbeat()
     assert (tmp_path / "heartbeat.json").exists()

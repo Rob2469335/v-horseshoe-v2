@@ -6,6 +6,7 @@ The critical behavior pinned here: during an examination block opened by a
 to her, not to a literal "MS. AL-SHABAZZ:" prefix. A naive text search would
 miss her whole cross-examination.
 """
+
 from __future__ import annotations
 
 from swarm_os.services.legal.transcript_search import parse_transcript, parse_minuscript
@@ -35,35 +36,47 @@ def test_footer_phone_never_reaches_passages():
 
 
 SAMPLE = (
-    _page(499, (
-        "1    THE COURT:  Good morning.  All the jurors are here.\n"
-        "2    MR. FOLLY:  Yes, your Honor.\n"
-        "3    THE COURT:  Please be seated.\n"
-    ))
-    + _page(502, (
-        "1    CROSS-EXAMINATION\n"
-        "2    BY MS. AL-SHABAZZ:\n"
-        "3    Q.  Good morning, Ms. Nichols.\n"
-        "4    A.  Good morning.\n"
-        "5    Q.  You met Reginald Dewitt in October of 2012, right?\n"
-        "6    A.  No, I did not.\n"
-        "7    (Jury present)\n"
-        "8    THE COURT:  All right.  Thank you.\n"
-    ))
-    + _page(506, (
-        "1    CROSS-EXAMINATION\n"
-        "2    BY MR. CECUTTI:\n"
-        "3    Q.  Now Robert -- you know Robert, right?\n"
-        "4    A.  Yes.\n"
-        "5    MS. AL-SHABAZZ:  Objection.\n"
-        "6    THE COURT:  Overruled.\n"
-    ))
-    + _page(533, (
-        "1    REDIRECT EXAMINATION\n"
-        "2    BY MR. CHIUCHIOLO:\n"
-        "3    Q.  Who told you to falsely claim you fell?\n"
-        "4    A.  This was Bryan.\n"
-    ))
+    _page(
+        499,
+        (
+            "1    THE COURT:  Good morning.  All the jurors are here.\n"
+            "2    MR. FOLLY:  Yes, your Honor.\n"
+            "3    THE COURT:  Please be seated.\n"
+        ),
+    )
+    + _page(
+        502,
+        (
+            "1    CROSS-EXAMINATION\n"
+            "2    BY MS. AL-SHABAZZ:\n"
+            "3    Q.  Good morning, Ms. Nichols.\n"
+            "4    A.  Good morning.\n"
+            "5    Q.  You met Reginald Dewitt in October of 2012, right?\n"
+            "6    A.  No, I did not.\n"
+            "7    (Jury present)\n"
+            "8    THE COURT:  All right.  Thank you.\n"
+        ),
+    )
+    + _page(
+        506,
+        (
+            "1    CROSS-EXAMINATION\n"
+            "2    BY MR. CECUTTI:\n"
+            "3    Q.  Now Robert -- you know Robert, right?\n"
+            "4    A.  Yes.\n"
+            "5    MS. AL-SHABAZZ:  Objection.\n"
+            "6    THE COURT:  Overruled.\n"
+        ),
+    )
+    + _page(
+        533,
+        (
+            "1    REDIRECT EXAMINATION\n"
+            "2    BY MR. CHIUCHIOLO:\n"
+            "3    Q.  Who told you to falsely claim you fell?\n"
+            "4    A.  This was Bryan.\n"
+        ),
+    )
 )
 
 
@@ -83,8 +96,11 @@ def test_page_bleed_regression():
     seated = [p for p in court if p.text == "Please be seated."]
     assert seated and seated[0].page == 499
     # The 502 block's own speaker line must be on 502, not pulled back to 499.
-    greeting = [p for p in idx.speaker_passages("AL-SHABAZZ")
-                if p.text == "Good morning, Ms. Nichols."]
+    greeting = [
+        p
+        for p in idx.speaker_passages("AL-SHABAZZ")
+        if p.text == "Good morning, Ms. Nichols."
+    ]
     assert greeting and greeting[0].page == 502
 
 
@@ -96,7 +112,7 @@ def test_speaker_passages_include_q_lines_under_by_header():
     texts = [p.text for p in passages]
     assert any("Good morning, Ms. Nichols" in t for t in texts)
     assert any("met Reginald Dewitt" in t for t in texts)
-    assert any("Objection" in t for t in texts)          # literal prefix line
+    assert any("Objection" in t for t in texts)  # literal prefix line
     assert any("falsely claim you fell" not in t for t in texts)  # Chiuciolo's
 
 
@@ -218,7 +234,7 @@ def test_bare_name_line_boundary_is_flagged():
         "\n760\nJ5ATDUN1\n\n"
         "        1             MS. AL-SHABAZZ:  I just have a couple of questions.\n"
         "        2             THE COURT:  All right.\n"
-        "        3             Ms. Al-Shabazz.\n"   # bare name line, no colon
+        "        3             Ms. Al-Shabazz.\n"  # bare name line, no colon
         "\n\n" + _FOOTER + "\n"
         "\n761\nJ5ATDUN1\n\n"
         "        1             MS. AL-SHABAZZ:  Did they show you a photograph?\n"
@@ -237,6 +253,7 @@ def test_bare_name_line_boundary_is_flagged():
 # LLM). These tests PIN that guarantee: exact line lookup, line-number-column
 # stripping, and page attribution — so a quote in a motion is structurally
 # traceable to the source page.
+
 
 def test_blt_exact_line_lookup_is_deterministic():
     """'Look up the text at line N' must be a deterministic string op — the same
@@ -264,10 +281,7 @@ def test_blt_verbatim_quote_not_truncated_or_normalized():
     must match the transcript byte-for-byte after only the line-number column
     strip (BLT: models collapse/spell-correct verbatim text)."""
     exact = "No, I did not."
-    body = (
-        "1    MS. AL-SHABAZZ:  Did you meet him?\n"
-        "2    A.  " + exact + "\n"
-    )
+    body = "1    MS. AL-SHABAZZ:  Did you meet him?\n2    A.  " + exact + "\n"
     idx = parse_transcript(_page(507, body), case="US v. Test", source="blt2")
     page, text = idx.search(exact)[0]
     assert exact in text
@@ -280,14 +294,11 @@ def test_blt_search_scoped_to_correct_page_not_page_bleed():
     """BLT page attribution: the same phrase on two different pages must return
     BOTH page anchors (the page-bleed fix — a passage belongs to the page where
     it STARTED, never inherited from the next page's block)."""
-    p1 = (
-        "1    THE COURT:  Please be seated.\n"
-        "2    MR. FOLLY:  Yes, your Honor.\n"
+    p1 = "1    THE COURT:  Please be seated.\n2    MR. FOLLY:  Yes, your Honor.\n"
+    p2 = "1    THE COURT:  All right.  Thank you.\n"
+    idx = parse_transcript(
+        _page(499, p1) + _page(502, p2), case="US v. Test", source="blt3"
     )
-    p2 = (
-        "1    THE COURT:  All right.  Thank you.\n"
-    )
-    idx = parse_transcript(_page(499, p1) + _page(502, p2), case="US v. Test", source="blt3")
     pages = {p for p, _ in idx.search("All right")}
     assert 502 in pages
     # "Please be seated" was on page 499 — never re-stamped 502.
@@ -303,16 +314,22 @@ def test_pypdf_extracted_layout_page_before_footer():
     after the footer split the page number sits at the END of the previous
     block — the parser must harvest it there and apply it to the next block's
     content (real shape from the PDF-only trial days, 5/17-5/28 2019)."""
-    p1 = _pdf_page(1189, (
-        "UNITED STATES DISTRICT COURT\n"
-        "SOUTHERN DISTRICT OF NEW YORK\n"
-        "THE COURT:  Good morning.\n"
-        "MR. DINNERSTEIN:  Good morning, your Honor.\n"
-    ))
-    p2 = _pdf_page(1190, (
-        "THE COURT:  All right, let's bring the jury in.\n"
-        "MS. ROTHMAN:  Yes, your Honor.\n"
-    ))
+    p1 = _pdf_page(
+        1189,
+        (
+            "UNITED STATES DISTRICT COURT\n"
+            "SOUTHERN DISTRICT OF NEW YORK\n"
+            "THE COURT:  Good morning.\n"
+            "MR. DINNERSTEIN:  Good morning, your Honor.\n"
+        ),
+    )
+    p2 = _pdf_page(
+        1190,
+        (
+            "THE COURT:  All right, let's bring the jury in.\n"
+            "MS. ROTHMAN:  Yes, your Honor.\n"
+        ),
+    )
     idx = parse_transcript(p1 + p2, case="US v. Test", source="pdf")
     pages = {p.page for p in idx.passages}
     assert pages == {1189, 1190}
@@ -325,18 +342,21 @@ def test_summation_section_attributed_to_named_speaker():
     per-line 'NAME:' prefixes — the speaker comes only from the section header
     'J5l1dun2  Summation - Mr. Dinnerstein'. The parser must attribute the
     following text to that speaker (real shape that was previously unparsed)."""
-    txt = (
-        _pdf_page(1668, (
+    txt = _pdf_page(
+        1668,
+        (
             "J5l1dun2                 Summation - Mr. Dinnerstein \n"
             "Someone might have principles. Then there's Kasheem Jones.  That's "
             "another witness the government put on, no mention of Robert.  I "
             "submit that Robert Locust has never been a runner.\n"
-        ))
-        + _pdf_page(1669, (
+        ),
+    ) + _pdf_page(
+        1669,
+        (
             "J5l1dun2                 Summation - Mr. Dinnerstein \n"
             "And finally, the charge: the government must prove each element "
             "beyond a reasonable doubt.\n"
-        ))
+        ),
     )
     idx = parse_transcript(txt, case="US v. Test", source="summ")
     summ = [p for p in idx.passages if p.speaker == "MR. DINNERSTEIN"]
@@ -350,11 +370,14 @@ def test_charge_section_attributed_to_court():
     """The jury Charge section (5/22/19) is continuous instruction text with no
     'NAME:' prefixes — attributed to THE COURT via the 'J5m1dun1  Charge'
     header (real shape that was previously unparsed)."""
-    txt = _pdf_page(1780, (
-        "J5m1dun1                 Charge \n"
-        "Ladies and gentlemen, you are the sole and exclusive judges of the "
-        "facts.  You pass on the weight of the evidence.\n"
-    ))
+    txt = _pdf_page(
+        1780,
+        (
+            "J5m1dun1                 Charge \n"
+            "Ladies and gentlemen, you are the sole and exclusive judges of the "
+            "facts.  You pass on the weight of the evidence.\n"
+        ),
+    )
     idx = parse_transcript(txt, case="US v. Test", source="charge")
     court = [p for p in idx.passages if p.speaker == "THE COURT"]
     assert court, "charge text must be attributed to THE COURT"
@@ -369,17 +392,23 @@ def test_continuous_court_speech_flushes_per_page():
     the whole multi-page instruction collapsed onto one page)."""
     # The real shape: page 31 has the Court speaking (with prefix), then pages
     # 32+ are continuous un-prefixed instruction text that continues it.
-    lead = _pdf_page(31, (
-        "J571dun1 - Corrected \n"
-        "THE COURT:  All right, I want to give you a few rules that you're "
-        "going to live by over the course of the next few weeks.\n"
-    ))
+    lead = _pdf_page(
+        31,
+        (
+            "J571dun1 - Corrected \n"
+            "THE COURT:  All right, I want to give you a few rules that you're "
+            "going to live by over the course of the next few weeks.\n"
+        ),
+    )
     pages = lead + "".join(
-        _pdf_page(32 + i, (
-            f"J571dun1 - Corrected \n"
-            f"{i + 1}   I want to give you a few rules, rule number {i + 1}.  "
-            f"You must follow the law and the evidence.\n"
-        ))
+        _pdf_page(
+            32 + i,
+            (
+                f"J571dun1 - Corrected \n"
+                f"{i + 1}   I want to give you a few rules, rule number {i + 1}.  "
+                f"You must follow the law and the evidence.\n"
+            ),
+        )
         for i in range(3)
     )
     idx = parse_transcript(pages, case="US v. Test", source="instr")

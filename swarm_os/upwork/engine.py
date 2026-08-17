@@ -9,6 +9,7 @@ MODEL = "qwen3.5-4b"
 # TLS/DNS handshake + connection per proposal/estimate/scope/invoice request).
 _client: httpx.AsyncClient | None = None
 
+
 def _get_client() -> httpx.AsyncClient:
     global _client
     if _client is None or _client.is_closed:
@@ -17,6 +18,7 @@ def _get_client() -> httpx.AsyncClient:
             headers={"Authorization": "Bearer llama"},
         )
     return _client
+
 
 async def run_upwork_task(task_type: str, user_input: str):
     """
@@ -33,6 +35,7 @@ async def run_upwork_task(task_type: str, user_input: str):
     memory_count = 0
     try:
         from swarm_os.upwork.learning_engine_qdrant import COLLECTION, client
+
         if hasattr(client, "count"):
             _count = client.count(collection_name=COLLECTION, exact=True)
             memory_count = int(getattr(_count, "count", 0) or 0)
@@ -49,18 +52,30 @@ async def run_upwork_task(task_type: str, user_input: str):
                 "The freelancer's name is Robert. Keep it conversational, tailored, and high-impact. Do not use placeholders.\n\n"
                 "Return a JSON object with a single key 'content' containing the generated text."
             )
-            r = await _get_client().post(LLAMA_URL, json={"model": MODEL, "messages": [{"role": "user", "content": prompt}], "response_format": {"type": "json_object"}})
+            r = await _get_client().post(
+                LLAMA_URL,
+                json={
+                    "model": MODEL,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "response_format": {"type": "json_object"},
+                },
+            )
             data = r.json()
             try:
-                response_json = json.loads(data.get("choices", [{}])[0].get("message", {}).get("content", "{}"))
+                response_json = json.loads(
+                    data.get("choices", [{}])[0].get("message", {}).get("content", "{}")
+                )
             except Exception:
                 response_json = {}
-            content = response_json.get("content", data.get("choices", [{}])[0].get("message", {}).get("content", ""))
+            content = response_json.get(
+                "content",
+                data.get("choices", [{}])[0].get("message", {}).get("content", ""),
+            )
             return {
                 "type": "proposal",
                 "content": content,
                 "memory_used": memory_count,
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.utcnow().isoformat(),
             }
 
         elif task_type == "rate":
@@ -73,10 +88,19 @@ async def run_upwork_task(task_type: str, user_input: str):
                 "3. Analysis of the complexity, potential roadblocks, and estimation reasoning.\n\n"
                 "Return a JSON object with keys 'hours', 'bid', and 'analysis'."
             )
-            r = await _get_client().post(LLAMA_URL, json={"model": MODEL, "messages": [{"role": "user", "content": prompt}], "response_format": {"type": "json_object"}})
+            r = await _get_client().post(
+                LLAMA_URL,
+                json={
+                    "model": MODEL,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "response_format": {"type": "json_object"},
+                },
+            )
             data = r.json()
             try:
-                response_json = json.loads(data.get("choices", [{}])[0].get("message", {}).get("content", "{}"))
+                response_json = json.loads(
+                    data.get("choices", [{}])[0].get("message", {}).get("content", "{}")
+                )
             except Exception:
                 response_json = {}
             return {
@@ -84,7 +108,7 @@ async def run_upwork_task(task_type: str, user_input: str):
                 "hours": response_json.get("hours", "10-20"),
                 "bid": response_json.get("bid", "$500"),
                 "analysis": response_json.get("analysis", "No analysis provided."),
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.utcnow().isoformat(),
             }
 
         elif task_type == "scope":
@@ -98,16 +122,28 @@ async def run_upwork_task(task_type: str, user_input: str):
                 "- 'items': a list of strings representing milestones.\n"
                 "- 'estimate': a string representing the duration."
             )
-            r = await _get_client().post(LLAMA_URL, json={"model": MODEL, "messages": [{"role": "user", "content": prompt}], "response_format": {"type": "json_object"}})
+            r = await _get_client().post(
+                LLAMA_URL,
+                json={
+                    "model": MODEL,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "response_format": {"type": "json_object"},
+                },
+            )
             data = r.json()
             try:
-                response_json = json.loads(data.get("choices", [{}])[0].get("message", {}).get("content", "{}"))
+                response_json = json.loads(
+                    data.get("choices", [{}])[0].get("message", {}).get("content", "{}")
+                )
             except Exception:
                 response_json = {}
             return {
                 "type": "scope_breakdown",
-                "items": response_json.get("items", ["Backend routing", "Frontend UI", "Testing & verification"]),
-                "estimate": response_json.get("estimate", "2-3 weeks")
+                "items": response_json.get(
+                    "items",
+                    ["Backend routing", "Frontend UI", "Testing & verification"],
+                ),
+                "estimate": response_json.get("estimate", "2-3 weeks"),
             }
 
         elif task_type == "invoice":
@@ -119,16 +155,25 @@ async def run_upwork_task(task_type: str, user_input: str):
                 "- 'summary': a text summary listing the deliverables and pricing.\n"
                 "- 'total': the total estimated price in USD (e.g., '$750')."
             )
-            r = await _get_client().post(LLAMA_URL, json={"model": MODEL, "messages": [{"role": "user", "content": prompt}], "response_format": {"type": "json_object"}})
+            r = await _get_client().post(
+                LLAMA_URL,
+                json={
+                    "model": MODEL,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "response_format": {"type": "json_object"},
+                },
+            )
             data = r.json()
             try:
-                response_json = json.loads(data.get("choices", [{}])[0].get("message", {}).get("content", "{}"))
+                response_json = json.loads(
+                    data.get("choices", [{}])[0].get("message", {}).get("content", "{}")
+                )
             except Exception:
                 response_json = {}
             return {
                 "type": "invoice",
                 "summary": response_json.get("summary", "Project setup and delivery"),
-                "total": response_json.get("total", "$500")
+                "total": response_json.get("total", "$500"),
             }
 
         elif task_type == "pitch":
@@ -139,15 +184,30 @@ async def run_upwork_task(task_type: str, user_input: str):
                 "Use the structure of: Problem solved, System built, and Result delivered for each bullet point.\n\n"
                 "Return a JSON object with a key 'bullets' containing a list of strings."
             )
-            r = await _get_client().post(LLAMA_URL, json={"model": MODEL, "messages": [{"role": "user", "content": prompt}], "response_format": {"type": "json_object"}})
+            r = await _get_client().post(
+                LLAMA_URL,
+                json={
+                    "model": MODEL,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "response_format": {"type": "json_object"},
+                },
+            )
             data = r.json()
             try:
-                response_json = json.loads(data.get("choices", [{}])[0].get("message", {}).get("content", "{}"))
+                response_json = json.loads(
+                    data.get("choices", [{}])[0].get("message", {}).get("content", "{}")
+                )
             except Exception:
                 response_json = {}
             return {
                 "type": "case_study",
-                "bullets": response_json.get("bullets", ["Built scalable microservices", "Optimized React render speeds by 40%"])
+                "bullets": response_json.get(
+                    "bullets",
+                    [
+                        "Built scalable microservices",
+                        "Optimized React render speeds by 40%",
+                    ],
+                ),
             }
 
         elif task_type == "skills_gap":
@@ -158,19 +218,29 @@ async def run_upwork_task(task_type: str, user_input: str):
                 "might not possess or might need extra preparation for.\n\n"
                 "Return a JSON object with a key 'missing' containing a list of strings representing these skills."
             )
-            r = await _get_client().post(LLAMA_URL, json={"model": MODEL, "messages": [{"role": "user", "content": prompt}], "response_format": {"type": "json_object"}})
+            r = await _get_client().post(
+                LLAMA_URL,
+                json={
+                    "model": MODEL,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "response_format": {"type": "json_object"},
+                },
+            )
             data = r.json()
             try:
-                response_json = json.loads(data.get("choices", [{}])[0].get("message", {}).get("content", "{}"))
+                response_json = json.loads(
+                    data.get("choices", [{}])[0].get("message", {}).get("content", "{}")
+                )
             except Exception:
                 response_json = {}
             return {
                 "type": "gap_analysis",
-                "missing": response_json.get("missing", ["Custom LLM integration", "Advanced state caching"])
+                "missing": response_json.get(
+                    "missing", ["Custom LLM integration", "Advanced state caching"]
+                ),
             }
 
     except Exception as exc:
         return {"error": f"Local LLM query failed: {exc}"}
 
     return {"error": "unknown task"}
-

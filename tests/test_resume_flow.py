@@ -24,4 +24,3 @@ async def test_resume_flow_advances_generation():
     assert len(kernel.organisms) >= len(organisms)
     orig_ids = {o.id for o in organisms}
     assert orig_ids.issubset({o.id for o in kernel.organisms})
-

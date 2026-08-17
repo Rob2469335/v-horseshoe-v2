@@ -13,6 +13,7 @@ on _llm_parser.py's post-hoc salvage logic. Grammar guarantees syntax only,
 not semantic completeness (e.g. {"action":"final"} with no "response" is
 accepted) — that conditional gap is deliberately deferred.
 """
+
 from __future__ import annotations
 
 TOOL_DECISION_JSON_SCHEMA = {
@@ -23,10 +24,20 @@ TOOL_DECISION_JSON_SCHEMA = {
         "action": {
             "type": "string",
             "enum": [
-                "delegate", "web_search", "filesystem", "sandbox_repl",
-                "vscode_automation", "semantic_search", "remember", "ask_user",
-                "lsp", "mcp", "mcp_register", "self_heal", "final"
-            ]
+                "delegate",
+                "web_search",
+                "filesystem",
+                "sandbox_repl",
+                "vscode_automation",
+                "semantic_search",
+                "remember",
+                "ask_user",
+                "lsp",
+                "mcp",
+                "mcp_register",
+                "self_heal",
+                "final",
+            ],
         },
         "target_agent": {"type": "string"},
         "server_name": {"type": "string"},
@@ -44,7 +55,7 @@ TOOL_DECISION_JSON_SCHEMA = {
         "response": {"type": "string"},
         "fact": {"type": "string"},
         "category": {"type": "string"},
-        "question": {"type": "string"}
+        "question": {"type": "string"},
     },
-    "required": ["action"]
+    "required": ["action"],
 }

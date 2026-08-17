@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .strategy import DefaultStrategy, DeepStrategy, BanditStrategy, RoutingStrategy
 
+
 class StrategyRegistry:
     def __init__(self) -> None:
         self._strategies: dict[str, RoutingStrategy] = {}
@@ -59,6 +60,7 @@ class StrategyRegistry:
             raise KeyError(f"Unknown strategy: {self._default_name}")
 
         return self._strategies[self._default_name]
+
 
 strategy_registry = StrategyRegistry()
 strategy_registry.register(DefaultStrategy())

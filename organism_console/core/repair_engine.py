@@ -11,21 +11,65 @@ from datetime import date, datetime, timezone
 from typing import Optional, Dict, Any, List, Tuple
 
 import logging
+
 log = logging.getLogger("zenith_cli")
 
 
 def _sha256(text: str) -> str:
     return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
 
+
 FAILURE_TAXONOMY = {
-    "import_resolution": {"patterns": [r"importerror", r"modulenotfounderror", r"no module named"], "tier": 0},
-    "syntax_error": {"patterns": [r"syntaxerror", r"indentationerror", r"invalid syntax", r"unexpected eof", r"unexpected indent", r"expected an indented block"], "tier": 0},
-    "type_error": {"patterns": [r"typeerror", r"unsupported operand type", r"argument of type"], "tier": 1},
-    "runtime_exception": {"patterns": [r"keyerror", r"indexerror", r"attributeerror", r"valueerror"], "tier": 1},
-    "tool_misuse": {"patterns": [r"unknown tool", r"invalid tool call", r"missing required parameter"], "tier": 1},
-    "specification_drift": {"patterns": [r"deviat", r"not what was asked", r"unrelated", r"specification drift", r"spec drift", r"requirement drift"], "tier": 2},
-    "logic_bug": {"patterns": [r"wrong result", r"incorrect", r"off-by-one", r"edge case"], "tier": 2},
-    "api_failure": {"patterns": [r"connectionerror", r"timeout", r"5\d{2}", r"service unavailable"], "tier": 2},
+    "import_resolution": {
+        "patterns": [r"importerror", r"modulenotfounderror", r"no module named"],
+        "tier": 0,
+    },
+    "syntax_error": {
+        "patterns": [
+            r"syntaxerror",
+            r"indentationerror",
+            r"invalid syntax",
+            r"unexpected eof",
+            r"unexpected indent",
+            r"expected an indented block",
+        ],
+        "tier": 0,
+    },
+    "type_error": {
+        "patterns": [r"typeerror", r"unsupported operand type", r"argument of type"],
+        "tier": 1,
+    },
+    "runtime_exception": {
+        "patterns": [r"keyerror", r"indexerror", r"attributeerror", r"valueerror"],
+        "tier": 1,
+    },
+    "tool_misuse": {
+        "patterns": [
+            r"unknown tool",
+            r"invalid tool call",
+            r"missing required parameter",
+        ],
+        "tier": 1,
+    },
+    "specification_drift": {
+        "patterns": [
+            r"deviat",
+            r"not what was asked",
+            r"unrelated",
+            r"specification drift",
+            r"spec drift",
+            r"requirement drift",
+        ],
+        "tier": 2,
+    },
+    "logic_bug": {
+        "patterns": [r"wrong result", r"incorrect", r"off-by-one", r"edge case"],
+        "tier": 2,
+    },
+    "api_failure": {
+        "patterns": [r"connectionerror", r"timeout", r"5\d{2}", r"service unavailable"],
+        "tier": 2,
+    },
 }
 
 KNOWLEDGE_BASE_DIR = Path(__file__).parent.parent.parent / "swarm_os" / "healing"
@@ -56,10 +100,31 @@ REPAIR_ALLOWED_DIRS = (
 
 # Blocked path patterns matched against any path component (case-insensitive).
 REPAIR_BLOCKED_PATTERNS = (
-    "tests", "test_", "conftest", ".env", ".git", ".venv", "venv", "node_modules",
-    "models", "docs", "scripts", ".github", "data", "logs", "_data",
-    "AGENTS.md", "README", "package.json", "package-lock.json", "pyproject.toml",
-    "requirements", "pytest.ini", "tox.ini", "start-dev", "start_llama",
+    "tests",
+    "test_",
+    "conftest",
+    ".env",
+    ".git",
+    ".venv",
+    "venv",
+    "node_modules",
+    "models",
+    "docs",
+    "scripts",
+    ".github",
+    "data",
+    "logs",
+    "_data",
+    "AGENTS.md",
+    "README",
+    "package.json",
+    "package-lock.json",
+    "pyproject.toml",
+    "requirements",
+    "pytest.ini",
+    "tox.ini",
+    "start-dev",
+    "start_llama",
 )
 
 # R4 (anti-truncation): a full-file LLM rewrite that shrinks the file more than
@@ -84,6 +149,7 @@ def _is_repairable_path(file_path: Optional[Path]) -> bool:
         return False
     try:
         from swarm_os.services.autonomy_policy import get_autonomy_policy
+
         policy = get_autonomy_policy()
         if policy is not None:
             return policy.is_repairable(file_path)
@@ -114,7 +180,9 @@ def _is_repairable_path(file_path: Optional[Path]) -> bool:
     return False
 
 
-def _anti_truncation_ok(original: str, new: str, min_ratio: float = ANTI_TRUNCATION_RATIO) -> bool:
+def _anti_truncation_ok(
+    original: str, new: str, min_ratio: float = ANTI_TRUNCATION_RATIO
+) -> bool:
     """Reject LLM rewrites that silently shrink a file (truncated output)."""
     if len(original) < 200:
         return True  # tiny files: size heuristic is unreliable
@@ -140,6 +208,7 @@ def _save_breaker(state: Dict[str, Any]):
         # threshold. The CLI watchman is gated off when SWARM_AUTONOMY=1, so this
         # is belt-and-suspenders — but the write must never be the weak link.
         from filelock import FileLock
+
         with FileLock(str(BREAKER_FILE) + ".lock", timeout=5.0):
             BREAKER_FILE.write_text(json.dumps(state, indent=2), encoding="utf-8")
     except Exception as e:
@@ -151,7 +220,12 @@ def _circuit_state() -> Dict[str, Any]:
     state = _load_breaker()
     today = date.today().isoformat()
     if state.get("date") != today:
-        state = {"date": today, "repairs": 0, "consecutive_failures": 0, "open_until": 0.0}
+        state = {
+            "date": today,
+            "repairs": 0,
+            "consecutive_failures": 0,
+            "open_until": 0.0,
+        }
     return state
 
 
@@ -175,8 +249,11 @@ def _record_repair_result(success: bool):
         if state["consecutive_failures"] >= MAX_CONSECUTIVE_FAILURES:
             state["open_until"] = time.time() + BREAK_COOLDOWN_SECONDS
             state["consecutive_failures"] = 0
-            log.warning("Repair circuit breaker tripped: %d consecutive failures. Pausing %dh.",
-                        MAX_CONSECUTIVE_FAILURES, BREAK_COOLDOWN_SECONDS // 3600)
+            log.warning(
+                "Repair circuit breaker tripped: %d consecutive failures. Pausing %dh.",
+                MAX_CONSECUTIVE_FAILURES,
+                BREAK_COOLDOWN_SECONDS // 3600,
+            )
     _save_breaker(state)
 
 
@@ -197,7 +274,10 @@ def _find_related_tests(file_path: Path) -> List[Path]:
     module_path = str(rel).replace("\\", "/").replace(".py", "")
     related = []
     for t in sorted(tests_dir.glob("test_*.py")):
-        if module_base in t.name or t.name.replace("test_", "").replace(".py", "") in module_base:
+        if (
+            module_base in t.name
+            or t.name.replace("test_", "").replace(".py", "") in module_base
+        ):
             related.append(t)
             if len(related) >= 5:
                 break
@@ -232,32 +312,72 @@ def _run_related_tests(file_path: Path) -> Optional[Dict[str, Any]]:
 
     def _run(cmd: List[str]) -> Tuple[int, str]:
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=90,
-                                  encoding="utf-8", errors="replace")
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=90,
+                encoding="utf-8",
+                errors="replace",
+            )
             return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
         except subprocess.TimeoutExpired:
             return -1, "related test run timed out after 90s"
         except Exception as exc:
             return -2, f"related test run failed: {exc}"
 
-    first_cmd = [sys.executable, "-m", "pytest", *[str(t) for t in related], "-q", "--tb=line"]
+    first_cmd = [
+        sys.executable,
+        "-m",
+        "pytest",
+        *[str(t) for t in related],
+        "-q",
+        "--tb=line",
+    ]
     code, out = _run(first_cmd)
     if code == 0:
-        return {"ok": True, "output": out, "flaky": False,
-                "initial_result": "pass", "retry_result": None}
+        return {
+            "ok": True,
+            "output": out,
+            "flaky": False,
+            "initial_result": "pass",
+            "retry_result": None,
+        }
     if code in (-1, -2):
-        return {"ok": False, "output": out, "flaky": False,
-                "initial_result": "error", "retry_result": None}
+        return {
+            "ok": False,
+            "output": out,
+            "flaky": False,
+            "initial_result": "error",
+            "retry_result": None,
+        }
     # First run failed: re-run only the failed tests. Passing -> flaky, not broken.
-    retry_cmd = [sys.executable, "-m", "pytest", "-q", "--tb=line", "--lf", "--no-header"]
+    retry_cmd = [
+        sys.executable,
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=line",
+        "--lf",
+        "--no-header",
+    ]
     retry_code, retry_out = _run(retry_cmd)
     if retry_code == 0:
-        return {"ok": True, "flaky": True,
-                "initial_result": "fail", "retry_result": "pass",
-                "output": f"[flaky] first run failed, last-failed re-run passed:\n{out}\n--- re-run ---\n{retry_out}"}
-    return {"ok": False, "flaky": False,
-            "initial_result": "fail", "retry_result": "fail",
-            "output": f"{out}\n--- last-failed re-run ---\n{retry_out}"}
+        return {
+            "ok": True,
+            "flaky": True,
+            "initial_result": "fail",
+            "retry_result": "pass",
+            "output": f"[flaky] first run failed, last-failed re-run passed:\n{out}\n--- re-run ---\n{retry_out}",
+        }
+    return {
+        "ok": False,
+        "flaky": False,
+        "initial_result": "fail",
+        "retry_result": "fail",
+        "output": f"{out}\n--- last-failed re-run ---\n{retry_out}",
+    }
+
 
 def classify_failure(error_text: str) -> Tuple[str, int]:
     error_lower = error_text.lower()
@@ -299,17 +419,45 @@ def _structural_verify_repo(file_path) -> bool:
 # real fixes. FIX_PS_TERMS (structural/schema signals) are checked FIRST and win
 # ties; MV only fires when no structural signal matched.
 FIX_PS_TERMS = (
-    "json", "format", "invalid", "malformed", "forbidden", "unauthorized",
-    "not allowed", "missing field", "syntax error", "parse", "schema",
-    "expected", "must be", "should not", "violation", "rule", "constraint",
-    "not defined", "nameerror", "typeerror", "attributeerror", "importerror",
-    "keyerror", "indexerror", "valueerror", "traceback",
+    "json",
+    "format",
+    "invalid",
+    "malformed",
+    "forbidden",
+    "unauthorized",
+    "not allowed",
+    "missing field",
+    "syntax error",
+    "parse",
+    "schema",
+    "expected",
+    "must be",
+    "should not",
+    "violation",
+    "rule",
+    "constraint",
+    "not defined",
+    "nameerror",
+    "typeerror",
+    "attributeerror",
+    "importerror",
+    "keyerror",
+    "indexerror",
+    "valueerror",
+    "traceback",
 )
 # MV fires ONLY when no structural/PS signal matched. Keep only signals that are
 # genuinely about the MODEL being the limitation, not generic traceback language.
 FIX_MV_TERMS = (
-    "hallucin", "don't know", "i don't know", "cannot reason", "wrong answer",
-    "misunderstanding", "nonsense", "not capable", "out of scope",
+    "hallucin",
+    "don't know",
+    "i don't know",
+    "cannot reason",
+    "wrong answer",
+    "misunderstanding",
+    "nonsense",
+    "not capable",
+    "out of scope",
 )
 
 
@@ -339,6 +487,7 @@ def _should_attempt_llm_patch(error_text: str) -> bool:
     succeed and would only burn a /generate call + tokens."""
     return classify_fix_class(error_text) != "model_variability"
 
+
 def load_cures() -> Dict[str, List[Dict]]:
     if CURES_FILE.exists():
         try:
@@ -347,9 +496,11 @@ def load_cures() -> Dict[str, List[Dict]]:
             pass
     return {}
 
+
 def save_cures(cures: Dict[str, List[Dict]]):
     KNOWLEDGE_BASE_DIR.mkdir(parents=True, exist_ok=True)
     CURES_FILE.write_text(json.dumps(cures, indent=2), encoding="utf-8")
+
 
 def load_lessons() -> List[Dict]:
     if not LESSONS_FILE.exists():
@@ -363,10 +514,12 @@ def load_lessons() -> List[Dict]:
                 pass
     return lessons
 
+
 def append_lesson(lesson: Dict):
     KNOWLEDGE_BASE_DIR.mkdir(parents=True, exist_ok=True)
     with open(LESSONS_FILE, "a", encoding="utf-8") as f:
         f.write(json.dumps(lesson) + "\n")
+
 
 def validate_file(file_path: Optional[Path]) -> Tuple[bool, str]:
     if not file_path or not file_path.exists():
@@ -383,6 +536,7 @@ def validate_file(file_path: Optional[Path]) -> Tuple[bool, str]:
 
 def meta_classify_lessons(lessons: List[Dict]) -> Dict[str, Any]:
     from collections import Counter as _Counter
+
     if not lessons:
         return {"new_patterns": [], "merged_types": [], "orphan_errors": []}
 
@@ -441,7 +595,9 @@ def run_adversarial_check(engine: Any) -> Dict[str, Any]:
         results["total"] += 1
         try:
             compile(code, "<adversarial>", "exec")
-            results["details"].append({"code": code[:60], "detected": False, "fixed": False})
+            results["details"].append(
+                {"code": code[:60], "detected": False, "fixed": False}
+            )
             continue
         except SyntaxError as e:
             error_text = f"SyntaxError: {e.msg} at line {e.lineno}"
@@ -453,13 +609,15 @@ def run_adversarial_check(engine: Any) -> Dict[str, Any]:
         if detected:
             results["detected"] += 1
         repair = engine.diagnose_and_repair(error_text) if engine else {}
-        results["details"].append({
-            "code": code[:60],
-            "detected": detected,
-            "tier": tier,
-            "fixed": repair.get("fixed", False),
-            "failure_type": ftype,
-        })
+        results["details"].append(
+            {
+                "code": code[:60],
+                "detected": detected,
+                "tier": tier,
+                "fixed": repair.get("fixed", False),
+                "failure_type": ftype,
+            }
+        )
         if repair.get("fixed"):
             results["fixed"] += 1
     return results
@@ -481,7 +639,11 @@ def get_similar_lessons(error_text: str, top_k: int = 3) -> List[Dict]:
                 svc = get_reflection_service()
                 # check_for_past_mistakes returns a [PAST-MISTAKE WARNING] string
                 # built from the top retrieved ReflexionMemory rules for this error.
-                warning = _ai.run(svc.check_for_past_mistakes(error_text, threshold=0.3, max_chars=1200))
+                warning = _ai.run(
+                    svc.check_for_past_mistakes(
+                        error_text, threshold=0.3, max_chars=1200
+                    )
+                )
                 if warning and "PAST-MISTAKE" in warning:
                     lesson = {
                         "error_text": error_text[:200],
@@ -489,7 +651,11 @@ def get_similar_lessons(error_text: str, top_k: int = 3) -> List[Dict]:
                         "failure_type": "reflexion",
                         "success": None,
                         "source": "reflexion",
-                        "error_keywords": [w for w in error_text.replace(".", " ").split() if len(w) > 3][:8],
+                        "error_keywords": [
+                            w
+                            for w in error_text.replace(".", " ").split()
+                            if len(w) > 3
+                        ][:8],
                     }
                     if not any(l.get("source") == "reflexion" for l in lessons):
                         lessons.append(lesson)
@@ -523,8 +689,15 @@ class T0PatternRepair:
     @staticmethod
     def try_repair(error_text: str, file_path: Optional[Path] = None) -> Optional[str]:
         error_lower = error_text.lower()
-        if "importerror" in error_lower or "module not found" in error_lower or "no module named" in error_lower:
-            m = re.search(r"(?:import error|no module named)\s*['\"]?([a-zA-Z0-9_.]+)['\"]?", error_lower)
+        if (
+            "importerror" in error_lower
+            or "module not found" in error_lower
+            or "no module named" in error_lower
+        ):
+            m = re.search(
+                r"(?:import error|no module named)\s*['\"]?([a-zA-Z0-9_.]+)['\"]?",
+                error_lower,
+            )
             if m:
                 module_name = m.group(1)
                 if file_path and file_path.exists():
@@ -532,7 +705,11 @@ class T0PatternRepair:
                     if module_name.split(".")[0] not in content:
                         return f"pip install {module_name.split('.')[0]}"
                 return f"pip install {module_name.split('.')[0]}"
-        if "syntax" in error_lower or "indentation" in error_lower or "indent" in error_lower:
+        if (
+            "syntax" in error_lower
+            or "indentation" in error_lower
+            or "indent" in error_lower
+        ):
             if file_path and file_path.exists():
                 try:
                     content = file_path.read_text(encoding="utf-8", errors="ignore")
@@ -543,7 +720,10 @@ class T0PatternRepair:
                         if e.lineno <= len(lines):
                             line = lines[e.lineno - 1]
                             if "self." not in line and "cls." not in line:
-                                if e.msg and ("unexpected indent" in e.msg.lower() or "expected an indented block" in e.msg.lower()):
+                                if e.msg and (
+                                    "unexpected indent" in e.msg.lower()
+                                    or "expected an indented block" in e.msg.lower()
+                                ):
                                     if "expected an indented block" in e.msg.lower():
                                         # Use 4 spaces of indentation
                                         fixed_line = "    " + line.strip()
@@ -561,7 +741,11 @@ class T0PatternRepair:
 
 class T1ConstrainedRepair:
     @staticmethod
-    def try_repair(error_text: str, file_path: Optional[Path] = None, context: Optional[Dict] = None) -> Optional[str]:
+    def try_repair(
+        error_text: str,
+        file_path: Optional[Path] = None,
+        context: Optional[Dict] = None,
+    ) -> Optional[str]:
         if not file_path or not file_path.exists():
             return None
         try:
@@ -573,16 +757,20 @@ class T1ConstrainedRepair:
         error_lower = error_text.lower()
 
         if "typeerror" in error_lower:
-            m = re.search(r"argument of type\s+['\"]?(\w+)['\"]?\s+is not iterable", error_lower)
+            m = re.search(
+                r"argument of type\s+['\"]?(\w+)['\"]?\s+is not iterable", error_lower
+            )
             if m:
                 target_type = m.group(1)
                 for node in ast.walk(tree):
                     if isinstance(node, ast.For):
-                        iter_name = ast.unparse(node.iter) if hasattr(ast, 'unparse') else ""
+                        iter_name = (
+                            ast.unparse(node.iter) if hasattr(ast, "unparse") else ""
+                        )
                         if iter_name:
                             new_content = content.replace(
                                 f"for {ast.unparse(node.target)} in {iter_name}",
-                                f"for {ast.unparse(node.target)} in ({iter_name} if isinstance({iter_name}, (list, tuple, set, dict)) else [{iter_name}])"
+                                f"for {ast.unparse(node.target)} in ({iter_name} if isinstance({iter_name}, (list, tuple, set, dict)) else [{iter_name}])",
                             )
                             if new_content != content:
                                 file_path.write_text(new_content, encoding="utf-8")
@@ -599,12 +787,18 @@ class T1ConstrainedRepair:
                             # Match the key in brackets with either quote style
                             pattern = rf"{re.escape(full.split('[')[0])}\[['\"]{re.escape(missing_key)}['\"]\]"
                             if re.search(pattern, content):
-                                parent = ast.unparse(node.value) if hasattr(ast, 'unparse') else ""
+                                parent = (
+                                    ast.unparse(node.value)
+                                    if hasattr(ast, "unparse")
+                                    else ""
+                                )
                                 if parent:
                                     new_access = f"{parent}.get('{missing_key}')"
                                     new_content = re.sub(pattern, new_access, content)
                                     if new_content != content:
-                                        file_path.write_text(new_content, encoding="utf-8")
+                                        file_path.write_text(
+                                            new_content, encoding="utf-8"
+                                        )
                                         return f"T1: Replaced subscript {full} with .get() at {file_path.name}"
                         except Exception:
                             pass
@@ -613,7 +807,12 @@ class T1ConstrainedRepair:
 
 class T2DeepRepair:
     @staticmethod
-    def build_prompt(error_text: str, failure_type: str, similar_lessons: List[Dict], context_hint: str = "") -> str:
+    def build_prompt(
+        error_text: str,
+        failure_type: str,
+        similar_lessons: List[Dict],
+        context_hint: str = "",
+    ) -> str:
         lessons_section = ""
         if similar_lessons:
             lessons_section = "\n## Past Lessons from Similar Repairs\n" + "\n".join(
@@ -679,7 +878,9 @@ class TieredRepairOrchestrator:
         self.total_tokens = 0
         self.start_time = datetime.now(timezone.utc)
 
-    def _snapshot_and_validate(self, file_path: Optional[Path], result: Dict[str, Any], original: str) -> bool:
+    def _snapshot_and_validate(
+        self, file_path: Optional[Path], result: Dict[str, Any], original: str
+    ) -> bool:
         """Fail-closed acceptance gate: revert the file unless it survives ALL checks:
         path allowlist, anti-truncation, compile, and the module's own tests."""
         if not file_path or not file_path.exists():
@@ -689,9 +890,13 @@ class TieredRepairOrchestrator:
         if not _is_repairable_path(file_path):
             file_path.write_text(original, encoding="utf-8")
             result["fixed"] = False
-            result["validation_error"] = "path not in allowlist / blocked sensitive path"
+            result["validation_error"] = (
+                "path not in allowlist / blocked sensitive path"
+            )
             if self.cmd_ctx:
-                self.cmd_ctx.console.print(f"[red]Blocked repair on protected path: {file_path}[/red]")
+                self.cmd_ctx.console.print(
+                    f"[red]Blocked repair on protected path: {file_path}[/red]"
+                )
             return False
 
         content = file_path.read_text(encoding="utf-8", errors="ignore")
@@ -700,9 +905,13 @@ class TieredRepairOrchestrator:
         if not _anti_truncation_ok(original, content):
             file_path.write_text(original, encoding="utf-8")
             result["fixed"] = False
-            result["validation_error"] = "anti-truncation guard: rewrite shrank file by >20%"
+            result["validation_error"] = (
+                "anti-truncation guard: rewrite shrank file by >20%"
+            )
             if self.cmd_ctx:
-                self.cmd_ctx.console.print(f"[red]Anti-truncation guard triggered for {file_path} — reverted[/red]")
+                self.cmd_ctx.console.print(
+                    f"[red]Anti-truncation guard triggered for {file_path} — reverted[/red]"
+                )
             return False
 
         # Compile gate (R12: no new syntax errors).
@@ -712,7 +921,9 @@ class TieredRepairOrchestrator:
             result["fixed"] = False
             result["validation_error"] = msg
             if self.cmd_ctx:
-                self.cmd_ctx.console.print(f"[red]Validation failed, reverted: {msg}[/red]")
+                self.cmd_ctx.console.print(
+                    f"[red]Validation failed, reverted: {msg}[/red]"
+                )
             return False
 
         # Security gate (independent verify): the repaired file must not have
@@ -722,13 +933,16 @@ class TieredRepairOrchestrator:
         # banned import is reverted, not shipped.
         try:
             from swarm_os.services.security_gate import SecurityGate
+
             SecurityGate.scan_file(file_path)
         except Exception as exc:
             file_path.write_text(original, encoding="utf-8")
             result["fixed"] = False
             result["validation_error"] = f"security gate rejected: {exc}"
             if self.cmd_ctx:
-                self.cmd_ctx.console.print(f"[red]Security gate rejected repair, reverted: {exc}[/red]")
+                self.cmd_ctx.console.print(
+                    f"[red]Security gate rejected repair, reverted: {exc}[/red]"
+                )
             return False
 
         # Quality gate (R11): run the repaired module's own tests before accepting.
@@ -742,9 +956,13 @@ class TieredRepairOrchestrator:
             if not test_res.get("ok"):
                 file_path.write_text(original, encoding="utf-8")
                 result["fixed"] = False
-                result["validation_error"] = f"related tests failed: {test_res['output'][-500:]}"
+                result["validation_error"] = (
+                    f"related tests failed: {test_res['output'][-500:]}"
+                )
                 if self.cmd_ctx:
-                    self.cmd_ctx.console.print(f"[red]Related tests failed, reverted: {test_res['output'][-200:]}[/red]")
+                    self.cmd_ctx.console.print(
+                        f"[red]Related tests failed, reverted: {test_res['output'][-200:]}[/red]"
+                    )
                 return False
         else:
             # NO related test covers this module. A repair accepted with zero
@@ -757,7 +975,9 @@ class TieredRepairOrchestrator:
             if not structural_ok:
                 file_path.write_text(original, encoding="utf-8")
                 result["fixed"] = False
-                result["validation_error"] = "no related tests AND structural verify failed (empty/broken file)"
+                result["validation_error"] = (
+                    "no related tests AND structural verify failed (empty/broken file)"
+                )
                 if self.cmd_ctx:
                     self.cmd_ctx.console.print(
                         f"[red]No tests + structural verify failed, reverted: {file_path}[/red]"
@@ -772,11 +992,20 @@ class TieredRepairOrchestrator:
 
         return result.get("fixed", False)
 
-    def repair(self, error_text: str, file_path: Optional[Path] = None, context: Optional[Dict] = None) -> Dict[str, Any]:
+    def repair(
+        self,
+        error_text: str,
+        file_path: Optional[Path] = None,
+        context: Optional[Dict] = None,
+    ) -> Dict[str, Any]:
         failure_type, tier = classify_failure(error_text)
         similar_lessons = get_similar_lessons(error_text)
-        
-        original_content = file_path.read_text(encoding="utf-8", errors="ignore") if file_path and file_path.exists() else ""
+
+        original_content = (
+            file_path.read_text(encoding="utf-8", errors="ignore")
+            if file_path and file_path.exists()
+            else ""
+        )
 
         # R18: fail closed when the circuit breaker is open or the daily cap is hit.
         breaker_allowed, breaker_reason = _circuit_allows_repair()
@@ -797,7 +1026,9 @@ class TieredRepairOrchestrator:
                 "retry_dispatched": False,
             }
             if self.cmd_ctx:
-                self.cmd_ctx.console.print(f"[yellow]⚕ {breaker_reason} — skipping repair.[/yellow]")
+                self.cmd_ctx.console.print(
+                    f"[yellow]⚕ {breaker_reason} — skipping repair.[/yellow]"
+                )
             return result
 
         # Durable orchestrator state (2026 P0): create an authoritative record so
@@ -807,6 +1038,7 @@ class TieredRepairOrchestrator:
             create_record,
             transition as _st,
         )
+
         try:
             _rec = create_record(
                 file_path=file_path if file_path is not None else Path(""),
@@ -817,7 +1049,9 @@ class TieredRepairOrchestrator:
             _rec_id = _rec.repair_id
             _rec = _st(_rec, "INSPECTING")
         except Exception as _rec_exc:
-            log.warning("Durable repair-state init failed (%s): %s", error_text[:80], _rec_exc)
+            log.warning(
+                "Durable repair-state init failed (%s): %s", error_text[:80], _rec_exc
+            )
             _rec = None
             _rec_id = None
 
@@ -846,7 +1080,9 @@ class TieredRepairOrchestrator:
                     result["repair_action"] = cure["action"]
                     result["confidence"] = cure.get("confidence", 0.5)
                     if self.cmd_ctx:
-                        self.cmd_ctx.console.print(f"[dim]Found cure for [{failure_type}]: {str(cure.get('action', '') or '')[:80]}...[/dim]")
+                        self.cmd_ctx.console.print(
+                            f"[dim]Found cure for [{failure_type}]: {str(cure.get('action', '') or '')[:80]}...[/dim]"
+                        )
 
         tier_order = _optimize_tier_order(failure_type)
 
@@ -862,7 +1098,9 @@ class TieredRepairOrchestrator:
                     result["confidence"] = 0.8
                     self._snapshot_and_validate(file_path, result, original_content)
             elif attempt_tier == 1:
-                t1_result = T1ConstrainedRepair.try_repair(error_text, file_path, context)
+                t1_result = T1ConstrainedRepair.try_repair(
+                    error_text, file_path, context
+                )
                 if t1_result:
                     result["repair_action"] = t1_result
                     result["tier_used"] = 1
@@ -875,51 +1113,84 @@ class TieredRepairOrchestrator:
                 # so skip the /generate call instead of burning tokens on retry.
                 # Checked BEFORE the path guard: MV skips regardless of path.
                 if not _should_attempt_llm_patch(error_text):
-                    result["validation_error"] = "fix_class=model_variability: LLM patch skipped (model limitation, not patchable)"
+                    result["validation_error"] = (
+                        "fix_class=model_variability: LLM patch skipped (model limitation, not patchable)"
+                    )
                     result["fix_class"] = "model_variability"
                     if self.cmd_ctx:
-                        self.cmd_ctx.console.print("[yellow]Skpping T2 LLM patch: model_variability failure (diagnose-before-patch)[/yellow]")
+                        self.cmd_ctx.console.print(
+                            "[yellow]Skpping T2 LLM patch: model_variability failure (diagnose-before-patch)[/yellow]"
+                        )
                     break
                 # R6: don't burn an LLM call repairing a protected path.
                 if file_path and not _is_repairable_path(file_path):
-                    result["validation_error"] = "path not in allowlist / blocked sensitive path"
+                    result["validation_error"] = (
+                        "path not in allowlist / blocked sensitive path"
+                    )
                     if self.cmd_ctx:
-                        self.cmd_ctx.console.print(f"[red]Blocked T2 repair on protected path: {file_path}[/red]")
+                        self.cmd_ctx.console.print(
+                            f"[red]Blocked T2 repair on protected path: {file_path}[/red]"
+                        )
                     break
                 from organism_console.api_client import call_api
-                prompt = T2DeepRepair.build_prompt(error_text, failure_type, similar_lessons)
+
+                prompt = T2DeepRepair.build_prompt(
+                    error_text, failure_type, similar_lessons
+                )
                 try:
-                    resp = call_api("/generate", "POST", {
-                        "prompt": prompt,
-                        "agent_id": getattr(self.cmd_ctx.state, "active_agent", "coder"),
-                    })
+                    resp = call_api(
+                        "/generate",
+                        "POST",
+                        {
+                            "prompt": prompt,
+                            "agent_id": getattr(
+                                self.cmd_ctx.state, "active_agent", "coder"
+                            ),
+                        },
+                    )
                     if resp and resp.status_code == 200:
                         response_text = resp.json().get("response", "")
                         if "```json" in response_text:
-                            m = re.search(r"```json\s*(\{.*?\})\s*```", response_text, re.DOTALL)
+                            m = re.search(
+                                r"```json\s*(\{.*?\})\s*```", response_text, re.DOTALL
+                            )
                             if m:
                                 response_text = m.group(1)
                         elif "```" in response_text:
-                            m = re.search(r"```\s*(\{.*?\})\s*```", response_text, re.DOTALL)
+                            m = re.search(
+                                r"```\s*(\{.*?\})\s*```", response_text, re.DOTALL
+                            )
                             if m:
                                 response_text = m.group(1)
                         try:
                             diag = json.loads(response_text)
                             result["root_cause"] = diag.get("root_cause")
-                            result["repair_action"] = diag.get("fix_strategy") or diag.get("code_patch")
+                            result["repair_action"] = diag.get(
+                                "fix_strategy"
+                            ) or diag.get("code_patch")
                             result["confidence"] = float(diag.get("confidence", 0.3))
                             result["tier_used"] = 2
                             if diag.get("files_to_modify") or diag.get("code_patch"):
-                                if diag.get("code_patch") and (not file_path or not file_path.exists()):
-                                    result["validation_error"] = "LLM provided a code patch but no valid target file path was supplied"
+                                if diag.get("code_patch") and (
+                                    not file_path or not file_path.exists()
+                                ):
+                                    result["validation_error"] = (
+                                        "LLM provided a code patch but no valid target file path was supplied"
+                                    )
                                     result["fixed"] = False
                                 else:
                                     if diag.get("code_patch"):
-                                        file_path.write_text(diag.get("code_patch"), encoding="utf-8")
+                                        file_path.write_text(
+                                            diag.get("code_patch"), encoding="utf-8"
+                                        )
                                     result["fixed"] = True
-                                    self._snapshot_and_validate(file_path, result, original_content)
-                            result["generated_test"] = diag.get("test_patch") or diag.get("test_code")
-                        except (json.JSONDecodeError, ValueError):
+                                    self._snapshot_and_validate(
+                                        file_path, result, original_content
+                                    )
+                            result["generated_test"] = diag.get(
+                                "test_patch"
+                            ) or diag.get("test_code")
+                        except json.JSONDecodeError, ValueError:
                             result["repair_action"] = response_text[:500]
                     self.total_tokens += len(response_text) // 4 if response_text else 0
                 except Exception as e:
@@ -933,30 +1204,40 @@ class TieredRepairOrchestrator:
         ft_data = budget.setdefault(failure_type, {})
         for t in [0, 1, 2]:
             key = f"t{t}_calls"
-            ft_data[key] = ft_data.get(key, 0) + (1 if result.get("tier_used") == t else 0)
+            ft_data[key] = ft_data.get(key, 0) + (
+                1 if result.get("tier_used") == t else 0
+            )
         for t in [0, 1, 2]:
             avg_key = f"t{t}_avg_cost"
             cnt_key = f"t{t}_calls"
             calls = ft_data.get(cnt_key, 0)
             if calls > 0:
-                ft_data[avg_key] = (ft_data.get(avg_key, 0) * (calls - 1) + self.total_tokens) / calls
+                ft_data[avg_key] = (
+                    ft_data.get(avg_key, 0) * (calls - 1) + self.total_tokens
+                ) / calls
             sr_key = f"t{t}_success_rate"
             sr_calls = ft_data.get(cnt_key, 0)
-            sr_successes = ft_data.get(f"t{t}_successes", 0) + (1 if result.get("fixed") and result.get("tier_used") == t else 0)
+            sr_successes = ft_data.get(f"t{t}_successes", 0) + (
+                1 if result.get("fixed") and result.get("tier_used") == t else 0
+            )
             ft_data[f"t{t}_successes"] = sr_successes
             ft_data[sr_key] = sr_successes / max(sr_calls, 1)
         save_budget(budget)
 
-        append_lesson({
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "error_text": error_text[:500],
-            "error_keywords": [w for w in error_text.lower().split() if len(w) > 4][:20],
-            "failure_type": failure_type,
-            "tier_used": tier,
-            "repair_action": result["repair_action"],
-            "success": result["fixed"],
-            "confidence": result["confidence"],
-        })
+        append_lesson(
+            {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "error_text": error_text[:500],
+                "error_keywords": [w for w in error_text.lower().split() if len(w) > 4][
+                    :20
+                ],
+                "failure_type": failure_type,
+                "tier_used": tier,
+                "repair_action": result["repair_action"],
+                "success": result["fixed"],
+                "confidence": result["confidence"],
+            }
+        )
 
         if not result.get("skipped"):
             _record_repair_result(result["fixed"])
@@ -967,25 +1248,38 @@ class TieredRepairOrchestrator:
         # result so the watch-loop audit can link to it.
         if _rec is not None:
             try:
-                from organism_console.core.repair_state import load as _st_load, transition as _st_t
+                from organism_console.core.repair_state import (
+                    load as _st_load,
+                    transition as _st_t,
+                )
+
                 _final = _st_load(_rec_id)
                 if _final is not None:
                     _final.candidate_revision = _sha256(
                         file_path.read_text(encoding="utf-8", errors="ignore")
-                        if file_path and file_path.exists() else original_content
+                        if file_path and file_path.exists()
+                        else original_content
                     )
                     _final.validation_result = {
                         "outcome": "accepted" if result.get("fixed") else "rejected",
                         **(result.get("test_validation") or {}),
                     }
-                    _final.security_result = {"ok": True} if result.get("fixed") else {
-                        "ok": False, "reason": result.get("validation_error")}
+                    _final.security_result = (
+                        {"ok": True}
+                        if result.get("fixed")
+                        else {"ok": False, "reason": result.get("validation_error")}
+                    )
                     if result.get("fixed"):
                         # Walk the durable record through the full legal path to
                         # ACCEPTED (the actual work already happened in the tier
                         # loop; this records the authoritative evidence).
-                        for _p in ("DIAGNOSING", "PATCHING", "VALIDATING",
-                                   "SECURITY_CHECK", "EVIDENCE_CAPTURE"):
+                        for _p in (
+                            "DIAGNOSING",
+                            "PATCHING",
+                            "VALIDATING",
+                            "SECURITY_CHECK",
+                            "EVIDENCE_CAPTURE",
+                        ):
                             try:
                                 _final = _st_t(_final, _p)
                             except Exception:
@@ -996,13 +1290,17 @@ class TieredRepairOrchestrator:
                             pass
                         _final.next_action = "none"
                     else:
-                        _final.last_error = result.get("validation_error") or "repair did not fix the failure"
+                        _final.last_error = (
+                            result.get("validation_error")
+                            or "repair did not fix the failure"
+                        )
                         try:
                             _final = _st_t(_final, "REPAIR_FAILED")
                         except Exception:
                             pass
                         _final.next_action = "abort"
                     from organism_console.core.repair_state import persist as _st_p
+
                     _st_p(_final)
                 result["repair_state_id"] = _rec_id
             except Exception as _final_exc:
@@ -1025,13 +1323,19 @@ class RepairWatchman:
             return
         if start_at_end:
             try:
-                event_file = KNOWLEDGE_BASE_DIR.parent.parent / "data" / "events" / "events.jsonl"
+                event_file = (
+                    KNOWLEDGE_BASE_DIR.parent.parent
+                    / "data"
+                    / "events"
+                    / "events.jsonl"
+                )
                 if event_file.exists():
                     self._last_position = event_file.stat().st_size
             except Exception:
                 pass
         self._running = True
         import threading
+
         self._thread = threading.Thread(target=self._watch, daemon=True)
         self._thread.start()
 
@@ -1043,7 +1347,9 @@ class RepairWatchman:
         return self._running
 
     def _watch(self):
-        event_file = KNOWLEDGE_BASE_DIR.parent.parent / "data" / "events" / "events.jsonl"
+        event_file = (
+            KNOWLEDGE_BASE_DIR.parent.parent / "data" / "events" / "events.jsonl"
+        )
         if not event_file.exists():
             self._running = False
             return
@@ -1060,13 +1366,17 @@ class RepairWatchman:
                                 data = json.loads(line)
                                 _handle_event_line(self.engine, data)
                             except Exception:
-                                log.exception("Failed to parse event line at offset %d", self._last_position)
+                                log.exception(
+                                    "Failed to parse event line at offset %d",
+                                    self._last_position,
+                                )
                                 pass
                         self._last_position = f.tell()
             except Exception as e:
                 log.warning(f"RepairWatchman iteration failed: {e}")
 
             import time as _time
+
             _time.sleep(self.interval)
 
 
@@ -1087,6 +1397,7 @@ def _handle_event_line(engine: Any, data: dict) -> None:
             if err and len(err) < 500 and engine:
                 import re
                 from pathlib import Path
+
                 payload = data.get("payload") or {}
                 args = payload.get("arguments") or {}
                 file_path_str = args.get("file_path") or args.get("TargetFile")
@@ -1110,7 +1421,9 @@ def _handle_event_line(engine: Any, data: dict) -> None:
             payload = data.get("payload") or {}
             agent_id = payload.get("agent_id") or data.get("source") or "unknown"
             prompt = str(payload.get("prompt") or "")[:150]
-            log.warning("turn_budget_exhausted for agent %s (prompt: %s)", agent_id, prompt)
+            log.warning(
+                "turn_budget_exhausted for agent %s (prompt: %s)", agent_id, prompt
+            )
             from swarm_os.services.reflection_loop import get_reflection_service
             import asyncio as _asyncio
 
@@ -1129,7 +1442,9 @@ def _handle_event_line(engine: Any, data: dict) -> None:
                 # Keep a strong reference so the event loop's GC cannot silently
                 # reap this fire-and-forget reflexion task mid-await, and surface
                 # any exception it raises instead of dropping it.
-                _record_task = _asyncio.get_running_loop().create_task(_record_turn_reflexion())
+                _record_task = _asyncio.get_running_loop().create_task(
+                    _record_turn_reflexion()
+                )
 
                 def _consume(_t: _asyncio.Task) -> None:
                     if not _t.cancelled() and _t.exception():

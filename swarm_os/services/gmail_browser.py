@@ -19,6 +19,7 @@ Design (matches email_service conventions):
   running loop (email_service sync facades are invoked from threadpool threads,
   which have none; agent paths may have one).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -105,44 +106,78 @@ async def _open_context(pw):
         channel=_CHANNEL,
         headless=False,
         viewport={"width": 1280, "height": 720},
-        args=["--disable-blink-features=AutomationControlled", "--no-first-run", "--no-default-browser-check"],
+        args=[
+            "--disable-blink-features=AutomationControlled",
+            "--no-first-run",
+            "--no-default-browser-check",
+        ],
     )
 
 
 async def _list_impl(folder: str, limit: int, unread_only: bool) -> dict:
     from playwright.async_api import async_playwright
+
     pw = await async_playwright().start()
     try:
         ctx = await _open_context(pw)
         try:
             page = ctx.pages[0] if ctx.pages else await ctx.new_page()
-            await page.goto("https://mail.google.com/mail/u/0/inbox", wait_until="domcontentloaded", timeout=_NAV_TIMEOUT_MS)
+            await page.goto(
+                "https://mail.google.com/mail/u/0/inbox",
+                wait_until="domcontentloaded",
+                timeout=_NAV_TIMEOUT_MS,
+            )
             html_ok = False
             for _ in range(6):
                 await asyncio.sleep(2)
                 try:
-                    html_ok = bool(await page.evaluate("() => document.querySelectorAll('tr.zA').length > 0"))
+                    html_ok = bool(
+                        await page.evaluate(
+                            "() => document.querySelectorAll('tr.zA').length > 0"
+                        )
+                    )
                 except Exception:
                     html_ok = False
                 if html_ok:
                     break
                 if "accounts.google.com" in page.url:
-                    return {"ok": False, "error": "not signed into Google in the browser profile (%s)" % _PROFILE_DIR,
-                            "url": page.url}
+                    return {
+                        "ok": False,
+                        "error": "not signed into Google in the browser profile (%s)"
+                        % _PROFILE_DIR,
+                        "url": page.url,
+                    }
             if unread_only:
-                await page.goto("https://mail.google.com/mail/u/0/#search/is%3Aunread",
-                                wait_until="domcontentloaded", timeout=_NAV_TIMEOUT_MS)
+                await page.goto(
+                    "https://mail.google.com/mail/u/0/#search/is%3Aunread",
+                    wait_until="domcontentloaded",
+                    timeout=_NAV_TIMEOUT_MS,
+                )
                 for _ in range(4):
                     await asyncio.sleep(2)
                     try:
-                        if bool(await page.evaluate("() => document.querySelectorAll('tr.zA').length > 0")):
+                        if bool(
+                            await page.evaluate(
+                                "() => document.querySelectorAll('tr.zA').length > 0"
+                            )
+                        ):
                             break
                     except Exception:
                         pass
             rows = await page.evaluate(_ROW_JS)
             if not rows and not html_ok:
-                return {"ok": False, "error": "Gmail rows did not render", "url": page.url}
-            return {"ok": True, "folder": folder, "count": len(rows[:limit]), "messages": rows[:limit], "url": page.url}
+                return {
+                    "ok": False,
+                    "error": "Gmail rows did not render",
+                    "url": page.url,
+                }
+            return {
+                "ok": True,
+                "folder": folder,
+                "count": len(rows[:limit]),
+                "messages": rows[:limit],
+                "url": page.url,
+            }
         finally:
             try:
                 await ctx.close()
@@ -168,24 +203,38 @@ _CLICK_THREAD_JS = """(tid) => {
 
 async def _read_impl(uid: str) -> dict:
     from playwright.async_api import async_playwright
+
     pw = await async_playwright().start()
     try:
         ctx = await _open_context(pw)
         try:
             page = ctx.pages[0] if ctx.pages else await ctx.new_page()
-            await page.goto("https://mail.google.com/mail/u/0/inbox", wait_until="domcontentloaded", timeout=_NAV_TIMEOUT_MS)
+            await page.goto(
+                "https://mail.google.com/mail/u/0/inbox",
+                wait_until="domcontentloaded",
+                timeout=_NAV_TIMEOUT_MS,
+            )
             for _ in range(6):
                 await asyncio.sleep(2)
                 try:
-                    if await page.evaluate("() => document.querySelectorAll('tr.zA').length > 0"):
+                    if await page.evaluate(
+                        "() => document.querySelectorAll('tr.zA').length > 0"
+                    ):
                         break
                 except Exception:
                     pass
             if "accounts.google.com" in page.url:
-                return {"ok": False, "error": "not signed into Google in the browser profile (%s)" % _PROFILE_DIR}
+                return {
+                    "ok": False,
+                    "error": "not signed into Google in the browser profile (%s)"
+                    % _PROFILE_DIR,
+                }
             clicked = await page.evaluate(_CLICK_THREAD_JS, uid)
             if not clicked:
-                return {"ok": False, "error": "thread %s not found in mailbox view" % uid}
+                return {
+                    "ok": False,
+                    "error": "thread %s not found in mailbox view" % uid,
+                }
             data = {}
             for _ in range(6):
                 await asyncio.sleep(2)
@@ -193,9 +242,20 @@ async def _read_impl(uid: str) -> dict:
                 if data.get("subject") or data.get("body"):
                     break
             if not data.get("subject") and not data.get("body"):
-                return {"ok": False, "error": "thread %s not found or message view did not render" % uid}
-            return {"ok": True, "id": uid, "subject": data["subject"], "from": data.get("from", ""),
-                    "to": "", "date": "", "attachments": 0, "body": data["body"][:8000]}
+                return {
+                    "ok": False,
+                    "error": "thread %s not found or message view did not render" % uid,
+                }
+            return {
+                "ok": True,
+                "id": uid,
+                "subject": data["subject"],
+                "from": data.get("from", ""),
+                "to": "",
+                "date": "",
+                "attachments": 0,
+                "body": data["body"][:8000],
+            }
         finally:
             try:
                 await ctx.close()
@@ -211,33 +271,62 @@ async def _read_impl(uid: str) -> dict:
 async def _search_impl(query: str, folder: str, limit: int) -> dict:
     from playwright.async_api import async_playwright
     import urllib.parse
+
     pw = await async_playwright().start()
     try:
         ctx = await _open_context(pw)
         try:
             page = ctx.pages[0] if ctx.pages else await ctx.new_page()
-            await page.goto("https://mail.google.com/mail/u/0/inbox", wait_until="domcontentloaded", timeout=_NAV_TIMEOUT_MS)
+            await page.goto(
+                "https://mail.google.com/mail/u/0/inbox",
+                wait_until="domcontentloaded",
+                timeout=_NAV_TIMEOUT_MS,
+            )
             for _ in range(6):
                 await asyncio.sleep(2)
                 try:
-                    if await page.evaluate("() => document.querySelectorAll('tr.zA').length > 0"):
+                    if await page.evaluate(
+                        "() => document.querySelectorAll('tr.zA').length > 0"
+                    ):
                         break
                 except Exception:
                     pass
             if "accounts.google.com" in page.url:
-                return {"ok": False, "error": "not signed into Google in the browser profile (%s)" % _PROFILE_DIR}
-            tag = "in:%s " % folder if folder and folder.lower() not in ("", "all") else ""
+                return {
+                    "ok": False,
+                    "error": "not signed into Google in the browser profile (%s)"
+                    % _PROFILE_DIR,
+                }
+            tag = (
+                "in:%s " % folder
+                if folder and folder.lower() not in ("", "all")
+                else ""
+            )
             q = urllib.parse.quote((tag + query).strip())
-            await page.goto("https://mail.google.com/mail/u/0/#search/%s" % q, wait_until="domcontentloaded", timeout=_NAV_TIMEOUT_MS)
+            await page.goto(
+                "https://mail.google.com/mail/u/0/#search/%s" % q,
+                wait_until="domcontentloaded",
+                timeout=_NAV_TIMEOUT_MS,
+            )
             for _ in range(4):
                 await asyncio.sleep(2)
                 try:
-                    if bool(await page.evaluate("() => document.querySelectorAll('tr.zA').length > 0")):
+                    if bool(
+                        await page.evaluate(
+                            "() => document.querySelectorAll('tr.zA').length > 0"
+                        )
+                    ):
                         break
                 except Exception:
                     pass
             rows = await page.evaluate(_ROW_JS)
-            return {"ok": True, "query": query, "folder": folder, "count": len(rows[:limit]), "messages": rows[:limit]}
+            return {
+                "ok": True,
+                "query": query,
+                "folder": folder,
+                "count": len(rows[:limit]),
+                "messages": rows[:limit],
+            }
         finally:
             try:
                 await ctx.close()
@@ -252,17 +341,30 @@ async def _search_impl(query: str, folder: str, limit: int) -> dict:
 
 async def _send_impl(to: str, subject: str, body: str) -> dict:
     from playwright.async_api import async_playwright
+
     pw = await async_playwright().start()
     try:
         ctx = await _open_context(pw)
         try:
             page = ctx.pages[0] if ctx.pages else await ctx.new_page()
-            await page.goto("https://mail.google.com/mail/u/0/#inbox", wait_until="domcontentloaded", timeout=_NAV_TIMEOUT_MS)
+            await page.goto(
+                "https://mail.google.com/mail/u/0/#inbox",
+                wait_until="domcontentloaded",
+                timeout=_NAV_TIMEOUT_MS,
+            )
             await asyncio.sleep(3)
             if "accounts.google.com" in page.url:
-                return {"ok": False, "error": "not signed into Google in the browser profile (%s)" % _PROFILE_DIR}
+                return {
+                    "ok": False,
+                    "error": "not signed into Google in the browser profile (%s)"
+                    % _PROFILE_DIR,
+                }
             compose = None
-            for sel in ('div[gh="cm"]', '[role="button"][aria-label*="ompose"]', 'a[href="#inbox?compose=new"]'):
+            for sel in (
+                'div[gh="cm"]',
+                '[role="button"][aria-label*="ompose"]',
+                'a[href="#inbox?compose=new"]',
+            ):
                 try:
                     loc = page.locator(sel).first
                     if await loc.count() and await loc.is_visible():
@@ -271,11 +373,18 @@ async def _send_impl(to: str, subject: str, body: str) -> dict:
                 except Exception:
                     continue
             if compose is None:
-                return {"ok": False, "error": "Compose button not found in the Gmail UI"}
+                return {
+                    "ok": False,
+                    "error": "Compose button not found in the Gmail UI",
+                }
             await compose.click(timeout=8000)
             await asyncio.sleep(2)
             filled = False
-            for sel in ('input[name="to"]', 'input[aria-label*="ecipients"]', 'div[aria-label*="o recipients"] input'):
+            for sel in (
+                'input[name="to"]',
+                'input[aria-label*="ecipients"]',
+                'div[aria-label*="o recipients"] input',
+            ):
                 try:
                     loc = page.locator(sel).first
                     if await loc.count():
@@ -285,9 +394,16 @@ async def _send_impl(to: str, subject: str, body: str) -> dict:
                 except Exception:
                     continue
             if not filled:
-                return {"ok": False, "error": "To field not found in the compose window"}
+                return {
+                    "ok": False,
+                    "error": "To field not found in the compose window",
+                }
             subj_ok = False
-            for sel in ('input[name="subjectbox"]', 'input[aria-label*="ubject"]', 'input[name="subject"]'):
+            for sel in (
+                'input[name="subjectbox"]',
+                'input[aria-label*="ubject"]',
+                'input[name="subject"]',
+            ):
                 try:
                     loc = page.locator(sel).first
                     if await loc.count():
@@ -297,9 +413,16 @@ async def _send_impl(to: str, subject: str, body: str) -> dict:
                 except Exception:
                     continue
             if not subj_ok:
-                return {"ok": False, "error": "Subject field not found in the compose window"}
+                return {
+                    "ok": False,
+                    "error": "Subject field not found in the compose window",
+                }
             body_ok = False
-            for sel in ('div[aria-label="Message Body"]', 'div[aria-label*="essage body"]', '.Am.Al.editable'):
+            for sel in (
+                'div[aria-label="Message Body"]',
+                'div[aria-label*="essage body"]',
+                ".Am.Al.editable",
+            ):
                 try:
                     loc = page.locator(sel).first
                     if await loc.count():
@@ -310,9 +433,16 @@ async def _send_impl(to: str, subject: str, body: str) -> dict:
                 except Exception:
                     continue
             if not body_ok:
-                return {"ok": False, "error": "Message body field not found in the compose window"}
+                return {
+                    "ok": False,
+                    "error": "Message body field not found in the compose window",
+                }
             send = None
-            for sel in ('div[data-tooltip*="Send"]', '[role="button"][aria-label*="Send"]', 'div[gh="k"]'):
+            for sel in (
+                'div[data-tooltip*="Send"]',
+                '[role="button"][aria-label*="Send"]',
+                'div[gh="k"]',
+            ):
                 try:
                     loc = page.locator(sel).first
                     if await loc.count() and await loc.is_visible():
@@ -321,12 +451,25 @@ async def _send_impl(to: str, subject: str, body: str) -> dict:
                 except Exception:
                     continue
             if send is None:
-                return {"ok": False, "error": "Send button not found in the compose window"}
+                return {
+                    "ok": False,
+                    "error": "Send button not found in the compose window",
+                }
             await send.click(timeout=8000)
             await asyncio.sleep(3)
-            sent = "sent" in page.url or "Sent" in await page.title() or "Compose" not in await page.title()
-            return {"ok": sent, "to": to, "subject": subject,
-                    "error": None if sent else "send clicked but could not confirm the message was sent"}
+            sent = (
+                "sent" in page.url
+                or "Sent" in await page.title()
+                or "Compose" not in await page.title()
+            )
+            return {
+                "ok": sent,
+                "to": to,
+                "subject": subject,
+                "error": None
+                if sent
+                else "send clicked but could not confirm the message was sent",
+            }
         finally:
             try:
                 await ctx.close()
@@ -339,9 +482,13 @@ async def _send_impl(to: str, subject: str, body: str) -> dict:
             pass
 
 
-def gmail_browser_list(acc: dict, folder: str = "INBOX", limit: int = 20, unread_only: bool = False) -> dict:
+def gmail_browser_list(
+    acc: dict, folder: str = "INBOX", limit: int = 20, unread_only: bool = False
+) -> dict:
     try:
-        return _run_in_loop(_list_impl(folder=folder, limit=int(limit), unread_only=bool(unread_only)))
+        return _run_in_loop(
+            _list_impl(folder=folder, limit=int(limit), unread_only=bool(unread_only))
+        )
     except Exception as exc:
         log.warning("gmail_browser_list failed: %s", exc)
         return {"ok": False, "error": str(exc)}
@@ -355,7 +502,9 @@ def gmail_browser_read(acc: dict, uid: str, folder: str = "INBOX") -> dict:
         return {"ok": False, "error": str(exc)}
 
 
-def gmail_browser_search(acc: dict, query: str, folder: str = "INBOX", limit: int = 20) -> dict:
+def gmail_browser_search(
+    acc: dict, query: str, folder: str = "INBOX", limit: int = 20
+) -> dict:
     try:
         return _run_in_loop(_search_impl(query=query, folder=folder, limit=int(limit)))
     except Exception as exc:

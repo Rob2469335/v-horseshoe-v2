@@ -17,6 +17,7 @@ Design rules:
 
 Public API: ``record_usage(...)``, ``extract_usage(resp)``, ``usage_report(days)``.
 """
+
 from __future__ import annotations
 
 import json
@@ -58,7 +59,15 @@ _PRICING = {
 # Model-string prefixes whose provider we can name but whose price we do NOT
 # hardcode — report null cost rather than guessing (Gemini/Groq/NVIDIA/OpenAI
 # paid vary by model and change often).
-_UNKNOWN_CLOUD_PREFIXES = ("openrouter/", "groq/", "nvidia", "gemini/", "openai/gpt-", "openai/o1", "openai/o3")
+_UNKNOWN_CLOUD_PREFIXES = (
+    "openrouter/",
+    "groq/",
+    "nvidia",
+    "gemini/",
+    "openai/gpt-",
+    "openai/o1",
+    "openai/o3",
+)
 
 
 def _provider_of(model: str) -> str:
@@ -79,7 +88,12 @@ def _provider_of(model: str) -> str:
         name = m.replace("openai/", "")
         if name.startswith("zen/"):
             return "opencode_go"
-        if name.startswith("gpt") or name.startswith("o1") or name.startswith("o3") or "deepseek" in name:
+        if (
+            name.startswith("gpt")
+            or name.startswith("o1")
+            or name.startswith("o3")
+            or "deepseek" in name
+        ):
             return "openai_paid"
         return "local"
     return "local"
@@ -102,7 +116,9 @@ def _unit_cost(model: str) -> tuple | None:
     return None
 
 
-def estimate_cost(model: str, prompt_tokens: int, completion_tokens: int, cached_tokens: int = 0) -> float | None:
+def estimate_cost(
+    model: str, prompt_tokens: int, completion_tokens: int, cached_tokens: int = 0
+) -> float | None:
     """Estimated USD for one call. ``cached_tokens`` is the DeepSeek cache-hit
     portion of prompt_tokens (billed ~98% cheaper than a miss)."""
     rates = _unit_cost(model)
@@ -149,7 +165,9 @@ def extract_usage(resp: Any) -> dict | None:
     if u is None:
         return None
     prompt = int(u.get("prompt_tokens") or 0)
-    completion = int(u.get("completion_tokens") or u.get("completion_tokens_details") and 0 or 0)
+    completion = int(
+        u.get("completion_tokens") or u.get("completion_tokens_details") and 0 or 0
+    )
     if not completion:
         completion = int(u.get("total_tokens", 0)) - prompt
         if completion < 0:
@@ -159,7 +177,11 @@ def extract_usage(resp: Any) -> dict | None:
     if isinstance(details, dict):
         cached = int(details.get("cached_tokens") or 0)
     cached = cached or int(u.get("prompt_cache_hit_tokens") or 0)
-    return {"prompt_tokens": prompt, "completion_tokens": completion, "cached_tokens": cached}
+    return {
+        "prompt_tokens": prompt,
+        "completion_tokens": completion,
+        "cached_tokens": cached,
+    }
 
 
 def record_usage(
@@ -198,7 +220,9 @@ def record_usage(
         log.debug("usage log write failed: %s", e)
 
 
-def record_response(resp: Any, model: str, source: str = "", agent_id: str = "", ok: bool = True) -> None:
+def record_response(
+    resp: Any, model: str, source: str = "", agent_id: str = "", ok: bool = True
+) -> None:
     """Record usage from a litellm response if it carries one."""
     u = extract_usage(resp)
     if u is None:
@@ -221,7 +245,14 @@ def usage_report(days: int = 30) -> dict[str, Any]:
     ``known_cost`` sums only records with a price; ``unknown_cost`` is null-priced
     traffic (openrouter variants not in the pricing table, etc.)."""
     if not _USAGE_PATH.exists():
-        return {"days": days, "total_cost": None, "known_cost": 0.0, "unknown_cost": 0.0, "per_model": {}, "rows": 0}
+        return {
+            "days": days,
+            "total_cost": None,
+            "known_cost": 0.0,
+            "unknown_cost": 0.0,
+            "per_model": {},
+            "rows": 0,
+        }
     cutoff = time.time() - days * 86400
     per_model: dict[str, dict] = {}
     known = 0.0
@@ -241,7 +272,16 @@ def usage_report(days: int = 30) -> dict[str, Any]:
             rows += 1
             model = str(row.get("model") or "?")
             cost = row.get("cost")
-            m = per_model.setdefault(model, {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "cost": None, "provider": row.get("provider")})
+            m = per_model.setdefault(
+                model,
+                {
+                    "calls": 0,
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "cost": None,
+                    "provider": row.get("provider"),
+                },
+            )
             m["calls"] += 1
             m["prompt_tokens"] += int(row.get("prompt_tokens") or 0)
             m["completion_tokens"] += int(row.get("completion_tokens") or 0)

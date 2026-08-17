@@ -5,6 +5,7 @@ and the static knowledge tables and return plain dicts. The deal score, fair
 value, engine / mpg / solar / livability / life-ease / weak-spot readouts and
 the negotiation tip are all unit-testable in isolation.
 """
+
 from __future__ import annotations
 
 import re
@@ -35,8 +36,13 @@ _MOTORHOME_TITLE_RE = re.compile(
 # unambiguous. Big makes (Coachmen, Forest River, Winnebago...) build trailers
 # too, so a model token alone is never trusted from them.
 _MOTORHOME_ONLY_MAKES = (
-    "roadtrek", "pleasure-way", "pleasure way", "sportsmobile",
-    "leisure travel", "ltv", "lazy daze",
+    "roadtrek",
+    "pleasure-way",
+    "pleasure way",
+    "sportsmobile",
+    "leisure travel",
+    "ltv",
+    "lazy daze",
 )
 
 
@@ -69,13 +75,28 @@ def _is_motorhome_like(lst: RVListing) -> bool:
     if lst.rv_type != "unknown":
         return False
     # Title/attrs carry the strongest signal ("2016 Winnebago View 24M").
-    blob = " ".join(filter(None, [lst.title, lst.model or "", " ".join(v for v in lst.attrs.values() for v in v[:2])])).lower()
-    if re.search(r"\bmotorhome\b|\bmotor coach\b|\bclass [abc]\b|\bcamper van\b|\bsprinter\b|\bdiesel pusher\b|\brv chassis\b|\bvan\b", blob):
+    blob = " ".join(
+        filter(
+            None,
+            [
+                lst.title,
+                lst.model or "",
+                " ".join(v for v in lst.attrs.values() for v in v[:2]),
+            ],
+        )
+    ).lower()
+    if re.search(
+        r"\bmotorhome\b|\bmotor coach\b|\bclass [abc]\b|\bcamper van\b|\bsprinter\b|\bdiesel pusher\b|\brv chassis\b|\bvan\b",
+        blob,
+    ):
         return True
     # Description-only motorhome words are only trusted when unambiguous
     # (a bare "van" in prose is too weak and matches aggregator boilerplate).
     desc = (lst.description or "")[:600].lower()
-    if re.search(r"\bmotorhome\b|\bmotor coach\b|\bclass [abc]\b|\bcamper van\b|\bsprinter\b|\bdiesel pusher\b", desc):
+    if re.search(
+        r"\bmotorhome\b|\bmotor coach\b|\bclass [abc]\b|\bcamper van\b|\bsprinter\b|\bdiesel pusher\b",
+        desc,
+    ):
         return True
     model_key = (lst.model or "").lower().split()[0] if lst.model else ""
     return model_key in KNOWN_MOTORHOME_MODELS
@@ -103,7 +124,13 @@ def _analyze_engine(lst: RVListing) -> dict[str, str]:
         if trans:
             bits.append(trans)
         desc = " ".join(bits) if bits else "Engine details not disclosed"
-        fuel = "diesel" if re.search(r"diesel|caterpillar|cat |cummins|detroit", f"{mfg} {size}".lower()) else "gas"
+        fuel = (
+            "diesel"
+            if re.search(
+                r"diesel|caterpillar|cat |cummins|detroit", f"{mfg} {size}".lower()
+            )
+            else "gas"
+        )
         return {
             "type": "self-propelled motorhome",
             "engine": desc or "not disclosed",
@@ -115,7 +142,15 @@ def _analyze_engine(lst: RVListing) -> dict[str, str]:
     # Towable — no engine.
     hitch = "Class 5 / gooseneck" if lst.rv_type == "Fifth Wheel" else "Class 3-4 hitch"
     if weight:
-        tv = "3/4-ton or 1-ton truck" if weight >= 8000 else ("half-ton truck or full-size SUV" if weight >= 5000 else "mid-size SUV / van")
+        tv = (
+            "3/4-ton or 1-ton truck"
+            if weight >= 8000
+            else (
+                "half-ton truck or full-size SUV"
+                if weight >= 5000
+                else "mid-size SUV / van"
+            )
+        )
         note = f"Needs a {tv}; unit weighs ~{weight:,} lbs GVWR. Budget the tow vehicle into the total cost."
     else:
         note = "Needs a capable tow vehicle; verify its payload/GCWR before committing."
@@ -154,9 +189,16 @@ def _analyze_mpg(lst: RVListing) -> dict[str, str]:
                 "a half-ton truck/SUV is the usual minimum."
             ),
         }
-    fuel = "diesel" if re.search(r"diesel|caterpillar|cat |cummins|detroit", engine.lower()) else "gas"
+    fuel = (
+        "diesel"
+        if re.search(r"diesel|caterpillar|cat |cummins|detroit", engine.lower())
+        else "gas"
+    )
     if fuel == "diesel":
-        lo, hi = lo - 0.5, hi - 1.0  # diesels are slightly thirstier per gallon but cheaper per mile
+        lo, hi = (
+            lo - 0.5,
+            hi - 1.0,
+        )  # diesels are slightly thirstier per gallon but cheaper per mile
     return {
         "mpg_estimate": f"~{lo:.0f}-{hi:.0f} mpg",
         "detail": (
@@ -210,11 +252,16 @@ def _analyze_solar(lst: RVListing) -> dict[str, str]:
 
 
 def _all_text(lst: RVListing) -> str:
-    return " ".join(filter(None, [
-        lst.title,
-        lst.description[:1500],
-        " ".join(v for v in lst.attrs.values() for v in v[:3]),
-    ]))
+    return " ".join(
+        filter(
+            None,
+            [
+                lst.title,
+                lst.description[:1500],
+                " ".join(v for v in lst.attrs.values() for v in v[:3]),
+            ],
+        )
+    )
 
 
 def _feature_present(lst: RVListing, feat: dict[str, Any]) -> bool:
@@ -226,7 +273,11 @@ def _feature_present(lst: RVListing, feat: dict[str, Any]) -> bool:
             return bool(lst.mileage) and 0 < lst.mileage < 60000
         return True
     if feat.get("attr_true"):
-        if _attr_str(lst.attrs, feat["attr_true"]).strip().lower() in ("true", "yes", "1"):
+        if _attr_str(lst.attrs, feat["attr_true"]).strip().lower() in (
+            "true",
+            "yes",
+            "1",
+        ):
             return True
     elif feat.get("attr") and _attr_str(lst.attrs, feat["attr"]).strip():
         return True
@@ -251,15 +302,21 @@ def _analyze_life_ease(lst: RVListing) -> dict[str, Any]:
         present = _feature_present(lst, feat)
         if present:
             present_n += 1
-        items.append({
-            "key": feat["key"],
-            "label": feat["label"],
-            "why": feat["why"],
-            "present": present,
-        })
+        items.append(
+            {
+                "key": feat["key"],
+                "label": feat["label"],
+                "why": feat["why"],
+                "present": present,
+            }
+        )
     score = round(100.0 * present_n / len(items)) if items else 0
 
-    if lst.rv_type in ("Class A Motorhome", "Class B Motorhome", "Class C Motorhome") or _is_motorhome_like(lst):
+    if lst.rv_type in (
+        "Class A Motorhome",
+        "Class B Motorhome",
+        "Class C Motorhome",
+    ) or _is_motorhome_like(lst):
         note = "Motorhome: this checklist is the 'make life easy for 2' spec sheet owners care about."
     else:
         note = "Towable: add a capable tow vehicle + brake controller; the checklist still applies to the trailer itself."
@@ -276,10 +333,18 @@ def _analyze_weak_spots(lst: RVListing) -> dict[str, Any]:
     """Known brand weak spots + how to check them at inspection."""
     make_key = (lst.make or "").lower()
     if not make_key:
-        return {"make": lst.make or "unknown", "weak_spots": [], "summary": "Brand unknown — have a licensed RV inspector go over it."}
+        return {
+            "make": lst.make or "unknown",
+            "weak_spots": [],
+            "summary": "Brand unknown — have a licensed RV inspector go over it.",
+        }
     spots = KNOWN_WEAK_SPOTS.get(make_key)
     if not spots:
-        return {"make": lst.make, "weak_spots": [], "summary": f"No strong community consensus on {lst.make} weak spots; still insist on a certified inspection."}
+        return {
+            "make": lst.make,
+            "weak_spots": [],
+            "summary": f"No strong community consensus on {lst.make} weak spots; still insist on a certified inspection.",
+        }
     return {
         "make": lst.make,
         "weak_spots": [{"issue": i, "check": c} for i, c in spots],
@@ -300,7 +365,14 @@ def _analyze_livability(lst: RVListing) -> dict[str, Any]:
 
     # No structured data and no textual hints? Say so instead of guessing.
     has_data = bool(a) or bool(sleeps) or bool(size) or bool(lst.description)
-    desc_hint = re.search(r"\b(shower|bath|queen bed|double bed|bunk|dry bath)\b", lst.description.lower()) if lst.description else None
+    desc_hint = (
+        re.search(
+            r"\b(shower|bath|queen bed|double bed|bunk|dry bath)\b",
+            lst.description.lower(),
+        )
+        if lst.description
+        else None
+    )
     if not has_data and not desc_hint:
         return {
             "verdict": "Unknown (no spec data)",
@@ -312,8 +384,12 @@ def _analyze_livability(lst: RVListing) -> dict[str, Any]:
             "toy_hauler": False,
         }
 
-    has_shower = "shower" in bath or bool(re.search(r"\bshower\b|\bdry bath\b", lst.description.lower()))
-    has_bed = queens + doubles >= 1 or bool(re.search(r"\bqueen bed\b|\bdouble bed\b", lst.description.lower()))
+    has_shower = "shower" in bath or bool(
+        re.search(r"\bshower\b|\bdry bath\b", lst.description.lower())
+    )
+    has_bed = queens + doubles >= 1 or bool(
+        re.search(r"\bqueen bed\b|\bdouble bed\b", lst.description.lower())
+    )
     space_ok = size >= 22 or (size == 0)  # 0 = unknown, don't penalize
 
     if has_shower and has_bed and space_ok:
@@ -344,7 +420,9 @@ def _analyze_livability(lst: RVListing) -> dict[str, Any]:
     }
 
 
-def _estimate_fair_value(year: int, rv_type: str, mileage: int | None = None) -> dict[str, float]:
+def _estimate_fair_value(
+    year: int, rv_type: str, mileage: int | None = None
+) -> dict[str, float]:
     """Depreciation curve: ~28% off in year 1, ~7%/yr after, 15% floor.
     Mileage penalizes motorhomes > 50k and towables > 30k."""
     base = BASE_NEW_PRICE.get(rv_type, BASE_NEW_PRICE["unknown"])
@@ -399,7 +477,16 @@ def _score_listing(lst: RVListing) -> dict[str, Any]:
 
     # 3) Features / upgrades (0-15).
     features = 0.0
-    premium = ["solar", "lithium", "inverter", "leveling jacks", "new roof", "new tires", "generator", "slide"]
+    premium = [
+        "solar",
+        "lithium",
+        "inverter",
+        "leveling jacks",
+        "new roof",
+        "new tires",
+        "generator",
+        "slide",
+    ]
     for kw in premium:
         if kw in (pos or []):
             features += 2.5
@@ -430,9 +517,28 @@ def _score_listing(lst: RVListing) -> dict[str, Any]:
         raw = min(raw, 55.0)
 
     # Critical red flags cap the verdict.
-    critical = len([r for r in reds if r in ("water damage", "water intrusion", "roof leak", "mold",
-                                             "frame damage", "frame rot", "salvage", "rebuilt title",
-                                             "flood", "fire damage", "blown", "does not run", "junk")])
+    critical = len(
+        [
+            r
+            for r in reds
+            if r
+            in (
+                "water damage",
+                "water intrusion",
+                "roof leak",
+                "mold",
+                "frame damage",
+                "frame rot",
+                "salvage",
+                "rebuilt title",
+                "flood",
+                "fire damage",
+                "blown",
+                "does not run",
+                "junk",
+            )
+        ]
+    )
     if critical:
         raw = min(raw, 39.0)
 
@@ -468,17 +574,21 @@ def _score_listing(lst: RVListing) -> dict[str, Any]:
 def _build_analysis(lst: RVListing, budget: int) -> dict[str, Any]:
     fair = _estimate_fair_value(lst.year, lst.rv_type, lst.mileage)
     cond = _analyze_condition(lst.description or lst.title)
-    lst.analysis.update({
-        "fair_value": fair,
-        "fair_value_range": f"${fair['low']:,}-${fair['high']:,}" if fair["low"] else "n/a",
-        "red_flags": cond["red_flags"],
-        "positives": cond["positives"],
-        "engine": _analyze_engine(lst),
-        "mpg": _analyze_mpg(lst),
-        "solar": _analyze_solar(lst),
-        "weak_spots": _analyze_weak_spots(lst),
-        "livability": _analyze_livability(lst),
-    })
+    lst.analysis.update(
+        {
+            "fair_value": fair,
+            "fair_value_range": f"${fair['low']:,}-${fair['high']:,}"
+            if fair["low"]
+            else "n/a",
+            "red_flags": cond["red_flags"],
+            "positives": cond["positives"],
+            "engine": _analyze_engine(lst),
+            "mpg": _analyze_mpg(lst),
+            "solar": _analyze_solar(lst),
+            "weak_spots": _analyze_weak_spots(lst),
+            "livability": _analyze_livability(lst),
+        }
+    )
     lst.analysis["life_ease"] = _analyze_life_ease(lst)
     score = _score_listing(lst)
     lst.analysis["score"] = score
@@ -505,7 +615,9 @@ def _build_analysis(lst: RVListing, budget: int) -> dict[str, Any]:
     if solar.get("has_solar"):
         pros.append("Already solar-equipped (lowest hookup effort)")
     else:
-        cons.append(f"No solar installed — adding it is {solar.get('complexity', 'moderate').lower()} complexity")
+        cons.append(
+            f"No solar installed — adding it is {solar.get('complexity', 'moderate').lower()} complexity"
+        )
     cons = cons[:7]
 
     engine = lst.analysis.get("engine") or {}
@@ -522,13 +634,15 @@ def _build_analysis(lst: RVListing, budget: int) -> dict[str, Any]:
         else:
             negotiation_tip = f"Within fair range (${low:,}-${high:,}); a small discount may be achievable."
 
-    lst.analysis.update({
-        "pros": pros,
-        "cons": cons,
-        "verdict": score["verdict"],
-        "negotiation_tip": negotiation_tip,
-        "reasoning": _reasoning_text(lst, fair, score),
-    })
+    lst.analysis.update(
+        {
+            "pros": pros,
+            "cons": cons,
+            "verdict": score["verdict"],
+            "negotiation_tip": negotiation_tip,
+            "reasoning": _reasoning_text(lst, fair, score),
+        }
+    )
     return lst.analysis
 
 
@@ -538,7 +652,9 @@ def _reasoning_text(lst: RVListing, fair: dict, score: dict) -> str:
         pct = int(round((lst.price / fair["fair"]) * 100))
         parts.append(f"listed at ~{pct}% of estimated fair value")
     if lst.analysis.get("red_flags"):
-        parts.append(f"{len(lst.analysis['red_flags'])} red flag(s): {', '.join(lst.analysis['red_flags'][:4])}")
+        parts.append(
+            f"{len(lst.analysis['red_flags'])} red flag(s): {', '.join(lst.analysis['red_flags'][:4])}"
+        )
     if lst.analysis.get("positives"):
         parts.append(f"positives: {', '.join(lst.analysis['positives'][:4])}")
     if lst.mileage:

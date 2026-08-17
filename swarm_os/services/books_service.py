@@ -242,7 +242,9 @@ class BooksService:
         ),
     ]
 
-    def get_chess_tips(self, count: int = 10, seed: int | None = None) -> dict[str, Any]:
+    def get_chess_tips(
+        self, count: int = 10, seed: int | None = None
+    ) -> dict[str, Any]:
         """Return `count` chess tips, each sourced from a real chess book.
 
         Seeded/rotated so different page loads surface different tips while
@@ -252,7 +254,11 @@ class BooksService:
 
         data = self._load()
         books = data.get("books", []) if data.get("ok", True) else []
-        chess_books = [b for b in books if b.get("genre") == "chess" and b.get("beginner_translation")]
+        chess_books = [
+            b
+            for b in books
+            if b.get("genre") == "chess" and b.get("beginner_translation")
+        ]
         rng = random.Random(seed if seed is not None else random.randint(0, 10**9))
         # Prefer curated tips (they're verified, beginner-first wording), then
         # enrich with a live read of the manifest so new books can contribute.

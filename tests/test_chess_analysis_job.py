@@ -211,7 +211,9 @@ def test_rolling_eta_from_recent_completions(monkeypatch, tmp_path):
         [97, now - 60.0],
         [100, now],
     ]
-    monkeypatch.setattr(cj, "time", type("T", (), {"time": staticmethod(lambda: now)})())
+    monkeypatch.setattr(
+        cj, "time", type("T", (), {"time": staticmethod(lambda: now)})()
+    )
     rate = cj._rolling_rate(job)
     assert rate is not None
     assert abs(rate - 5.0) < 0.5  # ~5 games/min from the least-squares slope
@@ -223,7 +225,7 @@ def test_rolling_eta_from_recent_completions(monkeypatch, tmp_path):
     job["completions"] = [
         [90, now - 120.0],
         [94, now - 90.0],
-        [94, now - 80.0],   # a slow game (10 min, only 0 games)
+        [94, now - 80.0],  # a slow game (10 min, only 0 games)
         [97, now - 60.0],
         [100, now],
     ]

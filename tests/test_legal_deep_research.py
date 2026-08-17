@@ -11,14 +11,19 @@ is a RESTRAINED expertise-role, not a costume. These tests pin:
   - the offline fail-closed path (no web tools => corpus-only, never raises)
   - the verification contract on the returned answer
 """
+
 from __future__ import annotations
 
 import pytest
 from unittest.mock import AsyncMock, patch
 
 from swarm_os.services.legal.deep_research import (
-    _is_authoritative, _pick_fetch_urls, _law_as_of, _web_research,
-    _PERSONA, _ISSUE_CHECKLIST,
+    _is_authoritative,
+    _pick_fetch_urls,
+    _law_as_of,
+    _web_research,
+    _PERSONA,
+    _ISSUE_CHECKLIST,
 )
 
 
@@ -36,8 +41,13 @@ def test_persona_is_restrained_expertise_not_costume():
 
 def test_issue_checklist_has_review_standards():
     c = _ISSUE_CHECKLIST.lower()
-    for required in ("standard of review", "de novo", "abuse of discretion",
-                     "plain error", "preserved"):
+    for required in (
+        "standard of review",
+        "de novo",
+        "abuse of discretion",
+        "plain error",
+        "preserved",
+    ):
         assert required in c, f"checklist missing: {required}"
 
 
@@ -82,8 +92,17 @@ async def test_web_research_never_raises_on_outage():
     """Web tools unavailable (import failure or handler error) must degrade to
     an empty source list, never raise."""
     import swarm_os.lib.mcp.web_search as ws
-    with patch.object(ws, "web_search_handler", new=AsyncMock(return_value={"ok": False, "error": "no key"})), \
-         patch.object(ws, "web_fetch_handler", new=AsyncMock(return_value={"ok": False})):
+
+    with (
+        patch.object(
+            ws,
+            "web_search_handler",
+            new=AsyncMock(return_value={"ok": False, "error": "no key"}),
+        ),
+        patch.object(
+            ws, "web_fetch_handler", new=AsyncMock(return_value={"ok": False})
+        ),
+    ):
         res = await _web_research("test question", max_fetches=2)
     assert res["ok"] is False
     assert res["web_sources"] == []
@@ -92,17 +111,27 @@ async def test_web_research_never_raises_on_outage():
 @pytest.mark.asyncio
 async def test_web_research_fetches_authoritative_urls():
     import swarm_os.lib.mcp.web_search as ws
-    search = {"ok": True, "results": [
-        {"url": "https://www.law.cornell.edu/uscode/text/18/922", "title": "LII"},
-        {"url": "https://example.com/blog", "title": "blog"},
-    ]}
-    fetched = {"ok": True, "title": "LII page", "content": "the actual statute text here"}
+
+    search = {
+        "ok": True,
+        "results": [
+            {"url": "https://www.law.cornell.edu/uscode/text/18/922", "title": "LII"},
+            {"url": "https://example.com/blog", "title": "blog"},
+        ],
+    }
+    fetched = {
+        "ok": True,
+        "title": "LII page",
+        "content": "the actual statute text here",
+    }
 
     async def fake_fetch(params, trace_hook=None):
         return dict(fetched, url=params["url"])
 
-    with patch.object(ws, "web_search_handler", new=AsyncMock(return_value=search)), \
-         patch.object(ws, "web_fetch_handler", new=fake_fetch):
+    with (
+        patch.object(ws, "web_search_handler", new=AsyncMock(return_value=search)),
+        patch.object(ws, "web_fetch_handler", new=fake_fetch),
+    ):
         res = await _web_research("firearm possession", max_fetches=2)
     assert res["ok"] is True
     assert len(res["web_sources"]) == 2
@@ -117,8 +146,10 @@ async def test_deep_research_fail_closed_jurisdiction_gate():
     a guess)."""
     from swarm_os.services.legal.deep_research import deep_research
     import swarm_os.services.legal.legal_advisor as la
-    with patch.object(la, "corpus_scope",
-                      new=AsyncMock(return_value={"jurisdictions": {}})):
+
+    with patch.object(
+        la, "corpus_scope", new=AsyncMock(return_value={"jurisdictions": {}})
+    ):
         res = await deep_research("what are my rights?", web=False)
     assert res.ok is False
     assert "jurisdiction" in res.message.lower()
@@ -131,24 +162,76 @@ async def test_deep_research_offline_uses_corpus_and_verifies():
     from swarm_os.services.legal.deep_research import deep_research
     from swarm_os.services.legal.citation_verify import VerifyResponse
     import swarm_os.services.legal.legal_advisor as la
-    scope = {"jurisdictions": {"ny": {"expected": 40102, "ingested": 8000,
-                                      "pct": 20.0, "complete": False, "snapshot": "v2026.07"}}}
-    with patch.object(la, "corpus_scope", new=AsyncMock(return_value=scope)), \
-         patch("swarm_os.services.legal.legal_search.search_statutes",
-               new=AsyncMock(return_value=[{"citation": "N.Y. RPA Law § 235-b",
-                                            "section_title": "t", "jurisdiction": "ny", "content": "x"}])), \
-         patch("swarm_os.services.legal.legal_search.search_cases",
-               new=AsyncMock(return_value=[{"citation": "252 F.3d 238", "section_title": "Simeonov",
-                                            "court": "2d Cir.", "circuit": "2d", "year": 2001,
-                                            "tier": 1, "content": "y"}])), \
-         patch("swarm_os.services.legal.deep_research._persona_synthesize",
-               new=AsyncMock(return_value="The rule applies under N.Y. RPA Law § 235-b.")), \
-         patch("swarm_os.services.legal.citation_verify.verify_citations",
-               new=AsyncMock(return_value=VerifyResponse(
-                   ok=True, citations=[], message="0 parsed",
-                   stats={"count": 0, "verified": 0, "fabricated": 0, "ambiguous": 0,
-                          "unverified": 0, "unparsed": 0, "skipped": 0}))):
-        res = await deep_research("my landlord won't return deposit", jurisdiction="ny", web=False)
+
+    scope = {
+        "jurisdictions": {
+            "ny": {
+                "expected": 40102,
+                "ingested": 8000,
+                "pct": 20.0,
+                "complete": False,
+                "snapshot": "v2026.07",
+            }
+        }
+    }
+    with (
+        patch.object(la, "corpus_scope", new=AsyncMock(return_value=scope)),
+        patch(
+            "swarm_os.services.legal.legal_search.search_statutes",
+            new=AsyncMock(
+                return_value=[
+                    {
+                        "citation": "N.Y. RPA Law § 235-b",
+                        "section_title": "t",
+                        "jurisdiction": "ny",
+                        "content": "x",
+                    }
+                ]
+            ),
+        ),
+        patch(
+            "swarm_os.services.legal.legal_search.search_cases",
+            new=AsyncMock(
+                return_value=[
+                    {
+                        "citation": "252 F.3d 238",
+                        "section_title": "Simeonov",
+                        "court": "2d Cir.",
+                        "circuit": "2d",
+                        "year": 2001,
+                        "tier": 1,
+                        "content": "y",
+                    }
+                ]
+            ),
+        ),
+        patch(
+            "swarm_os.services.legal.deep_research._persona_synthesize",
+            new=AsyncMock(return_value="The rule applies under N.Y. RPA Law § 235-b."),
+        ),
+        patch(
+            "swarm_os.services.legal.citation_verify.verify_citations",
+            new=AsyncMock(
+                return_value=VerifyResponse(
+                    ok=True,
+                    citations=[],
+                    message="0 parsed",
+                    stats={
+                        "count": 0,
+                        "verified": 0,
+                        "fabricated": 0,
+                        "ambiguous": 0,
+                        "unverified": 0,
+                        "unparsed": 0,
+                        "skipped": 0,
+                    },
+                )
+            ),
+        ),
+    ):
+        res = await deep_research(
+            "my landlord won't return deposit", jurisdiction="ny", web=False
+        )
     assert res.ok is True
     assert res.law_as_of == "v2026.07"
     assert res.verification["checked"] is True

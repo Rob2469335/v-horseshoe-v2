@@ -11,6 +11,7 @@ The critical behaviors:
   5. Unverifiable canary -> flag for human, never assume clean.
   6. Never-reviewed flags eventually expire (bounded snapshot growth).
 """
+
 from types import SimpleNamespace
 
 import json
@@ -28,7 +29,9 @@ def _isolate_paths(monkeypatch, tmp_path):
     monkeypatch.setattr(wl, "_HEARTBEAT_FILE", tmp_path / "heartbeat.json")
     monkeypatch.setattr(wl, "_AUDIT_FILE", tmp_path / "auto_repairs.jsonl")
     monkeypatch.setattr(wl, "_AGENTS_MD", tmp_path / "AGENTS.md")
-    monkeypatch.setattr(wl, "_CANARY_HUMAN_REVIEW_FILE", tmp_path / "human_review.jsonl")
+    monkeypatch.setattr(
+        wl, "_CANARY_HUMAN_REVIEW_FILE", tmp_path / "human_review.jsonl"
+    )
     return tmp_path
 
 
@@ -49,7 +52,9 @@ def test_refuse_second_pending_canary_same_file(tmp_path):
     assert ok2 is False
     assert "already pending" in msg2
     # Different file registers fine.
-    ok3, _ = cr.register_canary("runtime_v2/api/agent_service_v2.py", "snapC", window_minutes=5)
+    ok3, _ = cr.register_canary(
+        "runtime_v2/api/agent_service_v2.py", "snapC", window_minutes=5
+    )
     assert ok3
 
 
@@ -59,12 +64,16 @@ def test_concurrent_register_same_file_registers_once(tmp_path):
     the file lock only inside _save_registry, so a check-then-act race let both
     threads pass the pending check and write two canaries for one file."""
     import threading
+
     results = []
 
     def _reg():
-        results.append(cr.register_canary("swarm_os/api/routes.py", "snap", window_minutes=5))
+        results.append(
+            cr.register_canary("swarm_os/api/routes.py", "snap", window_minutes=5)
+        )
 
     barrier = threading.Barrier(2)
+
     def _gated():
         barrier.wait()
         _reg()
@@ -76,9 +85,13 @@ def test_concurrent_register_same_file_registers_once(tmp_path):
         t.join()
 
     oks = [r[0] for r in results]
-    assert oks.count(True) == 1, f"expected exactly one successful registration, got {results}"
+    assert oks.count(True) == 1, (
+        f"expected exactly one successful registration, got {results}"
+    )
     pending = [c for c in cr.load_registry().values() if c.get("state") == cr.PENDING]
-    assert len(pending) == 1, "exactly one pending canary for the file after a concurrent race"
+    assert len(pending) == 1, (
+        "exactly one pending canary for the file after a concurrent race"
+    )
 
 
 def test_registry_restart_survival(tmp_path):
@@ -124,9 +137,17 @@ def test_signal1_attributed_failure_flags_human_review_false(tmp_path, monkeypat
     loop = wl.WatchLoop(SimpleNamespace(), interval_seconds=0.01)
     calls = {"auto": 0, "human": 0}
     loop._auto_rollback = lambda *a, **k: calls.__setitem__("auto", calls["auto"] + 1)
-    loop._flag_for_human = lambda *a, **k: calls.__setitem__("human", calls["human"] + 1)
-    loop._resolve_flag("rid1", cr.FLAGGED, "signal_1 test regression attributable to x.py",
-                       "snap1", "swarm_os/api/routes.py", human_review=False)
+    loop._flag_for_human = lambda *a, **k: calls.__setitem__(
+        "human", calls["human"] + 1
+    )
+    loop._resolve_flag(
+        "rid1",
+        cr.FLAGGED,
+        "signal_1 test regression attributable to x.py",
+        "snap1",
+        "swarm_os/api/routes.py",
+        human_review=False,
+    )
     assert calls["auto"] == 1
     assert calls["human"] == 0
 
@@ -137,9 +158,17 @@ def test_signal2_only_flags_human_review(tmp_path, monkeypatch):
     loop = wl.WatchLoop(SimpleNamespace(), interval_seconds=0.01)
     calls = {"auto": 0, "human": 0}
     loop._auto_rollback = lambda *a, **k: calls.__setitem__("auto", calls["auto"] + 1)
-    loop._flag_for_human = lambda *a, **k: calls.__setitem__("human", calls["human"] + 1)
-    loop._resolve_flag("rid2", cr.FLAGGED, "signal_2 downstream consumer breakage; HUMAN REVIEW",
-                       "snap2", "swarm_os/api/routes.py", human_review=True)
+    loop._flag_for_human = lambda *a, **k: calls.__setitem__(
+        "human", calls["human"] + 1
+    )
+    loop._resolve_flag(
+        "rid2",
+        cr.FLAGGED,
+        "signal_2 downstream consumer breakage; HUMAN REVIEW",
+        "snap2",
+        "swarm_os/api/routes.py",
+        human_review=True,
+    )
     assert calls["auto"] == 0
     assert calls["human"] == 1
 
@@ -148,7 +177,9 @@ def test_flag_for_human_writes_surface_file(tmp_path):
     """A human-review flag must land in the dedicated human_review.jsonl the CLI
     /status reads — not just the audit trail."""
     loop = wl.WatchLoop(SimpleNamespace(), interval_seconds=0.01)
-    loop._flag_for_human("swarm_os/api/routes.py", "rid9", "signal_2 downstream", "snap9")
+    loop._flag_for_human(
+        "swarm_os/api/routes.py", "rid9", "signal_2 downstream", "snap9"
+    )
     f = tmp_path / "human_review.jsonl"
     assert f.exists()
     content = f.read_text(encoding="utf-8")
@@ -160,8 +191,12 @@ def test_flag_for_human_writes_surface_file(tmp_path):
 def test_unverifiable_flags_for_human(tmp_path, monkeypatch):
     loop = wl.WatchLoop(SimpleNamespace(), interval_seconds=0.01)
     calls = {"human": 0}
-    loop._flag_for_human = lambda *a, **k: calls.__setitem__("human", calls["human"] + 1)
-    loop._resolve_unverifiable("rid3", "canary evaluation error: boom", "snap3", "swarm_os/api/routes.py")
+    loop._flag_for_human = lambda *a, **k: calls.__setitem__(
+        "human", calls["human"] + 1
+    )
+    loop._resolve_unverifiable(
+        "rid3", "canary evaluation error: boom", "snap3", "swarm_os/api/routes.py"
+    )
     assert calls["human"] == 1
 
 
@@ -175,6 +210,7 @@ def test_expired_flags_bounded(tmp_path):
     reg = cr.load_registry()
     reg[rid]["resolved_at"] = "2026-01-01T00:00:00+00:00"
     from runtime_v2.services.canary_registry import _save_registry
+
     _save_registry(reg)
     expired = cr.clear_expired_old_flags(max_age_days=14.0)
     assert expired == 1
@@ -184,8 +220,12 @@ def test_expired_flags_bounded(tmp_path):
 
 def test_traceback_attribution(tmp_path):
     loop = wl.WatchLoop(SimpleNamespace(), interval_seconds=0.01)
-    assert loop._traceback_attributes("  File \"swarm_os/api/routes.py\", line 12", "swarm_os/api/routes.py")
-    assert not loop._traceback_attributes("  File \"other.py\", line 1", "swarm_os/api/routes.py")
+    assert loop._traceback_attributes(
+        '  File "swarm_os/api/routes.py", line 12', "swarm_os/api/routes.py"
+    )
+    assert not loop._traceback_attributes(
+        '  File "other.py", line 1', "swarm_os/api/routes.py"
+    )
 
 
 def test_traceback_attribution_windows_separators(tmp_path):
@@ -199,16 +239,16 @@ def test_traceback_attribution_windows_separators(tmp_path):
     the 2026 autonomy smoke test; unit tests only had forward-slash fixtures)."""
     loop = wl.WatchLoop(SimpleNamespace(), interval_seconds=0.01)
     real_tb = (
-        'FFFFFFF                                                                  [100%]\n'
-        '================================== FAILURES ===================================\n'
+        "FFFFFFF                                                                  [100%]\n"
+        "================================== FAILURES ===================================\n"
         'E     File "C:\\Users\\rober\\Projects\\v-horseshoe-v2\\runtime_v2\\services\\indexer.py", line 22\n'
-        '        TOKEN_BUDGET_CHARS = 1800\n'
-        '    IndentationError: unexpected indent\n'
-        'C:\\Users\\rober\\Projects\\v-horseshoe-v2\\tests\\test_indexer_budget.py:54:   '
+        "        TOKEN_BUDGET_CHARS = 1800\n"
+        "    IndentationError: unexpected indent\n"
+        "C:\\Users\\rober\\Projects\\v-horseshoe-v2\\tests\\test_indexer_budget.py:54:   "
         'File "C:\\Users\\rober\\Projects\\v-horseshoe-v2\\runtime_v2\\services\\indexer.py", line 22\n'
-        '=========================== short test summary info ===========================\n'
-        'FAILED tests/test_indexer_budget.py::test_fit_token_budget_leaves_short_text_unchanged\n'
-        '7 failed in 0.12s\n'
+        "=========================== short test summary info ===========================\n"
+        "FAILED tests/test_indexer_budget.py::test_fit_token_budget_leaves_short_text_unchanged\n"
+        "7 failed in 0.12s\n"
     )
     assert loop._traceback_attributes(real_tb, "runtime_v2/services/indexer.py")
     assert not loop._traceback_attributes(real_tb, "runtime_v2/services/watch_loop.py")
@@ -227,8 +267,8 @@ def test_traceback_attribution_no_sibling_package_false_positive(tmp_path):
     # Sibling module fails; its traceback merely mentions the shared package.
     tb_sibling = (
         'E   File "C:\\Users\\rober\\Projects\\v-horseshoe-v2\\runtime_v2\\services\\other.py", line 5\n'
-        '    from runtime_v2.services import helper\n'
-        '    AssertionError\n'
+        "    from runtime_v2.services import helper\n"
+        "    AssertionError\n"
     )
     assert not loop._traceback_attributes(tb_sibling, "runtime_v2/services/indexer.py")
     # Same package, different subpackage.
@@ -371,7 +411,9 @@ def test_soft_case_wired_into_evaluate_as_human_review(tmp_path, monkeypatch):
         )
     calls = {"auto": 0, "human": 0}
     loop._auto_rollback = lambda *a, **k: calls.__setitem__("auto", calls["auto"] + 1)
-    loop._flag_for_human = lambda *a, **k: calls.__setitem__("human", calls["human"] + 1)
+    loop._flag_for_human = lambda *a, **k: calls.__setitem__(
+        "human", calls["human"] + 1
+    )
     loop._resolve_flag(
         "rid3",
         cr.FLAGGED,
@@ -413,7 +455,9 @@ def test_canary_eval_signal1_uses_real_dict_shape(tmp_path, monkeypatch):
     )
     calls = {"auto": 0, "human": 0}
     loop._auto_rollback = lambda *a, **k: calls.__setitem__("auto", calls["auto"] + 1)
-    loop._flag_for_human = lambda *a, **k: calls.__setitem__("human", calls["human"] + 1)
+    loop._flag_for_human = lambda *a, **k: calls.__setitem__(
+        "human", calls["human"] + 1
+    )
     loop._resolve_flag = lambda rid, st, det, sid, f, human_review: calls.__setitem__(
         "auto" if not human_review else "human",
         calls["auto" if not human_review else "human"] + 1,

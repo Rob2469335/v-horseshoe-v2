@@ -4,16 +4,19 @@ import logging
 
 log = logging.getLogger(__name__)
 
+
 class ToolParser:
     @staticmethod
     def parse(text: str) -> tuple[str, str] | None:
         # Check Pattern A: <tool_call name="tool">params</tool_call>
-        match_a = re.search(r'<tool_call\s+name="([^"]+)">\s*(\{.*?\})\s*</tool_call>', text, re.DOTALL)
+        match_a = re.search(
+            r'<tool_call\s+name="([^"]+)">\s*(\{.*?\})\s*</tool_call>', text, re.DOTALL
+        )
         if match_a:
             return match_a.group(1).strip(), match_a.group(2).strip()
 
         # Check Pattern B: <tool>tool</tool> params
-        match_b = re.search(r'<tool>([^<]+)</tool>\s*(\{.*?\})', text, re.DOTALL)
+        match_b = re.search(r"<tool>([^<]+)</tool>\s*(\{.*?\})", text, re.DOTALL)
         if match_b:
             return match_b.group(1).strip(), match_b.group(2).strip()
 
@@ -30,15 +33,33 @@ class ToolParser:
                         params = obj.get("params", {})
                         return obj["tool_name"].strip(), json.dumps(params)
                     _cmd_val = obj.get("command", "")
-                    _CLI_ONLY = {"/goal", "/plan", "/debug", "/compress", "/boot", "/exit", "/debate", "/chat", "/agents", "/tokens", "/trace", "/clear", "/model", "/focus"}
-                    if ("command" in obj and isinstance(_cmd_val, str)
-                        and _cmd_val.strip() in _CLI_ONLY):
+                    _CLI_ONLY = {
+                        "/goal",
+                        "/plan",
+                        "/debug",
+                        "/compress",
+                        "/boot",
+                        "/exit",
+                        "/debate",
+                        "/chat",
+                        "/agents",
+                        "/tokens",
+                        "/trace",
+                        "/clear",
+                        "/model",
+                        "/focus",
+                    }
+                    if (
+                        "command" in obj
+                        and isinstance(_cmd_val, str)
+                        and _cmd_val.strip() in _CLI_ONLY
+                    ):
                         return "command", json.dumps({"command": _cmd_val.strip()})
             except json.JSONDecodeError as e:
                 log.debug("Pattern C JSON decode failed: %s", e)
-                
+
         # Check Pattern D: markdown json block
-        match_md = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', text, re.DOTALL)
+        match_md = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
         if match_md:
             try:
                 obj = json.loads(match_md.group(1), strict=False)
@@ -46,22 +67,26 @@ class ToolParser:
                     if "tool" in obj and isinstance(obj["tool"], str):
                         return obj["tool"].strip(), json.dumps(obj.get("params", {}))
                     if "tool_name" in obj and isinstance(obj["tool_name"], str):
-                        return obj["tool_name"].strip(), json.dumps(obj.get("params", {}))
+                        return obj["tool_name"].strip(), json.dumps(
+                            obj.get("params", {})
+                        )
             except json.JSONDecodeError as e:
                 log.debug("Pattern D JSON decode failed: %s", e)
 
         # Check Pattern E: just a tool name in tags
-        match_tool_only = re.search(r'<tool>([^<]+)</tool>', text)
+        match_tool_only = re.search(r"<tool>([^<]+)</tool>", text)
         if match_tool_only:
             t = match_tool_only.group(1).strip()
-            text_after = text[match_tool_only.end():].strip()
+            text_after = text[match_tool_only.end() :].strip()
             if text_after.startswith("{") and text_after.endswith("}"):
                 return t, text_after
             else:
                 return t, "{}"
 
         # Fallback Check: loosely search for JSON with "tool_name"
-        loose_match = re.search(r'\{[^{}]*"tool(?:_name)?"\s*:\s*"([^"]+)"[^{}]*\}', text, re.DOTALL)
+        loose_match = re.search(
+            r'\{[^{}]*"tool(?:_name)?"\s*:\s*"([^"]+)"[^{}]*\}', text, re.DOTALL
+        )
         if loose_match:
             t_name = loose_match.group(1)
             try:
@@ -74,7 +99,7 @@ class ToolParser:
 
         # Fallback Check 2: strip repeated markdown code-fences and salvage innermost valid JSON object
         # (advance past the scanned window, not one char, to avoid O(N^2) rescans on pathological input)
-        stripped_fences = re.sub(r'```[a-zA-Z]*', '', text).replace('```', '').strip()
+        stripped_fences = re.sub(r"```[a-zA-Z]*", "", text).replace("```", "").strip()
         salvage_objs = []
         s_start = stripped_fences.find("{")
         while s_start != -1:
@@ -85,17 +110,28 @@ class ToolParser:
             for j in range(s_start, len(stripped_fences)):
                 s_scan_end = j
                 ch = stripped_fences[j]
-                if s_esc: s_esc = False; continue
-                if ch == "\\": s_esc = True; continue
-                if ch == '"': s_instr = not s_instr; continue
+                if s_esc:
+                    s_esc = False
+                    continue
+                if ch == "\\":
+                    s_esc = True
+                    continue
+                if ch == '"':
+                    s_instr = not s_instr
+                    continue
                 if not s_instr:
-                    if ch == "{": s_brace += 1
+                    if ch == "{":
+                        s_brace += 1
                     elif ch == "}":
                         s_brace -= 1
                         if s_brace == 0:
                             try:
-                                obj = json.loads(stripped_fences[s_start:j + 1], strict=False)
-                                if isinstance(obj, dict) and ("tool" in obj or "tool_name" in obj):
+                                obj = json.loads(
+                                    stripped_fences[s_start : j + 1], strict=False
+                                )
+                                if isinstance(obj, dict) and (
+                                    "tool" in obj or "tool_name" in obj
+                                ):
                                     salvage_objs.append(obj)
                             except json.JSONDecodeError as e:
                                 log.debug("Fallback 2 JSON decode failed: %s", e)

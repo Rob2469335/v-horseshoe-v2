@@ -14,7 +14,11 @@ class Learner:
     otherwise writes to a timeline JSON file.
     """
 
-    def __init__(self, learning_service: Optional[object] = None, timeline_path: Optional[str] = None):
+    def __init__(
+        self,
+        learning_service: Optional[object] = None,
+        timeline_path: Optional[str] = None,
+    ):
         self.learning = learning_service
         if timeline_path:
             self.timeline_path = timeline_path
@@ -30,14 +34,14 @@ class Learner:
         self._cache = None
         try:
             if os.path.exists(self.timeline_path):
-                with open(self.timeline_path, 'r', encoding='utf-8') as fh:
+                with open(self.timeline_path, "r", encoding="utf-8") as fh:
                     self._cache = json.load(fh) or {}
         except Exception:
             self._cache = {}
 
     def _save_cache(self):
         try:
-            with open(self.timeline_path, 'w', encoding='utf-8') as fh:
+            with open(self.timeline_path, "w", encoding="utf-8") as fh:
                 json.dump(self._cache, fh, indent=2)
         except Exception as e:
             log.warning("Failed to persist healing learner state: %s", e)
@@ -50,8 +54,13 @@ class Learner:
             try:
                 # best effort: call record_repair for successful_fix if available
                 if failure.successful_fix:
-                    comp = failure.service or failure.symptom.get('component')
-                    self.learning.record_repair(comp, failure.successful_fix.get('action', 'unknown'), failure.successful_fix.get('result', ''), failure.successful_fix.get('reason', ''))
+                    comp = failure.service or failure.symptom.get("component")
+                    self.learning.record_repair(
+                        comp,
+                        failure.successful_fix.get("action", "unknown"),
+                        failure.successful_fix.get("result", ""),
+                        failure.successful_fix.get("reason", ""),
+                    )
             except Exception:
                 pass
 

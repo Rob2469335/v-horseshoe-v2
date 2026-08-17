@@ -108,7 +108,12 @@ def _analyze_game(board: chess.Board, max_plies: int = 40) -> list[dict[str, Any
                 bb = chess.Board(pre_fen)
                 best_san = bb.san(chess.Move.from_uci(before_best))
             except Exception as exc:
-                log.debug("best_san conversion failed for %s/%s: %s", before_best, pre_fen, exc)
+                log.debug(
+                    "best_san conversion failed for %s/%s: %s",
+                    before_best,
+                    pre_fen,
+                    exc,
+                )
                 pass
         records.append(
             {
@@ -284,7 +289,9 @@ def save_last_username(username: str) -> dict[str, Any]:
         return {"ok": False, "error": "username is required"}
     try:
         _PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-        _USERNAME_FILE.write_text(json.dumps({"username": username.lower()}), encoding="utf-8")
+        _USERNAME_FILE.write_text(
+            json.dumps({"username": username.lower()}), encoding="utf-8"
+        )
         return {"ok": True, "username": username.lower()}
     except Exception as exc:
         log.warning("username save failed: %s", exc)
@@ -295,7 +302,12 @@ def get_last_username() -> dict[str, Any]:
     """The last saved chess.com username (or None)."""
     try:
         if _USERNAME_FILE.exists():
-            return {"ok": True, "username": json.loads(_USERNAME_FILE.read_text(encoding="utf-8")).get("username")}
+            return {
+                "ok": True,
+                "username": json.loads(_USERNAME_FILE.read_text(encoding="utf-8")).get(
+                    "username"
+                ),
+            }
     except Exception as exc:
         log.warning("username load failed: %s", exc)
     return {"ok": True, "username": None}

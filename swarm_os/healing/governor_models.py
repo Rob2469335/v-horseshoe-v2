@@ -90,5 +90,6 @@ class ChangeRecord:
 
 # helper for generating ids
 
+
 def gen_id(prefix: str = "inc") -> str:
     return f"{prefix}-{uuid.uuid4().hex[:8]}"

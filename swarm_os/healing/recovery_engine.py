@@ -17,6 +17,7 @@ log = logging.getLogger("zenith_healing")
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
+
 def _record_to_agents_md(anomaly: str, script: str):
     """SOTA 2026: Persist autonomous self-healing lessons directly to AGENTS.md
     so that future AI agents (open code / swarm) learn without instruction creep.
@@ -24,6 +25,7 @@ def _record_to_agents_md(anomaly: str, script: str):
     backend healing daemon) never race the read-modify-write."""
     try:
         from filelock import FileLock
+
         agents_file = PROJECT_ROOT / "AGENTS.md"
         if not agents_file.exists():
             return
@@ -35,22 +37,31 @@ def _record_to_agents_md(anomaly: str, script: str):
             summary = "Executed isolated DangerRoom repair script."
             for line in script.splitlines():
                 line_s = line.strip().lstrip("#").strip()
-                if line_s and not line_s.startswith("import ") and not line_s.startswith("from "):
+                if (
+                    line_s
+                    and not line_s.startswith("import ")
+                    and not line_s.startswith("from ")
+                ):
                     summary = line_s[:100]
                     break
             import time
+
             date_str = time.strftime("%Y-%m-%d")
             new_entry = f"- **Auto-Heal ({date_str})**: Resolved anomaly `{anomaly}`. Action: {summary}\n"
             marker = "## Self-Healing & Self-Learning Fixes\n"
             if marker in content:
                 content = content.replace(marker, marker + "\n" + new_entry, 1)
                 agents_file.write_text(content, encoding="utf-8")
-                log.info(f"Recorded auto-heal lesson for anomaly '{anomaly}' into AGENTS.md")
+                log.info(
+                    f"Recorded auto-heal lesson for anomaly '{anomaly}' into AGENTS.md"
+                )
     except Exception as e:
         log.warning(f"Could not record auto-heal to AGENTS.md: {e}")
 
+
 def _find_and_kill(match_str, exclude_pid=None):
     import psutil
+
     killed = []
     my_pid = exclude_pid or psutil.Process().pid
     for proc in psutil.process_iter(["pid", "name", "cmdline"]):
@@ -61,9 +72,10 @@ def _find_and_kill(match_str, exclude_pid=None):
             if match_str in cmdline:
                 proc.kill()
                 killed.append(proc.info["pid"])
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
+        except psutil.NoSuchProcess, psutil.AccessDenied:
             continue
     return killed
+
 
 def restart_llamacpp(anomaly):
     try:
@@ -74,7 +86,11 @@ def restart_llamacpp(anomaly):
     try:
         script = PROJECT_ROOT / "start-dev.ps1"
         if not script.exists():
-            return {"ok": False, "action": "restart_llamacpp", "error": f"start-dev.ps1 not found at {script}"}
+            return {
+                "ok": False,
+                "action": "restart_llamacpp",
+                "error": f"start-dev.ps1 not found at {script}",
+            }
         proc = subprocess.Popen(
             ["powershell", "-ExecutionPolicy", "Bypass", "-File", str(script)],
             cwd=str(PROJECT_ROOT),
@@ -86,10 +102,15 @@ def restart_llamacpp(anomaly):
         except subprocess.TimeoutExpired:
             pass  # still running — restart proceeding
         if proc.poll() is not None and proc.returncode != 0:
-            return {"ok": False, "action": "restart_llamacpp", "error": f"restart process exited early with code {proc.returncode}"}
+            return {
+                "ok": False,
+                "action": "restart_llamacpp",
+                "error": f"restart process exited early with code {proc.returncode}",
+            }
         return {"ok": True, "action": "restarted_llamacpp"}
     except Exception as exc:
         return {"ok": False, "action": "restart_llamacpp", "error": str(exc)}
+
 
 def restart_backend(anomaly):
     try:
@@ -104,6 +125,7 @@ def restart_backend(anomaly):
         # detect in-process and refuse fail-closed (governor records the failed
         # attempt via the action key) instead of spawning a doomed child.
         import sys as _sys
+
         _in_process = any("swarm_os.app.main" in arg for arg in _sys.argv)
         if _in_process:
             return {
@@ -118,8 +140,14 @@ def restart_backend(anomaly):
         # BUG FIX: Don't kill ourselves — skip the calling PID (this IS the backend)
         killed = _find_and_kill("swarm_os.app.main", exclude_pid=os.getpid())
         cmd = [
-            sys.executable, "-m", "uvicorn",
-            "swarm_os.app.main:app", "--host", "127.0.0.1", "--port", "8000",
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "swarm_os.app.main:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8000",
         ]
         proc = subprocess.Popen(
             cmd,
@@ -134,10 +162,16 @@ def restart_backend(anomaly):
         except subprocess.TimeoutExpired:
             pass  # still running — restart proceeding
         if proc.poll() is not None and proc.returncode != 0:
-            return {"ok": False, "action": "restart_backend", "error": f"backend restart exited early with code {proc.returncode}", "killed_pids": killed}
+            return {
+                "ok": False,
+                "action": "restart_backend",
+                "error": f"backend restart exited early with code {proc.returncode}",
+                "killed_pids": killed,
+            }
         return {"ok": True, "action": "restarted_backend", "killed_pids": killed}
     except Exception as exc:
         return {"ok": False, "action": "restart_backend", "error": str(exc)}
+
 
 async def llm_guided_recovery(anomaly):
     """Fallback recovery using GraphRAG Memory and LLM-generated code executed in the DangerRoom."""
@@ -150,24 +184,36 @@ async def llm_guided_recovery(anomaly):
     try:
         from swarm_os.lib.mcp.web_search import web_search_handler
         from swarm_os.lib.mcp.playwright import playwright_handler
-        error_msg = str(anomaly.get("error") or anomaly.get("message") or anomaly.get("details") or anomaly)[:150]
-        search_res = await web_search_handler({"query": f"python {error_msg}", "max_results": 3})
+
+        error_msg = str(
+            anomaly.get("error")
+            or anomaly.get("message")
+            or anomaly.get("details")
+            or anomaly
+        )[:150]
+        search_res = await web_search_handler(
+            {"query": f"python {error_msg}", "max_results": 3}
+        )
         web_context = ""
         if search_res.get("ok") and search_res.get("results"):
             web_context = "\nWeb Search Results:\n"
             top_url = search_res["results"][0].get("url")
             if top_url:
-                playwright_res = await playwright_handler({"operation": "navigate", "url": top_url})
+                playwright_res = await playwright_handler(
+                    {"operation": "navigate", "url": top_url}
+                )
                 if playwright_res.get("ok"):
-                    md_content = playwright_res.get("full_content", playwright_res.get("content_summary", ""))
+                    md_content = playwright_res.get(
+                        "full_content", playwright_res.get("content_summary", "")
+                    )
                     web_context += f"Full Page Markdown for top result ({top_url}):\n{md_content[:2500]}\n"
             for item in search_res["results"]:
                 web_context += f"- {item.get('title')}: {item.get('snippet')}\n"
     except Exception as e:
         log.warning(f"Web search failed during recovery: {e}")
         web_context = ""
-    
-    prompt = f'''You are a system recovery agent for Swarm OS.
+
+    prompt = f"""You are a system recovery agent for Swarm OS.
 The system experienced this anomaly:
 {json.dumps(anomaly, indent=2)}
 
@@ -177,15 +223,16 @@ Historical Context from past recoveries:
 
 Write a Python script to fix this issue (e.g. killing ports, clearing cache).
 Enclose the script in a ```python block.
-'''
-    
+"""
+
     messages = [{"role": "user", "content": prompt}]
-    
+
     for attempt in range(2):
         try:
             # Recovery/repair script generation = complex reasoning — use cloud
             # DeepSeek V4 Flash (funded, cheap) instead of local qwen3.5-4b.
             import os as _os
+
             _kwargs = {
                 "model": "openai/deepseek-v4-flash",
                 "messages": messages,
@@ -200,20 +247,20 @@ Enclose the script in a ```python block.
                 res = await acompletion(**_kwargs)
             script_full = res.choices[0].message.content
             messages.append({"role": "assistant", "content": script_full})
-            
+
             match = re.search(r"```python(.*?)```", script_full, re.DOTALL)
             script = match.group(1).strip() if match else script_full.strip()
-            
+
             root_dir = PROJECT_ROOT
-            
+
             # BUG FIX: DangerRoom only implements async context management.
             # Using `with` raised AttributeError, crashing every llm_guided_recovery.
             async with DangerRoom(root_dir) as sandbox:
                 sandbox_file = sandbox.sandbox_dir / "recovery_script.py"
                 with open(sandbox_file, "w", encoding="utf-8") as f:
                     f.write(script)
-                
-                await sandbox.scan_sandbox() # Security gate check
+
+                await sandbox.scan_sandbox()  # Security gate check
 
                 # BUG FIX: Use async subprocess to avoid blocking the event loop.
                 # subprocess.run() in an async context stalls all other coroutines.
@@ -224,13 +271,19 @@ Enclose the script in a ```python block.
                 # gates) so a malicious mutation cannot exfiltrate them or trigger
                 # daemon loops (e.g. SWARM_EVOLUTION=1 spawning another generation).
                 clean_env = {
-                    k: v for k, v in os.environ.items()
-                    if not any(s in k.upper() for s in ("API_KEY", "TOKEN", "SECRET", "PASSWORD"))
+                    k: v
+                    for k, v in os.environ.items()
+                    if not any(
+                        s in k.upper()
+                        for s in ("API_KEY", "TOKEN", "SECRET", "PASSWORD")
+                    )
                     and not k.startswith("SWARM_")
                 }
                 clean_env["PYTHONNOUSERSITE"] = "1"
                 proc_handle = await asyncio.create_subprocess_exec(
-                    sys.executable, "-I", str(sandbox_file),
+                    sys.executable,
+                    "-I",
+                    str(sandbox_file),
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     cwd=str(sandbox.sandbox_dir),
@@ -252,35 +305,51 @@ Enclose the script in a ```python block.
                 proc = _ProcResult(
                     proc_handle.returncode,
                     stdout_b.decode(errors="replace"),
-                    stderr_b.decode(errors="replace")
+                    stderr_b.decode(errors="replace"),
                 )
                 if proc.returncode == 0:
-                    memory_bridge._add({
-                        "event_type": "dynamic_recovery",
-                        "outcome": "success",
-                        "anomaly": anomaly,
-                        "script": script
-                    })
+                    memory_bridge._add(
+                        {
+                            "event_type": "dynamic_recovery",
+                            "outcome": "success",
+                            "anomaly": anomaly,
+                            "script": script,
+                        }
+                    )
                     await memory_bridge._flush()
                     # _record_to_agents_md takes a blocking FileLock + writes
                     # AGENTS.md — run it off the event loop.
                     await asyncio.to_thread(_record_to_agents_md, str(anomaly), script)
-                    return {"ok": True, "action": "llm_guided_recovery", "output": proc.stdout}
+                    return {
+                        "ok": True,
+                        "action": "llm_guided_recovery",
+                        "output": proc.stdout,
+                    }
                 else:
-                    messages.append({"role": "user", "content": f"Script failed with output:\n{proc.stderr}\nPlease fix it."})
-                    
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": f"Script failed with output:\n{proc.stderr}\nPlease fix it.",
+                        }
+                    )
+
         except SecurityGateViolation as e:
-            messages.append({"role": "user", "content": f"Security violation: {e}. Fix it."})
+            messages.append(
+                {"role": "user", "content": f"Security violation: {e}. Fix it."}
+            )
         except Exception as e:
             messages.append({"role": "user", "content": f"Error: {e}. Fix it."})
-            
-    memory_bridge._add({
-        "event_type": "dynamic_recovery",
-        "outcome": "failure",
-        "anomaly": anomaly
-    })
+
+    memory_bridge._add(
+        {"event_type": "dynamic_recovery", "outcome": "failure", "anomaly": anomaly}
+    )
     await memory_bridge._flush()
-    return {"ok": False, "action": "llm_guided_recovery", "reason": "Failed to generate working recovery script"}
+    return {
+        "ok": False,
+        "action": "llm_guided_recovery",
+        "reason": "Failed to generate working recovery script",
+    }
+
 
 # Causal Dependency Graph for Root Cause Inference
 # Maps a downstream symptom to its upstream root cause
@@ -290,8 +359,9 @@ CAUSAL_GRAPH = {
     "gte-modernbert-base": "llamacpp",
     "frontend": "swarm_api",
     "qdrant_client": "qdrant",
-    "memory_bridge": "qdrant"
+    "memory_bridge": "qdrant",
 }
+
 
 def _trace_root_cause(symptom: str) -> str:
     """Traverse the causal graph to find the root cause of an anomaly."""
@@ -306,15 +376,20 @@ def _trace_root_cause(symptom: str) -> str:
             break
         path.append(current)
     if len(path) > 1:
-        log.info(f"Causal Inference: Traced symptom '{symptom}' -> root cause '{current}' (Path: {' -> '.join(path)})")
+        log.info(
+            f"Causal Inference: Traced symptom '{symptom}' -> root cause '{current}' (Path: {' -> '.join(path)})"
+        )
     return current
+
 
 def micro_restart(anomaly, actions: Optional[dict] = None):
     """Preemptive Micro-Restart: Surgically restart a specific sub-component without taking down the full system."""
     component = anomaly.get("component") or anomaly.get("source")
     target = _trace_root_cause(component)
 
-    log.info(f"Initiating preemptive micro-restart for root cause: {target} (Symptom: {component})")
+    log.info(
+        f"Initiating preemptive micro-restart for root cause: {target} (Symptom: {component})"
+    )
 
     # BUG FIX: Actually invoke the registered recovery action for the root cause
     # rather than just returning a simulation dict.
@@ -323,6 +398,7 @@ def micro_restart(anomaly, actions: Optional[dict] = None):
         if callable(action_fn):
             log.info(f"Dispatching real micro-restart action for '{target}'.")
             import inspect
+
             if inspect.iscoroutinefunction(action_fn):
                 return _run_async_action(action_fn, anomaly, target, component)
             result = action_fn(anomaly)
@@ -338,8 +414,17 @@ def micro_restart(anomaly, actions: Optional[dict] = None):
             return result
 
     # Fallback: log-only if no registered action (e.g., internal thread)
-    log.info(f"No registered action for '{target}'. Logging micro-restart as informational.")
-    return {"ok": True, "action": "micro_restart", "target": target, "symptom": component, "reason": "No registered hard-restart needed; component state flagged for lazy-reload."}
+    log.info(
+        f"No registered action for '{target}'. Logging micro-restart as informational."
+    )
+    return {
+        "ok": True,
+        "action": "micro_restart",
+        "target": target,
+        "symptom": component,
+        "reason": "No registered hard-restart needed; component state flagged for lazy-reload.",
+    }
+
 
 def _run_async_action(action_fn, anomaly, target, component):
     async def _wrapper():
@@ -348,6 +433,7 @@ def _run_async_action(action_fn, anomaly, target, component):
             result["action"] = f"micro_restart -> {target}"
             result["symptom"] = component
         return result
+
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
@@ -355,18 +441,21 @@ def _run_async_action(action_fn, anomaly, target, component):
     if loop and loop.is_running():
         return asyncio.ensure_future(_wrapper())
     return asyncio.run(_wrapper())
+
 
 def _run_awaitable(awaitable, anomaly, target, component):
     """Await an already-produced awaitable (from a sync-def action that returned
     one) without re-invoking the action. Mirrors _run_async_action's loop
     handling, but consumes the existing coroutine rather than calling the
     function a second time."""
+
     async def _wrapper():
         result = await awaitable
         if isinstance(result, dict):
             result["action"] = f"micro_restart -> {target}"
             result["symptom"] = component
         return result
+
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
@@ -375,15 +464,22 @@ def _run_awaitable(awaitable, anomaly, target, component):
         return asyncio.ensure_future(_wrapper())
     return asyncio.run(_wrapper())
 
+
 def alert_only(anomaly):
     log.warning("Self-healing detected an unrecoverable issue: %s", anomaly)
-    return {"ok": False, "action": "alert_only", "reason": "no automated recovery available for this component"}
+    return {
+        "ok": False,
+        "action": "alert_only",
+        "reason": "no automated recovery available for this component",
+    }
+
 
 class RecoveryEngine:
     def __init__(self, actions=None):
         # Merge infra actions with whole-computer system recovery actions.
         try:
             from .system_recovery import SYSTEM_RECOVERY_ACTIONS
+
             system_actions = dict(SYSTEM_RECOVERY_ACTIONS)
         except Exception:
             system_actions = {}
@@ -401,20 +497,25 @@ class RecoveryEngine:
         # If this is a preemptive forecast warning, attempt a non-destructive micro-restart first.
         # Pass self.actions so micro_restart can dispatch a real action if one is registered.
         if anomaly.get("level") == "forecast_warning":
-            log.info(f"Forecast warning detected for {source}. Attempting preemptive micro-restart.")
+            log.info(
+                f"Forecast warning detected for {source}. Attempting preemptive micro-restart."
+            )
             result = micro_restart(anomaly, actions=self.actions)
             return result if not hasattr(result, "__await__") else await result
 
         # For actual failures, perform causal root-cause inference
         root_cause = _trace_root_cause(source)
 
-        action = self.actions.get(root_cause, llm_guided_recovery)  # fallback to llm_guided_recovery
+        action = self.actions.get(
+            root_cause, llm_guided_recovery
+        )  # fallback to llm_guided_recovery
         if callable(action):
             # The registered actions are SYNC functions (restart_llamacpp /
             # restart_backend call subprocess.Popen().wait(timeout=2.0); a few
             # are async (llm_guided_recovery). The sync ones block the event
             # loop for up to ~2s each, so dispatch them off-loop via to_thread.
             import inspect
+
             if inspect.iscoroutinefunction(action):
                 result = await action(anomaly)
             else:

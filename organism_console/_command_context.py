@@ -1,4 +1,5 @@
 """Command context data class."""
+
 from typing import Any, Callable, Dict, List, Optional
 from rich.console import Console
 
@@ -13,7 +14,7 @@ class CommandContext:
         get_system_stats: Callable[[], Dict[str, Any]],
         installed_models: List[str],
         run_goal_loop: Optional[Callable[[str], None]] = None,
-        run_debate: Optional[Callable[[str], None]] = None
+        run_debate: Optional[Callable[[str], None]] = None,
     ) -> None:
         self.state = state
         self.console = console

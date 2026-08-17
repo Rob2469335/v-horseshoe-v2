@@ -105,6 +105,7 @@ def _get_game(game_id: str) -> dict[str, Any] | None:
     """The cached summary (name, moves, result) for a curated game, or None."""
     return _load_games_cache().get(game_id)
 
+
 # The famous games to curate: (player, tag). Each is located by scanning the
 # database for a game matching White/Black + a move-order signature (the first
 # few plies), so we never hand-type moves.
@@ -487,7 +488,9 @@ async def explain_move(game_id: str, ply: int) -> dict[str, Any]:
     mover_after = -after_cp
     swing = mover_after - before_cp
     if swing > 60:
-        det += f"The move improved White's chances by roughly {round(swing)} centipawns. "
+        det += (
+            f"The move improved White's chances by roughly {round(swing)} centipawns. "
+        )
     elif swing < -60:
         det += f"The move gives up ~{round(-swing)} centipawns — likely a deliberate positional choice. "
 
@@ -571,7 +574,12 @@ def _critical_moment(before: chess.Board, gm_san: str, ply: int) -> dict[str, An
     try:
         mv = before.parse_san(gm_san)
     except Exception:
-        return {"think_required": False, "critical_type": [], "difficulty": 1, "reason": ""}
+        return {
+            "think_required": False,
+            "critical_type": [],
+            "difficulty": 1,
+            "reason": "",
+        }
     after = before.copy()
     after.push(mv)
 
@@ -592,7 +600,12 @@ def _critical_moment(before: chess.Board, gm_san: str, ply: int) -> dict[str, An
         atk = before.attackers(not before_turn, sq)
         if len(atk) > len(before.attackers(before_turn, sq)):
             # This piece is en prise; does the GM's move save it?
-            still_attacked = len(after.attackers(not before_turn, sq)) > len(after.attackers(before_turn, sq)) if after.piece_at(sq) and after.piece_at(sq).color == before_turn else False
+            still_attacked = (
+                len(after.attackers(not before_turn, sq))
+                > len(after.attackers(before_turn, sq))
+                if after.piece_at(sq) and after.piece_at(sq).color == before_turn
+                else False
+            )
             if not still_attacked:
                 critical_type.append("defense")
                 reasons.append(f"a piece on {chess.square_name(sq)} is rescued")
@@ -613,7 +626,9 @@ def _critical_moment(before: chess.Board, gm_san: str, ply: int) -> dict[str, An
     # mover gave material up). If White moved, mover_swing = mat_after-mat_before;
     # if Black moved, the mover's loss is the opposite sign.
     mover_is_white = before.turn == chess.WHITE
-    mover_lost = (mat_before - mat_after) if mover_is_white else (mat_after - mat_before)
+    mover_lost = (
+        (mat_before - mat_after) if mover_is_white else (mat_after - mat_before)
+    )
     if mover_lost >= 3:
         critical_type.append("sacrifice")
         reasons.append("material is offered — a sacrifice or a deliberate trade")
@@ -635,13 +650,23 @@ def _critical_moment(before: chess.Board, gm_san: str, ply: int) -> dict[str, An
     think_required = bool(
         critical_type
         and (
-            swing >= 1  # any net material win/loss is a real decision (recaptures are swing 0)
+            swing
+            >= 1  # any net material win/loss is a real decision (recaptures are swing 0)
             or "tactical" in critical_type
             or "sacrifice" in critical_type
             or "endgame" in critical_type
         )
     )
-    difficulty = min(3, max(1, 1 + (1 if "tactical" in critical_type else 0) + (1 if "sacrifice" in critical_type else 0) + (1 if "endgame" in critical_type else 0)))
+    difficulty = min(
+        3,
+        max(
+            1,
+            1
+            + (1 if "tactical" in critical_type else 0)
+            + (1 if "sacrifice" in critical_type else 0)
+            + (1 if "endgame" in critical_type else 0),
+        ),
+    )
     reason = "; ".join(reasons) if reasons else ""
     return {
         "think_required": think_required,
@@ -654,7 +679,9 @@ def _critical_moment(before: chess.Board, gm_san: str, ply: int) -> dict[str, An
 def _moment_hint(critical_type: list[str]) -> str:
     """A one-line prompt for a THINK POSITION (what to think about)."""
     if "tactical" in critical_type:
-        return "Material is on the line — find the best move and check your calculation."
+        return (
+            "Material is on the line — find the best move and check your calculation."
+        )
     if "check" in critical_type:
         return "A check — is it the right one, or just a check?"
     if "capture" in critical_type:

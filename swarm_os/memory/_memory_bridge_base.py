@@ -1,4 +1,5 @@
 """Base constants and dataclasses for the MemoryBridge."""
+
 from __future__ import annotations
 
 import logging
@@ -25,10 +26,17 @@ VECTOR_SIZE = 768
 DECAY = 180.0
 
 FLUSH_TRIGGERS = {
-    "TASK_COMPLETE", "record_failure", "AGENT_ERROR",
+    "TASK_COMPLETE",
+    "record_failure",
+    "AGENT_ERROR",
     # Actual event types written by agent_service_v2 / orchestrator:
-    "generation_completed", "stream_completed", "tool_result", "agent_action",
-    "task_completed", "generation_failed", "healing_attempt",
+    "generation_completed",
+    "stream_completed",
+    "tool_result",
+    "agent_action",
+    "task_completed",
+    "generation_failed",
+    "healing_attempt",
 }
 EVENT_TYPE_KEYS = ("event_type", "type", "action", "kind")
 

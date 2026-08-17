@@ -9,6 +9,7 @@ All tests drive the REAL gmail_api HTTP/thunk seams through mocked `_http_reques
 contract (email_draft -> send_token -> email_send confirmed-only send, carried
 by email_service) is preserved end-to-end through the gmail_api send leg.
 """
+
 import base64
 import json
 
@@ -58,8 +59,12 @@ def test_msg_from_gmail_metadata_no_body():
         "id": "abc",
         "labelIds": ["INBOX", "UNREAD"],
         "payload": {
-            "headers": _gmail_headers(Subject="Hello", From="boss@x.com",
-                                      To="me@gmail.com", Date="Tue, 1 Jan 2026 00:00:00 +0000"),
+            "headers": _gmail_headers(
+                Subject="Hello",
+                From="boss@x.com",
+                To="me@gmail.com",
+                Date="Tue, 1 Jan 2026 00:00:00 +0000",
+            ),
             "mimeType": "text/plain",
             "body": {"data": ""},
         },
@@ -81,8 +86,11 @@ def test_msg_from_gmail_full_body_and_attachment_count():
             "mimeType": "multipart/mixed",
             "parts": [
                 {"mimeType": "text/plain", "filename": "", "body": payload},
-                {"mimeType": "application/pdf", "filename": "report.pdf",
-                 "body": {"data": base64.urlsafe_b64encode(b"%PDF").decode()}},
+                {
+                    "mimeType": "application/pdf",
+                    "filename": "report.pdf",
+                    "body": {"data": base64.urlsafe_b64encode(b"%PDF").decode()},
+                },
             ],
         },
     }
@@ -99,9 +107,14 @@ def test_gmail_list_returns_metadata(monkeypatch):
         calls.setdefault("url", []).append(url)
         if "/messages?" in url:
             return {"messages": [{"id": "m1"}, {"id": "m2"}]}
-        return {"id": "m1", "labelIds": ["INBOX"],
-                "payload": {"headers": _gmail_headers(Subject="S1", From="a@b", To="me", Date="d"),
-                            "mimeType": "text/plain"}}
+        return {
+            "id": "m1",
+            "labelIds": ["INBOX"],
+            "payload": {
+                "headers": _gmail_headers(Subject="S1", From="a@b", To="me", Date="d"),
+                "mimeType": "text/plain",
+            },
+        }
 
     monkeypatch.setattr(ga, "_http_request", fake)
     data = ga.gmail_list(_acc(), limit=2)
@@ -126,10 +139,17 @@ def test_gmail_list_unread_only_adds_q(monkeypatch):
 def test_gmail_read_full_body(monkeypatch):
     def fake(method, url, headers=None, body=None):
         assert "format=full" in url
-        return {"id": "m1", "labelIds": ["INBOX"],
-                "payload": {"headers": _gmail_headers(Subject="Full", From="a@b", To="me", Date="d"),
-                            "mimeType": "text/plain",
-                            "body": {"data": base64.urlsafe_b64encode(b"the whole body").decode()}}}
+        return {
+            "id": "m1",
+            "labelIds": ["INBOX"],
+            "payload": {
+                "headers": _gmail_headers(
+                    Subject="Full", From="a@b", To="me", Date="d"
+                ),
+                "mimeType": "text/plain",
+                "body": {"data": base64.urlsafe_b64encode(b"the whole body").decode()},
+            },
+        }
 
     monkeypatch.setattr(ga, "_http_request", fake)
     r = ga.gmail_read(_acc(), uid="m1")
@@ -144,9 +164,16 @@ def test_gmail_search_passes_query(monkeypatch):
         urls.append(url)
         if "/messages?" in url:
             return {"messages": [{"id": "m1"}]}
-        return {"id": "m1", "labelIds": [],
-                "payload": {"headers": _gmail_headers(Subject="Match", From="a@b", To="me", Date="d"),
-                            "mimeType": "text/plain"}}
+        return {
+            "id": "m1",
+            "labelIds": [],
+            "payload": {
+                "headers": _gmail_headers(
+                    Subject="Match", From="a@b", To="me", Date="d"
+                ),
+                "mimeType": "text/plain",
+            },
+        }
 
     monkeypatch.setattr(ga, "_http_request", fake)
     r = ga.gmail_search(_acc(), query="from:boss budget")
@@ -173,7 +200,9 @@ def test_gmail_http_error_flattened(monkeypatch):
 
 
 def test_gmail_no_token_returns_error(monkeypatch):
-    monkeypatch.setattr("swarm_os.services.oauth2_loopback.get_valid_token", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "swarm_os.services.oauth2_loopback.get_valid_token", lambda *a, **k: None
+    )
     r = ga.gmail_list(_acc())
     assert r["ok"] is False
     assert "token" in r.get("error", "").lower()
@@ -219,8 +248,13 @@ def test_email_send_via_gmail_api_reuses_token_once(monkeypatch, tmp_path):
     cfg = tmp_path / "email_config.json"
     cfg.write_text(json.dumps({"accounts": [_acc()]}), encoding="utf-8")
     monkeypatch.setattr(es, "_CONFIG_PATH", cfg)
-    monkeypatch.setattr(ga, "_http_request",
-                        lambda m, u, headers=None, body=None: {"id": "x"} if m == "POST" else {"messages": []})
+    monkeypatch.setattr(
+        ga,
+        "_http_request",
+        lambda m, u, headers=None, body=None: (
+            {"id": "x"} if m == "POST" else {"messages": []}
+        ),
+    )
     token = es.email_draft("them@gmail.com", "Hi", "b", account="gmail")["send_token"]
     assert es.email_send(token, confirmed=True)["ok"] is True
     assert es.email_send(token, confirmed=True)["ok"] is False  # one-time consume
@@ -232,7 +266,9 @@ def test_email_list_dispatches_to_gmail_api(monkeypatch, tmp_path):
     cfg.write_text(json.dumps({"accounts": [_acc()]}), encoding="utf-8")
     monkeypatch.setattr(es, "_CONFIG_PATH", cfg)
     called = []
-    monkeypatch.setattr(ga, "gmail_list", lambda acc, **kw: called.append((acc, kw)) or {"ok": True})
+    monkeypatch.setattr(
+        ga, "gmail_list", lambda acc, **kw: called.append((acc, kw)) or {"ok": True}
+    )
     r = es.email_list(account="gmail")
     assert r == {"ok": True}
     assert called and called[0][1]["unread_only"] is False
@@ -251,6 +287,7 @@ def test_imap_account_still_default_transport():
     """Accounts WITHOUT transport:gmail_api keep IMAP semantics — the config
     status must report 'imap', not gmail_api."""
     from pathlib import Path
+
     p = Path("config/email_config.example.json")
     raw = json.loads(p.read_text())
     assert raw["accounts"][0].get("transport", "imap") == "imap"

@@ -25,6 +25,7 @@ DESIGN (from the closed-loop-repair review):
   validation + security results — a crashed repair can never be ACCEPTED by
   construction.
 """
+
 from __future__ import annotations
 
 import json
@@ -59,8 +60,9 @@ LEGAL_TRANSITIONS: dict[str, set[str]] = {
 
 # Phases that occur AFTER a patch was written to disk. A crash in any of these
 # must force REVERTING (the candidate is on disk but never accepted).
-POST_PATCH_PHASES = frozenset({"PATCHING", "VALIDATING", "REVALIDATING",
-                               "SECURITY_CHECK", "EVIDENCE_CAPTURE"})
+POST_PATCH_PHASES = frozenset(
+    {"PATCHING", "VALIDATING", "REVALIDATING", "SECURITY_CHECK", "EVIDENCE_CAPTURE"}
+)
 
 # Phases where no patch touched disk yet; a crash here is safe to fail without
 # a revert (nothing to revert).
@@ -81,13 +83,15 @@ class RepairRecord:
     phase_started_at: float = 0.0
     phase_completed_at: float | None = None
     candidate_revision: str | None = None  # sha256 of the patched file on disk
-    baseline_revision: str | None = None   # sha256 of the pre-patch file
+    baseline_revision: str | None = None  # sha256 of the pre-patch file
     file_path: str = ""
     error_text: str = ""
     failure_type: str = ""
-    validation_result: dict | None = None  # {initial_result, retry_result, flaky, outcome}
-    security_result: dict | None = None    # {ok, reason}
-    revert_result: dict | None = None      # {ok, reason}
+    validation_result: dict | None = (
+        None  # {initial_result, retry_result, flaky, outcome}
+    )
+    security_result: dict | None = None  # {ok, reason}
+    revert_result: dict | None = None  # {ok, reason}
     evidence_refs: list = field(default_factory=list)
     last_error: str | None = None
     next_action: str | None = None  # what recover() decided should happen next
@@ -101,8 +105,9 @@ def _state_path(repair_id: str) -> Path:
     return _REPAIR_STATE_DIR / f"{repair_id}.json"
 
 
-def create_record(file_path: Path, error_text: str, failure_type: str,
-                  baseline_revision: str | None) -> RepairRecord:
+def create_record(
+    file_path: Path, error_text: str, failure_type: str, baseline_revision: str | None
+) -> RepairRecord:
     """Create and persist a fresh CREATED record. Returns it."""
     rec = RepairRecord(
         repair_id=new_repair_id(),
@@ -142,8 +147,9 @@ def persist(rec: RepairRecord) -> str:
         tmp = path.with_suffix(".json.tmp")
         lock = FileLock(str(path) + ".lock", timeout=5.0)
         with lock:
-            tmp.write_text(json.dumps(asdict(rec), ensure_ascii=False, indent=2),
-                           encoding="utf-8")
+            tmp.write_text(
+                json.dumps(asdict(rec), ensure_ascii=False, indent=2), encoding="utf-8"
+            )
             os.replace(tmp, path)
     except Exception as exc:
         log.warning("Repair-state persist failed (%s): %s", rid, exc)
@@ -159,7 +165,9 @@ def load(repair_id: str) -> RepairRecord | None:
         data = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
             return None
-        return RepairRecord(**{k: v for k, v in data.items() if k in RepairRecord.__dataclass_fields__})
+        return RepairRecord(
+            **{k: v for k, v in data.items() if k in RepairRecord.__dataclass_fields__}
+        )
     except Exception as exc:
         log.warning("Repair-state load failed (%s): %s", repair_id, exc)
         return None
@@ -194,7 +202,9 @@ def recover(repair_id: str) -> RepairRecord:
     # POST_PATCH: the candidate may be on disk and was never accepted.
     rec.phase = "REPAIR_FAILED"
     rec.phase_completed_at = time.time()
-    rec.last_error = f"crashed during {rec.phase}; candidate revision was never accepted"
+    rec.last_error = (
+        f"crashed during {rec.phase}; candidate revision was never accepted"
+    )
     rec.next_action = "revert"
     persist(rec)
     return rec

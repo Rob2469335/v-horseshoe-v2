@@ -5,25 +5,30 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
+
 # --- Existing Core Orchestration Schemas ---
 class GenerateRequest(BaseModel):
     model: Optional[str] = None
     prompt: Optional[str] = None
     messages: Optional[List[Dict[str, Any]]] = None
 
+
 class GenerateResponse(BaseModel):
     content: str
     model: str
 
+
 class AssignRequest(BaseModel):
     node: Dict[str, Any]
     job: Dict[str, Any]
+
 
 class AssignResponse(BaseModel):
     accepted: bool
     node_id: str
     job_id: str
     score: int
+
 
 class StatusResponse(BaseModel):
     ready: bool
@@ -42,15 +47,19 @@ class StatusResponse(BaseModel):
     primary_vision_model: Optional[str] = None
     fallback_pool: Dict[str, Any] = Field(default_factory=dict)
 
+
 # --- New Capability Tool Schemas ---
 class ToolExecuteRequest(BaseModel):
     """Request to execute a capability tool."""
+
     capability: str
     payload: Dict[str, Any]
     cache_key: Optional[str] = None
 
+
 class ToolExecuteResponse(BaseModel):
     """Response from capability tool execution."""
+
     status: str
     capability: str
     data: Dict[str, Any]
@@ -60,8 +69,10 @@ class ToolExecuteResponse(BaseModel):
     stdout: Optional[str] = None
     stderr: Optional[str] = None
 
+
 class ToolListResponse(BaseModel):
     """Response listing available capabilities."""
+
     capabilities: List[str]
     count: int
     vision_configured: bool = False
@@ -70,10 +81,13 @@ class ToolListResponse(BaseModel):
     vision_models_configured: List[str] = Field(default_factory=list)
     vision_models_installed: List[str] = Field(default_factory=list)
 
+
 class CacheStatusResponse(BaseModel):
     """Response showing cache status."""
+
     cache_size: int
     cached_keys: List[str]
+
 
 class LearningOutcomeResponse(BaseModel):
     task: Optional[str] = None
@@ -84,6 +98,7 @@ class LearningOutcomeResponse(BaseModel):
     approved: Optional[bool] = None
     reason_code: Optional[str] = None
 
+
 class TimelinePointResponse(BaseModel):
     bucket: str
     event_count: int
@@ -91,17 +106,21 @@ class TimelinePointResponse(BaseModel):
     partial_count: int = 0
     fail_count: int = 0
 
+
 class TimelineResponse(BaseModel):
     window_minutes: int
     points: List[TimelinePointResponse] = Field(default_factory=list)
 
+
 class AutoAssignResponse(BaseModel):
     mapping: Dict[str, str]
+
 
 class CreateApprovalRequest(BaseModel):
     component: str
     action: str
     reason: str
+
 
 class ApprovalDecisionRequest(BaseModel):
     note: Optional[str] = None
