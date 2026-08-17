@@ -102,7 +102,33 @@ class SandboxReplHandler:
             cmd = ["pwsh", "-NoProfile", "-Command", str(command)]
             timeout = 30.0
         elif language == "pytest":
-            cmd = [sys.executable, "-m", "pytest", str(path), "-v", "--tb=short"]
+            # SECURITY: a payload/LLM-controlled path must not smuggle pytest
+            # CLI options (--junitxml=..., --pdb, -x). Reject any '-'/-leading
+            # target, enforce sandbox containment, and append '--' so the rest
+            # are parsed as files, never options.
+            from pathlib import Path as _Path
+
+            raw = str(path or "")
+            if not raw or raw.startswith("-"):
+                return {
+                    "ok": False,
+                    "stdout": "",
+                    "stderr": "Security Gate blocked pytest target (flag-like or empty path).",
+                    "returncode": 1,
+                }
+            project_root = _Path(
+                __file__
+            ).resolve().parents[2]
+            try:
+                _Path(raw).resolve().relative_to(project_root.resolve())
+            except (ValueError, OSError):
+                return {
+                    "ok": False,
+                    "stdout": "",
+                    "stderr": "Security Gate blocked pytest target (outside project root).",
+                    "returncode": 1,
+                }
+            cmd = [sys.executable, "-m", "pytest", "-v", "--tb=short", "--", str(raw)]
             timeout = 60.0
         else:
             return {
@@ -148,5 +174,16 @@ class SandboxReplHandler:
                     "stderr": f"Execution timed out ({timeout}s limit).",
                     "returncode": -1,
                 }
+            finally:
+                # asyncio.CancelledError inherits BaseException — the except
+                # TimeoutError above never fires on a cancelled/abandoned stream,
+                # so without this an orphaned `python -I` keeps running (up to
+                # the full timeout). Kill any proc we did not finish.
+                if proc.returncode is None:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                    await proc.wait()
         except Exception as e:
             return {"ok": False, "stdout": "", "stderr": str(e), "returncode": 1}

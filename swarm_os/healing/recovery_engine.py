@@ -294,7 +294,19 @@ Enclose the script in a ```python block.
                         stdout_b, stderr_b = await proc_handle.communicate()
                 except TimeoutError:
                     proc_handle.kill()
+                    await proc_handle.wait()
                     raise Exception("Recovery script timed out after 10 seconds.")
+                finally:
+                    # asyncio.CancelledError inherits BaseException — the except
+                    # TimeoutError above never fires on a cancelled task, so
+                    # without a finally an orphaned recovery script (up to 10s
+                    # of arbitrary code) is left running.
+                    if proc_handle.returncode is None:
+                        try:
+                            proc_handle.kill()
+                        except Exception:
+                            pass
+                        await proc_handle.wait()
 
                 class _ProcResult:
                     def __init__(self, rc, out, err):

@@ -35,6 +35,12 @@ class DangerRoom:
                     "node_modules",
                     "nul",
                     "audit_test.py",
+                    # LIVE SECRETS: .env (API keys, tokens, OAuth creds) must
+                    # never land in the sandbox — LLM-generated mutation/recovery
+                    # code there could read it and exfiltrate. clean_sandbox_env
+                    # strips the *process* env; this stops the *file* on disk.
+                    ".env",
+                    ".env.example",
                 )
                 or c.startswith(".sandbox")
                 or c.startswith(".gemini")

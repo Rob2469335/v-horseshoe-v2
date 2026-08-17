@@ -175,11 +175,79 @@ async def test_sandbox_repl_blocks_destructive_powershell():
         assert "Security Gate" in r.get("stderr", ""), bad
 
 
+@pytest.mark.asyncio
+async def test_sandbox_repl_kills_proc_on_cancel(monkeypatch):
+    """asyncio.CancelledError inherits BaseException — the except TimeoutError
+    branch never fires on a cancelled/abandoned stream, so a finally must kill
+    the subprocess or an orphaned `python -I` runs up to the full timeout.
+    Regression for the 2026-08-17 audit finding (same shape as the danger_room
+    fix)."""
+    from swarm_os.capabilities.sandbox_repl import SandboxReplHandler
+
+    class _CancellingProc:
+        def __init__(self):
+            self.returncode = None
+            self.killed = False
+
+        async def communicate(self):
+            raise asyncio.CancelledError("test cancellation")
+
+        def kill(self):
+            self.killed = True
+
+        async def wait(self):
+            return None
+
+    created = []
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        p = _CancellingProc()
+        created.append(p)
+        return p
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", fake_create_subprocess_exec)
+    with pytest.raises(asyncio.CancelledError):
+        await SandboxReplHandler().execute(
+            {"language": "python", "code": "import time; time.sleep(30)"}
+        )
+    assert created, "subprocess must have been created"
+    assert created[0].killed is True
+
+
+@pytest.mark.asyncio
+async def test_sandbox_repl_pytest_rejects_flag_and_outside_path(monkeypatch):
+    """sandbox_repl pytest branch: a flag-like path (--junitxml=...) or a path
+    outside the project root must be blocked before reaching pytest — an
+    injected flag would write outside the sandbox, --pdb drops into an
+    interactive debugger. Regression for the 2026-08-17 audit finding."""
+    from swarm_os.capabilities.sandbox_repl import SandboxReplHandler
+
+    h = SandboxReplHandler()
+    for bad in (
+        "--junitxml=C:/Windows/Temp/pwned.xml",
+        "-x",
+        "",
+        r"C:\Windows\System32\pwned.py",
+    ):
+        r = await h.execute({"language": "pytest", "path": bad})
+        assert r.get("ok") is False, bad
+        assert "Security Gate" in r.get("stderr", ""), bad
+
+
+@pytest.mark.asyncio
+async def test_sandbox_repl_pytest_runs_real_target():
+    """A real in-project pytest target still runs through the sandbox branch
+    (flag rejection must not break the legitimate flow)."""
+    from swarm_os.capabilities.sandbox_repl import SandboxReplHandler
+
+    r = await SandboxReplHandler().execute(
+        {"language": "pytest", "path": "tests/test_security_hardening.py::test_security_gate_scan_code"}
+    )
+    assert r.get("returncode") == 0, r.get("stdout", "")[-200:]
+    assert "1 passed" in r.get("stdout", "")
+
+
 # ── security: screen self-promotion blocked ─────────────────────────────────
-@pytest.mark.skipif(
-    sys.platform != "win32", reason="screen-control is Windows-only (ctypes.windll)"
-)
-def test_screen_self_promote_blocked_in_human_mode(monkeypatch):
     from swarm_os.lib.mcp import screen as s
 
     s.SCREEN_AUTONOMOUS = False
@@ -873,6 +941,30 @@ async def test_dangerroom_kills_proc_on_cancel(monkeypatch):
         import shutil
 
         shutil.rmtree(tmp_path, ignore_errors=True)
+
+
+def test_dangerroom_excludes_env_from_sandbox(tmp_path):
+    """LIVE SECRETS: .env (API keys, OAuth creds) must never be copied into the
+    DangerRoom sandbox — LLM-generated mutation/recovery code there could read it
+    and exfiltrate. clean_sandbox_env strips the process env; this excludes the
+    file on disk. Empirically verified pre-fix: sandbox .env existed (1763 bytes)."""
+    import asyncio
+    from swarm_os.services.danger_room import DangerRoom
+
+    root = tmp_path / "proj"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / ".env").write_text("SECRET_API_KEY=live-key-123\n", encoding="utf-8")
+    (root / ".env.example").write_text("SECRET_API_KEY=\n", encoding="utf-8")
+    (root / "keep.py").write_text("x = 1\n", encoding="utf-8")
+
+    dr = DangerRoom(root)
+    asyncio.run(dr.setup())
+    try:
+        assert not (dr.sandbox_dir / ".env").exists()
+        assert not (dr.sandbox_dir / ".env.example").exists()
+        assert (dr.sandbox_dir / "keep.py").exists()
+    finally:
+        asyncio.run(dr.teardown())
 
 
 def test_swarm_config_mcp_servers_are_valid():
