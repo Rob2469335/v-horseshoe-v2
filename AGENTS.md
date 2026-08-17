@@ -1830,3 +1830,11 @@ Head-to-head across all spec types on the 4B (gen = long paragraph, dec = tool-d
 - **Unified Cron Scheduler**: Added 5-part cron syntax parsing to `task_scheduler.py` and a new `/cron` gateway command. Autonomous agents can now manage schedules via the `cron_manage` tool in `runtime_v2`.
 - **Gateway Device Pairing**: Secured `telegram_center.py` by rejecting unknown users by default and enforcing a dynamic 4-digit PIN pairing flow for secure device authentication.
 - **Interactive Skill Authoring**: Added `/learn` to the gateway to teach behaviors interactively. Added `skill_manage` tool to safely persist learned skills directly into `AGENTS.md`, matching OpenClaw's permanent memory capability without adding a third-party harness.
+
+### IMPLEMENTED - Post-Parity Hardening & Audit Fixes (2026-08)
+- **Telegram Gateway Security**: Upgraded the device pairing PIN generation from `random.randint` to cryptographically secure `secrets.randbelow`. Fixed an unbounded memory leak and race condition in the `_pending_pairing` queue via a synchronous `asyncio.Lock()` and TTL sweep. Fixed a silent exception swallow that could wipe `swarm_config.json` on corruption.
+- **Skill Injection Hardening**: Implemented strict regex sanitization on `skill_manage add` to prevent agents from injecting prompt-override Markdown headings (e.g., `## `) into this policy file. Also implemented the `remove` action for full lifecycle management.
+- **Scheduler Epoch Drift**: Fixed a critical bug in `task_scheduler.py` where `_is_due(..., now=_now())` used a mutable default argument, capturing the module's load time rather than execution time, thereby breaking all time-based cron guards.
+
+
+## Custom Learned Skills
