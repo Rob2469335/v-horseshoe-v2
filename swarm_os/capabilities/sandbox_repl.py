@@ -57,41 +57,70 @@ class SandboxReplHandler:
         elif language == "powershell":
             # SECURITY: PowerShell has no clean AST-scan analog here, so gate the
             # command string with a conservative denylist of destructive/system-
-            # mutating verbs (Remove/Stop/Set/Fmt/New-Service/reg/disk/...).
+            # mutating verbs + the shapes that dodge a verb denylist (aliases,
+            # backtick escapes, iex, .NET interop, call operator, separators).
+            # NOTE: a denylist is NOT a sandbox boundary — it is defense-in-depth
+            # on top of the ALWAYS_CONFIRM approval gate in the agent path.
             blocked_ps = (
-                "remove-",
-                "stop-",
-                "set-",
-                "format-",
-                "new-",
-                "start-",
-                "restart-",
-                "del ",
-                "rm ",
-                "rd ",
+                # destructive / system-mutating verbs (normalized: no '-', no
+                # backticks, so `Remove-Item` and `Remove`-`Item` both match)
+                "remove",
+                "rm",
+                "stop",
+                "set",
+                "format",
+                "new",
+                "start",
+                "restart",
+                "del",
+                "rd",
                 "erase",
                 "kill",
                 "taskkill",
                 "shutdown",
-                "format",
+                "restart-computer",
                 "reg delete",
                 "diskpart",
                 "takeown",
                 "icacls",
-                "attrib +",
-                "install-",
-                "uninstall-",
+                "attrib",
+                "install",
+                "uninstall",
                 "out-file",
                 "set-content",
                 "add-content",
                 "copy-item",
                 "move-item",
                 "rename-item",
+                "clear-item",
+                "remove-item",
+                # alias/call-operator shapes that reach the same verbs
+                "ri ",
+                "mv ",
+                "cp ",
+                "ni ",
+                "ii ",
+                "saps ",
+                "iex ",
+                "iex(",
+                "& ",
+                # .NET / WMI interop (no verb to match)
+                "[system.",
+                "[diagnostics.",
+                "[wmi",
+                "::delete",
+                "::start(",
+                ".net",
+                "invoke-expression",
+                "invoke-command",
+                # separators / redirection that chain or escape
                 ">",
                 ">>",
                 "|",
+                ";",
+                "`",
             )
-            ps_lower = str(command or "").lower()
+            ps_lower = str(command or "").lower().replace("-", "").replace("`", "")
             if any(b in ps_lower for b in blocked_ps):
                 return {
                     "ok": False,

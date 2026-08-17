@@ -175,6 +175,43 @@ async def test_sandbox_repl_blocks_destructive_powershell():
         assert "Security Gate" in r.get("stderr", ""), bad
 
 
+@pytest.mark.asyncio
+async def test_sandbox_repl_blocks_powershell_denylist_bypass_shapes():
+    """The PowerShell denylist is NOT a boundary (defense-in-depth over the
+    ALWAYS_CONFIRM agent gate) — but the shapes the 2026-08-17 audit proved
+    dodge a verb-only denylist must be blocked: aliases (ri/mv/ii), backtick
+    escapes, iex, call operator, .NET interop, and separators."""
+    from swarm_os.capabilities.sandbox_repl import SandboxReplHandler
+
+    for bad in (
+        "ri C:\\x",
+        "mv x y",
+        "ii calc.exe",
+        "iex (Get-Content c.ps1)",
+        "Remove`-Item x",
+        "Get-Content a; ri b",
+        "& { ri x }",
+        "[System.IO.File]::Delete('C:\\x')",
+        "[System.Diagnostics.Process]::Start('cmd.exe')",
+    ):
+        r = await SandboxReplHandler().execute(
+            {"language": "powershell", "command": bad}
+        )
+        assert r.get("ok") is False, bad
+        assert "Security Gate" in r.get("stderr", ""), bad
+
+
+@pytest.mark.asyncio
+async def test_sandbox_repl_allows_benign_powershell():
+    """Benign read-only PowerShell still passes the hardened denylist."""
+    from swarm_os.capabilities.sandbox_repl import SandboxReplHandler
+
+    r = await SandboxReplHandler().execute(
+        {"language": "powershell", "command": "Get-Process -Name explorer"}
+    )
+    assert r.get("ok") is True
+
+
 def test_legacy_runtime_classifies_playwright_writes_as_state_changing():
     """/tools/execute dispatches through agent_runtime.call_tool whose only gate
     is is_state_changing. Browser input ops (click/type/fill/press) must be
