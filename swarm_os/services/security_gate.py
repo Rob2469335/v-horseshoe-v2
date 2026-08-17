@@ -11,18 +11,46 @@ class SecurityGateViolation(Exception):
 
 
 class BannedNodeVisitor(ast.NodeVisitor):
+    # Strict mode is used for LLM/agent-supplied snippets (scan_code): those may
+    # not use pathlib file I/O or network clients at all. Repo-file scanning
+    # (scan_file) keeps strict=False so the project's own legitimate use of
+    # pathlib/requests/httpx is not rejected.
+    STRICT_BANNED_MODULES = {
+        # file I/O outside the `open` ban (pathlib can read/write/unlink any file)
+        "pathlib",
+        # network egress beyond the `socket` ban (urllib/requests/httpx/http.client)
+        "urllib",
+        "urllib.request",
+        "urllib.parse",
+        "requests",
+        "httpx",
+        "http.client",
+        "urllib3",
+        "aiohttp",
+        "smtplib",
+        "ftplib",
+        "poplib",
+        "imaplib",
+        "telnetlib",
+        "xmlrpc",
+    }
+
     def __init__(
         self,
         banned_calls: List[str],
         banned_modules: List[str],
         banned_os_attrs: frozenset,
+        strict: bool = False,
     ):
         self.banned_calls = banned_calls
         self.banned_modules = banned_modules
         self.banned_os_attrs = banned_os_attrs
+        self.strict = strict
         self.violations = []
-        # Names bound to the os module (`import os` / `import os as o`), so a
-        # later `o.system(...)` / `os.walk('.')` can be attribute-checked.
+        # Names bound to the os module (`import os` / `import os as o` /
+        # `import os.path`), so a later `o.system(...)` / `os.walk('.')` can be
+        # attribute-checked. `import os.path` binds `os` even though the alias
+        # name is "os.path" — track the top-level segment too.
         self._os_names: set[str] = set()
         # Names bound to dangerous os attributes via `from os import system`
         # (with or without `as`), so a later `system(...)` call is caught.
@@ -57,6 +85,18 @@ class BannedNodeVisitor(ast.NodeVisitor):
                 self.violations.append(
                     f"Banned reflection on os module: '{node.func.id}' at line {node.lineno}"
                 )
+            # `getattr(__builtins__, 'exec')` — reflection INTO the builtins dict
+            # lifts a banned call without a Name-call ever matching (the target
+            # rides as a string arg, and `__builtins__` is not an os name).
+            elif (
+                node.func.id in ("getattr", "setattr", "delattr")
+                and node.args
+                and isinstance(node.args[0], ast.Name)
+                and node.args[0].id == "__builtins__"
+            ):
+                self.violations.append(
+                    f"Banned reflection on __builtins__: '{node.func.id}' at line {node.lineno}"
+                )
         self.generic_visit(node)
 
     def visit_Import(self, node):
@@ -65,11 +105,18 @@ class BannedNodeVisitor(ast.NodeVisitor):
                 self.violations.append(
                     f"Banned module import found: '{alias.name}' at line {node.lineno}"
                 )
-            elif alias.name == "os":
+            elif self.strict and alias.name in self.STRICT_BANNED_MODULES:
+                self.violations.append(
+                    f"Banned import in sandbox snippet: '{alias.name}' at line {node.lineno}"
+                )
+            elif alias.name == "os" or alias.name.startswith("os."):
                 # os is allowed wholesale; dangerous ATTRIBUTES are checked in
-                # visit_Attribute. Track the bound name so `import os as o`
-                # still resolves for the attribute scan.
-                self._os_names.add(alias.asname or alias.name)
+                # visit_Attribute. Track the bound name so `import os as o` and
+                # `import os.path` (which binds `os`) still resolve for the
+                # attribute scan. The bound name is the alias, or the top-level
+                # segment for a dotted import (`import os.path` binds `os`).
+                bound = alias.asname or alias.name.split(".")[0]
+                self._os_names.add(bound)
         self.generic_visit(node)
 
     def visit_ImportFrom(self, node):
@@ -77,14 +124,53 @@ class BannedNodeVisitor(ast.NodeVisitor):
             self.violations.append(
                 f"Banned module import found: '{node.module}' at line {node.lineno}"
             )
+        elif self.strict and node.module in self.STRICT_BANNED_MODULES:
+            self.violations.append(
+                f"Banned import in sandbox snippet: '{node.module}' at line {node.lineno}"
+            )
         elif node.module == "os":
             for alias in node.names:
-                if alias.name in self.banned_os_attrs:
+                if alias.name == "*":
+                    # `from os import *` smuggles every dangerous attr in without
+                    # a name we can enumerate — block the star import outright.
+                    self.violations.append(
+                        f"Banned star import from os at line {node.lineno}"
+                    )
+                elif alias.name in self.banned_os_attrs:
                     self.violations.append(
                         f"Banned os import found: 'os.{alias.name}' at line {node.lineno}"
                     )
                     self._os_func_aliases.add(alias.asname or alias.name)
         self.generic_visit(node)
+
+    def visit_Assign(self, node):
+        # Track rebinding `o = os` (also `o = os.path` / `o = m` where m is a
+        # tracked os alias, and tuple unpacking `a, b = (1, os)`): a later
+        # `o.system(...)` must be attribute-checked just like the original name.
+        def _name_is_os(name: ast.Name) -> bool:
+            return name.id in self._os_names
+
+        def _collect_source_os(node_: ast.AST) -> bool:
+            if isinstance(node_, ast.Name):
+                return _name_is_os(node_)
+            if isinstance(node_, ast.Attribute):
+                return isinstance(node_.value, ast.Name) and _name_is_os(node_.value)
+            if isinstance(node_, (ast.Tuple, ast.List)):
+                return any(_collect_source_os(elt) for elt in node_.elts)
+            return False
+
+        if _collect_source_os(node.value):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    self._os_names.add(target.id)
+                elif isinstance(target, (ast.Tuple, ast.List)):
+                    for elt in target.elts:
+                        if isinstance(elt, ast.Name):
+                            self._os_names.add(elt.id)
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node):
+        self.visit_Assign(node)
 
     def visit_Attribute(self, node):
         if (
@@ -128,6 +214,23 @@ class BannedNodeVisitor(ast.NodeVisitor):
         ):
             self.violations.append(
                 f"Banned sys.modules access found at line {node.lineno}"
+            )
+        # `os.__dict__['system']('x')` / `vars(os)['system']('x')` — reflection
+        # into the os module namespace via subscript, bypassing the Name-call and
+        # attribute scans. `vars(<tracked os name>)` is the same hole.
+        elif isinstance(node.value, ast.Attribute) and isinstance(
+            node.value.value, ast.Name
+        ) and node.value.value.id in self._os_names:
+            self.violations.append(
+                f"Banned subscript on os module namespace at line {node.lineno}"
+            )
+        elif isinstance(node.value, ast.Call) and isinstance(
+            node.value.func, ast.Name
+        ) and node.value.func.id == "vars" and node.value.args and isinstance(
+            node.value.args[0], ast.Name
+        ) and node.value.args[0].id in self._os_names:
+            self.violations.append(
+                f"Banned vars() reflection on os module at line {node.lineno}"
             )
         self.generic_visit(node)
 
@@ -222,20 +325,23 @@ class SecurityGate:
     )
 
     @classmethod
-    def _scan_visitor(cls, code: str) -> BannedNodeVisitor:
+    def _scan_visitor(cls, code: str, strict: bool = False) -> BannedNodeVisitor:
         tree = ast.parse(code, mode="exec")
         visitor = BannedNodeVisitor(
-            cls.BANNED_CALLS, cls.BANNED_MODULES, cls.BANNED_OS_ATTRS
+            cls.BANNED_CALLS, cls.BANNED_MODULES, cls.BANNED_OS_ATTRS, strict=strict
         )
         visitor.visit(tree)
         return visitor
 
     @classmethod
-    def scan_code(cls, code: str) -> None:
+    def scan_code(cls, code: str, strict: bool = True) -> None:
         """Scan inline source code (e.g. an LLM/agent-supplied Python snippet)
-        before execution. Raises SecurityGateViolation on banned calls/modules."""
+        before execution. Raises SecurityGateViolation on banned calls/modules.
+
+        `strict=True` (default) additionally bans pathlib file I/O and network
+        clients — legitimate in the project, never in an LLM snippet."""
         try:
-            visitor = cls._scan_visitor(code)
+            visitor = cls._scan_visitor(code, strict=strict)
         except SyntaxError as e:
             raise SecurityGateViolation(f"Syntax Error in supplied code: {e}")
         if visitor.violations:

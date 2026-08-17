@@ -468,6 +468,101 @@ def test_security_gate_allows_plain_sys_usage():
     SecurityGate.scan_code("import os\ngetattr(os, 'walk')('.')")
 
 
+# ── security gate: sandbox-escape shape regression tests (2026-08-17) ────────
+# The 2026-08-17 audit found the AST gate bypassable end-to-end: `import
+# os.path; os.system(...)`, `o = os; o.system(...)`, `from os import *`,
+# `os.__dict__['system'](...)`, `vars(os)['system'](...)`,
+# `getattr(__builtins__, 'exec')`, and pathlib/network modules in LLM snippets.
+# Each shape below was empirically verified as a REAL execution vector before
+# the fix (the code ran); each must now DENY. Revert-proof.
+def test_security_gate_blocks_dotted_os_import_attr_call():
+    from swarm_os.services.security_gate import SecurityGate, SecurityGateViolation
+
+    with pytest.raises(SecurityGateViolation):
+        SecurityGate.scan_code("import os.path\nos.system('echo pwned')")
+
+
+def test_security_gate_blocks_os_rebinding():
+    from swarm_os.services.security_gate import SecurityGate, SecurityGateViolation
+
+    for bad in (
+        "import os\no = os\no.system('whoami')",
+        "import os\nos2 = os\nos2.system('whoami')",
+        "import os\na, b = (1, os)\nb.system('whoami')",
+    ):
+        with pytest.raises(SecurityGateViolation):
+            SecurityGate.scan_code(bad)
+
+
+def test_security_gate_allows_os_path_rebinding_read():
+    # `o = os.path; o.abspath('.')` stays ALLOWED — os.path has no .system and
+    # abspath is a read, not a banned os attribute.
+    from swarm_os.services.security_gate import SecurityGate
+
+    SecurityGate.scan_code("import os\no = os.path\nprint(o.abspath('.'))")
+
+
+def test_security_gate_blocks_os_star_import():
+    from swarm_os.services.security_gate import SecurityGate, SecurityGateViolation
+
+    with pytest.raises(SecurityGateViolation):
+        SecurityGate.scan_code("from os import *\nsystem('whoami')")
+
+
+def test_security_gate_blocks_os_namespace_subscript():
+    from swarm_os.services.security_gate import SecurityGate, SecurityGateViolation
+
+    for bad in (
+        "import os\nos.__dict__['system']('whoami')",
+        "import os\nvars(os)['system']('whoami')",
+    ):
+        with pytest.raises(SecurityGateViolation):
+            SecurityGate.scan_code(bad)
+
+
+def test_security_gate_blocks_builtins_getattr_reflection():
+    from swarm_os.services.security_gate import SecurityGate, SecurityGateViolation
+
+    with pytest.raises(SecurityGateViolation):
+        SecurityGate.scan_code("getattr(__builtins__, 'exec')('print(1)')")
+
+
+def test_security_gate_strict_blocks_pathlib_and_network():
+    from swarm_os.services.security_gate import SecurityGate, SecurityGateViolation
+
+    # scan_code is strict by default: LLM snippets may not use pathlib file I/O
+    # or network clients (repo files may — scan_file stays non-strict).
+    for bad in (
+        "from pathlib import Path\nPath('x.txt').write_text('pwned')",
+        "import pathlib\npathlib.Path('x').read_text()",
+        "import urllib.request\nurllib.request.urlopen('http://127.0.0.1:8000')",
+        "import requests\nrequests.get('http://127.0.0.1:8000')",
+        "import httpx\nhttpx.post('http://127.0.0.1:8000', json={})",
+    ):
+        with pytest.raises(SecurityGateViolation):
+            SecurityGate.scan_code(bad)
+
+
+def test_security_gate_non_strict_allows_pathlib_and_network_for_repo():
+    # scan_file path (strict=False) must still accept the repo's own legit use
+    # of pathlib/requests/httpx — otherwise danger_room's sandbox copy scan
+    # would reject the project's own source.
+    from swarm_os.services.security_gate import SecurityGate
+
+    SecurityGate.scan_code(
+        "from pathlib import Path\nPath('x').exists()",
+        strict=False,
+    )
+    SecurityGate.scan_code(
+        "import requests\nr = requests.get('http://127.0.0.1:8000/readyz')",
+        strict=False,
+    )
+    SecurityGate.scan_code(
+        "import httpx\nclient = httpx.Client()\nprint(client)",
+        strict=False,
+    )
+
+
 @pytest.mark.asyncio
 async def test_sandbox_repl_allows_readonly_os_code():
     # `import os; os.walk('.')` (the debugger's natural file-listing snippet)
