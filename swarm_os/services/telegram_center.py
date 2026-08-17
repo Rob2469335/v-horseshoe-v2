@@ -555,14 +555,21 @@ class TelegramCommandCenter:
                 await self._client.send_message(chat_id, note)
 
     async def _dispatch_approved(self, rec: dict) -> None:
-        """Execute an approved pending action through tool_executor — the SAME
-        seam the CLI approval uses, so chat approval is not a bypass."""
+        """Execute an already-consumed approved pending action.
+
+        Uses tool_executor._dispatch directly (NOT run()) — run() re-applies the
+        approval gate, and with auth=None a CONFIRM/ALWAYS_CONFIRM action would
+        silently create a NEW pending action and return confirmation_required
+        instead of executing the one the owner just approved. The record was
+        atomically consumed via consume_any() (which verifies the stored
+        payload), so direct dispatch of the stored payload is the correct seam.
+        """
         try:
-            from runtime_v2.services.tool_executor import run
+            from runtime_v2.services.tool_executor import _dispatch
 
             tool = rec.get("tool")
             payload = rec.get("payload") or {}
-            result = await run(tool, payload)
+            result = await _dispatch(tool, payload)
             log.info(
                 "telegram-approved action executed: tool=%s ok=%s",
                 tool,

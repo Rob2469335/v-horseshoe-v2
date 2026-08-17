@@ -175,6 +175,42 @@ async def test_sandbox_repl_blocks_destructive_powershell():
         assert "Security Gate" in r.get("stderr", ""), bad
 
 
+def test_legacy_runtime_classifies_playwright_writes_as_state_changing():
+    """/tools/execute dispatches through agent_runtime.call_tool whose only gate
+    is is_state_changing. Browser input ops (click/type/fill/press) must be
+    classified state-changing so they require approval — previously playwright
+    was never checked, so a loopback caller could drive the persistent
+    logged-in browser with no approval. Regression for the 2026-08-17 audit."""
+    from swarm_os.agent_runtime import AgentRuntime
+    from swarm_os.exceptions import ApprovalRequiredError
+
+    rt = AgentRuntime.__new__(AgentRuntime)
+    rt.approved_actions = []
+
+    for op in ("click", "browser_type", "fill_form", "browser_press_key", "select"):
+        assert rt.is_state_changing(
+            "playwright", {"operation": op, "name": "Transfer"}
+        ) is True, op
+    for op in ("navigate", "screenshot", "extract_text", "browser_state", "wait"):
+        assert rt.is_state_changing(
+            "playwright", {"operation": op, "url": "https://example.com"}
+        ) is False, op
+
+    async def _expect_approval():
+        try:
+            await rt.call_tool(
+                "playwright",
+                {"operation": "click", "name": "Transfer"},
+            )
+        except ApprovalRequiredError:
+            return True
+        return False
+
+    import asyncio
+
+    assert asyncio.run(_expect_approval()) is True
+
+
 @pytest.mark.asyncio
 async def test_sandbox_repl_kills_proc_on_cancel(monkeypatch):
     """asyncio.CancelledError inherits BaseException — the except TimeoutError

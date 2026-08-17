@@ -56,6 +56,24 @@ class AgentRuntime:
         if tool_name == "sandbox_repl":
             lang = payload.get("language", "").lower().strip()
             return lang in ("python", "powershell")
+        if tool_name == "playwright":
+            # Browser INPUT operations drive the persistent, logged-in browser
+            # (clicks, typed text, form fills, key presses) — the same set the
+            # approval registry treats as ALWAYS_CONFIRM. Without this, the
+            # legacy /tools/execute path dispatches them with NO approval.
+            op = payload.get("operation", "").lower().strip()
+            return op in (
+                "browser_click",
+                "click",
+                "browser_type",
+                "type",
+                "browser_fill_form",
+                "fill_form",
+                "browser_press_key",
+                "press",
+                "select",
+                "scroll",
+            )
         return False
 
     async def call_tool(

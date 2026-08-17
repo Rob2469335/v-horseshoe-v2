@@ -457,8 +457,24 @@ async def control_screen_action(req: ScreenActionRequest) -> Dict[str, Any]:
 
 @router.post("/screen/autonomous")
 async def control_screen_autonomous(req: AutonomousRequest) -> Dict[str, Any]:
-    from swarm_os.lib.mcp.screen import set_screen_autonomous
+    # SECURITY: `set_screen_autonomous` is a self-bypass primitive — flipping
+    # autonomous ON via the HTTP API would let a loopback caller take over the
+    # real mouse/keyboard without the operator enabling SWARM_SCREEN_AUTONOMOUS=1.
+    # Match screen_handler's rule: autonomous can only be ENABLED when it is
+    # already on (idempotent no-op), never as an escalation from human mode.
+    from swarm_os.lib.mcp import screen as _screen
 
+    if req.enabled and not _screen.SCREEN_AUTONOMOUS:
+        return {
+            "status": "blocked",
+            "result": {
+                "ok": False,
+                "error": (
+                    "HUMAN-CONTROL MODE: autonomous screen input cannot be enabled "
+                    "over the API. An operator must set SWARM_SCREEN_AUTONOMOUS=1."
+                ),
+            },
+        }
     result = await asyncio.to_thread(set_screen_autonomous, req.enabled)
     return {"status": "executed", "result": result}
 

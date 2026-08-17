@@ -199,6 +199,37 @@ def test_callback_approve_consumes_and_dispatches(monkeypatch):
     assert registry.peek(rec["pending_id"]) is None
 
 
+def test_dispatch_approved_executes_stored_payload_without_regate(monkeypatch):
+    """The REAL _dispatch_approved seam (not the mock): a consumed pending action
+    must dispatch its stored payload through _dispatch — NOT run(), which would
+    re-apply the approval gate and silently mint a duplicate pending action
+    instead of executing. Regression for the 2026-08-17 audit finding: the old
+    `run(tool, payload)` never executed (authorization was fake)."""
+    import asyncio
+    from swarm_os.services.telegram_center import TelegramCommandCenter
+
+    dispatched = {}
+
+    async def fake_dispatch(tool, payload):
+        dispatched["tool"] = tool
+        dispatched["payload"] = payload
+        return {"ok": True, "status": "executed"}
+
+    monkeypatch.setattr(
+        "runtime_v2.services.tool_executor._dispatch", fake_dispatch
+    )
+    center = TelegramCommandCenter()
+    registry = ar.get_registry()
+    rec = registry.create(
+        agent_id="t", turn=1, tool="filesystem", action="write", payload={"path": "/x"}
+    )
+    consumed = registry.consume_any(rec["pending_id"])
+    assert consumed is not None
+    asyncio.run(center._dispatch_approved(consumed))
+    assert dispatched.get("tool") == "filesystem"
+    assert dispatched.get("payload") == {"path": "/x"}
+
+
 def test_callback_deny_removes_pending():
     center = tc.get_center()
     calls = []
