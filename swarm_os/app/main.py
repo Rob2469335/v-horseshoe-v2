@@ -512,7 +512,10 @@ def create_app() -> FastAPI:
             if path in ("/health", "/readyz", "/", "/docs", "/openapi.json"):
                 return await call_next(request)
             auth = request.headers.get("Authorization", "")
-            if auth != f"Bearer {_api_token}":
+            # Constant-time compare (no early-exit on the first differing byte).
+            import secrets as _secrets
+
+            if not _secrets.compare_digest(auth, f"Bearer {_api_token}"):
                 return JSONResponse(
                     status_code=401,
                     content={

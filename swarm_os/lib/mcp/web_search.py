@@ -593,6 +593,19 @@ async def web_fetch_handler(params: Dict[str, Any], trace_hook=None) -> Dict[str
         )
         async with AsyncWebCrawler(verbose=False) as crawler:
             result = await crawler.arun(url=url, config=run_cfg)
+        # SECURITY: the browser path follows redirects internally with no
+        # per-hop check (unlike the pooled-client fallback). If the final URL
+        # resolved to a loopback/private/cloud-metadata target, discard the
+        # content instead of returning it — an attacker redirect would otherwise
+        # make the agent read internal services.
+        final_url = getattr(result, "url", None)
+        if final_url and str(final_url).strip().lower() != url.lower():
+            _final_ssrf = _ssrf_check(str(final_url))
+            if _final_ssrf:
+                return {
+                    "ok": False,
+                    "error": f"web_fetch blocked: redirect landed on {_final_ssrf}",
+                }
         if result and result.markdown and len(result.markdown.strip()) > 50:
             text = result.markdown.strip()
             title = result.metadata.get("title", "") if result.metadata else ""
