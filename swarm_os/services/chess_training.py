@@ -61,7 +61,6 @@ _LADDER_STAGES: dict[str, list[int]] = {
     "transfer": [3, 7, 14, 30],
 }
 _DEFAULT_LADDER = [1, 2, 4, 7]
-_MAX_ENTRIES = 600
 
 STAGE_NAMES = ("repair", "reinforce", "transfer")
 
@@ -117,10 +116,9 @@ def _load() -> list[dict[str, Any]]:
 
 def _save(items: list[dict[str, Any]]) -> None:
     try:
-        _DATA_DIR.mkdir(parents=True, exist_ok=True)
-        with _STORE_FILE.open("w", encoding="utf-8") as fh:
-            for it in items[-_MAX_ENTRIES:]:
-                fh.write(json.dumps(it) + "\n")
+        from .chess_store import save_jsonl
+
+        save_jsonl(_STORE_FILE, items)
     except Exception as exc:
         log.warning("training store save failed: %s", exc)
 
@@ -433,9 +431,15 @@ def concept_progress() -> dict[str, Any]:
 
 
 def reset_all() -> dict[str, Any]:
+    from .chess_store import manifest_path
+
     with _LOCK:
-        if _STORE_FILE.exists():
-            _STORE_FILE.unlink()
+        for p in (_STORE_FILE, manifest_path(_STORE_FILE)):
+            try:
+                if p.exists():
+                    p.unlink()
+            except OSError as exc:
+                log.warning("training store reset failed to remove %s: %s", p, exc)
     return {"ok": True, "reset": True}
 
 

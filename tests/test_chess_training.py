@@ -11,10 +11,12 @@ mastery rule are the core of the personal-curriculum loop. These tests pin:
   - Reinforce and Transfer positions are structurally different (different FEN)
 """
 
+import hashlib
+import json
+
 import pytest
 
 from swarm_os.services import chess_training as ct
-
 
 @pytest.fixture(autouse=True)
 def _isolate(monkeypatch, tmp_path):
@@ -250,3 +252,62 @@ def test_post_hoc_confidence_rejected_from_calibration():
     assert cal["rejected_post_hoc"] == 1
     cell = cal["concepts"]["hanging piece"]["stages"]["repair"]["confident"]
     assert cell["n"] == 1
+
+
+def _manifest() -> dict:
+    """Read the store's retention manifest (archive total + SHA-256)."""
+    return json.loads(
+        ct._STORE_FILE.with_suffix(".jsonl.manifest.json").read_text(encoding="utf-8")
+    )
+
+
+def test_write_beyond_old_cap_persists_every_item():
+    """Regression: _save once truncated the archive to the newest 600 items on
+    EVERY save — a silent 'rolling window' that destroyed older training items.
+    Seeding 605 items must persist ALL of them."""
+    with ct._LOCK:
+        items = [
+            ct._build_item(
+                concept=f"concept{i}",
+                stage="repair",
+                pre_fen="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+                solution_uci="e2e4",
+                solution_san="e4",
+                source="own_game",
+                prompt="test",
+                difficulty=1,
+                source_ref=f"ref{i}",
+            )
+            for i in range(605)
+        ]
+        ct._save(items)
+    assert len(ct._load()) == 605
+
+
+def test_manifest_records_archive_state():
+    """The manifest must record the exact committed archive — total count and
+    SHA-256 of the on-disk bytes (a tamper-evident retention record)."""
+    _seed_item()
+    m = _manifest()
+    assert m["store"] == "training.jsonl"
+    assert m["total"] == 1
+    assert m["sha256"] == hashlib.sha256(ct._STORE_FILE.read_bytes()).hexdigest()
+    assert m["policy"].startswith("archive-all")
+
+
+def test_manifest_survives_answer_mutations():
+    """record_answer rewrites archive + manifest together; the manifest must
+    reflect the post-answer store, never drift."""
+    it = _seed_item()
+    ct.record_answer(it["id"], correct=True)
+    assert _manifest()["total"] == len(ct._load())
+    assert _manifest()["sha256"] == hashlib.sha256(ct._STORE_FILE.read_bytes()).hexdigest()
+
+
+def test_reset_all_removes_manifest():
+    """reset_all must clear the manifest too, so a fresh store doesn't inherit
+    a stale retention record."""
+    _seed_item()
+    ct.reset_all()
+    assert not ct._STORE_FILE.exists()
+    assert not ct._STORE_FILE.with_suffix(".jsonl.manifest.json").exists()

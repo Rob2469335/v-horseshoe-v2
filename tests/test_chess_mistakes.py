@@ -4,6 +4,9 @@ The store is isolated to a temp dir (never touches production data). The
 ladder is pinned via env so scheduling is deterministic.
 """
 
+import hashlib
+import json
+
 import pytest
 
 from swarm_os.services import chess_mistakes as cm
@@ -205,3 +208,47 @@ def test_coach_report_builds_skill_profile():
     assert "tactics" in r["skills"]
     assert r["skills"]["tactics"]["bar"] == 100  # strongest weakness
     assert r["focus_skill"] == "tactics"
+
+
+def _manifest() -> dict:
+    """Read the store's retention manifest (archive total + SHA-256)."""
+    return json.loads(
+        cm._STORE_FILE.with_suffix(".jsonl.manifest.json").read_text(encoding="utf-8")
+    )
+
+
+def test_write_beyond_old_cap_persists_every_entry():
+    """Regression: _save once truncated the archive to the newest 500 entries
+    on EVERY save — a silent 'rolling window' that destroyed older evidence.
+    Recording 505 distinct mistakes must persist ALL of them; the oldest must
+    survive."""
+    for i in range(505):
+        cm.record_mistake(
+            f"fen{i}", f"u{i}", f"s{i}", "g1f3", "Nf3", "Blunder", concept="hanging"
+        )
+    entries = cm._load()
+    assert len(entries) == 505
+    keys = {e["key"] for e in entries}
+    assert "fen0|u0" in keys  # the OLDEST entry survived the write path
+    assert "fen504|u504" in keys
+
+
+def test_manifest_records_archive_state():
+    """The manifest must record the exact committed archive — total count and
+    SHA-256 of the on-disk bytes (a tamper-evident retention record)."""
+    cm.record_mistake("f1", "e2e5", "e5", "g1f3", "Nf3", "Blunder", concept="hanging")
+    cm.record_mistake("f2", "c2c4", "c4", "d2d4", "d4", "Mistake", concept="hanging")
+    m = _manifest()
+    assert m["store"] == "mistakes.jsonl"
+    assert m["total"] == 2
+    assert m["sha256"] == hashlib.sha256(cm._STORE_FILE.read_bytes()).hexdigest()
+    assert m["policy"].startswith("archive-all")
+
+
+def test_manifest_stays_in_sync_across_mutations():
+    """Every mutation (solved/failed) rewrites the archive + manifest together,
+    so the manifest never lies about the store's contents."""
+    entry = cm.record_mistake("f", "e2e5", "e5", "g1f3", "Nf3", "Blunder", concept="hanging")
+    cm.mark_failed(entry["id"])
+    assert _manifest()["total"] == len(cm._load())
+    assert _manifest()["sha256"] == hashlib.sha256(cm._STORE_FILE.read_bytes()).hexdigest()

@@ -11,8 +11,11 @@ engine's best move (the answer), the concept, and the book fragment citations
 so the review can show the same grounded 'why'. Solves are spaced; a failed
 review re-queues the entry at the start of the ladder.
 
-Storage: data/chess_mistakes.jsonl (rolling). Fail-closed: unreadable store
-degrades to an empty queue with an error string, never a crash.
+Storage: data/chess/mistakes.jsonl (archive-all — atomic saves, no lossy
+compaction; see chess_store). Eviction is a view decision only: review_due and
+get_recurring_mistakes cap their OUTPUT, never the archive. Fail-closed:
+unreadable store degrades to an empty queue with an error string, never a
+crash.
 """
 
 from __future__ import annotations
@@ -34,7 +37,6 @@ _LOCK = threading.Lock()
 # Spaced-repetition ladder (days). A solve advances to the next box; a failed
 # review resets to box 0. Configurable via env for testing.
 _SR_LADDER_DAYS = [1, 3, 7, 14]
-_MAX_ENTRIES = 500
 
 
 def _ladder_days() -> list[int]:
@@ -75,10 +77,9 @@ def _load() -> list[dict[str, Any]]:
 
 def _save(entries: list[dict[str, Any]]) -> None:
     try:
-        _DATA_DIR.mkdir(parents=True, exist_ok=True)
-        with _STORE_FILE.open("w", encoding="utf-8") as fh:
-            for e in entries[-_MAX_ENTRIES:]:
-                fh.write(json.dumps(e) + "\n")
+        from .chess_store import save_jsonl
+
+        save_jsonl(_STORE_FILE, entries)
     except Exception as exc:
         log.warning("chess mistakes store save failed: %s", exc)
 

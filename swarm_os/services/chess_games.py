@@ -27,7 +27,6 @@ log = logging.getLogger(__name__)
 _DATA_DIR = Path("data/chess")
 _GAMES_FILE = _DATA_DIR / "games.jsonl"
 _LOCK = threading.Lock()
-_MAX_GAMES = 200
 
 
 def _now() -> float:
@@ -53,10 +52,9 @@ def _load_games() -> list[dict[str, Any]]:
 
 def _save_games(games: list[dict[str, Any]]) -> None:
     try:
-        _DATA_DIR.mkdir(parents=True, exist_ok=True)
-        with _GAMES_FILE.open("w", encoding="utf-8") as fh:
-            for g in games[-_MAX_GAMES:]:
-                fh.write(json.dumps(g) + "\n")
+        from .chess_store import save_jsonl
+
+        save_jsonl(_GAMES_FILE, games)
     except Exception as exc:
         log.warning("chess games save failed: %s", exc)
 

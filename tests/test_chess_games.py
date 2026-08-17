@@ -3,6 +3,9 @@
 The store is isolated to a temp dir (never touches production data).
 """
 
+import hashlib
+import json
+
 import pytest
 
 from swarm_os.services import chess_games as cg
@@ -209,3 +212,29 @@ def test_accuracy_never_exceeds_100():
     assert cg._accuracy_of({"moves": [{"win_delta_pct": -90.0}]}) == 10.0
     # Only a move that loses more than its entire expected points floors at 0.
     assert cg._accuracy_of({"moves": [{"win_delta_pct": -150.0}]}) == 0.0
+
+
+def test_write_beyond_old_cap_persists_every_game():
+    """Regression: _save_games once truncated the archive to the newest 200
+    games on EVERY save — older recorded games were silently destroyed.
+    Recording 205 games must persist ALL of them."""
+    for _ in range(205):
+        g = cg.start_game()
+        cg.record_move(g["id"], _move())
+        cg.finish_game(g["id"])
+    assert len(cg._load_games()) == 205
+
+
+def test_manifest_records_archive_state():
+    """The manifest must record the exact committed archive — total count and
+    SHA-256 of the on-disk bytes (a tamper-evident retention record)."""
+    g = cg.start_game()
+    cg.record_move(g["id"], _move())
+    cg.finish_game(g["id"])
+    m = json.loads(
+        cg._GAMES_FILE.with_suffix(".jsonl.manifest.json").read_text(encoding="utf-8")
+    )
+    assert m["store"] == "games.jsonl"
+    assert m["total"] == 1
+    assert m["sha256"] == hashlib.sha256(cg._GAMES_FILE.read_bytes()).hexdigest()
+    assert m["policy"].startswith("archive-all")
