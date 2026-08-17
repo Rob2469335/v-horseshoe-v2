@@ -593,10 +593,11 @@ async def notify(text: str, *, parse_mode: str = "HTML") -> bool:
     if not client or not enabled():
         return False
     cfg = _cfg()
-    if not cfg.get("owner"):
+    owners = cfg.get("owners", [])
+    if not owners:
         return False
     try:
-        await client.send_message(cfg["owner"], text, parse_mode=parse_mode)
+        await client.send_message(owners[0], text, parse_mode=parse_mode)
         return True
     except Exception as exc:
         log.warning("telegram notify failed: %s", exc)
