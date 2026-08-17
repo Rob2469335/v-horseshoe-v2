@@ -124,6 +124,12 @@ if (-not (Test-Path $qdrantPath)) {
 if (-not (Test-Path $qdrantPath)) {
     $qdrantPath = "qdrant"
 }
+# SECURITY (2026-08-17 audit): Qdrant's default `service.host` is 0.0.0.0 — it
+# listens on every interface with NO auth, exposing the whole memory/chess/legal
+# store to the LAN (verified reachable from 10.2.0.2). The env var is the
+# documented override (highest priority, cannot move the ./storage data path).
+# Bind loopback only: local services reach it at 127.0.0.1; nothing off-box can.
+$env:QDRANT__SERVICE__HOST = "127.0.0.1"
 Start-Process $qdrantPath -WindowStyle Hidden
 for ($i = 0; $i -lt 30; $i++) {
     try { Invoke-RestMethod "http://127.0.0.1:6333" | Out-Null; Write-Host "Qdrant ✔" -ForegroundColor Green; break }
