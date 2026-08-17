@@ -203,11 +203,14 @@ async def test_sandbox_repl_blocks_powershell_denylist_bypass_shapes():
 
 @pytest.mark.asyncio
 async def test_sandbox_repl_allows_benign_powershell():
-    """Benign read-only PowerShell still passes the hardened denylist."""
+    """Benign read-only PowerShell still passes the hardened denylist.
+    Uses Get-Process -Id $PID (the running shell itself) so it succeeds on
+    both Windows and Linux runners — a hard-coded process name like
+    'explorer' only exists on Windows."""
     from swarm_os.capabilities.sandbox_repl import SandboxReplHandler
 
     r = await SandboxReplHandler().execute(
-        {"language": "powershell", "command": "Get-Process -Name explorer"}
+        {"language": "powershell", "command": "Get-Process -Id $PID"}
     )
     assert r.get("ok") is True
 
