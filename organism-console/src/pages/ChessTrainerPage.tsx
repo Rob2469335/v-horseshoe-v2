@@ -2,8 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card"
 import { Button } from "../components/ui/button"
 import { Badge } from "../components/ui/badge"
+import { ActionOnboardingCard } from "../components/ui/action-onboarding-card"
 import ChessBoard, { type BoardHighlights, BOARD_THEMES, type BoardThemeKey } from "../components/chess/ChessBoard"
-
+import { Play, RefreshCw, BookOpen, BrainCircuit } from "lucide-react"
 const FILES = "abcdefgh"
 const RANKS = "87654321"
 
@@ -81,9 +82,9 @@ function legalMovesFor(fen: string, sq: string): string[] {
     if (ep !== "-") {
       const epF = FILES.indexOf(ep[0])
       const epRow = RANKS.indexOf(ep[1])
-      if (epRow === r0 && (epF === f0 - 1 || epF === f0 + 1)) {
-        const capRank = mine ? 6 : 3
-        targets.push(ep[0] + RANKS[capRank])
+      const expectedEpRow = mine ? r0 - 1 : r0 + 1
+      if (epRow === expectedEpRow && (epF === f0 - 1 || epF === f0 + 1)) {
+        targets.push(ep)
       }
     }
   } else if (p === "n") {
@@ -113,9 +114,11 @@ function legalMovesFor(fen: string, sq: string): string[] {
     }
     // Castling (best-effort; backend validates).
     const rankStr = mine ? "1" : "8"
-    if (piece === "K" && f0 === 4 && r0 === (mine ? 7 : 0)) {
-      if (castling.includes("K") && empty(5, r0) && empty(6, r0) && board["h" + rankStr] === "R") targets.push("g" + rankStr)
-      if (castling.includes("Q") && empty(3, r0) && empty(2, r0) && empty(1, r0) && board["a" + rankStr] === "R") targets.push("c" + rankStr)
+    const myK = mine ? "K" : "k"
+    const myR = mine ? "R" : "r"
+    if (piece === myK && f0 === 4 && r0 === (mine ? 7 : 0)) {
+      if (castling.includes(mine ? "K" : "k") && empty(5, r0) && empty(6, r0) && board["h" + rankStr] === myR) targets.push("g" + rankStr)
+      if (castling.includes(mine ? "Q" : "q") && empty(3, r0) && empty(2, r0) && empty(1, r0) && board["a" + rankStr] === myR) targets.push("c" + rankStr)
     }
   }
   return targets
@@ -378,6 +381,7 @@ function sideToMove(fen: string): "w" | "b" {
 export default function ChessTrainerPage() {
   const backendUrl = "http://127.0.0.1:8000"
   const [fen, setFen] = useState("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1")
+  const [fenHistory, setFenHistory] = useState<string[]>([]) // FEN snapshots for undo
   const [history, setHistory] = useState<string[]>([])
   const [selected, setSelected] = useState<string | null>(null)
   const [legalTargets, setLegalTargets] = useState<string[]>([])
@@ -478,7 +482,15 @@ export default function ChessTrainerPage() {
     }
     // A target square (empty or enemy piece) — attempt the move from selection.
     if (selected) {
-      const uci = selected + sq
+      let uci = selected + sq
+      // Auto-queen for pawn promotion
+      const p = board[selected]
+      if (p && p.toLowerCase() === "p") {
+        const rank = sq[1]
+        if (rank === "1" || rank === "8") {
+          uci += "q"
+        }
+      }
       setSelected(null)
       setLegalTargets([])
       void evaluateMove(uci)
@@ -550,6 +562,7 @@ export default function ChessTrainerPage() {
           setRetryFen(null)
           setHistory((h) => [...h, res.san ?? uci])
           setLastMove({ from: uci.slice(0, 2), to: uci.slice(2, 4) })
+          setFenHistory((fh) => [...fh, preFen])
           setFen(res.fen)
           void engineReply(res.fen)
         }
@@ -569,7 +582,7 @@ export default function ChessTrainerPage() {
     setLastMove(null)
     setSelected(null)
     setLegalTargets([])
-    setHistory([])
+    setHistory((h) => h.slice(0, -1))
     setExplanationOpen(false)
   }
 
@@ -583,6 +596,7 @@ export default function ChessTrainerPage() {
       if (res.ok && res.fen) {
         setHistory((h) => [...h, res.san ?? res.uci ?? ""])
         if (res.uci) setLastMove({ from: res.uci.slice(0, 2), to: res.uci.slice(2, 4) })
+        setFenHistory((fh) => [...fh, playerFen])
         setFen(res.fen)
       }
     } catch { /* ignore */ }
@@ -590,6 +604,7 @@ export default function ChessTrainerPage() {
 
   const resetToPractice = (p: PracticePosition) => {
     setFen(p.fen)
+    setFenHistory([])
     setHistory([])
     setResult(null)
     setLastMove(null)
@@ -600,8 +615,13 @@ export default function ChessTrainerPage() {
   }
 
   const undoMove = () => {
-    setHistory((h) => h.slice(0, -1))
-    setFen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1")
+    setFenHistory((fh) => {
+      const popCount = fh.length >= 2 ? 2 : 1
+      const prev = fh[fh.length - popCount]
+      if (prev) setFen(prev)
+      return fh.slice(0, -popCount)
+    })
+    setHistory((h) => h.slice(0, -(h.length >= 2 ? 2 : 1)))
     setResult(null)
     setLastMove(null)
     setSelected(null)
@@ -989,6 +1009,22 @@ export default function ChessTrainerPage() {
           </Badge>
         </div>
       </header>
+      
+      <div className="mb-4">
+        <ActionOnboardingCard
+          id="chess-hero"
+          hero
+          title="Play the Opening"
+          description="The best way to learn is by playing. Make your first move on the board against the engine, and it will evaluate your play."
+          actionLabel="Start a Game"
+          icon={<Play size={24} />}
+          onAction={() => {
+            const el = document.getElementById("chess-new-game-btn")
+            if (el) el.click()
+            window.scrollTo({ top: 0, behavior: "smooth" })
+          }}
+        />
+      </div>
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,520px)_minmax(0,1fr)] lg:items-start">
         {/* Board + controls — sticky so the board stays visible while you scroll
@@ -1034,8 +1070,8 @@ export default function ChessTrainerPage() {
               </div>
               <div className="flex gap-2">
                 <Button size="sm" variant="outline" onClick={undoMove} disabled={history.length === 0}>↺ Undo</Button>
-                <Button size="sm" variant="outline" onClick={coachHint}>💡 Coach</Button>
-                <Button size="sm" variant="outline" onClick={newGame}>New game</Button>
+                <Button id="chess-coach-btn" size="sm" variant="outline" onClick={coachHint}>💡 Coach</Button>
+                <Button id="chess-new-game-btn" size="sm" variant="outline" onClick={newGame}>New game</Button>
               </div>
             </div>
 
@@ -1117,6 +1153,20 @@ export default function ChessTrainerPage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
+              {review.length === 0 && (
+                <ActionOnboardingCard
+                  id="chess-review"
+                  title="Spaced Repetition"
+                  description="When you blunder, the engine saves the mistake. It will re-test you on that exact position later to build muscle memory."
+                  actionLabel="Analyze a Game"
+                  icon={<RefreshCw size={20} />}
+                  onAction={() => {
+                    const el = document.getElementById("chess-analyze-btn")
+                    if (el) el.click()
+                  }}
+                />
+              )}
+
               {activeReview && (
                 <div className="rounded-lg border border-emerald-400/20 bg-emerald-950/10 p-3">
                   <div className="mb-1 text-sm font-semibold text-emerald-200">Review position</div>
@@ -1260,7 +1310,7 @@ export default function ChessTrainerPage() {
             <CardHeader>
               <div className="flex items-center justify-between">
                 <CardTitle className="text-base">Concept training</CardTitle>
-                <Button size="sm" variant="outline" onClick={buildTraining} disabled={trainingBuilding}>
+                <Button id="chess-build-training-btn" size="sm" variant="outline" onClick={buildTraining} disabled={trainingBuilding}>
                   {trainingBuilding ? "…" : "Build / refresh"}
                 </Button>
               </div>
@@ -1271,6 +1321,20 @@ export default function ChessTrainerPage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
+              {!trainingItem && !trainingProgress?.total_items && (
+                <ActionOnboardingCard
+                  id="chess-training"
+                  title="Concept Training"
+                  description="Repair your recurring mistakes through active recall. The trainer generates new positions that test the exact same concept you struggled with."
+                  actionLabel="Build Training"
+                  icon={<BookOpen size={20} />}
+                  onAction={() => {
+                    const el = document.getElementById("chess-build-training-btn")
+                    if (el) el.click()
+                  }}
+                />
+              )}
+
               {/* Confidence calibration summary (analytics only — never reorders
                   training; observed performance outranks self-reported confidence). */}
               {trainingCalibration && trainingCalibration.concepts && Object.keys(trainingCalibration.concepts).length > 0 && (
@@ -1387,6 +1451,20 @@ export default function ChessTrainerPage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
+              {!result && (
+                <ActionOnboardingCard
+                  id="chess-coach"
+                  title="Play-Coach Pattern"
+                  description="When you get stuck, tap the Coach button for a progressive hint. First it gives a concept, then draws an arrow, and finally reveals the best move."
+                  actionLabel="Ask Coach"
+                  icon={<BrainCircuit size={20} />}
+                  onAction={() => {
+                    const el = document.getElementById("chess-coach-btn")
+                    if (el) el.click()
+                  }}
+                />
+              )}
+
               {result?.sacrifice && result.sacrifice.sound && (
                 <div className="rounded-lg border border-violet-400/30 bg-violet-400/10 p-3">
                   <div className="mb-1 text-sm font-semibold text-violet-200">Brilliant — sound sacrifice! {result.sacrifice.pattern}</div>
@@ -1490,7 +1568,7 @@ export default function ChessTrainerPage() {
                 <Button size="sm" variant="outline" onClick={buildProfile} disabled={ccProfileLoading}>
                   {ccProfileLoading ? "Building…" : "Profile + journey"}
                 </Button>
-                <Button size="sm" variant="outline" onClick={startAnalysis} disabled={ccJob?.status === "running"}>
+                <Button id="chess-analyze-btn" size="sm" variant="outline" onClick={startAnalysis} disabled={ccJob?.status === "running"}>
                   {ccJob?.status === "running" ? "Analyzing…" : "Analyze all games"}
                 </Button>
               </div>

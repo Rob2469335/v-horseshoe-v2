@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card"
 import { Button } from "./ui/button"
 import { Badge } from "./ui/badge"
+import { ActionOnboardingCard } from "./ui/action-onboarding-card"
+import { Mail } from "lucide-react"
 
 type EmailMessage = {
   id: string
@@ -175,6 +177,18 @@ export default function EmailPanel({ backendUrl }: Props) {
           </div>
         )}
 
+        <ActionOnboardingCard
+          id="email-quickstart"
+          title="Triage Your Inbox"
+          description="The agent can process your inbox autonomously. Let's start by having it find all newsletters and unsubscribe links for you."
+          actionLabel="Scan for Newsletters"
+          icon={<Mail size={20} />}
+          onAction={() => {
+            const btn = document.getElementById("email-scan-btn")
+            if (btn) btn.click()
+          }}
+        />
+
         <div className="flex gap-2">
           <input
             className="flex-1 rounded-md border border-white/10 bg-black/40 px-3 py-1.5 text-sm text-white/80"
@@ -233,7 +247,7 @@ export default function EmailPanel({ backendUrl }: Props) {
           <Button size="sm" variant="outline" onClick={runDigest} disabled={digestLoading}>
             {digestLoading ? "Digesting…" : "Weekly digest"}
           </Button>
-          <Button size="sm" variant="outline" onClick={scanUnsubscribes}>Scan for newsletters</Button>
+          <Button id="email-scan-btn" size="sm" variant="outline" onClick={scanUnsubscribes}>Scan for newsletters</Button>
         </div>
 
         {digest && (

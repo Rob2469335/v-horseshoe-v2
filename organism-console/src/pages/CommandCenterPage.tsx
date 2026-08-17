@@ -11,7 +11,8 @@ import WebTaskPanel from "../components/WebTaskPanel"
 import DeepResearchPanel from "../components/DeepResearchPanel"
 import NewsPanel from "../components/NewsPanel"
 import TasksPanel from "../components/TasksPanel"
-
+import { ActionOnboardingCard } from "../components/ui/action-onboarding-card"
+import { Activity } from "lucide-react"
 type LiveEvent = {
   event?: string
   type?: string
@@ -288,6 +289,22 @@ export default function CommandCenterPage() {
           ))}
         </div>
       )}
+
+      {/* ============ Onboarding Hero ============ */}
+      <div className="mb-6">
+        <ActionOnboardingCard
+          id="cmd-hero"
+          hero
+          title="Command Center Quick Start"
+          description="This is the swarm transparency layer. Observe active probes, view health scores, and watch live agent actions. Run a diagnostic to see it in action."
+          actionLabel="Run System Diagnostic"
+          icon={<Activity size={24} />}
+          onAction={() => {
+            overviewQuery.refetch()
+            log("Running system diagnostic probe...", "ok")
+          }}
+        />
+      </div>
 
       {/* ============ Status strip ============ */}
       <div className={`mb-6 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 rounded-2xl border p-4 ${statusTone}`}>

@@ -12,8 +12,69 @@
  *  - Coordinates: lichess-style, 9px, opacity .8, alternating dark/light.
  *  - Move animation: transform transition ~200ms cubic-bezier on pieces.
  */
-import { useMemo } from "react"
+import { useMemo, useEffect, useRef } from "react"
 import { ChessPiece } from "./ChessPiece"
+
+function AnimatedPiece({
+  piece,
+  fileIdx,
+  rankIdx,
+  isMoved,
+  lastMove,
+  displayFiles,
+  displayRanks,
+  sqLeftPct,
+  sqTopPct
+}: {
+  piece: string
+  fileIdx: number
+  rankIdx: number
+  isMoved: boolean
+  lastMove: { from: string; to: string } | null
+  displayFiles: string[]
+  displayRanks: string[]
+  sqLeftPct: (i: number) => number
+  sqTopPct: (i: number) => number
+}) {
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (isMoved && lastMove) {
+      const fromFileIdx = displayFiles.indexOf(lastMove.from[0])
+      const fromRankIdx = displayRanks.indexOf(lastMove.from[1])
+      const dx = (fromFileIdx - fileIdx) * 100
+      const dy = (fromRankIdx - rankIdx) * 100
+      if (dx !== 0 || dy !== 0) {
+        ref.current?.animate(
+          [
+            { transform: `translate(${dx}%, ${dy}%)` },
+            { transform: 'translate(0px, 0px)' }
+          ],
+          {
+            duration: 200,
+            easing: 'cubic-bezier(0.35, 0.7, 0.5, 1)'
+          }
+        )
+      }
+    }
+  }, [isMoved, lastMove, fileIdx, rankIdx, displayFiles, displayRanks])
+
+  return (
+    <div
+      ref={ref}
+      className="absolute"
+      style={{
+        width: "12.5%",
+        height: "12.5%",
+        left: `${sqLeftPct(fileIdx)}%`,
+        top: `${sqTopPct(rankIdx)}%`,
+        willChange: "transform",
+      }}
+    >
+      <ChessPiece piece={piece} />
+    </div>
+  )
+}
 
 const FILES = "abcdefgh"
 const RANKS = "87654321"
@@ -205,28 +266,22 @@ export default function ChessBoard({
             })
           )}
         </div>
-        {/* Animated piece layer (transform-transitioned, 200ms cubic-bezier). */}
         <div className="pointer-events-none absolute inset-0 z-10">
           {pieceLayer.map((it) => {
-            const isMoved = lastMove && lastMove.to === it.sq && lastMove.from !== lastMove.to
-            const dx = isMoved ? (sqLeftPct(displayFiles.indexOf(lastMove!.from[0])) - sqLeftPct(it.fileIdx)) : 0
-            const dy = isMoved ? (sqTopPct(displayRanks.indexOf(lastMove!.from[1])) - sqTopPct(it.rankIdx)) : 0
+            const isMoved = !!lastMove && lastMove.to === it.sq && lastMove.from !== lastMove.to
             return (
-              <div
+              <AnimatedPiece
                 key={it.sq}
-                className="absolute"
-                style={{
-                  width: "12.5%",
-                  height: "12.5%",
-                  left: `${sqLeftPct(it.fileIdx)}%`,
-                  top: `${sqTopPct(it.rankIdx)}%`,
-                  transform: isMoved ? `translate(${dx}%, ${dy}%)` : undefined,
-                  transition: isMoved ? "transform 200ms cubic-bezier(0.35, 0.7, 0.5, 1)" : undefined,
-                  willChange: "transform",
-                }}
-              >
-                <ChessPiece piece={it.piece} />
-              </div>
+                piece={it.piece}
+                fileIdx={it.fileIdx}
+                rankIdx={it.rankIdx}
+                isMoved={isMoved}
+                lastMove={lastMove || null}
+                displayFiles={displayFiles}
+                displayRanks={displayRanks}
+                sqLeftPct={sqLeftPct}
+                sqTopPct={sqTopPct}
+              />
             )
           })}
         </div>

@@ -2,6 +2,8 @@ import { useState } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card"
 import { Button } from "./ui/button"
 import { Badge } from "./ui/badge"
+import { ActionOnboardingCard } from "./ui/action-onboarding-card"
+import { Globe } from "lucide-react"
 
 type Step = {
   action: string
@@ -71,6 +73,22 @@ export default function WebTaskPanel({ backendUrl }: Props) {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
+        {!running && !result && (
+          <ActionOnboardingCard
+            id="webtask-quickstart"
+            title="Drive the Browser"
+            description="The agent can read pages, click, and navigate on your behalf. Try a quick web task."
+            actionLabel="Run Example Task"
+            icon={<Globe size={20} />}
+            onAction={() => {
+              setGoal("Find the latest React 19 release notes")
+              setTimeout(() => {
+                const btn = document.getElementById("webtask-run-btn")
+                if (btn) btn.click()
+              }, 100)
+            }}
+          />
+        )}
         <div className="flex gap-2">
           <input
             className="flex-1 rounded-md border border-white/10 bg-black/40 px-3 py-1.5 text-sm text-white/80"
@@ -80,7 +98,7 @@ export default function WebTaskPanel({ backendUrl }: Props) {
             onKeyDown={(e) => e.key === "Enter" && runTask()}
             disabled={running}
           />
-          <Button size="sm" disabled={running || !goal.trim()} onClick={() => runTask()}>
+          <Button id="webtask-run-btn" size="sm" disabled={running || !goal.trim()} onClick={() => runTask()}>
             {running ? "Working…" : "Run task"}
           </Button>
         </div>

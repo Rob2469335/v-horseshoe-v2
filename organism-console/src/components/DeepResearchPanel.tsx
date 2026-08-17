@@ -2,6 +2,8 @@ import { useState } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card"
 import { Button } from "./ui/button"
 import { Badge } from "./ui/badge"
+import { ActionOnboardingCard } from "./ui/action-onboarding-card"
+import { Search } from "lucide-react"
 
 type Citation = { n: number; title: string; url: string }
 
@@ -62,6 +64,22 @@ export default function DeepResearchPanel({ backendUrl }: Props) {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
+        {!running && !result && (
+          <ActionOnboardingCard
+            id="deepresearch-quickstart"
+            title="Deep Research Agent"
+            description="The agent will spawn sub-researchers, execute parallel searches, read sources, and synthesize a final report. Try it out."
+            actionLabel="Start Deep Research"
+            icon={<Search size={20} />}
+            onAction={() => {
+              setGoal("Analyze SOTA UI trends for 2026")
+              setTimeout(() => {
+                const btn = document.getElementById("deepresearch-run-btn")
+                if (btn) btn.click()
+              }, 100)
+            }}
+          />
+        )}
         <div className="flex gap-2">
           <input
             className="flex-1 rounded-md border border-white/10 bg-black/40 px-3 py-1.5 text-sm text-white/80"
@@ -71,7 +89,7 @@ export default function DeepResearchPanel({ backendUrl }: Props) {
             onKeyDown={(e) => e.key === "Enter" && runResearch()}
             disabled={running}
           />
-          <Button size="sm" disabled={running || !goal.trim()} onClick={runResearch}>
+          <Button id="deepresearch-run-btn" size="sm" disabled={running || !goal.trim()} onClick={runResearch}>
             {running ? "Researching…" : "Deep research"}
           </Button>
         </div>
