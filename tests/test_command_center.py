@@ -8,6 +8,7 @@ The key behaviors:
   4. The persistent browser handler reports session state without crashing.
 """
 
+import os
 import time
 
 import pytest
@@ -72,8 +73,11 @@ def test_file_read_resolution(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "ok.txt").write_text("hello", encoding="utf-8")
     assert ctl._resolve_project_file("ok.txt") == str(tmp_path / "ok.txt")
+    # os.path.join builds a platform-correct traversal: backslash separators are
+    # only a traversal on Windows — a literal "..\\..\\etc\\passwd" is a plain
+    # filename on POSIX and stays inside the project root (no exception).
     with pytest.raises(Exception):
-        ctl._resolve_project_file("..\\..\\etc\\passwd")
+        ctl._resolve_project_file(os.path.join("..", "..", "etc", "passwd"))
 
 
 def test_file_read_resolution_rejects_sibling_prefix_collision(tmp_path, monkeypatch):
