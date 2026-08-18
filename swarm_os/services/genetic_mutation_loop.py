@@ -1,6 +1,7 @@
 import json
 import asyncio
 import logging
+import os
 import shutil
 import uuid
 from pathlib import Path
@@ -35,10 +36,19 @@ if logging.getLogger().handlers == []:
 ROOT_DIR = Path(__file__).parent.parent.parent.resolve()
 PENDING_MUTATION_DIR = ROOT_DIR / ".data" / "pending_mutations"
 AGENT_SERVICE_PATH = ROOT_DIR / "runtime_v2" / "api" / "agent_service_v2.py"
-# Code mutation = complex reasoning — use the cloud DeepSeek V4 Flash default
-# (funded, cheap) instead of local qwen3.5-4b which produces weak mutations.
-MODEL = "openai/deepseek-v4-flash"
+# Code mutation = complex reasoning — use a cloud model instead of local qwen3.5-4b
+# which produces weak mutations. Use the SAME free-first analysis-cloud selection
+# the rest of the swarm uses (any free provider key enables it; default NVIDIA
+# free flash), so a provider with an expired/unusable credential can never be
+# chosen (previously a dead GEMINI_API_KEY was preferred and halted evolution).
+from runtime_v2.services._llm_client import (
+    _analysis_cloud_enabled,
+    _analysis_cloud_model,
+)
 
+MODEL = (
+    _analysis_cloud_model() if _analysis_cloud_enabled() else "openai/deepseek-v4-flash"
+)
 EVOLUTION_PROMPT = """You are the Swarm OS Genetic Architect. 
 Your goal is to optimize the core engine function `{target_func}` to make it faster and use less memory based on recent performance logs.
 
@@ -137,23 +147,36 @@ async def run_genetic_mutation(
         messages = [{"role": "user", "content": prompt}]
 
         try:
-            # Route to cloud DeepSeek (OpenCode Go / OPENAI_API_BASE) when the
-            # model is a cloud id; fall back to local llama.cpp otherwise.
-            _is_cloud = "/" in MODEL and not MODEL.startswith("openai/qwen")
-            import os as _os
+            # Fail over through the LIVE cloud chain immediately when a provider
+            # drops out (free tiers cycle/expire often). Mirrors the proven
+            # complete_for_tool_decision seam: build_kwargs() emits a per-provider
+            # dict fallback list (each scoped to its OWN endpoint+key), and
+            # litellm.acompletion() walks the chain on failure — a dead provider
+            # (NVIDIA free quota, Groq/Gemini limits, OpenRouter credit) is skipped
+            # on the next call instead of burning retries on it and halting
+            # evolution. (A litellm Router built over distinct model_name groups
+            # does NOT cross-failover without an explicit fallbacks arg — verified
+            # empirically — so the dict-fallback form is required.)
+            from runtime_v2.services.fallback_manager import (
+                get_live_fallbacks,
+                _is_local_model,
+            )
+            from runtime_v2.services._llm_client import build_kwargs
 
-            _kwargs = {"model": MODEL, "messages": messages, "temperature": temperature}
-            if _is_cloud:
-                _base = _os.getenv("OPENAI_API_BASE", "")
-                _key = _os.getenv("OPENAI_API_KEY", "")
-                if _base:
-                    _kwargs["api_base"] = _base
-                if _key:
-                    _kwargs["api_key"] = _key
-            else:
-                _kwargs.update(api_base="http://127.0.0.1:8080/v1", api_key="llama")
+            routing_mode = os.getenv("SWARM_ROUTING_MODE", "auto")
+            raw_fallbacks = await get_live_fallbacks(mode=routing_mode)
+            fallbacks = [
+                f["model"] for f in raw_fallbacks if not _is_local_model(f["model"])
+            ][:4]
+            kwargs = build_kwargs(
+                MODEL,
+                {"messages": messages, "temperature": temperature},
+                fallbacks,
+            )
+            kwargs["max_retries"] = 0
+            kwargs["timeout"] = 90.0
             async with asyncio.timeout(90):
-                res = await acompletion(**_kwargs)
+                res = await acompletion(**kwargs)
             mutated_code_full = res.choices[0].message.content
 
             match = re.search(r"```(?:python)?(.*?)```", mutated_code_full, re.DOTALL)

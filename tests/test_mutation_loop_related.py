@@ -49,3 +49,34 @@ def test_mutation_loop_sync_writes_offloaded_to_thread():
     history_block = src.split("HISTORY_FILE.parent.mkdir")[1]
     assert "asyncio.to_thread(" in history_block
     assert "HISTORY_FILE.write_text(json.dumps" not in history_block
+
+
+def test_mutation_loop_llm_call_fails_over_across_providers():
+    """The mutation-loop LLM call must fail over to the NEXT provider when the
+    chosen one drops out (free tiers cycle/expire often) — never retry a dead
+    provider until the chain is exhausted. The proven cross-provider failover
+    seam is build_kwargs() + litellm.acompletion(**kwargs) with a per-provider
+    dict fallback list (each scoped to its own endpoint/key), the same call
+    complete_for_tool_decision uses.
+
+    A litellm.Router built over distinct model_name groups does NOT
+    cross-failover without an explicit fallbacks arg (verified empirically), so
+    this pins the dict-fallback form: build_kwargs imports present, the
+    acompletion call carries the fallbacks-bearing kwargs, and no Router is
+    constructed in the retry block."""
+    import inspect
+
+    import swarm_os.services.genetic_mutation_loop as gml
+
+    src = inspect.getsource(gml.run_genetic_mutation)
+    # The chain must come from the LIVE fallback list, filtered to cloud models.
+    assert "await get_live_fallbacks(mode=routing_mode)" in src
+    assert 'not _is_local_model(f["model"])' in src
+    # Per-provider dict fallbacks must reach the LLM call via build_kwargs.
+    assert "build_kwargs(" in src
+    assert "res = await acompletion(**kwargs)" in src
+    # The retry block must NOT build a Router (it would silently lose failover).
+    assert "build_router" not in src
+    # The chosen model must be the free-first analysis-cloud default when a free
+    # key is present, never a hardcoded single provider.
+    assert "_analysis_cloud_model()" in inspect.getsource(gml)
