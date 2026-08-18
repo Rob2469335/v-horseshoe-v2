@@ -11,6 +11,27 @@ import pytest
 from unittest.mock import AsyncMock
 
 
+@pytest.fixture(autouse=True)
+def global_subprocess_mock(request):
+    """Shadow the CI conftest's autouse subprocess.Popen mock for the DangerRoom
+    test: run_tests spawns a REAL `sys.executable -m pytest` in the sandbox via
+    asyncio.create_subprocess_exec, which on POSIX wraps subprocess.Popen — the
+    conftest mock would make the run return exit code -1 ("[Errno 3] No such
+    process") on the Linux runner. Windows' asyncio uses CreateProcess and is
+    unaffected, but the real Popen is harmless there too.
+    """
+    if request.node.name == "test_danger_room_run_tests_returns_real_exit_code":
+        yield  # real subprocess.Popen stays intact for the sandbox pytest run
+        return
+    from unittest.mock import patch
+
+    with patch("subprocess.Popen") as mock_popen:
+        mock_popen.return_value.communicate.return_value = (b"", b"")
+        mock_popen.return_value.returncode = 0
+        mock_popen.return_value.pid = 99999
+        yield mock_popen
+
+
 def test_compute_fitness_completion_gating():
     from swarm_os.services.outcome_fitness import compute_fitness
 
