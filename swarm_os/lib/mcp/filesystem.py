@@ -74,16 +74,28 @@ def filesystem_handler(
     root = root.resolve()
 
     def resolve_in_sandbox(requested_path_str: str) -> Path:
-        # LLMs often assume they are in a linux root directory
+        # LLMs often assume they are in a linux root directory and pass "/foo.py"
+        # meaning "foo.py" relative to the sandbox root. But a REAL absolute path
+        # that resolves INSIDE the sandbox must be honored as-is — the old code
+        # stripped the leading "/" from any no-colon path, so on POSIX a genuine
+        # absolute path like "/tmp/pytest-of-runner/.../file.txt" was rewritten to
+        # a nested relative path (Windows absolute paths carry a drive ":" so they
+        # were never hit). Try the literal path first; only fall back to the
+        # root-relative heuristic when it is outside the sandbox.
         if requested_path_str in ("/", "\\"):
             requested_path_str = "."
-        elif (
-            requested_path_str.startswith("/") or requested_path_str.startswith("\\")
-        ) and ":" not in requested_path_str:
-            requested_path_str = requested_path_str.lstrip("/\\") or "."
-
         try:
             req_path = Path(requested_path_str or ".")
+            if req_path.is_absolute():
+                target_path = req_path.resolve()
+                target_path.relative_to(root)
+                return target_path
+        except ValueError:
+            pass  # absolute path outside root -> try the LLM root-relative form
+
+        stripped = requested_path_str.lstrip("/\\") or "."
+        try:
+            req_path = Path(stripped)
             if req_path.is_absolute():
                 target_path = req_path.resolve()
             else:
