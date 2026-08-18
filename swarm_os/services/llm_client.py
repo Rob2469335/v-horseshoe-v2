@@ -20,6 +20,10 @@ class CloudLLMClient:
     @staticmethod
     def detect_provider(model_name: str) -> str:
         model_name = model_name.lower()
+        if model_name.startswith("gemini/"):
+            return "gemini"
+        if model_name.startswith("groq/"):
+            return "groq"
         if model_name.startswith("openrouter/") or "/" in model_name:
             if "nvidia" in model_name and "openrouter" not in model_name:
                 return "nvidia"
@@ -69,11 +73,37 @@ class CloudLLMClient:
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
             }
+        elif provider == "gemini":
+            api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+            base_url = os.environ.get(
+                "GEMINI_BASE_URL",
+                "https://generativelanguage.googleapis.com/v1beta/openai",
+            ).strip()
+            url = f"{base_url}/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            }
+        elif provider == "groq":
+            api_key = os.environ.get("GROQ_API_KEY", "").strip()
+            base_url = os.environ.get(
+                "GROQ_BASE_URL", "https://api.groq.com/openai/v1"
+            ).strip()
+            url = f"{base_url}/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            }
         else:
             raise ValueError(f"Unsupported cloud provider: {provider}")
 
         # Strip prefixes from model name for the cloud API
-        clean_model = model.replace("openrouter/", "").replace("nvidia/", "")
+        clean_model = (
+            model.replace("openrouter/", "")
+            .replace("nvidia/", "")
+            .replace("gemini/", "")
+            .replace("groq/", "")
+        )
         if provider == "openrouter" and any(
             forbidden in clean_model.lower()
             for forbidden in ("claude", "anthropic", "sonnet", "opus", "gpt-4")
