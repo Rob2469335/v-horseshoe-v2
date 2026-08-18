@@ -78,7 +78,7 @@ def test_build_kwargs_routes_zen_free_and_go_paid():
                 os.environ[k] = v
 
 
-def test_chain_leads_with_free_flash_zen_go_paid(monkeypatch):
+def test_chain_free_then_paid_direct_then_opencode_go_last(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     monkeypatch.setenv("OPENAI_API_BASE", "https://opencode.ai/zen/go/v1")
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or")
@@ -104,13 +104,18 @@ def test_chain_leads_with_free_flash_zen_go_paid(monkeypatch):
         return [f["model"] for f in fm._cached_fallbacks]
 
     models = asyncio.run(_run())
-    # The three v4-flash options lead INLINE: NVIDIA free -> Zen free -> Go paid.
+    # Free providers lead (NVIDIA NIM first); paid DeepSeek direct then the
+    # OpenCode pair (Zen FREE, Go PAID last of the cloud chain).
     assert models[0] == "nvidia_nim/deepseek-ai/deepseek-v4-flash"
-    assert models[1] == "openai/zen/deepseek-v4-flash"
-    assert models[2] == "openai/deepseek-v4-flash"
-    # DeepSeek direct (paid api.deepseek.com) is the LAST cloud entry.
     assert "deepseek/deepseek-v4-flash" in models
-    assert models.index("deepseek/deepseek-v4-flash") > models.index(
+    assert "openai/zen/deepseek-v4-flash" in models
+    assert "openai/deepseek-v4-flash" in models
+    # Paid Go sits AFTER paid DeepSeek direct (paid-last, not leading).
+    assert models.index("openai/deepseek-v4-flash") > models.index(
+        "deepseek/deepseek-v4-flash"
+    )
+    # Zen free stays before Go paid within the pair.
+    assert models.index("openai/zen/deepseek-v4-flash") < models.index(
         "openai/deepseek-v4-flash"
     )
 
