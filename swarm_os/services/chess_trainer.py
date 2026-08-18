@@ -1491,3 +1491,111 @@ async def _explain_move(
     if enhanced:
         return f"{det}\n\n{enhanced}"
     return det
+
+
+# ---------------------------------------------------------------------------
+# Socratic coaching (2026 SOTA — ChessDojo-style "what's the idea?" active
+# recall). One turn = the coach asks a question (or reacts to the learner's
+# answer); the frontend holds the rolling dialogue and calls back. The coach
+# never gives the move away until the learner has been stuck several turns
+# (fail-open reveal) — the point is retrieval, not spoon-feeding.
+# ---------------------------------------------------------------------------
+
+
+async def _socratic_coach_turn(
+    fen: str,
+    plan: dict[str, Any],
+    best_move_san: str | None,
+    history: list[dict[str, str]],
+) -> dict[str, Any]:
+    """Produce the coach's next turn for a position. `history` is the rolling
+    dialogue [{role: "user"|"coach", content}], oldest first. Returns
+    {ok, reply} where reply is the coach's text (a question, a reaction, or a
+    reveal). Fail-closed: LLM failure degrades to a deterministic nudge."""
+    try:
+        import chess as _chess  # noqa: F401  (kept for parity with _llm_enhancement)
+        import litellm
+
+        from ..core.settings import get_settings
+
+        concept = plan.get("standard_plan", {}).get("name", "") or plan.get(
+            "plan", ""
+        )
+        turns = len(history)
+        dial = "\n".join(
+            f"{'LEARNER' if m.get('role') == 'user' else 'COACH'}: {m.get('content', '')}"
+            for m in history[-8:]
+        )
+        reveal = turns >= 5
+        prompt = (
+            "You are a Socratic chess coach for a ~500-rated beginner. Your job "
+            "is to guide them to SEE the idea themselves, one question at a time "
+            "- never lecture, never dump the answer.\n"
+            "Position facts (ground your question in these; do not invent):\n"
+            f"- The plan is: {plan.get('plan', '')}\n"
+            f"- Concept: {concept}\n"
+            f"- Weakest enemy point: {plan.get('weak_square') or 'not obvious'}\n"
+            f"- Their king exposure: {plan.get('king_alert') or 'normal'}\n"
+            f"- Best move (SECRET - do not name it): {best_move_san or 'unknown'}\n\n"
+            "Rules:\n"
+            "1. Ask ONE short question, or react to the learner's last answer in "
+            "1-2 short sentences then ask the next question.\n"
+            "2. Draw attention to the relevant area (a loose piece, the king's "
+            "file, the weak square) without naming the move.\n"
+            "3. Affirm what is right in their thinking; gently correct blind spots.\n"
+            "4. Plain beginner language. Keep it under 40 words.\n"
+            "5. Do NOT name the best move. "
+            f"{'HOWEVER the learner has been stuck for several turns, so now give a gentle concrete nudge (still not the exact move if avoidable).' if reveal else ''}\n\n"
+            f"DIALOGUE SO FAR:\n{dial or '(start of conversation - open with a question about the position)'}\n\n"
+            "COACH:"
+        )
+        s = get_settings()
+
+        ds_key = os.getenv("DEEPSEEK_API_KEY", "")
+        if ds_key:
+            for attempt in (0, 1):
+                async with asyncio.timeout(_EXPLAIN_TIMEOUT_S):
+                    resp = await litellm.acompletion(
+                        model="deepseek/deepseek-v4-flash",
+                        messages=[{"role": "user", "content": prompt}],
+                        api_key=ds_key,
+                        max_tokens=300,
+                        timeout=_EXPLAIN_TIMEOUT_S,
+                    )
+                text = (resp.choices[0].message.content or "").strip()
+                if text:
+                    return {"ok": True, "reply": text[:600]}
+                if attempt == 0:
+                    await asyncio.sleep(0.5)
+            raise RuntimeError("deepseek returned empty content twice")
+
+        model = getattr(s, "analysis_cloud_model", None) or "openai/deepseek-v4-flash"
+        base = os.getenv("OPENAI_API_BASE", "https://opencode.ai/zen/go/v1")
+        key = os.getenv("OPENAI_API_KEY", "")
+        if key:
+            async with asyncio.timeout(_EXPLAIN_TIMEOUT_S):
+                resp = await litellm.acompletion(
+                    model=model,
+                    messages=[{"role": "user", "content": prompt}],
+                    api_base=base,
+                    api_key=key,
+                    custom_llm_provider="openai",
+                    max_tokens=1500,
+                    timeout=_EXPLAIN_TIMEOUT_S,
+                )
+            msg = resp.choices[0].message
+            text = (msg.content or "").strip()
+            if text:
+                return {"ok": True, "reply": text[:600]}
+        log.warning("socratic coach: no cloud key, using deterministic fallback")
+    except Exception as exc:
+        log.warning("socratic coach LLM failed, using deterministic fallback: %s", exc)
+
+    # Deterministic fallback: a concept nudge grounded in the plan checklist
+    # (no move given) - the same engine-grounded nudge as hint level 1.
+    nudge = plan.get("plan", "")
+    if plan.get("king_alert"):
+        nudge = f"{plan['king_alert']} - look at the kings before deciding."
+    if not nudge:
+        nudge = "Look for the weakest point in your opponent's position."
+    return {"ok": True, "reply": nudge[:300]}

@@ -586,3 +586,73 @@ def test_eval_cp_mate_does_not_crash():
     # Side-to-move being mated in 3 -> negative.
     info2 = {"score": ce.PovScore(ce.Mate(-3), chess.BLACK)}
     assert ct._eval_cp(info2) == pytest.approx(-99997.0)
+
+
+# ---------------------------------------------------------------------------
+# Socratic coach
+# ---------------------------------------------------------------------------
+def test_socratic_coach_deterministic_fallback_without_llm(monkeypatch):
+    """The Socratic coach must NOT raise when no cloud key is set — it degrades
+    to a deterministic engine-grounded nudge (fail-open, never a crash)."""
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(ct, "_LLM_EXPLAIN_ENABLED", True)
+
+    import asyncio
+
+    plan = ct.coach_plan(chess.Board().fen())
+    res = asyncio.run(ct._socratic_coach_turn(chess.Board().fen(), plan, "e2e4", []))
+    assert res["ok"] is True
+    assert res["reply"]
+    # The fallback nudge never names a move / reveals nothing secret.
+    assert "e2e4" not in res["reply"]
+
+
+def test_socratic_coach_llm_failure_degrades(monkeypatch):
+    """A throwing LLM must degrade to the deterministic fallback, never raise."""
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(ct, "_LLM_EXPLAIN_ENABLED", True)
+
+    import asyncio
+
+    import litellm
+
+    async def boom(*a, **k):
+        raise RuntimeError("llm down")
+
+    monkeypatch.setattr(litellm, "acompletion", boom)
+
+    plan = ct.coach_plan(chess.Board().fen())
+    res = asyncio.run(ct._socratic_coach_turn(chess.Board().fen(), plan, "e2e4", [{"role": "user", "content": "I'm stuck"}]))
+    assert res["ok"] is True
+    assert res["reply"]
+
+
+def test_socratic_api_wires_history_and_best_move(monkeypatch):
+    """The /coach/socratic route passes history through and echoes the engine's
+    best_move_san back to the frontend (for the fail-open reveal + arrows)."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from swarm_os.api import chess_trainer as trainer_api
+
+    async def fake_turn(fen, plan, best_move_san, history):
+        assert history  # non-empty dialogue reaches the service
+        return {"ok": True, "reply": "Look at their king's file."}
+
+    monkeypatch.setattr(ct, "_socratic_coach_turn", fake_turn)
+    monkeypatch.setattr(ct, "_best_move_and_cp", lambda board: ("e2e4", 30.0, ["e2e4"]))
+
+    app = FastAPI()
+    app.include_router(trainer_api.router)
+    with TestClient(app) as c:
+        r = c.post(
+            "/chess/trainer/coach/socratic",
+            json={"fen": chess.Board().fen(), "history": [{"role": "user", "content": "I'm stuck"}]},
+        )
+        assert r.status_code == 200
+        j = r.json()
+        assert j["ok"] is True
+        assert j["reply"] == "Look at their king's file."
+        assert j["best_move_san"] == "e4"  # SAN, not UCI — the route converts

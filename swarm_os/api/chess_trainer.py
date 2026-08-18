@@ -167,6 +167,24 @@ async def trainer_engine_move(req: EngineMoveRequest) -> dict[str, Any]:
         raise HTTPException(status_code=503, detail="engine move failed")
 
 
+class EngineStrongRequest(BaseModel):
+    fen: str = Field(..., description="Current position FEN")
+
+
+@router.post("/engine-strong")
+async def trainer_engine_strong(req: EngineStrongRequest) -> dict[str, Any]:
+    """The engine's BEST reply (no Skill Level nerf) for Sequel Drilling.
+    Returns the strongest possible reply so the learner has to prove their move works."""
+    from ..services.chess_trainer import engine_reply
+
+    try:
+        # level=20 is max Skill Level in Stockfish
+        return await engine_reply(req.fen, rating=2500, level=20)
+    except Exception as exc:
+        log.warning("chess engine-strong failed: %s", exc)
+        raise HTTPException(status_code=503, detail="engine strong move failed")
+
+
 class CoachHintRequest(BaseModel):
     fen: str = Field(..., description="Current position FEN (side to move)")
 
@@ -205,10 +223,85 @@ async def trainer_coach_hint(req: CoachHintRequest) -> dict[str, Any]:
     plan["hint_level_2"] = (
         "Look for a forcing move — a check, capture, or a sacrifice that opens their position"
     )
+
+    from ..services.chess_trainer import _LLM_EXPLAIN_ENABLED
+    if _LLM_EXPLAIN_ENABLED and plan.get("best_move_san"):
+        prompt = f"""You are a Socratic chess coach. The learner made a mistake.
+Concept/Issue: {plan.get('concept', 'Unknown')}
+The correct plan is: {plan.get('plan', '')}
+The best move to find is: {plan.get('best_move_san')}
+
+Provide two short hints to guide them without giving away the move.
+1. A perceptual hint (point their attention to the right area of the board, a loose piece, or a threat).
+2. A conceptual hint (explain WHAT they should try to achieve, e.g., "open the f-file" or "develop with tempo").
+
+Return strictly JSON format: {{"hint_level_1": "...", "hint_level_2": "..."}}"""
+        try:
+            from litellm import acompletion
+            import json
+            import os
+            
+            # Fast model attempt
+            res = await acompletion(
+                model="deepseek/deepseek-v4-flash" if os.environ.get("OPENROUTER_API_KEY") else "qwen3.5-4b",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=300,
+                timeout=15.0,
+                response_format={"type": "json_object"},
+                api_base="http://127.0.0.1:8080/v1" if not os.environ.get("OPENROUTER_API_KEY") else None,
+                api_key="llama" if not os.environ.get("OPENROUTER_API_KEY") else None,
+                custom_llm_provider="openai" if not os.environ.get("OPENROUTER_API_KEY") else None,
+            )
+            content = res.choices[0].message.content
+            if content:
+                data = json.loads(content)
+                if data.get("hint_level_1"):
+                    plan["hint_level_1"] = data["hint_level_1"]
+                if data.get("hint_level_2"):
+                    plan["hint_level_2"] = data["hint_level_2"]
+        except Exception as exc:
+            log.warning("Socratic LLM hint failed, using deterministic fallback: %s", exc)
+
     return plan
 
 
-@router.post("/index-books")
+class SocraticRequest(BaseModel):
+    fen: str = Field(..., description="Current position FEN (side to move)")
+    history: list[dict[str, str]] = Field(
+        default_factory=list,
+        description="Rolling dialogue [{role: user|coach, content}], oldest first",
+    )
+
+
+@router.post("/coach/socratic")
+async def trainer_coach_socratic(req: SocraticRequest) -> dict[str, Any]:
+    """Interactive Socratic coaching turn: the coach asks a question or reacts
+    to the learner's last answer, grounded in the engine's plan for the
+    position. The coach never names the best move until the learner has been
+    stuck several turns (fail-open reveal). Fail-closed: LLM outage degrades
+    to a deterministic plan nudge."""
+    from ..services.chess_trainer import coach_plan, _socratic_coach_turn, _best_move_and_cp
+    import asyncio
+    import chess
+
+    plan = coach_plan(req.fen)
+    if not plan.get("ok"):
+        raise HTTPException(status_code=503, detail="coach unavailable")
+
+    best_move_san = None
+    try:
+        board = chess.Board(req.fen)
+        best_move, _, _ = await asyncio.to_thread(_best_move_and_cp, board)
+        if best_move:
+            best_move_san = board.san(chess.Move.from_uci(best_move))
+    except Exception as exc:
+        log.warning("socratic best-move lookup failed for %s: %s", req.fen, exc)
+
+    result = await _socratic_coach_turn(req.fen, plan, best_move_san, req.history)
+    if not result.get("ok"):
+        raise HTTPException(status_code=503, detail="coach unavailable")
+    result["best_move_san"] = best_move_san
+    return result
 async def trainer_index_books(force: bool = False) -> dict[str, Any]:
     """Build/refresh the Qdrant chess-book index (idempotent)."""
     from ..services.chess_book_memory import index_books
@@ -262,6 +355,15 @@ async def trainer_review_stats() -> dict[str, Any]:
     from ..services.chess_mistakes import stats
 
     return stats()
+
+
+@router.get("/blunder-radar")
+async def trainer_blunder_radar(limit: int = 10) -> dict[str, Any]:
+    """Blunder Radar Mode: a mix of actual mistakes and solid positions.
+    The learner must decide 'Is there a tactic here?' (Yes/No)."""
+    from ..services.chess_mistakes import get_blunder_radar
+
+    return get_blunder_radar(limit=limit)
 
 
 @router.get("/review/top")
