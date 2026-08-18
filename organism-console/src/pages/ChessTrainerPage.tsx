@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { AnimatePresence, motion } from "framer-motion"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card"
 import { Button } from "../components/ui/button"
 import { Badge } from "../components/ui/badge"
@@ -357,6 +358,7 @@ type ReviewEntry = {
   book_titles?: string[]
   box?: number
   due_at?: number
+  lead_in_moves?: {fen: string; san: string; uci: string}[]
 }
 
 function parseFen(fen: string): Record<string, string> {
@@ -381,9 +383,81 @@ function sideToMove(fen: string): "w" | "b" {
   return (fen.split(" ")[1] || "w") as "w" | "b"
 }
 
+// Win% eval curve as an SVG line chart (zero new deps — no recharts). Hover a
+// point to see the move + win%; blunders are red dots, everything else blue.
+function EvalCurveChart({
+  curve,
+}: {
+  curve: Array<{ n: number; san?: string; win_pct?: number; classification?: string }>
+}) {
+  const [hover, setHover] = useState<number | null>(null)
+  const ref = useRef<HTMLDivElement | null>(null)
+  if (curve.length === 0) return null
+
+  const W = 640
+  const H = 72
+  const PAD = 6
+  const x = (i: number) => (curve.length === 1 ? W / 2 : PAD + (i / (curve.length - 1)) * (W - PAD * 2))
+  const y = (pct: number) => H - PAD - (Math.max(0, Math.min(100, pct)) / 100) * (H - PAD * 2)
+
+  const pts = curve.map((p, i) => `${x(i).toFixed(1)},${y(p.win_pct ?? 50).toFixed(1)}`)
+  const line = pts.join(" ")
+  const area = `M ${pts[0].split(",")[0]} ${H - PAD} L ${line.replace(/ /g, " L ")} L ${x(curve.length - 1)} ${H - PAD} Z`
+
+  const onMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!ref.current) return
+    const rect = ref.current.getBoundingClientRect()
+    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width))
+    setHover(Math.round(ratio * (curve.length - 1)))
+  }
+
+  return (
+    <div ref={ref} className="relative" onMouseMove={onMouseMove} onMouseLeave={() => setHover(null)}>
+      <svg viewBox={`0 0 ${W} ${H}`} className="h-16 w-full" preserveAspectRatio="none">
+        <polygon points={area} fill="#4da3e0" fillOpacity="0.12" />
+        <polyline
+          points={line}
+          fill="none"
+          stroke="#4da3e0"
+          strokeWidth="2"
+          vectorEffect="non-scaling-stroke"
+          strokeLinejoin="round"
+        />
+        {curve.map((p, i) => (
+          <circle
+            key={p.n}
+            cx={x(i)}
+            cy={y(p.win_pct ?? 50)}
+            r={hover === i ? 4 : 2.5}
+            fill={(p.classification ?? "").startsWith("B") ? "#e05b4d" : "#4da3e0"}
+            vectorEffect="non-scaling-stroke"
+          />
+        ))}
+        {hover !== null && (
+          <line
+            x1={x(hover)}
+            y1={PAD}
+            x2={x(hover)}
+            y2={H - PAD}
+            stroke="rgba(255,255,255,0.25)"
+            strokeWidth="1"
+            vectorEffect="non-scaling-stroke"
+          />
+        )}
+      </svg>
+      {hover !== null && curve[hover] && (
+        <div className="pointer-events-none absolute -top-7 left-1/2 -translate-x-1/2 whitespace-nowrap rounded border border-white/20 bg-black/90 px-2 py-0.5 text-[10px] text-white/90">
+          {curve[hover].n}. {curve[hover].san ?? ""} · {curve[hover].win_pct ?? "?"}%
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function ChessTrainerPage() {
   const backendUrl = "http://127.0.0.1:8000"
   const engineAbortRef = useRef<AbortController | null>(null)
+  const autoAdvanceTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const [fen, setFen] = useState("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1")
   const [fenHistory, setFenHistory] = useState<string[]>([]) // FEN snapshots for undo
   const [history, setHistory] = useState<string[]>([])
@@ -401,6 +475,7 @@ export default function ChessTrainerPage() {
   const [review, setReview] = useState<ReviewEntry[]>([])
   const [reviewStats, setReviewStats] = useState<{ total: number; due_count: number } | null>(null)
   const [activeReview, setActiveReview] = useState<ReviewEntry | null>(null)
+  const [leadInIndex, setLeadInIndex] = useState<number | null>(null)
   const [hint, setHint] = useState<CoachPlan | null>(null)
   const [hintLevel, setHintLevel] = useState(0)
   const [boardTheme, setBoardTheme] = useState<BoardThemeKey>("vibrant")
@@ -409,7 +484,11 @@ export default function ChessTrainerPage() {
   const [gameId, setGameId] = useState<string | null>(null)
   const [gameReview, setGameReview] = useState<GameReview | null>(null)
   const [reviewing, setReviewing] = useState(false)
-  const [reviewSolved, setReviewSolved] = useState<"none" | "solved" | "failed">("none")
+  const [reviewSolved, setReviewSolved] = useState<"none" | "solved" | "failed" | "sequel">("none")
+  const [isSequelDrill, setIsSequelDrill] = useState(false)
+  const [radarItems, setRadarItems] = useState<any[] | null>(null)
+  const [activeRadarItem, setActiveRadarItem] = useState<any | null>(null)
+  const [radarSolved, setRadarSolved] = useState<"none" | "correct" | "incorrect">("none")
   const [tips, setTips] = useState<Array<{ tip: string; source: string; category: string }> | null>(null)
   const [tipsLoading, setTipsLoading] = useState(false)
   const [topMistakes, setTopMistakes] = useState<Array<{
@@ -430,14 +509,18 @@ export default function ChessTrainerPage() {
   const [trainingConfidenceAt, setTrainingConfidenceAt] = useState<number | null>(null)
   const [trainingCalibration, setTrainingCalibration] = useState<Record<string, any> | null>(null)
   const [trainingBuilding, setTrainingBuilding] = useState(false)
+  // Persist the eval bar between moves so it doesn't vanish when the engine replies.
+  const [lastEvalPct, setLastEvalPct] = useState<number | null>(null)
 
   const board = useMemo(() => parseFen(fen), [fen])
   const turn = useMemo(() => sideToMove(fen), [fen])
 
-  // Clear coach hint when the board state changes.
+  // Clear coach hint + Socratic dialogue when the board state changes.
   useEffect(() => {
     setHint(null)
     setHintLevel(0)
+    setSocraticMsgs([])
+    setSocraticInput("")
   }, [fen])
 
   const refreshHealth = useCallback(async () => {
@@ -566,6 +649,13 @@ export default function ChessTrainerPage() {
       })).json() as EvalResult
       setResult(res)
       setExplanationOpen(true)
+      // Persist the eval bar — update on every evaluation. win_after_pct is the
+      // MOVER's win%, so normalize to White's share NOW (the mover is the player;
+      // turn at render time is the opponent's once the board advances, which would
+      // invert the bar for a Black-side player or after the engine replies).
+      if (res.ok && res.win_after_pct != null) {
+        setLastEvalPct(sideToMove(preFen) === "w" ? res.win_after_pct : 100 - res.win_after_pct)
+      }
       // In drill mode, capturing a hanging piece solves it.
       if (drill && res.legal && res.ok) {
         setDrillResult(drillSolved(res) ? "solved" : "missed")
@@ -574,13 +664,49 @@ export default function ChessTrainerPage() {
           setDrillResult("solved")
         }
       }
-      // In review mode, playing the entry's best move solves it.
-      if (activeReview && res.legal && uci === activeReview.best_uci) {
-        setReviewSolved("solved")
-        resolveReview(activeReview, true)
-      } else if (activeReview && res.legal && res.classification && ["Mistake", "Blunder"].includes(res.classification)) {
-        setReviewSolved("failed")
-        resolveReview(activeReview, false)
+      // In review mode, playing the entry's best move solves it, OR finding an equally good move.
+      if (activeReview && res.legal) {
+        // Accept the stored best move, OR any move Stockfish now classifies as Excellent or better
+        const isPassed = uci === activeReview.best_uci || (res.classification && ["Best", "Excellent", "Good", "Brilliant"].includes(res.classification));
+        if (isPassed) {
+          if (!isSequelDrill && activeReview) {
+            setIsSequelDrill(true)
+            setReviewSolved("sequel")
+            try {
+              const reply = await fetch(`${backendUrl}/chess/trainer/engine-strong`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ fen: res.fen })
+              }).then(r => r.json())
+              if (reply.ok && reply.uci && !reply.is_checkmate) {
+                setFen(reply.fen)
+                setHistory((h) => [...h, res.san ?? uci, reply.san ?? reply.uci])
+                setFenHistory((h) => [...h, res.fen, reply.fen])
+                setLastMove({ from: reply.uci.slice(0, 2), to: reply.uci.slice(2, 4) })
+                setResult(null)
+                setHint(null)
+                setHintLevel(0)
+                return
+              } else {
+                setReviewSolved("solved")
+                resolveReview(activeReview, true)
+                setIsSequelDrill(false)
+              }
+            } catch {
+              setReviewSolved("solved")
+              resolveReview(activeReview, true)
+              setIsSequelDrill(false)
+            }
+          } else {
+            setReviewSolved("solved")
+            if (activeReview) resolveReview(activeReview, true)
+            setIsSequelDrill(false)
+          }
+        } else if (res.classification && ["Mistake", "Blunder", "Inaccuracy"].includes(res.classification)) {
+          setReviewSolved("failed")
+          if (activeReview) resolveReview(activeReview, false)
+          setIsSequelDrill(false)
+        }
       }
       if (res.ok && res.legal && res.fen) {
         // Learning-first: on a bad move, hold the position so the learner can
@@ -723,6 +849,34 @@ export default function ChessTrainerPage() {
       setHint(plan)
     } catch {
       setHint({ ok: false, plan: "coach unavailable" })
+    }
+  }
+
+  // Socratic dialogue: the coach asks a question, the learner answers, repeat.
+  // The coach never names the move until the learner has been stuck several
+  // turns (fail-open reveal). Board position changes reset the dialogue.
+  const [socraticMsgs, setSocraticMsgs] = useState<Array<{ role: "user" | "coach"; content: string }>>([])
+  const [socraticInput, setSocraticInput] = useState("")
+  const [socraticBusy, setSocraticBusy] = useState(false)
+
+  const socraticAsk = async (text: string) => {
+    const trimmed = text.trim()
+    if (!trimmed || socraticBusy) return
+    setSocraticInput("")
+    const updated = [...socraticMsgs, { role: "user" as const, content: trimmed }]
+    setSocraticMsgs(updated)
+    setSocraticBusy(true)
+    try {
+      const r = await (await fetch(`${backendUrl}/chess/trainer/coach/socratic`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fen, history: updated }),
+      })).json() as { ok: boolean; reply?: string; error?: string }
+      setSocraticMsgs((m) => [...m, { role: "coach", content: r.reply ?? r.error ?? "Coach unavailable." }])
+    } catch {
+      setSocraticMsgs((m) => [...m, { role: "coach", content: "Coach unavailable — the engine nudge below still helps." }])
+    } finally {
+      setSocraticBusy(false)
     }
   }
 
@@ -876,6 +1030,11 @@ export default function ChessTrainerPage() {
       setCcJob({ ok: false, error: "could not start analysis" })
     }
   }
+
+  // Clear the polling interval on unmount to prevent a memory leak.
+  useEffect(() => {
+    return () => { if (ccPoll) clearInterval(ccPoll) }
+  }, [ccPoll])
 
   const ccLoading = ccProfileLoading || (ccJob?.status === "running")
 
@@ -1042,18 +1201,108 @@ export default function ChessTrainerPage() {
   }, [backendUrl])
   useEffect(() => { loadAnalytics() }, [loadAnalytics])
 
-  const startReview = (entry: ReviewEntry) => {
-    setActiveReview(entry)
-    setReviewSolved("none")
-    setFen(entry.pre_fen)
+  useEffect(() => {
+    return () => {
+      if (autoAdvanceTimeoutRef.current) clearTimeout(autoAdvanceTimeoutRef.current)
+    }
+  }, [])
+
+  const loadRadar = async () => {
+    try {
+      const res = await fetch(`${backendUrl}/chess/trainer/blunder-radar?limit=10`).then(r => r.json())
+      if (res.ok) setRadarItems(res.items)
+    } catch {}
+  }
+
+  const startRadarItem = (item: any) => {
+    setActiveRadarItem(item)
+    setActiveReview(null)
+    setRadarSolved("none")
+    setFen(item.fen)
     setFenHistory([])
     setHistory([])
+    setLastMove(null)
+    setResult(null)
+    setHint(null)
+    setHintLevel(0)
+    setIsSequelDrill(false)
+  }
+
+  const guessRadar = (hasTactic: boolean) => {
+    if (!activeRadarItem) return
+    const isCorrect = hasTactic === activeRadarItem.has_tactic
+    setRadarSolved(isCorrect ? "correct" : "incorrect")
+  }
+
+  const startReview = (entry: ReviewEntry) => {
+    if (autoAdvanceTimeoutRef.current) clearTimeout(autoAdvanceTimeoutRef.current)
+    if (engineAbortRef.current) engineAbortRef.current.abort()
+    
+    setIsSequelDrill(false)
+    setActiveReview(entry)
+    setReviewSolved("none")
+    
+    if (entry.lead_in_moves && entry.lead_in_moves.length > 0) {
+      setLeadInIndex(0)
+      setFen(entry.lead_in_moves[0].fen)
+      setFenHistory([])
+      setHistory([])
+    } else {
+      setLeadInIndex(null)
+      setFen(entry.pre_fen)
+      setFenHistory([])
+      setHistory([])
+    }
+    
     setResult(null)
     setLastMove(null)
     setSelected(null)
     setLegalTargets([])
     setRetryFen(null)
     setExplanationOpen(true)
+  }
+
+  const playNextLeadInMove = () => {
+    if (!activeReview || leadInIndex === null || !activeReview.lead_in_moves) return
+    const moves = activeReview.lead_in_moves
+    
+    const move = moves[leadInIndex]
+    const nextFen = leadInIndex + 1 < moves.length ? moves[leadInIndex + 1].fen : activeReview.pre_fen
+    
+    setFenHistory(prev => [...prev, fen])
+    setHistory(prev => [...prev, move.san || move.uci])
+    setFen(nextFen)
+    
+    setLastMove({
+      from: move.uci.substring(0, 2),
+      to: move.uci.substring(2, 4)
+    })
+    
+    if (leadInIndex + 1 < moves.length) {
+      setLeadInIndex(leadInIndex + 1)
+    } else {
+      setLeadInIndex(null)
+    }
+  }
+
+  const advanceToNextMistake = async (currentEntryId: string) => {
+    try {
+      const [d, s] = await Promise.all([
+        (await fetch(`${backendUrl}/chess/trainer/review?limit=20`)).json(),
+        (await fetch(`${backendUrl}/chess/trainer/review/stats`)).json(),
+      ])
+      const newQueue = d.due ?? []
+      setReview(newQueue)
+      setReviewStats({ total: s.total ?? 0, due_count: s.due_count ?? 0 })
+      const nextEntry = newQueue.find((r: ReviewEntry) => r.id !== currentEntryId)
+      if (nextEntry) {
+        startReview(nextEntry)
+      } else {
+        setActiveReview(null)
+        setReviewSolved("none")
+        newGame()
+      }
+    } catch { /* ignore */ }
   }
 
   const resolveReview = async (entry: ReviewEntry, solved: boolean) => {
@@ -1065,8 +1314,14 @@ export default function ChessTrainerPage() {
       })
     } catch { /* ignore */ }
     setReviewSolved(solved ? "solved" : "failed")
-    loadReview()
+    setIsSequelDrill(false)
+    
+    if (autoAdvanceTimeoutRef.current) clearTimeout(autoAdvanceTimeoutRef.current)
+    autoAdvanceTimeoutRef.current = setTimeout(() => advanceToNextMistake(entry.id), 1500)
   }
+
+  // Interactive board disables clicks if they haven't guessed the radar yet
+  const boardInteractive = leadInIndex !== null ? false : (activeRadarItem ? radarSolved !== "none" : reviewSolved !== "solved")
 
   return (
     <div className="space-y-6 p-6">
@@ -1111,7 +1366,7 @@ export default function ChessTrainerPage() {
             <div className="mx-auto w-full max-w-[480px]">
               <ChessBoard
                 fen={fen}
-                interactive
+                interactive={boardInteractive}
                 onSquareClick={onSquareClick}
                 theme={boardTheme}
                 highlights={{
@@ -1119,13 +1374,15 @@ export default function ChessTrainerPage() {
                   selected,
                   legalTargets,
                   checkSquare: (result?.in_check || result?.is_checkmate) ? findKing(fen) : null,
-                  arrows: (result?.best_move && result.best_move.length >= 4)
+                  arrows: (reviewSolved === "failed" && activeReview?.best_uci && activeReview.best_uci.length >= 4)
+                    ? [{ from: activeReview.best_uci.slice(0, 2), to: activeReview.best_uci.slice(2, 4) }]
+                    : (result?.best_move && result.best_move.length >= 4)
                     ? [{ from: result.best_move.slice(0, 2), to: result.best_move.slice(2, 4) }]
                     : (hintLevel >= 2 && hint?.best_move && hint.best_move.length >= 4)
                       ? [{ from: hint.best_move.slice(0, 2), to: hint.best_move.slice(2, 4) }]
                       : [],
                 }}
-                evalBar={result?.win_after_pct != null ? { whitePct: turn === "w" ? result.win_after_pct : 100 - result.win_after_pct } : null}
+                evalBar={lastEvalPct != null ? { whitePct: lastEvalPct } : null}
               />
             </div>
 
@@ -1155,8 +1412,18 @@ export default function ChessTrainerPage() {
             </div>
 
             {history.length > 0 && (
-              <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/60">
-                {history.map((m, i) => <span key={i} className="mr-2">{m}</span>)}
+              <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 font-mono text-xs text-white/60">
+                {history.reduce((pairs: string[][], m, i) => {
+                  if (i % 2 === 0) pairs.push([m])
+                  else pairs[pairs.length - 1].push(m)
+                  return pairs
+                }, []).map((pair, i) => (
+                  <span key={i} className="mr-3 inline-block">
+                    <span className="text-white/30">{i + 1}.</span>{" "}
+                    <span className="text-white/80">{pair[0]}</span>
+                    {pair[1] && <span className="text-white/60"> {pair[1]}</span>}
+                  </span>
+                ))}
               </div>
             )}
           </CardContent>
@@ -1164,6 +1431,31 @@ export default function ChessTrainerPage() {
 
         {/* Feedback + practice */}
         <div className="space-y-4">
+
+          {/* Prominent retry banner — sits at the very top so it can't be missed */}
+          <AnimatePresence>
+            {retryFen && (
+              <motion.div
+                key="retry-banner"
+                initial={{ opacity: 0, y: -12 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -12 }}
+                transition={{ type: "spring", stiffness: 320, damping: 28 }}
+                className="rounded-xl border-2 border-amber-400/60 bg-amber-950/30 p-4 shadow-lg shadow-amber-900/20"
+              >
+                <div className="mb-1 text-base font-bold text-amber-300">
+                  {result?.classification === "Blunder" ? "💥 Blunder!" : result?.classification === "Mistake" ? "❌ Mistake" : "⚠️ Inaccuracy"}
+                </div>
+                <div className="mb-3 text-sm text-amber-100/80">
+                  That wasn't the best move — the green arrow shows a stronger option. Find it yourself!
+                </div>
+                <Button size="sm" onClick={retry} className="bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/40 text-amber-200">
+                  🔄 Try a different move
+                </Button>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
           {result && result.ok === false && (
             <Card className="border-red-400/40 bg-red-950/10">
               <CardContent className="py-3 text-sm text-red-200">
@@ -1173,51 +1465,235 @@ export default function ChessTrainerPage() {
             </Card>
           )}
 
-          {evaluating && <div className="text-sm text-white/50">Analyzing with Stockfish 18…</div>}
-
-          {result && result.ok === true && (
-            <Card className="border-white/10 bg-panel">
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-base">{result.san}</CardTitle>
-                  {result.classification && (
-                    <Badge className={CLASS_COLOR[result.classification] ?? ""}>{result.classification}</Badge>
-                  )}
-                </div>
-                <CardDescription>
-                  {result.win_delta_pct != null && (
-                    <span className="text-white/70">
-                      Win chance: {result.win_before_pct}% → {result.win_after_pct}% ({result.win_delta_pct > 0 ? "+" : ""}{result.win_delta_pct}%)
-                    </span>
-                  )}
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                {result.is_checkmate && <div className="text-emerald-300">Checkmate! Well played.</div>}
-                {result.is_stalemate && <div className="text-amber-300">Stalemate — a draw.</div>}
-                {retryFen && (
-                  <div className="rounded-lg border border-amber-400/30 bg-amber-400/5 p-3">
-                    <div className="mb-2 text-sm text-amber-200">
-                      That move wasn't ideal — the arrow shows a stronger option.
-                      <span className="text-white/50"> Try to find it yourself.</span>
-                    </div>
-                    <Button size="sm" onClick={retry}>↺ Try again</Button>
-                  </div>
-                )}
-                {result.explanation && (
-                  <div>
-                    <button className="text-xs font-semibold uppercase tracking-wide text-white/50 hover:text-white" onClick={() => setExplanationOpen((o) => !o)}>
-                      {explanationOpen ? "▾ Why" : "▸ Why"}
-                    </button>
-                    {explanationOpen && (
-                      <pre className="mt-1 whitespace-pre-wrap rounded-lg border border-emerald-400/20 bg-emerald-950/10 p-3 text-sm leading-relaxed text-emerald-100/90">{result.explanation}</pre>
-                    )}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+          {evaluating && (
+            <div className="flex items-center gap-2 text-sm text-white/50">
+              <span>Stockfish analyzing</span>
+              <span className="flex gap-0.5">
+                {[0, 1, 2].map((i) => (
+                  <motion.span
+                    key={i}
+                    className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-400/70"
+                    animate={{ opacity: [0.2, 1, 0.2] }}
+                    transition={{ duration: 1.2, repeat: Infinity, delay: i * 0.2 }}
+                  />
+                ))}
+              </span>
+            </div>
           )}
 
+          <AnimatePresence mode="wait">
+            {result && result.ok === true && (
+              <motion.div
+                key={result.san ?? "result"}
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0 }}
+                transition={{ type: "spring", stiffness: 280, damping: 26 }}
+              >
+                <Card className={`border ${
+                  result.classification === "Best" || result.classification === "Brilliant" ? "border-emerald-400/40 bg-emerald-950/10"
+                  : result.classification === "Good" || result.classification === "Excellent" ? "border-sky-400/30 bg-sky-950/10"
+                  : result.classification === "Inaccuracy" ? "border-amber-400/30 bg-amber-950/10"
+                  : result.classification === "Mistake" || result.classification === "Blunder" ? "border-red-400/30 bg-red-950/10"
+                  : "border-white/10 bg-panel"
+                }`}>
+                  <CardHeader>
+                    <div className="flex items-center justify-between">
+                      <CardTitle className="text-base font-mono">{result.san}</CardTitle>
+                      <div className="flex items-center gap-2">
+                        {result.classification && (
+                          <Badge className={CLASS_COLOR[result.classification] ?? ""}>{result.classification}</Badge>
+                        )}
+                      </div>
+                    </div>
+                    {/* Plain-English label — the number follows in small text */}
+                    <div className="text-sm font-medium mt-1">
+                      {result.is_checkmate ? <span className="text-emerald-300">♟ Checkmate — you won!</span>
+                      : result.is_stalemate ? <span className="text-amber-300">½ Stalemate — it's a draw.</span>
+                      : result.classification === "Brilliant" ? <span className="text-violet-300">💎 Brilliant! Engine-level move.</span>
+                      : result.classification === "Best" ? <span className="text-emerald-300">✅ Best move — that's what Stockfish plays.</span>
+                      : result.classification === "Excellent" ? <span className="text-emerald-200">👍 Excellent — near-best play.</span>
+                      : result.classification === "Good" ? <span className="text-sky-300">👍 Good move — solid choice.</span>
+                      : result.classification === "Inaccuracy" ? <span className="text-amber-300">⚠️ Inaccuracy — a slightly better option existed.</span>
+                      : result.classification === "Mistake" ? <span className="text-orange-300">❌ Mistake — this loses some advantage.</span>
+                      : result.classification === "Blunder" ? <span className="text-red-300">💥 Blunder — this loses a lot of material or advantage.</span>
+                      : null}
+                    </div>
+                    {result.win_delta_pct != null && (
+                      <CardDescription className="mt-1">
+                        <span className="text-white/50 text-xs">
+                          Win%: {result.win_before_pct}% → {result.win_after_pct}%
+                          {" "}({result.win_delta_pct > 0 ? "+" : ""}{result.win_delta_pct}%)
+                        </span>
+                      </CardDescription>
+                    )}
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    {result.explanation && (
+                      <div>
+                        <button className="text-xs font-semibold uppercase tracking-wide text-white/50 hover:text-white" onClick={() => setExplanationOpen((o) => !o)}>
+                          {explanationOpen ? "▾ Why" : "▸ Why"}
+                        </button>
+                        {explanationOpen && (
+                          <pre className="mt-1 whitespace-pre-wrap rounded-lg border border-white/10 bg-black/20 p-3 text-sm leading-relaxed text-white/85">{result.explanation}</pre>
+                        )}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* ── 1. COACH (live play feedback — most immediately useful) ── */}
+          <Card className="border-white/10 bg-panel">
+            <CardHeader>
+              <CardTitle className="text-base">Coach</CardTitle>
+              <CardDescription>
+                Engine-grounded coaching: the plan for this position, sacrifice detection, and a
+                tap-to-escalate hint (concept → arrow → best move).
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {!result && (
+                <ActionOnboardingCard
+                  id="chess-coach"
+                  title="Play-Coach Pattern"
+                  description="When you get stuck, tap the Coach button for a progressive hint. First it gives a concept, then draws an arrow, and finally reveals the best move."
+                  actionLabel="Ask Coach"
+                  icon={<BrainCircuit size={20} />}
+                  onAction={() => {
+                    const el = document.getElementById("chess-coach-btn")
+                    if (el) el.click()
+                  }}
+                />
+              )}
+
+              {result?.sacrifice && result.sacrifice.sound && (
+                <div className="rounded-lg border border-violet-400/30 bg-violet-400/10 p-3">
+                  <div className="mb-1 text-sm font-semibold text-violet-200">Brilliant — sound sacrifice! {result.sacrifice.pattern}</div>
+                  <div className="text-xs text-white/70">
+                    You offered {result.sacrifice.give_up} and got {result.sacrifice.get_back}. The engine kept the eval
+                    — you bought the attack, you didn't lose the piece.
+                  </div>
+                </div>
+              )}
+              {result?.missed_sacrifice && (
+                <div className="rounded-lg border border-amber-400/30 bg-amber-400/5 p-3">
+                  <div className="mb-1 text-sm font-semibold text-amber-200">Missed gift</div>
+                  <div className="text-xs text-white/70">
+                    {result.missed_sacrifice.message}. The arrow shows it.
+                  </div>
+                </div>
+              )}
+              {result?.plan_state?.plan && (
+                <div className="rounded-lg border border-amber-400/30 bg-amber-950/10 p-3">
+                  <div className="mb-1 flex items-center justify-between text-xs font-semibold uppercase tracking-wide text-white/40">
+                    <span>Current plan · {result.plan_state.plan.name}</span>
+                    <span>{(result.plan_state.unchanged_moves ?? 0) > 0 ? `holding ${result.plan_state.unchanged_moves}+ moves` : "new"}</span>
+                  </div>
+                  <div className="text-sm font-medium text-amber-100">{result.plan_state.plan.recipe}</div>
+                  {result.plan_state.plan.trigger && (
+                    <div className="mt-0.5 text-xs text-white/50">trigger: {result.plan_state.plan.trigger}</div>
+                  )}
+                </div>
+              )}
+              {result?.coach?.plan && (
+                <div className="rounded-lg border border-emerald-400/20 bg-emerald-950/10 p-3">
+                  <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-white/40">Plan</div>
+                  <div className="text-sm text-emerald-100/90">{result.coach.plan}</div>
+                  {result.coach.material != null && result.coach.material !== 0 && (
+                    <div className="mt-0.5 text-xs text-white/50">
+                      material: {result.coach.material > 0 ? "+" : ""}{result.coach.material}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="rounded-lg border border-white/10 bg-black/20 p-3">
+                <div className="mb-2 flex items-center justify-between">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-white/40">Coach hint</span>
+                  <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1" aria-label="Hint escalation">
+                      {[1, 2, 3].map((n) => (
+                        <span
+                          key={n}
+                          className={`inline-block h-2 w-2 rounded-full transition-colors ${
+                            hintLevel >= n ? "bg-amber-400" : "bg-white/15"
+                          }`}
+                        />
+                      ))}
+                    </div>
+                    <Button size="sm" variant="outline" onClick={coachHint}>
+                      {hintLevel === 0 ? "Ask coach" : `Hint ${hintLevel}/3`}
+                    </Button>
+                  </div>
+                </div>
+                {hintLevel === 1 && hint?.hint_level_1 && (
+                  <div className="text-sm text-white/85">{hint.hint_level_1}</div>
+                )}
+                {hintLevel === 2 && (
+                  <div className="text-sm text-white/85">
+                    {hint?.hint_level_2}
+                    <div className="mt-1 text-xs text-white/50">The green arrow shows the best move.</div>
+                  </div>
+                )}
+                {hintLevel === 3 && hint?.best_move_san && (
+                  <div className="text-sm text-white/85">
+                    The best move is <span className="font-semibold text-emerald-400">{hint.best_move_san}</span>.
+                  </div>
+                )}
+              </div>
+
+              {/* Socratic dialogue — the coach asks, you answer, it reacts.
+                  Never names the move until you've been stuck several turns. */}
+              <div className="rounded-lg border border-violet-400/20 bg-violet-950/10 p-3">
+                <div className="mb-2 flex items-center justify-between">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-white/40">Socratic coach</span>
+                  <span className="text-[10px] text-white/40">Answer in your own words</span>
+                </div>
+                {socraticMsgs.length === 0 && (
+                  <div className="mb-2 text-sm text-white/60">
+                    Stuck? Answer the coach's question out loud and it will guide you to the idea —
+                    <button className="ml-1 text-violet-300 underline hover:text-violet-200" onClick={() => socraticAsk("I'm stuck — what should I be thinking about here?")}>
+                      ask to start
+                    </button>
+                  </div>
+                )}
+                {socraticMsgs.length > 0 && (
+                  <div className="mb-2 max-h-48 space-y-2 overflow-y-auto pr-1">
+                    {socraticMsgs.map((m, i) => (
+                      <div
+                        key={i}
+                        className={`text-sm ${m.role === "user" ? "text-right text-white/70" : "text-left text-white/90"}`}
+                      >
+                        <span className={`inline-block max-w-[90%] rounded-lg px-2.5 py-1.5 ${m.role === "user" ? "bg-white/10" : "bg-violet-400/10"}`}>
+                          {m.content}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <form
+                  className="flex gap-2"
+                  onSubmit={(e) => { e.preventDefault(); void socraticAsk(socraticInput) }}
+                >
+                  <input
+                    value={socraticInput}
+                    onChange={(e) => setSocraticInput(e.target.value)}
+                    placeholder={socraticBusy ? "Coach is thinking…" : "Your answer…"}
+                    disabled={socraticBusy}
+                    className="min-w-0 flex-1 rounded-md border border-white/10 bg-black/40 px-2 py-1.5 text-sm text-white/90 placeholder-white/40 focus:border-violet-400/50 focus:outline-none disabled:opacity-60"
+                  />
+                  <Button size="sm" type="submit" disabled={socraticBusy || !socraticInput.trim()}>
+                    {socraticBusy ? "…" : "Send"}
+                  </Button>
+                </form>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* ── 2. REVIEW QUEUE (their real blunders to drill) ── */}
           <Card className="border-white/10 bg-panel">
             <CardHeader>
               <div className="flex items-center justify-between">
@@ -1249,23 +1725,44 @@ export default function ChessTrainerPage() {
               {activeReview && (
                 <div className="rounded-lg border border-emerald-400/20 bg-emerald-950/10 p-3">
                   <div className="mb-1 text-sm font-semibold text-emerald-200">Review position</div>
-                  <div className="mb-2 text-xs text-white/50">
-                    You played {activeReview.played_san} here ({activeReview.classification}).
-                    {activeReview.concept ? ` Theme: ${activeReview.concept}.` : ""}
-                    Find the better move.
-                  </div>
+                  {leadInIndex !== null ? (
+                    <div className="mb-2">
+                      <div className="text-xs text-white/50 mb-2">Replaying game context ({leadInIndex + 1} of {activeReview.lead_in_moves?.length}). What led to the mistake?</div>
+                      <Button size="sm" variant="secondary" onClick={playNextLeadInMove}>Play Context Move</Button>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="mb-2 text-xs text-white/50">
+                        You played {activeReview.played_san} here ({activeReview.classification}).
+                        {activeReview.concept ? ` Theme: ${activeReview.concept}.` : ""}
+                        Find the better move.
+                      </div>
                   {reviewSolved === "solved" && (
                     <div className="mb-2 text-sm text-emerald-300">✓ Correct — that's the right idea. Added to your spaced review.</div>
                   )}
                   {reviewSolved === "failed" && (
                     <div className="mb-2 text-sm text-amber-300">That's still a mistake — it'll come back tomorrow.</div>
                   )}
+                  {reviewSolved === "sequel" && (
+                    <div className="mb-2 text-sm text-sky-300">👍 Good move! Now find the follow-up against the engine's best reply.</div>
+                  )}
                   <div className="flex gap-2">
                     {reviewSolved === "none" && (
                       <Button size="sm" variant="outline" onClick={() => resolveReview(activeReview, false)}>Show answer</Button>
                     )}
-                    <Button size="sm" variant="outline" onClick={() => { setActiveReview(null); setReviewSolved("none"); newGame() }}>Done reviewing</Button>
+                    {reviewSolved !== "none" && (
+                      <Button size="sm" className="bg-emerald-600 hover:bg-emerald-500 text-white" onClick={() => {
+                        if (autoAdvanceTimeoutRef.current) clearTimeout(autoAdvanceTimeoutRef.current)
+                        advanceToNextMistake(activeReview.id)
+                      }}>Next Mistake →</Button>
+                    )}
+                    <Button size="sm" variant="outline" onClick={() => { 
+                      if (autoAdvanceTimeoutRef.current) clearTimeout(autoAdvanceTimeoutRef.current)
+                      setActiveReview(null); setReviewSolved("none"); newGame() 
+                    }}>Done reviewing</Button>
                   </div>
+                  </>
+                )}
                 </div>
               )}
 
@@ -1290,6 +1787,83 @@ export default function ChessTrainerPage() {
                   ))}
                 </div>
               )}
+            </CardContent>
+          </Card>
+
+          {/* ── 3. BLUNDER RADAR (detecting if there's a tactic) ── */}
+          <Card className="border-white/10 bg-panel">
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-base">Blunder Radar</CardTitle>
+                <Button size="sm" variant="outline" onClick={loadRadar}>Load Radar</Button>
+              </div>
+              <CardDescription>Develop your danger sense. Is there a critical move to find, or is it a solid position?</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {activeRadarItem && (
+                <div className="rounded-lg border border-white/10 bg-black/20 p-4">
+                  <div className="mb-3 text-sm font-medium text-white/80">Assess this position:</div>
+                  {radarSolved === "none" ? (
+                    <div className="flex gap-2">
+                      <Button className="flex-1 bg-red-600 hover:bg-red-500 text-white" onClick={() => guessRadar(true)}>Yes, there's a tactic</Button>
+                      <Button className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white" onClick={() => guessRadar(false)}>No, solid position</Button>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      <div className={`text-sm ${radarSolved === "correct" ? "text-emerald-300" : "text-amber-300"}`}>
+                        {radarSolved === "correct" ? "✓ Correct!" : "✗ Incorrect."}
+                        {activeRadarItem.has_tactic ? " There is a tactic here." : " This is a solid position."}
+                      </div>
+                      {activeRadarItem.has_tactic && radarSolved === "correct" && (
+                        <div className="text-xs text-white/60">Now find the move on the board!</div>
+                      )}
+                      <Button size="sm" variant="outline" onClick={() => { setActiveRadarItem(null); setRadarItems((prev) => prev?.filter((i) => i.id !== activeRadarItem.id) ?? []) }}>Next Position</Button>
+                    </div>
+                  )}
+                </div>
+              )}
+              
+              {!activeRadarItem && radarItems && radarItems.length > 0 && (
+                <div className="max-h-56 space-y-1.5 overflow-y-auto">
+                  {radarItems.map((r) => (
+                    <button
+                      key={r.id}
+                      onClick={() => startRadarItem(r)}
+                      className={`flex w-full items-center justify-between rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-left text-sm hover:bg-black/40`}
+                    >
+                      <span className="text-white/85">Radar Item</span>
+                      <Badge className="border-white/20 bg-white/5 text-white/60">Evaluate</Badge>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {!activeRadarItem && (!radarItems || radarItems.length === 0) && (
+                <div className="text-xs text-white/40">Load radar to practice sensing danger.</div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* ── PRACTICE POSITIONS (curated starting points — near top so a new
+               learner finds them without scrolling past the games cards) ── */}
+          <Card className="border-white/10 bg-panel">
+            <CardHeader>
+              <CardTitle className="text-base">Practice positions</CardTitle>
+              <CardDescription>Curated starting points — the board resets to each one.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {practice.map((p) => (
+                  <button
+                    key={p.slug}
+                    onClick={() => resetToPractice(p)}
+                    className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-left text-sm hover:bg-black/40"
+                  >
+                    <div className="font-semibold text-white/90">{p.name}</div>
+                    <div className="text-xs text-white/50">{p.goal}</div>
+                    <div className="mt-1"><Badge className="border-white/20 bg-white/5 text-white/60">Tier {p.tier}</Badge></div>
+                  </button>
+                ))}
+              </div>
             </CardContent>
           </Card>
 
@@ -1522,95 +2096,7 @@ export default function ChessTrainerPage() {
             </CardContent>
           </Card>
 
-          <Card className="border-white/10 bg-panel">
-            <CardHeader>
-              <CardTitle className="text-base">Coach</CardTitle>
-              <CardDescription>
-                Engine-grounded coaching: the plan for this position, sacrifice detection, and a
-                tap-to-escalate hint (concept → arrow → best move).
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {!result && (
-                <ActionOnboardingCard
-                  id="chess-coach"
-                  title="Play-Coach Pattern"
-                  description="When you get stuck, tap the Coach button for a progressive hint. First it gives a concept, then draws an arrow, and finally reveals the best move."
-                  actionLabel="Ask Coach"
-                  icon={<BrainCircuit size={20} />}
-                  onAction={() => {
-                    const el = document.getElementById("chess-coach-btn")
-                    if (el) el.click()
-                  }}
-                />
-              )}
-
-              {result?.sacrifice && result.sacrifice.sound && (
-                <div className="rounded-lg border border-violet-400/30 bg-violet-400/10 p-3">
-                  <div className="mb-1 text-sm font-semibold text-violet-200">Brilliant — sound sacrifice! {result.sacrifice.pattern}</div>
-                  <div className="text-xs text-white/70">
-                    You offered {result.sacrifice.give_up} and got {result.sacrifice.get_back}. The engine kept the eval
-                    — you bought the attack, you didn't lose the piece.
-                  </div>
-                </div>
-              )}
-              {result?.missed_sacrifice && (
-                <div className="rounded-lg border border-amber-400/30 bg-amber-400/5 p-3">
-                  <div className="mb-1 text-sm font-semibold text-amber-200">Missed gift</div>
-                  <div className="text-xs text-white/70">
-                    {result.missed_sacrifice.message}. The arrow shows it.
-                  </div>
-                </div>
-              )}
-              {result?.plan_state?.plan && (
-                <div className="rounded-lg border border-amber-400/30 bg-amber-950/10 p-3">
-                  <div className="mb-1 flex items-center justify-between text-xs font-semibold uppercase tracking-wide text-white/40">
-                    <span>Current plan · {result.plan_state.plan.name}</span>
-                    <span>{(result.plan_state.unchanged_moves ?? 0) > 0 ? `holding ${result.plan_state.unchanged_moves}+ moves` : "new"}</span>
-                  </div>
-                  <div className="text-sm font-medium text-amber-100">{result.plan_state.plan.recipe}</div>
-                  {result.plan_state.plan.trigger && (
-                    <div className="mt-0.5 text-xs text-white/50">trigger: {result.plan_state.plan.trigger}</div>
-                  )}
-                </div>
-              )}
-              {result?.coach?.plan && (
-                <div className="rounded-lg border border-emerald-400/20 bg-emerald-950/10 p-3">
-                  <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-white/40">Plan</div>
-                  <div className="text-sm text-emerald-100/90">{result.coach.plan}</div>
-                  {result.coach.material != null && result.coach.material !== 0 && (
-                    <div className="mt-0.5 text-xs text-white/50">
-                      material: {result.coach.material > 0 ? "+" : ""}{result.coach.material}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              <div className="rounded-lg border border-white/10 bg-black/20 p-3">
-                <div className="mb-2 flex items-center justify-between">
-                  <span className="text-xs font-semibold uppercase tracking-wide text-white/40">Coach hint</span>
-                  <Button size="sm" variant="outline" onClick={coachHint}>
-                    {hintLevel === 0 ? "Ask coach" : `Hint ${hintLevel}/3`}
-                  </Button>
-                </div>
-                {hintLevel === 1 && hint?.hint_level_1 && (
-                  <div className="text-sm text-white/85">{hint.hint_level_1}</div>
-                )}
-                {hintLevel === 2 && (
-                  <div className="text-sm text-white/85">
-                    {hint?.hint_level_2}
-                    <div className="mt-1 text-xs text-white/50">The green arrow shows the best move.</div>
-                  </div>
-                )}
-                {hintLevel === 3 && hint?.best_move_san && (
-                  <div className="text-sm text-white/85">
-                    The best move is <span className="font-semibold text-emerald-400">{hint.best_move_san}</span>.
-                  </div>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-
+          {/* ── 7. HANGING PIECES DRILL (tactical vision) ── */}
           <Card className="border-white/10 bg-panel">
             <CardHeader>
               <CardTitle className="text-base">Hanging pieces — board vision</CardTitle>
@@ -1632,6 +2118,7 @@ export default function ChessTrainerPage() {
             </CardContent>
           </Card>
 
+          {/* ── 3. MY CHESS.COM GAMES (800+ real games — most valuable data source) ── */}
           <Card className="border-white/10 bg-panel">
             <CardHeader>
               <CardTitle className="text-base">My chess.com games</CardTitle>
@@ -1798,19 +2285,7 @@ export default function ChessTrainerPage() {
                   {gameReview.curve && gameReview.curve.length > 0 && (
                     <div>
                       <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-white/40">Eval curve</div>
-                      <div className="flex h-16 items-end gap-px overflow-hidden rounded-md bg-black/40 p-1">
-                        {gameReview.curve.map((pt) => (
-                          <div
-                            key={pt.n}
-                            title={`${pt.n}. ${pt.san ?? ""} (${pt.win_pct ?? "?"}%)`}
-                            className="flex-1 rounded-sm transition-all"
-                            style={{
-                              height: `${Math.max(4, Math.min(100, pt.win_pct ?? 50))}%`,
-                              backgroundColor: (pt.classification ?? "").startsWith("B") ? "#e05b4d" : "#4da3e0",
-                            }}
-                          />
-                        ))}
-                      </div>
+                      <EvalCurveChart curve={gameReview.curve} />
                     </div>
                   )}
                   {gameReview.key_moments && gameReview.key_moments.length > 0 && (
@@ -2000,28 +2475,6 @@ export default function ChessTrainerPage() {
                   )}
                 </div>
               )}
-            </CardContent>
-          </Card>
-
-          <Card className="border-white/10 bg-panel">
-            <CardHeader>
-              <CardTitle className="text-base">Practice positions</CardTitle>
-              <CardDescription>Curated starting points — the board resets to each one.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="grid gap-2 sm:grid-cols-2">
-                {practice.map((p) => (
-                  <button
-                    key={p.slug}
-                    onClick={() => resetToPractice(p)}
-                    className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-left text-sm hover:bg-black/40"
-                  >
-                    <div className="font-semibold text-white/90">{p.name}</div>
-                    <div className="text-xs text-white/50">{p.goal}</div>
-                    <div className="mt-1"><Badge className="border-white/20 bg-white/5 text-white/60">Tier {p.tier}</Badge></div>
-                  </button>
-                ))}
-              </div>
             </CardContent>
           </Card>
 
