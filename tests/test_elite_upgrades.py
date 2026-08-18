@@ -15,8 +15,13 @@ from swarm_os.lib.mcp.mcp_client import ExternalMCPClientManager
 def _isolate_search_quota(monkeypatch, tmp_path):
     """Search-quota counters are module-global and file-backed (data/search_quota.json);
     redirect + reset them so a test can never spend the real monthly budget or be
-    skewed by it. All provider search tests here participate in the shared store."""
+    skewed by it. All provider search tests here participate in the shared store.
+
+    Keyless providers (openalex/gdelt) do REAL GETs — they are gated behind
+    SWARM_SEARCH_KEYLESS, so this fixture turns them OFF by default (tests mock
+    only the POST path); a keyless-provider test re-enables it explicitly."""
     monkeypatch.setenv("SWARM_SEARCH_QUOTA_FILE", str(tmp_path / "quota.json"))
+    monkeypatch.setenv("SWARM_SEARCH_KEYLESS", "0")
     _QUOTA_STORE.reset_for_tests()
     yield
     _QUOTA_STORE.reset_for_tests()
@@ -341,6 +346,117 @@ async def test_web_search_quota_exclusion(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_web_search_keyless_providers_join_fanout(monkeypatch):
+    """OpenAlex + GDELT are keyless (env-key=None): they join the fan-out with NO
+    configured key, merge/dedup like any provider, and are labeled in the result.
+    They fire GETs — re-enable the keyless gate this fixture turned off."""
+    for k in (
+        "TAVILY_API_KEY",
+        "SERPER_API_KEY",
+        "BRAVE_API_KEY",
+        "EXA_API_KEY",
+        "SERPAPI_KEY",
+        "TINYFISH_API_KEY",
+        "SCAVIO_API_KEY",
+        "FIRECRAWL_API_KEY",
+    ):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("SWARM_SEARCH_KEYLESS", "1")
+
+    async def _get(self, url, *args, **kwargs):
+        url = str(url)
+        if "openalex.org" in url:
+            return _g(
+                {
+                    "meta": {"count": 2},
+                    "results": [
+                        {
+                            "id": "https://openalex.org/W1",
+                            "title": "OpenAlex Paper",
+                            "doi": "10.1000/x1",
+                            "publication_year": 2026,
+                        }
+                    ],
+                }
+            )
+        if "gdeltproject.org" in url:
+            return _g(
+                {
+                    "articles": [
+                        {
+                            "url": "https://shared.example/s",
+                            "title": "GDELT",
+                            "sourcecountry": "US",
+                        },
+                        {
+                            "url": "https://news.example/n2",
+                            "title": "Second",
+                            "language": "en",
+                        },
+                    ]
+                }
+            )
+        raise AssertionError(f"unexpected get URL: {url}")
+
+    def _g(payload):
+        m = MagicMock()
+        m.status_code = 200
+        m.json.return_value = payload
+        return m
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", _get)
+
+    res = await web_search_handler({"query": "q", "max_results": 3})
+    assert res["ok"] is True
+    assert res["providers"] == ["openalex", "gdelt"]
+    assert res["provider"] == "multi:openalex,gdelt"
+    urls = [r["url"] for r in res["results"]]
+    assert "https://doi.org/10.1000/x1" in urls
+    assert "https://news.example/n2" in urls
+    merged = {r["provider"] for r in res["results"]}
+    assert {"openalex", "gdelt"} <= merged
+
+
+@pytest.mark.anyio
+async def test_web_search_keyless_gate_off_is_hermetic(monkeypatch):
+    """SWARM_SEARCH_KEYLESS=0 (the fixture default) excludes keyless providers
+    entirely — with no keyed provider configured, the handler falls to DDG and
+    never fires an OpenAlex/GDELT GET."""
+    for k in (
+        "TAVILY_API_KEY",
+        "SERPER_API_KEY",
+        "BRAVE_API_KEY",
+        "EXA_API_KEY",
+        "SERPAPI_KEY",
+        "TINYFISH_API_KEY",
+        "SCAVIO_API_KEY",
+        "FIRECRAWL_API_KEY",
+    ):
+        monkeypatch.delenv(k, raising=False)
+
+    called_get = []
+
+    async def _get(self, url, *args, **kwargs):
+        called_get.append(str(url))
+        return _g({"meta": {"count": 0}, "results": []})
+
+    def _g(payload):
+        m = MagicMock()
+        m.status_code = 200
+        m.json.return_value = payload
+        return m
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", _get)
+
+    res = await web_search_handler({"query": "q", "max_results": 2})
+    assert called_get == []  # no keyless GET fired
+    # No keyed provider and no keyless provider → DDG fallback, which is
+    # unavailable in tests (duckduckgo_search not installed) → ok:False. The
+    # point is that no real GET to OpenAlex/GDELT ever fires.
+    assert res["ok"] is False
+
+
+@pytest.mark.anyio
 async def test_qdrant_recall_handler():
     # Clear any lazily cached instances on the singleton to avoid test order pollution
     if hasattr(registry, "_qdrant"):
@@ -399,3 +515,180 @@ async def test_mcp_client_manager_nonexistent_config():
     manager = ExternalMCPClientManager(config_path="nonexistent_config.json")
     tools = await manager.start()
     assert tools == []
+
+
+def _mock_resp(payload):
+    m = MagicMock()
+    m.status_code = 200
+    m.json.return_value = payload
+    return m
+
+
+@pytest.mark.anyio
+async def test_web_search_evidence_layer_near_dup_collapse_and_agreement(monkeypatch):
+    """DIVERSITY + EVIDENCE LAYER: same story at different URLs (syndicated copy)
+    collapses to one canonical result tagged with its echo count; exact-URL
+    corroboration across providers is attributed as consensus; unique-to-provider
+    findings are counted per provider. The existing result-shape contract
+    (title/url/snippet/provider/providers) is preserved."""
+    for k in (
+        "TAVILY_API_KEY",
+        "SERPER_API_KEY",
+        "BRAVE_API_KEY",
+        "EXA_API_KEY",
+        "SERPAPI_KEY",
+        "TINYFISH_API_KEY",
+        "SCAVIO_API_KEY",
+        "FIRECRAWL_API_KEY",
+    ):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("SWARM_SEARCH_KEYLESS", "1")
+
+    async def _get(self, url, *args, **kwargs):
+        url = str(url)
+        if "openalex.org" in url:
+            return _mock_resp(
+                {
+                    "meta": {"count": 2},
+                    "results": [
+                        {
+                            "id": "https://openalex.org/W1",
+                            "title": "Rates fall on new policy",
+                            "doi": None,
+                            "publication_year": 2026,
+                        },
+                        {
+                            "id": "https://openalex.org/W2",
+                            "title": "Only openalex story",
+                            "doi": "10.1000/x1",
+                            "publication_year": 2025,
+                        },
+                    ],
+                }
+            )
+        if "gdeltproject.org" in url:
+            return _mock_resp(
+                {
+                    "articles": [
+                        {
+                            "url": "https://a.example/story",
+                            "title": "Rates fall on new policy",
+                            "sourcecountry": "US",
+                        },
+                        {
+                            "url": "https://b.example/story",
+                            "title": "Rates fall on new policy (update)",
+                            "sourcecountry": "US",
+                        },
+                        {
+                            "url": "https://c.example/unique",
+                            "title": "Only gdelt story",
+                            "language": "en",
+                        },
+                    ]
+                }
+            )
+        raise AssertionError(f"unexpected get URL: {url}")
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", _get)
+
+    res = await web_search_handler({"query": "q", "max_results": 5})
+    assert res["ok"] is True
+    # Backward-compatible contract: label + provider fields still present.
+    assert res["provider"] == "multi:openalex,gdelt"
+    assert res["providers"] == ["openalex", "gdelt"]
+
+    # Four engine hits collapse to three unique sources: two near-duplicate wire
+    # stories (openalex W1 title matches the gdelt syndicate) fold into ONE
+    # canonical result (first-seen = openalex W1), while the openalex-only W2
+    # (its doi mapped to doi.org) and the gdelt-only story survive.
+    assert len(res["results"]) == 3
+    rrf_keys = {r["url"] for r in res["results"]}
+    assert rrf_keys == {
+        "https://openalex.org/W1",
+        "https://doi.org/10.1000/x1",
+        "https://c.example/unique",
+    }
+    # The syndicated "Rates fall on new policy" folded into ONE canonical result
+    # carrying the near-dup echoes (a.example + b.example variants).
+    fall = next(r for r in res["results"] if r["url"] == "https://openalex.org/W1")
+    assert fall.get("echoes", 0) == 2
+    assert "https://a.example/story" in fall.get("variants", [])
+    assert "https://b.example/story" in fall.get("variants", [])
+    assert set(fall.get("providers") or []) == {"openalex", "gdelt"}
+
+    ev = res["evidence"]
+    assert ev["raw_results"] == 5
+    assert ev["unique_results"] == 3
+    assert ev["deduped"] == 2
+    assert ev["clusters"] >= 1
+    # Exact-URL corroboration: none here (openalex W2 and the gdelt hits are all
+    # distinct URLs) — so consensus is 0 and everything is unique-to-provider.
+    assert ev["consensus"] == 0
+    assert "openalex" in ev["unique_to_provider"]
+    assert "gdelt" in ev["unique_to_provider"]
+    assert "EVIDENCE POOL" in res["evidence_text"]
+
+
+@pytest.mark.anyio
+async def test_web_search_evidence_layer_conflicting_claims_flagged(monkeypatch):
+    """DIVERSITY + EVIDENCE LAYER: opposing claims on the same topic (shared
+    content words + opposite direction lexis) are surfaced as CONFLICTING CLAIMS
+    in the evidence context the LLM receives."""
+    for k in (
+        "TAVILY_API_KEY",
+        "SERPER_API_KEY",
+        "BRAVE_API_KEY",
+        "EXA_API_KEY",
+        "SERPAPI_KEY",
+        "TINYFISH_API_KEY",
+        "SCAVIO_API_KEY",
+        "FIRECRAWL_API_KEY",
+    ):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("SWARM_SEARCH_KEYLESS", "1")
+
+    async def _get(self, url, *args, **kwargs):
+        url = str(url)
+        if "openalex.org" in url:
+            return _mock_resp(
+                {
+                    "meta": {"count": 1},
+                    "results": [
+                        {
+                            "id": "https://openalex.org/C1",
+                            "title": "Study: red wine raises blood pressure",
+                            "doi": None,
+                            "publication_year": 2026,
+                        }
+                    ],
+                }
+            )
+        if "gdeltproject.org" in url:
+            return _mock_resp(
+                {
+                    "articles": [
+                        {
+                            "url": "https://d.example/wine",
+                            "title": "Red wine lowers blood pressure, finds study",
+                            "sourcecountry": "US",
+                        }
+                    ]
+                }
+            )
+        raise AssertionError(f"unexpected get URL: {url}")
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", _get)
+
+    res = await web_search_handler(
+        {"query": "red wine blood pressure", "max_results": 3}
+    )
+    assert res["ok"] is True
+    ev = res["evidence"]
+    assert ev["conflicts"] == 1
+    assert "CONFLICTING CLAIMS" in res["evidence_text"]
+    # The opposing signal must be lexically real: the neg-direction word "raises"
+    # in one source vs the pos-direction "lowers" in the other.
+    extra = [r["title"] for r in res["results"]]
+    assert any("raises" in t for t in extra)
+    assert any("lowers" in t for t in extra)

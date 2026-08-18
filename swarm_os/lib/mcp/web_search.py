@@ -246,8 +246,64 @@ async def _firecrawl_search(client, query: str, max_results: int) -> list[dict]:
     ]
 
 
-def _provider_specs() -> list[tuple[str, str, _SearchFn]]:
-    """(name, env-key, fn) for every provider with a configured non-placeholder key."""
+async def _openalex_search(client, query: str, max_results: int) -> list[dict]:
+    """OpenAlex scholarly search — keyless (free, no account)."""
+
+    r = await client.get(
+        "https://api.openalex.org/works",
+        params={
+            "search": query,
+            "per-page": max_results,
+            "select": "id,title,doi,publication_year",
+        },
+    )
+    r.raise_for_status()
+    works = r.json().get("results", [])[:max_results]
+    out: list[dict] = []
+    for w in works:
+        title = w.get("title") or ""
+        year = w.get("publication_year") or ""
+        # Prefer the resolvable DOI; fall back to the OpenAlex work homepage.
+        url = f"https://doi.org/{w['doi']}" if w.get("doi") else w.get("id") or ""
+        snippet = f"OpenAlex work {year}" if year else "OpenAlex work"
+        if title:
+            snippet = f"{title} — {snippet}"
+        out.append({"title": title, "url": url, "snippet": snippet})
+    return out
+
+
+async def _gdelt_search(client, query: str, max_results: int) -> list[dict]:
+    """GDELT DOC 2.0 news search — keyless (no account), rolling 3-month window."""
+
+    r = await client.get(
+        "https://api.gdeltproject.org/api/v2/doc/doc",
+        params={
+            "query": query,
+            "mode": "artlist",
+            "maxrecords": max_results,
+            "format": "json",
+            "output": "artlist",
+        },
+    )
+    r.raise_for_status()
+    articles = r.json().get("articles", [])[:max_results]
+    out: list[dict] = []
+    for a in articles:
+        title = a.get("title") or ""
+        url = a.get("url") or ""
+        source = a.get("sourcecountry") or ""
+        lang = a.get("language") or ""
+        tag = " ".join(x for x in (source, lang) if x).strip()
+        snippet = f"GDELT news {tag}" if tag else "GDELT news"
+        if title:
+            snippet = f"{title} — {snippet}"
+        out.append({"title": title, "url": url, "snippet": snippet})
+    return out
+
+
+def _provider_specs() -> list[tuple[str, str | None, _SearchFn]]:
+    """(name, env-key, fn). env-key=None means a keyless provider — ALWAYS
+    enabled (no key to configure, no monthly allowance to budget)."""
     return [
         ("tavily", "TAVILY_API_KEY", _tavily_search),
         ("serper", "SERPER_API_KEY", _serper_search),
@@ -257,6 +313,8 @@ def _provider_specs() -> list[tuple[str, str, _SearchFn]]:
         ("tinyfish", "TINYFISH_API_KEY", _tinyfish_search),
         ("scavio", "SCAVIO_API_KEY", _scavio_search),
         ("firecrawl", "FIRECRAWL_API_KEY", _firecrawl_search),
+        ("openalex", None, _openalex_search),
+        ("gdelt", None, _gdelt_search),
     ]
 
 
@@ -283,6 +341,8 @@ DEFAULT_MONTHLY_BUDGETS: dict[str, int | None] = {
     "tinyfish": None,  # unlimited — no credit system
     "scavio": 50,  # free tier: 50 credits/month (verified live 2026-08-17)
     "firecrawl": 500,  # free tier: 500 credits/month
+    "openalex": None,  # keyless — no credit system
+    "gdelt": None,  # keyless — no credit system
 }
 
 
@@ -392,10 +452,10 @@ _QUOTA_STORE = _QuotaStore()
 
 
 def _quota_authorized_providers(
-    specs: list[tuple[str, str, _SearchFn]],
-) -> list[tuple[str, str, _SearchFn]]:
+    specs: list[tuple[str, str | None, _SearchFn]],
+) -> list[tuple[str, str | None, _SearchFn]]:
     """Filter provider specs to those not past their monthly budget."""
-    result: list[tuple[str, str, _SearchFn]] = []
+    result: list[tuple[str, str | None, _SearchFn]] = []
     for name, env_key, fn in specs:
         if _QUOTA_STORE.exhausted(name):
             logger.warning(
@@ -420,6 +480,324 @@ _RRF_K = 60
 
 def _rrf_rank(rank: int) -> float:
     return 1.0 / (_RRF_K + rank + 1)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# DIVERSITY + EVIDENCE LAYER — content-level dedup + agreement/conflict analysis
+#
+# The parallel fan-out maximizes SOURCE diversity; this layer turns that raw
+# diversity into a USABLE diverse pool for the LLM:
+#   * near-duplicate clustering: the same story syndicated across many URLs
+#     (AP/wire copy, press-release reposts) is a single *fact*, not N facts.
+#     Word-bigram shingle Jaccard >= _NEAR_DUP_JACCARD collapses those echoes
+#     into one canonical result and records how many variants + which providers
+#     carried it.
+#   * agreement attribution: a finding surfaced by 2+ independent engines is
+#     (weakly) corroborated; one surfaced by a single engine is un-corroborated
+#     unique-to-<provider> information.
+#   * conflict detection: directions encoded in the text itself ("raises" vs
+#     "lowers", "approves" vs "rejects", "worsens" vs "improves") over shared
+#     topic tokens flags OPPOSING claims for the LLM to adjudicate. Pure
+#     deterministic — counts 0 honestly when no lexical opposition exists.
+#   * evidence summary: per-query stats (sources searched, raw/unique counts,
+#     consensus vs unique distribution, per-provider unique contribution) so
+#     the LLM can reason about coverage, not just consume a flat list.
+#
+# No embeddings, no LLM, no new dependencies — runs inside the existing
+# fan-out seam so every consumer (tool_executor, agent_service_v2, deep
+# research, fan-out scripts) inherits it unchanged.
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Content-word TITLE overlap at/above this collapses a near-duplicate echo.
+# Web-copy duplicates (wire syndication, press-release reposts) share their
+# headline wording; that signal lives in the TITLE, not the snippet (snippets
+# carry per-engine boilerplate: "OpenAlex work 2026" vs "GDELT news US"). Jaccard
+# over the title's content words (stopwords removed) — position-free, so
+# "Rates fall on new policy" == "Rates fall on new policy (update)" scores 0.8.
+# 0.7 is the classic "effectively identical" cutoff (Moz/MinHash practice:
+# >= 0.7 identical, ~0.5 borderline, <= 0.3 distinct): it requires the bulk of a
+# headline's wording to overlap, which separates genuinely distinct-but-similar
+# titles ("Only openalex story" vs "Only gdelt story" = 0.5) from true wire
+# reposts (0.7-1.0). Distinct headlines for the same story are paraphrase, which
+# is explicitly out of scope (needs embeddings, not lexicals).
+_NEAR_DUP_TITLE_JACCARD = 0.7
+
+
+def _near_dup_score(a: dict, b: dict) -> float:
+    """Lexical similarity between two results (title-content-word Jaccard)."""
+    aw = _content_words(a.get("title", ""))
+    bw = _content_words(b.get("title", ""))
+    if not aw or not bw:
+        return 0.0
+    inter = len(set(aw) & set(bw))
+    return inter / (len(set(aw)) + len(set(bw)) - inter)
+
+
+_STOPWORDS = frozenset(
+    """
+    a an and are as at be but by for from had has have he her his i in into is it
+    its of on or our she so that the their them then there these they this to was
+    we were what when where which who will with you your rtl
+    """.split()
+)
+
+
+def _content_words(text: str) -> list[str]:
+    import re as _re
+
+    if not text:
+        return []
+    words = _re.findall(r"[A-Za-z0-9]+(?:'[A-Za-z]+)?", text.lower())
+    return [w for w in words if w not in _STOPWORDS and len(w) > 1]
+
+
+# Directional terms for the conflict heuristic. A "claims conflict" is surfaced
+# when two results (a) share topic content words AND (b) encode opposite
+# directions — e.g. one article says prices "rise"/"spike", another says they
+# "fall"/"drop". Claim-level contradiction detection (does the text actually
+# contradict?) is an LLM/NLI layer; this deterministic signal only flags the
+# lexical-opposition CANDIDATES for the LLM to adjudicate, and never invents
+# one when no opposition is present.
+_POLARITY_NEG = {
+    "raises",
+    "raised",
+    "raising",
+    "increase",
+    "increases",
+    "increased",
+    "spike",
+    "spikes",
+    "jump",
+    "jumps",
+    "surge",
+    "surges",
+    "grow",
+    "grows",
+    "growing",
+    "worsen",
+    "worsens",
+    "worsening",
+    "climb",
+    "climbs",
+    "halt",
+    "halts",
+    "pauses",
+    "still",
+    "warns",
+    "warned",
+    "warns",
+}
+_POLARITY_POS = {
+    "lowers",
+    "lowered",
+    "lowering",
+    "decrease",
+    "decreases",
+    "decreased",
+    "drop",
+    "drops",
+    "fall",
+    "falls",
+    "falling",
+    "decline",
+    "declines",
+    "improve",
+    "improves",
+    "improved",
+    "cut",
+    "cuts",
+    "curbs",
+    "curb",
+    "eases",
+    "ease",
+    "sink",
+    "sinks",
+    "recovers",
+    "recovered",
+    "rejects",
+    "rejected",
+    "opposes",
+    "opposed",
+    "blocks",
+    "blocked",
+    "denies",
+    "denied",
+    "refutes",
+    "refuted",
+}
+
+
+def _dedupe_near_dups(merged: list[dict]) -> list[dict]:
+    """Collapse near-duplicate (syndicated) entries into canonical results.
+
+    Exact-URL duplicates were already removed by the RRF merge; this catches
+    the same story at DIFFERENT URLs (wire copy / press-release reposts). The
+    canonical entry keeps the union of carrying providers (with a fresh best
+    provider label — the RRF first-seen label is stale once we reassign), the
+    echo count and surviving variant URLs, so the LLM knows it collapsed.
+    """
+    deduped: list[dict] = []
+    idx_by_key: dict[str, int] = {}
+    for k, it in enumerate(merged):
+        key = _norm_url(it.get("url", "")) or f"#no-url#{k}"
+        if key in idx_by_key:
+            target = deduped[idx_by_key[key]]  # exact-URL echo (post-RRF guard)
+            _merge_echo(target, it)
+            continue
+        cluster_idx: int | None = None
+        for j, target in enumerate(deduped):
+            if _near_dup_score(it, target) >= _NEAR_DUP_TITLE_JACCARD:
+                cluster_idx = j
+                break
+        if cluster_idx is None:
+            idx_by_key[key] = len(deduped)
+            deduped.append(it)
+        else:
+            _merge_echo(deduped[cluster_idx], it)
+    for it in deduped:
+        if not it.get("echoes"):
+            continue
+        prov_seen = sorted(dict.fromkeys(it.get("providers") or []))
+        it["provider"] = prov_seen[0] if prov_seen else it.get("provider")
+        it["providers"] = prov_seen
+    return deduped
+
+
+def _merge_echo(target: dict, it: dict) -> None:
+    """Fold a duplicate story into the canonical entry: union providers, count an
+    echo, and record the extra variant URL."""
+    target["echoes"] = target.get("echoes", 0) + 1
+    seen = set(target.get("providers") or []) | set(it.get("providers") or [])
+    target["providers"] = sorted(seen)
+    target.setdefault("variants", []).append(it.get("url", ""))
+
+
+def _conflict_pairs(results: list[dict]) -> list[tuple[dict, dict, list[str]]]:
+    """Deterministic opposing-claim pairs: shared topic words + opposite polarity."""
+    pairs: list[tuple[dict, dict, list[str]]] = []
+    for i in range(len(results)):
+        for j in range(i + 1, len(results)):
+            a, b = results[i], results[j]
+            aw = _content_words(f"{a.get('title', '')} {a.get('snippet', '')}")
+            bw = _content_words(f"{b.get('title', '')} {b.get('snippet', '')}")
+            topic = set(aw) & set(bw)
+            if len(topic) < 2:
+                continue
+            a_neg = any(w in _POLARITY_NEG for w in aw)
+            a_pos = any(w in _POLARITY_POS for w in aw)
+            b_neg = any(w in _POLARITY_NEG for w in bw)
+            b_pos = any(w in _POLARITY_POS for w in bw)
+            if (a_neg and b_pos) or (a_pos and b_neg):
+                sig = sorted(
+                    w for w in topic if w in _POLARITY_NEG or w in _POLARITY_POS
+                )
+                pairs.append((a, b, sig[:4]))
+    return pairs
+
+
+def _grid_provider_map(
+    per_provider: list[tuple[str, list[dict] | None]],
+) -> dict[str, set[str]]:
+    """Map normalized URL → the set of providers that returned it (raw, pre-dedup)."""
+    grid: dict[str, set[str]] = {}
+    for name, items in per_provider:
+        if not items:
+            continue
+        for it in items:
+            key = _norm_url(it.get("url", ""))
+            if key:
+                grid.setdefault(key.lower(), set()).add(name)
+    return grid
+
+
+def _build_evidence(
+    providers_ok: list[str],
+    per_provider: list[tuple[str, list[dict] | None]],
+    results: list[dict],
+) -> dict[str, Any]:
+    """Diversity + evidence summary for the LLM's synthesis context.
+
+    Attribution is grounded on the RAW per-provider URL sets (before the
+    near-dup fold): a result is *eligible* as corroborated when its normalized
+    URL was literally returned by 2+ providers; anything else that survived to
+    the final pool counts as unique-to-provider information. This is exact-URL
+    corroboration — the honest, deterministic ceiling (semantic paraphrasing
+    across engines is an embedding/LLM layer, deliberately out of scope here).
+    """
+    grid = _grid_provider_map(per_provider)
+    raw_total = len(grid)  # distinct normalized URLs across all providers
+    corroborated: list[dict] = []
+    unique_to: dict[str, list[dict]] = {}
+    for it in results:
+        key = _norm_url(it.get("url", "")).lower()
+        if not key:
+            continue
+        carriers = grid.get(key, set())
+        if len(carriers) >= 2:
+            corroborated.append(it)
+        else:
+            carrier = next(iter(carriers), "")
+            if carrier:
+                unique_to.setdefault(carrier, []).append(it)
+    consensus_sources: dict[str, int] = {}
+    for it in corroborated:
+        for p in set(it.get("providers") or []):
+            consensus_sources[p] = consensus_sources.get(p, 0) + 1
+    conflicts = _conflict_pairs(results)
+    source_items = {name: items for name, items in per_provider if items}
+    evidence = {
+        "sources": {p: len(source_items.get(p, [])) for p in providers_ok},
+        "raw_results": raw_total,
+        "unique_results": len(results),
+        "deduped": max(0, raw_total - len(results)),
+        "clusters": sum(1 for it in results if it.get("echoes", 0) > 0),
+        "consensus": len(corroborated),
+        "consensus_pct": round(100.0 * len(corroborated) / len(results), 1)
+        if results
+        else 0.0,
+        "consensus_sources": consensus_sources,
+        "unique_to_provider": {p: len(v) for p, v in unique_to.items() if v},
+        "conflicts": len(conflicts),
+    }
+    lines = [
+        "EVIDENCE POOL (synthesis context)",
+        f"sources searched ({len(providers_ok)}): {', '.join(providers_ok)}",
+        (
+            f"raw results: {raw_total} | unique sources deduped to {len(results)} "
+            f"(-{evidence['deduped']}) | echo clusters collapsed: {evidence['clusters']}"
+        ),
+        (
+            f"consensus (exact same URL from 2+ providers): {evidence['consensus']} "
+            f"({evidence['consensus_pct']}% of pool) — corroborated by {evidence['consensus_sources']}"
+        ),
+        (
+            f"unique-to-provider (uncorroborated, only one engine surfaced): "
+            f"{sum(evidence['unique_to_provider'].values())}"
+        ),
+    ]
+    if evidence["unique_to_provider"]:
+        lines.append(
+            "per-provider unique findings\n"
+            + "\n".join(
+                f"  {p}: {n}" for p, n in sorted(evidence["unique_to_provider"].items())
+            )
+        )
+    else:
+        lines.append("per-provider unique findings: none")
+    if evidence["conflicts"]:
+        for a, b, sig in conflicts:
+            la = results.index(a) + 1
+            lb = results.index(b) + 1
+            lines.append(
+                f"\nCONFLICTING CLAIMS ({', '.join(sig) if sig else 'opposing direction'}): "
+                f"result #{la} [{','.join(a.get('providers') or [])}] vs result #{lb} "
+                f"[{','.join(b.get('providers') or [])}]\n"
+                f"  A: {a.get('title', '')}\n  B: {b.get('title', '')}"
+            )
+    else:
+        lines.append("conflicting claims: none detected (deterministic lexical check)")
+    evidence["_text"] = "\n".join(lines)
+    return evidence
 
 
 def _rrf_merge(per_provider: list[tuple[str, list[dict] | None]]) -> list[dict]:
@@ -505,10 +883,20 @@ async def web_search_handler(params: Dict[str, Any], trace_hook=None) -> Dict[st
     # MERGE across engines (distinct indices surface non-overlapping hits the
     # first-answering fail-chain used to hide). Providers past their monthly
     # free-tier quota are excluded rather than failed (see QUOTA GUARD).
+    # Keyless providers (env-key=None) join unconditionally, but SWARM_SEARCH_KEYLESS=0
+    # turns them all off (test isolation — they fire real GETs otherwise).
+    keyless = os.getenv("SWARM_SEARCH_KEYLESS", "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
     providers: list[tuple[str, _SearchFn]] = [
         (name, fn)
         for name, env_key, fn in _quota_authorized_providers(_provider_specs())
-        if _has_key(env_key, min_len=8)
+        if env_key is None
+        and keyless
+        or (env_key is not None and _has_key(env_key, min_len=8))
     ]
     if not providers:
         return await _ddg_fallback(query, max_results)
@@ -526,12 +914,30 @@ async def web_search_handler(params: Dict[str, Any], trace_hook=None) -> Dict[st
     per_provider = await asyncio.gather(*(run_one(n, fn) for n, fn in providers))
 
     providers_ok: list[str] = [name for name, items in per_provider if items]
+    raw_per_provider = [(name, items) for name, items in per_provider if items]
     merged: list[dict] = _rrf_merge(per_provider)
 
     if not merged:
         logger.warning("All configured web-search providers failed or returned nothing")
         ddg = await _ddg_fallback(query, max_results)
         return ddg
+
+    # DIVERSITY + EVIDENCE LAYER: collapse syndicated echoes, attribute agreement
+    # vs unique-to-provider, detect lexical-opposition conflicts, and summarize
+    # coverage for the LLM. Deterministic; any unexpected failure degrades to the
+    # plain RRF merge (search must never break because the analysis layer broke).
+    try:
+        results = _dedupe_near_dups(merged) or merged
+        if len(providers_ok) > 1:
+            evidence = _build_evidence(providers_ok, raw_per_provider, results)
+        else:
+            evidence = {"sources": {providers_ok[0]: len(raw_per_provider[0][1] or [])}}
+    except Exception as exc:  # noqa: BLE001 — defensive: keep the search working
+        logger.warning(
+            "web-search evidence layer degraded (using plain merge): %s", exc
+        )
+        results = merged
+        evidence = {}
 
     if trace_hook:
         trace_hook(
@@ -540,7 +946,7 @@ async def web_search_handler(params: Dict[str, Any], trace_hook=None) -> Dict[st
                 "ok": True,
                 "query": query,
                 "providers": providers_ok,
-                "results": len(merged),
+                "results": len(results),
             },
         )
 
@@ -553,7 +959,9 @@ async def web_search_handler(params: Dict[str, Any], trace_hook=None) -> Dict[st
         "provider": provider_label,
         "providers": providers_ok,
         "query": query,
-        "results": merged,
+        "results": results,
+        "evidence": evidence,
+        "evidence_text": evidence.get("_text", ""),
     }
 
 
