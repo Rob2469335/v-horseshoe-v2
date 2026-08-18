@@ -58,9 +58,10 @@ def _mock_engine(monkeypatch):
 def test_parse_game_pgn():
     parsed = ci._parse_game_pgn(SAMPLE_PGN)
     assert parsed is not None
-    headers, board = parsed
+    headers, board, game_obj = parsed
     assert headers["White"] == "tester"
     assert len(board.move_stack) == 14
+    assert game_obj is not None
 
 
 def test_parse_game_pgn_bad():
@@ -69,12 +70,14 @@ def test_parse_game_pgn_bad():
 
 def test_analyze_game_produces_move_records():
     parsed = ci._parse_game_pgn(SAMPLE_PGN)
-    headers, board = parsed
-    records = ci._analyze_game(board)
+    headers, board, game_obj = parsed
+    records = ci._analyze_game(board, max_plies=100000, game_obj=game_obj)
     assert len(records) == 14
     assert records[0]["uci"] == "e2e4"
     assert "classification" in records[0]
     assert "pre_fen" in records[0]
+    assert "clock_remaining_secs" in records[0]
+    assert "think_time_secs" in records[0]
 
 
 def test_import_games_feeds_stores(monkeypatch, tmp_path):

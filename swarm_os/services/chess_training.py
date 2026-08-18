@@ -370,6 +370,74 @@ def training_due(limit: int = 10, concept: str | None = None) -> dict[str, Any]:
     if not concept:
         # Within equal priority, older box + sooner due first.
         pool.sort(key=lambda it: (it.get("box", 0), it.get("due_at", 0)))
+
+        # Inject tactical motifs (curated, engine-free prototypes). Motifs are
+        # persisted on first serve (deduped by source+concept+pre_fen) so the
+        # answer path can find them and the spaced ladder advances — an
+        # ephemeral item could never be answered (record_answer looks it up in
+        # the store and would return 'no such training item').
+        from .chess_tactics_library import get_motif_items
+
+        with _LOCK:
+            items = _load()
+        motifs = get_motif_items()
+        motif_ids = {f"{m.get('concept')}|{m.get('pre_fen')}" for m in motifs}
+        existing = {
+            f"{it.get('concept')}|{it.get('pre_fen')}"
+            for it in items
+            if it.get("source") == "motif"
+        }
+        added = False
+        for m in motifs:
+            key = f"{m.get('concept')}|{m.get('pre_fen')}"
+            if key not in existing and key in motif_ids:
+                item = _build_item(
+                    concept=m["concept"],
+                    stage=m.get("stage", "reinforce"),
+                    pre_fen=m["pre_fen"],
+                    solution_uci=m["solution_uci"],
+                    solution_san=m["solution_san"],
+                    source="motif",
+                    prompt=m.get("prompt", m["concept"]),
+                    difficulty=int(m.get("difficulty", 1)),
+                    source_ref=f"motif:{key}",
+                )
+                item["due_at"] = 0  # a fresh motif is due immediately
+                items.append(item)
+                added = True
+        if added:
+            with _LOCK:
+                _save(items)
+            # Re-read so the persisted motif items are in the due pool.
+            with _LOCK:
+                items = _load()
+
+        # Deterministic interleave: slot a due motif every 5th position so the
+        # mix of personal-blunder + classic-pattern practice is consistent (the
+        # old random-insert into a big pool almost never surfaced a motif).
+        # Cap the motif share at ~1/5 of the requested batch; motifs only ever
+        # slot into the interleave positions (never prepend-flood a sparse
+        # personal queue).
+        motif_due = [
+            it
+            for it in items
+            if it.get("source") == "motif"
+            and it.get("due_at", 0) <= now
+            and not it.get("retired")
+        ]
+        motif_due.sort(key=lambda it: (it.get("box", 0), it.get("due_at", 0)))
+        motif_cap = max(1, limit // 5)
+        motif_due = motif_due[:motif_cap]
+        real_due = [it for it in pool if it.get("source") != "motif"]
+        interleaved: list[dict[str, Any]] = []
+        mi = 0
+        for ri, item in enumerate(real_due):
+            if mi < len(motif_due) and ri % 5 == 4:
+                interleaved.append(motif_due[mi])
+                mi += 1
+            interleaved.append(item)
+        pool = interleaved
+
     return {
         "ok": True,
         "due": pool[:limit],

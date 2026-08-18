@@ -32,6 +32,7 @@ log = logging.getLogger(__name__)
 
 _DATA_DIR = Path("data/chess")
 _STORE_FILE = _DATA_DIR / "mistakes.jsonl"
+_ARCHIVE_FILE = _DATA_DIR / "mistakes_archive.jsonl"
 _LOCK = threading.Lock()
 
 # Spaced-repetition ladder (days). A solve advances to the next box; a failed
@@ -93,6 +94,10 @@ def record_mistake(
     classification: str,
     concept: str = "",
     book_titles: list[str] | None = None,
+    clock_remaining_secs: float | None = None,
+    think_time_secs: float | None = None,
+    impulse_blunder: bool = False,
+    lead_in_moves: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     """Persist a Mistake/Blunder. Returns the stored entry. Deduplicates by
     (pre_fen, played_uci) so the same blunder isn't queued twice."""
@@ -118,6 +123,10 @@ def record_mistake(
             "classification": classification,
             "concept": concept,
             "book_titles": book_titles or [],
+            "clock_remaining_secs": clock_remaining_secs,
+            "think_time_secs": think_time_secs,
+            "impulse_blunder": impulse_blunder,
+            "lead_in_moves": lead_in_moves or [],
             "box": 0,
             "due_at": now,
             "last_seen": now,
@@ -147,6 +156,62 @@ def review_due(limit: int = 10, box: int | None = None) -> dict[str, Any]:
         }
 
 
+def get_blunder_radar(limit: int = 10) -> dict[str, Any]:
+    """Return a mix of mistakes (where a tactic/blunder existed) and solid positions.
+    The learner must decide 'Is there a tactic here?'"""
+    import random
+    from .chess_games import _load_games
+
+    with _LOCK:
+        mistakes = _load()
+    
+    radar_items = []
+    num_mistakes = min(limit // 2, len(mistakes))
+    chosen_mistakes = random.sample(mistakes, num_mistakes) if num_mistakes else []
+    for m in chosen_mistakes:
+        radar_items.append({
+            "id": m.get("id", uuid.uuid4().hex[:12]),
+            "fen": m.get("pre_fen"),
+            "has_tactic": True,
+            "best_uci": m.get("best_uci"),
+            "best_san": m.get("best_san"),
+            "concept": m.get("concept"),
+            "played_uci": m.get("played_uci"),
+            "played_san": m.get("played_san"),
+            "classification": m.get("classification", "Mistake")
+        })
+
+    num_solid = limit - len(radar_items)
+    if num_solid > 0:
+        games = _load_games()
+        all_solid = []
+        for g in games:
+            for m in g.get("moves", []):
+                # Pick positions where a good move was played, so there is no massive blunder/missed tactic
+                if m.get("classification") in ("Best", "Excellent", "Good", "Brilliant", "Book"):
+                    all_solid.append(m)
+        
+        chosen_solid = random.sample(all_solid, min(num_solid, len(all_solid))) if all_solid else []
+        for m in chosen_solid:
+            radar_items.append({
+                "id": uuid.uuid4().hex[:12],
+                "fen": m.get("fen"),
+                "has_tactic": False,
+                "best_uci": m.get("uci"),
+                "best_san": m.get("san"),
+                "concept": "Solid Position",
+                "played_uci": m.get("uci"),
+                "played_san": m.get("san"),
+                "classification": m.get("classification")
+            })
+
+    random.shuffle(radar_items)
+    return {
+        "ok": True,
+        "items": radar_items
+    }
+
+
 def _resolve(entry_id: str) -> dict[str, Any] | None:
     entries = _load()
     return next((e for e in entries if e.get("id") == entry_id), None)
@@ -166,6 +231,13 @@ def mark_solved(entry_id: str) -> dict[str, Any]:
         retired = entry["box"] >= len(ladder)
         if retired:
             entries.remove(entry)
+            entry["mastered_at"] = _now()
+            entry["box_max_reached"] = True
+            try:
+                with open(_ARCHIVE_FILE, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(entry) + "\n")
+            except Exception as e:
+                log.error(f"Failed to archive mastered mistake {entry_id}: {e}")
         else:
             entry["due_at"] = _now() + ladder[entry["box"]] * 86400
         _save(entries)
@@ -449,7 +521,20 @@ def coach_report() -> dict[str, Any]:
     concept_counts: dict[str, int] = {}
     concept_blunders: dict[str, int] = {}
     concept_positions: dict[str, set] = {}
+    
+    impulse_blunders = 0
+    timed_out_blunders = 0
+    comfortable_blunders = 0
+
     for e in entries:
+        if e.get("impulse_blunder"):
+            impulse_blunders += 1
+        clk = e.get("clock_remaining_secs")
+        if clk is not None:
+            if clk < 10:
+                timed_out_blunders += 1
+            elif clk > 60:
+                comfortable_blunders += 1
         concept = _classify_concept(
             e.get("pre_fen", ""),
             e.get("played_uci", ""),
@@ -508,6 +593,11 @@ def coach_report() -> dict[str, Any]:
         "ok": True,
         "total": len(entries),
         "skills": skills,
+        "time_pressure": {
+            "impulse_blunders": impulse_blunders,
+            "timed_out_blunders": timed_out_blunders,
+            "comfortable_blunders": comfortable_blunders,
+        },
         "top_concepts": sorted(concept_counts.items(), key=lambda x: -x[1])[:5],
         "concept_scores": concept_scores,
         "focus_skill": focus_skill,

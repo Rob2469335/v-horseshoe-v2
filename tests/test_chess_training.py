@@ -328,3 +328,76 @@ def test_reset_all_removes_manifest():
     ct.reset_all()
     assert not ct._STORE_FILE.exists()
     assert not ct._STORE_FILE.with_suffix(".jsonl.manifest.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# Tactical motif injection (curated prototypes interleaved into the queue)
+# ---------------------------------------------------------------------------
+def test_motifs_persisted_on_first_serve():
+    """Motifs must be persisted into the store on first serve so the answer
+    path can find them — an ephemeral item is unanswerable (record_answer would
+    return 'no such training item')."""
+    ct.training_due(limit=10)
+    stored = ct._load()
+    motifs = [i for i in stored if i.get("source") == "motif"]
+    assert len(motifs) == 10  # all curated motifs materialize once
+    # Shape contract: the frontend TrainingItem expects solution_uci/san + stage.
+    m = motifs[0]
+    assert m.get("solution_uci")
+    assert m.get("solution_san")
+    assert m.get("stage") == "reinforce"
+
+
+def test_motif_answer_advances_ladder():
+    """A served motif must be answerable (no 'no such training item') and its
+    correct answer advances it out of the due set."""
+    ct.training_due(limit=10)
+    stored = ct._load()
+    m = next(i for i in stored if i.get("source") == "motif")
+    r = ct.record_answer(m["id"], correct=True)
+    assert r.get("ok") is True
+    assert r.get("mastered") is False
+    # answered motif is no longer due (box advanced past 0)
+    r2 = ct.training_due(limit=10)
+    served = [i for i in r2["due"] if i.get("source") == "motif"]
+    assert all(i["id"] != m["id"] for i in served)
+
+
+def test_motif_interleave_capped_and_positioned():
+    """Motifs slot every 5th position and never flood a batch beyond ~1/5."""
+    # Seed enough real items to fill a 10-batch.
+    for i in range(12):
+        it = ct._build_item(
+            concept="hanging",
+            stage="repair",
+            pre_fen=f"rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 {i + 1}",
+            solution_uci="e2e4",
+            solution_san="e4",
+            source="own_game",
+            prompt="test",
+            source_ref="x",
+        )
+        it["due_at"] = 0
+        with ct._LOCK:
+            items = ct._load()
+            items.append(it)
+            ct._save(items)
+    r = ct.training_due(limit=10)
+    due = r["due"]
+    motifs = [i for i in due if i.get("source") == "motif"]
+    assert 0 < len(motifs) <= 2  # ~1/5 of 10, never a flood
+    positions = [idx for idx, i in enumerate(due) if i.get("source") == "motif"]
+    assert all(p % 5 == 4 for p in positions)
+
+
+def test_motifs_never_duplicate_on_repeated_calls():
+    """Repeated training_due calls must not stack duplicate motif items."""
+    ct.training_due(limit=10)
+    ct.training_due(limit=10)
+    stored = ct._load()
+    motif_keys = [
+        (i.get("concept"), i.get("pre_fen"))
+        for i in stored
+        if i.get("source") == "motif"
+    ]
+    assert len(motif_keys) == len(set(motif_keys))  # no duplicates

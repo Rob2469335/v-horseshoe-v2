@@ -201,7 +201,7 @@ async def _analyze_one(username: str, game: dict) -> dict[str, Any]:
     parsed = _parse_game_pgn(game.get("pgn", ""))
     if parsed is None:
         return {"records": [], "mistakes": 0, "error": "unparseable pgn"}
-    headers, board = parsed
+    headers, board, game_obj = parsed
     if len(board.move_stack) < 4:
         return {"records": [], "mistakes": 0, "error": None}
     try:
@@ -215,7 +215,7 @@ async def _analyze_one(username: str, game: dict) -> dict[str, Any]:
 
     gid = start_game()["id"]
     mistakes = 0
-    for rec in records:
+    for i, rec in enumerate(records):
         # Real win-delta from the evals (mover's perspective on both).
         win_before = _expected_points(500, rec["eval_before_cp"])
         win_after = _expected_points(500, rec["eval_after_cp"])
@@ -238,7 +238,27 @@ async def _analyze_one(username: str, game: dict) -> dict[str, Any]:
                 "source": f"chess.com:{username}",
             },
         )
+
         if rec["classification"] in ("Mistake", "Blunder", "Inaccuracy"):
+            from .chess_book_memory import _concept_from
+
+            concept = _concept_from(
+                rec["classification"], f"{rec['uci']} {rec['best_uci'] or ''}"
+            )
+
+            think = rec.get("think_time_secs")
+
+            # Extract 3-5 lead in moves
+            start_idx = max(0, i - 4)
+            lead_in_moves = [
+                {
+                    "fen": r["pre_fen"],
+                    "san": r["san"],
+                    "uci": r["uci"],
+                }
+                for r in records[start_idx:i]
+            ]
+
             record_mistake(
                 pre_fen=rec["pre_fen"],
                 played_uci=rec["uci"],
@@ -246,8 +266,12 @@ async def _analyze_one(username: str, game: dict) -> dict[str, Any]:
                 best_uci=rec["best_uci"],
                 best_san=rec["best_move_san"],
                 classification=rec["classification"],
-                concept="imported",
+                concept=concept,
                 book_titles=[],
+                clock_remaining_secs=rec.get("clock_remaining_secs"),
+                think_time_secs=think,
+                impulse_blunder=(think is not None and think < 3.0),
+                lead_in_moves=lead_in_moves,
             )
             mistakes += 1
     # Finalize the game so it counts in analytics (only finished games do) —
