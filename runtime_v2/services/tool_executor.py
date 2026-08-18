@@ -36,7 +36,7 @@ async def get_mcp_manager():
                 from swarm_os.lib.mcp.mcp_client import ExternalMCPClientManager
 
                 _mcp_manager = ExternalMCPClientManager()
-                async with asyncio.timeout(60.0):
+                async with asyncio.timeout(300.0):
                     await _mcp_manager.start()
     return _mcp_manager
 

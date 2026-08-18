@@ -79,7 +79,7 @@ class ExternalMCPClientManager:
                 session = await self.exit_stack.enter_async_context(
                     ClientSession(read_stream, write_stream)
                 )
-                async with asyncio.timeout(30.0):
+                async with asyncio.timeout(120.0):
                     await session.initialize()
 
                 # Retrieve tools
