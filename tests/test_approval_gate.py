@@ -36,6 +36,31 @@ def _fresh_registry(monkeypatch):
     return ar.get_registry()
 
 
+@pytest.fixture(autouse=True)
+def _real_subprocess(request):
+    """Keep subprocess.Popen REAL for the tests that dispatch real subprocesses
+    (the git tool + sandbox_repl python exec). The CI conftest's autouse
+    `subprocess.Popen` mock breaks asyncio.create_subprocess_exec on POSIX
+    (asyncio's selector transport wraps subprocess.Popen there; Windows uses
+    CreateProcess and is unaffected), so those tools return "[Errno 3] No such
+    process" on the Linux runner unless the mock is shadowed — the same reason
+    test_security_hardening keeps Popen real for its sandbox tests.
+    """
+    if request.node.name in (
+        "test_one_time_consumption",
+        "test_git_tool_readonly_dispatch",
+    ):
+        yield  # real subprocess.Popen (git + sandbox_repl must actually run)
+        return
+    from unittest.mock import patch
+
+    with patch("subprocess.Popen") as mock_popen:
+        mock_popen.return_value.communicate.return_value = (b"", b"")
+        mock_popen.return_value.returncode = 0
+        mock_popen.return_value.pid = 99999
+        yield mock_popen
+
+
 # ── policy classification ────────────────────────────────────────────────────
 def test_read_only_ops_are_allow():
     assert ar.agent_tool_policy("filesystem", "read") == ar.ALLOW
