@@ -33,12 +33,12 @@ def test_provider_classification():
 
 
 def test_cost_estimation_cache_hit_discount():
-    # 10K input all miss + 2K output: 10000/1e6*0.14 + 2000/1e6*0.28
+    # 10K input all miss + 2K output: 10000/1e6*0.22 + 2000/1e6*0.66 (off-peak)
     miss = usage_log.estimate_cost("deepseek/deepseek-v4-flash", 10000, 2000, 0)
-    assert miss == pytest.approx(0.00196, rel=1e-3)
-    # 9K of the 10K prompt cached: 1000*0.14 + 9000*0.0028 + 2000*0.28 / 1e6
+    assert miss == pytest.approx(0.00352, rel=1e-3)
+    # 9K of the 10K prompt cached: 1000*0.22 + 9000*0.007 + 2000*0.66 / 1e6
     hit = usage_log.estimate_cost("deepseek/deepseek-v4-flash", 10000, 2000, 9000)
-    assert hit == pytest.approx(0.0007252, rel=1e-3)
+    assert hit == pytest.approx(0.001603, rel=1e-3)
     assert hit < miss  # cache hits are cheaper
 
 
@@ -93,12 +93,12 @@ def test_record_usage_roundtrip(tmp_path: Path):
         row = json.loads(lines[0])
         assert row["model"] == "deepseek/deepseek-v4-flash"
         assert row["provider"] == "deepseek_direct"
-        assert row["cost"] == pytest.approx(0.0007252, rel=1e-3)
+        assert row["cost"] == pytest.approx(0.001603, rel=1e-3)
         assert row["agent_id"] == "researcher"
 
         report = usage_log.usage_report(days=30)
         assert report["rows"] == 1
-        assert report["known_cost"] == pytest.approx(0.0007252, rel=1e-3)
+        assert report["known_cost"] == pytest.approx(0.001603, rel=1e-3)
         assert report["per_model"]["deepseek/deepseek-v4-flash"]["calls"] == 1
     finally:
         usage_log._USAGE_PATH = orig

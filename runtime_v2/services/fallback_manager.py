@@ -248,8 +248,8 @@ async def _fetch_openrouter_models() -> list[dict]:
             ):
                 continue
             # FLASH-ONLY policy: DeepSeek models are allowed only as v4-flash
-            # variants. deepseek-v4-pro is 3x the flash price ($0.435/$0.87 vs
-            # $0.14/$0.28) and legacy deepseek-chat/r1 aliases retired 2026-07-24.
+            # variants. deepseek-v4-pro is 3x the flash price ($0.66/$1.98 vs
+            # $0.22/$0.66 off-peak) and legacy deepseek-chat/r1 aliases retired 2026-07-24.
             if "deepseek" in m_id.lower() and "flash" not in m_id.lower():
                 continue
             if (
@@ -344,7 +344,7 @@ async def _fetch_nvidia_models() -> list[dict]:
         for m in data:
             m_id = m.get("id", "")
             # FLASH-ONLY policy (same as OpenRouter): keep deepseek-v4-flash, drop
-            # deepseek-v4-pro ($0.435/$0.87 — 3x flash) and coder variants.
+            # deepseek-v4-pro ($0.66/$1.98 — 3x flash, off-peak) and coder variants.
             if "deepseek" in m_id.lower() and "flash" not in m_id.lower():
                 continue
             models.append(
@@ -449,8 +449,9 @@ def _get_opencode_fallback() -> list[dict]:
 
 def _get_deepseek_direct_fallback() -> list[dict]:
     """DeepSeek V4 Flash direct (first-party api.deepseek.com) — PRIMARY cloud
-    model when DEEPSEEK_API_KEY is set. Cheapest path available: $0.14/M input
-    (miss), $0.0028/M (cache hit, ~98% cheaper), $0.28/M output. litellm's
+    model when DEEPSEEK_API_KEY is set. Cheapest path available: $0.22/M input
+    (miss), $0.007/M (cache hit, ~97% cheaper), $0.66/M output at off-peak
+    (effective 2026-08-16; peak hours double these). litellm's
     native `deepseek/` provider routes to api.deepseek.com using DEEPSEEK_API_KEY.
     Returns [] (no-op) when the key is absent so the swarm keeps its current
     OpenRouter/free-tier chain."""
