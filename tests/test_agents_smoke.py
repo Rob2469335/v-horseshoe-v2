@@ -5,15 +5,31 @@ from fastapi.testclient import TestClient
 from swarm_os.app.main import app
 
 
+_CLOUD_KEYS = (
+    "OPENROUTER_API_KEY",
+    "NVIDIA_API_KEY",
+    "GROQ_API_KEY",
+    "GEMINI_API_KEY",
+    "OPENAI_API_KEY",
+    "DEEPSEEK_API_KEY",
+)
+
+
 def _llm_backend_up() -> bool:
-    """Check if a live llama.cpp server is responding (integration env)."""
+    """A live LLM backend is reachable — local llama.cpp OR a configured cloud
+    fallback chain (fallback_manager keys). Either means the real /step request
+    below would run live generation, which is too slow for a unit test."""
+    import os
+
     try:
         import httpx
 
         r = httpx.get("http://127.0.0.1:8080/health", timeout=2.0)
-        return r.status_code == 200
+        if r.status_code == 200:
+            return True
     except Exception:
-        return False
+        pass
+    return any(os.getenv(k) for k in _CLOUD_KEYS)
 
 
 @pytest.fixture
