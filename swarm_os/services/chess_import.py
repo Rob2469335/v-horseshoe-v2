@@ -61,7 +61,7 @@ async def _last_archives(username: str, n: int = 3) -> list[str]:
     return archives[-n:] if archives else []
 
 
-def _parse_game_pgn(pgn_text: str) -> tuple[dict[str, Any], chess.Board] | None:
+def _parse_game_pgn(pgn_text: str) -> tuple[dict[str, Any], chess.Board, chess.pgn.Game] | None:
     """Parse a PGN into (headers, board-with-moves). Returns None on failure or
     when the game has no moves.
 
@@ -78,13 +78,13 @@ def _parse_game_pgn(pgn_text: str) -> tuple[dict[str, Any], chess.Board] | None:
                 board.push(node.move)
         if not board.move_stack:
             return None
-        return dict(game.headers), board
+        return dict(game.headers), board, game
     except Exception as exc:
         log.warning("pgn parse failed: %s", exc)
         return None
 
 
-def _analyze_game(board: chess.Board, max_plies: int = 40) -> list[dict[str, Any]]:
+def _analyze_game(board: chess.Board, max_plies: int = 100000, game_obj: chess.pgn.Game | None = None) -> list[dict[str, Any]]:
     """Evaluate up to `max_plies` moves in the game, classifying each. Returns
     per-move records like the trainer's evaluate_move output (uci, san, pre_fen,
     classification, win_delta_pct, best_uci, best_move_san). Bounded so a long
@@ -92,7 +92,20 @@ def _analyze_game(board: chess.Board, max_plies: int = 40) -> list[dict[str, Any
     records: list[dict[str, Any]] = []
     moves = list(board.move_stack)[:max_plies]  # Move objects
     replay = chess.Board()
-    for mv in moves:
+    clock_remaining = []
+    think_times = []
+    if game_obj:
+        prev_t = None
+        for node in game_obj.mainline():
+            t = _parse_clock(node.comment)
+            clock_remaining.append(t)
+            if t is not None and prev_t is not None:
+                think_times.append(max(0.0, prev_t - t))
+            else:
+                think_times.append(None)
+            prev_t = t
+
+    for i, mv in enumerate(moves):
         uci = mv.uci()
         pre_fen = replay.fen()
         before_best, before_cp, _ = _best_move_and_cp(replay)
@@ -127,6 +140,8 @@ def _analyze_game(board: chess.Board, max_plies: int = 40) -> list[dict[str, Any
                 "was_best": was_best,
                 "eval_before_cp": round(before_cp, 1),
                 "eval_after_cp": round(mover_after, 1),
+                "clock_remaining_secs": clock_remaining[i] if i < len(clock_remaining) else None,
+                "think_time_secs": think_times[i] if i < len(think_times) else None,
             }
         )
     return records
@@ -182,7 +197,7 @@ async def import_games(
             if parsed is None:
                 errors.append("unparseable pgn")
                 continue
-            headers, board = parsed
+            headers, board, game_obj = parsed
             # Optional color filter: only keep games where `username` played
             # the requested color.
             if color in ("white", "black"):
@@ -201,8 +216,8 @@ async def import_games(
                 continue
             try:
                 # Bound each game's analysis (~40 plies x 2 evals x ~0.8s worst).
-                async with asyncio.timeout(120):
-                    records = await asyncio.to_thread(_analyze_game, board, 40)
+                async with asyncio.timeout(600):
+                    records = await asyncio.to_thread(_analyze_game, board, 100000, game_obj)
             except Exception as exc:
                 errors.append(f"analysis failed: {exc}")
                 continue
@@ -242,6 +257,7 @@ async def import_games(
             if record_mistakes:
                 for rec in records:
                     if rec["classification"] in ("Mistake", "Blunder", "Inaccuracy"):
+                        think = rec.get("think_time_secs")
                         record_mistake(
                             pre_fen=rec["pre_fen"],
                             played_uci=rec["uci"],
@@ -251,6 +267,9 @@ async def import_games(
                             classification=rec["classification"],
                             concept="imported",
                             book_titles=[],
+                            clock_remaining_secs=rec.get("clock_remaining_secs"),
+                            think_time_secs=think,
+                            impulse_blunder=(think is not None and think < 3.0),
                         )
                         mistakes_queued += 1
 
@@ -468,9 +487,18 @@ async def build_profile(
             elif player_result == "draw":
                 entry["score"] += 0.5
 
-            # Opening (label by first 6 plies; the API also gives ECO but a
-            # moves-based label is clearer for a beginner).
-            opening_key = " ".join(m.uci() for m in board.move_stack[:6]) or "unknown"
+            # Opening: extract readable name from chess.com ECOUrl header or Opening header
+            eco_url = game_obj.headers.get("ECOUrl", "")
+            opening_name = game_obj.headers.get("Opening", "")
+            
+            if eco_url:
+                slug = eco_url.strip("/").split("/")[-1]
+                opening_key = slug.replace("-", " ")
+            elif opening_name:
+                opening_key = opening_name
+            else:
+                opening_key = " ".join(m.uci() for m in board.move_stack[:6]) or "unknown"
+
             o = stats["openings"].setdefault(opening_key, {"games": 0, "score": 0.0})
             o["games"] += 1
             if player_result == "win":
