@@ -145,6 +145,7 @@ type EvalResult = {
   best_move_san?: string | null
   is_checkmate?: boolean
   is_stalemate?: boolean
+  game_over?: boolean
   in_check?: boolean
   explanation?: string
   fen?: string
@@ -176,6 +177,8 @@ type CoachPlan = {
   material?: number
   hint_level_1?: string
   hint_level_2?: string
+  best_move?: string | null
+  best_move_san?: string | null
 }
 
 type SacrificeInfo = {
@@ -380,6 +383,7 @@ function sideToMove(fen: string): "w" | "b" {
 
 export default function ChessTrainerPage() {
   const backendUrl = "http://127.0.0.1:8000"
+  const engineAbortRef = useRef<AbortController | null>(null)
   const [fen, setFen] = useState("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1")
   const [fenHistory, setFenHistory] = useState<string[]>([]) // FEN snapshots for undo
   const [history, setHistory] = useState<string[]>([])
@@ -429,6 +433,12 @@ export default function ChessTrainerPage() {
 
   const board = useMemo(() => parseFen(fen), [fen])
   const turn = useMemo(() => sideToMove(fen), [fen])
+
+  // Clear coach hint when the board state changes.
+  useEffect(() => {
+    setHint(null)
+    setHintLevel(0)
+  }, [fen])
 
   const refreshHealth = useCallback(async () => {
     try {
@@ -482,13 +492,28 @@ export default function ChessTrainerPage() {
     }
     // A target square (empty or enemy piece) — attempt the move from selection.
     if (selected) {
+      if (!legalTargets.includes(sq)) {
+        setSelected(null)
+        setLegalTargets([])
+        return
+      }
       let uci = selected + sq
       // Auto-queen for pawn promotion
       const p = board[selected]
       if (p && p.toLowerCase() === "p") {
         const rank = sq[1]
         if (rank === "1" || rank === "8") {
-          uci += "q"
+          const promo = window.prompt("Promote to (q/r/b/n):", "q")
+          if (promo === null) {
+            setSelected(null)
+            setLegalTargets([])
+            return
+          }
+          if (["q", "r", "b", "n"].includes(promo.toLowerCase())) {
+            uci += promo.toLowerCase()
+          } else {
+            uci += "q"
+          }
         }
       }
       setSelected(null)
@@ -501,6 +526,9 @@ export default function ChessTrainerPage() {
     setEvaluating(true)
     setResult(null)
     const preFen = fen
+    const controller = new AbortController()
+    engineAbortRef.current = controller
+
     try {
       // Pre-move safety check (Heisman Slow->Safe->Active): if this move hangs
       // a piece or leaves the king exposed, BLOCK it and make the learner
@@ -509,6 +537,7 @@ export default function ChessTrainerPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ fen: preFen, uci }),
+        signal: controller.signal,
       })).json() as { ok: boolean; safe?: boolean; message?: string; hanging_after?: string[]; error?: string }
 
       if (safety.ok && safety.safe === false) {
@@ -519,7 +548,10 @@ export default function ChessTrainerPage() {
           classification: "Blunder",
           legal_moves: undefined,
         })
-        setRetryFen(preFen)
+        if (!retryFen) {
+          setRetryFen(preFen)
+          setHistory((h) => [...h, uci])
+        }
         setSelected(null)
         setLegalTargets([])
         setEvaluating(false)
@@ -530,6 +562,7 @@ export default function ChessTrainerPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ fen: preFen, uci, rating, want_explain: true, game_id: gameId }),
+        signal: controller.signal,
       })).json() as EvalResult
       setResult(res)
       setExplanationOpen(true)
@@ -555,19 +588,27 @@ export default function ChessTrainerPage() {
         // and steamrolling on. Only advance when the move was fine.
         const needsRetry = res.classification === "Mistake" || res.classification === "Blunder" || res.classification === "Inaccuracy"
         if (needsRetry) {
-          setRetryFen(preFen)
-          setHistory((h) => [...h, res.san ?? uci])
+          if (!retryFen) {
+            setRetryFen(preFen)
+            setHistory((h) => [...h, res.san ?? uci])
+          }
           setLastMove({ from: uci.slice(0, 2), to: uci.slice(2, 4) })
         } else {
           setRetryFen(null)
-          setHistory((h) => [...h, res.san ?? uci])
+          setHistory((h) => {
+            const baseHistory = retryFen ? h.slice(0, -1) : h;
+            return [...baseHistory, res.san ?? uci];
+          })
           setLastMove({ from: uci.slice(0, 2), to: uci.slice(2, 4) })
           setFenHistory((fh) => [...fh, preFen])
           setFen(res.fen)
-          void engineReply(res.fen)
+          if (!res.is_checkmate && !res.is_stalemate && !res.game_over) {
+            await engineReply(res.fen)
+          }
         }
       }
-    } catch {
+    } catch (e: any) {
+      if (e?.name === "AbortError") return
       setResult({ ok: false, error: "evaluation failed" })
     } finally {
       setEvaluating(false)
@@ -587,22 +628,46 @@ export default function ChessTrainerPage() {
   }
 
   const engineReply = async (playerFen: string) => {
+    const controller = new AbortController()
+    engineAbortRef.current = controller
+    let isTimeout = false
+    const timeout = setTimeout(() => {
+      isTimeout = true
+      controller.abort()
+    }, 15000)
     try {
       const res = await (await fetch(`${backendUrl}/chess/trainer/engine-move`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ fen: playerFen, rating, level }),
+        signal: controller.signal,
       })).json() as EngineReply
-      if (res.ok && res.fen) {
-        setHistory((h) => [...h, res.san ?? res.uci ?? ""])
-        if (res.uci) setLastMove({ from: res.uci.slice(0, 2), to: res.uci.slice(2, 4) })
-        setFenHistory((fh) => [...fh, playerFen])
-        setFen(res.fen)
+      
+      if (res.ok) {
+        if (res.game_over || res.is_checkmate || res.is_stalemate) {
+          setResult(res as any)
+        }
+        if (res.fen) {
+          setHistory((h) => [...h, res.san ?? res.uci ?? ""])
+          if (res.uci) setLastMove({ from: res.uci.slice(0, 2), to: res.uci.slice(2, 4) })
+          setFenHistory((fh) => [...fh, playerFen])
+          setFen(res.fen)
+        }
       }
-    } catch { /* ignore */ }
+    } catch (e: any) { 
+      if (isTimeout) {
+        setResult({ ok: false, error: "engine timeout or network failure" } as any)
+        return
+      }
+      if (e?.name === "AbortError") return
+      setResult({ ok: false, error: "engine timeout or network failure" } as any)
+    } finally {
+      clearTimeout(timeout)
+    }
   }
 
   const resetToPractice = (p: PracticePosition) => {
+    engineAbortRef.current?.abort()
     setFen(p.fen)
     setFenHistory([])
     setHistory([])
@@ -615,13 +680,22 @@ export default function ChessTrainerPage() {
   }
 
   const undoMove = () => {
+    engineAbortRef.current?.abort()
+    
+    let popCount = 1;
+    if (retryFen) {
+      popCount = 2;
+    } else {
+      popCount = history.length % 2 === 1 ? 1 : 2;
+    }
+    popCount = Math.min(popCount, Math.max(1, fenHistory.length));
+
     setFenHistory((fh) => {
-      const popCount = fh.length >= 2 ? 2 : 1
       const prev = fh[fh.length - popCount]
       if (prev) setFen(prev)
       return fh.slice(0, -popCount)
     })
-    setHistory((h) => h.slice(0, -(h.length >= 2 ? 2 : 1)))
+    setHistory((h) => h.slice(0, -(popCount + (retryFen ? 1 : 0))))
     setResult(null)
     setLastMove(null)
     setSelected(null)
@@ -634,7 +708,7 @@ export default function ChessTrainerPage() {
   // Coach hint escalation (Play-Coach pattern): press 1 = concept nudge,
   // press 2 = best-move arrow, press 3 = the best move revealed.
   const coachHint = async () => {
-    const next = (hintLevel + 1) % 3
+    const next = (hintLevel + 1) % 4
     setHintLevel(next)
     try {
       if (next === 0) {
@@ -660,6 +734,7 @@ export default function ChessTrainerPage() {
       if (drill.ok && drill.fen) {
         setFen(drill.fen)
         setDrill(drill)
+        setFenHistory([])
         setHistory([])
         setResult(null)
         setLastMove(null)
@@ -827,6 +902,7 @@ export default function ChessTrainerPage() {
       if (s.ok && s.fen_before) {
         setGmStudy(s)
         setFen(s.fen_before)
+        setFenHistory([])
         setHistory([])
         setResult(null)
         setLastMove(null)
@@ -970,6 +1046,7 @@ export default function ChessTrainerPage() {
     setActiveReview(entry)
     setReviewSolved("none")
     setFen(entry.pre_fen)
+    setFenHistory([])
     setHistory([])
     setResult(null)
     setLastMove(null)
@@ -1042,9 +1119,11 @@ export default function ChessTrainerPage() {
                   selected,
                   legalTargets,
                   checkSquare: (result?.in_check || result?.is_checkmate) ? findKing(fen) : null,
-                  arrows: result?.best_move && result.best_move.length === 4
+                  arrows: (result?.best_move && result.best_move.length >= 4)
                     ? [{ from: result.best_move.slice(0, 2), to: result.best_move.slice(2, 4) }]
-                    : [],
+                    : (hintLevel >= 2 && hint?.best_move && hint.best_move.length >= 4)
+                      ? [{ from: hint.best_move.slice(0, 2), to: hint.best_move.slice(2, 4) }]
+                      : [],
                 }}
                 evalBar={result?.win_after_pct != null ? { whitePct: turn === "w" ? result.win_after_pct : 100 - result.win_after_pct } : null}
               />
@@ -1396,6 +1475,7 @@ export default function ChessTrainerPage() {
                       onClick={() => {
                         if (trainingItem?.pre_fen) {
                           setFen(trainingItem.pre_fen)
+                          setFenHistory([])
                           setHistory([])
                           setResult(null)
                           setLastMove(null)
@@ -1510,7 +1590,7 @@ export default function ChessTrainerPage() {
                 <div className="mb-2 flex items-center justify-between">
                   <span className="text-xs font-semibold uppercase tracking-wide text-white/40">Coach hint</span>
                   <Button size="sm" variant="outline" onClick={coachHint}>
-                    {hintLevel === 0 ? "Ask coach" : `Hint ${hintLevel}/2`}
+                    {hintLevel === 0 ? "Ask coach" : `Hint ${hintLevel}/3`}
                   </Button>
                 </div>
                 {hintLevel === 1 && hint?.hint_level_1 && (
@@ -1520,6 +1600,11 @@ export default function ChessTrainerPage() {
                   <div className="text-sm text-white/85">
                     {hint?.hint_level_2}
                     <div className="mt-1 text-xs text-white/50">The green arrow shows the best move.</div>
+                  </div>
+                )}
+                {hintLevel === 3 && hint?.best_move_san && (
+                  <div className="text-sm text-white/85">
+                    The best move is <span className="font-semibold text-emerald-400">{hint.best_move_san}</span>.
                   </div>
                 )}
               </div>

@@ -1117,6 +1117,7 @@ async def evaluate_move(
         "in_check": board.is_check(),
         "is_checkmate": board.is_checkmate(),
         "is_stalemate": board.is_stalemate(),
+        "game_over": board.is_game_over(),
         "fen": board.fen(),
         "explanation": "",
     }

@@ -178,11 +178,23 @@ async def trainer_coach_hint(req: CoachHintRequest) -> dict[str, Any]:
     given); the frontend escalates to the best-move arrow and then the move.
     Research-grounded: actionable hints beat vague praise; escalation preserves
     the retrieval-practice benefit while rescuing a stuck learner."""
-    from ..services.chess_trainer import coach_plan
+    from ..services.chess_trainer import coach_plan, _best_move_and_cp
+    import asyncio
+    import chess
 
     plan = coach_plan(req.fen)
     if not plan.get("ok"):
         raise HTTPException(status_code=503, detail="coach hint unavailable")
+
+    try:
+        board = chess.Board(req.fen)
+        best_move, _, _ = await asyncio.to_thread(_best_move_and_cp, board)
+        if best_move:
+            plan["best_move"] = best_move
+            plan["best_move_san"] = board.san(chess.Move.from_uci(best_move))
+    except Exception as exc:
+        log.warning("coach hint best-move lookup failed for %s: %s", req.fen, exc)
+
     # Build a concept nudge (level 1) without revealing the move.
     nudge = plan.get("plan", "")
     if plan.get("attack_now"):
