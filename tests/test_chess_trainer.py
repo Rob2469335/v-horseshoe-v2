@@ -148,9 +148,17 @@ def test_evaluate_invalid_fen_fails_closed():
     assert r["ok"] is False
 
 
-def test_engine_reply_returns_move(monkeypatch):
+def test_engine_reply_returns_move(monkeypatch, tmp_path):
     import asyncio
 
+    # engine_reply gates on STOCKFISH_PATH.exists() BEFORE the mocked eval runs.
+    # bin/stockfish.exe is a local (untracked) Windows binary, so on the Linux
+    # CI runner the real path doesn't exist and engine_reply would return
+    # ok:False without ever reaching the (mocked) engine. Point it at a real
+    # temp file so the sampling logic is what's exercised, not the exists() gate.
+    fake_engine = tmp_path / "stockfish"
+    fake_engine.write_bytes(b"")
+    monkeypatch.setattr(ct, "STOCKFISH_PATH", fake_engine)
     # The human-like opponent evaluates via _best_move_and_cp then samples.
     monkeypatch.setattr(ct, "_best_move_and_cp", lambda board: ("e2e4", 30.0, ["e2e4"]))
     r = asyncio.run(
