@@ -725,6 +725,7 @@ class AgentServiceV2:
             try:
                 loop = asyncio.get_running_loop()
                 import sys
+
                 if "pytest" in sys.modules:
                     _do_record()
                 else:

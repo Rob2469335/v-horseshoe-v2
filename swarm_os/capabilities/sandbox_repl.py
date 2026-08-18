@@ -145,12 +145,10 @@ class SandboxReplHandler:
                     "stderr": "Security Gate blocked pytest target (flag-like or empty path).",
                     "returncode": 1,
                 }
-            project_root = _Path(
-                __file__
-            ).resolve().parents[2]
+            project_root = _Path(__file__).resolve().parents[2]
             try:
                 _Path(raw).resolve().relative_to(project_root.resolve())
-            except (ValueError, OSError):
+            except ValueError, OSError:
                 return {
                     "ok": False,
                     "stdout": "",

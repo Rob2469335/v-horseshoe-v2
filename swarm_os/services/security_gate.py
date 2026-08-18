@@ -218,17 +218,22 @@ class BannedNodeVisitor(ast.NodeVisitor):
         # `os.__dict__['system']('x')` / `vars(os)['system']('x')` — reflection
         # into the os module namespace via subscript, bypassing the Name-call and
         # attribute scans. `vars(<tracked os name>)` is the same hole.
-        elif isinstance(node.value, ast.Attribute) and isinstance(
-            node.value.value, ast.Name
-        ) and node.value.value.id in self._os_names:
+        elif (
+            isinstance(node.value, ast.Attribute)
+            and isinstance(node.value.value, ast.Name)
+            and node.value.value.id in self._os_names
+        ):
             self.violations.append(
                 f"Banned subscript on os module namespace at line {node.lineno}"
             )
-        elif isinstance(node.value, ast.Call) and isinstance(
-            node.value.func, ast.Name
-        ) and node.value.func.id == "vars" and node.value.args and isinstance(
-            node.value.args[0], ast.Name
-        ) and node.value.args[0].id in self._os_names:
+        elif (
+            isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Name)
+            and node.value.func.id == "vars"
+            and node.value.args
+            and isinstance(node.value.args[0], ast.Name)
+            and node.value.args[0].id in self._os_names
+        ):
             self.violations.append(
                 f"Banned vars() reflection on os module at line {node.lineno}"
             )

@@ -215,9 +215,7 @@ def test_dispatch_approved_executes_stored_payload_without_regate(monkeypatch):
         dispatched["payload"] = payload
         return {"ok": True, "status": "executed"}
 
-    monkeypatch.setattr(
-        "runtime_v2.services.tool_executor._dispatch", fake_dispatch
-    )
+    monkeypatch.setattr("runtime_v2.services.tool_executor._dispatch", fake_dispatch)
     center = TelegramCommandCenter()
     registry = ar.get_registry()
     rec = registry.create(
