@@ -2,6 +2,7 @@ import os
 import json
 import asyncio
 import logging
+import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -10,9 +11,11 @@ log = logging.getLogger(__name__)
 # Extension -> language server command + correct languageId per LSP spec.
 # Kept as a table so the languageId always matches the actual file language
 # (the old client hardcoded "python" for every file, which broke go/rust
-# diagnostics).
+# diagnostics). The .py entry uses sys.executable — the interpreter that has
+# pylsp installed — not a bare "python", which may not exist on PATH on
+# Linux CI (only "python3" is guaranteed).
 LANGUAGE_SERVERS: Dict[str, Dict[str, Any]] = {
-    ".py": {"cmd": ["python", "-m", "pylsp"], "languageId": "python"},
+    ".py": {"cmd": [sys.executable, "-m", "pylsp"], "languageId": "python"},
     ".go": {"cmd": ["gopls"], "languageId": "go"},
     ".rs": {"cmd": ["rust-analyzer"], "languageId": "rust"},
 }
