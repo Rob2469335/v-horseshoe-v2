@@ -1502,16 +1502,79 @@ async def _explain_move(
 # ---------------------------------------------------------------------------
 
 
+async def _proposal_eval(fen: str, uci: str) -> dict[str, Any]:
+    """Evaluate a learner's proposed move for the Socratic coach: legality,
+    before/after win%, classification, and whether it matches the engine's best.
+    Fail-closed: never returns a fabricated eval (returns ok=False on any
+    failure). The coach grounds its reaction ONLY in these engine numbers."""
+    try:
+        import chess
+
+        board = chess.Board(fen)
+        try:
+            move = chess.Move.from_uci(uci)
+        except Exception:
+            return {"ok": False, "error": f"invalid move '{uci}'"}
+        if move not in board.legal_moves:
+            return {
+                "ok": False,
+                "error": f"'{uci}' is not a legal move in this position",
+            }
+        before_best, before_cp, _ = await asyncio.to_thread(_best_move_and_cp, board)
+        try:
+            san = board.san(move)
+        except Exception:
+            san = uci
+        board.push(move)
+        after_cp = (await asyncio.to_thread(_best_move_and_cp, board))[1]
+        mover_after = -after_cp
+        was_best = before_best == uci
+        classification = _classify(500, before_cp, mover_after, was_best)
+        win_before = _expected_points(500, before_cp)
+        win_after = _expected_points(500, mover_after)
+        best_win_pct = round(win_before * 100, 1)
+        best_san = None
+        if before_best:
+            try:
+                b2 = chess.Board(fen)
+                best_san = b2.san(chess.Move.from_uci(before_best))
+            except Exception:
+                best_san = before_best
+        return {
+            "ok": True,
+            "uci": uci,
+            "san": san,
+            "classification": classification,
+            "is_best": was_best,
+            "win_before_pct": round(win_before * 100, 1),
+            "win_after_pct": round(win_after * 100, 1),
+            "win_delta_pct": round((win_after - win_before) * 100, 1),
+            "best_move": before_best,
+            "best_move_san": best_san,
+            "best_win_pct": best_win_pct,
+        }
+    except Exception as exc:
+        log.warning("socratic proposal eval failed for %s/%s: %s", fen, uci, exc)
+        return {"ok": False, "error": str(exc)}
+
+
 async def _socratic_coach_turn(
     fen: str,
     plan: dict[str, Any],
     best_move_san: str | None,
     history: list[dict[str, str]],
+    proposed_uci: str | None = None,
 ) -> dict[str, Any]:
     """Produce the coach's next turn for a position. `history` is the rolling
-    dialogue [{role: "user"|"coach", content}], oldest first. Returns
-    {ok, reply} where reply is the coach's text (a question, a reaction, or a
-    reveal). Fail-closed: LLM failure degrades to a deterministic nudge."""
+    dialogue [{role: "user"|"coach", content}], oldest first. When
+    `proposed_uci` is given, the engine evaluates THAT exact move (before/after
+    eval, win delta, classification) and the coach reacts to the learner's
+    proposal grounded in those numbers — the LLM translates engine facts, it
+    never invents a refutation (CCC principle). Returns {ok, reply}. Fail-closed:
+    LLM failure degrades to a deterministic nudge."""
+    proposal = None
+    if proposed_uci:
+        proposal = await _proposal_eval(fen, proposed_uci)
     try:
         import chess as _chess  # noqa: F401  (kept for parity with _llm_enhancement)
         import litellm
@@ -1527,6 +1590,18 @@ async def _socratic_coach_turn(
             for m in history[-8:]
         )
         reveal = turns >= 5
+        proposal_block = ""
+        if proposal and proposal.get("ok"):
+            proposal_block = (
+                f"\nThe learner proposes playing {proposal.get('san')} ({proposal.get('uci')}).\n"
+                f"Engine facts about their proposal (GROUND your reaction ONLY in these — "
+                f"do not invent analysis):\n"
+                f"- Win% before: {proposal.get('win_before_pct')}%, after: {proposal.get('win_after_pct')}% "
+                f"(delta {proposal.get('win_delta_pct')} points)\n"
+                f"- Classification: {proposal.get('classification')}\n"
+                f"- The engine's best move is {proposal.get('best_move_san')} "
+                f"(win% {proposal.get('best_win_pct')}%) — {'their proposal matches it.' if proposal.get('is_best') else 'a different, stronger move.'}\n"
+            )
         prompt = (
             "You are a Socratic chess coach for a ~500-rated beginner. Your job "
             "is to guide them to SEE the idea themselves, one question at a time "
@@ -1536,7 +1611,8 @@ async def _socratic_coach_turn(
             f"- Concept: {concept}\n"
             f"- Weakest enemy point: {plan.get('weak_square') or 'not obvious'}\n"
             f"- Their king exposure: {plan.get('king_alert') or 'normal'}\n"
-            f"- Best move (SECRET - do not name it): {best_move_san or 'unknown'}\n\n"
+            f"- Best move (SECRET - do not name it): {best_move_san or 'unknown'}\n"
+            f"{proposal_block}\n"
             "Rules:\n"
             "1. Ask ONE short question, or react to the learner's last answer in "
             "1-2 short sentences then ask the next question.\n"
@@ -1592,7 +1668,27 @@ async def _socratic_coach_turn(
         log.warning("socratic coach LLM failed, using deterministic fallback: %s", exc)
 
     # Deterministic fallback: a concept nudge grounded in the plan checklist
-    # (no move given) - the same engine-grounded nudge as hint level 1.
+    # (no move given) - the same engine-grounded nudge as hint level 1. When a
+    # proposal was evaluated, react to its engine facts instead.
+    if proposal and proposal.get("ok"):
+        if proposal.get("is_best"):
+            nudge = (
+                f"Good — {proposal.get('san')} matches the engine's best move "
+                f"({proposal.get('best_win_pct')}% win chance). Why does it work here?"
+            )
+        elif proposal.get("win_delta_pct", 0) < -5:
+            nudge = (
+                f"{proposal.get('san')} drops your win chance by "
+                f"{abs(proposal.get('win_delta_pct'))} points "
+                f"({proposal.get('win_before_pct')}% -> {proposal.get('win_after_pct')}%). "
+                f"Look for a stronger move — the weak square / king file is the clue."
+            )
+        else:
+            nudge = (
+                f"{proposal.get('san')} is okay but not the best — the engine found "
+                f"({proposal.get('best_move_san')}). What do you see around the king?"
+            )
+        return {"ok": True, "reply": nudge[:300]}
     nudge = plan.get("plan", "")
     if plan.get("king_alert"):
         nudge = f"{plan['king_alert']} - look at the kings before deciding."

@@ -637,12 +637,14 @@ def test_socratic_api_wires_history_and_best_move(monkeypatch):
 
     from swarm_os.api import chess_trainer as trainer_api
 
-    async def fake_turn(fen, plan, best_move_san, history):
+    async def fake_turn(fen, plan, best_move_san, history, proposed_uci=None):
         assert history  # non-empty dialogue reaches the service
+        assert proposed_uci is None
         return {"ok": True, "reply": "Look at their king's file."}
 
     monkeypatch.setattr(ct, "_socratic_coach_turn", fake_turn)
     monkeypatch.setattr(ct, "_best_move_and_cp", lambda board: ("e2e4", 30.0, ["e2e4"]))
+    monkeypatch.setattr(ct, "_proposal_eval", lambda fen, uci: {"ok": True, "uci": uci})
 
     app = FastAPI()
     app.include_router(trainer_api.router)
@@ -656,3 +658,73 @@ def test_socratic_api_wires_history_and_best_move(monkeypatch):
         assert j["ok"] is True
         assert j["reply"] == "Look at their king's file."
         assert j["best_move_san"] == "e4"  # SAN, not UCI — the route converts
+
+
+def test_socratic_api_proposed_uci_echoes_proposal(monkeypatch):
+    """When proposed_uci is given, the route forwards it to the service AND
+    echoes the proposal eval back (for the frontend arrow/delta display)."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from swarm_os.api import chess_trainer as trainer_api
+
+    captured = {}
+
+    async def fake_turn(fen, plan, best_move_san, history, proposed_uci=None):
+        captured["uci"] = proposed_uci
+        return {"ok": True, "reply": "Let's look at that king file first."}
+
+    async def fake_proposal_eval(fen, uci):
+        return {"ok": True, "uci": uci, "classification": "Inaccuracy"}
+
+    monkeypatch.setattr(ct, "_socratic_coach_turn", fake_turn)
+    monkeypatch.setattr(ct, "_best_move_and_cp", lambda board: ("e2e4", 30.0, ["e2e4"]))
+    monkeypatch.setattr(ct, "_proposal_eval", fake_proposal_eval)
+
+    app = FastAPI()
+    app.include_router(trainer_api.router)
+    with TestClient(app) as c:
+        r = c.post(
+            "/chess/trainer/coach/socratic",
+            json={
+                "fen": chess.Board().fen(),
+                "history": [{"role": "user", "content": "What about e2e4?"}],
+                "proposed_uci": "e2e4",
+            },
+        )
+        assert r.status_code == 200
+        assert captured["uci"] == "e2e4"
+        assert r.json()["proposal"]["uci"] == "e2e4"
+        assert r.json()["proposal"]["classification"] == "Inaccuracy"
+
+
+def test_proposal_eval_illegal_move_fails_closed(monkeypatch):
+    """_proposal_eval must never fabricate an eval — an illegal move returns
+    ok=False, never a guessed win-delta."""
+    import asyncio
+
+    monkeypatch.setattr(ct, "_best_move_and_cp", lambda board: ("e2e4", 30.0, ["e2e4"]))
+    res = asyncio.run(ct._proposal_eval(chess.Board().fen(), "e2e5"))
+    assert res["ok"] is False
+    assert "not a legal move" in res["error"]
+
+
+def test_socratic_deterministic_fallback_reacts_to_proposal(monkeypatch):
+    """Without an LLM, a proposed bad move still gets an engine-grounded
+    deterministic reaction (win-delta based), not silence."""
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    import asyncio
+
+    # e2e4 is the best first move from the start position.
+    monkeypatch.setattr(ct, "_best_move_and_cp", lambda board: ("e2e4", 30.0, ["e2e4"]))
+    plan = ct.coach_plan(chess.Board().fen())
+    res = asyncio.run(
+        ct._socratic_coach_turn(
+            chess.Board().fen(), plan, "e4", [], proposed_uci="a2a3"
+        )
+    )
+    assert res["ok"] is True
+    assert res["reply"]
+    assert "e4" in res["reply"] or "win chance" in res["reply"]

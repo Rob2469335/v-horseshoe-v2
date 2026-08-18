@@ -271,15 +271,22 @@ class SocraticRequest(BaseModel):
         default_factory=list,
         description="Rolling dialogue [{role: user|coach, content}], oldest first",
     )
+    proposed_uci: str | None = Field(
+        default=None,
+        description="A move the learner is proposing — the engine evaluates it "
+        "and the coach reacts grounded in that eval",
+    )
 
 
 @router.post("/coach/socratic")
 async def trainer_coach_socratic(req: SocraticRequest) -> dict[str, Any]:
     """Interactive Socratic coaching turn: the coach asks a question or reacts
     to the learner's last answer, grounded in the engine's plan for the
-    position. The coach never names the best move until the learner has been
-    stuck several turns (fail-open reveal). Fail-closed: LLM outage degrades
-    to a deterministic plan nudge."""
+    position. When `proposed_uci` is given, the engine evaluates that exact
+    move and the coach reacts to the learner's proposal (not the engine
+    name-dropping the best move). The coach never names the best move until the
+    learner has been stuck several turns (fail-open reveal). Fail-closed: LLM
+    outage degrades to a deterministic plan nudge."""
     from ..services.chess_trainer import coach_plan, _socratic_coach_turn, _best_move_and_cp
     import asyncio
     import chess
@@ -297,10 +304,18 @@ async def trainer_coach_socratic(req: SocraticRequest) -> dict[str, Any]:
     except Exception as exc:
         log.warning("socratic best-move lookup failed for %s: %s", req.fen, exc)
 
-    result = await _socratic_coach_turn(req.fen, plan, best_move_san, req.history)
+    result = await _socratic_coach_turn(
+        req.fen, plan, best_move_san, req.history, proposed_uci=req.proposed_uci
+    )
     if not result.get("ok"):
         raise HTTPException(status_code=503, detail="coach unavailable")
     result["best_move_san"] = best_move_san
+    if req.proposed_uci:
+        # Echo back the proposal eval so the frontend can show the arrow/delta
+        # if the coach LLM path didn't include it.
+        from ..services.chess_trainer import _proposal_eval
+
+        result["proposal"] = await _proposal_eval(req.fen, req.proposed_uci)
     return result
 async def trainer_index_books(force: bool = False) -> dict[str, Any]:
     """Build/refresh the Qdrant chess-book index (idempotent)."""

@@ -12,7 +12,7 @@
  *  - Coordinates: lichess-style, 9px, opacity .8, alternating dark/light.
  *  - Move animation: transform transition ~200ms cubic-bezier on pieces.
  */
-import { useMemo, useEffect, useRef } from "react"
+import { useMemo, useEffect, useRef, useState } from "react"
 import { ChessPiece } from "./ChessPiece"
 
 function AnimatedPiece({
@@ -137,6 +137,7 @@ type Props = {
   fen: string
   interactive?: boolean
   onSquareClick?: (sq: string) => void
+  onProposeMove?: (uci: string) => void
   orientation?: "white" | "black"
   highlights?: BoardHighlights
   evalBar?: { whitePct: number } | null
@@ -147,6 +148,7 @@ export default function ChessBoard({
   fen,
   interactive = false,
   onSquareClick,
+  onProposeMove,
   orientation = "white",
   highlights = {},
   evalBar = null,
@@ -161,9 +163,45 @@ export default function ChessBoard({
 
   const whitePct = evalBar ? Math.max(0, Math.min(100, evalBar.whitePct)) : null
 
-  // Piece animation layer: each piece is absolutely positioned at its square
-  // and animates via a transform transition (the 2026 FLIP-style standard).
-  // We key by square so a moved piece is the same DOM element translated.
+  // Right-click-drag move proposal (lichess-style arrow): the user draws an
+  // arrow from a square to a target; on release the UCI is sent to the coach
+  // ("what if I play this?"). The preview arrow renders while dragging.
+  const boardRef = useRef<HTMLDivElement | null>(null)
+  const [proposalDrag, setProposalDrag] = useState<{ from: string; to: string } | null>(null)
+
+  const sqFromPoint = (e: React.MouseEvent | React.PointerEvent) => {
+    const el = boardRef.current
+    if (!el) return null
+    const rect = el.getBoundingClientRect()
+    const x = (e.clientX - rect.left) / rect.width * 8
+    const y = (e.clientY - rect.top) / rect.height * 8
+    const fIdx = Math.min(7, Math.max(0, Math.floor(x)))
+    const rIdx = Math.min(7, Math.max(0, Math.floor(y)))
+    return displayFiles[fIdx] + displayRanks[rIdx]
+  }
+
+  const onContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault()
+    if (!interactive || !onProposeMove) return
+    const sq = sqFromPoint(e)
+    setProposalDrag(sq ? { from: sq, to: sq } : null)
+  }
+  const onContextMove = (e: React.MouseEvent) => {
+    if (!proposalDrag) return
+    e.preventDefault()
+    const sq = sqFromPoint(e)
+    if (sq) setProposalDrag((d) => (d && d.to !== sq ? { ...d, to: sq } : d))
+  }
+  const onContextUp = (e: React.MouseEvent) => {
+    if (!proposalDrag) return
+    e.preventDefault()
+    const to = sqFromPoint(e) ?? proposalDrag.to
+    setProposalDrag(null)
+    if (onProposeMove && proposalDrag.from !== to) {
+      onProposeMove(proposalDrag.from + to)
+    }
+  }
+
   const pieceLayer = useMemo(() => {
     const items: Array<{ sq: string; piece: string; fileIdx: number; rankIdx: number }> = []
     for (let fi = 0; fi < 8; fi++) {
@@ -192,8 +230,13 @@ export default function ChessBoard({
         </div>
       )}
       <div
+        ref={boardRef}
         className="relative w-full select-none overflow-hidden rounded-[4px] border border-black/50 shadow-[0_4px_12px_rgba(0,0,0,0.55)]"
-        style={{ aspectRatio: "1 / 1", background: DARK }}
+        style={{ aspectRatio: "1 / 1", background: DARK, touchAction: "none" }}
+        onContextMenu={onContextMenu}
+        onMouseMove={onContextMove}
+        onMouseUp={onContextUp}
+        onMouseLeave={onContextUp}
       >
         <div className="grid h-full w-full grid-cols-8 grid-rows-8">
           {displayRanks.map((rank) =>
@@ -286,7 +329,7 @@ export default function ChessBoard({
           })}
         </div>
         {/* Best-move / hint arrows (SVG overlay above pieces). */}
-        {arrows.length > 0 && (
+        {(arrows.length > 0 || proposalDrag) && (
           <svg viewBox="0 0 100 100" className="pointer-events-none absolute inset-0 z-20 h-full w-full">
             {arrows.map((a, i) => {
               const fromF = displayFiles.indexOf(a.from[0])
@@ -319,6 +362,37 @@ export default function ChessBoard({
                 </g>
               )
             })}
+            {proposalDrag && proposalDrag.from !== proposalDrag.to && (() => {
+              const fromF = displayFiles.indexOf(proposalDrag.from[0])
+              const fromR = displayRanks.indexOf(proposalDrag.from[1])
+              const toF = displayFiles.indexOf(proposalDrag.to[0])
+              const toR = displayRanks.indexOf(proposalDrag.to[1])
+              if (fromF < 0 || toF < 0 || fromR < 0 || toR < 0) return null
+              const x1 = fromF * 12.5 + 6.25
+              const y1 = fromR * 12.5 + 6.25
+              const x2 = toF * 12.5 + 6.25
+              const y2 = toR * 12.5 + 6.25
+              const dx = x2 - x1
+              const dy = y2 - y1
+              const len = Math.hypot(dx, dy) || 1
+              const ux = dx / len
+              const uy = dy / len
+              const sx = x1 + ux * 8
+              const sy = y1 + uy * 8
+              const ex = x2 - ux * 7
+              const ey = y2 - uy * 7
+              const head = 4.5
+              const color = "rgba(240,200,80,0.85)"
+              return (
+                <g>
+                  <path d={`M${sx} ${sy} L${ex} ${ey}`} stroke={color} strokeWidth="2.6" strokeLinecap="round" fill="none" strokeDasharray="4 2" />
+                  <path
+                    d={`M${ex} ${ey} L${ex - ux * head - uy * head * 0.55} ${ey - uy * head + ux * head * 0.55} L${ex - ux * head + uy * head * 0.55} ${ey - uy * head - ux * head * 0.55} Z`}
+                    fill={color}
+                  />
+                </g>
+              )
+            })()}
           </svg>
         )}
       </div>

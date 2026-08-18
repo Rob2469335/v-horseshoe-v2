@@ -859,18 +859,19 @@ export default function ChessTrainerPage() {
   const [socraticInput, setSocraticInput] = useState("")
   const [socraticBusy, setSocraticBusy] = useState(false)
 
-  const socraticAsk = async (text: string) => {
+  const socraticAsk = async (text: string, proposedUci?: string) => {
     const trimmed = text.trim()
-    if (!trimmed || socraticBusy) return
+    if ((!trimmed && !proposedUci) || socraticBusy) return
     setSocraticInput("")
-    const updated = [...socraticMsgs, { role: "user" as const, content: trimmed }]
+    const content = proposedUci ? `What about playing ${proposedUci}?` : trimmed
+    const updated = [...socraticMsgs, { role: "user" as const, content }]
     setSocraticMsgs(updated)
     setSocraticBusy(true)
     try {
       const r = await (await fetch(`${backendUrl}/chess/trainer/coach/socratic`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fen, history: updated }),
+        body: JSON.stringify({ fen, history: updated, proposed_uci: proposedUci ?? null }),
       })).json() as { ok: boolean; reply?: string; error?: string }
       setSocraticMsgs((m) => [...m, { role: "coach", content: r.reply ?? r.error ?? "Coach unavailable." }])
     } catch {
@@ -878,6 +879,11 @@ export default function ChessTrainerPage() {
     } finally {
       setSocraticBusy(false)
     }
+  }
+
+  // Right-click-drag a move on the board to ask the coach "what if I play this?"
+  const proposeMoveToCoach = (uci: string) => {
+    void socraticAsk("", uci)
   }
 
   // Hanging-piece drill: load a position with a loose enemy piece and put it on
@@ -1368,6 +1374,7 @@ export default function ChessTrainerPage() {
                 fen={fen}
                 interactive={boardInteractive}
                 onSquareClick={onSquareClick}
+                onProposeMove={proposeMoveToCoach}
                 theme={boardTheme}
                 highlights={{
                   lastMove,
@@ -1650,7 +1657,7 @@ export default function ChessTrainerPage() {
               <div className="rounded-lg border border-violet-400/20 bg-violet-950/10 p-3">
                 <div className="mb-2 flex items-center justify-between">
                   <span className="text-xs font-semibold uppercase tracking-wide text-white/40">Socratic coach</span>
-                  <span className="text-[10px] text-white/40">Answer in your own words</span>
+                  <span className="text-[10px] text-white/40">Answer in words · or right-click-drag a move to propose it</span>
                 </div>
                 {socraticMsgs.length === 0 && (
                   <div className="mb-2 text-sm text-white/60">
