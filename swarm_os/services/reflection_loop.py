@@ -638,10 +638,34 @@ async def _distill(distiller_content: str, fix_class: str | None = None) -> str:
         return ""
 
     attempts = []
-    # 2026 model policy: the funded OpenCode Go flash leads the chain (DeepSeek
-    # V4 Flash via OPENAI_API_KEY/base), then the free tiers. Model string is
-    # `deepseek-v4-flash` on the openai provider — the stale `deepseek-chat`
-    # alias was retired and would silently fall to a worse provider.
+    # Prioritize Gemini/Groq/DeepSeek if keys are present, since OpenCode DeepSeek is out of balance.
+    if os.environ.get("GEMINI_API_KEY"):
+        attempts.append(
+            {
+                "model": "gemini/gemini-1.5-pro",
+                "messages": [{"role": "user", "content": distiller_content}],
+                "max_tokens": DISTILLER_MAX_TOKENS_CLOUD,
+                "timeout": 90.0,
+            }
+        )
+    if os.environ.get("DEEPSEEK_API_KEY"):
+        attempts.append(
+            {
+                "model": "deepseek/deepseek-chat",
+                "messages": [{"role": "user", "content": distiller_content}],
+                "max_tokens": DISTILLER_MAX_TOKENS_CLOUD,
+                "timeout": 90.0,
+            }
+        )
+    if os.environ.get("GROQ_API_KEY"):
+        attempts.append(
+            {
+                "model": "groq/llama-3.3-70b-versatile",
+                "messages": [{"role": "user", "content": distiller_content}],
+                "max_tokens": DISTILLER_MAX_TOKENS_CLOUD,
+                "timeout": 90.0,
+            }
+        )
     if os.environ.get("OPENAI_API_KEY"):
         api_base = os.getenv("OPENAI_API_BASE", "https://api.opencode.go/v1")
         api_key = os.environ["OPENAI_API_KEY"]
@@ -665,28 +689,10 @@ async def _distill(distiller_content: str, fix_class: str | None = None) -> str:
                 "timeout": 90.0,
             }
         )
-    if os.environ.get("GROQ_API_KEY"):
-        attempts.append(
-            {
-                "model": "groq/llama-3.3-70b-versatile",
-                "messages": [{"role": "user", "content": distiller_content}],
-                "max_tokens": DISTILLER_MAX_TOKENS_CLOUD,
-                "timeout": 90.0,
-            }
-        )
     if os.environ.get("NVIDIA_API_KEY"):
         attempts.append(
             {
                 "model": "nvidia_nim/meta/llama-3.1-70b-instruct",
-                "messages": [{"role": "user", "content": distiller_content}],
-                "max_tokens": DISTILLER_MAX_TOKENS_CLOUD,
-                "timeout": 90.0,
-            }
-        )
-    if os.environ.get("GEMINI_API_KEY"):
-        attempts.append(
-            {
-                "model": "gemini/gemini-2.0-flash",
                 "messages": [{"role": "user", "content": distiller_content}],
                 "max_tokens": DISTILLER_MAX_TOKENS_CLOUD,
                 "timeout": 90.0,
