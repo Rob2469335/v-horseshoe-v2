@@ -125,6 +125,28 @@ def global_system_probe_mock():
 
 
 @pytest.fixture(autouse=True)
+def global_chess_engine_mock():
+    """Prevent a REAL Stockfish from ever spawning during the suite.
+
+    Every TestClient startup runs the app lifespan, which calls
+    `resume_incomplete()` → `asyncio.to_thread(_analyze_game, ...)` on the
+    event loop's DEFAULT ThreadPoolExecutor. Under a module-scope real-Popen
+    override that executor thread then blocks forever inside python-chess's
+    `engine.analyse` (no timeout), and the TestClient portal's shutdown does
+    `executor.shutdown(wait=True)` — the asyncio-lib #1014-wide hang class that
+    wedged full-suite runs at nondeterministic percentages.
+
+    `_get_engine()` is the one seam: both `_analyse` and `_best_move_and_cp`
+    route through it and fail closed (return None) when it returns None, so no
+    subprocess is ever started.
+    """
+    with patch(
+        "swarm_os.services.chess_trainer._get_engine", return_value=None
+    ):
+        yield
+
+
+@pytest.fixture(autouse=True)
 def global_subprocess_mock():
     # Prevent tests from spawning actual background servers (like uvicorn or ollama)
     # which leads to PytestUnhandledThreadExceptionWarning and zombie processes.
