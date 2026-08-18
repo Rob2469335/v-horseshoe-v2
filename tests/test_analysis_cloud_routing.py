@@ -13,34 +13,73 @@ def _patch_env(**overrides):
 
 def test_analysis_agent_routes_to_cloud_when_key_present():
     with _patch_env(
-        OPENAI_API_KEY="sk-test", SWARM_ANALYSIS_CLOUD="auto", SWARM_ROUTING_MODE="auto"
+        NVIDIA_API_KEY="sk-test",
+        SWARM_ANALYSIS_CLOUD="auto",
+        SWARM_ROUTING_MODE="auto",
     ):
         for agent in ("code_analyzer", "researcher", "reviewer"):
-            assert get_litellm_model(agent, "qwen3.5-4b") == "openai/deepseek-v4-flash"
+            assert (
+                get_litellm_model(agent, "qwen3.5-4b")
+                == "nvidia_nim/deepseek-ai/deepseek-v4-flash-0731"
+            )
 
 
 def test_edit_agents_route_to_cloud_when_key_present():
     # coder/debugger need strong instruction-following for the read->edit->
     # verify protocol; the local 4B reproduced the /upgrade dead-loop instead.
     with _patch_env(
-        OPENAI_API_KEY="sk-test", SWARM_ANALYSIS_CLOUD="auto", SWARM_ROUTING_MODE="auto"
+        NVIDIA_API_KEY="sk-test",
+        SWARM_ANALYSIS_CLOUD="auto",
+        SWARM_ROUTING_MODE="auto",
     ):
         for agent in ("coder", "debugger"):
-            assert get_litellm_model(agent, "qwen3.5-4b") == "openai/deepseek-v4-flash"
+            assert (
+                get_litellm_model(agent, "qwen3.5-4b")
+                == "nvidia_nim/deepseek-ai/deepseek-v4-flash-0731"
+            )
 
 
 def test_executor_routes_to_cloud_when_key_present():
     # executor now orchestrates compound goals (chaining researcher->coder->
     # tool-runner); the local 4B cannot follow a multi-agent chain reliably.
     with _patch_env(
-        OPENAI_API_KEY="sk-test", SWARM_ANALYSIS_CLOUD="auto", SWARM_ROUTING_MODE="auto"
+        NVIDIA_API_KEY="sk-test",
+        SWARM_ANALYSIS_CLOUD="auto",
+        SWARM_ROUTING_MODE="auto",
     ):
-        assert get_litellm_model("executor", "qwen3.5-4b") == "openai/deepseek-v4-flash"
+        assert (
+            get_litellm_model("executor", "qwen3.5-4b")
+            == "nvidia_nim/deepseek-ai/deepseek-v4-flash-0731"
+        )
 
 
 def test_analysis_agent_stays_local_without_cloud_key():
     with _patch_env(
-        OPENAI_API_KEY="", SWARM_ANALYSIS_CLOUD="auto", SWARM_ROUTING_MODE="auto"
+        OPENAI_API_KEY="",
+        NVIDIA_API_KEY="",
+        GROQ_API_KEY="",
+        GEMINI_API_KEY="",
+        OPENROUTER_API_KEY="",
+        DEEPSEEK_API_KEY="",
+        SWARM_ANALYSIS_CLOUD="auto",
+        SWARM_ROUTING_MODE="auto",
+    ):
+        for agent in ("code_analyzer", "researcher", "reviewer", "coder", "debugger"):
+            assert get_litellm_model(agent, "qwen3.5-4b") == "openai/qwen3.5-4b"
+
+
+def test_analysis_agent_stays_local_with_paid_only_key():
+    # The paid OpenCode Go / DeepSeek direct accounts must NOT enable the
+    # analysis-cloud hop on their own — free credit burns first.
+    with _patch_env(
+        OPENAI_API_KEY="sk-paid-go",
+        DEEPSEEK_API_KEY="sk-paid-direct",
+        NVIDIA_API_KEY="",
+        GROQ_API_KEY="",
+        GEMINI_API_KEY="",
+        OPENROUTER_API_KEY="",
+        SWARM_ANALYSIS_CLOUD="auto",
+        SWARM_ROUTING_MODE="auto",
     ):
         for agent in ("code_analyzer", "researcher", "reviewer", "coder", "debugger"):
             assert get_litellm_model(agent, "qwen3.5-4b") == "openai/qwen3.5-4b"
@@ -74,7 +113,7 @@ def test_non_analysis_agent_stays_local_even_with_cloud_key():
 
 def test_cloud_model_env_override():
     with _patch_env(
-        OPENAI_API_KEY="sk-test",
+        NVIDIA_API_KEY="sk-test",
         ANALYSIS_CLOUD_MODEL="openrouter/deepseek/deepseek-r1:free",
         SWARM_ROUTING_MODE="auto",
     ):

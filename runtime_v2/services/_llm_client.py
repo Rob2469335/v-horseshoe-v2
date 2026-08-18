@@ -110,7 +110,9 @@ _ANALYSIS_CLOUD_AGENTS = (
 
 
 def _analysis_cloud_model() -> str:
-    return os.getenv("ANALYSIS_CLOUD_MODEL", "openai/deepseek-v4-flash")
+    return os.getenv(
+        "ANALYSIS_CLOUD_MODEL", "nvidia_nim/deepseek-ai/deepseek-v4-flash-0731"
+    )
 
 
 def _analysis_cloud_enabled() -> bool:
@@ -120,7 +122,19 @@ def _analysis_cloud_enabled() -> bool:
     flag = os.getenv("SWARM_ANALYSIS_CLOUD", "auto").strip().lower()
     if flag in ("off", "0", "false", "local"):
         return False
-    return bool(os.getenv("OPENAI_API_KEY"))
+    # Free providers only: a no-cost key (NVIDIA/Groq/Gemini/OpenRouter) enables
+    # the analysis-cloud hop. Paid-only accounts (OPENAI_API_KEY = OpenCode Go,
+    # DEEPSEEK_API_KEY = DeepSeek direct) must NOT satisfy it — free credit burns
+    # first; the paid accounts stay last-resort fallbacks, not the default.
+    return any(
+        os.getenv(k)
+        for k in (
+            "NVIDIA_API_KEY",
+            "GROQ_API_KEY",
+            "GEMINI_API_KEY",
+            "OPENROUTER_API_KEY",
+        )
+    )
 
 
 def get_routing_mode() -> str:
@@ -144,9 +158,9 @@ def get_litellm_model(
         for forbidden in ("claude", "anthropic", "sonnet", "opus", "gpt-4", "o1", "o3")
     ):
         log.warning(
-            f"Intercepted forbidden expensive model '{model}' -> enforcing DeepSeek V4 Flash ('openai/deepseek-v4-flash')"
+            f"Intercepted forbidden expensive model '{model}' -> enforcing DeepSeek V4 Flash ('{_analysis_cloud_model()}')"
         )
-        return "openai/deepseek-v4-flash"
+        return _analysis_cloud_model()
 
     # UPGRADE: route heavy analysis/research work to a fast cloud model when a
     # key is present and cloud is enabled. A 4B local model at ~6 t/s makes
