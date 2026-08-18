@@ -291,19 +291,25 @@ async def test_sandbox_repl_kills_proc_on_cancel(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_sandbox_repl_pytest_rejects_flag_and_outside_path(monkeypatch):
+async def test_sandbox_repl_pytest_rejects_flag_and_outside_path(tmp_path):
     """sandbox_repl pytest branch: a flag-like path (--junitxml=...) or a path
     outside the project root must be blocked before reaching pytest — an
     injected flag would write outside the sandbox, --pdb drops into an
     interactive debugger. Regression for the 2026-08-17 audit finding."""
     from swarm_os.capabilities.sandbox_repl import SandboxReplHandler
 
+    # A path genuinely outside the project root on BOTH platforms. The old
+    # `C:\\Windows\\System32\\pwned.py` literal is a RELATIVE filename on Linux
+    # (backslash is not a separator there), so it resolved inside the root and
+    # pytest ran it ("file or directory not found") instead of the gate firing.
+    outside = str(tmp_path / "outside_root.py")
+
     h = SandboxReplHandler()
     for bad in (
         "--junitxml=C:/Windows/Temp/pwned.xml",
         "-x",
         "",
-        r"C:\Windows\System32\pwned.py",
+        outside,
     ):
         r = await h.execute({"language": "pytest", "path": bad})
         assert r.get("ok") is False, bad
@@ -324,6 +330,10 @@ async def test_sandbox_repl_pytest_runs_real_target():
 
 
 # ── security: screen self-promotion blocked ─────────────────────────────────
+@pytest.mark.skipif(
+    sys.platform != "win32", reason="screen-control is Windows-only (ctypes.windll)"
+)
+def test_screen_self_promote_blocked_in_human_mode(monkeypatch):
     from swarm_os.lib.mcp import screen as s
 
     s.SCREEN_AUTONOMOUS = False
