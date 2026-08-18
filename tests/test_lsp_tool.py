@@ -19,6 +19,18 @@ _HAS_PYLSP = importlib.util.find_spec("pylsp") is not None
 
 
 @pytest.fixture(autouse=True)
+def global_subprocess_mock():
+    """Shadow the CI conftest's autouse subprocess.Popen mock for this module:
+    the LSP tests spawn an actual `sys.executable -m pylsp` child via
+    asyncio.create_subprocess_exec, which on POSIX wraps subprocess.Popen — the
+    mocked Popen would break the spawn ("[Errno 3] No such process") and leave
+    the pool empty. Windows' asyncio uses CreateProcess and is unaffected, but
+    the real Popen is harmless there too.
+    """
+    yield  # real subprocess.Popen stays intact for every LSP test
+
+
+@pytest.fixture(autouse=True)
 async def _clean_pool():
     await lsp_tool.close_all()
     yield
