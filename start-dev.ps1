@@ -58,13 +58,17 @@ Write-Host "NVIDIA key present:      $([bool]$env:NVIDIA_API_KEY)" -ForegroundCo
 Write-Host "OpenRouter key present:   $([bool]$env:OPENROUTER_API_KEY)" -ForegroundColor Gray
 Write-Host "Gemini key present:       $([bool]$env:GEMINI_API_KEY)" -ForegroundColor Gray
 Write-Host "Groq key present:         $([bool]$env:GROQ_API_KEY)" -ForegroundColor Gray
+Write-Host "DeepSeek key present:     $([bool]$env:DEEPSEEK_API_KEY)" -ForegroundColor Gray
 Write-Host "Tavily key present:       $([bool]$env:TAVILY_API_KEY)" -ForegroundColor Gray
 Write-Host "Brave key present:        $([bool]$env:BRAVE_API_KEY)" -ForegroundColor Gray
 Write-Host "Exa key present:          $([bool]$env:EXA_API_KEY)" -ForegroundColor Gray
 Write-Host "Serper key present:       $([bool]$env:SERPER_API_KEY)" -ForegroundColor Gray
 Write-Host "SerpApi key present:      $([bool]$env:SERPAPI_KEY)" -ForegroundColor Gray
 Write-Host "TinyFish key present:     $([bool]$env:TINYFISH_API_KEY)" -ForegroundColor Gray
+Write-Host "Firecrawl key present:    $([bool]$env:FIRECRAWL_API_KEY)" -ForegroundColor Gray
+Write-Host "Scavio key present:       $([bool]$env:SCAVIO_API_KEY)" -ForegroundColor Gray
 Write-Host "OpenAI/OpenCode key:      $([bool]$env:OPENAI_API_KEY)" -ForegroundColor Gray
+Write-Host "Generic API key:          $([bool]$env:API_KEY)" -ForegroundColor Gray
 Write-Host "OpenCode Base URL:        $([bool]$env:OPENAI_API_BASE)" -ForegroundColor Gray
 
 # STEP 1 - Cleanup
