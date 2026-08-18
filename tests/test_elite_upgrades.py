@@ -32,6 +32,8 @@ async def test_web_search_handler_tavily(monkeypatch):
         "EXA_API_KEY",
         "SERPAPI_KEY",
         "TINYFISH_API_KEY",
+        "SCAVIO_API_KEY",
+        "FIRECRAWL_API_KEY",
     ):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test-key")
@@ -70,6 +72,8 @@ async def test_web_search_handler_serper(monkeypatch):
         "EXA_API_KEY",
         "SERPAPI_KEY",
         "TINYFISH_API_KEY",
+        "SCAVIO_API_KEY",
+        "FIRECRAWL_API_KEY",
     ):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("SERPER_API_KEY", "serper-test-key")
@@ -103,7 +107,14 @@ async def test_web_search_handler_serper(monkeypatch):
 async def test_web_search_handler_fanout_merges_and_dedups(monkeypatch):
     """The parallel fan-out queries EVERY configured provider and merges the
     results (deduped by URL), rather than returning the first that answers."""
-    for k in ("BRAVE_API_KEY", "EXA_API_KEY", "SERPAPI_KEY", "TINYFISH_API_KEY"):
+    for k in (
+        "BRAVE_API_KEY",
+        "EXA_API_KEY",
+        "SERPAPI_KEY",
+        "TINYFISH_API_KEY",
+        "SCAVIO_API_KEY",
+        "FIRECRAWL_API_KEY",
+    ):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test-key")
     monkeypatch.setenv("SERPER_API_KEY", "serper-test-key")
@@ -168,6 +179,8 @@ async def test_web_search_handler_fanout_two_providers(monkeypatch):
         "EXA_API_KEY",
         "SERPAPI_KEY",
         "TINYFISH_API_KEY",
+        "SCAVIO_API_KEY",
+        "FIRECRAWL_API_KEY",
     ):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test-key")
@@ -218,6 +231,8 @@ async def test_web_search_fanout_rrf_consensus_boost(monkeypatch):
         "EXA_API_KEY",
         "SERPAPI_KEY",
         "TINYFISH_API_KEY",
+        "SCAVIO_API_KEY",
+        "FIRECRAWL_API_KEY",
     ):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test-key")
@@ -287,6 +302,8 @@ async def test_web_search_quota_exclusion(monkeypatch):
         "EXA_API_KEY",
         "SERPAPI_KEY",
         "TINYFISH_API_KEY",
+        "SCAVIO_API_KEY",
+        "FIRECRAWL_API_KEY",
     ):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test-key")

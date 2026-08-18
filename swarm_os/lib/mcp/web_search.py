@@ -212,6 +212,40 @@ async def _tinyfish_search(client, query: str, max_results: int) -> list[dict]:
     ]
 
 
+async def _scavio_search(client, query: str, max_results: int) -> list[dict]:
+    r = await client.post(
+        "https://api.scavio.dev/api/v2/google",
+        headers={"Authorization": f"Bearer {os.getenv('SCAVIO_API_KEY', '')}"},
+        json={"query": query, "hl": "en", "gl": "us"},
+    )
+    r.raise_for_status()
+    return [
+        {
+            "title": i.get("title", ""),
+            "url": i.get("link", i.get("url", "")),
+            "snippet": i.get("snippet", ""),
+        }
+        for i in r.json().get("organic_results", [])[:max_results]
+    ]
+
+
+async def _firecrawl_search(client, query: str, max_results: int) -> list[dict]:
+    r = await client.post(
+        "https://api.firecrawl.dev/v2/search",
+        headers={"Authorization": f"Bearer {os.getenv('FIRECRAWL_API_KEY', '')}"},
+        json={"query": query, "limit": max_results},
+    )
+    r.raise_for_status()
+    return [
+        {
+            "title": i.get("title", ""),
+            "url": i.get("url", ""),
+            "snippet": i.get("description", ""),
+        }
+        for i in r.json().get("data", {}).get("web", [])[:max_results]
+    ]
+
+
 def _provider_specs() -> list[tuple[str, str, _SearchFn]]:
     """(name, env-key, fn) for every provider with a configured non-placeholder key."""
     return [
@@ -221,6 +255,8 @@ def _provider_specs() -> list[tuple[str, str, _SearchFn]]:
         ("exa", "EXA_API_KEY", _exa_search),
         ("serpapi", "SERPAPI_KEY", _serpapi_search),
         ("tinyfish", "TINYFISH_API_KEY", _tinyfish_search),
+        ("scavio", "SCAVIO_API_KEY", _scavio_search),
+        ("firecrawl", "FIRECRAWL_API_KEY", _firecrawl_search),
     ]
 
 
@@ -245,6 +281,8 @@ DEFAULT_MONTHLY_BUDGETS: dict[str, int | None] = {
     "exa": 1000,
     "serpapi": 250,  # demoted: already rate-limits in live probes
     "tinyfish": None,  # unlimited — no credit system
+    "scavio": 50,  # free tier: 50 credits/month (verified live 2026-08-17)
+    "firecrawl": 500,  # free tier: 500 credits/month
 }
 
 
