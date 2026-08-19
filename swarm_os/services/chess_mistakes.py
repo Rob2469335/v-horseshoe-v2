@@ -39,6 +39,10 @@ _LOCK = threading.Lock()
 # review resets to box 0. Configurable via env for testing.
 _SR_LADDER_DAYS = [1, 3, 7, 14]
 
+# Piece values for concept classification heuristics.
+_PIECE_VALUE_MAP = {"p": 1, "n": 3, "b": 3, "r": 5, "q": 9}
+
+
 
 def _ladder_days() -> list[int]:
     raw = __import__("os").environ.get("CHESS_SR_LADDER", "")
@@ -313,25 +317,12 @@ def _classify_concept(
     after = b.copy()
     after.push(played)
 
-    # Material before/after from the MOVER's perspective.
-    def _mat(brd, color):
-        vals = {"p": 1, "n": 3, "b": 3, "r": 5, "q": 9}
-        return sum(
-            vals.get(p.symbol().lower(), 0)
-            for sq in chess.SQUARES
-            if (p := brd.piece_at(sq)) and p.color == color
-        )
 
-    before_mat = _mat(b, mover)
-    after_mat = _mat(after, mover)
-
-    # Bad exchange: the played move trades a MORE valuable piece for a LESS
-    # valuable one (net material loss for the mover).
-    if b.is_capture(played) and after_mat < before_mat:
-        return "bad exchange"
 
     # Hanging piece: after the move, one of the mover's non-king pieces is
     # attacked more than defended (opponent can capture it next move).
+    # Check this FIRST — it's the most specific/actionable error (e.g. Qxf7?? where
+    # the queen is immediately recaptured by the king).
     for sq in chess.SQUARES:
         p = after.piece_at(sq)
         if not p or p.color != mover or p.piece_type == chess.KING:
@@ -340,6 +331,22 @@ def _classify_concept(
         defenders = after.attackers(mover, sq)
         if len(attackers) > len(defenders):
             return "hanging piece"
+
+    # Bad exchange: the played move captures a LESS valuable piece with a MORE
+    # valuable one (net material loss vs what was captured).
+    # We compare the captured piece value to the moved piece value directly,
+    # because after_mat >= before_mat always (can't lose your own pieces on your own move).
+    if b.is_capture(played):
+        moved_piece = b.piece_at(played.from_square)
+        cap_piece = b.piece_at(played.to_square)
+        if b.is_en_passant(played):
+            cap_val = 1
+        else:
+            cap_val = _PIECE_VALUE_MAP.get(cap_piece.symbol().lower(), 0) if cap_piece else 0
+        moved_val = _PIECE_VALUE_MAP.get(moved_piece.symbol().lower(), 0) if moved_piece else 0
+        if moved_val > cap_val + 1:  # losing >1 pawn of material on the exchange
+            return "bad exchange"
+
 
     # Missed a strong check/mate: the best move gives check but the played move doesn't.
     if best_uci:
@@ -362,11 +369,12 @@ def _classify_concept(
         except Exception as exc:
             log.debug("missed-capture detection failed (uci=%s): %s", best_uci, exc)
 
-    # King safety: only flag when the king is genuinely at risk — the best move
-    # castles OR the played move leaves the king exposed to attack. Not just
-    # "castling was available" (that fires in every opening).
+    # King safety: flag when the move leaves the king more exposed than before.
+    # Checking king_attackers directly after a legal move is always 0 (you cannot
+    # move into check). Instead, compare the king's defender count before and after.
     king_sq = after.king(mover)
-    king_attackers = after.attackers(not mover, king_sq)
+    defenders_before = len(b.attackers(mover, king_sq)) if king_sq is not None else 0
+    defenders_after = len(after.attackers(mover, king_sq)) if king_sq is not None else 0
     best_castled = False
     if best_uci:
         try:
@@ -375,7 +383,7 @@ def _classify_concept(
                 best_castled = True
         except Exception as exc:
             log.debug("castle detection failed (uci=%s): %s", best_uci, exc)
-    if king_attackers or best_castled:
+    if best_castled or (king_sq is not None and defenders_after < defenders_before):
         return "king safety"
 
     return "imprecise move"
