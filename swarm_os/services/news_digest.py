@@ -86,7 +86,7 @@ def _load_subscriptions() -> dict[str, list[str]]:
                 return data
     except Exception as exc:
         log.warning("news subscriptions load failed: %s", exc)
-    return dict(DEFAULT_SUBSCRIPTIONS)
+    return {k: list(v) for k, v in DEFAULT_SUBSCRIPTIONS.items()}
 
 
 def _save_subscriptions(subs: dict[str, list[str]]) -> None:
@@ -282,34 +282,36 @@ async def ingest_feeds(limit_per_feed: int = 10) -> dict:
     from ..lib.mcp.web_search import web_fetch_handler
 
     subs = _load_subscriptions()
-    new_items: list[dict] = []
+    fetched: list[tuple[str, str, dict]] = []
     errors: list[str] = []
+    for topic, urls in subs.items():
+        for url in urls:
+            try:
+                fetched_resp = await web_fetch_handler(
+                    {"url": url, "max_chars": 200_000}
+                )
+                text = fetched_resp.get("text") or fetched_resp.get("content") or ""
+                if not text:
+                    continue
+                for e in _parse_feed(text)[:limit_per_feed]:
+                    fetched.append((topic, url, e))
+            except Exception as exc:
+                errors.append(f"{url}: {exc}")
+                log.warning("news ingest failed for %s: %s", url, exc)
     with _LOCK:
         store = _load_items()
         seen = {_item_key(it) for it in store}
-        for topic, urls in subs.items():
-            for url in urls:
-                try:
-                    fetched = await web_fetch_handler(
-                        {"url": url, "max_chars": 200_000}
-                    )
-                    text = fetched.get("text") or fetched.get("content") or ""
-                    if not text:
-                        continue
-                    entries = _parse_feed(text)[:limit_per_feed]
-                    for e in entries:
-                        key = _item_key(e)
-                        if key in seen:
-                            continue
-                        seen.add(key)
-                        e["topic"] = topic
-                        e["source"] = url
-                        e["ingested_at"] = _now()
-                        store.append(e)
-                        new_items.append(e)
-                except Exception as exc:
-                    errors.append(f"{url}: {exc}")
-                    log.warning("news ingest failed for %s: %s", url, exc)
+        new_items: list[dict] = []
+        for topic, url, e in fetched:
+            key = _item_key(e)
+            if key in seen:
+                continue
+            seen.add(key)
+            e["topic"] = topic
+            e["source"] = url
+            e["ingested_at"] = _now()
+            store.append(e)
+            new_items.append(e)
         _save_items(store[-500:])
     return {
         "ok": True,

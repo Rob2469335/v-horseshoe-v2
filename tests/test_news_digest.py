@@ -98,6 +98,15 @@ def test_remove_subscription_topic_and_url(monkeypatch):
     assert "t" not in res["topics"]
 
 
+def test_add_subscription_does_not_mutate_default_subs(monkeypatch):
+    original = [list(v) for v in nd.DEFAULT_SUBSCRIPTIONS.values()]
+    res = nd.add_subscription("ai-agents", "https://oreilly.com/radar/feed/")
+    assert res["ok"] is True
+    assert all(
+        list(v) == o for v, o in zip(nd.DEFAULT_SUBSCRIPTIONS.values(), original)
+    )
+
+
 def test_ingest_feeds_deduplicates(monkeypatch):
     calls = {"n": 0}
 
@@ -112,6 +121,23 @@ def test_ingest_feeds_deduplicates(monkeypatch):
     # Second ingest: same feed, items already in store -> nothing new.
     res2 = _run(nd.ingest_feeds())
     assert res2["ingested"] == 0
+
+
+def test_ingest_feeds_does_not_hold_lock_across_fetch(monkeypatch):
+    """The store lock must not be held while a network fetch is in flight —
+    holding a threading.Lock across an await freezes any same-loop consumer
+    (e.g. digest()) for the whole fetch storm."""
+    lock_states = []
+
+    async def fake_fetch(params):
+        lock_states.append(nd._LOCK.locked())
+        return {"ok": True, "text": RSS_XML}
+
+    monkeypatch.setattr("swarm_os.lib.mcp.web_search.web_fetch_handler", fake_fetch)
+    res = _run(nd.ingest_feeds())
+    assert res["ok"] is True
+    assert lock_states, "fetch handler was never called"
+    assert all(held is False for held in lock_states)
 
 
 def test_digest_llm_down_degrades(monkeypatch):
