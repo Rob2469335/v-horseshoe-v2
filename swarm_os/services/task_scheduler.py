@@ -367,6 +367,12 @@ async def run_due_tasks(runner=None) -> list[str]:
             log.info("scheduled task %s ran: %s", tid, str(result)[:120])
             await _notify_task_complete(tid, task, result)
         except Exception as exc:
+            # RETRY STORM FIX: Record the failure so last_run updates, preventing
+            # continuous re-trigger every 60s.
+            _record_result(
+                tid,
+                {"ok": False, "error": f"runner exception: {exc}"},
+            )
             log.warning("scheduled task %s failed: %s", tid, exc)
     return ran
 
