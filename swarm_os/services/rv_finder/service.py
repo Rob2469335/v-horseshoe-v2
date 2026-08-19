@@ -72,6 +72,51 @@ def _normalize_type_filter(rv_type: str):
     return lambda l: l.rv_type == want
 
 
+def _resolve_radius(radius_miles: int | None) -> int:
+    """Translate the caller's radius_miles into an effective distance filter.
+
+    radius_miles=0 means "no distance limit" (nationwide). The default 50mi is
+    applied only when the caller explicitly asks for the default (None /
+    negative) — so a nationwide search no longer silently becomes 50mi NY.
+    """
+    from .geo import DEFAULT_RADIUS_MILES
+
+    if radius_miles is None or radius_miles < 0:
+        return DEFAULT_RADIUS_MILES
+    return int(radius_miles)
+
+
+def _pick_best_motorhome_fallback(ranked: list[RVListing]) -> RVListing | None:
+    """Best real motorhome lead for the fallback path.
+
+    The title itself must claim motorhome (never aggregator boilerplate), and
+    listings with critical red flags or scam signals are excluded entirely.
+    Structured listings are preferred only as a tiebreak — the Deal Score
+    dominates, so a damaged/scammy unit never wins over a cleaner lead just
+    because it carries structured attrs.
+    """
+    from .analysis import _title_motorhome
+    from .parsers import _is_junk_title
+
+    candidates = [
+        l
+        for l in ranked
+        if l.year
+        and l.make
+        and _title_motorhome(l)
+        and not _is_junk_title(l.title, l.model)
+        and not (l.analysis.get("score") or {}).get("critical_red_flags")
+        and not (l.analysis.get("scam_risk") or {}).get("signals")
+    ]
+    candidates.sort(
+        key=lambda l: (
+            -((l.analysis.get("score") or {}).get("score", -1)),
+            1 if l.attrs else 0,
+        )
+    )
+    return candidates[0] if candidates else None
+
+
 def _build_summary(
     ranked: list[RVListing],
     best: RVListing | None,
@@ -155,10 +200,13 @@ async def find_best_rv_deals(
     started = time.time()
     raw: list[RVListing] = []
 
-    from .geo import DEFAULT_LOCATION, DEFAULT_RADIUS_MILES
+    from .geo import DEFAULT_LOCATION
 
     location = (location or "").strip() or DEFAULT_LOCATION
-    radius = int(radius_miles) if radius_miles else DEFAULT_RADIUS_MILES
+    # radius_miles=0 means "no distance limit" (nationwide). The default radius
+    # is applied only when the caller explicitly asks for the default (None /
+    # negative), so a nationwide search no longer silently becomes 50mi NY.
+    radius = _resolve_radius(radius_miles)
 
     tasks = []
     if use_ppl:
@@ -238,17 +286,26 @@ async def find_best_rv_deals(
                 location,
             )
         else:
-            cities: dict[str, tuple[float, float]] = {}
+            # Resolve each unique city once. resolve_lat_lng already paces
+            # Nominatim to ~1 req/s via a shared lock (a politeness limit, not
+            # a bug), so bounded concurrency here mainly lets cached cities
+            # short-circuit instantly instead of serializing the whole loop.
+            unique = list(dict.fromkeys(l.location for l in listings if l.location))
+            sem = asyncio.Semaphore(4)
+
+            async def _resolve(loc: str) -> tuple[str, tuple[float, float] | None]:
+                async with sem:
+                    return loc, await resolve_lat_lng(loc, cache)
+
+            resolved = await asyncio.gather(*(_resolve(loc) for loc in unique))
+            cities: dict[str, tuple[float, float] | None] = dict(resolved)
             for lst in listings:
-                if not lst.location:
-                    continue
-                if lst.location not in cities:
-                    cities[lst.location] = await resolve_lat_lng(
-                        lst.location, cache
-                    ) or (None, None)  # type: ignore[assignment]
-                lat, lng = cities[lst.location]
-                if lat and lng:
-                    lst.distance_miles = haversine_miles(anchor[0], anchor[1], lat, lng)
+                if lst.location and cities.get(lst.location):
+                    lat, lng = cities[lst.location]
+                    if lat and lng:
+                        lst.distance_miles = haversine_miles(
+                            anchor[0], anchor[1], lat, lng
+                        )
             # Hard filter: drop confirmed out-of-range, keep unknown-distance but demote.
             listings = [
                 l
@@ -304,22 +361,11 @@ async def find_best_rv_deals(
     # Fallback: if no fully-analyzed motorhome qualified, surface the best real
     # motorhome lead we found (Class B/C listings are scarce in structured data).
     # The title itself must claim motorhome (never aggregator boilerplate), and
-    # structured listings are preferred over snippet-only leads.
+    # structured listings are preferred — but only as a tiebreak: score and red
+    # flags still dominate, so a damaged/scammy unit never wins over a cleaner
+    # lead just because it happens to carry structured attrs.
     if best_motorhome is None:
-        from .analysis import _title_motorhome
-        from .parsers import _is_junk_title
-
-        candidates = [
-            l
-            for l in ranked
-            if l.year
-            and l.make
-            and _title_motorhome(l)
-            and not _is_junk_title(l.title, l.model)
-        ]
-        candidates.sort(key=lambda l: 1 if l.attrs else 0, reverse=True)
-        if candidates:
-            best_motorhome = candidates[0]
+        best_motorhome = _pick_best_motorhome_fallback(ranked)
 
     source_counts: dict[str, int] = {}
     for l in ranked:

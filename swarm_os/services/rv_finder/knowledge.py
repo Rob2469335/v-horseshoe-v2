@@ -391,7 +391,7 @@ KNOWN_MOTORHOME_MODELS = (
     "redhawk rize solis tellaro maestro traverse trend beyond revel daybreak outlook synergy "
     "sunseeker windsport vegas ace axis quattro siesta cambria prisma forester aurora sunrise "
     "view navion solera ekko roam boldt leprechaun galaxy greyhawk melbourne precept alante "
-    "unity wonder joy outlaw delano sequence chateau horizon sunstar sportsmobile travalo "
+    "unity wonder joy outlaw delano sequence chateau horizon sunstar sportsmobile travato "
     "cross trek four winds solara daybreak zion 190 210"
 ).split()
 

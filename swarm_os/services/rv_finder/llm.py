@@ -108,23 +108,30 @@ async def _llm_deep_dive(listings: list[RVListing], budget: int) -> str:
                 "num_retries": 0,
             }
         )
-        for cfg in attempts:
-            try:
-                async with asyncio.timeout(cfg["timeout"]):
-                    res = await acompletion(**cfg)
-                content = res.choices[0].message.content or ""
-                if content.strip():
-                    try:
-                        from runtime_v2.services.usage_log import record_response
+        # Overall budget across the whole provider chain: a deep-dive is an
+        # enhancement, not the search. Without a cap, 120+90+300s of sequential
+        # provider timeouts could hang the API for ~8.5 minutes. 180s bounds the
+        # cloud pair generously and still leaves the local fallback headroom.
+        async with asyncio.timeout(180.0):
+            for cfg in attempts:
+                try:
+                    async with asyncio.timeout(cfg["timeout"]):
+                        res = await acompletion(**cfg)
+                    content = res.choices[0].message.content or ""
+                    if content.strip():
+                        try:
+                            from runtime_v2.services.usage_log import record_response
 
-                        record_response(
-                            res, cfg.get("model", ""), source="rv_finder_deep_dive"
-                        )
-                    except Exception as usage_err:  # noqa: BLE001
-                        logger.debug("usage log skipped: %s", usage_err)
-                    return content.strip()
-            except Exception as e:
-                logger.warning("deep-dive via %s failed: %s", cfg.get("model"), e)
+                            record_response(
+                                res, cfg.get("model", ""), source="rv_finder_deep_dive"
+                            )
+                        except Exception as usage_err:  # noqa: BLE001
+                            logger.debug("usage log skipped: %s", usage_err)
+                        return content.strip()
+                except Exception as e:
+                    logger.warning("deep-dive via %s failed: %s", cfg.get("model"), e)
+    except TimeoutError:
+        logger.warning("rv_finder deep-dive exceeded overall 180s budget")
     except Exception as e:
         logger.warning("deep-dive failed: %s", e)
     return ""

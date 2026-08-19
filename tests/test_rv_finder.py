@@ -516,3 +516,118 @@ def test_craigslist_queries_prioritize_motorhomes():
     bc_urls = parsers._build_craigslist_queries(25000, "class b/c")
     assert any("auto_make_model=campervan" in u for u in bc_urls)
     assert any("auto_make_model=motorhome" in u for u in bc_urls)
+
+
+class TestMileageExtraction:
+    def test_six_digit_comma_mileage(self):
+        from swarm_os.services.rv_finder.parsers import _extract_mileage
+
+        assert _extract_mileage("125,000 miles") == 125000
+        assert _extract_mileage("213,000 miles") == 213000
+        assert _extract_mileage("12,500 miles") == 12500
+        assert _extract_mileage("125000 miles") == 125000
+
+
+class TestJunkTitleLegitTitles:
+    def test_real_listing_with_for_sale_phrase_accepted(self):
+        from swarm_os.services.rv_finder.parsers import _is_junk_title
+
+        assert not _is_junk_title(
+            "2016 Thor Four Winds Motorhome for Sale", "Four Winds"
+        )
+        assert not _is_junk_title("2018 Thor Chateau Motorhome for Sale", "Chateau")
+        assert not _is_junk_title("2016 Winnebago View 24M Class C", "View")
+
+    def test_aggregator_headings_still_rejected(self):
+        from swarm_os.services.rv_finder.parsers import _is_junk_title
+
+        assert _is_junk_title("Motorhomes under $30k for sale", "")
+        assert _is_junk_title("Used Motorhomes for sale", "")
+        assert _is_junk_title("Motorhomes near me", "")
+
+
+class TestBestMotorhomeFallbackScoring:
+    def test_fallback_prefers_higher_score_over_structured_attrs(self):
+        """The best_motorhome fallback must pick the higher-scoring lead even
+        when the lower-scoring one has structured attrs (a damaged structured
+        unit must never win over a pristine snippet-only lead)."""
+        from swarm_os.services.rv_finder.service import _pick_best_motorhome_fallback
+        from swarm_os.services.rv_finder.models import RVListing
+
+        damaged = RVListing(
+            title="2016 Thor Axis Class C",
+            year=2016,
+            make="Thor",
+            model="Axis",
+            price=18000,
+            attrs={"Mileage": ["85000"]},
+        )
+        damaged.analysis = {
+            "score": {"score": 25.0, "verdict": "High Risk", "critical_red_flags": 1},
+            "scam_risk": {"signals": []},
+        }
+        clean = RVListing(
+            title="2018 Coachmen Leprechaun 260DS Class C",
+            year=2018,
+            make="Coachmen",
+            model="Leprechaun",
+            price=35000,
+            attrs={},
+        )
+        clean.analysis = {
+            "score": {"score": 58.0, "verdict": "Fair Price", "critical_red_flags": 0},
+            "scam_risk": {"signals": []},
+        }
+        picked = _pick_best_motorhome_fallback([damaged, clean])
+        assert picked is clean
+
+    def test_fallback_skips_critical_red_flag_listing(self):
+        from swarm_os.services.rv_finder.service import _pick_best_motorhome_fallback
+        from swarm_os.services.rv_finder.models import RVListing
+
+        damaged = RVListing(
+            title="2016 Thor Axis Class C",
+            year=2016,
+            make="Thor",
+            model="Axis",
+            price=15000,
+            attrs={"Mileage": ["85000"]},
+        )
+        damaged.analysis = {
+            "score": {"score": 20.0, "verdict": "High Risk", "critical_red_flags": 1},
+            "scam_risk": {"signals": []},
+        }
+        picked = _pick_best_motorhome_fallback([damaged])
+        assert picked is None
+
+
+class TestRadiusUnlimited:
+    def test_zero_radius_is_unlimited_not_default(self):
+        from swarm_os.services.rv_finder.service import _resolve_radius
+
+        assert _resolve_radius(0) == 0
+        assert _resolve_radius(None) == 50
+        assert _resolve_radius(-1) == 50
+        assert _resolve_radius(100) == 100
+
+
+class TestMotorhomeModelFix:
+    def test_travato_recognized_as_motorhome(self):
+        from swarm_os.services.rv_finder.analysis import (
+            _is_motorhome_like,
+            _title_motorhome,
+        )
+        from swarm_os.services.rv_finder.models import RVListing
+
+        # Title carries the class word? No — "Travato" is a model-only signal.
+        # The headline gate (_title_motorhome) recognizes it via the title blob;
+        # _is_motorhome_like picks it up once the model is extracted (Travato is
+        # Winnebago's Class B, now correctly in KNOWN_MOTORHOME_MODELS).
+        lst = RVListing(title="2020 Winnebago Travato 59K", rv_type="unknown")
+        assert _title_motorhome(lst)
+        lst2 = RVListing(
+            title="2020 Winnebago Travato 59K",
+            rv_type="unknown",
+            model="Travato",
+        )
+        assert _is_motorhome_like(lst2)

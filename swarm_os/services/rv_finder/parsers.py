@@ -149,7 +149,7 @@ def _extract_year(text: str) -> int | None:
 
 
 def _extract_mileage(text: str) -> int | None:
-    m = re.search(r"\b([\d,]{1,2}(?:,\d{3}){1,2})\s*(?:mi|miles)\b", text or "", re.I)
+    m = re.search(r"\b(\d{1,3}(?:,\d{3}){1,2})\s*(?:mi|miles)\b", text or "", re.I)
     if m:
         return int(m.group(1).replace(",", ""))
     m = re.search(r"\b([\d]{4,6})\s*(?:mi|miles|km)\b", text or "", re.I)
@@ -383,7 +383,10 @@ _JUNK_TITLE_RES = [
     re.compile(r"\b(?:used|new)\s+rvs?\s+(?:near|in|by|under)\b", re.I),
     re.compile(r"\brvs?\s+under\s*\$\s?[\d,]+\b", re.I),
     re.compile(r"\brv\s*trader\b|\brv\s*usa\b", re.I),
-    re.compile(r"\bmotorhomes?\s+(?:under|for\s*sale|near)\b", re.I),
+    re.compile(
+        r"^\s*(?!\d{4}\b)(?:used|new)?\s*motorhomes?\s+(?:under|for\s*sale|near)\b",
+        re.I,
+    ),
     re.compile(r"\bcall\s+(?:dealer|for\s+price|seller)\b", re.I),
     re.compile(r"\bnear\s+me\b", re.I),
     re.compile(
