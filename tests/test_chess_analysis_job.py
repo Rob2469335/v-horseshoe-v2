@@ -158,7 +158,9 @@ def test_run_job_resume_builds_from_done_games(monkeypatch, tmp_path):
     done = cj._load_job("resume-test")
     assert done["status"] == "done"
     assert done["done_games"] == 3
-    assert len(job["_games"]) == 1  # only the remaining game (index 2) fetched
+    # _games is dropped on completion (memory release) — the durable resume
+    # state is game_refs, which stays intact.
+    assert "_games" not in job
 
 
 def test_analysis_endpoint(tmp_path):

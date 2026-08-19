@@ -29,7 +29,7 @@ def test_pin_motif_is_a_real_pin():
     """The Pin prototype must actually be an absolute pin — the knight cannot
     legally move because it exposes the king — and the solution captures the
     pinned piece for free."""
-    m = next(x for x in MOTIFS if x["concept"] == "Pin")
+    m = next(x for x in MOTIFS if x["concept"] == "pin")
     b = chess.Board(m["fen"])
     assert b.is_pinned(chess.BLACK, chess.C6)
     # Bxc6+ wins the pinned knight (black cannot recapture along the pin line).

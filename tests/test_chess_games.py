@@ -6,6 +6,7 @@ The store is isolated to a temp dir (never touches production data).
 import hashlib
 import json
 
+import chess
 import pytest
 
 from swarm_os.services import chess_games as cg
@@ -46,6 +47,52 @@ def test_start_game_returns_id_and_finalizes_prior():
     assert games[-2]["status"] == "finished"  # prior game finalized
 
 
+def test_start_game_no_finalize_keeps_in_progress_games():
+    # A background bulk import must NOT truncate a live interactive game.
+    g1 = cg.start_game()
+    cg.record_move(g1["id"], _move())
+    g2 = cg.start_game(finalize_existing=False)  # bulk-import-style start
+    cg._load_games()
+    # Both are still in_progress — the import didn't finalize the interactive one.
+    assert g1["status"] == "in_progress"
+    assert g2["status"] == "in_progress"
+
+
+def test_record_game_writes_finished_game_in_one_call():
+    # The bulk-import path persists a whole finished game in ONE load/save
+    # (no per-move whole-file rewrites — the write-amplification fix).
+    g1 = cg.start_game(finalize_existing=False)
+    cg.record_game(
+        {
+            "id": g1["id"],
+            "start_fen": chess.STARTING_FEN,
+            "started_at": 1.0,
+            "ended_at": 2.0,
+            "status": "finished",
+            "player_color": "w",
+            "source": "chess.com:tester",
+            "moves": [_move("e4", "Best", 0), _move("Nf3", "Best", 0)],
+        }
+    )
+    games = cg._load_games()
+    g = next(x for x in games if x["id"] == g1["id"])
+    assert g["status"] == "finished"
+    assert len(g["moves"]) == 2
+
+
+def test_accuracy_filters_black_player_moves():
+    # A Black-side player's accuracy counts only their recorded moves.
+    # Games now only record the player's moves (interactive=True by default).
+    g = cg.start_game(player_color="b")
+    for m in (
+        _move("e5", "Best", 0),  # black (player) — 1.0
+        _move("Nc6", "Best", 0),  # black (player) — 1.0
+    ):
+        cg.record_move(g["id"], m)
+    review = cg.finish_game(g["id"])
+    assert review["accuracy"] == pytest.approx(100.0, abs=0.1)
+
+
 def test_record_move_appends():
     g = cg.start_game()
     cg.record_move(g["id"], _move("e4", "Best", 0))
@@ -57,16 +104,16 @@ def test_record_move_appends():
 
 def test_review_accuracy_and_phases():
     g = cg.start_game()
-    # 3 moves: Best, Best, Blunder(-30%) -> accuracy (1+1+0.7)/3 ~90%
+    # 2 player moves: Best then Blunder(-30%). Accuracy = (1 + 0.7)/2 = 85%.
+    # With 2 moves, only opening and middlegame phases exist.
     for m in (
         _move("e4", "Best", 0),
-        _move("Nf3", "Best", 0),
         _move("Qh5", "Blunder", -30, "d1h5", "g1f3"),
     ):
         cg.record_move(g["id"], m)
     review = cg.finish_game(g["id"])
-    assert review["accuracy"] == pytest.approx(90.0, abs=0.1)
-    assert set(review["phases"].keys()) == {"opening", "middlegame", "endgame"}
+    assert review["accuracy"] == pytest.approx(85.0, abs=0.1)
+    assert set(review["phases"].keys()) == {"opening", "middlegame"}
 
 
 def test_review_curve():

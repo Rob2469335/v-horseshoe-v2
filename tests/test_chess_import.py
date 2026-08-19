@@ -184,3 +184,74 @@ def test_api_username_endpoints(monkeypatch, tmp_path):
         assert r.json()["username"] == "lilrob2"
         r = c.get("/chess/trainer/import/chesscom/username")
         assert r.json()["username"] == "lilrob2"
+
+
+def test_username_match_is_exact_not_substring(monkeypatch, tmp_path):
+    """'rob' must NOT match a 'robert' header (substring misattribution bug)."""
+    import asyncio
+
+    from swarm_os.services import chess_games as cg
+    from swarm_os.services import chess_mistakes as cm
+
+    pgn_robert = SAMPLE_PGN.replace('[White "tester"]', '[White "robert_locust"]')
+
+    async def fake_fetch_robert(url, timeout=20.0):
+        return {"games": [{"pgn": pgn_robert, "url": "https://www.chess.com/game/live/2"}]}
+
+    monkeypatch.setattr(ci, "_fetch", fake_fetch_robert)
+    monkeypatch.setattr(cg, "_DATA_DIR", tmp_path / "chess")
+    monkeypatch.setattr(cg, "_GAMES_FILE", tmp_path / "chess" / "games.jsonl")
+    monkeypatch.setattr(cm, "_DATA_DIR", tmp_path / "chess")
+    monkeypatch.setattr(cm, "_STORE_FILE", tmp_path / "chess" / "mistakes.jsonl")
+
+    # Importing as "rob" must NOT analyze a game where the header is "robert_locust".
+    res = asyncio.run(ci.import_games("rob", months=1, max_games=10))
+    assert res["games_analyzed"] == 0
+    # And "robert_locust" DOES match exactly.
+    res2 = asyncio.run(ci.import_games("robert_locust", months=1, max_games=10))
+    assert res2["games_analyzed"] == 1
+
+
+def test_custom_fen_header_parses_into_correct_start(monkeypatch):
+    """A [FEN ...] header must produce a board starting from that position, not
+    the standard start (old code ignored it -> wrong boards or 'illegal san')."""
+    pgn = """[White "tester"]
+[Black "opponent"]
+[FEN "bbqnnrkr/pppppppp/8/8/8/8/PPPPPPPP/BBQNNRKR w KQkq - 0 1"]
+[SetUp "1"]
+[Result "*"]
+
+1. c4 c5 2. g3 g6 *"""
+    parsed = ci._parse_game_pgn(pgn)
+    assert parsed is not None
+    headers, board, game_obj = parsed
+    assert len(board.move_stack) == 4
+    # The board must reflect the custom start (a chess960-style position).
+    assert board.fen().startswith("bbqnnrkr")
+
+
+def test_opponent_moves_not_recorded(monkeypatch, tmp_path):
+    """Only the USER's moves are recorded to games.jsonl — the opponent's are
+    skipped (the old code recorded every ply, polluting accuracy analytics)."""
+    import asyncio
+
+    import chess
+
+    from swarm_os.services import chess_games as cg
+
+    monkeypatch.setattr(cg, "_DATA_DIR", tmp_path / "chess")
+    monkeypatch.setattr(cg, "_GAMES_FILE", tmp_path / "chess" / "games.jsonl")
+
+    res = asyncio.run(ci.import_games("tester", months=1, max_games=10))
+    assert res["ok"] is True
+    games = cg._load_games()
+    assert games
+    # 'tester' is White in the sample. Every recorded move must be a White move.
+    for g in games:
+        for i, m in enumerate(g.get("moves", [])):
+            board = chess.Board(m["pre_fen"])
+            assert board.turn == chess.WHITE, (
+                f"recorded an opponent (black) move at ply {i}: {m['uci']}"
+            )
+
+

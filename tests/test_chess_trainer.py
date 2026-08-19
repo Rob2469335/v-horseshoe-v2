@@ -69,6 +69,27 @@ def test_classify_rating_scaled_thresholds():
     assert low == high
 
 
+def test_classify_excellent_reachable_with_no_material_loss():
+    # A tiny eval loss (< 2% expected points) with no material lost must be
+    # "Excellent" — the old typo ("Good" if loss >= 0.02 else "Good") made the
+    # branch return "Good" in BOTH arms, so "Excellent" was unreachable.
+    assert (
+        ct._classify(500, 20, 15, was_best=False, material_delta=0.0) == "Excellent"
+    )
+    # A loss in the 0.02-0.05 band (Good) stays Good, distinct from Excellent.
+    assert (
+        ct._classify(500, 80, 50, was_best=False, material_delta=0.0) == "Good"
+    )
+
+
+def test_classify_queen_hang_is_blunder_not_inaccuracy():
+    # material_delta=-9 (a full queen) must floor to Blunder — the old default
+    # of material_delta=0.0 made the material guard cap it at Inaccuracy.
+    assert (
+        ct._classify(500, 0, -50, was_best=False, material_delta=-9.0) == "Blunder"
+    )
+
+
 # ---------------------------------------------------------------------------
 # evaluate_move (engine mocked)
 # ---------------------------------------------------------------------------
@@ -715,7 +736,13 @@ def test_socratic_api_proposed_uci_echoes_proposal(monkeypatch):
 
     async def fake_turn(fen, plan, best_move_san, history, proposed_uci=None):
         captured["uci"] = proposed_uci
-        return {"ok": True, "reply": "Let's look at that king file first."}
+        return {
+            "ok": True,
+            "reply": "Let's look at that king file first.",
+            # _socratic_coach_turn now computes + echoes the proposal itself; the
+            # route no longer re-runs _proposal_eval (the double-engine-eval bug).
+            "proposal": {"ok": True, "uci": proposed_uci, "classification": "Inaccuracy"},
+        }
 
     async def fake_proposal_eval(fen, uci):
         return {"ok": True, "uci": uci, "classification": "Inaccuracy"}

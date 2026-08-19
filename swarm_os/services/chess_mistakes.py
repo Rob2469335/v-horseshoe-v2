@@ -199,11 +199,14 @@ def get_blunder_radar(limit: int = 10) -> dict[str, Any]:
         for m in chosen_solid:
             radar_items.append({
                 "id": uuid.uuid4().hex[:12],
-                "fen": m.get("fen"),
+                # PRE-move FEN — the board BEFORE the good move, so the listed
+                # best_uci/best_san is a legal answer on the shown position
+                # (the old code used the post-move fen, making the move illegal).
+                "fen": m.get("pre_fen") or m.get("fen"),
                 "has_tactic": False,
                 "best_uci": m.get("uci"),
                 "best_san": m.get("san"),
-                "concept": "Solid Position",
+                "concept": "solid position",
                 "played_uci": m.get("uci"),
                 "played_san": m.get("san"),
                 "classification": m.get("classification")

@@ -712,16 +712,19 @@ export default function ChessTrainerPage() {
                 setReviewSolved("solved")
                 resolveReview(activeReview, true)
                 setIsSequelDrill(false)
+                return  // never fall through into engineReply for the next puzzle
               }
             } catch {
               setReviewSolved("solved")
               resolveReview(activeReview, true)
               setIsSequelDrill(false)
+              return  // never fall through into engineReply for the next puzzle
             }
           } else {
             setReviewSolved("solved")
             if (activeReview) resolveReview(activeReview, true)
             setIsSequelDrill(false)
+            return  // never fall through into engineReply for the next puzzle
           }
         } else if (res.classification && ["Mistake", "Blunder", "Inaccuracy"].includes(res.classification)) {
           // In review mode a wrong move is marked failed but we do NOT auto-advance
@@ -788,6 +791,10 @@ export default function ChessTrainerPage() {
     setLegalTargets([])
     setHistory((h) => h.slice(0, -1))
     setExplanationOpen(false)
+    // Clear the failed-review state so the solution arrow is NOT left on the
+    // board while the learner guesses again (the old code kept reviewSolved
+    // == "failed", which kept the arrow drawn).
+    setReviewSolved("none")
   }
 
   const engineReply = async (playerFen: string) => {
@@ -904,15 +911,23 @@ export default function ChessTrainerPage() {
     const updated = [...socraticMsgs, { role: "user" as const, content }]
     setSocraticMsgs(updated)
     setSocraticBusy(true)
+    const askFen = fen  // the position this question was asked about
     try {
       const r = await (await fetch(`${backendUrl}/chess/trainer/coach/socratic`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fen, history: updated, proposed_uci: proposedUci ?? null }),
+        body: JSON.stringify({ fen: askFen, history: updated, proposed_uci: proposedUci ?? null }),
       })).json() as { ok: boolean; reply?: string; error?: string }
-      setSocraticMsgs((m) => [...m, { role: "coach", content: r.reply ?? r.error ?? "Coach unavailable." }])
+      // The board may have moved while the coach answered — the dialogue resets
+      // on FEN change, so appending this reply to the NEW board's chat would
+      // mix positions. Only append when the board is still the one asked about.
+      if (fen === askFen) {
+        setSocraticMsgs((m) => [...m, { role: "coach", content: r.reply ?? r.error ?? "Coach unavailable." }])
+      }
     } catch {
-      setSocraticMsgs((m) => [...m, { role: "coach", content: "Coach unavailable — the engine nudge below still helps." }])
+      if (fen === askFen) {
+        setSocraticMsgs((m) => [...m, { role: "coach", content: "Coach unavailable — the engine nudge below still helps." }])
+      }
     } finally {
       setSocraticBusy(false)
     }

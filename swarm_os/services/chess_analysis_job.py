@@ -27,6 +27,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+import chess
+
 from .chess_import import _analyze_game, _fetch, _last_archives, _parse_game_pgn
 from .chess_trainer import _best_move_and_cp  # noqa: F401 (engine warm-up)
 
@@ -110,7 +112,13 @@ def _save_job(job: dict[str, Any]) -> None:
         # `_live_task` (a live asyncio.Task, not JSON-serializable) — only the
         # light `game_refs` (url, index) survive to disk.
         disk = {k: v for k, v in job.items() if k not in ("_games", "_live_task")}
-        _job_path(job["job_id"]).write_text(json.dumps(disk), encoding="utf-8")
+        path = _job_path(job["job_id"])
+        # Atomic write: serialize to a temp file in the same dir, then rename.
+        # A crash mid-write otherwise leaves a truncated JSON that fails to load
+        # and silently kills resume-on-restart.
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(disk), encoding="utf-8")
+        tmp.replace(path)
     except Exception as exc:
         log.warning("job save failed: %s", exc)
 
@@ -204,24 +212,40 @@ async def _analyze_one(username: str, game: dict) -> dict[str, Any]:
     headers, board, game_obj = parsed
     if len(board.move_stack) < 4:
         return {"records": [], "mistakes": 0, "error": None}
+    # The user's color from the headers (exact match — substring would misattribute
+    # e.g. "rob" in "robert"). Only their moves are recorded / queued as mistakes.
+    white_hdr = (headers.get("White") or "").strip().lower()
+    black_hdr = (headers.get("Black") or "").strip().lower()
+    is_white = white_hdr == username
+    is_black = black_hdr == username
+    if not (is_white or is_black):
+        return {"records": [], "mistakes": 0, "error": None}
     try:
-        records = await asyncio.to_thread(_analyze_game, board, max_plies=100000)
+        # Pass game_obj so clock/think data survives into bulk records (the
+        # import path does; the bulk path previously stripped it).
+        records = await asyncio.to_thread(_analyze_game, board, 100000, game_obj)
     except Exception as exc:
         return {"records": [], "mistakes": 0, "error": f"analysis: {exc}"}
 
-    from .chess_games import finish_game, record_move, start_game
+    from .chess_games import record_game, start_game
     from .chess_mistakes import record_mistake
     from .chess_trainer import _expected_points
 
-    gid = start_game()["id"]
+    # finalize_existing=False: a background bulk job must NOT truncate a live
+    # interactive game the user is mid-way through.
+    gid = start_game(finalize_existing=False, player_color=("w" if is_white else "b"))["id"]
+    game_moves = []
     mistakes = 0
     for i, rec in enumerate(records):
+        # Even ply = white mover, odd = black. Skip the opponent's moves — they
+        # are not the user's games/errors (data pollution otherwise).
+        if i % 2 != (0 if is_white else 1):
+            continue
         # Real win-delta from the evals (mover's perspective on both).
         win_before = _expected_points(500, rec["eval_before_cp"])
         win_after = _expected_points(500, rec["eval_after_cp"])
         win_delta = round((win_after - win_before) * 100, 1)
-        record_move(
-            gid,
+        game_moves.append(
             {
                 "uci": rec["uci"],
                 "san": rec["san"],
@@ -236,7 +260,7 @@ async def _analyze_one(username: str, game: dict) -> dict[str, Any]:
                 "is_best": rec["was_best"],
                 "concept": "",
                 "source": f"chess.com:{username}",
-            },
+            }
         )
 
         if rec["classification"] in ("Mistake", "Blunder", "Inaccuracy"):
@@ -274,9 +298,21 @@ async def _analyze_one(username: str, game: dict) -> dict[str, Any]:
                 lead_in_moves=lead_in_moves,
             )
             mistakes += 1
-    # Finalize the game so it counts in analytics (only finished games do) —
-    # otherwise every imported game stays in_progress forever.
-    finish_game(gid)
+    # Persist the whole game ONCE (finished) — the bulk path avoids the per-move
+    # whole-file rewrites the old record_move did. Only finished games count in
+    # analytics, and a finished game can never be re-advanced.
+    record_game(
+        {
+            "id": gid,
+            "start_fen": headers.get("FEN", chess.STARTING_FEN),
+            "started_at": time.time(),
+            "ended_at": time.time(),
+            "status": "finished",
+            "player_color": "w" if is_white else "b",
+            "source": f"chess.com:{username}",
+            "moves": game_moves,
+        }
+    )
     return {"records": records, "mistakes": mistakes, "error": None}
 
 
@@ -375,6 +411,10 @@ async def _run_job(job: dict[str, Any]) -> None:
     job["status"] = "done"
     job["updated_at"] = time.time()
     job.pop("_live_task", None)
+    # Drop the full PGN-laden game dicts once the run finishes — they'd otherwise
+    # be retained in memory for the process lifetime (the disk copy only ever
+    # holds the light `game_refs`). A future resume re-fetches from refs.
+    job.pop("_games", None)
     _save_job(job)
 
 
@@ -399,10 +439,13 @@ async def start_analysis(
             break
     if existing:
         job = _load_job(existing)
-        # If this job already has a live task in THIS process, don't spawn a
+        # If this job already has a LIVE task in THIS process, don't spawn a
         # duplicate (it would process the same games concurrently). Only
-        # (re)start when no in-memory task is running.
-        already_live = _jobs.get(existing) and job and _jobs[existing].get("_live_task")
+        # (re)start when no in-memory task is running — a FINISHED or crashed
+        # task still evaluates truthy, so check done() explicitly (otherwise a
+        # dead task would block resuming a failed run forever).
+        live_task = _jobs.get(existing) and _jobs[existing].get("_live_task")
+        already_live = bool(live_task and not live_task.done())
         if (
             auto_start
             and job

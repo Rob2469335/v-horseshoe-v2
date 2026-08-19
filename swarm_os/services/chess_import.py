@@ -25,6 +25,7 @@ import io
 import json
 import logging
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -65,6 +66,11 @@ def _parse_game_pgn(pgn_text: str) -> tuple[dict[str, Any], chess.Board, chess.p
     """Parse a PGN into (headers, board-with-moves). Returns None on failure or
     when the game has no moves.
 
+    Honors the [FEN ...] header (custom start positions / Chess960): the board
+    is built FROM the header FEN, not the standard start, so the mainline moves
+    replay the actual position (pushing onto a standard board would either crash
+    with 'illegal san' or silently produce a wrong position).
+
     NOTE: game.board() does NOT populate move_stack in python-chess 1.11 — the
     moves must be pushed by traversing game.mainline(). (Verified empirically:
     board() returns 0 moves, mainline traversal returns all of them.)"""
@@ -72,7 +78,7 @@ def _parse_game_pgn(pgn_text: str) -> tuple[dict[str, Any], chess.Board, chess.p
         game = chess.pgn.read_game(io.StringIO(pgn_text))
         if game is None:
             return None
-        board = chess.Board()
+        board = game.board()
         for node in game.mainline():
             if node.move is not None:
                 board.push(node.move)
@@ -95,15 +101,23 @@ def _analyze_game(board: chess.Board, max_plies: int = 100000, game_obj: chess.p
     clock_remaining = []
     think_times = []
     if game_obj:
-        prev_t = None
+        # Track each color's clock independently. chess.com's %clk is the time
+        # remaining for the player WHO JUST MOVED, so consecutive nodes alternate
+        # colors — a single `prev_t` mixes white's clock with black's and produces
+        # garbage think-times (verified: Nf3 probed at 20s when it was 10s). Think
+        # time for a move = that player's own clock before minus after.
+        prev_clocks: dict[bool, float | None] = {chess.WHITE: None, chess.BLACK: None}
         for node in game_obj.mainline():
             t = _parse_clock(node.comment)
             clock_remaining.append(t)
+            mover_color = node.turn()
+            prev_t = prev_clocks[mover_color]
             if t is not None and prev_t is not None:
                 think_times.append(max(0.0, prev_t - t))
             else:
                 think_times.append(None)
-            prev_t = t
+            if t is not None:
+                prev_clocks[mover_color] = t
 
     for i, mv in enumerate(moves):
         uci = mv.uci()
@@ -178,7 +192,7 @@ async def import_games(
     mistakes_queued = 0
     errors: list[str] = []
 
-    from .chess_games import record_move, start_game
+    from .chess_games import start_game
     from .chess_mistakes import record_mistake
 
     for url in archives:
@@ -198,19 +212,25 @@ async def import_games(
                 errors.append("unparseable pgn")
                 continue
             headers, board, game_obj = parsed
+            # Determine the user's color ONCE per game with EXACT username
+            # matching (substring matching misattributes: "rob" in "robert").
+            # This color also drives which moves get recorded to the game store
+            # and the mistake queue — the opponent's mistakes must NEVER pollute
+            # the user's training queue or inflate their rating.
+            white_name = (headers.get("White") or "").strip().lower()
+            black_name = (headers.get("Black") or "").strip().lower()
+            is_white = white_name == username
+            is_black = black_name == username
+            if not (is_white or is_black):
+                # Not a game the user played — skip entirely (also guards the
+                # no-color-match case from queueing stranger moves).
+                continue
             # Optional color filter: only keep games where `username` played
             # the requested color.
-            if color in ("white", "black"):
-                white_name = (headers.get("White") or "").strip().lower()
-                black_name = (headers.get("Black") or "").strip().lower()
-                is_white = username in white_name
-                is_black = username in black_name
-                if not (is_white or is_black):
-                    continue
-                if color == "white" and not is_white:
-                    continue
-                if color == "black" and not is_black:
-                    continue
+            if color == "white" and not is_white:
+                continue
+            if color == "black" and not is_black:
+                continue
             # Skip games we don't want (shorter than 4 moves are meaningless).
             if len(board.move_stack) < 8:
                 continue
@@ -224,15 +244,23 @@ async def import_games(
             moves_analyzed += len(records)
 
             if record_games:
-                from .chess_games import finish_game
+                from .chess_games import start_game
                 from .chess_trainer import _expected_points
 
-                gid = start_game()["id"]
-                for rec in records:
+                # finalize_existing=False: a background import must NOT truncate
+                # a live interactive game the user is mid-way through. The game
+                # is built fully in memory then written once (record_game) — the
+                # old per-move record_move rewrote the whole file per move.
+                gid = start_game(finalize_existing=False, player_color=("w" if is_white else "b"))["id"]
+                game_moves = []
+                for i, rec in enumerate(records):
+                    # Only the user's own moves belong in their recorded game
+                    # (even ply index = white, odd = black; ply i is the mover).
+                    if i % 2 != (0 if is_white else 1):
+                        continue
                     win_before = _expected_points(500, rec["eval_before_cp"])
                     win_after = _expected_points(500, rec["eval_after_cp"])
-                    record_move(
-                        gid,
+                    game_moves.append(
                         {
                             "uci": rec["uci"],
                             "san": rec["san"],
@@ -247,15 +275,33 @@ async def import_games(
                             "is_best": rec["was_best"],
                             "concept": "",
                             "source": f"chess.com:{username}",
-                        },
+                        }
                     )
-                # Finalize so the game counts in analytics (only finished games
-                # do) — otherwise every imported game stays in_progress forever.
-                finish_game(gid)
+                # Persist the whole game ONCE (finished) — the bulk path avoids
+                # the per-move whole-file rewrites the old record_move did.
+                from .chess_games import record_game
+
+                record_game(
+                    {
+                        "id": gid,
+                        "start_fen": headers.get("FEN", chess.STARTING_FEN),
+                        "started_at": time.time(),
+                        "ended_at": time.time(),
+                        "status": "finished",
+                        "player_color": "w" if is_white else "b",
+                        "source": f"chess.com:{username}",
+                        "moves": game_moves,
+                    }
+                )
                 games_analyzed += 1
 
             if record_mistakes:
-                for rec in records:
+                for i, rec in enumerate(records):
+                    # Only the user's own mistakes enter their review queue —
+                    # the opponent's mistakes are the user's OPPORTUNITIES, not
+                    # their blunders (ply i is the mover: even=white, odd=black).
+                    if i % 2 != (0 if is_white else 1):
+                        continue
                     if rec["classification"] in ("Mistake", "Blunder", "Inaccuracy"):
                         think = rec.get("think_time_secs")
                         record_mistake(
@@ -426,8 +472,8 @@ async def build_profile(
             # "white"/"black" fields are dicts; headers are plain strings).
             white_hdr = (game_obj.headers.get("White") or "").strip().lower()
             black_hdr = (game_obj.headers.get("Black") or "").strip().lower()
-            is_white = username in white_hdr
-            is_black = username in black_hdr
+            is_white = white_hdr == username
+            is_black = black_hdr == username
             # Result from the player's perspective. The API has no white_result:
             # each side dict carries .result ("win"/"timeout"/"agreed"/
             # "repetition"/"stalemate"/"checkmated"/"resigned"/"abandoned").
@@ -436,9 +482,11 @@ async def build_profile(
             white_res = white_side.get("result", "")
             player_result = None
             if is_white:
-                if white_res in ("win", "timeout"):
+                if white_res == "win":
                     player_result = "win"
-                elif white_res in ("checkmated", "resigned", "abandoned"):
+                elif white_res in ("checkmated", "resigned", "abandoned", "timeout"):
+                    # "timeout" means THIS player ran out of time -> a loss for
+                    # them (the side dict's result is from that side's view).
                     player_result = "loss"
                 elif white_res in (
                     "agreed",
@@ -451,9 +499,9 @@ async def build_profile(
                     player_result = "draw"
             elif is_black:
                 black_res = black_side.get("result", "")
-                if black_res in ("win", "timeout"):
+                if black_res == "win":
                     player_result = "win"
-                elif black_res in ("checkmated", "resigned", "abandoned"):
+                elif black_res in ("checkmated", "resigned", "abandoned", "timeout"):
                     player_result = "loss"
                 elif black_res in (
                     "agreed",

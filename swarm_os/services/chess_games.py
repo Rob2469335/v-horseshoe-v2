@@ -61,21 +61,39 @@ def _save_games(games: list[dict[str, Any]]) -> None:
 
 def start_game(
     start_fen: str = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+    finalize_existing: bool = True,
+    player_color: str = "w",
+    interactive: bool = True,
 ) -> dict[str, Any]:
-    """Begin a new recorded game. Returns the game id. Any existing 'in-progress'
-    game is finalized (no review data lost)."""
+    """Begin a new recorded game. Returns the game id.
+
+    By default any existing 'in-progress' game is finalized (no review data
+    lost) — the interactive trainer starts a fresh game each session. Background
+    bulk imports MUST pass finalize_existing=False so they never truncate a
+    live interactive game the user is mid-way through (the old behavior
+    silently finalized every in-progress game on every imported game).
+
+    `player_color` ('w'/'b') records which side the player is on so accuracy and
+    analytics only count THEIR moves (parity: even ply = white, odd = black).
+
+    `interactive=True` (default) means only the player's moves are recorded
+    (engine replies omitted). `interactive=False` means a full game with both
+    sides' moves (used by bulk import)."""
     with _LOCK:
         games = _load_games()
-        for g in games:
-            if g.get("status") == "in_progress":
-                g["status"] = "finished"
-                g["ended_at"] = _now()
+        if finalize_existing:
+            for g in games:
+                if g.get("status") == "in_progress":
+                    g["status"] = "finished"
+                    g["ended_at"] = _now()
         game = {
             "id": uuid.uuid4().hex[:12],
             "start_fen": start_fen,
             "started_at": _now(),
             "ended_at": None,
             "status": "in_progress",
+            "player_color": player_color,
+            "interactive": interactive,
             "moves": [],
         }
         games.append(game)
@@ -107,6 +125,25 @@ def record_move(game_id: str, move: dict[str, Any]) -> None:
             return
         game["moves"].append(move)
         _save_games(games)
+
+
+def record_game(game: dict[str, Any]) -> dict[str, Any]:
+    """Persist a COMPLETE recorded game in ONE load/save.
+
+    The bulk-import path used to call start_game + record_move per move — each
+    record_move loaded + rewrote the whole games.jsonl, i.e. hundreds of GB of
+    write amplification importing 1,000 games. This writes the finished game
+    once. `game` should be a finished-game dict (id, moves, status='finished',
+    started_at/ended_at)."""
+    with _LOCK:
+        games = _load_games()
+        existing = next((g for g in games if g.get("id") == game.get("id")), None)
+        if existing is not None:
+            existing.update(game)
+        else:
+            games.append(game)
+        _save_games(games)
+        return {"ok": True, "id": game.get("id")}
 
 
 def finish_game(game_id: str) -> dict[str, Any]:
@@ -145,10 +182,45 @@ def list_games(limit: int = 20) -> dict[str, Any]:
     }
 
 
-def _accuracy_of(game: dict[str, Any]) -> float:
+def _player_color_of(game: dict[str, Any]) -> str:
+    """Which color the human played in a recorded game ('w'/'b'). The player is
+    'w' unless the game record says otherwise (legacy records pre-date the field,
+    and interactive training is always white)."""
+    return (game.get("player_color") or "w").lower()
+
+
+def _is_player_move(game: dict[str, Any], start_idx: int, offset: int) -> bool:
+    """True if the move at (global) index `start_idx + offset` was played by the
+    human, via mover-color parity (even ply = white, odd = black). Every
+    consumer that must only reflect the player's own play — accuracy, the
+    guided-review queue payload, queue_game_mistakes, and progress analytics —
+    goes through this single predicate so the canonical full-both-sides game
+    shape (as stored) never leaks the opponent's moves into user-facing stats.
+
+    For interactive games (player-only moves recorded), all recorded moves are
+    the player's moves, so return True unconditionally. Legacy games without the
+    'interactive' field are also player-only (both interactive and imported
+    games filter to player moves only), so default to True."""
+    if game.get("interactive", True):
+        return True
+    player_color = _player_color_of(game)
+    return ((start_idx + offset) % 2 == 0) == (player_color == "w")
+
+
+def _accuracy_of(game: dict[str, Any], start_idx: int = 0) -> float:
     """Per-game accuracy 0-100 (chess.com-CAPS-style): average expected-points
-    kept per move (Best=1.0). Only counts moves that were evaluated."""
-    moves = [m for m in game.get("moves", []) if m.get("win_delta_pct") is not None]
+    kept per move (Best=1.0). Only counts moves that were evaluated.
+
+    Only the PLAYER's moves count (mover color via even/odd ply index) so the
+    opponent's accuracy never inflates the player's rating.
+
+    `start_idx` is the global move index the (possibly sliced) `moves` list
+    begins at, so phase-slices keep the correct mover parity."""
+    moves = [
+        m
+        for i, m in enumerate(game.get("moves", []))
+        if m.get("win_delta_pct") is not None and _is_player_move(game, start_idx, i)
+    ]
     if not moves:
         return 0.0
     # Clamp each move's contribution to [0, 1]: a Best move can improve win%
@@ -203,16 +275,22 @@ def _review_of(game: dict[str, Any]) -> dict[str, Any]:
     phases = {}
     if n:
         third = max(1, n // 3)
-        for label, sl in (
-            ("opening", moves[:third]),
-            ("middlegame", moves[third : 2 * third]),
-            ("endgame", moves[2 * third :]),
+        for label, start_sl, sl in (
+            ("opening", 0, moves[:third]),
+            ("middlegame", third, moves[third : 2 * third]),
+            ("endgame", 2 * third, moves[2 * third :]),
         ):
             if sl:
-                sub = {"id": game.get("id"), "status": "finished", "moves": sl}
-                phases[label] = _accuracy_of(sub)
+                sub = {
+                    "id": game.get("id"),
+                    "status": "finished",
+                    "player_color": game.get("player_color"),
+                    "moves": sl,
+                }
+                phases[label] = _accuracy_of(sub, start_idx=start_sl)
     # Queue-mistakes payload: the blunder/mistake FENs + best moves, ready for
-    # chess_mistakes.record_mistake.
+    # chess_mistakes.record_mistake. Only the PLAYER's own mistakes belong —
+    # the opponent's mistakes are the player's opportunities, not their blunders.
     queue_mistakes = [
         {
             "pre_fen": m.get("pre_fen") or m.get("fen"),
@@ -223,8 +301,9 @@ def _review_of(game: dict[str, Any]) -> dict[str, Any]:
             "classification": m.get("classification"),
             "concept": m.get("concept", ""),
         }
-        for m in moves
+        for i, m in enumerate(moves)
         if m.get("classification") in ("Mistake", "Blunder", "Inaccuracy")
+        and _is_player_move(game, 0, i)
     ]
     return {
         "ok": True,
@@ -251,8 +330,10 @@ def queue_game_mistakes(game_id: str | None = None) -> dict[str, Any]:
         if game is None:
             return {"ok": False, "error": "no games recorded"}
     queued = 0
-    for m in game.get("moves", []):
+    for i, m in enumerate(game.get("moves", [])):
         if m.get("classification") not in ("Mistake", "Blunder", "Inaccuracy"):
+            continue
+        if not _is_player_move(game, 0, i):
             continue
         record_mistake(
             pre_fen=m.get("pre_fen") or m.get("fen") or "",

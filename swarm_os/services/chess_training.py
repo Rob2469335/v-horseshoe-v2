@@ -355,21 +355,22 @@ def training_due(limit: int = 10, concept: str | None = None) -> dict[str, Any]:
         report = cm.coach_report()
         scores = report.get("concept_scores", {})
 
-        def _prio(it):
-            c = it.get("concept", "")
-            return (
-                scores.get(c, {}).get("priority", 0.0),
-                it.get("box", 0),
-                it.get("due_at", 0),
-            )
-
         pool = [
             it for it in items if it.get("due_at", 0) <= now and not it.get("retired")
         ]
-        pool.sort(key=_prio, reverse=True)  # highest priority (weakest) first
+        # The coach's weakness priority drives order WITHIN the same box, not a
+        # pre-pass that a later stable sort discards. (The old code sorted by
+        # priority then immediately re-sorted stably by (box, due_at), which
+        # completely ignored the coach's model.) Higher priority = weaker concept
+        # = sooner.
+        pool.sort(
+            key=lambda it: (
+                it.get("box", 0),
+                -(scores.get(it.get("concept", ""), {}).get("priority", 0.0)),
+                it.get("due_at", 0),
+            )
+        )
     if not concept:
-        # Within equal priority, older box + sooner due first.
-        pool.sort(key=lambda it: (it.get("box", 0), it.get("due_at", 0)))
 
         # Inject tactical motifs (curated, engine-free prototypes). Motifs are
         # persisted on first serve (deduped by source+concept+pre_fen) so the
@@ -494,10 +495,12 @@ def record_answer(
             it["corrects"] = (it.get("corrects", 0) or 0) + 1
             it["clean_solves"] = (it.get("clean_solves", 0) or 0) + 1
             box = it.get("box", 0) + 1
-            # Mastered after REPEATED clean solves (>=2) at box >= 2 — a couple
-            # of spaced successes, not one lucky hit. Independent of ladder
-            # length so short test ladders behave like production.
-            if it.get("clean_solves", 0) >= 2 and box >= 2:
+            # Mastered only after REPEATED clean solves (>=2) AND clearing the
+            # FULL ladder (box >= len(ladder)) — the item must traverse the whole
+            # spaced-repetition schedule before retiring. The old rule retired at
+            # box>=2, so a transfer item ([3,7,14,30]) was permanently retired
+            # after two solves without ever spacing to 14d/30d.
+            if it.get("clean_solves", 0) >= 2 and box >= len(ladder):
                 it["mastered"] = True
                 it["retired"] = True
                 it["due_at"] = 0  # never due again

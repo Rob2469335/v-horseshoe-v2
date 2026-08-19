@@ -130,6 +130,7 @@ def _get_engine():
 def _analyse(board, limit):
     """Analyse with the persistent engine (TT reuse between adjacent searches —
     the second position is inside the first search's tree)."""
+    global _persistent_engine
     engine = _get_engine()
     if engine is None:
         return None
@@ -137,6 +138,13 @@ def _analyse(board, limit):
         return engine.analyse(board, limit)
     except Exception as exc:
         log.warning("engine analyse failed: %s", exc)
+        # The engine process likely crashed — drop it so the next _get_engine()
+        # spawns a fresh one instead of forever calling a dead object (which
+        # would fail open to 0.0 evals for the rest of the process lifetime).
+        try:
+            _persistent_engine = None
+        except Exception:
+            pass
         return None
 
 
@@ -298,7 +306,11 @@ def _classify(
     # Material guard (the SOTA fix): no material lost => never worse than
     # Inaccuracy, no matter how much the engine's eval swings.
     if material_delta >= 0.0:
-        return "Inaccuracy" if loss >= 0.05 else ("Good" if loss >= 0.02 else "Good")
+        return (
+            "Inaccuracy"
+            if loss >= 0.05
+            else ("Excellent" if loss < 0.02 else "Good")
+        )
     # Material WAS lost — floor it so a hung pawn/piece is never missed even if
     # the engine's eval didn't swing much: a piece (-3+) is always a Blunder, a
     # pawn (-1/-2) is at least a Mistake. Then let the eval loss escalate.
@@ -1260,23 +1272,33 @@ async def evaluate_move(
         try:
             probe = chess.Board(fen)
             bm = chess.Move.from_uci(before_best)
-            if bm in probe.legal_moves:
-                giver = probe.piece_at(bm.from_square)
-                if giver and _PIECE_VALUE.get(giver.symbol().lower(), 0) >= 3:
-                    probe.push(bm)
-                    # _best_move_and_cp returns the eval from the NEW side-to-move
-                    # (the opponent). Negate to the MOVER's perspective before
-                    # comparing against before_cp.
-                    mover_after_best = -(
-                        await asyncio.to_thread(_best_move_and_cp, probe)
-                    )[1]
-                    # Sound sacrifice: giving up the piece kept/improved the eval.
-                    if mover_after_best >= before_cp - 60.0:
-                        result["missed_sacrifice"] = {
-                            "move": before_best,
-                            "san": result.get("best_move_san"),
-                            "message": "you had a sound piece sacrifice here (the best move) but played something else",
-                        }
+            # A move is only a sacrifice if it actually LEFT material hanging —
+            # a normal developing move like Nf3 that happens to be the engine's
+            # best must NOT be flagged as a "missed sacrifice" just because it
+            # kept the eval. Same _move_hangs_piece check detect_sacrifice uses.
+            if (
+                bm in probe.legal_moves
+                and probe.piece_at(bm.from_square)
+                and _PIECE_VALUE.get(
+                    probe.piece_at(bm.from_square).symbol().lower(), 0
+                )
+                >= 3
+                and _move_hangs_piece(probe, bm)
+            ):
+                probe.push(bm)
+                # _best_move_and_cp returns the eval from the NEW side-to-move
+                # (the opponent). Negate to the MOVER's perspective before
+                # comparing against before_cp.
+                mover_after_best = -(
+                    await asyncio.to_thread(_best_move_and_cp, probe)
+                )[1]
+                # Sound sacrifice: giving up the piece kept/improved the eval.
+                if mover_after_best >= before_cp - 60.0:
+                    result["missed_sacrifice"] = {
+                        "move": before_best,
+                        "san": result.get("best_move_san"),
+                        "message": "you had a sound piece sacrifice here (the best move) but played something else",
+                    }
         except Exception as exc:
             log.warning("missed-sacrifice probe failed: %s", exc)
 
@@ -1605,7 +1627,13 @@ async def _proposal_eval(fen: str, uci: str) -> dict[str, Any]:
             san = board.san(move)
         except Exception:
             san = uci
+        # Net material change from the MOVER's perspective — WITHOUT this, the
+        # material guard in _classify defaults to 0.0 and a hung Queen is
+        # classified as at-most Inaccuracy.
+        mover_sign = 1 if board.turn == chess.WHITE else -1
+        material_before = _material_balance(board) * mover_sign
         board.push(move)
+        material_delta = (_material_balance(board) * mover_sign) - material_before
         reply_uci, after_cp, _ = await asyncio.to_thread(_best_move_and_cp, board)
         reply_san = None
         if reply_uci:
@@ -1615,7 +1643,7 @@ async def _proposal_eval(fen: str, uci: str) -> dict[str, Any]:
                 reply_san = reply_uci
         mover_after = -after_cp
         was_best = before_best == uci
-        classification = _classify(500, before_cp, mover_after, was_best)
+        classification = _classify(500, before_cp, mover_after, was_best, material_delta)
         win_before = _expected_points(500, before_cp)
         win_after = _expected_points(500, mover_after)
         best_win_pct = round(win_before * 100, 1)
@@ -1663,6 +1691,7 @@ async def _socratic_coach_turn(
     proposal = None
     if proposed_uci:
         proposal = await _proposal_eval(fen, proposed_uci)
+    turns = len(history)
     try:
         import chess as _chess  # noqa: F401  (kept for parity with _llm_enhancement)
         import litellm
@@ -1670,7 +1699,6 @@ async def _socratic_coach_turn(
         from ..core.settings import get_settings
 
         concept = plan.get("standard_plan", {}).get("name", "") or plan.get("plan", "")
-        turns = len(history)
         dial = "\n".join(
             f"{'LEARNER' if m.get('role') == 'user' else 'COACH'}: {m.get('content', '')}"
             for m in history[-8:]
@@ -1731,7 +1759,10 @@ async def _socratic_coach_turn(
                     )
                 text = (resp.choices[0].message.content or "").strip()
                 if text:
-                    return {"ok": True, "reply": text[:600]}
+                    out = {"ok": True, "reply": text[:600]}
+                    if proposal and proposal.get("ok"):
+                        out["proposal"] = proposal
+                    return out
                 if attempt == 0:
                     await asyncio.sleep(0.5)
             raise RuntimeError("deepseek returned empty content twice")
@@ -1753,7 +1784,10 @@ async def _socratic_coach_turn(
             msg = resp.choices[0].message
             text = (msg.content or "").strip()
             if text:
-                return {"ok": True, "reply": text[:600]}
+                out = {"ok": True, "reply": text[:600]}
+                if proposal and proposal.get("ok"):
+                    out["proposal"] = proposal
+                return out
         log.warning("socratic coach: no cloud key, using deterministic fallback")
     except Exception as exc:
         log.warning("socratic coach LLM failed, using deterministic fallback: %s", exc)
@@ -1775,11 +1809,19 @@ async def _socratic_coach_turn(
                 f"Look for a stronger move — the weak square / king file is the clue."
             )
         else:
-            nudge = (
-                f"{proposal.get('san')} is okay but not the best — the engine found "
-                f"({proposal.get('best_move_san')}). What do you see around the king?"
-            )
-        return {"ok": True, "reply": nudge[:300]}
+            if turns >= 5:
+                # Stuck several turns — now reveal the move (matches the LLM
+                # prompt's fail-open reveal rule).
+                nudge = (
+                    f"{proposal.get('san')} is okay but not the best — the engine found "
+                    f"({proposal.get('best_move_san')}). What do you see around the king?"
+                )
+            else:
+                nudge = (
+                    f"{proposal.get('san')} is okay but not the best. "
+                    f"Look for the stronger move — the weak square / king file is the clue."
+                )
+        return {"ok": True, "reply": nudge[:300], "proposal": proposal}
     nudge = plan.get("plan", "")
     if plan.get("king_alert"):
         nudge = f"{plan['king_alert']} - look at the kings before deciding."

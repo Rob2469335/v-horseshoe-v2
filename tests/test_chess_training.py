@@ -74,7 +74,11 @@ def test_mastery_requires_repeated_clean_solves():
     # A single clean solve does NOT master.
     ct.record_answer(it["id"], correct=True)
     assert ct._load()[0]["mastered"] is False
-    # A second clean solve that clears the ladder DOES master.
+    # Clearing the full ladder (test ladder is 3 boxes: CHESS_SR_LADDER=1,2,4)
+    # with repeated clean solves DOES master. Two solves reach box 2 — mastery
+    # requires traversing the whole schedule, not retiring at box 2.
+    ct.record_answer(it["id"], correct=True)
+    assert ct._load()[0]["mastered"] is False
     r = ct.record_answer(it["id"], correct=True)
     assert r["item"]["mastered"] is True
 
@@ -337,10 +341,14 @@ def test_motifs_persisted_on_first_serve():
     """Motifs must be persisted into the store on first serve so the answer
     path can find them — an ephemeral item is unanswerable (record_answer would
     return 'no such training item')."""
+    from swarm_os.services.chess_tactics_library import get_motif_items
+
     ct.training_due(limit=10)
     stored = ct._load()
     motifs = [i for i in stored if i.get("source") == "motif"]
-    assert len(motifs) == 10  # all curated motifs materialize once
+    # All curated motifs materialize once (count derived from the library, not
+    # hardcoded, so adding/removing prototypes doesn't stale this test).
+    assert len(motifs) == len(get_motif_items())
     # Shape contract: the frontend TrainingItem expects solution_uci/san + stage.
     m = motifs[0]
     assert m.get("solution_uci")

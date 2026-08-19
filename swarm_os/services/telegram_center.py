@@ -28,6 +28,7 @@ raises out of the daemon: failures are logged and the loop retries.
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import logging
 import os
@@ -47,6 +48,9 @@ _MAX_MESSAGE_LEN = 4000
 _pending_pairing = {}
 _pairing_lock = asyncio.Lock()
 
+_dynamic_owners_cache = None
+_dynamic_owners_mtime = 0.0
+
 
 def _generate_pin() -> str:
     import secrets
@@ -57,6 +61,7 @@ def _generate_pin() -> str:
 async def _add_owner(user_id: Any) -> None:
     import json
     from pathlib import Path
+    global _dynamic_owners_cache
 
     config_path = Path("swarm_config.json")
     config = {}
@@ -71,6 +76,8 @@ async def _add_owner(user_id: Any) -> None:
         owners.append(str(user_id))
     config["telegram_owners"] = owners
     config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
+    
+    _dynamic_owners_cache = owners
 
 
 def _cfg() -> dict:
@@ -82,14 +89,23 @@ def _cfg() -> dict:
     token = os.getenv("TELEGRAM_BOT_TOKEN") or getattr(s, "telegram_bot_token", None)
     owner = os.getenv("TELEGRAM_OWNER_ID") or getattr(s, "telegram_owner_id", None)
 
-    dynamic_owners = []
+    global _dynamic_owners_cache, _dynamic_owners_mtime
     config_path = Path("swarm_config.json")
-    if config_path.exists():
-        try:
-            config = json.loads(config_path.read_text(encoding="utf-8"))
-            dynamic_owners = config.get("telegram_owners", [])
-        except Exception:
-            pass
+    
+    try:
+        mtime = config_path.stat().st_mtime if config_path.exists() else 0.0
+        if _dynamic_owners_cache is None or mtime > _dynamic_owners_mtime:
+            if config_path.exists():
+                config = json.loads(config_path.read_text(encoding="utf-8"))
+                _dynamic_owners_cache = config.get("telegram_owners", [])
+            else:
+                _dynamic_owners_cache = []
+            _dynamic_owners_mtime = mtime
+    except Exception:
+        if _dynamic_owners_cache is None:
+            _dynamic_owners_cache = []
+
+    dynamic_owners = _dynamic_owners_cache
 
     all_owners = []
     if owner:
@@ -269,6 +285,8 @@ class TelegramCommandCenter:
                             "✅ Device paired successfully. You are now authorized.",
                         )
                         return
+                    else:
+                        del _pending_pairing[user_id]
 
                 if user_id not in _pending_pairing:
                     pin = _generate_pin()
@@ -325,7 +343,7 @@ class TelegramCommandCenter:
             # Free-form -> route to the swarm as a goal (bounded, read-mostly).
             await self._client.send_message(
                 chat_id,
-                f"🧠 Received as a swarm goal: {text.strip()[:200]}\n"
+                f"🧠 Received as a swarm goal: {html.escape(text.strip()[:200])}\n"
                 "(goal dispatch runs through the existing ceiling gate; "
                 "state-changing actions still ask for your approval here.)",
             )
@@ -381,7 +399,7 @@ class TelegramCommandCenter:
                 return
             msg = "<b>Scheduled Tasks:</b>\n"
             for t in tasks:
-                msg += f"ID: <code>{t['id']}</code>\nGoal: {t['goal']}\nSchedule: {t['schedule']}\n\n"
+                msg += f"ID: <code>{t['id']}</code>\nGoal: {html.escape(t['goal'])}\nSchedule: {t['schedule']}\n\n"
             await self._client.send_message(chat_id, msg)
         elif action == "remove":
             if len(parts) < 2:
@@ -408,7 +426,7 @@ class TelegramCommandCenter:
                 task = create_task(goal, schedule)
                 await self._client.send_message(
                     chat_id,
-                    f"✅ Created task {task['id']}\nGoal: {goal}\nSchedule: {schedule}",
+                    f"✅ Created task {task['id']}\nGoal: {html.escape(goal)}\nSchedule: {schedule}",
                 )
             except Exception as exc:
                 log.warning("telegram /cron failed: %s", exc)
@@ -433,32 +451,38 @@ class TelegramCommandCenter:
         await self._client.send_message(chat_id, "\n".join(lines))
 
     async def _send_news_digest(self, chat_id: Any) -> None:
-        from .news_digest import digest
-
-        res = await digest(max_items=30)
-        text = res.get("digest", "no digest") if res.get("ok") else "digest unavailable"
-        await self._client.send_message(chat_id, f"<b>Today's digest</b>\n\n{text}")
+        async def _run():
+            from .news_digest import digest
+            res = await digest(max_items=30)
+            text = res.get("digest", "no digest") if res.get("ok") else "digest unavailable"
+            await self._client.send_message(chat_id, f"<b>Today's digest</b>\n\n{text}")
+            
+        asyncio.create_task(_run())
 
     async def _send_research(self, chat_id: Any, goal: str) -> None:
         if not goal:
             await self._client.send_message(chat_id, "Usage: /research <goal>")
             return
-        await self._client.send_message(chat_id, f"🔬 Researching: {goal[:200]}…")
-        from .deep_research import deep_research
+        await self._client.send_message(chat_id, f"🔬 Researching: {html.escape(goal[:200])}…")
 
-        try:
-            res = await deep_research(goal, max_sub_questions=5, max_iterations=1)
-            answer = res.get("answer", "") or "no synthesis"
-            cites = "\n".join(
-                f"[{c['n']}] {c.get('title', '')} {c.get('url', '')}"
-                for c in res.get("citations", [])[:10]
-            )
-            await self._client.send_message(
-                chat_id, f"{answer}\n\n{cites}" if cites else answer
-            )
-        except Exception as exc:
-            log.warning("telegram research failed: %s", exc)
-            await self._client.send_message(chat_id, "Research failed.")
+        async def _run():
+            from .deep_research import deep_research
+            try:
+                res = await deep_research(goal, max_sub_questions=5, max_iterations=1)
+                answer = res.get("answer", "") or "no synthesis"
+                cites = "\n".join(
+                    f"[{c['n']}] {html.escape(c.get('title', ''))} {c.get('url', '')}"
+                    for c in res.get("citations", [])[:10]
+                )
+                safe_ans = html.escape(answer)
+                await self._client.send_message(
+                    chat_id, f"{safe_ans}\n\n{cites}" if cites else safe_ans
+                )
+            except Exception as exc:
+                log.warning("telegram research failed: %s", exc)
+                await self._client.send_message(chat_id, "Research failed.")
+
+        asyncio.create_task(_run())
 
     async def _send_inbox(self, chat_id: Any) -> None:
         from .email_service import email_list
@@ -478,21 +502,24 @@ class TelegramCommandCenter:
         """Route a free-form message to the swarm's goal machinery. The ceiling
         gate (task_scheduler.is_scheduler_allowed) bounds it — nothing
         state-changing runs unattended."""
-        try:
-            from .task_scheduler import (
-                _ceiling_gate,
-                _goal_is_known_safe,
-                _default_runner,
-            )
+        async def _run():
+            try:
+                from .task_scheduler import (
+                    _ceiling_gate,
+                    _goal_is_known_safe,
+                    _default_runner,
+                )
 
-            allowed, reason = _ceiling_gate(goal)
-            if not allowed or not _goal_is_known_safe(goal):
-                log.info("telegram goal refused by ceiling: %s", reason)
-                return
-            task = {"goal": goal}
-            await _default_runner(task)
-        except Exception as exc:
-            log.warning("telegram goal dispatch failed: %s", exc)
+                allowed, reason = _ceiling_gate(goal)
+                if not allowed or not _goal_is_known_safe(goal):
+                    log.info("telegram goal refused by ceiling: %s", reason)
+                    return
+                task = {"goal": goal}
+                await _default_runner(task)
+            except Exception as exc:
+                log.warning("telegram goal dispatch failed: %s", exc)
+                
+        asyncio.create_task(_run())
 
     # -- approval bridge ------------------------------------------------------
     async def _handle_callback(self, cb: dict) -> None:
@@ -564,19 +591,22 @@ class TelegramCommandCenter:
         atomically consumed via consume_any() (which verifies the stored
         payload), so direct dispatch of the stored payload is the correct seam.
         """
-        try:
-            from runtime_v2.services.tool_executor import _dispatch
+        async def _run():
+            try:
+                from runtime_v2.services.tool_executor import _dispatch
 
-            tool = rec.get("tool")
-            payload = rec.get("payload") or {}
-            result = await _dispatch(tool, payload)
-            log.info(
-                "telegram-approved action executed: tool=%s ok=%s",
-                tool,
-                result.get("ok"),
-            )
-        except Exception as exc:
-            log.warning("telegram-approved action execution failed: %s", exc)
+                tool = rec.get("tool")
+                payload = rec.get("payload") or {}
+                result = await _dispatch(tool, payload)
+                log.info(
+                    "telegram-approved action executed: tool=%s ok=%s",
+                    tool,
+                    result.get("ok"),
+                )
+            except Exception as exc:
+                log.warning("telegram-approved action execution failed: %s", exc)
+
+        asyncio.create_task(_run())
 
 
 # ---------------------------------------------------------------------------

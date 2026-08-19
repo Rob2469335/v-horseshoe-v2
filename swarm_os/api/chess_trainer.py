@@ -310,13 +310,13 @@ async def trainer_coach_socratic(req: SocraticRequest) -> dict[str, Any]:
     if not result.get("ok"):
         raise HTTPException(status_code=503, detail="coach unavailable")
     result["best_move_san"] = best_move_san
-    if req.proposed_uci:
-        # Echo back the proposal eval so the frontend can show the arrow/delta
-        # if the coach LLM path didn't include it.
-        from ..services.chess_trainer import _proposal_eval
-
-        result["proposal"] = await _proposal_eval(req.fen, req.proposed_uci)
+    # The proposal eval is already computed inside _socratic_coach_turn and
+    # echoed back on the result — the old code re-ran _proposal_eval here,
+    # doubling the engine cost per Socratic turn.
     return result
+
+
+@router.post("/index-books")
 async def trainer_index_books(force: bool = False) -> dict[str, Any]:
     """Build/refresh the Qdrant chess-book index (idempotent)."""
     from ..services.chess_book_memory import index_books
