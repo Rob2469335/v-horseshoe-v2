@@ -638,6 +638,27 @@ export default function ChessTrainerPage() {
         setSelected(null)
         setLegalTargets([])
         setEvaluating(false)
+        if (activeReview) {
+          setReviewSolved("failed")
+          try {
+            await fetch(`${backendUrl}/chess/trainer/review/failed`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ entry_id: activeReview.id }),
+            })
+          } catch { /* ignore */ }
+        } else {
+          // Fetch best move so the green arrow can be displayed for the safety blunder
+          fetch(`${backendUrl}/chess/trainer/engine-strong`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ fen: preFen })
+          }).then(r => r.json()).then(reply => {
+            if (reply.ok && reply.uci) {
+              setResult(prev => prev ? { ...prev, best_move: reply.uci } : null)
+            }
+          }).catch(() => {})
+        }
         return
       }
 
@@ -703,8 +724,21 @@ export default function ChessTrainerPage() {
             setIsSequelDrill(false)
           }
         } else if (res.classification && ["Mistake", "Blunder", "Inaccuracy"].includes(res.classification)) {
+          // In review mode a wrong move is marked failed but we do NOT auto-advance
+          // yet — the retry banner logic below will let the learner try again.
+          // Only call resolveReview so the SRS backend records the failure; the
+          // 1.5-second auto-advance inside resolveReview is suppressed because the
+          // retry path will clear and reset it.
           setReviewSolved("failed")
-          if (activeReview) resolveReview(activeReview, false)
+          if (activeReview) {
+            try {
+              await fetch(`${backendUrl}/chess/trainer/review/failed`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ entry_id: activeReview.id }),
+              })
+            } catch { /* ignore */ }
+          }
           setIsSequelDrill(false)
         }
       }
@@ -719,6 +753,9 @@ export default function ChessTrainerPage() {
             setHistory((h) => [...h, res.san ?? uci])
           }
           setLastMove({ from: uci.slice(0, 2), to: uci.slice(2, 4) })
+          // Show the blundered position so the learner can see what went wrong
+          // before offering them the retry banner.
+          setFen(res.fen)
         } else {
           setRetryFen(null)
           setHistory((h) => {
@@ -1210,14 +1247,17 @@ export default function ChessTrainerPage() {
   useEffect(() => {
     return () => {
       if (autoAdvanceTimeoutRef.current) clearTimeout(autoAdvanceTimeoutRef.current)
+      if (engineAbortRef.current) engineAbortRef.current.abort()
     }
   }, [])
 
   const loadRadar = async () => {
     try {
-      const res = await fetch(`${backendUrl}/chess/trainer/blunder-radar?limit=10`).then(r => r.json())
+      const res = await (await fetch(`${backendUrl}/chess/trainer/blunder-radar?limit=20`)).json()
       if (res.ok) setRadarItems(res.items)
-    } catch {}
+    } catch (e) {
+      console.error("loadRadar error:", e)
+    }
   }
 
   const startRadarItem = (item: any) => {
@@ -1328,6 +1368,24 @@ export default function ChessTrainerPage() {
 
   // Interactive board disables clicks if they haven't guessed the radar yet
   const boardInteractive = leadInIndex !== null ? false : (activeRadarItem ? radarSolved !== "none" : reviewSolved !== "solved")
+  const socraticHighlights = useMemo(() => {
+    const latest = [...socraticMsgs].reverse().find((m) => m.role === "coach")?.content || ""
+    const arrows: { from: string; to: string; color: string }[] = []
+    const squares: string[] = []
+    const matches = latest.match(/\[([a-h][1-8](?:-[a-h][1-8])?)\]/g)
+    if (matches) {
+      for (const m of matches) {
+        const inner = m.slice(1, -1)
+        if (inner.includes("-")) {
+          const [from, to] = inner.split("-")
+          arrows.push({ from, to, color: "rgba(139, 92, 246, 0.9)" })
+        } else {
+          squares.push(inner)
+        }
+      }
+    }
+    return { arrows, squares }
+  }, [socraticMsgs])
 
   return (
     <div className="space-y-6 p-6">
@@ -1381,7 +1439,10 @@ export default function ChessTrainerPage() {
                   selected,
                   legalTargets,
                   checkSquare: (result?.in_check || result?.is_checkmate) ? findKing(fen) : null,
-                  arrows: (reviewSolved === "failed" && activeReview?.best_uci && activeReview.best_uci.length >= 4)
+                  socraticSquares: socraticHighlights.squares,
+                  arrows: socraticHighlights.arrows.length > 0 
+                    ? socraticHighlights.arrows 
+                    : (reviewSolved === "failed" && activeReview?.best_uci && activeReview.best_uci.length >= 4)
                     ? [{ from: activeReview.best_uci.slice(0, 2), to: activeReview.best_uci.slice(2, 4) }]
                     : (result?.best_move && result.best_move.length >= 4)
                     ? [{ from: result.best_move.slice(0, 2), to: result.best_move.slice(2, 4) }]
@@ -1552,6 +1613,58 @@ export default function ChessTrainerPage() {
             )}
           </AnimatePresence>
 
+          {/* ── SOCRATIC COACH (Interactive Dialogue) ── */}
+          <Card className="border-violet-500/20 bg-violet-950/10">
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-center gap-2 text-base text-violet-100">
+                <BrainCircuit className="h-4 w-4 text-violet-400" />
+                Socratic Coach
+              </CardTitle>
+              <CardDescription className="text-violet-200/60">
+                Answer in words, or right-click-drag a move on the board to propose it.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {socraticMsgs.length === 0 && (
+                <div className="mb-2 text-sm text-violet-200/80">
+                  Stuck? Answer the coach's question out loud and it will guide you to the idea —
+                  <button className="ml-1 font-medium text-violet-300 underline hover:text-violet-100" onClick={() => socraticAsk("I'm stuck — what should I be thinking about here?")}>
+                    ask to start
+                  </button>
+                </div>
+              )}
+              {socraticMsgs.length > 0 && (
+                <div className="mb-4 max-h-[400px] space-y-3 overflow-y-auto pr-2">
+                  {socraticMsgs.map((m, i) => (
+                    <div
+                      key={i}
+                      className={`text-sm ${m.role === "user" ? "text-right text-white/70" : "text-left text-white/90"}`}
+                    >
+                      <span className={`inline-block max-w-[90%] rounded-lg px-3 py-2 ${m.role === "user" ? "bg-white/10" : "bg-violet-500/20 shadow-sm border border-violet-500/10"}`}>
+                        {m.content}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <form
+                className="flex gap-2"
+                onSubmit={(e) => { e.preventDefault(); void socraticAsk(socraticInput) }}
+              >
+                <input
+                  value={socraticInput}
+                  onChange={(e) => setSocraticInput(e.target.value)}
+                  placeholder={socraticBusy ? "Coach is thinking…" : "Your answer…"}
+                  disabled={socraticBusy}
+                  className="min-w-0 flex-1 rounded-md border border-violet-500/20 bg-black/40 px-3 py-2 text-sm text-white/90 placeholder-white/40 focus:border-violet-400 focus:outline-none disabled:opacity-60"
+                />
+                <Button size="sm" type="submit" disabled={socraticBusy || !socraticInput.trim()} className="bg-violet-600 hover:bg-violet-500 text-white">
+                  {socraticBusy ? "…" : "Send"}
+                </Button>
+              </form>
+            </CardContent>
+          </Card>
+
           {/* ── 1. COACH (live play feedback — most immediately useful) ── */}
           <Card className="border-white/10 bg-panel">
             <CardHeader>
@@ -1652,51 +1765,7 @@ export default function ChessTrainerPage() {
                 )}
               </div>
 
-              {/* Socratic dialogue — the coach asks, you answer, it reacts.
-                  Never names the move until you've been stuck several turns. */}
-              <div className="rounded-lg border border-violet-400/20 bg-violet-950/10 p-3">
-                <div className="mb-2 flex items-center justify-between">
-                  <span className="text-xs font-semibold uppercase tracking-wide text-white/40">Socratic coach</span>
-                  <span className="text-[10px] text-white/40">Answer in words · or right-click-drag a move to propose it</span>
-                </div>
-                {socraticMsgs.length === 0 && (
-                  <div className="mb-2 text-sm text-white/60">
-                    Stuck? Answer the coach's question out loud and it will guide you to the idea —
-                    <button className="ml-1 text-violet-300 underline hover:text-violet-200" onClick={() => socraticAsk("I'm stuck — what should I be thinking about here?")}>
-                      ask to start
-                    </button>
-                  </div>
-                )}
-                {socraticMsgs.length > 0 && (
-                  <div className="mb-2 max-h-48 space-y-2 overflow-y-auto pr-1">
-                    {socraticMsgs.map((m, i) => (
-                      <div
-                        key={i}
-                        className={`text-sm ${m.role === "user" ? "text-right text-white/70" : "text-left text-white/90"}`}
-                      >
-                        <span className={`inline-block max-w-[90%] rounded-lg px-2.5 py-1.5 ${m.role === "user" ? "bg-white/10" : "bg-violet-400/10"}`}>
-                          {m.content}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                <form
-                  className="flex gap-2"
-                  onSubmit={(e) => { e.preventDefault(); void socraticAsk(socraticInput) }}
-                >
-                  <input
-                    value={socraticInput}
-                    onChange={(e) => setSocraticInput(e.target.value)}
-                    placeholder={socraticBusy ? "Coach is thinking…" : "Your answer…"}
-                    disabled={socraticBusy}
-                    className="min-w-0 flex-1 rounded-md border border-white/10 bg-black/40 px-2 py-1.5 text-sm text-white/90 placeholder-white/40 focus:border-violet-400/50 focus:outline-none disabled:opacity-60"
-                  />
-                  <Button size="sm" type="submit" disabled={socraticBusy || !socraticInput.trim()}>
-                    {socraticBusy ? "…" : "Send"}
-                  </Button>
-                </form>
-              </div>
+
             </CardContent>
           </Card>
 
