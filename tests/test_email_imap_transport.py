@@ -214,8 +214,6 @@ def test_email_imap_timeout_configured(monkeypatch, tmp_path):
 
     import swarm_os.services.email_service as mod
 
-    original_imap = mod.imaplib.IMAP4_SSL
-
     def capture_timeout(host, port, ssl_context=None, timeout=None, **kwargs):
         captured["timeout"] = timeout
         return FakeIMAP([{"raw": _raw(), "seen": True}])
@@ -232,7 +230,10 @@ def test_email_search_returns_real_bodies(monkeypatch, tmp_path):
     _write_cfg(tmp_path, monkeypatch)
     fake = FakeIMAP(
         [
-            {"raw": _raw(subject="URGENT", body="need this today", seen=True), "seen": True},
+            {
+                "raw": _raw(subject="URGENT", body="need this today", seen=True),
+                "seen": True,
+            },
             {"raw": _raw(subject="Other", body="unrelated", seen=True), "seen": True},
         ]
     )

@@ -212,9 +212,7 @@ def email_list(
             ids = ids[-limit:] if ids else []
             out = []
             for i in ids:
-                typ, msg_data = conn.uid(
-                    "FETCH", i, "(FLAGS BODY.PEEK[])"
-                )
+                typ, msg_data = conn.uid("FETCH", i, "(FLAGS BODY.PEEK[])")
                 if typ == "OK" and msg_data and msg_data[0]:
                     raw = msg_data[0][1]
                     parsed = _parse_msg(i.decode(), raw)
