@@ -1,5 +1,4 @@
-import { useRef, useEffect } from "react"
-import { useChat } from "ai/react"
+import { useState } from "react"
 import { useUiStore } from "../state/ui-store"
 import { motion, AnimatePresence } from "framer-motion"
 import { Button } from "@/components/ui/button"
@@ -8,31 +7,54 @@ import { cn } from "@/lib/utils"
 
 export default function AgentPage() {
   const backendUrl = useUiStore((state) => state.backendUrl)
-  
-  const { messages, input, handleInputChange, handleSubmit, isLoading, error } = useChat({
-    api: `${backendUrl}/generate`,
-    fetch: async (url: string | URL | Request, options?: RequestInit) => {
-      const body = JSON.parse(options?.body as string)
-      const prompt = body.messages[body.messages.length - 1].content
-      
-      const response = await fetch(url, {
+
+  const [messages, setMessages] = useState<Array<{ id: string; role: "user" | "assistant"; content: string }>>([])
+  const [input, setInput] = useState("")
+  const [isLoading, setIsLoading] = useState(false)
+  const [error, setError] = useState<Error | null>(null)
+  const nextId = (role: "user" | "assistant") => `${role}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => setInput(e.target.value)
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    const prompt = input
+    if (!prompt.trim()) return
+
+    setMessages((prev) => [
+      ...prev,
+      { id: nextId("user"), role: "user", content: prompt },
+    ])
+    setInput("")
+    setIsLoading(true)
+    setError(null)
+
+    try {
+      const response = await fetch(`${backendUrl}/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt })
+        body: JSON.stringify({ prompt }),
       })
-      
+
       if (!response.ok) {
         throw new Error(`Request failed: ${response.status}`)
       }
-      
+
       const json = await response.json()
-      // BUG FIX: /generate returns {content, model} — content was missing from the chain,
-      // so every reply fell through to raw JSON.stringify.
+      // /generate returns {content, model} — content must be first in the chain,
+      // otherwise every reply falls through to raw JSON.stringify.
       const text = json.content ?? json.response ?? json.answer ?? json.output ?? json.result ?? JSON.stringify(json, null, 2)
-      
-      return new Response(String(text))
+
+      setMessages((prev) => [
+        ...prev,
+        { id: nextId("assistant"), role: "assistant", content: String(text) },
+      ])
+    } catch (err) {
+      setError(err instanceof Error ? err : new Error(String(err)))
+    } finally {
+      setIsLoading(false)
     }
-  })
+  }
 
   return (
     <motion.section 
