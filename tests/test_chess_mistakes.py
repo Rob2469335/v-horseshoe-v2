@@ -208,6 +208,33 @@ def test_classify_concept_identifies_error_types():
     assert missed in ("missed capture", "missed check", "imprecise move", "inaccuracy")
 
 
+def test_classify_dead_branches_removed_hanging_catches_all_shapes():
+    """Regression: a hanging piece — pawn OR valuable — always classifies as
+    'hanging piece'. The old 'pawn structure'/'calculation' branches (which
+    scanned for a hanging piece with an IDENTICAL attacker/defender predicate
+    AFTER the hanging-piece loop had already returned) were provably
+    unreachable dead code; this pins the reachable contract so nobody re-adds
+    a shadow branch that can never fire."""
+    # Hanging pawn: white plays Nf3, leaving the e4 pawn attacked by black's f5
+    # pawn and undefended. Must be 'hanging piece', never 'pawn structure'.
+    hanging_pawn = cm._classify_concept(
+        "rnbqkbnr/pppp1ppp/8/5p2/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 3",
+        "g1f3",
+        None,
+        "Mistake",
+    )
+    assert hanging_pawn == "hanging piece"
+
+    # Hanging queen (the Qxf7 blunder): must be 'hanging piece', never 'calculation'.
+    hanging_queen = cm._classify_concept(
+        "r1bqkbnr/pppp1ppp/2n5/4p2Q/4P3/8/PPPP1PPP/RNB1KBNR w KQkq - 1 2",
+        "h5f7",
+        None,
+        "Blunder",
+    )
+    assert hanging_queen == "hanging piece"
+
+
 def test_coach_report_builds_skill_profile():
     """The coach report must map recurring mistake concepts to skill bars and
     recommend a focus based on the most frequent error type."""

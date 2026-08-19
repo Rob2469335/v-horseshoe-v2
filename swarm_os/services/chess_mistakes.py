@@ -289,11 +289,11 @@ def _classify_concept(
       ignored threat       - the opponent threatened something the player ignored
       bad exchange         - the player traded a good piece for a worse one
       king safety          - the king is exposed / castling mishandled
-      pawn structure       - a pawn advance/capture created a weakness
-      development          - the player failed to develop / mis-placed a piece
-      endgame technique    - a technical endgame error
-      calculation          - a miscalculation (the played move loses material)
       imprecise / inaccuracy - a missed stronger move (no obvious category)
+
+    Any hanging piece (of any value) is classified as 'hanging piece' above;
+    'pawn structure' / 'calculation' concepts from the shared taxonomy are not
+    emitted here because their shapes collapse into 'hanging piece'.
     """
     try:
         import chess
@@ -377,18 +377,6 @@ def _classify_concept(
             log.debug("castle detection failed (uci=%s): %s", best_uci, exc)
     if king_attackers or best_castled:
         return "king safety"
-
-    # Pawn structure: a pawn move that loses material (opened a weakness).
-    if (
-        b.piece_at(played.from_square)
-        and b.piece_at(played.from_square).piece_type == chess.PAWN
-        and after_mat < before_mat
-    ):
-        return "pawn structure"
-
-    # The played move loses material (miscalculation).
-    if after_mat < before_mat:
-        return "calculation"
 
     return "imprecise move"
 
