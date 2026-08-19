@@ -205,14 +205,14 @@ def email_list(
         conn = _get_imap(acc)
         try:
             conn.select(folder)
-            typ, data = conn.search(None, "UNSEEN" if unread_only else "ALL")
+            typ, data = conn.uid("SEARCH", None, "UNSEEN" if unread_only else "ALL")
             if typ != "OK":
                 return {"ok": False, "error": f"IMAP search failed: {typ}"}
             ids = data[0].split()
             ids = ids[-limit:] if ids else []
             out = []
             for i in ids:
-                typ, msg_data = conn.fetch(i, "(RFC822)")
+                typ, msg_data = conn.uid("FETCH", i, "(RFC822)")
                 if typ == "OK" and msg_data and msg_data[0]:
                     raw = msg_data[0][1]
                     parsed = _parse_msg(i.decode(), raw)
@@ -244,7 +244,7 @@ def email_read(uid: str, folder: str = "INBOX", account: str | None = None) -> d
         conn = _get_imap(acc)
         try:
             conn.select(folder)
-            typ, msg_data = conn.fetch(uid, "(RFC822)")
+            typ, msg_data = conn.uid("FETCH", uid, "(RFC822)")
             if typ != "OK" or not msg_data or not msg_data[0]:
                 return {"ok": False, "error": f"message {uid} not found"}
             parsed = _parse_msg(uid, msg_data[0][1])
@@ -281,7 +281,7 @@ def email_search(
             conn.select(folder)
             # IMAP TEXT search over a multi-word query: AND the terms.
             terms = query.split()
-            typ, data = conn.search(None, "ALL")
+            typ, data = conn.uid("SEARCH", None, "ALL")
             if typ != "OK":
                 return {"ok": False, "error": "search failed"}
             ids = data[0].split()
@@ -289,7 +289,7 @@ def email_search(
             # charset handling for non-ASCII is unreliable; header scan is robust).
             out = []
             for i in ids[-200:]:
-                typ, msg_data = conn.fetch(i, "(BODY.PEEK[HEADER])")
+                typ, msg_data = conn.uid("FETCH", i, "(BODY.PEEK[HEADER])")
                 if typ != "OK" or not msg_data[0]:
                     continue
                 header_blob = msg_data[0][1]
@@ -589,23 +589,23 @@ def email_manage(
         try:
             conn.select(folder)
             if op == "mark_read":
-                typ, _ = conn.store(uid, "+FLAGS", r"(\Seen)")
+                typ, _ = conn.uid("STORE", uid, "+FLAGS", r"(\Seen)")
                 return {"ok": typ == "OK", "op": op, "uid": uid}
             if op == "mark_unread":
-                typ, _ = conn.store(uid, "-FLAGS", r"(\Seen)")
+                typ, _ = conn.uid("STORE", uid, "-FLAGS", r"(\Seen)")
                 return {"ok": typ == "OK", "op": op, "uid": uid}
             if op in ("archive", "move"):
                 target = target_folder or "[Gmail]/All Mail"
                 if op == "move" and not target_folder:
                     return {"ok": False, "error": "move requires target_folder"}
-                typ, _ = conn.copy(uid, target)
+                typ, _ = conn.uid("COPY", uid, target)
                 if typ != "OK":
                     return {"ok": False, "error": f"IMAP copy to {target} failed"}
-                conn.store(uid, "+FLAGS", r"(\Deleted)")
+                conn.uid("STORE", uid, "+FLAGS", r"(\Deleted)")
                 conn.expunge()
                 return {"ok": True, "op": op, "uid": uid, "target": target}
             if op == "delete":
-                typ, _ = conn.store(uid, "+FLAGS", r"(\Deleted)")
+                typ, _ = conn.uid("STORE", uid, "+FLAGS", r"(\Deleted)")
                 if typ != "OK":
                     return {"ok": False, "error": "IMAP delete failed"}
                 conn.expunge()
