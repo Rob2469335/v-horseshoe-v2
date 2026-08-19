@@ -300,7 +300,8 @@ async def _final_synthesis(
     digest = []
     for r, remap in zip(sub_reports, renumber):
         # Rewrite [N] tokens to the global numbers.
-        answer = r["answer"]
+        # FALLBACK: use raw_sources if answer is empty (fail-closed fallback)
+        answer = r["answer"] or r.get("raw_sources", "")
         for local, global_n in remap["mapping"].items():
             answer = re.sub(rf"\[{local}\]", f"[{global_n}]", answer)
         digest.append(f"SUB-QUESTION: {r['question']}\nANSWER: {answer}")
@@ -318,6 +319,26 @@ async def _final_synthesis(
     )
     answer = ""
     try:
+        # TOKEN/BUDGET LEAK FIX: cap synthesis at 1500 chars per finding
+        # (matching _evaluate_gaps) so the final prompt doesn't blow past context limits.
+        truncated_digest = []
+        for d in digest:
+            if len(d) > 1500:
+                truncated_digest.append(d[:1500] + "… [truncated]")
+            else:
+                truncated_digest.append(d)
+
+        block = "\n\n".join(
+            f"[{i + 1}] {c.get('title', '')} — {c.get('url', '')}"
+            for i, c in enumerate(flat)
+        )
+        prompt = (
+            "You are writing the final research report. Combine the sub-research findings below "
+            "into ONE coherent answer to the goal. Cite each claim with its source number in "
+            "brackets, e.g. [1], referencing the source list at the end. Flag any conflicts "
+            "between findings. Be thorough and precise.\n\n"
+            f"GOAL: {goal}\n\nFINDINGS:\n{'\n\n'.join(truncated_digest)}\n\nSOURCES:\n{block}"
+        )
         answer = await _complete(prompt, max_tokens=2000, timeout=180.0)
     except Exception as exc:
         log.warning("final synthesis failed for %r: %s", goal, exc)
@@ -346,7 +367,7 @@ async def deep_research(
     try:
         max_sub_questions = max(1, min(int(max_sub_questions), 20))
         max_iterations = max(0, min(int(max_iterations), 3))
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return {"status": "error", "error": "invalid research parameters"}
 
     sem = asyncio.Semaphore(_MAX_CONCURRENCY)
