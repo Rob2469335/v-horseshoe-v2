@@ -408,3 +408,35 @@ async def test_approved_pending_resolves_exactly_once_across_turns(monkeypatch):
     finals = [c for c in chunks if c.get("type") == "final"]
     assert finals, f"no final produced, chunks: {[c.get('type') for c in chunks]}"
     assert calls["count"] >= 1, "follow-up _get_decision never ran after approval"
+
+
+# ── registry ceiling ──────────────────────────────────────────────────────────
+def test_pending_registry_capped_at_ceiling():
+    """A hot buggy agent loop minting CONFIRM actions must not grow the pending
+    registry without bound. The cap evicts the OLDEST live entries, so a batch
+    smaller than the ceiling never loses anything and memory stays bounded."""
+    reg = ar._Registry()
+    made = []
+    for i in range(ar._PENDING_MAX + 50):
+        rec = reg.create(
+            agent_id="researcher",
+            turn=i,
+            tool="web_fetch",
+            action="fetch",
+            payload={"url": f"https://example.com/{i}"},
+        )
+        made.append(rec["pending_id"])
+    live = reg.stats()["pending"]
+    assert live == ar._PENDING_MAX, f"expected {ar._PENDING_MAX}, got {live}"
+    # The newest entries (the ones still relevant) survive after the eviction.
+    newest = made[-1]
+    assert reg.peek(newest) is not None, "newest live entry evicted"
+    # Oldest first-batch entries are gone (evicted as the ceiling was exceeded).
+    oldest = made[0]
+    assert reg.peek(oldest) is None, "oldest entry not evicted at the ceiling"
+    # A just-created record is still consumable despite the eviction churn.
+    consumed = reg.consume_any(newest)
+    assert consumed is not None
+    assert consumed["arg_digest"] == ar._arg_digest(
+        {"url": f"https://example.com/{ar._PENDING_MAX + 49}"}
+    )

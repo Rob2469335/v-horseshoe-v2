@@ -45,6 +45,7 @@ from typing import Any
 
 _OPAQUE_ID_BYTES = 16  # 128-bit opaque pending id
 _PENDING_TTL_S = 300.0  # pending approvals expire after 5 minutes
+_PENDING_MAX = 512  # ceiling on live pending actions (oldest evicted first)
 
 # Policy verdicts (single authoritative classification for the agent tool path).
 ALLOW = "ALLOW"  # execute immediately, never asks
@@ -326,6 +327,17 @@ class _Registry:
         now = time.time()
         with self._lock:
             self._prune_expired()
+            # Ceiling: a hot loop minting confirmations must not grow memory
+            # without bound. Evict the OLDEST live entries past the cap (the
+            # already-submitted approvals get executed/expire before new ones;
+            # a batch smaller than the cap never evicts anything).
+            if len(self._pending) >= _PENDING_MAX:
+                over = len(self._pending) - _PENDING_MAX + 1
+                for _ in range(over):
+                    oldest = min(
+                        self._pending, key=lambda k: self._pending[k]["created_at"]
+                    )
+                    del self._pending[oldest]
             self._pending[pending_id] = {
                 "agent_id": agent_id,
                 "turn": turn,
