@@ -92,7 +92,9 @@ def _load_subscriptions() -> dict[str, list[str]]:
 def _save_subscriptions(subs: dict[str, list[str]]) -> None:
     try:
         _DATA_DIR.mkdir(parents=True, exist_ok=True)
-        _SUBSCRIPTIONS_FILE.write_text(json.dumps(subs, indent=2), encoding="utf-8")
+        tmp_path = _SUBSCRIPTIONS_FILE.with_suffix(".tmp")
+        tmp_path.write_text(json.dumps(subs, indent=2), encoding="utf-8")
+        os.replace(tmp_path, _SUBSCRIPTIONS_FILE)
     except Exception as exc:
         log.warning("news subscriptions save failed: %s", exc)
 
@@ -116,27 +118,29 @@ def add_subscription(topic: str, url: str) -> dict:
     host = re.sub(r"^https?://", "", url).split("/")[0].lower()
     if not any(host == d or host.endswith("." + d) for d in _ALLOWED_FEED_DOMAINS):
         return {"ok": False, "error": f"feed host '{host}' is not on the allowed list"}
-    subs = _load_subscriptions()
-    existing = subs.get(topic, [])
-    if url not in existing:
-        existing.append(url)
-    subs[topic] = existing
-    _save_subscriptions(subs)
+    with _LOCK:
+        subs = _load_subscriptions()
+        existing = subs.get(topic, [])
+        if url not in existing:
+            existing.append(url)
+        subs[topic] = existing
+        _save_subscriptions(subs)
     return {"ok": True, "topic": topic, "urls": subs[topic]}
 
 
 def remove_subscription(topic: str, url: str | None = None) -> dict:
     topic = (topic or "").strip().lower().replace(" ", "-")
-    subs = _load_subscriptions()
-    if topic not in subs:
-        return {"ok": False, "error": f"topic '{topic}' not subscribed"}
-    if url is None:
-        del subs[topic]
-    else:
-        subs[topic] = [u for u in subs[topic] if u != url]
-        if not subs[topic]:
+    with _LOCK:
+        subs = _load_subscriptions()
+        if topic not in subs:
+            return {"ok": False, "error": f"topic '{topic}' not subscribed"}
+        if url is None:
             del subs[topic]
-    _save_subscriptions(subs)
+        else:
+            subs[topic] = [u for u in subs[topic] if u != url]
+            if not subs[topic]:
+                del subs[topic]
+        _save_subscriptions(subs)
     return {"ok": True, "topics": subs}
 
 
@@ -174,10 +178,20 @@ def _parse_feed(xml_text: str) -> list[dict]:
         elif tag == "entry":
             title = _child_text(entry, "title")
             link_el = None
+            # ATOM FIX: prefer link with rel="alternate" (the actual article URL)
+            # over the first link (often the feed self-reference).
+            alternate_links = []
             for child in entry:
                 if child.tag.split("}")[-1] == "link":
-                    link_el = child
-                    break
+                    href = child.get("href")
+                    rel = child.get("rel", "alternate")
+                    if href:
+                        if rel == "alternate":
+                            link_el = child
+                            break
+                        alternate_links.append(child)
+            if link_el is None and alternate_links:
+                link_el = alternate_links[0]
             link = (
                 link_el.get("href")
                 if link_el is not None
@@ -245,9 +259,11 @@ def _load_items() -> list[dict]:
 def _save_items(items: list[dict]) -> None:
     try:
         _DATA_DIR.mkdir(parents=True, exist_ok=True)
-        with _ITEMS_FILE.open("w", encoding="utf-8") as fh:
+        tmp_path = _ITEMS_FILE.with_suffix(".tmp")
+        with tmp_path.open("w", encoding="utf-8") as fh:
             for it in items:
                 fh.write(json.dumps(it) + "\n")
+        os.replace(tmp_path, _ITEMS_FILE)
     except Exception as exc:
         log.warning("news items save failed: %s", exc)
 
