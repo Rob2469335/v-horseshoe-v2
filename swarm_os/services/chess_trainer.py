@@ -751,10 +751,63 @@ def _move_hangs_piece(board, move) -> list[str]:
         return []
 
 
+def _king_was_castled(board, color) -> bool:
+    """True if `color`'s king sits on a castled square (short g1/g8 or long
+    c1/c8) behind a pawn shield. Used to gate the king-exposure advisory — a
+    beginner's castle is only at risk once it actually exists."""
+    ksq = board.king(color)
+    if ksq is None:
+        return False
+    return ksq in (chess.G1, chess.G8, chess.C1, chess.C8)
+
+
+def _move_opens_castled_shield(board, move) -> bool:
+    """False-positive-gated heuristic for 'this move leaves the king exposed':
+    the mover is CASTLED, and the move is a pawn push of one of the shield pawns
+    directly in front of that castle (g/f for a short castle, b/c for a long
+    castle) — the classic 'opening the king diagonal' blunder a beginner makes
+    after castling. Requires an existing castle so we never nag pre-castle, and
+    it is advisory-only (the caller never blocks purely on it), because e.g.
+    a principled g4/f3 can be fine."""
+    if not _king_was_castled(board, board.turn):
+        return False
+    moved = board.piece_at(move.from_square)
+    if moved is None or not board.turn == moved.color:
+        return False
+    if moved.piece_type != chess.PAWN:
+        return False
+    to_name = chess.square_name(move.to_square)
+    from_name = chess.square_name(move.from_square)
+    # Kingside castle (g1/g8): the f- and g-pawns shield it.
+    if board.king(board.turn) in (chess.G1, chess.G8):
+        shield_files = ("g", "f")
+    else:  # Queenside castle (c1/c8): the b- and c-pawns shield it.
+        shield_files = ("b", "c")
+    return to_name[0] in shield_files or from_name[0] in shield_files
+
+
 def check_move_safety(fen: str, uci: str) -> dict[str, Any]:
     """The pre-move safety check (Heisman Slow->Safe->Active): would this move
-    leave a piece hanging, or leave the king in check / badly exposed? Returns
-    {ok, safe, hanging_after, king_in_check, message}."""
+    leave a piece hanging, or leave the king badly exposed?
+
+    Blocking: `safe` is driven ONLY by the hanging-piece test (`_move_hangs_piece`)
+    — a beginner's #1 habit. A legal move can never leave the mover's OWN king IN
+    check (that is illegal by the laws of chess); the old implementation read
+    `board.is_check()` after the push, which — because `turn` flips — actually
+    reported whether the MOVER GAVE CHECK to the opponent, mislabelling it as
+    "your king is left in check". That buggy advisory wrongly blocked good
+    checking moves and has been dropped.
+
+    Advisory fields (never force `safe=false` on their own, so a good move is
+    never disrupted):
+      makes_check   - the mover's move gives check to the opponent (the honest
+                      relabel of the old misnamed signal).
+      king_exposed  - a castled beginner just pushed a shield pawn in front of
+                      their castle (f/g or b/c), a concrete low-false-positive
+                      king-exposure trigger (Heisman checks/captures/threats +
+                      ChessPivot pawn-shield cost ordering).
+
+    Returns {ok, safe, hanging_after, makes_check, king_exposed, message}."""
     try:
         board = chess.Board(fen)
         move = chess.Move.from_uci(uci)
@@ -763,28 +816,29 @@ def check_move_safety(fen: str, uci: str) -> dict[str, Any]:
         hanging = _move_hangs_piece(board, move)
         probe = board.copy()
         probe.push(move)
-        king_in_check = probe.is_check()
-        if not hanging and not king_in_check:
+        makes_check = probe.is_check()  # warns the side to move = the opponent now
+        king_exposed = _move_opens_castled_shield(board, move)
+        if not hanging:
+            msg = "safe — no piece hangs"
+            if makes_check:
+                msg = "safe — no piece hangs, and you give check!"
+            elif king_exposed:
+                msg = "safe to make — but that pawn push opens space in front of your castled king"
             return {
                 "ok": True,
                 "safe": True,
                 "hanging_after": [],
-                "king_in_check": False,
-                "message": "safe — no piece hangs and your king is fine",
+                "makes_check": makes_check,
+                "king_exposed": king_exposed,
+                "message": msg,
             }
-        issues = []
-        if king_in_check:
-            issues.append("your king is left in check")
-        if hanging:
-            issues.append(f"this move hangs {', '.join(hanging[:3])}")
         return {
             "ok": True,
             "safe": False,
             "hanging_after": hanging,
-            "king_in_check": king_in_check,
-            "message": "caught it! "
-            + " and ".join(issues)
-            + " — check before you move",
+            "makes_check": makes_check,
+            "king_exposed": king_exposed,
+            "message": f"caught it! this move hangs {', '.join(hanging[:3])} — check before you move",
         }
     except Exception as exc:
         log.warning("move safety check failed: %s", exc)

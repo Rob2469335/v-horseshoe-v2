@@ -427,6 +427,49 @@ def test_check_move_safety_illegal():
     assert res["safe"] is False
 
 
+def test_check_move_safety_makes_check_is_honest_relabel():
+    """A legal move can never leave the mover's OWN king in check (that is
+    illegal), so the old 'king_in_check' reading of board.is_check() after the
+    push actually reported whether the MOVER GAVE CHECK — and the message
+    mislabelled that good outcome as 'your king is left in check'. The field is
+    now honestly named makes_check, non-blocking."""
+    fen = "r1bqkbnr/pppp1ppp/2n5/4p3/4P2Q/8/PPPP1PPP/RNB1KBNR w KQkq - 1 3"
+    res = ct.check_move_safety(fen, "h4e7")  # Qxe7+ gives check (queen hangs too)
+    assert res["makes_check"] is True
+    # The queen hanging on e7 still blocks — gaving check never excuses a hang.
+    assert res["safe"] is False
+    assert "e7" in res["hanging_after"]
+
+
+def test_check_move_safety_king_exposed_only_when_castled():
+    """The king-exposure advisory fires only for a LOW-false-positive trigger:
+    a CASTLED beginner pushing a shield pawn in front of the castle (f/g for a
+    short castle). It must never fire pre-castle, and it never forces safe=False
+    by itself (a principled f3/g3 can be fine)."""
+    castled = chess.Board()
+    castled.set_fen("rnbq1rk1/pppp1ppp/5n2/4p3/4P3/8/PPPP1PPP/RNBQ1RK1 w - - 0 6")
+    res = ct.check_move_safety(castled.fen(), "f2f3")
+    assert res["king_exposed"] is True
+    # Advisory only: an otherwise-hanging-free move stays safe.
+    assert res["safe"] is True
+
+    # Not castled -> no exposure advisory.
+    start = ct.check_move_safety(chess.Board().fen(), "h2h3")
+    assert start["king_exposed"] is False
+    assert start["safe"] is True
+
+    # A non-shield pawn (a-push) while castled -> not the shield trigger.
+    a = ct.check_move_safety(castled.fen(), "a2a3")
+    assert a["king_exposed"] is False
+
+
+def test_check_move_safety_safe_fields_present():
+    """The safe path returns the advisory fields so consumers can rely on the
+    contract '{ok, safe, hanging_after, makes_check, king_exposed, message}'."""
+    res = ct.check_move_safety(chess.Board().fen(), "e2e4")
+    assert {"ok", "safe", "hanging_after", "makes_check", "king_exposed", "message"} <= set(res)
+
+
 def test_threats_from_move_detects_new_attack():
     # After black plays ...Ng8-f6, the knight attacks white's e4 pawn (which
     # white just moved) — that pawn is now under attack.
