@@ -457,7 +457,7 @@ function EvalCurveChart({
 export default function ChessTrainerPage() {
   const backendUrl = "http://127.0.0.1:8000"
   const engineAbortRef = useRef<AbortController | null>(null)
-  const autoAdvanceTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const autoAdvanceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [fen, setFen] = useState("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1")
   const [fenHistory, setFenHistory] = useState<string[]>([]) // FEN snapshots for undo
   const [history, setHistory] = useState<string[]>([])
