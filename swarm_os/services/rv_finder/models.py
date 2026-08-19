@@ -72,5 +72,6 @@ def serialize_listing(lst: RVListing | None) -> dict[str, Any] | None:
             "weak_spots": lst.analysis.get("weak_spots"),
             "livability": lst.analysis.get("livability"),
             "life_ease": lst.analysis.get("life_ease"),
+            "scam_risk": lst.analysis.get("scam_risk"),
         },
     }

@@ -248,6 +248,136 @@ class TestAnalysisBasics:
         assert "start negotiation" in tip
 
 
+class TestScamRisk:
+    """Private-seller scam/legitimacy scoring (2026 SOTA gap: BBB + RV Reports'
+    12 private-seller scam patterns). Detected scam signals must cap a cheap
+    bargain below "Good Deal"; a clean private listing must NOT be penalized."""
+
+    def _scammy(self, description: str, price: int = 12000) -> RVListing:
+        return RVListing(
+            title="2016 Winnebago View 24M Class C",
+            rv_type="Class C Motorhome",
+            year=2016,
+            make="Winnebago",
+            model="View",
+            price=price,
+            description=description,
+            source="Craigslist (private)",
+        )
+
+    def test_shipping_and_deposit_story_flagged_high_risk(self):
+        lst = self._scammy(
+            "Great condition! Can ship anywhere nationwide. Deposit to hold, "
+            "many buyers interested. Accept Zelle only, out of state, can't meet."
+        )
+        _build_analysis(lst, budget=30000)
+        risk = lst.analysis["scam_risk"]
+        assert len(risk["signals"]) >= 3
+        assert risk["risk"] >= 3
+        assert risk["verify_by_inspection"] is True
+        assert lst.analysis["score"]["verdict"] == "High Risk"
+
+    def test_escrow_and_wire_payment_flagged(self):
+        lst = self._scammy(
+            "Use our trusted vehicle protection service escrow. Bank to bank "
+            "wire transfer only, no inspection, title available upon deposit."
+        )
+        _build_analysis(lst, budget=30000)
+        signals = lst.analysis["scam_risk"]["signals"]
+        assert any("escrow" in s for s in signals)
+        assert any("wire" in s for s in signals)
+        assert lst.analysis["score"]["verdict"] == "High Risk"
+
+    def test_selling_on_behalf_claim_flagged(self):
+        lst = self._scammy(
+            "My cousin owns this, selling for him. Can't meet, email only."
+        )
+        _build_analysis(lst, budget=30000)
+        assert any("behalf" in s for s in lst.analysis["scam_risk"]["signals"])
+
+    def test_clean_private_listing_not_penalized(self):
+        lst = RVListing(
+            title="2018 Coachmen Leprechaun 260DS Class C",
+            rv_type="Class C Motorhome",
+            year=2018,
+            make="Coachmen",
+            model="Leprechaun",
+            price=39000,
+            description="Local sale, meet in person, title in hand. Well maintained.",
+            source="Craigslist (private)",
+            attrs={
+                "Engine Manufacturer": ["Ford"],
+                "Engine Size": ["6.8L Triton"],
+                "Chassis": ["Ford E-450"],
+                "Mileage": ["32000"],
+            },
+        )
+        _build_analysis(lst, budget=50000)
+        risk = lst.analysis["scam_risk"]
+        assert risk["signals"] == []
+        assert risk["risk"] == 0
+        assert risk["verify_by_inspection"] is True
+        # The verify note is surfaced as a con, but the score is NOT capped.
+        assert lst.analysis["score"]["score"] >= 60.0
+        assert lst.analysis["score"]["verdict"] == "Good Deal"
+        assert any("verify title" in c for c in lst.analysis["cons"])
+
+    def test_scam_risk_serialized_on_wire(self):
+        from swarm_os.services.rv_finder.models import serialize_listing
+
+        lst = self._scammy("Can ship anywhere, deposit to hold, zelle only.")
+        _build_analysis(lst, budget=30000)
+        wire = serialize_listing(lst)
+        assert wire["analysis"]["scam_risk"]["risk"] >= 3
+        assert wire["analysis"]["cons"]  # scam note surfaces in cons
+
+    def test_misleading_minor_work_claim_flagged(self):
+        lst = self._scammy("Runs great, just needs minor work, engine rebuilt.")
+        _build_analysis(lst, budget=30000)
+        assert any("minor work" in s for s in lst.analysis["scam_risk"]["signals"])
+
+
+class TestExtremeUnderpricing:
+    """A listing priced far below estimated fair value is either a genuine steal
+    or a scam/parts-unit — neither may rank as an unqualified 'Excellent Deal'."""
+
+    def test_deep_underprice_caps_below_excellent(self):
+        # 2021 Rockwood at $6k vs ~$20.5k fair = ~0.29 ratio → far below threshold.
+        lst = RVListing(
+            title="2021 Forest River Rockwood 2906WS",
+            rv_type="Travel Trailer",
+            year=2021,
+            make="Forest River",
+            model="Rockwood",
+            price=6000,
+            description="Clean title, local sale, inspected last month.",
+        )
+        _build_analysis(lst, budget=30000)
+        fair = lst.analysis["fair_value"]["fair"]
+        assert fair > 0
+        assert lst.price / fair <= 0.6
+        assert lst.analysis["score"]["verdict"] != "Excellent Deal"
+        assert "scam/parts-unit" in lst.analysis["negotiation_tip"]
+
+    def test_moderate_discount_still_excellent(self):
+        # $26k vs ~$40k fair for a nice Class C is a strong but not insane deal.
+        lst = RVListing(
+            title="2019 Winnebago View 24D",
+            rv_type="Class C Motorhome",
+            year=2019,
+            make="Winnebago",
+            model="View",
+            price=26000,
+            description="Excellent condition, solar, lithium, local sale.",
+            attrs={"Engine Size": ["6.8L"], "Mileage": ["30000"]},
+        )
+        _build_analysis(lst, budget=40000)
+        fair = lst.analysis["fair_value"]["fair"]
+        ratio = lst.price / fair if fair else 1
+        assert ratio > 0.6  # not extreme → no caveat
+        assert "scam/parts-unit" not in lst.analysis["negotiation_tip"]
+
+
 @pytest.mark.asyncio
 async def test_rv_parser_blocks_ssrf_targets(monkeypatch):
     """The rv_finder HTTP client must refuse to fetch private/loopback/metadata
@@ -324,9 +454,46 @@ def test_craigslist_parser_extracts_listings_with_price_and_location():
     assert first.price == 24500
     assert "Patchogue" in first.location
     assert first.attrs.get("_verified") == ["craigslist"]
+    assert first.stock_id == "uR4abcXyz"  # stable post-ID extracted
     second = listings[1]
     assert second.price == 19900
     assert second.url.startswith("https://www.craigslist.org/view/d/")
+
+
+def test_craigslist_dedups_by_post_id_across_slug_changes():
+    """The same Craigslist post must dedup by its stable post-ID even when the
+    area/slug tokens in the URL change (the 2026 scraping SOTA: dedup by post
+    ID, not the full URL)."""
+    import asyncio
+
+    from swarm_os.services.rv_finder import parsers
+
+    # Same post ID "abc123XYZ" with different area/slug prefixes and different
+    # title casing — must collapse to ONE listing by post ID.
+    content = (
+        "[2016 Winnebago View](https://www.craigslist.org/view/d/patchogue-2016-winnebago-view/abc123XYZ) | "
+        "8/11Patchogue | $24,500 | "
+        "[2016 Winnebago View](https://www.craigslist.org/view/d/queens-2016-winnebago-view/abc123XYZ) | "
+        "8/11Queens | $24,500"
+    )
+    listings = parsers._parse_craigslist_content(content, 25000)
+    assert len(listings) == 2  # parser emits both rows...
+
+    # ...but discovery dedups by the shared post ID (patch the local import
+    # source module so _discover_craigslist's in-function import sees it).
+    from swarm_os.lib.mcp import web_search as ws
+
+    async def fake_fetch(params):
+        return {"ok": True, "content": content}
+
+    orig = ws.web_fetch_handler
+    ws.web_fetch_handler = fake_fetch
+    try:
+        out = asyncio.run(parsers._discover_craigslist(25000, "all"))
+    finally:
+        ws.web_fetch_handler = orig
+    assert len(out) == 1
+    assert out[0].stock_id == "abc123XYZ"
 
 
 def test_craigslist_queries_prioritize_motorhomes():

@@ -612,6 +612,9 @@ def _parse_craigslist_content(content: str, budget: int) -> list[RVListing]:
     ):
         slug = m.group(1)
         url = f"https://www.craigslist.org/view/d/{slug}"
+        # The final URL segment is the stable Craigslist post ID — the dedup key
+        # (a full-URL compare breaks when the same post's area/slug tokens change).
+        post_id = slug.rsplit("/", 1)[-1].strip() or ""
         pre = content[max(0, m.start() - 200) : m.start()]
         lb = pre.rfind("[")
         lc = pre.rfind("]")
@@ -659,6 +662,7 @@ def _parse_craigslist_content(content: str, budget: int) -> list[RVListing]:
         listings.append(
             RVListing(
                 source="Craigslist (private)",
+                stock_id=post_id,
                 title=title,
                 year=year,
                 make=make,
@@ -691,9 +695,12 @@ async def _discover_craigslist(
         if not res.get("ok"):
             continue
         for lst in _parse_craigslist_content(res.get("content") or "", budget):
-            if lst.url in seen:
+            # Dedup by the stable Craigslist post ID (a full-URL compare would
+            # let the same post resurface when its area/slug tokens differ).
+            dedup_key = lst.stock_id or lst.url
+            if dedup_key in seen:
                 continue
-            seen.add(lst.url)
+            seen.add(dedup_key)
             listings.append(lst)
             if len(listings) >= max_results:
                 break

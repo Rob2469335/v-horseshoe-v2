@@ -131,6 +131,55 @@ CRITICAL_RED_FLAGS = [
     "junk",
 ]
 
+# Scam / legitimacy signals for private-party listings (BBBs, RV Reports' 12
+# private-seller scam patterns, and community threads). The 2026 research
+# consensus: private-seller RV scams cluster on shipping/escrow/out-of-state
+# stories, deposit pressure, email-only contact, "too good to be true" pricing,
+# and a seller who refuses photos/inspection. Each entry is (regex, label).
+# Detected signals CAP the deal score below "Good Deal" so a scammy bargain can
+# never rank as an excellent deal.
+SCAM_RISK_PATTERNS: list[tuple[str, str]] = [
+    (
+        r"\bship(?:ping)?\s+(?:anywhere|nationwide|worldwide|at\s+your\s+cost)|"
+        r"\bshipped\s+(?:to\s+your\s+door|directly|asap)\b",
+        "shipping arrangement pushed",
+    ),
+    (r"\bescrow|vehicle protection service", "escrow / protection-service pressure"),
+    (
+        r"\b(?:military|deployed|overseas|out\s*of\s*state|can't\s+meet|can\'t\s+meet)\b",
+        "out-of-state / cannot-meet story",
+    ),
+    (
+        r"\bdeposit\s+(?:to\s+hold|now|today)|(?:send|wire|pay)\s+(?:a|the)\s+deposit|"
+        r"first\s+come\s+first\s+served|many\s+buyers\s+interested|act\s+(?:fast|now|quick)",
+        "deposit / urgency pressure",
+    ),
+    (
+        r"\bemail\s+only\b|\bvia\s+email\b|\btext\s+me\b|\b(?:zelle|venmo|cash\s*app|gift\s*card)\b",
+        "payment / contact channel pressure",
+    ),
+    (
+        r"\bbank\s*to\s*bank\b|\bwire\s+(?:transfer|funds)|moneygram|western\s+union|"
+        r"\bno\s+(?:inspection|title)\b|title\s+available\s+upon|paypal\s+(?:friends|family)",
+        "wire / non-reversible payment asked",
+    ),
+    (
+        r"\b(?:my|the)\s+(?:relative|cousin|uncle|aunt|friend)\s+(?:is|owns|has|selling)|"
+        r"\bselling\s+for\s+(?:a\s+)?(?:relative|friend|my\s+parent)",
+        "selling-on-behalf claim",
+    ),
+    (
+        r"\b(?:blown\s+(?:engine|motor)|needs\s+minor\s+work|engine\s+rebuilt)\b",
+        "misleading-condition \u201cminor work\u201d claim",
+    ),
+]
+
+# A price this far below the estimated fair value is either a genuine steal or a
+# scam/parts-unit — neither can be ranked as a clean "Excellent Deal". Used by the
+# deal score to add a verify-before-commit caveat instead of an unqualified bargain.
+EXTREME_UNDERPRICE_RATIO = 0.6  # listed at <= 60% of estimated fair value
+
+
 # Positive condition / feature signals.
 POSITIVE_SIGNALS = [
     "no leaks",

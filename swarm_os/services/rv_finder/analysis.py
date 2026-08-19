@@ -15,11 +15,13 @@ from typing import Any
 from .knowledge import (
     BASE_NEW_PRICE,
     CRITICAL_RED_FLAGS,
+    EXTREME_UNDERPRICE_RATIO,
     KNOWN_MOTORHOME_MODELS,
     KNOWN_WEAK_SPOTS,
     LIFE_EASE_FEATURES,
     MPG_BY_TYPE,
     POSITIVE_SIGNALS,
+    SCAM_RISK_PATTERNS,
 )
 from .models import RVListing
 from .parsers import _attr_int, _attr_str
@@ -455,6 +457,42 @@ def _analyze_condition(text: str) -> dict[str, Any]:
     return {"red_flags": red_flags, "positives": positives}
 
 
+def _analyze_scam_risk(lst: RVListing) -> dict[str, Any]:
+    """Deterministic scam / legitimacy risk for a private-party listing.
+
+    2026 research (BBB, RV Reports' private-seller scam patterns, community
+    reports) shows private-seller RV scams concentrate in a few machine-detectable
+    text signals: shipping/escrow/out-of-state stories, deposit + urgency pressure,
+    non-reversible payment channels, selling-on-behalf claims, and refusal of
+    photos/inspection. Detected signals must CAP the deal score below "Good Deal"
+    so a scammy bargain can never rank as an excellent deal.
+    """
+    blob = " ".join(
+        filter(
+            None,
+            [
+                lst.title,
+                lst.description[:1500],
+                " ".join(v for v in lst.attrs.values() for v in v[:2]),
+            ],
+        )
+    ).lower()
+    hits: list[str] = []
+    for rx, label in SCAM_RISK_PATTERNS:
+        if re.search(rx, blob):
+            if label not in hits:
+                hits.append(label)
+    # A clean private-party listing carries no penalty signal, but the buyer
+    # should still verify by inspection — surfaced as a note, never as a scored
+    # scam signal (which would cap every legit Craigslist deal below "Good Deal").
+    private_party = (lst.source or "").lower() in ("craigslist (private)", "facebook")
+    return {
+        "signals": hits,
+        "risk": len(hits),
+        "verify_by_inspection": bool(hits or private_party),
+    }
+
+
 def _score_listing(lst: RVListing) -> dict[str, Any]:
     fair = lst.analysis.get("fair_value") or {"low": 0, "high": 0, "fair": 0}
     fair_est = fair["fair"]
@@ -542,6 +580,30 @@ def _score_listing(lst: RVListing) -> dict[str, Any]:
     if critical:
         raw = min(raw, 39.0)
 
+    # Scam-signal cap: detected private-seller scam signals must never rank as a
+    # clean deal (deterministic guard over heuristic text — see _analyze_scam_risk).
+    scam = lst.analysis.get("scam_risk") or {}
+    n_scam = len(scam.get("signals") or [])
+    if n_scam:
+        # Each real scam signal is a heavy penalty; cap below "Good Deal" so even
+        # a cheap bargain can't dress up as excellent.
+        raw = min(raw, 30.0 + n_scam)
+        scam_capped = True
+    else:
+        scam_capped = False
+
+    # Extreme-underpricing caveat: a price far below estimated fair value is
+    # either a genuine steal or a scam/parts-unit. Cap below "Excellent Deal"
+    # (not "Good Deal") and add a verify-before-commit note rather than praising it.
+    underpriced_capped = False
+    if (
+        fair_est > 0
+        and lst.price > 0
+        and (lst.price / fair_est) <= EXTREME_UNDERPRICE_RATIO
+    ):
+        raw = min(raw, 74.0)
+        underpriced_capped = True
+
     score = round(max(0.0, min(100.0, raw)), 1)
 
     if score >= 75:
@@ -557,6 +619,12 @@ def _score_listing(lst: RVListing) -> dict[str, Any]:
 
     if critical:
         verdict = "High Risk"
+    if scam_capped:
+        verdict = "High Risk"
+    if underpriced_capped and critical == 0 and n_scam == 0 and score >= 60:
+        verdict = (
+            "Good Deal"  # genuine-looking deeply-underpriced steals cap at Good Deal
+        )
 
     return {
         "score": score,
@@ -587,6 +655,7 @@ def _build_analysis(lst: RVListing, budget: int) -> dict[str, Any]:
             "solar": _analyze_solar(lst),
             "weak_spots": _analyze_weak_spots(lst),
             "livability": _analyze_livability(lst),
+            "scam_risk": _analyze_scam_risk(lst),
         }
     )
     lst.analysis["life_ease"] = _analyze_life_ease(lst)
@@ -620,6 +689,15 @@ def _build_analysis(lst: RVListing, budget: int) -> dict[str, Any]:
         )
     cons = cons[:7]
 
+    # Scam warnings are appended AFTER the truncation carve-out so a real
+    # scam-signal is never trimmed away by the cosmetic-cons cap.
+    scam = lst.analysis.get("scam_risk") or {}
+    scam_signals = scam.get("signals") or []
+    if scam_signals:
+        cons.append(f"Scam risk ({len(scam_signals)}): {', '.join(scam_signals[:3])}")
+    elif scam.get("verify_by_inspection"):
+        cons.append("Private seller — verify title, photos, and condition in person")
+
     engine = lst.analysis.get("engine") or {}
     if engine.get("note"):
         cons.append(engine["note"])
@@ -630,7 +708,14 @@ def _build_analysis(lst: RVListing, budget: int) -> dict[str, Any]:
         if lst.price > high:
             negotiation_tip = f"Listed above fair range (${low:,}-${high:,}); start negotiation near ${low:,}."
         elif lst.price < low:
-            negotiation_tip = "Already priced below fair range — act fast and verify condition thoroughly."
+            if lst.price / fair["fair"] <= EXTREME_UNDERPRICE_RATIO:
+                negotiation_tip = (
+                    "Priced far below fair range — could be a genuine steal or a "
+                    "scam/parts-unit. Verify title, photos, and a live inspection "
+                    "before committing."
+                )
+            else:
+                negotiation_tip = "Already priced below fair range — act fast and verify condition thoroughly."
         else:
             negotiation_tip = f"Within fair range (${low:,}-${high:,}); a small discount may be achievable."
 
