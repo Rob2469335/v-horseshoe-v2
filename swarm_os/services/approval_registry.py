@@ -414,7 +414,7 @@ def _arg_digest(payload: Any) -> str:
     so argument order does not change the digest."""
     try:
         canonical = json.dumps(payload, sort_keys=True, default=str)
-    except TypeError, ValueError:
+    except (TypeError, ValueError):
         canonical = str(payload)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 

@@ -75,25 +75,38 @@ def test_memory_timestamp_except_handlers_are_parenthesized():
     regression (routes.py:926/:932). It still parses as a tuple on Python 3.14
     (so the /memories tests pass either way), but it is non-portable and
     non-idiomatic. Pin the AST to the parenthesized tuple so a future sweep
-    that strips the parens fails loudly instead of passing on 3.14's tolerance."""
+    that strips the parens fails loudly instead of passing on 3.14's tolerance.
+    The 43f2622 ruff-format sweep re-introduced the comma form in
+    deep_research.py / approval_registry.py (the ac6cef6 fix regressed), so
+    scan every known-touched module, not just routes.py."""
     import ast
 
-    src = open("swarm_os/api/routes.py", encoding="utf-8").read()
-    tree = ast.parse(src)
+    scanned_files = [
+        "swarm_os/api/routes.py",
+        "swarm_os/services/deep_research.py",
+        "swarm_os/services/approval_registry.py",
+    ]
     comma_forms = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ExceptHandler) and node.type is not None:
-            if (
-                isinstance(node.type, ast.Tuple)
-                and any(isinstance(e, ast.Name) for e in node.type.elts)
-                and node.type.elts
-            ):
-                # A parenthesized tuple: ast keeps elts regardless of parens,
-                # so detect the SOURCE text of the handler type to prove parens.
-                lineno = node.lineno
-                lines = src.splitlines()
-                handler_line = lines[lineno - 1].strip()
-                if handler_line.startswith("except"):
-                    comma_forms.append(handler_line)
-    offenders = [l for l in comma_forms if ", " in l and not l.startswith("except (")]
+    for fname in scanned_files:
+        src = open(fname, encoding="utf-8").read()
+        tree = ast.parse(src)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ExceptHandler) and node.type is not None:
+                if (
+                    isinstance(node.type, ast.Tuple)
+                    and any(isinstance(e, ast.Name) for e in node.type.elts)
+                    and node.type.elts
+                ):
+                    # A parenthesized tuple: ast keeps elts regardless of parens,
+                    # so detect the SOURCE text of the handler type to prove parens.
+                    lineno = node.lineno
+                    lines = src.splitlines()
+                    handler_line = lines[lineno - 1].strip()
+                    if handler_line.startswith("except"):
+                        comma_forms.append((fname, handler_line))
+    offenders = [
+        f"{fname}:{line}"
+        for fname, line in comma_forms
+        if ", " in line and not line.startswith("except (")
+    ]
     assert offenders == [], f"comma-form except handlers present: {offenders}"
