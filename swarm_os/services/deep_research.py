@@ -59,7 +59,19 @@ async def _complete(prompt: str, max_tokens: int = 800, timeout: float = 120.0) 
         max_tokens=max_tokens,
         timeout=timeout,
     )
-    return resp.choices[0].message.content or ""
+    content = resp.choices[0].message.content or ""
+    # A synthesis that hit the token cap is silently truncated mid-sentence — a
+    # caller would present it as a complete report. Make the cut explicit so the
+    # truncation is never mistaken for a finished answer.
+    finish = getattr(resp.choices[0], "finish_reason", None)
+    if finish == "length":
+        log.warning(
+            "deep_research completion hit max_tokens=%s (finish_reason=length); "
+            "marking the truncated response",
+            max_tokens,
+        )
+        content = content.rstrip() + "\n\n[… report truncated at token cap]"
+    return content
 
 
 def _extract_json_array(text: str) -> list | None:
@@ -215,6 +227,7 @@ async def _run_sub_unit(question: str, max_results: int, max_tokens: int) -> dic
         "citations": [{k: v for k, v in s.items() if k != "text"} for s in sources],
         "degraded": not answer,
         "note": "" if answer else "synthesis failed; sources returned raw",
+        "raw_sources": block if not answer else "",
     }
 
 

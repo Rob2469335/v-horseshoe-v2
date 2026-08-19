@@ -187,3 +187,63 @@ def test_deep_research_no_sources_marks_sub_unit_degraded(monkeypatch):
     assert res["status"] == "ok"
     assert res["sub_reports"][0]["degraded"] is True
     assert res["sub_reports"][0]["note"] == "no sources found"
+
+
+def test_complete_marks_token_capped_synthesis(monkeypatch):
+    """A synthesis hitting the max_tokens cap (finish_reason=length) must carry
+    an explicit truncation marker — otherwise the caller presents a cut-off
+    report as a complete answer."""
+    import types
+
+    class FakeChoice:
+        pass
+
+    async def fake_acompletion(**kwargs):
+        choice = FakeChoice()
+        choice.message = types.SimpleNamespace(content="half a report")
+        choice.finish_reason = "length"
+        resp = types.SimpleNamespace(choices=[choice])
+        return resp
+
+    monkeypatch.setattr("litellm.acompletion", fake_acompletion)
+    text = asyncio_run(dr._complete("prompt", max_tokens=100))
+    assert "[… report truncated at token cap]" in text
+
+    async def fake_acompletion_stop(**kwargs):
+        choice = FakeChoice()
+        choice.message = types.SimpleNamespace(content="full report")
+        choice.finish_reason = "stop"
+        resp = types.SimpleNamespace(choices=[choice])
+        return resp
+
+    monkeypatch.setattr("litellm.acompletion", fake_acompletion_stop)
+    text = asyncio_run(dr._complete("prompt", max_tokens=100))
+    assert "[… report truncated" not in text
+
+
+def test_failed_sub_synthesis_returns_raw_sources(monkeypatch):
+    """When a sub-unit's synthesis fails, the raw source text must actually be
+    present in the sub-report — the degradation note claims "sources returned
+    raw", so dropping the text would make that claim false."""
+
+    async def fake_search(params):
+        return {
+            "ok": True,
+            "results": [
+                {"url": "http://raw1", "title": "Raw One", "snippet": ""},
+            ],
+        }
+
+    async def fake_fetch(params):
+        return {"ok": True, "text": "RAW SOURCE TEXT THAT MUST SURVIVE"}
+
+    async def fake_complete(prompt, **kw):
+        raise RuntimeError("synthesis down")
+
+    monkeypatch.setattr(dr, "_complete", fake_complete)
+    monkeypatch.setattr("swarm_os.lib.mcp.web_search.web_search_handler", fake_search)
+    monkeypatch.setattr("swarm_os.lib.mcp.web_search.web_fetch_handler", fake_fetch)
+    rep = asyncio_run(dr._run_sub_unit("q", max_results=1, max_tokens=100))
+    assert rep["degraded"] is True
+    assert rep["answer"] == ""
+    assert "RAW SOURCE TEXT THAT MUST SURVIVE" in rep["raw_sources"]
