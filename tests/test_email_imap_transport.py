@@ -205,3 +205,26 @@ def test_email_list_reports_real_unread_state(monkeypatch, tmp_path):
     by_subject = {m["subject"]: m for m in res["messages"]}
     assert by_subject["Seen one"]["unread"] is False
     assert by_subject["Fresh two"]["unread"] is True
+
+
+# ── IMAP socket timeout (audit) ──────────────────────────────────────────
+def test_email_imap_timeout_configured(monkeypatch, tmp_path):
+    _write_cfg(tmp_path, monkeypatch)
+    captured = {}
+
+    import swarm_os.services.email_service as mod
+
+    original_imap = mod.imaplib.IMAP4_SSL
+
+    def capture_timeout(host, port, ssl_context=None, timeout=None, **kwargs):
+        captured["timeout"] = timeout
+        # Return a minimal fake connection that supports the operations
+        # the test needs (login, select, uid, logout).
+        # We'll just return a FakeIMAP instance that behaves like a connection.
+        return FakeIMAP([{"raw": _raw(), "seen": True}])
+
+    monkeypatch.setattr(mod.imaplib, "IMAP4_SSL", capture_timeout)
+
+    res = es.email_list(limit=10)
+    assert res["ok"] is True
+    assert captured.get("timeout") == 30

@@ -128,7 +128,7 @@ def _get_imap(acc: dict):
         else:
             return None
     ctx = ssl.create_default_context()
-    conn = imaplib.IMAP4_SSL(imap_host, imap_port, ssl_context=ctx)
+    conn = imaplib.IMAP4_SSL(imap_host, imap_port, ssl_context=ctx, timeout=30)
     conn.login(imap_user, imap_pass)
     return conn
 
