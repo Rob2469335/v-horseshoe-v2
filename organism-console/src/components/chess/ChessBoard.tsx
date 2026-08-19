@@ -131,6 +131,7 @@ export type BoardHighlights = {
   legalTargets?: string[]
   checkSquare?: string | null
   arrows?: Array<{ from: string; to: string; color?: string }>
+  socraticSquares?: string[]
 }
 
 type Props = {
@@ -247,6 +248,7 @@ export default function ChessBoard({
               const base = dark ? DARK : LIGHT
               const isLast = lastMove && (lastMove.from === sq || lastMove.to === sq)
               const isSelected = selected === sq
+              const isSocratic = highlights?.socraticSquares?.includes(sq)
               const isDest = legalTargets.includes(sq)
               const isCheck = checkSquare === sq
               const hasCapture = isDest && !!piece
@@ -271,7 +273,7 @@ export default function ChessBoard({
                   onClick={() => interactive && onSquareClick?.(sq)}
                   className="relative"
                   style={{
-                    backgroundColor: isSelected ? SELECTED : isLast ? LAST_MOVE : base,
+                    backgroundColor: isSocratic ? "rgba(139, 92, 246, 0.45)" : isSelected ? SELECTED : isLast ? LAST_MOVE : base,
                     backgroundImage: isCheck ? CHECK : undefined,
                     cursor: interactive ? "pointer" : "default",
                   }}

@@ -1606,7 +1606,13 @@ async def _proposal_eval(fen: str, uci: str) -> dict[str, Any]:
         except Exception:
             san = uci
         board.push(move)
-        after_cp = (await asyncio.to_thread(_best_move_and_cp, board))[1]
+        reply_uci, after_cp, _ = await asyncio.to_thread(_best_move_and_cp, board)
+        reply_san = None
+        if reply_uci:
+            try:
+                reply_san = board.san(chess.Move.from_uci(reply_uci))
+            except Exception:
+                reply_san = reply_uci
         mover_after = -after_cp
         was_best = before_best == uci
         classification = _classify(500, before_cp, mover_after, was_best)
@@ -1632,6 +1638,8 @@ async def _proposal_eval(fen: str, uci: str) -> dict[str, Any]:
             "best_move": before_best,
             "best_move_san": best_san,
             "best_win_pct": best_win_pct,
+            "reply_uci": reply_uci,
+            "reply_san": reply_san,
         }
     except Exception as exc:
         log.warning("socratic proposal eval failed for %s/%s: %s", fen, uci, exc)
@@ -1670,6 +1678,9 @@ async def _socratic_coach_turn(
         reveal = turns >= 5
         proposal_block = ""
         if proposal and proposal.get("ok"):
+            refutation_line = ""
+            if not proposal.get("is_best") and proposal.get("reply_san"):
+                refutation_line = f"- If they play their proposal, the engine's best refutation is {proposal.get('reply_san')} ({proposal.get('reply_uci')}). Use this to guide them to see why their move fails.\n"
             proposal_block = (
                 f"\nThe learner proposes playing {proposal.get('san')} ({proposal.get('uci')}).\n"
                 f"Engine facts about their proposal (GROUND your reaction ONLY in these — "
@@ -1679,6 +1690,7 @@ async def _socratic_coach_turn(
                 f"- Classification: {proposal.get('classification')}\n"
                 f"- The engine's best move is {proposal.get('best_move_san')} "
                 f"(win% {proposal.get('best_win_pct')}%) — {'their proposal matches it.' if proposal.get('is_best') else 'a different, stronger move.'}\n"
+                f"{refutation_line}"
             )
         prompt = (
             "You are a Socratic chess coach for a ~500-rated beginner. Your job "
@@ -1699,7 +1711,8 @@ async def _socratic_coach_turn(
             "3. Affirm what is right in their thinking; gently correct blind spots.\n"
             "4. Plain beginner language. Keep it under 40 words.\n"
             "5. Do NOT name the best move. "
-            f"{'HOWEVER the learner has been stuck for several turns, so now give a gentle concrete nudge (still not the exact move if avoidable).' if reveal else ''}\n\n"
+            f"{'HOWEVER the learner has been stuck for several turns, so now give a gentle concrete nudge (still not the exact move if avoidable).' if reveal else ''}\n"
+            "6. You may emphasize squares or moves by wrapping them in brackets (e.g. [e4] or [e4-e5]). The UI will automatically highlight these on the board. Use this sparingly to draw attention to key areas.\n\n"
             f"DIALOGUE SO FAR:\n{dial or '(start of conversation - open with a question about the position)'}\n\n"
             "COACH:"
         )
