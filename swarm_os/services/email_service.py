@@ -291,24 +291,22 @@ def email_search(
             if typ != "OK":
                 return {"ok": False, "error": "search failed"}
             ids = data[0].split()
-            # Fetch headers to filter locally (TEXT search is server-side but the
-            # charset handling for non-ASCII is unreliable; header scan is robust).
             out = []
             for i in ids[-200:]:
-                typ, msg_data = conn.uid("FETCH", i, "(BODY.PEEK[HEADER])")
+                typ, msg_data = conn.uid("FETCH", i, "(BODY.PEEK[])")
                 if typ != "OK" or not msg_data[0]:
                     continue
-                header_blob = msg_data[0][1]
-                head = email.message_from_bytes(header_blob)
+                raw = msg_data[0][1]
+                msg = email.message_from_bytes(raw)
                 hay = " ".join(
                     [
-                        _decode_header_value(head.get("Subject", "")),
-                        _decode_header_value(head.get("From", "")),
-                        _decode_header_value(head.get("To", "")),
+                        _decode_header_value(msg.get("Subject", "")),
+                        _decode_header_value(msg.get("From", "")),
+                        _decode_header_value(msg.get("To", "")),
                     ]
                 ).lower()
                 if all(t.lower() in hay for t in terms):
-                    parsed = _parse_msg(i.decode(), header_blob)
+                    parsed = _parse_msg(i.decode(), raw)
                     out.append(parsed)
                     if len(out) >= limit:
                         break

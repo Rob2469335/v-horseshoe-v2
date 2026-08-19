@@ -218,9 +218,6 @@ def test_email_imap_timeout_configured(monkeypatch, tmp_path):
 
     def capture_timeout(host, port, ssl_context=None, timeout=None, **kwargs):
         captured["timeout"] = timeout
-        # Return a minimal fake connection that supports the operations
-        # the test needs (login, select, uid, logout).
-        # We'll just return a FakeIMAP instance that behaves like a connection.
         return FakeIMAP([{"raw": _raw(), "seen": True}])
 
     monkeypatch.setattr(mod.imaplib, "IMAP4_SSL", capture_timeout)
@@ -228,3 +225,25 @@ def test_email_imap_timeout_configured(monkeypatch, tmp_path):
     res = es.email_list(limit=10)
     assert res["ok"] is True
     assert captured.get("timeout") == 30
+
+
+# ── email_search returns real bodies (audit) ──────────────────────────────
+def test_email_search_returns_real_bodies(monkeypatch, tmp_path):
+    _write_cfg(tmp_path, monkeypatch)
+    fake = FakeIMAP(
+        [
+            {"raw": _raw(subject="URGENT", body="need this today", seen=True), "seen": True},
+            {"raw": _raw(subject="Other", body="unrelated", seen=True), "seen": True},
+        ]
+    )
+    monkeypatch.setattr(es, "_get_imap", lambda acc: fake)
+
+    res = es.email_search("URGENT")
+
+    assert res["ok"] is True
+    assert len(res["messages"]) == 1
+    msg = res["messages"][0]
+    assert msg["subject"] == "URGENT"
+    assert msg["body"] == "need this today"
+    # Verify the fetch used BODY.PEEK[] (full message) not BODY.PEEK[HEADER]
+    assert fake.fetches and fake.fetches[0][1] == "(BODY.PEEK[])"
