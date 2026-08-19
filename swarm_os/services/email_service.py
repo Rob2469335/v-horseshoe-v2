@@ -149,20 +149,32 @@ def _parse_msg(uid: str, raw: bytes) -> dict:
                 attachments += 1
             elif ctype == "text/plain" and "attachment" not in disp.lower():
                 try:
-                    body_parts.append(
-                        part.get_payload(decode=True).decode(
-                            part.get_content_charset() or "utf-8", errors="replace"
+                    charset = part.get_content_charset() or "utf-8"
+                    try:
+                        body_parts.append(
+                            part.get_payload(decode=True).decode(
+                                charset, errors="replace"
+                            )
                         )
-                    )
+                    except LookupError:
+                        body_parts.append(
+                            part.get_payload(decode=True).decode(
+                                "utf-8", errors="replace"
+                            )
+                        )
                 except Exception:
                     pass
     else:
         try:
-            body_parts.append(
-                msg.get_payload(decode=True).decode(
-                    msg.get_content_charset() or "utf-8", errors="replace"
+            charset = msg.get_content_charset() or "utf-8"
+            try:
+                body_parts.append(
+                    msg.get_payload(decode=True).decode(charset, errors="replace")
                 )
-            )
+            except LookupError:
+                body_parts.append(
+                    msg.get_payload(decode=True).decode("utf-8", errors="replace")
+                )
         except Exception:
             pass
     return {
@@ -352,6 +364,13 @@ def email_draft(
         return {"ok": False, "error": "to and subject are required"}
     token = base64.urlsafe_b64encode(os.urandom(16)).decode()
     with _SEND_LOCK:
+        # Sweep expired tokens first (memory leak fix)
+        now = time.time()
+        expired = [
+            t for t, d in _SEND_TOKENS.items() if now - d["created"] > _TOKEN_TTL_S
+        ]
+        for t in expired:
+            _SEND_TOKENS.pop(t, None)
         _SEND_TOKENS[token] = {
             "to": to,
             "subject": subject,
@@ -359,7 +378,7 @@ def email_draft(
             "cc": cc,
             "attachments": attachments or [],
             "account": account,
-            "created": time.time(),
+            "created": now,
         }
     return {
         "ok": True,
@@ -379,7 +398,8 @@ def email_send(send_token: str, confirmed: bool = False) -> dict:
 
     The approval gate (tool_executor / Command Center) holds the token and only
     calls this with confirmed=True after a human approves. A token used without
-    confirmed=True, or expired, is refused."""
+    confirmed=True, or expired, is refused. Token is ONLY consumed on SUCCESS
+    (not on SMTP failure) so the draft is not lost if transmission fails."""
     if not confirmed:
         return {
             "ok": False,
@@ -396,8 +416,7 @@ def email_send(send_token: str, confirmed: bool = False) -> dict:
         if time.time() - draft["created"] > _TOKEN_TTL_S:
             _SEND_TOKENS.pop(send_token, None)
             return {"ok": False, "error": "send token expired"}
-        # Consume the token so it can't be sent twice.
-        _SEND_TOKENS.pop(send_token, None)
+        # Do NOT pop yet — only consume on successful send.
     try:
         acc = _account(draft["account"])
         if not acc:
@@ -410,11 +429,19 @@ def email_send(send_token: str, confirmed: bool = False) -> dict:
             draft["attachments"],
         )
         if _uses_gmail_api(acc):
-            return _gmail_transport(acc).gmail_send_mime(acc, msg.as_bytes())
+            result = _gmail_transport(acc).gmail_send_mime(acc, msg.as_bytes())
+            if result.get("ok"):
+                with _SEND_LOCK:
+                    _SEND_TOKENS.pop(send_token, None)
+            return result
         if _uses_gmail_browser(acc):
-            return _gmail_browser_transport(acc).gmail_browser_send(
+            result = _gmail_browser_transport(acc).gmail_browser_send(
                 acc, draft["to"], draft["subject"], draft["body"]
             )
+            if result.get("ok"):
+                with _SEND_LOCK:
+                    _SEND_TOKENS.pop(send_token, None)
+            return result
         smtp_host = acc.get("smtp_host") or acc.get("host")
         smtp_port = int(acc.get("smtp_port", 587))
         smtp_user = acc.get("user") or acc.get("email")
@@ -426,6 +453,9 @@ def email_send(send_token: str, confirmed: bool = False) -> dict:
             conn.starttls(context=ctx)
             conn.login(smtp_user, smtp_pass)
             conn.sendmail(smtp_user, [draft["to"]], msg.as_string())
+        # Consume token ONLY on success
+        with _SEND_LOCK:
+            _SEND_TOKENS.pop(send_token, None)
         return {"ok": True, "to": draft["to"], "subject": draft["subject"]}
     except Exception as exc:
         log.warning("email_send failed: %s", exc)
@@ -604,13 +634,15 @@ def email_manage(
                 if typ != "OK":
                     return {"ok": False, "error": f"IMAP copy to {target} failed"}
                 conn.uid("STORE", uid, "+FLAGS", r"(\Deleted)")
-                conn.expunge()
+                # Do NOT call global expunge — it would purge ALL \Deleted messages.
+                # The message is now marked \Deleted and hidden from normal listings.
+                # If UIDPLUS is supported, UID EXPUNGE could target this specific message.
                 return {"ok": True, "op": op, "uid": uid, "target": target}
             if op == "delete":
                 typ, _ = conn.uid("STORE", uid, "+FLAGS", r"(\Deleted)")
                 if typ != "OK":
                     return {"ok": False, "error": "IMAP delete failed"}
-                conn.expunge()
+                # Do NOT call global expunge — it would purge ALL \Deleted messages.
                 return {"ok": True, "op": op, "uid": uid}
             return {"ok": False, "error": f"unknown email_manage op: {op}"}
         finally:
