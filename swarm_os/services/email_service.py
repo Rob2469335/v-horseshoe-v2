@@ -212,11 +212,17 @@ def email_list(
             ids = ids[-limit:] if ids else []
             out = []
             for i in ids:
-                typ, msg_data = conn.uid("FETCH", i, "(RFC822)")
+                typ, msg_data = conn.uid(
+                    "FETCH", i, "(FLAGS BODY.PEEK[])"
+                )
                 if typ == "OK" and msg_data and msg_data[0]:
                     raw = msg_data[0][1]
                     parsed = _parse_msg(i.decode(), raw)
-                    parsed["unread"] = True
+                    if unread_only:
+                        # The UNSEEN search already scoped the result set.
+                        parsed["unread"] = True
+                    else:
+                        parsed["unread"] = b"\\Seen" not in msg_data[0][0]
                     out.append(parsed)
             return {"ok": True, "folder": folder, "count": len(out), "messages": out}
         finally:

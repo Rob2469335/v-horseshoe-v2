@@ -173,3 +173,35 @@ def test_email_manage_flags_and_copies_by_uid(monkeypatch, tmp_path):
     assert res["ok"] is True
     assert ("COPY", ("1", "[Gmail]/All Mail")) in fake2.commands
     assert ("STORE", ("1", "+FLAGS", r"(\Deleted)")) in fake2.commands
+
+
+# ── list must not mark read + real unread state (audit) ────────────────────
+def test_email_list_uses_body_peek_not_rfc822(monkeypatch, tmp_path):
+    _write_cfg(tmp_path, monkeypatch)
+    fake = FakeIMAP([{"raw": _raw(), "seen": True}])
+    monkeypatch.setattr(es, "_get_imap", lambda acc: fake)
+
+    res = es.email_list(limit=10)
+
+    assert res["ok"] is True
+    # A LIST must not flip \\Seen on the server: (RFC822) == (BODY[]) which
+    # marks read; BODY.PEEK[] never touches the flags.
+    assert fake.fetches and fake.fetches[0][1] == "(FLAGS BODY.PEEK[])"
+
+
+def test_email_list_reports_real_unread_state(monkeypatch, tmp_path):
+    _write_cfg(tmp_path, monkeypatch)
+    fake = FakeIMAP(
+        [
+            {"raw": _raw(subject="Seen one", seen=True), "seen": True},
+            {"raw": _raw(subject="Fresh two", seen=False), "seen": False},
+        ]
+    )
+    monkeypatch.setattr(es, "_get_imap", lambda acc: fake)
+
+    res = es.email_list(limit=10)
+
+    assert res["ok"] is True
+    by_subject = {m["subject"]: m for m in res["messages"]}
+    assert by_subject["Seen one"]["unread"] is False
+    assert by_subject["Fresh two"]["unread"] is True
