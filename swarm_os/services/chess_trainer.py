@@ -744,6 +744,19 @@ def _move_hangs_piece(board, move) -> list[str]:
             attackers = _attackers_of(probe, sq, probe.turn)  # opponent attacks
             defenders = _defenders_of(probe, sq)
             if attackers > defenders:
+                if sq == move.to_square and board.is_capture(move):
+                    captured_piece = board.piece_at(move.to_square)
+                    if board.is_en_passant(move):
+                        cap_val = 1
+                    else:
+                        cap_val = (
+                            _PIECE_VALUE.get(captured_piece.symbol().lower(), 0)
+                            if captured_piece
+                            else 0
+                        )
+                    moved_val = _PIECE_VALUE.get(p.symbol().lower(), 0)
+                    if cap_val >= moved_val:
+                        continue
                 hanging.append(chess.square_name(sq))
         return hanging
     except Exception as exc:
@@ -946,16 +959,30 @@ def detect_sacrifice(
         if given is None:
             return None
         given_val = _PIECE_VALUE.get(given.symbol().lower(), 0)
-        # A sacrifice = gave up a piece (not a pawn trade) with material cost.
-        # _material_balance is from White's perspective; convert to the MOVER's
-        # perspective so a Black sacrifice also counts its own material loss.
-        mover_sign = 1 if given.color == chess.WHITE else -1
-        before_mover = _material_balance(board) * mover_sign
+
+        # A sacrifice means a piece was left hanging (or a higher-value piece took a lower-value one).
+        hanging_squares = _move_hangs_piece(board, move)
+
+        # Determine captured piece before pushing
+        cap = board.piece_at(move.to_square) if board.is_capture(move) else None
+
         board.push(move)
-        after_mover = _material_balance(board) * mover_sign
-        lost_material = before_mover - after_mover
-        if given_val < 3 and lost_material < 2:
-            return None  # not a piece sacrifice (pawn move / even trade)
+
+        if not hanging_squares:
+            return None
+
+        max_hanging_val = 0
+        for sq_name in hanging_squares:
+            sq = chess.parse_square(sq_name)
+            p = board.piece_at(sq)
+            if p:
+                val = _PIECE_VALUE.get(p.symbol().lower(), 0)
+                if val > max_hanging_val:
+                    max_hanging_val = val
+
+        if max_hanging_val < 3:
+            return None  # not a piece sacrifice (only pawns hanging)
+
         # Soundness: eval barely moved (within ~60cp) => you bought the attack.
         held = after_cp >= before_cp - 60.0
         if not held:
@@ -965,7 +992,6 @@ def detect_sacrifice(
             return None
         # Pattern tag.
         pattern = ""
-        cap = board.piece_at(move.to_square)
         target_sq = move.to_square
         # Greek gift: bishop takes h-pawn (h7/h2) with check.
         if (
@@ -980,7 +1006,7 @@ def detect_sacrifice(
             and cap.piece_type in (chess.KNIGHT, chess.BISHOP)
         ):
             pattern = "exchange sacrifice — rook for a minor piece"
-        elif given_val >= 3 and lost_material >= 3 and not (board.is_check()):
+        elif given_val >= 3 and not board.is_check():
             pattern = "piece sacrifice for initiative"
         if not pattern:
             pattern = "piece sacrifice"
@@ -1127,16 +1153,16 @@ async def evaluate_move(
     before_best, before_cp, _ = await asyncio.to_thread(_best_move_and_cp, board)
     # Material before the move (for the material guard in classification: a
     # move that doesn't lose material is never a Mistake/Blunder).
-    material_before = _material_balance(board)
+    mover_sign = 1 if board.turn == chess.WHITE else -1
+    material_before = _material_balance(board) * mover_sign
     # SAN must be computed BEFORE pushing (the move is only legal pre-push).
     try:
         played_san = board.san(move)
     except Exception:
         played_san = uci
     board.push(move)
-    # Net material change from the MOVER's perspective (after is now the
-    # opponent's side, so flip the balance sign).
-    material_delta = (_material_balance(board) * -1) - material_before
+    # Net material change from the MOVER's perspective.
+    material_delta = (_material_balance(board) * mover_sign) - material_before
 
     after_cp = (await asyncio.to_thread(_best_move_and_cp, board))[1]
 
@@ -1635,9 +1661,7 @@ async def _socratic_coach_turn(
 
         from ..core.settings import get_settings
 
-        concept = plan.get("standard_plan", {}).get("name", "") or plan.get(
-            "plan", ""
-        )
+        concept = plan.get("standard_plan", {}).get("name", "") or plan.get("plan", "")
         turns = len(history)
         dial = "\n".join(
             f"{'LEARNER' if m.get('role') == 'user' else 'COACH'}: {m.get('content', '')}"
