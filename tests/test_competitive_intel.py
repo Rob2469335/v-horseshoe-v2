@@ -81,6 +81,29 @@ def test_save_snapshot_uses_unique_tmp_names(monkeypatch):
     assert snap["content"] in ("a", "b")
 
 
+def test_deliver_telegram_escapes_raw_snippets(monkeypatch):
+    """Snippet text is untrusted page/fetch content delivered inside an HTML
+    <pre> block (telegram_center.notify defaults to parse_mode="HTML") — raw
+    markup must be escaped, never forwarded verbatim."""
+    from swarm_os.services import telegram_center as tc
+
+    captured = {}
+
+    def fake_notify(text, **kwargs):
+        captured["text"] = text
+        return True
+
+    monkeypatch.setattr(tc, "notify", fake_notify)
+
+    async def run():
+        return await ci._deliver_telegram("price dropped to <b>$99</b> & more")
+
+    assert asyncio.run(run()) is True
+    assert "&lt;b&gt;$99&lt;/b&gt; &amp; more" in captured["text"]
+    assert "<pre>" in captured["text"]
+    assert captured["text"].count("<pre>") == captured["text"].count("</pre>")
+
+
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------

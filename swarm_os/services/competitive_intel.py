@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import html
 import json
 import logging
 import os
@@ -890,7 +891,11 @@ async def _deliver_email(subject: str, body: str, email_to: str | None) -> bool:
 async def _deliver_telegram(body: str) -> bool:
     from swarm_os.services import telegram_center as tc
 
-    return tc.notify(f"<b>Competitive Intel</b>\n<pre>{body[:3000]}</pre>")
+    # Snippets are raw page/fetch text (untrusted) rendered inside an HTML
+    # <pre> block, and tc.notify defaults to parse_mode="HTML". Escape so a
+    # competitor's markup can't break out of the block or inject Telegram HTML.
+    safe_body = html.escape(body[:3000])
+    return tc.notify(f"<b>Competitive Intel</b>\n<pre>{safe_body}</pre>")
 
 
 _SLACK_CLIENT = None
