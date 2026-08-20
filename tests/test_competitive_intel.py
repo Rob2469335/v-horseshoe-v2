@@ -309,6 +309,40 @@ def test_strip_noise_bad_line_still_dropped():
     assert cleaned == "We sell widgets"
 
 
+def test_extract_added_snippet_scrubs_substantial_noise_line_instead_of_dropping():
+    """_extract_added_snippet must mirror _strip_noise: an ADDED line that merely
+    mentions a noise token is real content when it is substantial ("Sign in to
+    see our new pricing..." is not nav copy). Pre-fix it was dropped on ANY noise
+    token, and the drop fell through to the raw-text fallback, shipping the
+    scrubbed-away "sign in" noise into the classifier + stored snippet."""
+    old = "We sell widgets.\nTrusted by many."
+    new = (
+        "We sell widgets.\n"
+        "Sign in to see our new pro plan pricing details for every team size "
+        "with quarterly and annual discounts across the full catalog now"
+    )
+    snip = ci._extract_added_snippet(new, old)
+    assert "pro plan pricing details" in snip  # substantive added content kept
+    assert "trusted" not in snip  # not the raw whole-page fallback
+    assert "sign in" not in snip.lower()  # noise scrubbed, not shipped raw
+
+
+def test_extract_added_snippet_minified_fallback_scrubs_noise():
+    """A minified page (one long line containing noise words) is not one added
+    line with a noise mention — the scrubbed remainder must be returned, never
+    the raw un-scrubbed text that the old fallback handed to the classifier."""
+    old = "legacy copy"
+    new = (
+        "javascript enable javascript accept all cookies sign in to read our news "
+        + ("national freight network expansion live now " * 20)
+        + "with real time tracking integration"
+    )
+    snip = ci._extract_added_snippet(new, old)
+    assert "national freight network expansion" in snip  # real content survived
+    assert "javascript" not in snip  # noise scrubbed, not the raw fallback
+    assert "accept all" not in snip
+
+
 def test_scan_target_first_scan_no_change_event(monkeypatch):
     """First fetch stores a snapshot but produces no change event (baseline)."""
     monkeypatch.setattr(

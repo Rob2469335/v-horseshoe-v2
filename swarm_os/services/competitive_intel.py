@@ -552,14 +552,25 @@ async def scan_target(comp: dict, kind: str) -> dict:
 
 
 def _extract_added_snippet(new_text: str, old_text: str) -> str:
-    """Best-effort: return the section of new text around the first added line."""
+    """Best-effort: return the section of new text around the first added line.
+
+    Mirrors _strip_noise semantics (see its docstring): an ADDED line that merely
+    MENTIONS a noise token is scrubbed and kept when the scrubbed remainder is
+    substantial; only short nav/consent/cookie lines are dropped. The old
+    drop-on-any-noise behavior threw away real content (a pricing line like
+    "Sign in to see our new pricing", or the whole minified HTML when one long
+    line happened to contain 'javascript'), and its un-scrubbed fallback leaked
+    nav text straight into the classifier and the stored snippet."""
     old_lines = [l.strip() for l in (old_text or "").splitlines() if l.strip()]
     old_set = set(old_lines)
     for l in new_text.splitlines():
         l = l.strip()
-        if l and l not in old_set and not any(n in l.lower() for n in _NOISE_TOKENS):
-            return l
-    return new_text[:600]
+        if not l or l in old_set:
+            continue
+        scrubbed = _strip_noise(l)
+        if scrubbed:
+            return scrubbed
+    return _strip_noise(new_text)[:600] or new_text[:600]
 
 
 def _score_significance(
