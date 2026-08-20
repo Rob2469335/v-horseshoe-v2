@@ -711,6 +711,63 @@ def test_run_intel_no_changes_returns_early(monkeypatch):
     assert res["message"] == "no changes detected"
 
 
+def test_manual_run_intel_advances_scheduler_window(monkeypatch):
+    """A MANUAL run_intel (API /intel/run) must record last_run, otherwise the
+    weekly daemon's duplicate-run protection sees no last_run and fires a second
+    full run inside the same cadence right after the manual one. Pre-fix only the
+    daemon path wrote last_run; manual API runs left the window open."""
+    async def _scan(include=None):
+        return {
+            "scanned": 1,
+            "changed": 1,
+            "events": [
+                {
+                    "id": "e1",
+                    "competitor": "Acme",
+                    "kind": "pricing",
+                    "classification": "pricing",
+                    "significance": 4.5,
+                    "url": "https://acme.example.com/pricing",
+                    "snippet": "now $99/mo",
+                    "dedup_key": "z1",
+                    "changed_at": "2026-08-19T00:00:00Z",
+                }
+            ],
+            "errors": [],
+        }
+
+    async def _generate(cap=15):
+        return {
+            "id": "d1",
+            "generated_at": "2026-08-19T00:00:00Z",
+            "item_count": 1,
+            "items": [
+                {
+                    "id": "e1",
+                    "what_changed": "x",
+                    "so_what": "y",
+                    "provider": "deterministic",
+                }
+            ],
+        }
+
+    async def _deliver(digest, channels=None, email_to=None, webhook_url=None):
+        return {}
+
+    monkeypatch.setattr(ci, "scan_all", _scan)
+    monkeypatch.setattr(ci, "generate_digest", _generate)
+    monkeypatch.setattr(ci, "deliver_digest", _deliver)
+
+    async def run():
+        return await ci.run_intel()
+
+    res = asyncio.run(run())
+    assert res["ok"] is True
+    assert res["changed"] == 1
+    # the manual run recorded its completion: the weekly daemon must NOT be due
+    assert ci.intel_due_now(cadence_hours=168.0) is False
+
+
 # ---------------------------------------------------------------------------
 # Scheduler: cadence + duplicate-run protection
 # ---------------------------------------------------------------------------

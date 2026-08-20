@@ -971,26 +971,33 @@ async def run_intel(
     include: set[str] | None = None,
     cap: int = 15,
 ) -> dict:
-    """End-to-end: scan all competitors, generate digest, deliver it."""
+    """End-to-end: scan all competitors, generate digest, deliver it. Every
+    completed run (manual/API or daemon) records last_run so the weekly daemon
+    window advances — a manual run must not be followed by a scheduled duplicate
+    inside the same cadence."""
     scan = await scan_all(include=include)
     if not scan.get("changed"):
-        return {
+        res = {
             "ok": True,
             "changed": 0,
             "message": "no changes detected",
             "scanned": scan.get("scanned"),
         }
+        _save_last_run({"at": _now(), "result": res})
+        return res
     digest = await generate_digest(cap=cap)
     delivery = await deliver_digest(
         digest, channels=channels, email_to=email_to, webhook_url=webhook_url
     )
-    return {
+    res = {
         "ok": True,
         "changed": scan.get("changed"),
         "digest_id": digest.get("id"),
         "item_count": len(digest.get("items", [])),
         "delivery": delivery,
     }
+    _save_last_run({"at": _now(), "result": res})
+    return res
 
 
 def _now() -> str:
@@ -1051,7 +1058,6 @@ async def intel_daemon(
             if intel_due_now(cadence_hours):
                 log.info("intel daemon: weekly run due, running...")
                 res = await run_intel(channels=channels)
-                _save_last_run({"at": _now(), "result": res})
                 log.info("intel daemon: run complete: %s", res)
         except asyncio.CancelledError:
             raise
