@@ -471,7 +471,7 @@ async def scan_target(comp: dict, kind: str) -> dict:
             "error": text or "fetch failed",
         }
     content_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
-    prev = _load_snapshot(comp.get("id", ""), kind)
+    prev = await asyncio.to_thread(_load_snapshot, comp.get("id", ""), kind)
     prev_text = (prev or {}).get("content", "")
     snap = {
         "fetched_at": _now(),
@@ -483,7 +483,7 @@ async def scan_target(comp: dict, kind: str) -> dict:
     if prev is None:
         # First observation = baseline. Store it, no change event. This keeps
         # detection reproducible: a change only exists relative to a prior snapshot.
-        _save_snapshot(comp.get("id", ""), kind, snap)
+        await asyncio.to_thread(_save_snapshot, comp.get("id", ""), kind, snap)
         return {
             "ok": True,
             "changed": False,
@@ -630,10 +630,10 @@ async def scan_all(include: set[str] | None = None) -> dict:
                 continue
             seen.add(ev["dedup_key"])
             deduped.append(ev)
-        _append_changes(deduped)
+        await asyncio.to_thread(_append_changes, deduped)
         events = deduped
     for competitor_id, kind, snap in postponed:
-        _save_snapshot(competitor_id, kind, snap)
+        await asyncio.to_thread(_save_snapshot, competitor_id, kind, snap)
     return {
         "scanned": len(enabled),
         "changed": len(events),
@@ -758,7 +758,7 @@ async def generate_digest(
 ) -> dict:
     """Build the curated digest from stored change events. `since` ISO ts filter.
     Returns {digest_id, generated_at, items: [{...}], delivery: [...]}."""
-    events = _load_changes()
+    events = await asyncio.to_thread(_load_changes)
     if since:
         events = [e for e in events if e.get("changed_at", "") >= since]
     curated = _dedupe_events(events, cap=cap)
@@ -894,7 +894,7 @@ async def deliver_digest(
         except Exception as exc:
             rec["error"] = str(exc)
             log.warning("intel deliver %s failed: %s", ch, exc)
-        _append_delivery(rec)
+        await asyncio.to_thread(_append_delivery, rec)
         results.append(rec)
     return {"ok": any(r["ok"] for r in results), "deliveries": results}
 
@@ -1009,7 +1009,7 @@ async def run_intel(
             "message": "no changes detected",
             "scanned": scan.get("scanned"),
         }
-        _save_last_run({"at": _now(), "result": res})
+        await asyncio.to_thread(_save_last_run, {"at": _now(), "result": res})
         return res
     digest = await generate_digest(cap=cap)
     delivery = await deliver_digest(
@@ -1022,7 +1022,7 @@ async def run_intel(
         "item_count": len(digest.get("items", [])),
         "delivery": delivery,
     }
-    _save_last_run({"at": _now(), "result": res})
+    await asyncio.to_thread(_save_last_run, {"at": _now(), "result": res})
     return res
 
 

@@ -728,6 +728,120 @@ def test_email_delivery_offloaded_to_worker_thread(monkeypatch):
     assert seen["thread_name"] != loop_name["name"]  # ran off the loop
 
 
+def test_scan_all_persistence_offloaded_to_worker_thread(monkeypatch):
+    """The change-event append + postponed snapshot writes must run in a worker
+    thread, never the event loop — sync disk I/O on the loop (under _LOCK)
+    would stall the whole API for the duration of a full scan fan-out."""
+    import threading
+
+    monkeypatch.setattr(ci, "list_competitors", lambda: [_comp()])
+
+    content = {"v": "content baseline widgets"}
+
+    def fake_fetch(url):
+        if "pricing" in url:
+            return (True, "pricing page stable", "")
+        return (True, content["v"], "")
+
+    monkeypatch.setattr(ci, "_fetch_target", lambda url: _sync_fetch(fake_fetch(url)))
+
+    orig_append = ci._append_changes
+    orig_save = ci._save_snapshot
+    seen = {}
+
+    def recording_append(events):
+        seen["append_thread"] = threading.current_thread().name
+        orig_append(events)
+
+    def recording_save(cid, kind, snap):
+        seen["save_thread"] = threading.current_thread().name
+        orig_save(cid, kind, snap)
+
+    monkeypatch.setattr(ci, "_append_changes", recording_append)
+    monkeypatch.setattr(ci, "_save_snapshot", recording_save)
+
+    loop_name = {}
+
+    async def run():
+        loop_name["name"] = threading.current_thread().name
+        await ci.scan_all()  # baseline
+        content["v"] = "content baseline widgets and a new gadget"
+        return await ci.scan_all()  # meaningful change -> event + postponed save
+
+    res = asyncio.run(run())
+    assert res["changed"] == 1
+    assert seen["append_thread"] != loop_name["name"]  # append ran off the loop
+    assert seen["save_thread"] != loop_name["name"]  # snapshot save ran off the loop
+
+
+def test_digest_delivery_lastrun_disk_offloaded_to_worker_thread(monkeypatch):
+    """generate_digest's _load_changes, deliver_digest's _append_delivery, and
+    run_intel's _save_last_run are sync disk calls — each must run on a worker
+    thread, never the event loop (same class as the scan_all persistence)."""
+    import threading
+
+    ci._append_changes(
+        [
+            {
+                "id": "chg1",
+                "dedup_key": "chg1",
+                "changed_at": "2026-08-19T00:00:00Z",
+                "competitor_id": "acme",
+                "competitor": "Acme Corp",
+                "kind": "homepage",
+                "url": "https://acme.example.com",
+                "tier": "top_3",
+                "classification": "product_feature",
+                "significance": 3,
+                "added_tokens": ["gadget"],
+                "removed_tokens": [],
+                "snippet": "added a new fleet gadget",
+                "prev_hash": "a",
+                "new_hash": "b",
+                "summary": "added gadget",
+            }
+        ]
+    )
+
+    async def bad_remote(_prompt):
+        raise RuntimeError("no credit")
+
+    loop_name = {}
+    seen = {}
+
+    for fn in ("_load_changes", "_append_delivery", "_save_last_run"):
+        orig = getattr(ci, fn)
+
+        def wrapper(*args, _fn=fn, _orig=orig, **kwargs):
+            seen[_fn] = threading.current_thread().name
+            return _orig(*args, **kwargs)
+
+        monkeypatch.setattr(ci, fn, wrapper)
+
+    async def run():
+        loop_name["name"] = threading.current_thread().name
+        digest = await ci.generate_digest(
+            synthesizer=ci.IntelligenceSynthesizer(
+                remote_complete=bad_remote, local_complete=None
+            )
+        )
+        await ci.deliver_digest(digest, channels=["email"])
+        return digest
+
+    digest = asyncio.run(run())
+    assert digest["items"]  # deterministic fallback produced an item
+
+    async def _no_changes(include=None):
+        return {"scanned": 1, "changed": 0, "events": [], "errors": []}
+
+    monkeypatch.setattr(ci, "scan_all", _no_changes)
+
+    asyncio.run(ci.run_intel())
+    assert seen["_load_changes"] != loop_name["name"]
+    assert seen["_append_delivery"] != loop_name["name"]
+    assert seen["_save_last_run"] != loop_name["name"]
+
+
 # ---------------------------------------------------------------------------
 # End-to-end run_intel
 # ---------------------------------------------------------------------------
