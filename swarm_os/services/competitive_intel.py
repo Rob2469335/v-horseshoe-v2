@@ -503,8 +503,13 @@ async def scan_target(comp: dict, kind: str) -> dict:
             "competitor_id": comp.get("id"),
             "kind": kind,
         }
-    # Meaningful change: advance the baseline so the next scan diffs against it.
-    _save_snapshot(comp.get("id", ""), kind, snap)
+    # Meaningful change: the baseline is advanced by scan_all AFTER the change
+    # events are durable (see scan_all). Persisting here would create a crash
+    # window: a save during the fan-out, followed by a crash before the event
+    # is appended, would slide the baseline and permanently lose the change
+    # (the next scan diffs against the new baseline and never re-emits it).
+    # The snapshot rides out of the fan-out so scan_all persists it in the same
+    # durable step as the event append.
     # Build the change event from the added content only (deterministic).
     old_n = _normalize_text(_strip_noise(prev_text))
     new_n = _normalize_text(_strip_noise(text))
@@ -531,7 +536,13 @@ async def scan_target(comp: dict, kind: str) -> dict:
             f"{comp.get('id')}:{kind}:{cls}:{sorted(added_tokens)}".encode("utf-8")
         ).hexdigest()[:16],
     }
-    return {"ok": True, "changed": True, "event": event}
+    return {
+        "ok": True,
+        "changed": True,
+        "kind": kind,
+        "event": event,
+        "snapshot": snap,
+    }
 
 
 def _extract_added_snippet(new_text: str, old_text: str) -> str:
@@ -566,9 +577,14 @@ def _score_significance(
     return round(min(5.0, max(1.0, score)), 1)
 
 
-async def scan_competitor(comp: dict, include: set[str] | None = None) -> list[dict]:
-    """Scan all targets of one competitor, returning change events."""
+async def scan_competitor(
+    comp: dict, include: set[str] | None = None
+) -> tuple[list[dict], list[tuple[str, str, dict]]]:
+    """Scan all targets of one competitor, returning (change events, postponed
+    snapshots). Snapshots are NOT persisted here: they ride out so scan_all can
+    persist them AFTER the change events become durable (crash-window fix)."""
     events: list[dict] = []
+    snapshots: list[tuple[str, str, dict]] = []
     kinds = [k for k in comp.get("targets", []) if include is None or k in include]
     results = await asyncio.gather(
         *(scan_target(comp, k) for k in kinds), return_exceptions=True
@@ -579,7 +595,8 @@ async def scan_competitor(comp: dict, include: set[str] | None = None) -> list[d
             continue
         if r.get("changed"):
             events.append(r["event"])
-    return events
+            snapshots.append((comp.get("id", ""), r["kind"], r["snapshot"]))
+    return events, snapshots
 
 
 async def scan_all(include: set[str] | None = None) -> dict:
@@ -588,6 +605,7 @@ async def scan_all(include: set[str] | None = None) -> dict:
     reg = list_competitors()
     enabled = [c for c in reg if c.get("enabled", True)]
     events: list[dict] = []
+    postponed: list[tuple[str, str, dict]] = []
     errors = []
     results = await asyncio.gather(
         *(scan_competitor(c, include) for c in enabled), return_exceptions=True
@@ -596,8 +614,14 @@ async def scan_all(include: set[str] | None = None) -> dict:
         if isinstance(r, Exception):
             errors.append({"competitor": c.get("name"), "error": str(r)})
             continue
-        events.extend(r)
-    # Persist
+        evs, snaps = r
+        events.extend(evs)
+        postponed.extend(snaps)
+    # Persist. Ordering is the crash-window fix: the change events must be durable
+    # BEFORE the baselines advance (scan_target no longer saves changed snapshots
+    # during the fan-out). A crash between the event append and the snapshot save
+    # produces at worst a RE-DETECTED duplicate on the next scan — never the
+    # pre-fix silent loss (baseline slid, event never recorded).
     if events:
         seen: set[str] = set()
         deduped = []
@@ -608,6 +632,8 @@ async def scan_all(include: set[str] | None = None) -> dict:
             deduped.append(ev)
         _append_changes(deduped)
         events = deduped
+    for competitor_id, kind, snap in postponed:
+        _save_snapshot(competitor_id, kind, snap)
     return {
         "scanned": len(enabled),
         "changed": len(events),

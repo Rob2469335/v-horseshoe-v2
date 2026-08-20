@@ -359,6 +359,41 @@ def test_scan_target_same_content_twice_no_event(monkeypatch):
     assert res["changed"] is False
 
 
+def test_scan_target_defers_baseline_advance_until_events_durable(monkeypatch):
+    """Crash-window regression: a 'changed' scan_target must NOT advance the stored
+    baseline itself. Pre-fix the new snapshot was saved at line 507 DURING the
+    fan-out, while the change event was appended only after the whole gather in
+    scan_all — a crash in that window slid the baseline and permanently lost the
+    change (the next scan diffs against the new baseline and never re-emits the
+    alert). Now the snapshot rides out with the result and scan_all persists it
+    only AFTER the change events have been appended."""
+    comp = _comp()
+    content = {"v": "initial content"}
+
+    def fake_fetch(url):
+        return (True, content["v"], "")
+
+    monkeypatch.setattr(ci, "_fetch_target", lambda url: _sync_fetch(fake_fetch(url)))
+
+    async def run():
+        await ci.scan_target(comp, "homepage")  # baseline (still saved immediately)
+        baseline = ci._load_snapshot(comp["id"], "homepage")
+        content["v"] = "initial content and a brand new product feature"
+        res = await ci.scan_target(comp, "homepage")
+        after = ci._load_snapshot(comp["id"], "homepage")
+        return res, baseline, after
+
+    res, baseline, after = asyncio.run(run())
+    assert res["changed"] is True
+    # The event carries the new snapshot out of the fan-out...
+    assert (
+        res["snapshot"]["content"] == "initial content and a brand new product feature"
+    )
+    # ...but the stored baseline has NOT advanced at the scan_target seam — it
+    # advances only once scan_all has made the change event durable.
+    assert after["content"] == baseline["content"] == "initial content"
+
+
 def test_event_added_tokens_exclude_noise(monkeypatch):
     """added_tokens / dedup_key must be built from the noise-stripped text. Pre-fix
     tokenized the raw fetched body, so a real change that also added a cookie/nav
