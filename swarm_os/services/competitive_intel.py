@@ -679,17 +679,19 @@ class IntelligenceSynthesizer:
         self._remote_complete = remote_complete
         self._local_complete = local_complete
 
-    async def synthesize(self, ev: dict) -> str:
+    async def synthesize(self, ev: dict, provider_set: set[str] | None = None) -> str:
         """Return (why_it_matters, recommended_action) prose for one change.
         Records which provider actually produced it (for truthful digest
-        attribution: 'deterministic' vs 'remote' vs 'local')."""
+        attribution: 'deterministic' vs 'remote' vs 'local'). When `provider_set`
+        is given, the name is also added to it so a digest can attribute
+        truthfully per item instead of collapsing to the last write."""
         prompt = self._build_prompt(ev)
         # 1) configured remote
         if self._remote_complete is not None:
             try:
                 text = await self._remote_complete(prompt)
                 if text and len(text.strip()) > 10:
-                    _set_synth_provider("remote")
+                    _record_synth_provider("remote", provider_set)
                     return text.strip()
             except Exception as exc:
                 log.warning("intel remote synthesize failed: %s", exc)
@@ -698,12 +700,12 @@ class IntelligenceSynthesizer:
             try:
                 text = await self._local_complete(prompt)
                 if text and len(text.strip()) > 10:
-                    _set_synth_provider("local")
+                    _record_synth_provider("local", provider_set)
                     return text.strip()
             except Exception as exc:
                 log.warning("intel local synthesize failed: %s", exc)
         # 3) deterministic
-        _set_synth_provider("deterministic")
+        _record_synth_provider("deterministic", provider_set)
         return _so_what_deterministic(ev)
 
     @staticmethod
@@ -736,8 +738,9 @@ async def generate_digest(
     curated = _dedupe_events(events, cap=cap)
     synth = synthesizer or _SYNTHESIZER
     items = []
+    providers: set[str] = set()
     for ev in curated:
-        so_what = await synth.synthesize(ev)
+        so_what = await synth.synthesize(ev, provider_set=providers)
         items.append(
             {
                 "id": ev.get("id"),
@@ -749,6 +752,7 @@ async def generate_digest(
                 "snippet": ev.get("snippet"),
                 "what_changed": (ev.get("snippet") or "")[:200],
                 "so_what": so_what,
+                "provider": _last_synth_provider(),
             }
         )
     digest = {
@@ -756,7 +760,7 @@ async def generate_digest(
         "generated_at": _now(),
         "item_count": len(items),
         "items": items,
-        "provider": _last_synth_provider(),
+        "provider": _rollup_synth_providers(providers),
     }
     _save_digest(digest)
     return digest
@@ -771,6 +775,23 @@ def _set_synth_provider(name: str) -> None:
 
 def _last_synth_provider() -> str:
     return _last_provider["name"]
+
+
+def _record_synth_provider(name: str, provider_set: set[str] | None) -> None:
+    _set_synth_provider(name)
+    if provider_set is not None:
+        provider_set.add(name)
+
+
+def _rollup_synth_providers(providers: set[str]) -> str:
+    """Truthful digest-level attribution: one provider when every item used it,
+    otherwise an explicit mixed label — never the last item's provider."""
+    if not providers:
+        return "deterministic"
+    ordered = sorted(providers)
+    if len(ordered) == 1:
+        return ordered[0]
+    return "mixed:" + ",".join(ordered)
 
 
 def _save_digest(digest: dict) -> None:

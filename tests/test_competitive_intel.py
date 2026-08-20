@@ -570,6 +570,67 @@ def test_generate_digest_uses_stored_changes(monkeypatch):
     assert ci.get_digest(d["id"]) is not None
 
 
+def test_generate_digest_rolls_up_mixed_providers_truthfully(monkeypatch):
+    """A digest whose items span providers must NOT be labeled by the LAST item's
+    provider. The module-global _last_provider only tracks whichever synthesize
+    call finished last — so one remote item followed by an out-of-credit fallback
+    to deterministic was mislabeled as fully 'deterministic', and concurrent
+    digests clobbered each other's attribution. Each item now carries its own
+    provider and the digest rollup reports the truth ('mixed:...' when mixed)."""
+    monkeypatch.setattr(
+        ci,
+        "_load_changes",
+        lambda limit=500: [
+            {
+                "id": "e1",
+                "competitor": "Acme",
+                "kind": "pricing",
+                "classification": "pricing",
+                "significance": 4.5,
+                "url": "https://acme.example.com/pricing",
+                "snippet": "now $99/mo",
+                "dedup_key": "y1",
+                "changed_at": "2026-08-19T00:00:00Z",
+            },
+            {
+                "id": "e2",
+                "competitor": "Beta",
+                "kind": "changelog",
+                "classification": "product_feature",
+                "significance": 3.0,
+                "url": "https://beta.example.com/changelog",
+                "snippet": "launched v2",
+                "dedup_key": "y2",
+                "changed_at": "2026-08-19T01:00:00Z",
+            },
+        ],
+    )
+
+    calls = {"n": 0}
+
+    async def remote_then_depleted(p):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return "Remote analysis of the pricing change."
+        raise RuntimeError("Insufficient balance")
+
+    synth = ci.IntelligenceSynthesizer(
+        remote_complete=remote_then_depleted, local_complete=None
+    )
+
+    async def run():
+        return await ci.generate_digest(synthesizer=synth)
+
+    d = asyncio.run(run())
+    assert d["item_count"] == 2
+    # per-item truth: first item came from the remote model, second from the
+    # deterministic fallback after the remote call failed
+    assert d["items"][0]["provider"] == "remote"
+    assert d["items"][1]["provider"] == "deterministic"
+    # digest rollup is honest: it was NOT all-remote and NOT all-deterministic
+    assert d["provider"] == "mixed:deterministic,remote"
+
+
 # ---------------------------------------------------------------------------
 # Delivery (records + graceful failure)
 # ---------------------------------------------------------------------------
