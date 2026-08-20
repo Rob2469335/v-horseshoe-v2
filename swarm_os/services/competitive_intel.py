@@ -502,8 +502,8 @@ async def scan_target(comp: dict, kind: str) -> dict:
     # Meaningful change: advance the baseline so the next scan diffs against it.
     _save_snapshot(comp.get("id", ""), kind, snap)
     # Build the change event from the added content only (deterministic).
-    old_n = _normalize_text(prev_text)
-    new_n = _normalize_text(text)
+    old_n = _normalize_text(_strip_noise(prev_text))
+    new_n = _normalize_text(_strip_noise(text))
     added_tokens = _tokenize(new_n) - _tokenize(old_n)
     added_text = _extract_added_snippet(text, prev_text)
     cls, _ = _classify_change(added_text)

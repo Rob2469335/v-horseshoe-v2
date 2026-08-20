@@ -330,6 +330,36 @@ def test_scan_target_same_content_twice_no_event(monkeypatch):
     assert res["changed"] is False
 
 
+def test_event_added_tokens_exclude_noise(monkeypatch):
+    """added_tokens / dedup_key must be built from the noise-stripped text. Pre-fix
+    tokenized the raw fetched body, so a real change that also added a cookie/nav
+    banner leaked 'javascript'/'cookie'/'consent' into the event's added_tokens —
+    which also fingerprints the dedup_key, so the SAME real change got a different
+    dedup_key when the banner wording changed (duplicate alert)."""
+    content = {"v": "Welcome to Acme logistics platform for enterprise fleets"}
+
+    def fake_fetch(url):
+        return (True, content["v"], "")
+
+    monkeypatch.setattr(ci, "_fetch_target", lambda url: _sync_fetch(fake_fetch(url)))
+
+    async def run():
+        await ci.scan_target(_comp(), "homepage")  # baseline
+        content["v"] = (
+            "Welcome to Acme logistics platform for enterprise fleets "
+            "Now supporting freight rail nationwide javascript enabled "
+            "cookie consent banner sign in to view your quote"
+        )
+        res = await ci.scan_target(_comp(), "homepage")
+        return res
+
+    res = asyncio.run(run())
+    assert res["changed"] is True
+    tokens = set(res["event"]["added_tokens"])
+    assert "freight" in tokens  # the real content change was captured
+    assert not (tokens & {"javascript", "cookie", "consent", "sign"})
+
+
 def test_scan_all_dedupes_and_persists(monkeypatch):
     monkeypatch.setattr(ci, "list_competitors", lambda: [_comp()])
 
