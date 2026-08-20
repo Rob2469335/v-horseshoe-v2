@@ -33,6 +33,30 @@ def _comp(name="Acme Corp", url="https://acme.example.com", tier="top_3", target
 
 
 # ---------------------------------------------------------------------------
+# Persistence: appends must preserve history (no tmp+replace truncation)
+# ---------------------------------------------------------------------------
+def test_append_changes_preserves_history_across_batches():
+    """Two appends must BOTH survive. The pre-fix tmp+os.replace pattern opened
+    a fresh .tmp in append mode then replaced the target — so the second append
+    silently wiped the first batch from the change trail."""
+    ci._append_changes([{"id": "e1", "dedup_key": "k1"}])
+    ci._append_changes([{"id": "e2", "dedup_key": "k2"}])
+    ids = [ev["id"] for ev in ci._load_changes(limit=500)]
+    assert ids == ["e1", "e2"]
+
+
+def test_append_delivery_preserves_history_across_records():
+    """Failure/retry records must accumulate, never replace each other."""
+    ci._append_delivery({"digest_id": "d1", "channel": "email", "ok": False})
+    ci._append_delivery({"digest_id": "d1", "channel": "telegram", "ok": True})
+    recs = ci._load_deliveries(limit=100)
+    assert [(r["channel"], r["ok"]) for r in recs] == [
+        ("email", False),
+        ("telegram", True),
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 def test_add_competitor_roundtrip():

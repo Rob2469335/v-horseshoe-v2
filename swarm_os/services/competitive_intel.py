@@ -166,15 +166,15 @@ def _save_registry(reg: list[dict]) -> None:
 def _append_changes(events: list[dict]) -> None:
     p = _paths()
     _ensure_dirs()
-    # Serialize the read-modify-write of the append target: two concurrent scans
-    # appending to the same .tmp then os.replace would lose one's writes. The
-    # operation is synchronous (no awaits), so a threading lock is safe here.
+    # Append directly to the target UNDER THE LOCK. The old tmp+os.replace
+    # pattern opened a FRESH .tmp in append mode then atomically replaced the
+    # target — so every write silently TRUNCATED all history before that call
+    # (the change/delivery trail only ever kept the most recent batch). Readings
+    # tolerate a trailing partial line, so a direct append stays safe.
     with _LOCK:
-        tmp = p["changes"].with_suffix(".tmp")
-        with tmp.open("a", encoding="utf-8") as fh:
+        with p["changes"].open("a", encoding="utf-8") as fh:
             for ev in events:
                 fh.write(json.dumps(ev) + "\n")
-        os.replace(tmp, p["changes"])
 
 
 def _load_changes(limit: int = 500) -> list[dict]:
@@ -220,10 +220,12 @@ def _save_snapshot(competitor_id: str, kind: str, snap: dict) -> None:
 def _append_delivery(record: dict) -> None:
     p = _paths()
     _ensure_dirs()
-    tmp = p["delivery"].with_suffix(".tmp")
-    with tmp.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(record) + "\n")
-    os.replace(tmp, p["delivery"])
+    # Same history-preserving append as _append_changes; the old tmp+replace
+    # also truncated the delivery trail on every write. The JSON write is
+    # lock-guarded (single writer) like every other persistence point.
+    with _LOCK:
+        with p["delivery"].open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record) + "\n")
 
 
 def _load_deliveries(limit: int = 100) -> list[dict]:
