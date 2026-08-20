@@ -34,6 +34,7 @@ The model interprets that delta, never decides whether a change happened.
 from __future__ import annotations
 
 import asyncio
+import collections
 import hashlib
 import html
 import json
@@ -374,7 +375,7 @@ def _meaningful_delta(old: str, new: str, kind: str) -> bool:
         return False
     old_tokens = _tokenize(old_n)
     new_tokens = _tokenize(new_n)
-    if not new_tokens:
+    if not sum(new_tokens.values()):
         return False
     added = new_tokens - old_tokens
     removed = old_tokens - new_tokens
@@ -382,15 +383,20 @@ def _meaningful_delta(old: str, new: str, kind: str) -> bool:
         return False
     if kind == "feed":
         return bool(added)  # feeds are additive by nature
-    # ratio of changed tokens must exceed a floor to count (visualping-style
-    # noise: cookies, nav counters, timestamps)
-    total = max(1, len(old_tokens | new_tokens))
-    changed_ratio = (len(added) + len(removed)) / total
+    # ratio of changed token COUNT (frequency-aware) must exceed a floor to
+    # count (visualping-style noise: cookies, nav counters, timestamps). A
+    # frequency-aware count catches repeats-only rewrites — same word set, more
+    # emphasis — that pure set-difference was blind to.
+    total = max(1, sum((old_tokens | new_tokens).values()))
+    changed_ratio = (sum(added.values()) + sum(removed.values())) / total
     return changed_ratio >= 0.05
 
 
-def _tokenize(text: str) -> set[str]:
-    return set(re.findall(r"[a-z0-9#@$-]{3,}", text))
+def _tokenize(text: str) -> collections.Counter[str, int]:
+    """Tokenize into a frequency-aware Counter. Set-based tokenization threw away
+    token counts, so a repeat-only rewrite (same word set, a keyword repeated)
+    produced an identical token set and NO change alert."""
+    return collections.Counter(re.findall(r"[a-z0-9#@$-]{3,}", text))
 
 
 def _strip_noise(text: str) -> str:
@@ -557,7 +563,7 @@ def _extract_added_snippet(new_text: str, old_text: str) -> str:
 
 
 def _score_significance(
-    kind: str, cls: str, tier: str, added_tokens: set[str]
+    kind: str, cls: str, tier: str, added_tokens: collections.Counter[str, int] | set[str]
 ) -> float:
     score = _SIG_WEIGHTS.get(kind, 1.0)
     if cls == "pricing":

@@ -213,6 +213,15 @@ def test_meaningful_delta_ignores_counter_normalization():
     assert not ci._meaningful_delta(old, new, "homepage")
 
 
+def test_meaningful_delta_catches_frequency_repeat_rewrite():
+    """A repeat-only rewrite is invisible to set-difference (same word set,
+    no NEW words) but is real content churn — a keyword repeated for emphasis.
+    Frequency-aware tokenization must catch it. (set: identical sets -> False)"""
+    old = "discount on all widgets"
+    new = "discount discount discount on all widgets"
+    assert ci._meaningful_delta(old, new, "homepage")
+
+
 def test_normalize_text_lowercases_and_collapses():
     assert ci._normalize_text("  Hello   World  ") == "hello world"
 
