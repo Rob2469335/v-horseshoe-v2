@@ -213,6 +213,35 @@ def test_significance_capped_between_1_and_5():
 # ---------------------------------------------------------------------------
 # Scan (deterministic fetch seam mocked; snapshot + diff + event shape)
 # ---------------------------------------------------------------------------
+_BASE_COPY = (
+    "Welcome to the future of enterprise logistics automation platform solutions "
+    "designed for supply chain teams who manage inventory fleets warehouses routes "
+    "and last mile delivery across every region nationwide"
+)
+
+
+def test_scan_target_keeps_baseline_on_subthreshold_drift(monkeypatch):
+    """A sub-threshold change must NOT advance the stored snapshot. Pre-fix saved
+    the snapshot BEFORE the 5% meaningful-delta check — so each tiny edit re-anchored
+    the baseline toward the drift and real changes could never accumulate past the
+    floor (slow-drip edits would evade alerts while the baseline tracked them)."""
+    comp = _comp()
+    content = {"v": _BASE_COPY}
+    monkeypatch.setattr(
+        ci, "_fetch_target", lambda url: _sync_fetch((True, content["v"], ""))
+    )
+
+    async def run():
+        await ci.scan_target(comp, "homepage")  # baseline
+        # one new token out of ~40 = <5% changed ratio — not a meaningful change
+        content["v"] = _BASE_COPY + " boarding"
+        res = await ci.scan_target(comp, "homepage")
+        snap = ci._load_snapshot(comp["id"], "homepage")
+        return res, snap
+
+    res, snap = asyncio.run(run())
+    assert res["changed"] is False
+    assert snap["content"] == _BASE_COPY  # baseline stayed put, did not drift
 def test_scan_target_first_scan_no_change_event(monkeypatch):
     """First fetch stores a snapshot but produces no change event (baseline)."""
     monkeypatch.setattr(

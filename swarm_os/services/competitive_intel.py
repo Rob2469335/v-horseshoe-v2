@@ -465,10 +465,10 @@ async def scan_target(comp: dict, kind: str) -> dict:
         "content": text,
         "content_hash": content_hash,
     }
-    _save_snapshot(comp.get("id", ""), kind, snap)
     if prev is None:
         # First observation = baseline. Store it, no change event. This keeps
         # detection reproducible: a change only exists relative to a prior snapshot.
+        _save_snapshot(comp.get("id", ""), kind, snap)
         return {
             "ok": True,
             "changed": False,
@@ -478,12 +478,18 @@ async def scan_target(comp: dict, kind: str) -> dict:
         }
     changed = _meaningful_delta(prev_text, text, kind)
     if not changed:
+        # Sub-threshold drift: do NOT advance the baseline. Saving here would
+        # slide the comparison point toward the noise so real drift could never
+        # accumulate past the 5% floor (a slow drip of edits would evade alerts
+        # while the stored snapshot tracked the drift).
         return {
             "ok": True,
             "changed": False,
             "competitor_id": comp.get("id"),
             "kind": kind,
         }
+    # Meaningful change: advance the baseline so the next scan diffs against it.
+    _save_snapshot(comp.get("id", ""), kind, snap)
     # Build the change event from the added content only (deterministic).
     old_n = _normalize_text(prev_text)
     new_n = _normalize_text(text)
