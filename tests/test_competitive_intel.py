@@ -56,6 +56,31 @@ def test_append_delivery_preserves_history_across_records():
     ]
 
 
+def test_save_snapshot_uses_unique_tmp_names(monkeypatch):
+    """Two snapshot writes must NOT share a temp file path. Pre-fix both used the
+    static `.tmp` suffix; concurrent writes to the same path could interleave and
+    os.replace a corrupt snapshot (which _load_snapshot then misreads as
+    baseline, silently re-establishing it)."""
+    from pathlib import Path
+
+    tmp_names = []
+    orig_write_text = Path.write_text
+
+    def guarded_write_text(self, *args, **kwargs):
+        if ".tmp" in self.name:
+            tmp_names.append(self.name)
+        return orig_write_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", guarded_write_text)
+    ci._save_snapshot("c1", "homepage", {"content": "a"})
+    ci._save_snapshot("c1", "homepage", {"content": "b"})
+    assert len(tmp_names) == 2
+    assert len(set(tmp_names)) == 2  # distinct temp paths per write
+    # target always ends up as a clean, loadable snapshot
+    snap = ci._load_snapshot("c1", "homepage")
+    assert snap["content"] in ("a", "b")
+
+
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------

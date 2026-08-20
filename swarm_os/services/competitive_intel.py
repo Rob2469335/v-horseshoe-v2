@@ -212,7 +212,11 @@ def _load_snapshot(competitor_id: str, kind: str) -> dict | None:
 def _save_snapshot(competitor_id: str, kind: str, snap: dict) -> None:
     _ensure_dirs()
     p = _snapshot_path(competitor_id, kind)
-    tmp = p.with_suffix(".tmp")
+    # Unique-per-write temp name: a static `.tmp` meant two overlapping writes
+    # (the scan_all fan-out in the daemon) reused the SAME temp path — one
+    # truncate+write could interleave the other's JSON, and os.replace then
+    # shipped a corrupt snapshot that _load_snapshot treats as baseline.
+    tmp = p.with_suffix(f".tmp.{uuid.uuid4().hex}")
     tmp.write_text(json.dumps(snap, indent=2), encoding="utf-8")
     os.replace(tmp, p)
 
