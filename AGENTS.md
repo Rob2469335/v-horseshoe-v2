@@ -537,6 +537,11 @@ Dependency pairing: React 19 ↔ `@react-three/fiber` ^9.5 / `@react-three/drei`
 
 ## Recent Changes (do NOT re-apply)
 
+- **Proxy Stream Reliability & Model Swapping — 2 defects fixed (2026-08-20)**: The `model_router.py` streaming endpoint was failing to deliver text to the UI and crashing on model swaps.
+  - **FIX 1**: The proxy was forwarding the client's `Accept-Encoding: gzip` header to the upstream `llama.cpp` instance, causing `llama.cpp` to compress the Server-Sent Events stream. The proxy then stripped the `content-encoding` header on the way back out, causing the client to silently fail to parse the raw gzip bytes. Stripped `accept-encoding` from the forwarded headers so the stream remains uncompressed plain text.
+  - **FIX 2**: Caught `httpcore.ReadError` inside the `stream_generator`. When a request for a 14B model triggered a HEAVY mode swap, the proxy forcefully killed the active `llama.cpp` process. The abrupt connection reset crashed the active `StreamingResponse` generator and bubbled up to Uvicorn, throwing a fatal ASGI exception. It now catches `Exception` in the generator loop and gracefully exits.
+  - Gates: `ruff check . --select E9,F` clean. `pytest tests/ -q` clean (1377 passed).
+
 - **Competitive Intelligence follow-up round — 4/4 defects fixed (`e21035a`→`18b753a`, 2026-08-19)**: the original 7-bug CI pre-commit audit surfaced 4 more findings (#8–#12) whose exact text lives in an unrecoverable scratch file — so, per the evidence-first rule, they were **re-derived from current source** and each fixed with a revert-proof regression test (verified via `git stash`: each test FAILS on its pre-fix source, PASSES on the fix). One-fix-one-commit. In order:
   - **`e21035a` — FIX #3: baseline advance raced the change-event append.** `scan_target` persisted the changed-path snapshot BEFORE `scan_all` appended the change event — a crash between the two would slide the comparison baseline and lose the change permanently (the next scan diffs the same new page against the already-advanced baseline and never re-emits the alert). The changed-path `_save_snapshot` was removed from `scan_target`; the snapshot now rides out in the changed result (`snapshot` key) and `scan_all` persists it via the postponed-loop AFTER the events are durable (`_append_changes(deduped)` runs first). First-observation baseline save stays immediate (idempotent, no event). Test `test_scan_target_defers_baseline_advance_until_events_durable`: pre-fix `KeyError: 'snapshot'`.
   - **`19645b3` — FIX #4: sync disk I/O on the event loop.** Every async seam that reached a sync file helper (`_append_changes`/`_save_snapshot` in `scan_all`; `_load_snapshot` + baseline save in `scan_target`; `_load_changes()` in `generate_digest`; `_append_delivery(rec)` in `deliver_digest`; both `_save_last_run` branches in `run_intel`) now wraps them in `asyncio.to_thread`. Sync helpers `list_changes`/`change_count` intentionally stay sync (called from sync/route context). Verified by grep: no un-wrapped async-path call remains inside the loaded/async call graph. Tests `test_scan_all_persistence_offloaded_to_worker_thread` + `test_digest_delivery_lastrun_disk_offloaded_to_worker_thread`: monkeypatched wrapping helpers assert the disk op ran on a worker thread, not the loop (`'MainThread' != 'MainThread'` pre-fix).
@@ -1327,6 +1332,10 @@ Converted `except:` → `except Exception:` (or specific types) in `swarm_os/cor
 ---
 
 ## Self-Healing & Self-Learning Fixes
+
+- **Rule (code_analyzer)**: Failure: The code_analyzer agent failed to analyze the auditing codebase filesystem due to a 'File not found: x.py' error, indicating that the agen...
+
+- **Rule (code_analyzer)**: Failure: The code_analyzer agent attempted to analyze the auditing codebase filesystem but failed due to a "File not found: x.py" error. The agent ...
 
 - **Rule (code_analyzer)**: Failure: The code_analyzer agent attempted to analyze the auditing codebase filesystem but failed to read the file 'x.py' due to a File not found e...
 
