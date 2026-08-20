@@ -242,6 +242,35 @@ def test_scan_target_keeps_baseline_on_subthreshold_drift(monkeypatch):
     res, snap = asyncio.run(run())
     assert res["changed"] is False
     assert snap["content"] == _BASE_COPY  # baseline stayed put, did not drift
+
+
+# ---------------------------------------------------------------------------
+# Noise stripping: tokens scrubbed, never whole-line drops on long content
+# ---------------------------------------------------------------------------
+def test_strip_noise_scrubs_long_line_instead_of_dropping_it():
+    """A short nav/consent line is dropped entirely (real noise), but a LONG line
+    that merely mentions a noise token is real content (a minified HTML page is one
+    long line) — it must keep whatever survives scrubbing. Pre-fix any noise token
+    anywhere dropped the WHOLE line, so this document would come back empty."""
+    one_liner = (
+        "Enterprise logistics platform now offering nationwide freight shipping "
+        "for inventory fleets warehouses routes and last mile delivery across "
+        "every region with contract pricing for teams over fifty vehicles "
+        "javascript enabled cookie consent banner sign in to manage your quote"
+    )
+    cleaned = ci._strip_noise(one_liner)
+    assert "freight" in cleaned  # real content survived
+    assert "contract pricing" in cleaned
+    assert "javascript" not in cleaned  # noise tokens scrubbed
+    assert "cookie" not in cleaned
+    assert "sign in" not in cleaned
+
+
+def test_strip_noise_bad_line_still_dropped():
+    cleaned = ci._strip_noise("We sell widgets\nAccept all cookies\nSign in")
+    assert cleaned == "We sell widgets"
+
+
 def test_scan_target_first_scan_no_change_event(monkeypatch):
     """First fetch stores a snapshot but produces no change event (baseline)."""
     monkeypatch.setattr(

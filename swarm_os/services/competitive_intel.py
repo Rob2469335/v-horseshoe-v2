@@ -394,9 +394,20 @@ def _strip_noise(text: str) -> str:
     keep = []
     for l in lines:
         ll = l.lower()
-        if any(n in ll for n in _NOISE_TOKENS):
+        hits = [n for n in _NOISE_TOKENS if n in ll]
+        if not hits:
+            keep.append(l)
             continue
-        keep.append(l)
+        scrubbed = l
+        for n in hits:
+            scrubbed = re.sub(re.escape(n), "", scrubbed, flags=re.IGNORECASE)
+        # A noise hit on a SHORT line = a nav/consent/cookie line: drop it. A hit
+        # on a LONG line = real content that merely mentions a noise word (minified
+        # HTML is one long line — a single 'cookie'/'javascript' mention used to
+        # discard the ENTIRE page). Whatever survives scrubbing on a substantial
+        # line is content and must be kept.
+        if len(scrubbed.split()) >= 8:
+            keep.append(scrubbed)
     return "\n".join(keep)
 
 
