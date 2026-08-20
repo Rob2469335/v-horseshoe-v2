@@ -408,6 +408,19 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         log.warning(f"Task scheduler unavailable: {exc}")
 
+    # Competitive Intelligence monitor — OPT-IN via SWARM_INTEL=1. Runs a weekly
+    # full monitor (scan -> digest -> deliver) on a background cadence, exactly
+    # once per window (duplicate-run protected), history preserved in data/intel.
+    if os.environ.get("SWARM_INTEL", "0").strip() == "1":
+        try:
+            from swarm_os.services.competitive_intel import intel_daemon
+
+            t_intel = asyncio.create_task(intel_daemon())
+            bg_tasks.add(t_intel)
+            log.info("Started Competitive Intel daemon (SWARM_INTEL=1, weekly)")
+        except Exception as exc:
+            log.warning(f"Competitive Intel daemon unavailable: {exc}")
+
     try:
         from swarm_os.healing.system_probes import run_system_probes
 

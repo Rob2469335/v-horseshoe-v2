@@ -139,6 +139,36 @@ class NewsDigestRequest(BaseModel):
     max_items: int = 30
 
 
+class IntelAddCompetitor(BaseModel):
+    name: str
+    url: str
+    tier: str = "tier_2"
+    targets: list[str] | None = None
+
+
+class IntelUpdateCompetitor(BaseModel):
+    name: str | None = None
+    url: str | None = None
+    tier: str | None = None
+    targets: list[str] | None = None
+    enabled: bool | None = None
+
+
+class IntelRunRequest(BaseModel):
+    channels: list[str] | None = None
+    email_to: str | None = None
+    webhook_url: str | None = None
+    include: list[str] | None = None
+    cap: int = 15
+
+
+class IntelDeliverRequest(BaseModel):
+    digest_id: str
+    channels: list[str] | None = None
+    email_to: str | None = None
+    webhook_url: str | None = None
+
+
 class BrowserTaskRequest(BaseModel):
     goal: str
     max_steps: int = 12
@@ -389,6 +419,131 @@ async def news_digest(req: NewsDigestRequest):
     from ..services.news_digest import digest
 
     return await digest(topic=req.topic, max_items=req.max_items)
+
+
+# ---------------------------------------------------------------------------
+# Competitive Intelligence — the paid service (registry -> collect -> digest -> deliver)
+# ---------------------------------------------------------------------------
+@router.get("/intel/competitors")
+async def intel_competitors():
+    """List monitored competitors (registry)."""
+    from ..services.competitive_intel import list_competitors
+
+    return {"ok": True, "competitors": list_competitors()}
+
+
+@router.post("/intel/competitors")
+async def intel_add_competitor(req: IntelAddCompetitor):
+    """Register a competitor to monitor."""
+    from ..services.competitive_intel import add_competitor
+
+    return add_competitor(req.name, req.url, req.tier, req.targets)
+
+
+@router.patch("/intel/competitors/{competitor_id}")
+async def intel_update_competitor(competitor_id: str, req: IntelUpdateCompetitor):
+    """Update a competitor (name/url/tier/targets/enabled)."""
+    from ..services.competitive_intel import update_competitor
+
+    return update_competitor(
+        competitor_id,
+        name=req.name,
+        url=req.url,
+        tier=req.tier,
+        targets=req.targets,
+        enabled=req.enabled,
+    )
+
+
+@router.delete("/intel/competitors/{competitor_id}")
+async def intel_remove_competitor(competitor_id: str):
+    """Remove a competitor from monitoring."""
+    from ..services.competitive_intel import remove_competitor
+
+    return remove_competitor(competitor_id)
+
+
+@router.post("/intel/run")
+async def intel_run(req: IntelRunRequest):
+    """Run a full monitor cycle: scan all competitors, generate a digest, deliver it."""
+    from ..services.competitive_intel import run_intel
+
+    include = set(req.include) if req.include else None
+    return await run_intel(
+        channels=req.channels,
+        email_to=req.email_to,
+        webhook_url=req.webhook_url,
+        include=include,
+        cap=req.cap,
+    )
+
+
+@router.post("/intel/scan")
+async def intel_scan(req: IntelRunRequest):
+    """Scan-only: fetch + diff all targets, persist change events. No digest/delivery."""
+    from ..services.competitive_intel import scan_all
+
+    include = set(req.include) if req.include else None
+    return await scan_all(include=include)
+
+
+@router.post("/intel/digest")
+async def intel_digest(cap: int = 15):
+    """Build the curated digest from stored changes (no scan, no delivery)."""
+    from ..services.competitive_intel import generate_digest
+
+    return await generate_digest(cap=cap)
+
+
+@router.post("/intel/deliver")
+async def intel_deliver(req: IntelDeliverRequest):
+    """Deliver an existing digest to configured channels."""
+    from ..services.competitive_intel import get_digest, deliver_digest
+
+    digest = get_digest(req.digest_id)
+    if not digest:
+        return {"ok": False, "error": "digest not found"}
+    return await deliver_digest(
+        digest,
+        channels=req.channels,
+        email_to=req.email_to,
+        webhook_url=req.webhook_url,
+    )
+
+
+@router.get("/intel/history")
+async def intel_history(limit: int = 10):
+    """Recent digests."""
+    from ..services.competitive_intel import list_digests
+
+    return {"ok": True, "digests": list_digests(limit=limit)}
+
+
+@router.get("/intel/changes")
+async def intel_changes(limit: int = 100):
+    """Recent change events (raw, deduplicated on scan)."""
+    from ..services.competitive_intel import list_changes
+
+    return {"ok": True, "changes": list_changes(limit=limit)}
+
+
+@router.get("/intel/change/{change_id}")
+async def intel_change(change_id: str):
+    """Inspect a single change event."""
+    from ..services.competitive_intel import get_change
+
+    c = get_change(change_id)
+    if not c:
+        return {"ok": False, "error": "change not found"}
+    return {"ok": True, "change": c}
+
+
+@router.get("/intel/deliveries")
+async def intel_deliveries(limit: int = 50):
+    """Recent delivery records (observable failures)."""
+    from ..services.competitive_intel import _load_deliveries
+
+    return {"ok": True, "deliveries": _load_deliveries(limit=limit)}
 
 
 @router.post("/browser-task")

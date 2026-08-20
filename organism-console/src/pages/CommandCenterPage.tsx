@@ -11,6 +11,7 @@ import WebTaskPanel from "../components/WebTaskPanel"
 import DeepResearchPanel from "../components/DeepResearchPanel"
 import NewsPanel from "../components/NewsPanel"
 import TasksPanel from "../components/TasksPanel"
+import CompetitiveIntelPanel from "../components/CompetitiveIntelPanel"
 import { ActionOnboardingCard } from "../components/ui/action-onboarding-card"
 import { Activity } from "lucide-react"
 type LiveEvent = {
@@ -325,6 +326,7 @@ export default function CommandCenterPage() {
         <DeepResearchPanel backendUrl={backendUrl} />
         <NewsPanel backendUrl={backendUrl} />
         <TasksPanel backendUrl={backendUrl} />
+        <CompetitiveIntelPanel backendUrl={backendUrl} />
 
         {/* ============ System probes ============ */}
         <Card className="border-white/10 bg-panel">
