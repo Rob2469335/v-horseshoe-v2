@@ -159,7 +159,11 @@ def _load_registry() -> list[dict]:
 def _save_registry(reg: list[dict]) -> None:
     p = _paths()
     _ensure_dirs()
-    tmp = p["registry"].with_suffix(".tmp")
+    # Unique-per-write temp name (same class as _save_snapshot): a static `.tmp`
+    # would let an overlapping writer share the path and os.replace a truncated
+    # registry. Registration itself is lock-guarded, but never add a shared-path
+    # write back to this file.
+    tmp = p["registry"].with_suffix(f".tmp.{uuid.uuid4().hex}")
     tmp.write_text(json.dumps(reg, indent=2), encoding="utf-8")
     os.replace(tmp, p["registry"])
 
@@ -772,7 +776,7 @@ def _last_synth_provider() -> str:
 def _save_digest(digest: dict) -> None:
     _ensure_dirs()
     p = _paths()["digests"] / f"{digest['id']}.json"
-    tmp = p.with_suffix(".tmp")
+    tmp = p.with_suffix(f".tmp.{uuid.uuid4().hex}")
     tmp.write_text(json.dumps(digest, indent=2), encoding="utf-8")
     os.replace(tmp, p)
 
@@ -990,7 +994,7 @@ def _last_full_run() -> dict | None:
 def _save_last_run(record: dict) -> None:
     _ensure_dirs()
     p = _paths()["data_dir"] / "last_run.json"
-    tmp = p.with_suffix(".tmp")
+    tmp = p.with_suffix(f".tmp.{uuid.uuid4().hex}")
     tmp.write_text(json.dumps(record, indent=2), encoding="utf-8")
     os.replace(tmp, p)
 

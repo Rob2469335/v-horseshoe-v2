@@ -81,6 +81,35 @@ def test_save_snapshot_uses_unique_tmp_names(monkeypatch):
     assert snap["content"] in ("a", "b")
 
 
+def test_unique_tmp_paths_for_registry_digest_last_run(monkeypatch):
+    """Registry, digest, and last_run writers must NOT share a temp path across
+    writes. Pre-fix all three used the static `.tmp` suffix — concurrent writers
+    (daemon + manual run_intel + API generate_digest) could interleave on the
+    same path and os.replace a truncated target."""
+    from pathlib import Path
+
+    tmp_names = []
+    orig_write_text = Path.write_text
+
+    def guarded_write_text(self, *args, **kwargs):
+        if ".tmp" in self.name:
+            tmp_names.append(self.name)
+        return orig_write_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", guarded_write_text)
+
+    ci._save_registry([_comp(), _comp("Beta")])
+    ci._save_registry([_comp()])
+    ci._save_digest({"id": "d1", "items": []})
+    ci._save_digest({"id": "d1", "items": [{"id": "x"}]})
+    ci._save_last_run({"at": "2026-08-19T00:00:00+00:00", "result": "ok"})
+    ci._save_last_run({"at": "2026-08-19T01:00:00+00:00", "result": "ok"})
+
+    assert len(tmp_names) == 6
+    assert len(set(tmp_names)) == 6  # every write gets a distinct temp path
+    assert "." in tmp_names[0]  # unique suffix present, not the bare ".tmp"
+
+
 def test_deliver_telegram_escapes_raw_snippets(monkeypatch):
     """Snippet text is untrusted page/fetch content delivered inside an HTML
     <pre> block (telegram_center.notify defaults to parse_mode="HTML") — raw
