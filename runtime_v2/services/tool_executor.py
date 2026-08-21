@@ -783,7 +783,7 @@ async def _dispatch(tool_name: str, payload: dict, *, trace_hook=None) -> dict:
                 eval_flag_used = isinstance(args, list) and any(
                     isinstance(a, str)
                     and a.strip().lower()
-                    in ("-c", "-e", "--eval", "-p", "-i", "--call")
+                    in ("-c", "-e", "--eval", "-p", "-i", "--call", "timeit", "os", "subprocess", "sys", "pty", "runpy", "pdb", "cprofile", "profile")
                     and cmd in ("python", "python3", "node", "npx", "uvx")
                     for a in args
                 )
@@ -878,6 +878,37 @@ async def _dispatch(tool_name: str, payload: dict, *, trace_hook=None) -> dict:
             except Exception:
                 log.exception("MCP tool execution failed: %s.%s", server_name, mcp_tool)
                 result = {"ok": False, "error": "MCP tool execution failed"}
+
+        elif tool_name == "mcp_batch":
+            manager = await get_mcp_manager()
+            calls = payload.get("calls", [])
+            if not isinstance(calls, list):
+                result = {"ok": False, "error": "'calls' must be a list of tool invocations."}
+            else:
+                async def _call_one(call: dict):
+                    server_name = call.get("server")
+                    mcp_tool = call.get("tool")
+                    arguments = call.get("arguments", {})
+                    try:
+                        if not server_name or not mcp_tool:
+                            return {"ok": False, "error": "MCP action requires 'server' and 'tool' arguments."}
+                        async with asyncio.timeout(180.0):
+                            call_res = await manager.call_tool(server_name, mcp_tool, arguments)
+                        if hasattr(call_res, "content"):
+                            text_output = "\n".join([c.text for c in call_res.content if hasattr(c, "text")])
+                            return {"ok": True, "server": server_name, "tool": mcp_tool, "result": text_output}
+                        return {"ok": True, "server": server_name, "tool": mcp_tool, "result": str(call_res)}
+                    except KeyError as e:
+                        return {"ok": False, "server": server_name, "tool": mcp_tool, "error": str(e)}
+                    except TimeoutError:
+                        return {"ok": False, "server": server_name, "tool": mcp_tool, "error": "MCP operation timed out."}
+                    except Exception as e:
+                        log.exception("MCP tool execution failed: %s.%s", server_name, mcp_tool)
+                        return {"ok": False, "server": server_name, "tool": mcp_tool, "error": "MCP tool execution failed"}
+
+                # Run concurrently
+                results = await asyncio.gather(*[_call_one(c) for c in calls])
+                result = {"ok": True, "results": results}
         elif tool_name == "git":
             # Read-only git introspection: the agent can see its own working
             # tree state, history, and diffs without any state-changing

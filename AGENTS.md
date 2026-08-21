@@ -135,6 +135,8 @@ restate and sharpen the evidence-first rules above; where they go further, they
 govern.
 
 **Verification**
+
+- **Model/Infra swap verification**: no model alias or serving infra change is accepted without hard evidence pasted in the discussion. A narrated "it works" is never sufficient. A model swap MUST be accompanied by a paste of the raw /v1/models output AND a live token-speed benchmark against the expected architecture (e.g. llama.exe output or script test).
 - **A finding is not real until it's checked against current code, not described
   from memory or a prior audit.** Before implementing anything from an audit,
   plan, or prior finding: read the actual file, at the actual current line,
@@ -265,18 +267,22 @@ claim matters and isn't trivially re-derivable, verify it with the actual tool
 ## Module Map
 
 ### swarm_os/core/ (Orchestration & Infrastructure)
-
 | File | Lines | Role |
 |------|-------|------|
+| `event_bus.py` | 61 | Core event bus for inter-component messaging |
 | `orchestrator.py` | 976 | `Orchestrator.generate()` — text generation loop with tool-call parsing, dedup, routing; `stream_generate()` slot acquire/release with try/finally (abandoned-stream leak fix) + bandit `record_success` on the success path |
 | `message_bus.py` | 100 | Async event bus with `Event` dataclass, `subscribe()`/`publish()` via `asyncio.Queue`; fire-and-forget handler tasks (`_pending_tasks`, no head-of-line blocking) |
 | `tool_parser.py` | 146 | `ToolParser` — stateless tool-call extraction from LLM text (3 pattern formats + CLI) |
 | `settings.py` | 36 | Settings/config dataclasses |
 
 ### swarm_os/api/ (HTTP API)
-
 | File | Lines | Role |
 |------|-------|------|
+| `_fallbacks.py` | 82 | API fallback endpoints |
+| `books.py` | 115 | Books knowledge-base routes |
+| `control.py` | 828 | Command-center control plane routes |
+| `swarm_stream.py` | 44 | SSE streaming utilities |
+| `legal.py` | 620 | Legal assistant routes |
 | `routes.py` | 1030 | Main router: `/status`, `/readyz`, `/events`, `/traces`, `/tools`, `/tools/cache`, `/tools/execute`, `/generate`, `/assign`, `/models/autoassign`, `/timeline`, `/memory/search`, `/traces/summary`, `/healing/evaluate`, `/router`, `/critic`, `/memories` |
 | `api_features.py` | 1242 | Feature router: `/features/search` (dense-vector search + rerank, `{status: ok\|degraded, fallback, results}` with keyword-scan degraded fallback), chat-search SSE, Upwork analyzer, codebase indexing, snapshot lifecycle, approval workflows |
 | `agents.py` | 279 | Agent CRUD + step execution + model management |
@@ -286,9 +292,18 @@ claim matters and isn't trivially re-derivable, verify it with the actual tool
 | `chess_trainer.py` | 732 | Chess trainer routes: `/chess/trainer/{health, tips, practice, evaluate, engine-move, engine-strong, coach/hint, coach/socratic, index-books, review, review/{solved,failed,stats,top,coach}, review/training/{build,answer,progress,calibration}, blunder-radar, drill/hanging, safety, threats, game/{start,review,queue-mistakes}, games, analytics, gm-games, gm-games/{curate,play,study,guess,explain}, import/chesscom, import/chesscom/{username,profile}, analysis/{start,jobs,status/{job_id}}}` + curated `PRACTICE_POSITIONS` |
 
 ### swarm_os/services/ (Application Services)
-
 | File | Lines | Role |
 |------|-------|------|
+| `autonomy_policy.py` | 179 | Written autonomy policy loader |
+| `chess_plans.py` | 92 | Persistent 'current plan' state |
+| `chess_store.py` | 104 | Durable JSONL store helpers |
+| `email_service.py` | 810 | Email integration for the local swarm |
+| `gm_games.py` | 758 | Grandmaster games collection |
+| `gmail_api.py` | 255 | Gmail REST API transport |
+| `gmail_browser.py` | 520 | Gmail over persistent Playwright browser |
+| `oauth2_loopback.py` | 182 | Fully-local OAuth2 loopback |
+| `orchestrator.py` | 4 | Orchestrator stub |
+| `simulation_service.py` | 86 | Simulation service logic |
 | `tool_registry.py` | 404 | `SemanticToolRegistry` — Qdrant-backed semantic tool discovery with async client |
 | `llm_client.py` | 331 | `CloudLLMClient` — detects provider (OpenRouter/NVIDIA/llama.cpp) via litellm |
 | `genetic_mutation_loop.py` | 493 | Code mutation loop for self-improvement (DangerRoom+SecurityGate+compile+pytest validated, staged for approval; daemonized hourly via `SWARM_GENETIC_MUTATION=1`) |
@@ -326,9 +341,6 @@ claim matters and isn't trivially re-derivable, verify it with the actual tool
 ### swarm_os/services/rv_finder/ (Used-RV Deal Finder package)
 
 Package split from the deleted 1,275-line `rv_finder.py`. Exposed as `find_best_rv_deals()` via `__init__.py`; wired to `POST /features/rv-finder/search` in `api_features.py`.
-
-| File | Lines | Role |
-|------|-------|------|
 | `__init__.py` | 20 | `find_best_rv_deals()` re-export; wired to `POST /features/rv-finder/search` |
 | `service.py` | 352 | `find_best_rv_deals()` orchestrator; type-filter normalization, best_motorhome fallback |
 | `parsers.py` | 712 | HTTP + PPL + web discovery, `DISCOVERY_PARSERS`, `_parse_snippet(title, body, url)`, junk-title filter |
@@ -338,11 +350,15 @@ Package split from the deleted 1,275-line `rv_finder.py`. Exposed as `find_best_
 | `models.py` | 76 | `RVListing` dataclass + `serialize_listing()` |
 
 ### swarm_os/services/legal/ (Rob's Lawyer — legal research package)
-
-Package split from the deleted 1,275-line `rv_finder.py` style: exposed as `advise()`, `/legal/*`.
-
 | File | Lines | Role |
 |------|-------|------|
+| `brief_draft.py` | 435 | Brief/motion drafting checklist |
+| `case_graph.py` | 353 | Case-law citation graph |
+| `case_tracker.py` | 136 | Case tracker |
+| `deep_research.py` | 422 | Deep-research mode |
+| `hybrid_search.py` | 150 | Hybrid lexical+dense retrieval |
+| `nuggets.py` | 207 | Transcript fact-nuggets |
+| `transcript_analysis.py` | 374 | Transcript analysis tools |
 | `corpus_ingest.py` | 602 | OpenUSLaw Parquets → Qdrant (5-jurisdiction scope: NY/NJ/GA/NC/federal), token-budget batching, UUID point ids, embed retry, module entrypoint |
 | `legal_search.py` | 371 | Hybrid retrieval over the ingested corpus (dense + keyword/fallback, `/legal/search`) |
 | `citation_verify.py` | 652 | Eyecite parse + CourtListener lookup (token-gated external leg); canonical vol/reporter/page case-key; 3-state stats (`fabricated`/`unverified`/`unparsed`) + `count_citation_shapes()` |
@@ -356,9 +372,6 @@ Package split from the deleted 1,275-line `rv_finder.py` style: exposed as `advi
 | `swarm_os/api/legal.py` | 620 | `/legal/{search, cases/search, verify-citations, health, ask, corpus-scope, brief/check, brief/skeleton, deep-research, citator, docket}` |
 
 ### swarm_os/services/control_plane/ (Orchestration Control Plane)
-
-| File | Lines | Role |
-|------|-------|------|
 | `strategy.py` | 404 | Pluggable routing strategies (Default/Deep) |
 | `router.py` | 256 | Routes requests to optimal models based on profiles, cooldowns, strategy |
 | `planner.py` | 176 | Task decomposition into `PlanStep` sequences |
@@ -373,9 +386,18 @@ Package split from the deleted 1,275-line `rv_finder.py` style: exposed as `advi
 | `policy.py` | 29 | Step budget enforcement (max 12 steps) |
 
 ### swarm_os/healing/ (Self-Healing)
-
 | File | Lines | Role |
 |------|-------|------|
+| `anomaly_tracker.py` | 93 | Tracks operational anomalies |
+| `diagnostician.py` | 253 | Diagnoses failure classes |
+| `governor_models.py` | 95 | Governor state models |
+| `healing_events.py` | 35 | Healing event definitions |
+| `learner.py` | 94 | Learning loop logic |
+| `rollback_manager.py` | 13 | Rollback manager |
+| `skill_extractor.py` | 96 | Skill extraction from transcripts |
+| `strategy_registry.py` | 63 | Healing strategy registry |
+| `system_probes.py` | 317 | Whole-computer health probes |
+| `system_recovery.py` | 270 | Whole-computer recovery actions |
 | `recovery_engine.py` | 536 | Coordinated recovery with anomaly tracking (DangerRoom-isolated LLM repair scripts, root-cause dispatch) |
 | `healing_service.py` | 168 | `AnomalyTracker`, `FailureDetector`, `RecoveryEngine`, `RollbackManager` |
 | `governor.py` | 256 | Governance model tracking |
@@ -384,22 +406,13 @@ Package split from the deleted 1,275-line `rv_finder.py` style: exposed as `advi
 | `failure_detector.py` | 199 | Failure detection probes |
 
 ### swarm_os/memory/ (Memory Bridge)
-
-| File | Lines | Role |
-|------|-------|------|
 | `memory_bridge.py` | 921 | `MemoryBridge` — event ingestion, vector ops, consolidation, GraphRAG, integrates with EventLogRepo, GraphRepo, MemoryDaemon |
 | `_memory_bridge_base.py` | 60 | Constants: `CHUNK_SIZE`, `SUM_MODEL`, `VECTOR_SIZE`, `Session`, `Bias` dataclasses |
 
 ### swarm_os/infra/ (Infrastructure Clients)
-
-| File | Lines | Role |
-|------|-------|------|
 | `llama_client.py` | 194 | `LlamaClient` (was `OllamaClient`) — local llama.cpp inference (port 8080), streaming, GLM cloud fork |
 
 ### swarm_os/repositories/ (Data Access Layer)
-
-| File | Lines | Role |
-|------|-------|------|
 | `graph_repo.py` | 145 | Persists `networkx.DiGraph` as GraphML with async save/lock/eviction |
 | `event_log_repo.py` | 99 | Tail-reads `events.jsonl` using file offsets, watermark resume |
 | `mutation_repo.py` | 168 | Manages pending code mutations with approve/reject/rollback |
@@ -407,18 +420,22 @@ Package split from the deleted 1,275-line `rv_finder.py` style: exposed as `advi
 | `snapshot_repository.py` | 18 | Abstract base class for snapshot persistence |
 
 ### swarm_os/kernel/ (Kernel)
-
 | File | Lines | Role |
 |------|-------|------|
+| `environment.py` | 11 | Environment settings |
+| `genetics_compat.py` | 19 | Genetics compatibility layer |
+| `metrics.py` | 26 | Run metrics models |
+| `migrations.py` | 15 | Snapshot migrations |
+| `restore.py` | 31 | Snapshot restoration |
+| `snapshot_index.py` | 16 | Snapshot indexing |
+| `status.py` | 17 | Kernel status models |
+| `swarm_kernel.py` | 362 | Swarm evolutionary loop |
 | `genetics.py` | 482 | Genetic mutation engine (consolidated from genetics + genetics_v2) |
 | `selection.py` | 499 | Selection/mating logic |
 | `organism.py` | 167 | Organism lifecycle |
 | `brain.py` | 179 | Brain logic |
 
 ### swarm_os/lib/vector/ (Vector Search)
-
-| File | Lines | Role |
-|------|-------|------|
 | `qdrant_store.py` | 103 | `search(collection, query, top_k)` — dense-vector search: embeds via :8081 (nomic-embed), `query_points` by vector (was `query_text`, which silently returned nothing on 768-dim collections). Never raises; degrades to `[]`. |
 | `reranker.py` | 139 | `rerank(query, candidates, top_k)` — BGE cross-encoder rerank via :8082, semaphore-bounded, graceful fallback to original ordering on outage. Was an EMPTY stub (caused `/features/search` ImportError → 503). |
 
@@ -434,17 +451,22 @@ Package split from the deleted 1,275-line `rv_finder.py` style: exposed as `advi
 > `swarm_os/kernel/`; `swarm_os/swarm_kernel.py` is a thin re-export of it.
 
 ### runtime_v2/api/ (Agent Execution)
-
-| File | Lines | Role |
-|------|-------|------|
 | `agent_service_v2.py` | 3141 | `AgentServiceV2` class — `step_agent_stream()` main agent loop. Orchestrates decisions, actions, healing. Persists tool_result failure events + diary writes + turn-budget reflexions. |
 | `_agent_config.py` | 45 | Constants: `MAX_TURNS`, `MAX_DEPTH`, `_DEFAULTS`, `ANALYSIS_AGENTS`, `INTERNET_GOAL_AGENTS` |
 | `_agent_routing.py` | 477 | `fast_route_coordinator()`, `fast_start_for_agent()`, `matches_task_keywords()`, `best_route_target()`, `is_compound_goal()`, `lookup_model()` — keyword routing + warmup (code_analyzer + coder) + researcher web-first turn |
 
 ### runtime_v2/services/ (LLM & Tool Services)
-
 | File | Lines | Role |
 |------|-------|------|
+| `_semantic_decision_cache.py` | 231 | Semantic decision cache |
+| `canary_registry.py` | 184 | Canary registry for rollback |
+| `checkpointing.py` | 102 | Durable agent-run checkpointing |
+| `mapper.py` | 80 | Data mapping utilities |
+| `online_routing.py` | 107 | Online win-rate routing |
+| `project_map.py` | 107 | Compact project map builder |
+| `run_snapshot.py` | 138 | Diff-scoped run snapshots |
+| `system_intel.py` | 592 | Read-only system intelligence tools |
+| `vision_router.py` | 78 | Llama.cpp Vision model router policy |
 | `memory_core.py` | 545 | `remember_fat()`, `get_relevant_memories()` — Qdrant-backed memory |
 | `_llm_parser.py` | 313 | `extract_json()`, `normalize_decision()`, `normalize_model_json()`, `TOOL_CALL_SCHEMA`, `fire_and_forget()` |
 | `stream_runner.py` | 573 | `get_tool_decision()` — orchestration: MCP schema, memory injection, retry loop, LLM call |
@@ -474,9 +496,11 @@ Package split from the deleted 1,275-line `rv_finder.py` style: exposed as `advi
 > cooldowns.
 
 ### organism_console/ (CLI Frontend)
-
 | File | Lines | Role |
 |------|-------|------|
+| `api_client.py` | 92 | Console API client |
+| `config.py` | 13 | Console config |
+| `speech.py` | 80 | Speech utilities |
 | `_commands_dev.py` | 801 | Dev commands: `diff`, `commit`, `branch`, `debug`, `patch`, `impact`, `compress` |
 | `_commands_ai.py` | 876 | AI commands: `heal`, `upgrade`, `goal`, `vote`, `memory`, `simulation` |
 | `_commands_system.py` | 714 | System commands: `help`, `status`, `trace`, `cloud`, `tools`, `mcp`, `routing` |
@@ -510,6 +534,11 @@ Dependency pairing: React 19 ↔ `@react-three/fiber` ^9.5 / `@react-three/drei`
 
 ---
 
+
+### start-console/src/
+| `router.tsx` | 19 | Frontend router |
+| `styles.css` | 139 | Frontend styles |
+
 ## Key Patterns
 
 - **Agent loop** (`step_agent_stream`): turn-based loop (max 8 turns). Each turn: context trim → warmup/fast-route → LLM tool-decision → action dispatch → loop guard. Yields AsyncGenerator[dict].
@@ -536,6 +565,22 @@ Dependency pairing: React 19 ↔ `@react-three/fiber` ^9.5 / `@react-three/drei`
 ---
 
 ## Recent Changes (do NOT re-apply)
+
+- **MCP batch/parallel dispatch (2026-08)**: added mcp_batch tool action for executing independent MCP tools concurrently. stream_runner.py now includes mcp_batch in the tool decision schema (with an example) whenever mcp is allowed, and 	ool_executor.py processes the calls array via syncio.gather for true parallel fan-out.
+
+- **Qwen3.5-4B MTP Restore (2026-08)**: Reverted the local proxy fallback from Qwen3.8-4B to Qwen3.5-4B-MTP to restore speculative decoding (-ngram-mod) speeds (~21 t/s). The mock /v1/models endpoint correctly reports the qwen3.5-4b and qwen3.5-0.8b aliases.
+  - Fixed a critical logical bug in parsers.py where _attr_int() failed to parse weights with commas (e.g., parsing "8,500" as 8), which broke the towing capability classifier.
+  - Mitigated an O(N) I/O memory thrashing issue in geo.py by converting the geocoding cache from a monolithic JSON dict to append-only JSON lines (.jsonl). Migrated the legacy cache seamlessly.
+
+- **Native llama.cpp Model Router (2026-08)**: Replaced destructive subprocess-kill hacks with `llama.cpp`'s native router mode for vision fallbacks.
+  - **`vision_models.ini`**: Config preset mapping aliases (`qwen3-vl-2b`, `glm-ocr`) to their `.gguf` and `.mmproj` paths, keeping context sizes tight.
+  - **`vision_router.py`**: Added `VisionRouter` to act as a Python policy layer, exposing two distinct narrow tools (`analyze_ui_screenshot` via Qwen, `extract_document_region` via GLM-OCR at `temp=0.0`) instead of relying on fuzzy heuristics. It relies on the `llama.cpp` server to seamlessly hot-swap the models under the hood.
+  - **`start-daily-services.ps1`**: Updated port 8083 boot to run `llama.exe serve --models-preset config\vision_models.ini`.
+
+- **Deterministic Agent Routing & Disk Cleanup (2026-08)**:
+  - **Temp Override**: `_llm_client.py` modified to force `temperature = 0.0` explicitly for strictly deterministic agent roles (`coordinator`, `planner`, `tool-runner`), bypassing the global config.
+  - **Agent Roles**: Locked `coordinator`, `planner`, and `tool-runner` to the `qwen3.8-4b` model in `config/agent_models.json`.
+  - **Disk Prune**: Purged ~20GB of dead models/bloat (Qwen3-14B, OptGuideOnDeviceModel local downloads, orphaned 2.1GB models folder, and 2.5GB opencode SQLite database logs). Stripped 14B logic from `start_llama.bat`.
 
 - **Proxy Stream Reliability & Model Swapping — 2 defects fixed (2026-08-20)**: The `model_router.py` streaming endpoint was failing to deliver text to the UI and crashing on model swaps.
   - **FIX 1**: The proxy was forwarding the client's `Accept-Encoding: gzip` header to the upstream `llama.cpp` instance, causing `llama.cpp` to compress the Server-Sent Events stream. The proxy then stripped the `content-encoding` header on the way back out, causing the client to silently fail to parse the raw gzip bytes. Stripped `accept-encoding` from the forwarded headers so the stream remains uncompressed plain text.
@@ -2015,3 +2060,5 @@ Head-to-head across all spec types on the 4B (gen = long paragraph, dec = tool-d
 
 
 ## Custom Learned Skills
+
+

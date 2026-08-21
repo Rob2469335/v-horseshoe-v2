@@ -283,7 +283,7 @@ def agent_tool_policy(tool: str, action: str | None = None) -> str:
 
     if t == "lsp":
         return CONFIRM
-    if t in ("mcp", "mcp_register"):
+    if t in ("mcp", "mcp_register", "mcp_batch"):
         return CONFIRM if a not in ("register", "configure") else ALWAYS_CONFIRM
     if t == "vscode_automation":
         return CONFIRM

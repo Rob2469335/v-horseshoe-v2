@@ -58,6 +58,9 @@ def build_tool_decision_system(allowed_tools: list, mcp_schema: str = "") -> str
         examples.append(
             '{"thought": "Querying DB", "action": "mcp", "server": "sqlite", "tool": "query", "arguments": {"query": "SELECT * FROM users"}}'
         )
+        examples.append(
+            '{"thought": "Running multiple queries", "action": "mcp_batch", "calls": [{"server": "sqlite", "tool": "query", "arguments": {"query": "SELECT * FROM users"}}, {"server": "sqlite", "tool": "query", "arguments": {"query": "SELECT * FROM orders"}}]}'
+        )
     if "mcp_register" in allowed_tools:
         examples.append(
             '{"thought": "Adding tool", "action": "mcp_register", "server_name": "my_tool", "command": "python", "args": [".swarm_brain/tools/my_tool.py"]}'

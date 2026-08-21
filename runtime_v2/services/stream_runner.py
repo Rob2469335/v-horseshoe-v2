@@ -138,10 +138,11 @@ async def get_tool_decision(
         "lsp",
         "mcp",
         "self_heal",
+        "mcp_batch",
     ]
 
     mcp_schema = ""
-    if "mcp" in allowed:
+    if "mcp" in allowed or "mcp_batch" in allowed:
         try:
             from runtime_v2.services.tool_executor import get_mcp_manager
 
@@ -174,7 +175,7 @@ async def get_tool_decision(
                 else:
                     tool_names = ", ".join(t["name"] for t in tools[:10])
                     mcp_schema = (
-                        f"AVAILABLE MCP TOOLS (use action=mcp): {tool_names}\n\n"
+                        f"AVAILABLE MCP TOOLS (use action=mcp or action=mcp_batch): {tool_names}\n\n"
                     )
         except Exception as e:
             log.error(f"Failed to fetch MCP schemas: {e}")
@@ -256,7 +257,7 @@ async def get_tool_decision(
             # UPGRADE: asyncio.timeout() context manager (composable, cancels cleanly)
             async with asyncio.timeout(_STEP_TIMEOUT):
                 response = await complete_for_tool_decision(
-                    litellm_model, base_messages, fallbacks
+                    litellm_model, base_messages, fallbacks, agent_id=agent_id
                 )
             if not response or not response.choices:
                 log.warning(
