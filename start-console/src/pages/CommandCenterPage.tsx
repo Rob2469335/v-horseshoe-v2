@@ -250,7 +250,7 @@ export default function CommandCenterPage() {
             )}
           </h1>
           <p className="page-subtitle">
-            See and control the whole machine: system probes, healing, screen, models, and agent routing — one surface.
+            Your easy-to-use control panel. Monitor the AI, see what it's doing, and manage its brains and memory all in one place.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -298,7 +298,7 @@ export default function CommandCenterPage() {
           <CardHeader>
             <CardTitle>System probes</CardTitle>
             <CardDescription>
-              Whole-computer health — safe issues auto-heal, destructive ops (kill/clean/restart) require your approval.
+              This monitors your computer's health. It fixes simple issues automatically, but asks for your permission before doing anything major like restarting or deleting files.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -336,8 +336,7 @@ export default function CommandCenterPage() {
           <CardHeader>
             <CardTitle>Screen control</CardTitle>
             <CardDescription>
-              Computer-use tier — read-only by default. Flip to autonomous to let the swarm drive the mouse &amp; keyboard.
-              Risky input (typing secrets, system shortcuts) still requires approval even in autonomous mode.
+              Watch what the AI is doing on your screen. You can let the AI use your mouse and keyboard automatically, but it will still ask you before typing passwords or doing risky things.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -424,7 +423,9 @@ export default function CommandCenterPage() {
         <Card className="border-white/10 bg-panel">
           <CardHeader>
             <CardTitle>Models &amp; agent routing</CardTitle>
-            <CardDescription>Installed models and per-agent assignment. Pick a model to reassign an agent live.</CardDescription>
+            <CardDescription>
+              These are the AI &quot;brains&quot; you have installed. You can assign different tasks to different brains here. Some brains are faster, and some are smarter.
+            </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex flex-wrap gap-2">
@@ -467,7 +468,9 @@ export default function CommandCenterPage() {
         <Card className="border-white/10 bg-panel">
           <CardHeader>
             <CardTitle>Memory stores</CardTitle>
-            <CardDescription>Live point counts per Qdrant collection.</CardDescription>
+            <CardDescription>
+              This is the AI's long-term memory. It remembers past conversations, documents, and code so it can help you better next time. The numbers show how many memories are saved.
+            </CardDescription>
           </CardHeader>
           <CardContent className="space-y-2">
             {Object.entries(memoryCounts).length === 0 && <div className="text-sm text-white/40">No memory collections.</div>}
@@ -485,8 +488,7 @@ export default function CommandCenterPage() {
           <CardHeader>
             <CardTitle>Resilience &amp; gateway</CardTitle>
             <CardDescription>
-              Models in cooldown after failures (exponential backoff + jitter) and the fallback pool
-              by provider. Cooldowns skip a failing model before the next LLM call.
+              If an AI brain gets overwhelmed or fails, this system gives it a temporary timeout to recover, and automatically switches to a backup brain so your work isn't interrupted.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -533,7 +535,9 @@ export default function CommandCenterPage() {
           <CardHeader className="flex-row items-center justify-between space-y-0">
             <div>
               <CardTitle>Live execution trace</CardTitle>
-              <CardDescription>Timestamped swarm events from the event bus — watch agents work in real time.</CardDescription>
+              <CardDescription>
+              This is a live feed of what the AI is thinking and doing right now. It shows you a step-by-step log of its actions behind the scenes.
+            </CardDescription>
             </div>
             <Badge className={liveFeed.length ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-300" : "border-white/20 bg-white/5 text-white/40"}>
               {liveFeed.length ? "streaming" : "idle"}
