@@ -267,6 +267,7 @@ class SocraticRequest(BaseModel):
     fen: str = Field(..., max_length=200, description="Current position FEN (side to move)")
     history: list[dict[str, str]] = Field(
         default_factory=list,
+        max_length=50,
         description="Rolling dialogue [{role: user|coach, content}], oldest first",
     )
     proposed_uci: str | None = Field(
