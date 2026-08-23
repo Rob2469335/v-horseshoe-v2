@@ -23,6 +23,7 @@ TWO NON-NEGOTIABLE CONSTRAINTS (spec'd before code):
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import logging
 import threading
@@ -426,7 +427,7 @@ async def _notify_task_complete(task_id: str, task: dict, result: dict) -> None:
             detail = f" — {result.get('count', 0)} emails"
         elif result.get("ingested") is not None:
             detail = f" — {result.get('ingested')} new items"
-        await notify(f"{status} Task <b>{goal}</b> done{detail}")
+        await notify(f"{status} Task <b>{html.escape(goal)}</b> done{html.escape(detail)}")
     except Exception as exc:
         log.warning("task notify failed: %s", exc)
 

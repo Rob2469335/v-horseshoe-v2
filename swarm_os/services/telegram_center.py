@@ -409,10 +409,10 @@ class TelegramCommandCenter:
                 return
             success = delete_task(parts[1])
             if success:
-                await self._client.send_message(chat_id, f"✅ Task {parts[1]} removed.")
+                await self._client.send_message(chat_id, f"✅ Task {html.escape(parts[1])} removed.")
             else:
                 await self._client.send_message(
-                    chat_id, f"❌ Task {parts[1]} not found."
+                    chat_id, f"❌ Task {html.escape(parts[1])} not found."
                 )
         elif action == "add":
             if len(parts) < 3:
@@ -426,7 +426,7 @@ class TelegramCommandCenter:
                 task = create_task(goal, schedule)
                 await self._client.send_message(
                     chat_id,
-                    f"✅ Created task {task['id']}\nGoal: {html.escape(goal)}\nSchedule: {schedule}",
+                    f"✅ Created task {html.escape(task['id'])}\nGoal: {html.escape(goal)}\nSchedule: {html.escape(schedule)}",
                 )
             except Exception as exc:
                 log.warning("telegram /cron failed: %s", exc)
@@ -455,7 +455,7 @@ class TelegramCommandCenter:
             from .news_digest import digest
             res = await digest(max_items=30)
             text = res.get("digest", "no digest") if res.get("ok") else "digest unavailable"
-            await self._client.send_message(chat_id, f"<b>Today's digest</b>\n\n{text}")
+            await self._client.send_message(chat_id, f"<b>Today's digest</b>\n\n{html.escape(text)}")
             
         asyncio.create_task(_run())
 
@@ -490,12 +490,12 @@ class TelegramCommandCenter:
         res = await asyncio.to_thread(email_list, "INBOX", 5)
         if not res.get("ok"):
             await self._client.send_message(
-                chat_id, f"Email unavailable: {res.get('error', '?')}"
+                chat_id, f"Email unavailable: {html.escape(res.get('error', '?'))}"
             )
             return
         lines = ["<b>Inbox (last 5)</b>"]
         for m in res.get("messages", []):
-            lines.append(f"• {m.get('subject', '(no subject)')[:80]}")
+            lines.append(f"• {html.escape(m.get('subject', '(no subject)')[:80])}")
         await self._client.send_message(chat_id, "\n".join(lines) or "Empty inbox.")
 
     async def _dispatch_goal(self, goal: str) -> None:
@@ -566,13 +566,13 @@ class TelegramCommandCenter:
             if approve:
                 consumed = registry.consume_any(pending_id)
                 if consumed:
-                    note = f"✅ Approved {tool} {action}"
+                    note = f"✅ Approved {html.escape(tool)} {html.escape(action)}"
                     await self._dispatch_approved(consumed)
                 else:
                     note = "That action was already consumed or expired."
             else:
                 registry.deny(pending_id)
-                note = f"⛔ Denied {tool} {action}"
+                note = f"⛔ Denied {html.escape(tool)} {html.escape(action)}"
         if self._client:
             if callback_id:
                 await self._client.answer_callback(callback_id, note)
