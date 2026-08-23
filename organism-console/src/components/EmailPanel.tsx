@@ -18,6 +18,12 @@ type EmailMessage = {
 
 type Props = { backendUrl: string }
 
+async function fetchJson(url: string, init?: RequestInit): Promise<any> {
+  const res = await fetch(url, init)
+  if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`)
+  return res.json()
+}
+
 export default function EmailPanel({ backendUrl }: Props) {
   const [status, setStatus] = useState<{ configured: boolean; reason?: string } | null>(null)
   const [inbox, setInbox] = useState<EmailMessage[]>([])
@@ -35,13 +41,13 @@ export default function EmailPanel({ backendUrl }: Props) {
 
   const refresh = useCallback(async () => {
     try {
-      const s = await (await fetch(`${backendUrl}/control/email/status`)).json()
+      const s = await fetchJson(`${backendUrl}/control/email/status`)
       setStatus(s)
       if (s.configured) {
-        const r = await (await fetch(`${backendUrl}/control/email/list`, {
+        const r = await fetchJson(`${backendUrl}/control/email/list`, {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ folder: "INBOX", limit: 20 }),
-        })).json()
+        })
         setInbox(r.messages ?? [])
       }
     } catch {
@@ -53,19 +59,23 @@ export default function EmailPanel({ backendUrl }: Props) {
 
   const search = async () => {
     if (!query.trim()) { refresh(); return }
-    const r = await (await fetch(`${backendUrl}/control/email/search`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query, limit: 20 }),
-    })).json()
-    setInbox(r.messages ?? [])
+    try {
+      const r = await fetchJson(`${backendUrl}/control/email/search`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query, limit: 20 }),
+      })
+      setInbox(r.messages ?? [])
+    } catch { /* ignore — backend may be down */ }
   }
 
   const openMsg = async (m: EmailMessage) => {
-    const r = await (await fetch(`${backendUrl}/control/email/read`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ uid: m.id }),
-    })).json()
-    setSelected({ ...m, body: r.body })
+    try {
+      const r = await fetchJson(`${backendUrl}/control/email/read`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ uid: m.id }),
+      })
+      setSelected({ ...m, body: r.body })
+    } catch { /* ignore */ }
   }
 
   const summarizeThread = async () => {
@@ -73,10 +83,10 @@ export default function EmailPanel({ backendUrl }: Props) {
     setSummaryLoading(true)
     setSummary("")
     try {
-      const r = await (await fetch(`${backendUrl}/control/email/summarize-thread`, {
+      const r = await fetchJson(`${backendUrl}/control/email/summarize-thread`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ uid: selected.id }),
-      })).json()
+      })
       setSummary(r.summary ?? r.error ?? "no summary")
     } catch (e: any) {
       setSummary(`Failed: ${e.message}`)
@@ -85,37 +95,45 @@ export default function EmailPanel({ backendUrl }: Props) {
 
   const replyDraft = async () => {
     if (!selected) return
-    const r = await (await fetch(`${backendUrl}/control/email/reply-draft`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ uid: selected.id, note: draft.body }),
-    })).json()
-    if (r.ok && r.send_token) {
-      setDraft({ to: r.draft.to, subject: r.draft.subject, body: r.draft.body })
-      setDraftResult("Reply drafted — approval required before send.")
-      pendingTokenRef.current = r.send_token
-    } else {
-      setDraftResult(`Reply draft failed: ${r.error ?? "unknown"}`)
+    try {
+      const r = await fetchJson(`${backendUrl}/control/email/reply-draft`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ uid: selected.id, note: draft.body }),
+      })
+      if (r.ok && r.send_token) {
+        setDraft({ to: r.draft.to, subject: r.draft.subject, body: r.draft.body })
+        setDraftResult("Reply drafted — approval required before send.")
+        pendingTokenRef.current = r.send_token
+      } else {
+        setDraftResult(`Reply draft failed: ${r.error ?? "unknown"}`)
+      }
+    } catch (e: any) {
+      setDraftResult(`Reply draft failed: ${e.message}`)
     }
   }
 
   const manage = async (op: string) => {
     if (!selected) return
-    const r = await (await fetch(`${backendUrl}/control/email/manage`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ op, uid: selected.id }),
-    })).json()
-    setDraftResult(r.ok ? `✓ ${op} ${selected.subject}` : `${op} failed: ${r.error}`)
-    if (r.ok) refresh()
+    try {
+      const r = await fetchJson(`${backendUrl}/control/email/manage`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ op, uid: selected.id }),
+      })
+      setDraftResult(r.ok ? `✓ ${op} ${selected.subject}` : `${op} failed: ${r.error}`)
+      if (r.ok) refresh()
+    } catch (e: any) {
+      setDraftResult(`${op} failed: ${e.message}`)
+    }
   }
 
   const runDigest = async () => {
     setDigestLoading(true)
     setDigest("")
     try {
-      const r = await (await fetch(`${backendUrl}/control/email/digest`, {
+      const r = await fetchJson(`${backendUrl}/control/email/digest`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ days: 7 }),
-      })).json()
+      })
       setDigest(r.digest ?? r.error ?? "no digest")
     } catch (e: any) {
       setDigest(`Failed: ${e.message}`)
@@ -123,24 +141,32 @@ export default function EmailPanel({ backendUrl }: Props) {
   }
 
   const scanUnsubscribes = async () => {
-    const r = await (await fetch(`${backendUrl}/control/email/unsubscribe-scan`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ limit: 50 }),
-    })).json()
-    setUnsubscribes(r.messages ?? [])
-    setDraftResult(r.count ? `Found ${r.count} senders with unsubscribe links.` : "No newsletters detected in recent mail.")
+    try {
+      const r = await fetchJson(`${backendUrl}/control/email/unsubscribe-scan`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ limit: 50 }),
+      })
+      setUnsubscribes(r.messages ?? [])
+      setDraftResult(r.count ? `Found ${r.count} senders with unsubscribe links.` : "No newsletters detected in recent mail.")
+    } catch (e: any) {
+      setDraftResult(`Scan failed: ${e.message}`)
+    }
   }
 
   const stageDraft = async () => {
-    const r = await (await fetch(`${backendUrl}/control/email/draft`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(draft),
-    })).json()
-    if (r.ok && r.send_token) {
-      setDraftResult(`Draft staged — approval required before send. Token expires in ${r.expires_in_s}s.`)
-      pendingTokenRef.current = r.send_token
-    } else {
-      setDraftResult(`Draft failed: ${r.error ?? "unknown"}`)
+    try {
+      const r = await fetchJson(`${backendUrl}/control/email/draft`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(draft),
+      })
+      if (r.ok && r.send_token) {
+        setDraftResult(`Draft staged — approval required before send. Token expires in ${r.expires_in_s}s.`)
+        pendingTokenRef.current = r.send_token
+      } else {
+        setDraftResult(`Draft failed: ${r.error ?? "unknown"}`)
+      }
+    } catch (e: any) {
+      setDraftResult(`Draft failed: ${e.message}`)
     }
   }
 
@@ -148,13 +174,18 @@ export default function EmailPanel({ backendUrl }: Props) {
     const token = pendingTokenRef.current
     if (!token) { setDraftResult("No pending draft to send."); return }
     setSending(true)
-    const r = await (await fetch(`${backendUrl}/control/email/send`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ send_token: token, confirmed: true }),
-    })).json()
-    setSending(false)
-    setDraftResult(r.ok ? `✓ Sent to ${r.to}: ${r.subject}` : `Send failed: ${r.error}`)
-    pendingTokenRef.current = null
+    try {
+      const r = await fetchJson(`${backendUrl}/control/email/send`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ send_token: token, confirmed: true }),
+      })
+      setDraftResult(r.ok ? `✓ Sent to ${r.to}: ${r.subject}` : `Send failed: ${r.error}`)
+    } catch (e: any) {
+      setDraftResult(`Send failed: ${e.message}`)
+    } finally {
+      setSending(false)
+      pendingTokenRef.current = null
+    }
   }
 
   return (
