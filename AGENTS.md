@@ -466,7 +466,7 @@ Package split from the deleted 1,275-line `rv_finder.py`. Exposed as `find_best_
 | `project_map.py` | 107 | Compact project map builder |
 | `run_snapshot.py` | 138 | Diff-scoped run snapshots |
 | `system_intel.py` | 592 | Read-only system intelligence tools |
-| `vision_router.py` | 89 | Llama.cpp Vision model router policy |
+| `vision_router.py` | 59 | Llama.cpp Vision model router policy |
 | `memory_core.py` | 554 | `remember_fat()`, `get_relevant_memories()` — Qdrant-backed memory |
 | `_llm_parser.py` | 313 | `extract_json()`, `normalize_decision()`, `normalize_model_json()`, `TOOL_CALL_SCHEMA`, `fire_and_forget()` |
 | `stream_runner.py` | 573 | `get_tool_decision()` — orchestration: MCP schema, memory injection, retry loop, LLM call |
