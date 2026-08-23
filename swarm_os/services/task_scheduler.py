@@ -45,6 +45,18 @@ def _now() -> float:
     return time.time()
 
 
+_CLAIM_TTL_S = 900.0
+
+
+def _clear_claim(task_id: str) -> None:
+    """Release a dispatch claim (refusal or crashed runner) so the task can be
+    collected again in the next window."""
+    with _LOCK:
+        data = _load()
+        task = data.get(task_id)
+        if task and task.pop("claimed_at", None) is not None:
+            _save(data)
+
 def _load() -> dict:
     try:
         if _TASKS_FILE.exists():
@@ -327,11 +339,27 @@ async def run_due_tasks(runner=None) -> list[str]:
     if runner is None:
         runner = _default_runner
     due_ids = []
+    now = _now()
     with _LOCK:
         data = _load()
+        dirty = False
         for tid, task in data.items():
-            if _is_due(task, _now()):
-                due_ids.append(tid)
+            if not _is_due(task, now):
+                continue
+            # CLAIM before dispatch (audit 2026-08-23 B5): last_run is only
+            # written AFTER a slow runner finishes, so two collectors (60s
+            # daemon tick + manual /tasks/run) used to dispatch the same due
+            # task twice. An unexpired claim makes the second collector skip;
+            # refusals/exceptions release it below.
+            claimed = float(task.get("claimed_at") or 0.0)
+            if claimed and (now - claimed) < _CLAIM_TTL_S:
+                log.info("scheduled task %s already claimed - skipping", tid)
+                continue
+            task["claimed_at"] = now
+            dirty = True
+            due_ids.append(tid)
+        if dirty:
+            _save(data)
     ran = []
     for tid in due_ids:
         try:
@@ -343,12 +371,14 @@ async def run_due_tasks(runner=None) -> list[str]:
             # CEILING FIRST (authority), then known-safe (fail-closed on unmapped).
             allowed, reason = _ceiling_gate(goal)
             if not allowed:
+                _clear_claim(tid)
                 _record_result(
                     tid, {"ok": False, "blocked": "scheduler_ceiling", "reason": reason}
                 )
                 log.warning("scheduled task %s BLOCKED: %s", tid, reason)
                 continue
             if not _goal_is_known_safe(goal):
+                _clear_claim(tid)
                 _record_result(
                     tid,
                     {
@@ -367,6 +397,7 @@ async def run_due_tasks(runner=None) -> list[str]:
             log.info("scheduled task %s ran: %s", tid, str(result)[:120])
             await _notify_task_complete(tid, task, result)
         except Exception as exc:
+            _clear_claim(tid)
             # RETRY STORM FIX: Record the failure so last_run updates, preventing
             # continuous re-trigger every 60s.
             _record_result(
@@ -406,6 +437,8 @@ def _record_result(task_id: str, result: dict) -> None:
         if task_id in data:
             data[task_id]["last_run"] = datetime.now().isoformat()
             data[task_id]["result"] = result
+            # Outcome is durable - the dispatch claim has served its purpose.
+            data[task_id].pop("claimed_at", None)
             _save(data)
 
 

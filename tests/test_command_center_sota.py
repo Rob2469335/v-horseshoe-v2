@@ -300,3 +300,51 @@ def test_daemon_heartbeat_written(monkeypatch, tmp_path):
     daemon = ts.TaskSchedulerDaemon(interval_seconds=0.1)
     daemon._write_heartbeat()
     assert (tmp_path / "heartbeat.json").exists()
+
+
+def test_due_task_claimed_once_under_concurrent_collectors(monkeypatch, tmp_path):
+    """Audit B5: last_run is written only AFTER a slow runner finishes, so two
+    collectors (60s daemon tick + manual /tasks/run) both collected the same
+    due task and dispatched it twice. Claim-before-dispatch makes the second
+    collector skip while the first is in flight."""
+    import asyncio
+
+    from swarm_os.services import task_scheduler as ts
+
+    monkeypatch.setattr(ts, "_TASKS_FILE", tmp_path / "tasks.json")
+    ts.create_task("email summary", "daily 08:00")
+    monkeypatch.setattr(ts, "_is_due", lambda task, now=None: True)
+
+    runs = []
+
+    async def slow_runner(task):
+        runs.append(task["id"])
+        await asyncio.sleep(0.05)
+        return {"ok": True}
+
+    async def drive():
+        return await asyncio.gather(
+            ts.run_due_tasks(runner=slow_runner),
+            (await asyncio.sleep(0.01)) or ts.run_due_tasks(runner=slow_runner),
+        )
+
+    a, b = asyncio.run(drive())
+    total = len(a) + len(b)
+    assert total == 1, f"task dispatched {total}x across concurrent collectors"
+    assert len(runs) == 1
+
+
+def test_claim_released_on_refusal(monkeypatch, tmp_path):
+    """A ceiling-refused goal must not keep the claim - it stays collectable."""
+    from swarm_os.services import task_scheduler as ts
+
+    monkeypatch.setattr(ts, "_TASKS_FILE", tmp_path / "tasks.json")
+    ts.create_task("send an email now", "daily 08:00")
+    monkeypatch.setattr(ts, "_is_due", lambda task, now=None: True)
+
+    ran = asyncio.run(ts.run_due_tasks(runner=lambda task: {"ok": True}))
+    assert ran == []  # refused (email_send is important-tier)
+
+    with ts._LOCK:
+        data = ts._load()
+    assert all("claimed_at" not in t for t in data.values()), "claim leaked on refusal"
