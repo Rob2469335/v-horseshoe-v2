@@ -84,10 +84,14 @@ async def start_daily_models():
     )
     active_processes.append(p_rerank)
     
-    # Vision
+    # Vision - ROUTER mode over config/vision_models.ini presets.
+    # Routes per-request via the "model" field (qwen3-vl-2b / glm-ocr /
+    # qwen35-9b); child processes load on demand. --models-max 1 keeps a
+    # single resident, matching the old single-server memory footprint.
     p_vis = subprocess.Popen(
-        [".\\bin\\llama.exe", "serve", "-m", "C:\\Users\\rober\\models\\Qwen3VL-2B-Instruct-Q4_K_M.gguf", 
-         "--mmproj", "C:\\Users\\rober\\models\\mmproj-Qwen3VL-2B-Instruct-F16.gguf", "--image-min-tokens", "1024", "-c", "16384", "--api-key", "llama", "--cors-origins", "*", "--port", "8083", "-t", "2"],
+        [".\\bin\\llama.exe", "serve", "--models-preset", "config\\vision_models.ini",
+         "--models-max", "1", "--api-key", "llama", "--cors-origins", "*",
+         "--port", "8083"],
         cwd=cwd
     )
     active_processes.append(p_vis)

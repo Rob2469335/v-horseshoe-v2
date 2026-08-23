@@ -20,20 +20,17 @@ class VisionRouter:
     def __init__(self):
         self.headers = {"Authorization": f"Bearer {API_KEY}"}
 
-    async def _load_model(self, model: str):
-        print(f"[{model}] Hot-swapping into RAM...")
-        resp = await get_client().post(f"{LLAMA_BASE}/models/load", json={"model": model}, headers=self.headers)
-        resp.raise_for_status()
-
-    async def _unload_model(self, model: str):
-        print(f"[{model}] Unloading from RAM...")
-        resp = await get_client().post(f"{LLAMA_BASE}/models/unload", json={"model": model}, headers=self.headers)
-        resp.raise_for_status()
+    # NOTE: :8083 runs in llama.cpp ROUTER mode (--models-preset). There is no
+    # /models/load endpoint on this build - the router selects the preset from
+    # the per-request "model" field and loads/unloads child processes itself.
+    # (The previous explicit hot-swap calls 404'd in production.)
 
     async def _chat_completion(self, model: str, prompt: str, b64_image: str, temp: float) -> str:
         payload = {
             "model": model,
             "temperature": temp,
+            "max_tokens": 700,
+            "chat_template_kwargs": {"enable_thinking": False},
             "messages": [
                 {
                     "role": "user",
@@ -50,40 +47,23 @@ class VisionRouter:
 
     async def analyze_ui_screenshot(self, image_path: str, goal: str) -> str:
         """
-        Tool for Playwright GUI logic. Uses the resident Qwen3-VL 2B.
+        Tool for Playwright GUI logic. Routes to the resident Qwen3-VL 2B preset.
         """
         b64_image = base64.b64encode(Path(image_path).read_bytes()).decode("utf-8")
         return await self._chat_completion(MODEL_QWEN, goal, b64_image, temp=0.2)
 
     async def extract_document_region(self, image_path: str, schema: Optional[str] = None) -> str:
         """
-        Tool for dense tables, forms, or receipts. Hot-swaps to GLM-OCR, runs at temp=0, and unloads.
+        Tool for dense tables, forms, or receipts. Routes to GLM-OCR at temp=0.
+        The router loads the preset on demand; no manual swap needed.
         """
         b64_image = base64.b64encode(Path(image_path).read_bytes()).decode("utf-8")
-        
+
         prompt = (
             "Extract the visible table exactly. Return JSON with: "
             '{ "rows": [{"rank": "", "title": "", "gross": "", "year": ""}], "uncertain_fields": [] } '
             "Do not infer missing values. Use empty strings when unreadable."
         ) if not schema else schema
 
-        # 1. Hot swap to GLM-OCR
-        await self._load_model(MODEL_GLM)
-        
-        try:
-            # 2. Extract cleanly
-            print("[glm-ocr] Extracting dense text...")
-            result = await self._chat_completion(MODEL_GLM, prompt, b64_image, temp=0.0)
-            return result
-        finally:
-            # 3. Unload to free RAM
-            try:
-                await self._unload_model(MODEL_GLM)
-            except Exception as e:
-                print(f"[glm-ocr] Failed to unload: {e}")
-            
-            # 4. Restore resident Qwen
-            try:
-                await self._load_model(MODEL_QWEN)
-            except Exception as e:
-                print(f"[qwen3-vl-2b] Failed to reload: {e}")
+        print("[glm-ocr] Extracting dense text...")
+        return await self._chat_completion(MODEL_GLM, prompt, b64_image, temp=0.0)
