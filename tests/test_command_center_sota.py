@@ -13,7 +13,6 @@ real threat model) — their code does not exist in the tree.
 """
 
 import asyncio
-import time
 
 import pytest
 
@@ -169,7 +168,11 @@ def test_is_due_daily(monkeypatch, tmp_path):
     monkeypatch.setattr(ts, "datetime", _FakeDT)
     with ts._LOCK:
         data = ts._load()
-    assert ts._is_due(data[t["id"]], time.time()) is True
+    # Deterministic: pass an explicit 09:00 epoch. (_now() reads time.time()
+    # directly, so the datetime monkeypatch alone can't drive _is_due; and a
+    # bare time.time() made this test pass only when run after 08:00 local.)
+    fixed_0900 = _dt.datetime.now().replace(hour=9, minute=0, second=0, microsecond=0).timestamp()
+    assert ts._is_due(data[t["id"]], fixed_0900) is True
 
 
 def test_ceiling_gate_is_authority_before_keyword_scan(monkeypatch, tmp_path):
