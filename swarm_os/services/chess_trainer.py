@@ -1112,6 +1112,23 @@ async def engine_reply(fen: str, rating: int = 500, level: int = 1) -> dict[str,
 
         # Level -> temperature (higher = more uniform/blurrier choice) and a
         # blunder probability (occasionally play a clearly-worse move).
+        # Levels above 4 mean "strongest possible reply": play the engine's
+        # best move directly with no human-like sampling. (The old fallthrough
+        # let level=20 - sent by /engine-strong - land in the level-2 defaults:
+        # 22% blunder rate on the "strongest" endpoint.)
+        if level > 4:
+            best_move, _, _ = await asyncio.to_thread(_best_move_and_cp, board)
+            legal = list(board.legal_moves)
+            if best_move is None:
+                return {"ok": False, "error": "engine unavailable"}
+            best = chess.Move.from_uci(best_move)
+            return {
+                "ok": True,
+                "move": best.uci(),
+                "san": board.san(best),
+                "level": level,
+                "strongest": True,
+            }
         temp = {1: 2.2, 2: 1.4, 3: 0.8, 4: 0.3}.get(level, 1.4)
         blunder_p = {1: 0.35, 2: 0.22, 3: 0.10, 4: 0.02}.get(level, 0.22)
 
@@ -1206,6 +1223,16 @@ async def evaluate_move(
         }
 
     before_best, before_cp, _ = await asyncio.to_thread(_best_move_and_cp, board)
+    if before_best is None:
+        # Fail-closed: engine unavailable (missing binary or lock contention).
+        # The old path classified with zeroed evals -> "Excellent" on every
+        # move while silently blind. Never fabricate a rating from no data.
+        return {
+            "ok": False,
+            "legal": True,
+            "error": "engine unavailable - evaluation skipped; retry shortly",
+            "uci": uci,
+        }
     # Material before the move (for the material guard in classification: a
     # move that doesn't lose material is never a Mistake/Blunder).
     mover_sign = 1 if board.turn == chess.WHITE else -1
@@ -1665,11 +1692,14 @@ async def _proposal_eval(fen: str, uci: str) -> dict[str, Any]:
                 "ok": False,
                 "error": f"'{uci}' is not a legal move in this position",
             }
-        before_best, before_cp, _ = await asyncio.to_thread(_best_move_and_cp, board)
         try:
             san = board.san(move)
         except Exception:
             san = uci
+        # Pre-move engine eval (best move + cp from mover's perspective).
+        before_best, before_cp, _ = await asyncio.to_thread(_best_move_and_cp, board)
+        if before_best is None:
+            return {"ok": False, "error": "engine unavailable - evaluation skipped"}
         # Net material change from the MOVER's perspective — WITHOUT this, the
         # material guard in _classify defaults to 0.0 and a hung Queen is
         # classified as at-most Inaccuracy.

@@ -798,3 +798,42 @@ def test_socratic_deterministic_fallback_reacts_to_proposal(monkeypatch):
     assert res["ok"] is True
     assert res["reply"]
     assert "e4" in res["reply"] or "win chance" in res["reply"]
+
+
+def test_engine_strong_level20_plays_best_move_not_blunder_sampling():
+    """Regression (2026-08-23 audit F1): /engine-strong sent level=20, which
+    missed the 1-4 sampling dicts and landed in the level-2 defaults
+    (temp=1.4, blunder_p=0.22) - the 'strongest possible reply' endpoint
+    blundered 22% of the time. Levels > 4 must bypass human-like sampling
+    and return the engine's best move deterministically."""
+    import asyncio
+
+    r = asyncio.run(
+        ct.engine_reply(
+            "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+            rating=2500,
+            level=20,
+        )
+    )
+    assert r["ok"] is True
+    assert r.get("strongest") is True
+    assert r["move"] == "e2e4"  # from the monkeypatched _best_move_and_cp
+
+
+def test_evaluate_move_fail_closed_when_engine_unavailable(monkeypatch):
+    """Regression (2026-08-23 audit F2): when _best_move_and_cp returns None
+    (engine missing or lock timeout), evaluate_move classified the move with
+    zeroed evals -> 'Excellent' with ok:True. Must fail closed instead."""
+    import asyncio
+
+    monkeypatch.setattr(ct, "_best_move_and_cp", lambda board: (None, 0.0, []))
+    r = asyncio.run(
+        ct.evaluate_move(
+            "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+            "g1f3",
+            rating=800,
+        )
+    )
+    assert r["ok"] is False
+    assert "engine" in r["error"].lower()
+    assert "classification" not in r
