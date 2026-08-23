@@ -43,14 +43,20 @@ rem   qwen3.5-4b-mtp = MTP 4B (same as default)
 set "GEN_MODEL=C:\Users\rober\models\Qwen3.5-4B-UD-Q4_K_XL.gguf"
 set "GEN_ALIAS=qwen3.5-4b"
 set "GEN_NGL=99"
-if "%SWARM_LOCAL_MODEL%"=="qwen3.5-4b" (
-    set "GEN_MODEL=C:\Users\rober\models\Qwen3.5-4B-Q4_K_M.gguf"
-    set "GEN_ALIAS=qwen3.5-4b"
-    set "GEN_NGL=99"
-)
+rem NOTE: qwen3.5-4b override disabled — Qwen3.5-4B-Q4_K_M.gguf (plain, non-MTP) was never downloaded.
+rem if "%SWARM_LOCAL_MODEL%"=="qwen3.5-4b" (
+rem     set "GEN_MODEL=C:\Users\rober\models\Qwen3.5-4B-Q4_K_M.gguf"
+rem     set "GEN_ALIAS=qwen3.5-4b"
+rem     set "GEN_NGL=99"
+rem )
 if "%SWARM_LOCAL_MODEL%"=="qwen3.5-4b-mtp" (
     set "GEN_MODEL=C:\Users\rober\models\Qwen3.5-4B-UD-Q4_K_XL.gguf"
     set "GEN_ALIAS=qwen3.5-4b"
+    set "GEN_NGL=99"
+)
+if "%SWARM_LOCAL_MODEL%"=="qwen3.8-4b" (
+    set "GEN_MODEL=C:\Users\rober\models\Qwen3.8-4B-Q4_K_M.gguf"
+    set "GEN_ALIAS=qwen3.8-4b"
     set "GEN_NGL=99"
 )
 rem BUG FIX: --cache-reuse 1024 is not supported by MTP GGUFs (kv_unified=false).
@@ -59,6 +65,7 @@ rem Only set it for non-MTP models (plain Q4_K_M; MTP models have 'UD' in filena
 set "CACHE_REUSE_ARG=--cache-reuse 1024"
 echo %GEN_MODEL% | findstr /i "UD" >nul && set "CACHE_REUSE_ARG="
 
-bin\llama.exe serve -m "%GEN_MODEL%" --alias "%GEN_ALIAS%" -c 16384 -fa on -ctk q8_0 -ctv q8_0 -t 2 -tb 4 -b 2048 -ub 512 -np 1 --timeout 300 %CACHE_REUSE_ARG% -ngl %GEN_NGL% --port 8080 %SPEC_ARGS%
+set "LLAMA_PORT_ARG=%LLAMA_PORT%"
+if not defined LLAMA_PORT_ARG set "LLAMA_PORT_ARG=8080"
 
-pause
+bin\llama.exe serve -m "%GEN_MODEL%" --alias "%GEN_ALIAS%" -c 16384 -fa on -ctk q8_0 -ctv q8_0 -t 2 -tb 4 -b 2048 -ub 512 -np 1 --timeout 300 %CACHE_REUSE_ARG% -ngl %GEN_NGL% --port %LLAMA_PORT_ARG% %SPEC_ARGS%

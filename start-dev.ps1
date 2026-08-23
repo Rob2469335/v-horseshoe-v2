@@ -73,7 +73,7 @@ Write-Host "OpenCode Base URL:        $([bool]$env:OPENAI_API_BASE)" -Foreground
 
 # STEP 1 - Cleanup
 Write-Host "`n[STEP 1] Cleaning up..." -ForegroundColor Yellow
-foreach ($svc in @("llama-server","qdrant","node","python")) {
+foreach ($svc in @("llama","qdrant","node","python")) {
     Get-Process -Name $svc -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 }
 Start-Sleep -Seconds 1
@@ -136,6 +136,11 @@ if ($env:SWARM_LOCAL_MODEL -eq "qwen3.5-4b-mtp") {
     $genAlias = "qwen3.5-4b"
     $genNgl = "99"
 }
+if ($env:SWARM_LOCAL_MODEL -eq "qwen3.8-4b") {
+    $genModel = "C:\Users\rober\models\Qwen3.8-4B-Q4_K_M.gguf"
+    $genAlias = "qwen3.8-4b"
+    $genNgl = "99"
+}
 # BUG FIX: cache-reuse is not supported by MTP GGUFs (kv_unified=false).
 # Passing it generates a warning on every boot and the flag is silently dropped.
 # Only set it for non-MTP models (plain Q4_K_M builds don't contain 'UD' in name).
@@ -145,12 +150,17 @@ $cacheReuseArg = if ($genModel -like "*UD*") { @() } else { @("--cache-reuse", "
 # no effect, draft-mtp missed --spec-draft-n-max 3, and SWARM_DRAFT_MODEL was
 # silently ignored. Now passes $specArgs + $cacheReuseArg as ArgumentList and uses
 # @spec / @cacheReuse splatting inside the ScriptBlock.
-$llamaGenJob = Start-Job -ScriptBlock { param($r, $spec, $cacheReuse, $m, $a, $ngl); Set-Location $r; & .\bin\llama.exe serve -m $m --alias $a -c 16384 -ctk q8_0 -ctv q8_0 -fa on -t 2 -tb 4 -b 2048 -ub 512 -np 1 --timeout 300 @cacheReuse --api-key "llama" --cors-origins "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000" -ngl $ngl --port 8080 @spec 2>&1 } -ArgumentList $root, $specArgs, $cacheReuseArg, $genModel, $genAlias, $genNgl
-$llamaEmbJob = Start-Job -ScriptBlock { param($r); Set-Location $r; & .\bin\llama.exe serve -m "C:\Users\rober\models\gte-modernbert-base-Q8_0.gguf" --embedding --pooling cls -b 8192 -ub 8192 --api-key "llama" --cors-origins "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000" --port 8081 -t 2 2>&1 } -ArgumentList $root
-$llamaRerankJob = Start-Job -ScriptBlock { param($r); Set-Location $r; & .\bin\llama.exe serve -m "C:\Users\rober\models\gte-reranker-modernbert-base-Q8_0.gguf" --reranking --pooling rank -b 8192 -ub 8192 --api-key "llama" --cors-origins "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000" --port 8082 -t 2 2>&1 } -ArgumentList $root
-$llamaVisJob = Start-Job -ScriptBlock { param($r); Set-Location $r; & .\bin\llama.exe serve -m "C:\Users\rober\models\Qwen3VL-2B-Instruct-Q4_K_M.gguf" --mmproj "C:\Users\rober\models\mmproj-Qwen3VL-2B-Instruct-F16.gguf" --image-min-tokens 1024 -c 16384 --api-key "llama" --cors-origins "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000" --port 8083 -t 2 2>&1 } -ArgumentList $root
-# 0.8B summarization server (dedicated to memory consolidation/distiller — fast, lightweight, keeps the main 4B slot free)
-$llamaSummJob = Start-Job -ScriptBlock { param($r); Set-Location $r; & .\bin\llama.exe serve -m "C:\Users\rober\models\Qwen3.5-0.8B.Q4_K_M.gguf" --alias "qwen3.5-0.8b" -c 8192 -t 1 -tb 2 -b 512 -ub 256 -np 1 --timeout 120 --api-key "llama" --cors-origins "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000" --port 8084 2>&1 } -ArgumentList $root
+Write-Host "`n[STEP 2] Starting Smart Model Proxy (which handles Daily Models)..." -ForegroundColor Yellow
+$proxyJob = Start-Job -ScriptBlock { 
+    param($r, $model, $spec, $specType, $draft)
+    if ($model) { $env:SWARM_LOCAL_MODEL = $model }
+    if ($spec) { $env:SWARM_SPEC_DECODE = $spec }
+    if ($specType) { $env:SWARM_SPEC_TYPE = $specType }
+    if ($draft) { $env:SWARM_DRAFT_MODEL = $draft }
+    
+    Set-Location $r
+    powershell.exe -ExecutionPolicy Bypass -File .\start-proxy.ps1
+} -ArgumentList $root, $env:SWARM_LOCAL_MODEL, $env:SWARM_SPEC_DECODE, $env:SWARM_SPEC_TYPE, $env:SWARM_DRAFT_MODEL
 
 Start-Sleep -Seconds 8
 Write-Host "llama.cpp microservices ✔" -ForegroundColor Green
@@ -201,6 +211,15 @@ $backendEnv = @{
     OPENROUTER_BASE_URL = $env:OPENROUTER_BASE_URL
     NVIDIA_BASE_URL     = $env:NVIDIA_BASE_URL
     SWARM_SEARXNG_URL   = $env:SWARM_SEARXNG_URL
+    LLAMA_BASE_URL      = $env:LLAMA_BASE_URL
+    OLLAMA_BASE_URL     = $env:OLLAMA_BASE_URL
+    QDRANT_LOCAL        = $env:QDRANT_LOCAL
+    VH2_QDRANT_ENABLED  = $env:VH2_QDRANT_ENABLED
+    VH2_RERANKER_ENABLED = $env:VH2_RERANKER_ENABLED
+    OPENAI_API_BASE     = $env:OPENAI_API_BASE
+    ZENITH_WEATHER_CITY = $env:ZENITH_WEATHER_CITY
+    SWARM_GRAMMAR_DECODE = $env:SWARM_GRAMMAR_DECODE
+    SWARM_SEMANTIC_CACHE = $env:SWARM_SEMANTIC_CACHE
 }
 
 $backendJob = Start-Job -ScriptBlock {
@@ -274,19 +293,15 @@ Write-Host ""
 
 try {
     while ($true) {
-        Receive-Job $llamaGenJob   | ForEach-Object { Write-Host "[llama-gen]    $_" -ForegroundColor DarkGreen }
-        Receive-Job $llamaEmbJob   | ForEach-Object { Write-Host "[llama-emb]    $_" -ForegroundColor DarkGreen }
-        Receive-Job $llamaRerankJob | ForEach-Object { Write-Host "[llama-rank]   $_" -ForegroundColor DarkGreen }
-        Receive-Job $llamaVisJob   | ForEach-Object { Write-Host "[llama-vis]    $_" -ForegroundColor DarkGreen }
-        Receive-Job $llamaSummJob  | ForEach-Object { Write-Host "[llama-summ]   $_" -ForegroundColor DarkGreen }
+        Receive-Job $proxyJob | ForEach-Object { Write-Host "[proxy]  $_" -ForegroundColor DarkGreen }
         Receive-Job $backendJob  | ForEach-Object { Write-Host "[backend]  $_" -ForegroundColor DarkCyan }
         Receive-Job $frontendJob | ForEach-Object { Write-Host "[frontend] $_" -ForegroundColor DarkYellow }
         Start-Sleep -Milliseconds 300
     }
 } finally {
     Write-Host "`nShutting down..." -ForegroundColor Red
-    Stop-Job  $llamaGenJob, $llamaEmbJob, $llamaRerankJob, $llamaVisJob, $llamaSummJob, $backendJob, $frontendJob -ErrorAction SilentlyContinue
-    Remove-Job $llamaGenJob, $llamaEmbJob, $llamaRerankJob, $llamaVisJob, $llamaSummJob, $backendJob, $frontendJob -ErrorAction SilentlyContinue
+    Stop-Job $proxyJob, $backendJob, $frontendJob -ErrorAction SilentlyContinue
+    Remove-Job $proxyJob, $backendJob, $frontendJob -ErrorAction SilentlyContinue
     foreach ($svc in @("llama","qdrant","node","python")) {
         Get-Process -Name $svc -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     }

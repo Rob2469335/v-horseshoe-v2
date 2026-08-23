@@ -1,6 +1,7 @@
 import json
 import subprocess
 import asyncio
+import anyio
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 import httpx
@@ -46,7 +47,7 @@ async def kill_active_processes():
 async def start_heavy_model():
     print("Starting 14B model on port 8079...")
     env = os.environ.copy()
-    env["SWARM_LOCAL_MODEL"] = "qwen3-14b"
+    env["SWARM_LOCAL_MODEL"] = "qwen3.5-4b-mtp"
     env["LLAMA_PORT"] = "8079"
     p = subprocess.Popen(
         ["cmd.exe", "/c", "start_llama.bat"],
@@ -170,7 +171,8 @@ async def proxy_chat(request: Request):
             except Exception as e:
                 print(f"Stream interrupted: {e}")
             finally:
-                await resp.aclose()
+                with anyio.CancelScope(shield=True):
+                    await resp.aclose()
         # Strip duplicate transfer-encoding and content-length headers
         headers = dict(resp.headers)
         headers.pop('transfer-encoding', None)
@@ -192,7 +194,7 @@ async def proxy_models(request: Request):
           "owned_by": "llamacpp"
         },
         {
-          "id": "qwen3-14b-iq4_xs",
+          "id": "qwen3.5-0.8b",
           "object": "model",
           "owned_by": "llamacpp"
         }
