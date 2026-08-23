@@ -480,7 +480,12 @@ async def _playwright_impl(params: Dict[str, Any], trace_hook=None) -> Dict[str,
             if url:
                 await page.goto(url, wait_until="domcontentloaded", timeout=30000)
             name_ = Path(params.get("path", "browser.png")).name
-            shot_path = _get_project_root() / name_
+            # Save ONLY into the dedicated screenshots dir - /control/browser/image
+            # serves this exact directory, so arbitrary-root writes would expose
+            # any repo file via the image endpoint.
+            shot_dir = _get_project_root() / "logs" / "screenshots"
+            shot_dir.mkdir(parents=True, exist_ok=True)
+            shot_path = shot_dir / name_
             await page.screenshot(path=str(shot_path))
             return {"ok": True, "url": page.url, "path": str(shot_path)}
 

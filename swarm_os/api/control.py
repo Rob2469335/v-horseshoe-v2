@@ -692,10 +692,15 @@ async def control_browser_state() -> Dict[str, Any]:
 
 @router.get("/browser/image")
 async def control_browser_image(name: str) -> FileResponse:
-    """Serve a browser screenshot PNG from the project root (basename only)."""
-    root = os.getcwd()
+    """Serve a browser screenshot PNG from logs/screenshots (basename only).
+
+    Rooted at the dedicated screenshots dir - never the project root - so no
+    repo file (.env, swarm_config.json, ...) is reachable through this route."""
     safe = os.path.basename(str(name))
-    path = os.path.join(root, safe)
+    if not safe.lower().endswith(".png"):
+        raise HTTPException(status_code=404, detail="only .png screenshots are served")
+    shots_dir = os.path.join(os.getcwd(), "logs", "screenshots")
+    path = os.path.join(shots_dir, safe)
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail=f"browser image '{safe}' not found")
     return FileResponse(path, media_type="image/png")

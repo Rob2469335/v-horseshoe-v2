@@ -8,6 +8,7 @@ The key behaviors:
   4. The persistent browser handler reports session state without crashing.
 """
 
+import asyncio
 import os
 import time
 
@@ -95,3 +96,33 @@ def test_file_read_resolution_rejects_sibling_prefix_collision(tmp_path, monkeyp
     monkeypatch.chdir(project)
     with pytest.raises(Exception):
         ctl._resolve_project_file(str(sibling / "payload.py"))
+
+
+def test_browser_image_endpoint_cannot_disclose_root_files(tmp_path, monkeypatch):
+    """/control/browser/image must serve ONLY .png files from logs/screenshots -
+    never arbitrary project-root files. Regression for the 2026-08-23 audit:
+    the old cwd-rooted version served `.env` and `swarm_config.json` via
+    `?name=.env`. Revert-proof: fails on the pre-fix cwd-rooted handler."""
+    from fastapi import HTTPException
+    from swarm_os.api import control as ctl
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text("SECRET_TOKEN=abc", encoding="utf-8")
+    (tmp_path / "swarm_config.json").write_text("{}", encoding="utf-8")
+
+    # Root file, even with a png-ish trick or bare name -> refused.
+    with pytest.raises(HTTPException):
+        asyncio.run(ctl.control_browser_image(".env"))
+    with pytest.raises(HTTPException):
+        asyncio.run(ctl.control_browser_image("swarm_config.json"))
+    # Non-png suffix in the shots dir -> refused.
+    shots = tmp_path / "logs" / "screenshots"
+    shots.mkdir(parents=True)
+    (shots / "notes.txt").write_text("x", encoding="utf-8")
+    with pytest.raises(HTTPException):
+        asyncio.run(ctl.control_browser_image("notes.txt"))
+    # A real screenshot in the shots dir -> served (sanity, not just refusal).
+    (shots / "shot.png").write_bytes(b"\x89PNG fake")
+    resp = asyncio.run(ctl.control_browser_image("shot.png"))
+    assert resp.path.endswith("shot.png")
+
