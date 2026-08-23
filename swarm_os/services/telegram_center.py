@@ -260,7 +260,7 @@ class TelegramCommandCenter:
         if not msg:
             return
         chat_id = msg.get("chat", {}).get("id")
-        text = msg.get("text", "")
+        text = str(msg.get("text") or "")
         user_id = msg.get("from", {}).get("id")
         if not is_owner(user_id):
             import time
@@ -525,7 +525,7 @@ class TelegramCommandCenter:
     async def _handle_callback(self, cb: dict) -> None:
         if not self._client:
             return
-        data = cb.get("data", "")
+        data = str(cb.get("data") or "")
         chat_id = cb.get("message", {}).get("chat", {}).get("id")
         message_id = cb.get("message", {}).get("message_id")
         user_id = cb.get("from", {}).get("id")

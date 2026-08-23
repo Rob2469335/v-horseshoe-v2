@@ -141,42 +141,42 @@ def _parse_msg(uid: str, raw: bytes) -> dict:
     date = msg.get("Date", "")
     body_parts = []
     attachments = 0
+    html_parts = []
     if msg.is_multipart():
         for part in msg.walk():
             ctype = part.get_content_type()
             disp = str(part.get("Content-Disposition", ""))
             if part.get_filename():
                 attachments += 1
-            elif ctype == "text/plain" and "attachment" not in disp.lower():
-                try:
-                    charset = part.get_content_charset() or "utf-8"
+            elif ctype in ("text/plain", "text/html") and "attachment" not in disp.lower():
+                payload = part.get_payload(decode=True)
+                if payload is not None:
                     try:
-                        body_parts.append(
-                            part.get_payload(decode=True).decode(
-                                charset, errors="replace"
-                            )
-                        )
-                    except LookupError:
-                        body_parts.append(
-                            part.get_payload(decode=True).decode(
-                                "utf-8", errors="replace"
-                            )
-                        )
-                except Exception:
-                    pass
+                        charset = part.get_content_charset() or "utf-8"
+                        try:
+                            text = payload.decode(charset, errors="replace")
+                        except LookupError:
+                            text = payload.decode("utf-8", errors="replace")
+                        if ctype == "text/plain":
+                            body_parts.append(text)
+                        else:
+                            html_parts.append(text)
+                    except Exception:
+                        pass
     else:
-        try:
-            charset = msg.get_content_charset() or "utf-8"
+        payload = msg.get_payload(decode=True)
+        if payload is not None:
             try:
-                body_parts.append(
-                    msg.get_payload(decode=True).decode(charset, errors="replace")
-                )
-            except LookupError:
-                body_parts.append(
-                    msg.get_payload(decode=True).decode("utf-8", errors="replace")
-                )
-        except Exception:
-            pass
+                charset = msg.get_content_charset() or "utf-8"
+                try:
+                    body_parts.append(payload.decode(charset, errors="replace"))
+                except LookupError:
+                    body_parts.append(payload.decode("utf-8", errors="replace"))
+            except Exception:
+                pass
+    
+    if not body_parts and html_parts:
+        body_parts = html_parts
     return {
         "id": uid,
         "subject": subject,

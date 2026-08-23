@@ -78,7 +78,7 @@ class SandboxReplHandler:
                 "kill",
                 "taskkill",
                 "shutdown",
-                "restart-computer",
+                "restartcomputer",
                 "reg delete",
                 "diskpart",
                 "takeown",
@@ -86,14 +86,14 @@ class SandboxReplHandler:
                 "attrib",
                 "install",
                 "uninstall",
-                "out-file",
-                "set-content",
-                "add-content",
-                "copy-item",
-                "move-item",
-                "rename-item",
-                "clear-item",
-                "remove-item",
+                "outfile",
+                "setcontent",
+                "addcontent",
+                "copyitem",
+                "moveitem",
+                "renameitem",
+                "clearitem",
+                "removeitem",
                 # alias/call-operator shapes that reach the same verbs
                 "ri ",
                 "mv ",
@@ -111,8 +111,8 @@ class SandboxReplHandler:
                 "::delete",
                 "::start(",
                 ".net",
-                "invoke-expression",
-                "invoke-command",
+                "invokeexpression",
+                "invokecommand",
                 # separators / redirection that chain or escape
                 ">",
                 ">>",
@@ -148,7 +148,7 @@ class SandboxReplHandler:
             project_root = _Path(__file__).resolve().parents[2]
             try:
                 _Path(raw).resolve().relative_to(project_root.resolve())
-            except ValueError, OSError:
+            except (ValueError, OSError):
                 return {
                     "ok": False,
                     "stdout": "",

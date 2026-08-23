@@ -9,8 +9,8 @@ from pydantic import BaseModel, Field
 # --- Existing Core Orchestration Schemas ---
 class GenerateRequest(BaseModel):
     model: Optional[str] = None
-    prompt: Optional[str] = None
-    messages: Optional[List[Dict[str, Any]]] = None
+    prompt: Optional[str] = Field(default=None, max_length=100000)
+    messages: Optional[List[Dict[str, Any]]] = Field(default=None, max_length=1000)
 
 
 class GenerateResponse(BaseModel):

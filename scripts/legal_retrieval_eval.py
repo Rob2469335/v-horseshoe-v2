@@ -43,13 +43,13 @@ GOLDEN = [
         "question": "What notice must a New York landlord give before withholding a security deposit?",
         "jurisdiction": "ny",
         "corpus": "statutes",
-        "expected_cites": ["N.Y. GOL Law § 7-103"],
+        "expected_cites": ["N.Y. GOB Law § 7-108"],
     },
     {
         "question": "tenant rights when the apartment becomes uninhabitable",
         "jurisdiction": "ny",
         "corpus": "statutes",
-        "expected_cites": [],  # topic-described, no exact cite — any relevant hit counts
+        "expected_cites": ["N.Y. RPP Law § 235-b"],
         "expected_keywords": ["warranty", "habitability"],
     },
     {

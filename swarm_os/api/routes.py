@@ -10,7 +10,7 @@ from statistics import mean
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Query, Depends, HTTPException, Request
 
 from swarm_os.api import admin
 from swarm_os.api.api_features import router as api_features_router
@@ -282,7 +282,7 @@ async def list_events(runtime: Any = Depends(runtime_dep)):
 
 
 @router.get("/traces")
-def list_traces(limit: int = 50, orch: Any = Depends(get_orchestrator)):
+def list_traces(limit: int = Query(50, le=1000), orch: Any = Depends(get_orchestrator)):
     try:
         items = orch.get_recent_traces(limit=limit)
         return {"count": len(items), "traces": items}
@@ -553,7 +553,7 @@ def _classify_event_outcome(event: dict) -> str:
 
 
 @router.get("/timeline", response_model=TimelineResponse)
-async def timeline(window_minutes: int = 60, runtime: Any = Depends(runtime_dep)):
+async def timeline(window_minutes: int = Query(60, le=1440), runtime: Any = Depends(runtime_dep)):
     events_path = Path("data/events/events.jsonl")
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=window_minutes)
     buckets = defaultdict(
@@ -640,7 +640,7 @@ async def timeline(window_minutes: int = 60, runtime: Any = Depends(runtime_dep)
 
 
 @router.get("/memory/search")
-async def memory_search(q: str, limit: int = 8):
+async def memory_search(q: str, limit: int = Query(8, le=100)):
     try:
         from runtime_v2.services.memory_core import (
             get_embedding,
@@ -694,7 +694,7 @@ async def memory_search(q: str, limit: int = 8):
 
 @router.get("/traces/summary")
 def trace_summary(
-    orch: Any = Depends(get_orchestrator), limit: int = 50
+    orch: Any = Depends(get_orchestrator), limit: int = Query(50, le=1000)
 ) -> dict[str, Any]:
     try:
         items = orch.get_recent_traces(limit=limit) if orch is not None else []
@@ -765,7 +765,7 @@ async def root_post_evaluate_health(request: Request) -> dict:
 async def get_router_stats(
     orch: Any = Depends(get_orchestrator),
     runtime: Any = Depends(runtime_dep),
-    limit: int = 100,
+    limit: int = Query(100, le=1000),
 ) -> dict[str, Any]:
     """Return router/model-selection statistics derived from recent traces."""
 
@@ -879,7 +879,7 @@ async def get_router_stats(
 async def get_critic_stats(
     orch: Any = Depends(get_orchestrator),
     runtime: Any = Depends(runtime_dep),
-    limit: int = 200,
+    limit: int = Query(200, le=1000),
 ) -> dict[str, Any]:
     """Return critic/evaluator acceptance-rate statistics.
 

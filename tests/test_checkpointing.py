@@ -221,7 +221,7 @@ async def test_delete_happens_on_accepted_final(tmp_path):
     gen = svc._handle_final(
         {
             "action": "final",
-            "response": "swarm_os/api/routes.py hosts the router; the memory integration is sound.",
+            "response": "[FACT] swarm_os/api/routes.py hosts the router; the memory integration is sound.",
         },
         "code_analyzer",
         "m",
@@ -284,7 +284,7 @@ async def test_loop_level_delete_after_response_delivered(monkeypatch, tmp_path)
     async def _fake_decision(*args, **kwargs):
         return {
             "action": "final",
-            "response": "swarm_os/api/routes.py hosts the router; the memory integration is sound.",
+            "response": "[FACT] swarm_os/api/routes.py hosts the router; the memory integration is sound.",
         }
 
     monkeypatch.setattr(mod.AgentServiceV2, "_get_decision", _fake_decision)

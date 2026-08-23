@@ -195,7 +195,8 @@ def _classify_rv_type(*texts: str) -> str:
 def _attr_int(attrs: dict[str, list], name: str) -> int | None:
     vals = attrs.get(name) or []
     for v in vals:
-        m = re.search(r"\d+", str(v))
+        s = str(v).replace(",", "")
+        m = re.search(r"\d+", s)
         if m:
             return int(m.group(0))
     return None

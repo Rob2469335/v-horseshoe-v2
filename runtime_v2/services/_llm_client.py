@@ -375,7 +375,7 @@ def inject_system_prompt(messages: list, system: str) -> list:
 
 
 async def complete_for_tool_decision(
-    litellm_model: str, messages: list, fallbacks: list
+    litellm_model: str, messages: list, fallbacks: list, agent_id: str = None
 ):
     # BUG FIX: "openai/..." is a shared prefix for local llama.cpp AND the OpenCode
     # Zen/Go cloud endpoints. Using startswith("openai/") misclassified the primary
@@ -429,9 +429,13 @@ async def complete_for_tool_decision(
             return resp
         return await _call(extra, max_tokens)
 
+    is_strict_role = agent_id in ("coordinator", "planner", "tool-runner")
+    local_temp = 0.0 if is_strict_role else 0.2
+    cloud_temp = 0.0 if is_strict_role else 0.7
+
     extra = {
         "messages": messages,
-        "temperature": 0.7 if is_cloud else 0.2,
+        "temperature": cloud_temp if is_cloud else local_temp,
         "top_p": 0.95 if is_cloud else 0.9,
         "frequency_penalty": 0.1 if not is_cloud else 0.0,
         "presence_penalty": 0.1 if not is_cloud else 0.0,
@@ -447,6 +451,13 @@ async def complete_for_tool_decision(
             "id_slot": -1,
             "frequency_penalty": 0.1,
             "presence_penalty": 0.1,
+            # Disable the Qwen3/Qwen3.5/Qwen3.8 "thinking" block at the wire level.
+            # /no_think in the prompt is a soft-switch these models drop; only
+            # chat_template_kwargs.enable_thinking=false reliably yields prose in
+            # content (verified live on the 3.8). Without it the model spends the
+            # budget on an empty "Thinking Process:" scaffold inside
+            # reasoning_content and returns content="".
+            "chat_template_kwargs": {"enable_thinking": False},
         }
         # TASK 1 (opt-in grammar decode): constrain the local tool-decision path
         # to schema-valid JSON only. Cloud/DeepSeek never receives response_format.
@@ -523,6 +534,15 @@ async def stream_content(
                     model=litellm_model, **stream_kwargs
                 )
         if response is None:
+            # Local streaming path: disable the Qwen3.x thinking block at the
+            # wire level (chat_template_kwargs.enable_thinking=false — /no_think
+            # alone is dropped by these models). Without it the stream yields
+            # empty "Thinking Process:" scaffolds and no usable content.
+            if not is_cloud and "extra_body" not in kwargs:
+                kwargs["extra_body"] = {
+                    **kwargs.get("extra_body", {}),
+                    "chat_template_kwargs": {"enable_thinking": False},
+                }
             response = await litellm.acompletion(**kwargs)
         last_usage = None
         async for chunk in response:

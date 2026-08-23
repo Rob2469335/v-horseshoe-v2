@@ -122,33 +122,42 @@ def rerank_memories(query: str, memories: List[Dict[str, Any]]) -> List[Dict[str
 
     try:
         with _RERANK_SEM:
-            resp = requests.post(
-                f"{RERANK_URL}/v1/rerank",
-                headers={"Authorization": "Bearer llama"},
-                json={
-                    "model": RERANK_MODEL,
-                    "query": query,
-                    "documents": texts,
-                    "top_n": 3,
-                },
-                timeout=30.0,
-            )
-        if resp.status_code == 200:
-            results = resp.json().get("results", [])
-            for res in results:
-                idx = res.get("index")
-                if idx is not None and idx < len(memories):
-                    mem = memories[idx]
-                    payload = mem.get("payload", {})
-                    reranked.append(
-                        {
-                            "score": float(res.get("relevance_score", 0.0)),
-                            "id": mem.get("id", ""),
-                            "fact": payload.get("fact", ""),
-                            "category": payload.get("category", "general"),
-                        }
-                    )
-            return reranked
+            chunk_size = 50
+            all_scored = []
+            
+            for i in range(0, len(texts), chunk_size):
+                chunk = texts[i:i + chunk_size]
+                resp = requests.post(
+                    f"{RERANK_URL}/v1/rerank",
+                    headers={"Authorization": "Bearer llama"},
+                    json={
+                        "model": RERANK_MODEL,
+                        "query": query,
+                        "documents": chunk,
+                        "top_n": min(3, len(chunk)),
+                    },
+                    timeout=30.0,
+                )
+                if resp.status_code == 200:
+                    results = resp.json().get("results", [])
+                    for res in results:
+                        abs_idx = i + res.get("index", 0)
+                        if abs_idx < len(memories):
+                            mem = memories[abs_idx]
+                            payload = mem.get("payload", {})
+                            fact = payload.get("fact", "") or payload.get("correction", "") or payload.get("correction", "")
+                            all_scored.append(
+                                {
+                                    "score": float(res.get("relevance_score", 0.0)),
+                                    "id": mem.get("id", ""),
+                                    "fact": fact,
+                                    "category": payload.get("category", "general"),
+                                }
+                            )
+                else:
+                    resp.raise_for_status()
+            all_scored.sort(key=lambda x: x["score"], reverse=True)
+            return all_scored[:3]
     except Exception as e:
         # BUG FIX: was using print() instead of logging — failures didn't appear in
         # structured backend logs. Also upgraded to warning level since reranker
@@ -160,9 +169,9 @@ def rerank_memories(query: str, memories: List[Dict[str, Any]]) -> List[Dict[str
         payload = mem.get("payload", {})
         reranked.append(
             {
-                "score": mem.get("score", 0.0),
+                "score": float(mem.get("score", 0.0) or 0.0),
                 "id": mem.get("id", ""),
-                "fact": payload.get("fact", ""),
+                "fact": payload.get("fact", "") or payload.get("correction", ""),
                 "category": payload.get("category", "general"),
             }
         )
@@ -464,7 +473,7 @@ def dump_all_failures(limit: int = 200) -> str:
                 break
             for pt in points:
                 payload = pt.get("payload", {})
-                fact = payload.get("fact", "")
+                fact = payload.get("fact", "") or payload.get("correction", "")
                 ts = payload.get("timestamp", 0)
                 if fact:
                     all_facts.append((ts, fact))

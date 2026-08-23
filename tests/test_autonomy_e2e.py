@@ -237,7 +237,7 @@ async def test_l1_placeholder_rejected_substantive_accepted(monkeypatch, temp_gi
     state2.read_paths.add(FIXTURE_REL)
     substantive = {
         "action": "final",
-        "response": f"{FIXTURE_REL} hosts the router; the memory integration is sound.",
+        "response": f"[FACT] {FIXTURE_REL} hosts the router; the memory integration is sound.",
     }
     messages2 = [{"role": "user", "content": "hi"}]
     gen2 = svc._handle_final(

@@ -266,7 +266,7 @@ def evolve_one_generation() -> dict:
         for p in STAGED_DIR.glob("gen_*.jsonl"):
             try:
                 staged_gens.append(int(p.stem.split("_")[1]))
-            except IndexError, ValueError:
+            except (IndexError, ValueError):
                 log.warning(f"Malformed staged file ignored in gen calc: {p}")
         gen = max(staged_gens, default=0) + 1
 

@@ -240,7 +240,7 @@ async def test_past_mistake_warning_injected_into_tool_decision_prompt():
     class FakeResp:
         choices = [FakeChoice()]
 
-    async def fake_complete(model, messages, fallbacks):
+    async def fake_complete(model, messages, fallbacks, agent_id=None):
         captured["messages"] = messages
         return FakeResp()
 
@@ -312,7 +312,7 @@ async def test_malformed_json_retry_uses_json_repair_prompt():
     class FakeResp:
         choices = [FakeChoice()]
 
-    async def fake_complete(model, messages, fallbacks):
+    async def fake_complete(model, messages, fallbacks, agent_id=None):
         captured.append(messages)
         if len(captured) == 1:
             return type(

@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from ..capabilities.models import VSCodeAutomationRequest
 from .schemas import CreateApprovalRequest, ApprovalDecisionRequest
 
@@ -51,14 +51,14 @@ def _extract_json_object(text: str) -> dict | None:
                 candidate = stripped[start : i + 1]
                 try:
                     parsed = _json.loads(candidate)
-                except ValueError:
+                except (ValueError, RecursionError):
                     # Try stripping a trailing comma before the closing brace.
                     try:
                         candidate2 = candidate[: candidate.rfind("}")].rstrip()
                         if candidate2.endswith(","):
                             candidate2 = candidate2[:-1] + "}"
                         parsed = _json.loads(candidate2)
-                    except ValueError:
+                    except (ValueError, RecursionError):
                         return None
                 return parsed if isinstance(parsed, dict) else None
     return None
@@ -105,13 +105,13 @@ async def _llm_verdict(prompt: str, max_tokens: int = 900) -> dict | None:
 class QueryRequest(BaseModel):
     query: str
     collection: str = "chat_archive"
-    top_k: int = 5
+    top_k: int = Field(default=5, le=50)
 
 
 class WebResearchRequest(BaseModel):
     query: str
     max_results: int = 6
-    deep_read: int = 3
+    deep_read: int = Field(default=3, le=10)
     synthesize: bool = True
     verdict: bool = True
 
@@ -143,28 +143,28 @@ class IntelAddCompetitor(BaseModel):
     name: str
     url: str
     tier: str = "tier_2"
-    targets: list[str] | None = None
+    targets: list[str] | None = Field(default=None, max_length=50)
 
 
 class IntelUpdateCompetitor(BaseModel):
     name: str | None = None
     url: str | None = None
     tier: str | None = None
-    targets: list[str] | None = None
+    targets: list[str] | None = Field(default=None, max_length=50)
     enabled: bool | None = None
 
 
 class IntelRunRequest(BaseModel):
-    channels: list[str] | None = None
+    channels: list[str] | None = Field(default=None, max_length=100)
     email_to: str | None = None
     webhook_url: str | None = None
-    include: list[str] | None = None
+    include: list[str] | None = Field(default=None, max_length=100)
     cap: int = 15
 
 
 class IntelDeliverRequest(BaseModel):
     digest_id: str
-    channels: list[str] | None = None
+    channels: list[str] | None = Field(default=None, max_length=100)
     email_to: str | None = None
     webhook_url: str | None = None
 
@@ -212,7 +212,7 @@ async def semantic_search(req: QueryRequest):
         except Exception as exc:
             log.debug("Keyword fallback failed: %s", exc)
             return {"status": "degraded", "fallback": True, "results": []}
-    except ImportError:
+    except Exception:
         raise HTTPException(
             status_code=503,
             detail="Vector search not yet configured. lib/vector modules are empty stubs.",
@@ -344,7 +344,7 @@ async def web_research(req: WebResearchRequest):
             else [],
             **({"verdict": verdict} if verdict else {}),
         }
-    except ImportError:
+    except Exception:
         raise HTTPException(status_code=503, detail="web research modules unavailable")
     except Exception as exc:
         log.warning("web-research failed: %s", exc)
@@ -1362,8 +1362,8 @@ async def omnidev_run(req: OmniDevRequest, request: Request):
 class RvFinderRequest(BaseModel):
     budget: int = 30000
     rv_type: str = "all"
-    max_results: int = 40
-    deep_dive: int = 5
+    max_results: int = Field(default=40, le=100)
+    deep_dive: int = Field(default=5, le=10)
     use_ppl: bool = True
     use_web: bool = True
     location: str = ""

@@ -79,3 +79,31 @@ def test_mcp_batch_approval_gate():
     """Verify that mcp_batch requires CONFIRM level approval."""
     decision = agent_tool_policy("mcp_batch")
     assert decision == CONFIRM, f"Expected CONFIRM, got {decision}"
+
+
+@pytest.mark.asyncio
+async def test_mcp_batch_malformed_calls(mock_mcp_manager):
+    """Verify that a malformed calls list does not crash the batch."""
+    with patch("runtime_v2.services.tool_executor.get_mcp_manager", return_value=mock_mcp_manager), \
+         patch("runtime_v2.services.tool_executor.agent_tool_policy", return_value=ALLOW):
+        calls = [
+            "this is a string, not a dict",
+            {"server": "test", "tool": "good_tool", "arguments": {}}
+        ]
+        
+        result = await run("mcp_batch", {"calls": calls})
+        
+        out_str = str(result)
+        assert "Invalid call object" in out_str
+
+@pytest.mark.asyncio
+async def test_mcp_batch_too_many_calls(mock_mcp_manager):
+    """Verify that batch size is limited."""
+    with patch("runtime_v2.services.tool_executor.get_mcp_manager", return_value=mock_mcp_manager), \
+         patch("runtime_v2.services.tool_executor.agent_tool_policy", return_value=ALLOW):
+        calls = [{"server": "test", "tool": "tool", "arguments": {}}] * 51
+        
+        result = await run("mcp_batch", {"calls": calls})
+        
+        out_str = str(result)
+        assert "Maximum of 50 concurrent calls allowed" in out_str

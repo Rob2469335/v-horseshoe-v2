@@ -311,7 +311,8 @@ class SwarmBrainClient:
                 "response_preview": body_text[:1000],
             }
 
-        choice = data.get("choices", [{}])[0]
+        choices = data.get("choices")
+        choice = choices[0] if choices else {}
         message = choice.get("message", {})
         usage = data.get("usage", {})
         total_tokens = usage.get("total_tokens", 0)

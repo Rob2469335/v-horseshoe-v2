@@ -220,7 +220,7 @@ def _needs_approval(action: str, params: dict) -> str | None:
     """Critical actions (submit/purchase/login) require human approval. Returns
     a reason string if approval is needed, else None. The loop STOPS and returns
     an approval_request — the Command Center shows it and the human confirms."""
-    name = (params.get("name") or "").lower()
+    name = str(params.get("name") or "").lower()
     action_l = action.lower()
     hay = f"{action_l} {name}"
     for c in CRITICAL_ACTIONS:
@@ -311,7 +311,7 @@ async def run_browser_task(
                     a11y = [
                         {
                             "role": "vision",
-                            "name": (vision.get("description", ""))[:500],
+                            "name": (str(vision.get("description") or ""))[:500],
                             "value": "",
                         }
                     ]
@@ -325,6 +325,8 @@ async def run_browser_task(
             )
             decision = await _get_planner_decision(prompt)
             action = decision.get("action")
+            if not isinstance(action, str):
+                action = str(action) if action is not None else "unknown"
             params = decision.get("params") or {}
             history.append(
                 {

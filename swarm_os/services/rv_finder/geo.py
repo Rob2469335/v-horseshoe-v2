@@ -25,7 +25,7 @@ DEFAULT_LOCATION = os.environ.get("RV_FINDER_LOCATION", "Roosevelt, NY 11575")
 DEFAULT_RADIUS_MILES = int(os.environ.get("RV_FINDER_RADIUS_MILES", "50"))
 
 _CACHE_PATH = Path(
-    os.environ.get("RV_FINDER_GEO_CACHE", "data/rv_finder_geo_cache.json")
+    os.environ.get("RV_FINDER_GEO_CACHE", "data/rv_finder_geo_cache.jsonl")
 )
 
 _GEO_CLIENT: "httpx.AsyncClient | None" = None
@@ -77,20 +77,22 @@ def haversine_miles(lat1: float, lng1: float, lat2: float, lng2: float) -> float
 def _load_cache() -> dict[str, list[float]]:
     try:
         if _CACHE_PATH.exists():
-            data = json.loads(_CACHE_PATH.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                return {
-                    k: v for k, v in data.items() if isinstance(v, list) and len(v) == 2
-                }
+            cache = {}
+            for line in _CACHE_PATH.read_text(encoding="utf-8").splitlines():
+                if not line.strip(): continue
+                data = json.loads(line)
+                cache[data["key"]] = data["val"]
+            return cache
     except Exception as e:
         logger.warning("geo cache load failed: %s", e)
     return {}
 
 
-def _save_cache(cache: dict[str, list[float]]) -> None:
+def _save_cache_entry(key: str, val: list[float]) -> None:
     try:
         _CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _CACHE_PATH.write_text(json.dumps(cache, indent=0), encoding="utf-8")
+        with _CACHE_PATH.open("a", encoding="utf-8") as f:
+            f.write(json.dumps({"key": key, "val": val}) + "\n")
     except Exception as e:
         logger.warning("geo cache save failed: %s", e)
 
@@ -151,7 +153,7 @@ async def resolve_lat_lng(
                     lng = float(results[0].get("lon", 0) or 0)
                     if lat and lng:
                         cache[key] = [lat, lng]
-                        _save_cache(cache)
+                        _save_cache_entry(key, [lat, lng])
                         return lat, lng
         except Exception as e:
             logger.warning("geocode failed for %r: %s", loc, e)

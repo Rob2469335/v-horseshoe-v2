@@ -884,16 +884,26 @@ async def _dispatch(tool_name: str, payload: dict, *, trace_hook=None) -> dict:
             calls = payload.get("calls", [])
             if not isinstance(calls, list):
                 result = {"ok": False, "error": "'calls' must be a list of tool invocations."}
+            elif len(calls) > 50:
+                result = {"ok": False, "error": "Maximum of 50 concurrent calls allowed in a single batch."}
             else:
+                sem = asyncio.Semaphore(10)
+                
                 async def _call_one(call: dict):
+                    if not isinstance(call, dict):
+                        return {"ok": False, "error": f"Invalid call object, expected dict got {type(call).__name__}"}
+                        
                     server_name = call.get("server")
                     mcp_tool = call.get("tool")
                     arguments = call.get("arguments", {})
                     try:
                         if not server_name or not mcp_tool:
                             return {"ok": False, "error": "MCP action requires 'server' and 'tool' arguments."}
-                        async with asyncio.timeout(180.0):
-                            call_res = await manager.call_tool(server_name, mcp_tool, arguments)
+                        
+                        async with sem:
+                            async with asyncio.timeout(180.0):
+                                call_res = await manager.call_tool(server_name, mcp_tool, arguments)
+                        
                         if hasattr(call_res, "content"):
                             text_output = "\n".join([c.text for c in call_res.content if hasattr(c, "text")])
                             return {"ok": True, "server": server_name, "tool": mcp_tool, "result": text_output}
@@ -1066,7 +1076,8 @@ async def _dispatch(tool_name: str, payload: dict, *, trace_hook=None) -> dict:
             return {"ok": False, "error": f"Unknown tool: {tool_name}"}
 
         # Aggressive truncation for context window safety (traverse nested dicts)
-        def _truncate(obj, limit=5000):
+        def _truncate(obj, limit=5000, _depth=0):
+            if _depth > 50: return "<Truncated: Recursion depth exceeded>"
             if isinstance(obj, str):
                 return (
                     obj
@@ -1074,9 +1085,9 @@ async def _dispatch(tool_name: str, payload: dict, *, trace_hook=None) -> dict:
                     else obj[:limit] + "\n\n...[OUTPUT TRUNCATED]..."
                 )
             elif isinstance(obj, dict):
-                return {k: _truncate(v, limit) for k, v in obj.items()}
+                return {k: _truncate(v, limit, _depth=_depth + 1) for k, v in obj.items()}
             elif isinstance(obj, list):
-                return [_truncate(v, limit) for v in obj]
+                return [_truncate(v, limit, _depth + 1) for v in obj]
             elif isinstance(obj, (int, float, bool, type(None))):
                 return obj
             return str(obj)
