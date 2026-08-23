@@ -172,7 +172,9 @@ class IntelDeliverRequest(BaseModel):
 class BrowserTaskRequest(BaseModel):
     goal: str
     max_steps: int = 12
-    confirm: bool = False
+    # Single-use token minted by a prior approval_requested stop. There is
+    # deliberately no wire-level boolean self-approve (audit 2026-08-23).
+    approval_token: str | None = None
 
 
 @router.post("/search")
@@ -550,14 +552,16 @@ async def intel_deliveries(limit: int = 50):
 async def browser_task(req: BrowserTaskRequest):
     """Perplexity-style agentic browsing: drive the persistent browser toward a
     goal (fill a form, navigate, do a task). Returns per-step history; critical
-    actions (submit/purchase/login) return approval_requested unless confirmed
-    via /features/browser-task/confirm."""
+    actions (submit/purchase/login) return approval_requested with a single-use
+    approval_token; re-post with that token to execute exactly that action."""
     from ..services.browser_task import run_browser_task
 
     goal = req.goal.strip()
     if not goal:
         raise HTTPException(status_code=400, detail="goal is required")
-    return await run_browser_task(goal, max_steps=req.max_steps, confirm=req.confirm)
+    return await run_browser_task(
+        goal, max_steps=req.max_steps, approval_token=req.approval_token
+    )
 
 
 async def _keyword_fallback(req: QueryRequest) -> list:

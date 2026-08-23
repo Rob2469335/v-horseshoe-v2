@@ -30,6 +30,8 @@ from __future__ import annotations
 import json
 import logging
 import re
+import secrets
+import time
 from pathlib import Path
 
 from swarm_os.lib.mcp.playwright import playwright_handler
@@ -37,6 +39,42 @@ from swarm_os.lib.mcp.playwright import playwright_handler
 log = logging.getLogger(__name__)
 
 MAX_STEPS = 12
+
+# One-time approval tokens (audit 2026-08-23): the wire-level `confirm: true`
+# boolean let any loopback caller self-grant a critical action. An
+# approval_requested stop now mints an opaque single-use token bound to the
+# exact pending action+params (5-min TTL); continuing requires presenting it.
+_APPROVAL_TTL_S = 300.0
+_PENDING_APPROVALS: dict[str, tuple[str, dict, float]] = {}
+
+
+def _mint_approval_token(action: str, params: dict) -> str:
+    _sweep_approvals()
+    token = secrets.token_urlsafe(16)
+    _PENDING_APPROVALS[token] = (action, params, time.time() + _APPROVAL_TTL_S)
+    return token
+
+
+def _consume_approval_token(token: str, action: str, params: dict) -> bool:
+    """One-time consume, bound to the exact pending action+params."""
+    entry = _PENDING_APPROVALS.pop(token, None)
+    if entry is None:
+        return False
+    pend_action, pend_params, exp = entry
+    if time.time() > exp:
+        return False
+    return pend_action == action and pend_params == params
+
+
+def _sweep_approvals() -> None:
+    now = time.time()
+    for k in [k for k, (_, _, exp) in _PENDING_APPROVALS.items() if exp <= now]:
+        _PENDING_APPROVALS.pop(k, None)
+
+_SENSITIVE_FIELD_RE = re.compile(
+    r"passw|cvv|cvc|card|ssn|social.security|routing|sort.code|iban|otp|2fa"
+)
+
 CRITICAL_ACTIONS = (
     "submit",
     "purchase",
@@ -180,10 +218,15 @@ def _normalize_action(action: str, params: dict) -> str:
     a = action.lower().strip()
     if a == "type" or a == "fill_form":
         # Sort the tokens of any text/value so re-wording doesn't hide a loop.
+        # fields values may be plain strings (planner shape) OR dicts with a
+        # 'value' key - handle both (str-valued forms previously crashed here).
         fields = params.get("fields") or ([params] if params.get("value") else [])
         vals = []
         for f in fields:
-            v = str(f.get("value", "") or params.get("value", ""))
+            if isinstance(f, dict):
+                v = str(f.get("value", "") or params.get("value", ""))
+            else:
+                v = str(f)
             vals.append(" ".join(sorted(v.lower().split())))
         return f"{a}:{sorted(vals)}"
     if a == "click":
@@ -219,13 +262,31 @@ def _loop_detected(history: list[dict], repeats_threshold: int = 3) -> bool:
 def _needs_approval(action: str, params: dict) -> str | None:
     """Critical actions (submit/purchase/login) require human approval. Returns
     a reason string if approval is needed, else None. The loop STOPS and returns
-    an approval_request — the Command Center shows it and the human confirms."""
+    an approval_request - the Command Center shows it and the human confirms."""
     name = str(params.get("name") or "").lower()
     action_l = action.lower()
     hay = f"{action_l} {name}"
     for c in CRITICAL_ACTIONS:
         if c in hay:
-            return f"action '{action}' on '{name}' looks critical ({c}) — human approval required"
+            return f"action '{action}' on '{name}' looks critical ({c}) - human approval required"
+    # fill_form carries targets under params["fields"] (dict) - a form whose
+    # FIELD NAMES look critical (password / card number / ssn / cvv) gates even
+    # though the action string itself does not. Audit 2026-08-23: the old
+    # name-only scan made hay == "fill_form " for every form fill.
+    fields = params.get("fields")
+    if isinstance(fields, dict):
+        field_hay = " ".join(str(k).lower() for k in fields.keys())
+        for c in CRITICAL_ACTIONS:
+            if c in field_hay:
+                return (
+                    f"fill_form targets critical field(s) matching '{c}' "
+                    f"- human approval required"
+                )
+        if _SENSITIVE_FIELD_RE.search(field_hay):
+            return (
+                "fill_form targets credential/payment field(s) "
+                "- human approval required"
+            )
     return None
 
 
@@ -282,13 +343,17 @@ def approve_domain(url: str, remember: bool = True) -> None:
 
 
 async def run_browser_task(
-    goal: str, approval_gate=None, max_steps: int = MAX_STEPS, confirm: bool = False
+    goal: str,
+    approval_gate=None,
+    max_steps: int = MAX_STEPS,
+    approval_token: str | None = None,
 ) -> dict:
     """Run the agentic loop. `approval_gate` is an async callable(reason, pending)
     -> bool that a host can use to surface the confirmation; if None, critical
-    actions auto-stop with an approval_request in the result. `confirm=True`
-    pre-approves the next critical action (the Command Center's 'Approve &
-    continue' after an approval_requested stop).
+    actions auto-stop with an approval_request in the result. `approval_token`
+    (minted by that stop, single-use, 5-min TTL, bound to the pending action)
+    pre-approves exactly that action - the Command Center's 'Approve &
+    continue' flow. There is deliberately NO wire-level boolean self-approve.
 
     2026 upgrades (research-backed): task checklist injected each turn,
     semantic loop detection (normalized hashing + page fingerprint), retry-once
@@ -378,7 +443,19 @@ async def run_browser_task(
             # 4) approval gate for critical actions (submit/purchase/login always
             #    gate; an approved-domain note is surfaced in the result)
             critical = _needs_approval(action, params)
-            if critical and not (confirm and not approved_once):
+            if critical and approval_token and not approved_once:
+                # One-time token, bound to THIS action+params.
+                if _consume_approval_token(approval_token, action, params):
+                    approved_once = True
+                    approval_token = None  # consumed; later criticals re-gate
+                else:
+                    return {
+                        "status": "declined",
+                        "reason": "invalid or expired approval token",
+                        "steps": len(history),
+                        "history": history,
+                    }
+            if critical and not approved_once:
                 if approval_gate:
                     ok = await approval_gate(critical, history)
                     if not ok:
@@ -394,18 +471,20 @@ async def run_browser_task(
                         "reason": critical,
                         "pending_action": action,
                         "pending_params": params,
+                        "approval_token": _mint_approval_token(action, params),
                         "steps": len(history),
                         "history": history,
                     }
-            if critical and confirm and not approved_once:
-                approved_once = True  # consume the one-shot approval
 
             # 5) execute the deterministic primitive
             result = await playwright_handler({"operation": action, **params})
             history[-1]["result"] = result.get("ok")
 
             # 5b) retry-once: a FAILED action gets one resnapshot+retry, then nudge.
-            if not result.get("ok") and not retried:
+            # Retry-once ONLY for non-critical actions: a failed submit may
+            # have landed server-side despite the error (timeout after POST)
+            # - auto-retrying a payment/order is a double-submit hazard.
+            if not result.get("ok") and not retried and not critical:
                 retried = True
                 await playwright_handler({"operation": "browser_wait", "ms": 800})
                 a11y2 = (await playwright_handler({"operation": "browser_a11y"})).get(

@@ -82,21 +82,102 @@ def test_loop_stops_for_approval_on_critical_action(monkeypatch):
 
 
 def test_confirm_executes_critical_action(monkeypatch):
-    """confirm=True consumes one approval and executes the critical click."""
+    """A single-use approval_token (minted by the prior approval_requested
+    stop) consumes one approval and executes exactly that critical click.
+    Regression (2026-08-23): the old wire-level `confirm: true` boolean let
+    any caller self-grant; tokens are opaque, TTL'd, and bound to the
+    pending action+params."""
     calls = _install_mocks(
         monkeypatch,
         [
-            {
-                "action": "click",
-                "params": {"name": "Submit Order"},
-                "reason": "place order",
-            },
-            {"action": "done", "params": {}, "reason": "complete"},
+            {"action": "click", "params": {"name": "Submit Order"}, "reason": "r1"},
+            {"action": "click", "params": {"name": "Submit Order"}, "reason": "r2"},
+            {"action": "done", "params": {}, "reason": "d1"},
+            {"action": "done", "params": {}, "reason": "d2"},
         ],
     )
-    r = asyncio.run(bt.run_browser_task("buy the item", confirm=True))
+    first = asyncio.run(bt.run_browser_task("buy the item"))
+    assert first.get("status") == "approval_requested"
+    token = first.get("approval_token")
+    assert token, "approval_requested must mint a single-use token"
+
+    r = asyncio.run(bt.run_browser_task("buy the item", approval_token=token))
     assert r.get("status") == "done"
-    assert "click" in calls, "confirmed critical action must execute"
+    assert "click" in calls, "token-approved critical action must execute"
+
+
+def test_approval_token_is_single_use_and_bound(monkeypatch):
+    """The same token cannot approve a DIFFERENT critical action, and once
+    consumed it cannot be replayed for the original one either."""
+    _install_mocks(
+        monkeypatch,
+        [
+            {"action": "click", "params": {"name": "Submit Order"}, "reason": "r1"},
+            {"action": "click", "params": {"name": "Pay Now"}, "reason": "r2"},
+            {"action": "click", "params": {"name": "Submit Order"}, "reason": "r3"},
+            {"action": "done", "params": {}, "reason": "d1"},
+            {"action": "done", "params": {}, "reason": "d2"},
+        ],
+    )
+    first = asyncio.run(bt.run_browser_task("buy"))
+    assert first.get("status") == "approval_requested"
+    token = first["approval_token"]
+
+    # Token bound to click@'Submit Order'; presenting it against Pay Now
+    # fails the binding -> declined, and Pay Now must NOT execute.
+    second = asyncio.run(bt.run_browser_task("buy", approval_token=token))
+    assert second.get("status") == "declined"
+    assert "invalid or expired" in (second.get("reason") or "")
+
+    # Replay of the consumed token against the ORIGINAL action -> refused
+    # (single-use), and the click must not execute.
+    third = asyncio.run(bt.run_browser_task("buy", approval_token=token))
+    assert third.get("status") in ("declined", "approval_requested")
+    assert not any(
+        h.get("action") == "click" and h.get("result") for h in third.get("history", [])
+    )
+
+
+def test_failed_critical_action_is_not_auto_retried(monkeypatch):
+    """Audit B8: a failed CRITICAL action must NOT auto-retry (first attempt
+    may have landed server-side - double-submit hazard)."""
+    click_payloads = []
+
+    async def failing_handler(payload):
+        op = payload.get("operation")
+        if op == "click":
+            click_payloads.append(payload)
+            return {"ok": False, "error": "timeout after submit"}
+        if op == "browser_a11y":
+            return {
+                "ok": True,
+                "a11y": [{"role": "button", "name": "Submit Order", "value": ""}],
+            }
+        return {"ok": True, "url": "http://x"}
+
+    plan = [
+        {"action": "click", "params": {"name": "Submit Order"}, "reason": "go"},
+        {"action": "click", "params": {"name": "Submit Order"}, "reason": "go2"},
+        {"action": "done", "params": {}, "reason": "d"},
+    ]
+
+    async def fake_planner(prompt):
+        return plan.pop(0)
+
+    monkeypatch.setattr(bt, "playwright_handler", failing_handler)
+    monkeypatch.setattr(bt, "_get_planner_decision", fake_planner)
+
+    first = asyncio.run(bt.run_browser_task("buy"))
+    assert first.get("status") == "approval_requested"
+    r = asyncio.run(
+        bt.run_browser_task(
+            "buy",
+            approval_token=first["approval_token"],
+        )
+    )
+    assert len(click_payloads) == 1, (
+        f"critical click executed {len(click_payloads)}x - auto-retry fired"
+    )
 
 
 def test_loop_detection_stops(monkeypatch):
@@ -346,3 +427,23 @@ def test_planner_parses_content_when_present(monkeypatch):
     decision = asyncio.run(bt._get_planner_decision("a prompt"))
     assert decision["action"] == "navigate"
     assert decision["params"] == {"url": "https://chess.com"}
+
+
+def test_fill_form_with_critical_field_names_gates(monkeypatch):
+    """Audit B2: fill_form carries targets under params['fields'], so the old
+    name-only keyword scan produced hay == 'fill_form ' for EVERY form fill -
+    a form with password/card-number fields sailed through ungated."""
+    calls = _install_mocks(
+        monkeypatch,
+        [
+            {
+                "action": "fill_form",
+                "params": {"fields": {"card number": "4111", "cvv": "123"}},
+                "reason": "checkout",
+            },
+        ],
+    )
+    r = asyncio.run(bt.run_browser_task("check out"))
+    assert r.get("status") == "approval_requested"
+    assert "credential/payment field" in (r.get("reason") or "")
+    assert "fill_form" not in calls
