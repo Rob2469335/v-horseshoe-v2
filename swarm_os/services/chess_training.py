@@ -309,9 +309,11 @@ def build_items_from_gm(force: bool = False) -> dict[str, Any]:
                 )
                 existing_refs.add((t["ref"], "transfer"))
     with _LOCK:
-        merged = _load() + new_items
-        _save(merged)
-    return {"ok": True, "created": len(new_items)}
+        merged = _load()
+        present_refs = {(it.get("source_ref"), it.get("stage")) for it in merged if it.get("source") == "gm"}
+        fresh = [it for it in new_items if (it.get("source_ref"), it.get("stage")) not in present_refs]
+        _save(merged + fresh)
+    return {"ok": True, "created": len(fresh)}
 
 
 def _map_gm_moment_to_concept(critical_type: list[str]) -> str | None:
@@ -379,39 +381,36 @@ def training_due(limit: int = 10, concept: str | None = None) -> dict[str, Any]:
         # the store and would return 'no such training item').
         from .chess_tactics_library import get_motif_items
 
-        with _LOCK:
-            items = _load()
         motifs = get_motif_items()
         motif_ids = {f"{m.get('concept')}|{m.get('pre_fen')}" for m in motifs}
-        existing = {
-            f"{it.get('concept')}|{it.get('pre_fen')}"
-            for it in items
-            if it.get("source") == "motif"
-        }
-        added = False
-        for m in motifs:
-            key = f"{m.get('concept')}|{m.get('pre_fen')}"
-            if key not in existing and key in motif_ids:
-                item = _build_item(
-                    concept=m["concept"],
-                    stage=m.get("stage", "reinforce"),
-                    pre_fen=m["pre_fen"],
-                    solution_uci=m["solution_uci"],
-                    solution_san=m["solution_san"],
-                    source="motif",
-                    prompt=m.get("prompt", m["concept"]),
-                    difficulty=int(m.get("difficulty", 1)),
-                    source_ref=f"motif:{key}",
-                )
-                item["due_at"] = 0  # a fresh motif is due immediately
-                items.append(item)
-                added = True
-        if added:
-            with _LOCK:
+        
+        with _LOCK:
+            items = _load()
+            existing = {
+                f"{it.get('concept')}|{it.get('pre_fen')}"
+                for it in items
+                if it.get("source") == "motif"
+            }
+            added = False
+            for m in motifs:
+                key = f"{m.get('concept')}|{m.get('pre_fen')}"
+                if key not in existing and key in motif_ids:
+                    item = _build_item(
+                        concept=m["concept"],
+                        stage=m.get("stage", "reinforce"),
+                        pre_fen=m["pre_fen"],
+                        solution_uci=m["solution_uci"],
+                        solution_san=m["solution_san"],
+                        source="motif",
+                        prompt=m.get("prompt", m["concept"]),
+                        difficulty=int(m.get("difficulty", 1)),
+                        source_ref=f"motif:{key}",
+                    )
+                    item["due_at"] = 0  # a fresh motif is due immediately
+                    items.append(item)
+                    added = True
+            if added:
                 _save(items)
-            # Re-read so the persisted motif items are in the due pool.
-            with _LOCK:
-                items = _load()
 
         # Deterministic interleave: slot a due motif every 5th position so the
         # mix of personal-blunder + classic-pattern practice is consistent (the

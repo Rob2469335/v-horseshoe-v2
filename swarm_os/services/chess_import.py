@@ -90,7 +90,7 @@ def _parse_game_pgn(pgn_text: str) -> tuple[dict[str, Any], chess.Board, chess.p
         return None
 
 
-def _analyze_game(board: chess.Board, max_plies: int = 100000, game_obj: chess.pgn.Game | None = None) -> list[dict[str, Any]]:
+def _analyze_game(board: chess.Board, max_plies: int = 100000, game_obj: chess.pgn.Game | None = None, stop_flag: list[bool] | None = None) -> list[dict[str, Any]]:
     """Evaluate up to `max_plies` moves in the game, classifying each. Returns
     per-move records like the trainer's evaluate_move output (uci, san, pre_fen,
     classification, win_delta_pct, best_uci, best_move_san). Bounded so a long
@@ -120,6 +120,8 @@ def _analyze_game(board: chess.Board, max_plies: int = 100000, game_obj: chess.p
                 prev_clocks[mover_color] = t
 
     for i, mv in enumerate(moves):
+        if stop_flag and stop_flag[0]:
+            break
         uci = mv.uci()
         pre_fen = replay.fen()
         before_best, before_cp, _ = _best_move_and_cp(replay)
@@ -236,8 +238,13 @@ async def import_games(
                 continue
             try:
                 # Bound each game's analysis (~40 plies x 2 evals x ~0.8s worst).
-                async with asyncio.timeout(600):
-                    records = await asyncio.to_thread(_analyze_game, board, 100000, game_obj)
+                stop_flag = [False]
+                try:
+                    async with asyncio.timeout(600):
+                        records = await asyncio.to_thread(_analyze_game, board, 100000, game_obj, stop_flag)
+                except Exception as exc:
+                    stop_flag[0] = True
+                    raise exc
             except Exception as exc:
                 errors.append(f"analysis failed: {exc}")
                 continue
@@ -397,16 +404,19 @@ def _parse_clock(comment: str) -> float | None:
 def _think_time(game) -> list[float]:
     """Per-move think time (seconds) from %clk annotations, or [] if absent."""
     clock = []
-    prev = None
+    prev_clocks = {chess.WHITE: None, chess.BLACK: None}
     for node in game.mainline():
         t = _parse_clock(node.comment)
+        mover_color = node.turn()
+        prev_t = prev_clocks[mover_color]
+        if t is not None and prev_t is not None:
+            think = max(0.0, prev_t - t)
+            clock.append(think)
+        else:
+            clock.append(None)
         if t is not None:
-            if prev is not None:
-                think = prev - t
-                if think >= 0:
-                    clock.append(think)
-            prev = t
-    return clock
+            prev_clocks[mover_color] = t
+    return [c for c in clock if c is not None]
 
 
 async def build_profile(

@@ -297,3 +297,20 @@ def test_manifest_records_archive_state():
     assert m["total"] == 1
     assert m["sha256"] == hashlib.sha256(cg._GAMES_FILE.read_bytes()).hexdigest()
     assert m["policy"].startswith("archive-all")
+
+def test_progress_analytics_survives_finished_game():
+    """Regression: the phase-slicing pass called _is_player_move(g, i) with a
+    missing 'offset' arg -> TypeError, so progress_analytics() 500'd whenever
+    at least one finished game existed. Post-fix it returns per-phase stats."""
+    cg.record_game(
+        {
+            "id": "g1",
+            "status": "finished",
+            "player_color": "w",
+            "interactive": False,
+            "moves": [_move(delta=1.0), _move(delta=2.0), _move(delta=3.0)],
+        }
+    )
+    out = cg.progress_analytics()
+    assert "phases" in out
+    assert sum(out["phases"].values()) > 0

@@ -220,11 +220,14 @@ async def _analyze_one(username: str, game: dict) -> dict[str, Any]:
     is_black = black_hdr == username
     if not (is_white or is_black):
         return {"records": [], "mistakes": 0, "error": None}
+    stop_flag = [False]
     try:
         # Pass game_obj so clock/think data survives into bulk records (the
         # import path does; the bulk path previously stripped it).
-        records = await asyncio.to_thread(_analyze_game, board, 100000, game_obj)
+        async with asyncio.timeout(300):
+            records = await asyncio.to_thread(_analyze_game, board, 100000, game_obj, stop_flag)
     except Exception as exc:
+        stop_flag[0] = True
         return {"records": [], "mistakes": 0, "error": f"analysis: {exc}"}
 
     from .chess_games import record_game, start_game
@@ -316,7 +319,17 @@ async def _analyze_one(username: str, game: dict) -> dict[str, Any]:
     return {"records": records, "mistakes": mistakes, "error": None}
 
 
+
 async def _run_job(job: dict[str, Any]) -> None:
+    try:
+        await _run_job_impl(job)
+    except Exception as exc:
+        log.error("Fatal error in background analysis job %s: %s", job.get("job_id"), exc)
+        job["status"] = "error"
+        job["error"] = f"Fatal crash: {exc}"
+        _save_job(job)
+
+async def _run_job_impl(job: dict[str, Any]) -> None:
     """Process every game in the job, updating progress + persisting per game.
     Only lightweight references (url, index) are persisted — the full game
     dicts live in memory and are re-fetched on resume."""
@@ -428,54 +441,55 @@ async def start_analysis(
     if not username:
         return {"ok": False, "error": "username is required"}
 
-    # If a running/incomplete job exists for this username, resume it.
-    existing = None
-    for job in list_jobs().get("jobs", []):
-        if job.get("username") == username and job.get("status") in (
-            "running",
-            "paused",
-        ):
-            existing = job.get("job_id")
-            break
-    if existing:
-        job = _load_job(existing)
-        # If this job already has a LIVE task in THIS process, don't spawn a
-        # duplicate (it would process the same games concurrently). Only
-        # (re)start when no in-memory task is running — a FINISHED or crashed
-        # task still evaluates truthy, so check done() explicitly (otherwise a
-        # dead task would block resuming a failed run forever).
-        live_task = _jobs.get(existing) and _jobs[existing].get("_live_task")
-        already_live = bool(live_task and not live_task.done())
-        if (
-            auto_start
-            and job
-            and job.get("status") in ("running", "paused")
-            and not already_live
-        ):
-            _jobs[existing] = job
+    async with _jobs_lock:
+        # If a running/incomplete job exists for this username, resume it.
+        existing = None
+        for job in list_jobs().get("jobs", []):
+            if job.get("username") == username and job.get("status") in (
+                "running",
+                "paused",
+            ):
+                existing = job.get("job_id")
+                break
+        if existing:
+            job = _load_job(existing)
+            # If this job already has a LIVE task in THIS process, don't spawn a
+            # duplicate (it would process the same games concurrently). Only
+            # (re)start when no in-memory task is running - a FINISHED or crashed
+            # task still evaluates truthy, so check done() explicitly (otherwise a
+            # dead task would block resuming a failed run forever).
+            live_task = _jobs.get(existing) and _jobs[existing].get("_live_task")
+            already_live = bool(live_task and not live_task.done())
+            if (
+                auto_start
+                and job
+                and job.get("status") in ("running", "paused")
+                and not already_live
+            ):
+                _jobs[existing] = job
+                task = asyncio.create_task(_run_job(job))
+                job["_live_task"] = task
+            return {"ok": True, "job_id": existing, "resumed": True}
+    
+        job_id = uuid.uuid4().hex[:12]
+        job = {
+            "job_id": job_id,
+            "username": username,
+            "max_archives": max_archives,
+            "status": "running",
+            "started_at": time.time(),
+            "updated_at": time.time(),
+            "done_games": 0,
+            "total_games": 0,
+            "mistakes_queued": 0,
+            "errors": [],
+        }
+        _jobs[job_id] = job
+        _save_job(job)
+        if auto_start:
             task = asyncio.create_task(_run_job(job))
             job["_live_task"] = task
-        return {"ok": True, "job_id": existing, "resumed": True}
-
-    job_id = uuid.uuid4().hex[:12]
-    job = {
-        "job_id": job_id,
-        "username": username,
-        "max_archives": max_archives,
-        "status": "running",
-        "started_at": time.time(),
-        "updated_at": time.time(),
-        "done_games": 0,
-        "total_games": 0,
-        "mistakes_queued": 0,
-        "errors": [],
-    }
-    _jobs[job_id] = job
-    _save_job(job)
-    if auto_start:
-        task = asyncio.create_task(_run_job(job))
-        job["_live_task"] = task
-    return {"ok": True, "job_id": job_id, "resumed": False}
+        return {"ok": True, "job_id": job_id, "resumed": False}
 
 
 async def resume_incomplete() -> None:

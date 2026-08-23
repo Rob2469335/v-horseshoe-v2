@@ -685,10 +685,53 @@ def coach_plan(fen: str) -> dict[str, Any]:
 # attack/defense counts), and the drill feeds the spaced-review queue.
 
 
-def _attackers_of(board, sq, color) -> int:
-    """How many of `color`'s pieces attack the square sq (via python-chess's
-    built-in attack map — correct for pawn captures, sliders, knights)."""
-    return len(board.attackers(color, sq))
+def _legal_captures(board: chess.Board, sq: int, color: bool) -> list[chess.Move]:
+    """Every LEGAL capture of sq by color. Legal-move membership is the
+    pin-aware filter: a pinned piece has no legal move, so it drops out
+    naturally."""
+    out = []
+    original_turn = board.turn
+    board.turn = color
+    for m in board.legal_moves:
+        target_sq = m.to_square
+        if board.is_en_passant(m):
+            target_sq = m.to_square - 8 if color == chess.WHITE else m.to_square + 8
+            
+        if target_sq == sq:
+            p = board.piece_at(m.from_square)
+            if p is not None and p.color == color:
+                out.append(m)
+    board.turn = original_turn
+    return out
+
+
+def _attackers_of(board: chess.Board, sq: int, color: bool) -> int:
+    """How many of color's pieces legally attack the square sq.
+    Pin-aware: temporarily places an enemy piece on sq if needed to
+    evaluate legal captures via board.legal_moves (lila#19100)."""
+    original_piece = board.piece_at(sq)
+    
+    # Fallback to raw geometric attackers for kings. Capturing a king is never a 
+    # "legal move", and replacing a king with a queen breaks board validity.
+    if original_piece is not None and original_piece.piece_type == chess.KING:
+        return len(board.attackers(color, sq))
+        
+    target_color = not color
+    changed = False
+    
+    if original_piece is None or original_piece.color == color:
+        board.set_piece_at(sq, chess.Piece(chess.QUEEN, target_color))
+        changed = True
+        
+    caps = _legal_captures(board, sq, color)
+    
+    if changed:
+        if original_piece is None:
+            board.remove_piece_at(sq)
+        else:
+            board.set_piece_at(sq, original_piece)
+            
+    return len(caps)
 
 
 def _defenders_of(board, sq) -> int:

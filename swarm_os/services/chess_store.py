@@ -49,6 +49,7 @@ def atomic_write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
             for r in rows:
                 fh.write(json.dumps(r) + "\n")
             fh.flush()
+            os.fsync(fh.fileno())
         os.replace(tmp, path)
     except BaseException:
         try:
@@ -81,6 +82,7 @@ def write_manifest(store_path: Path, rows: list[dict[str, Any]]) -> None:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(json.dumps(manifest, indent=2) + "\n")
             fh.flush()
+            os.fsync(fh.fileno())
         os.replace(tmp, mpath)
     except BaseException:
         try:

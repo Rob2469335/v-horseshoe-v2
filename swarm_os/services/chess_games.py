@@ -51,12 +51,8 @@ def _load_games() -> list[dict[str, Any]]:
 
 
 def _save_games(games: list[dict[str, Any]]) -> None:
-    try:
-        from .chess_store import save_jsonl
-
-        save_jsonl(_GAMES_FILE, games)
-    except Exception as exc:
-        log.warning("chess games save failed: %s", exc)
+    from .chess_store import save_jsonl
+    save_jsonl(_GAMES_FILE, games)
 
 
 def start_game(
@@ -396,7 +392,25 @@ def progress_analytics() -> dict[str, Any]:
             "recent": [],
         }
 
-    all_moves = [m for g in finished for m in g.get("moves", [])]
+    all_moves = []
+    opening_moves = []
+    middlegame_moves = []
+    endgame_moves = []
+
+    for g in finished:
+        g_moves = g.get("moves", [])
+        player_moves = [m for i, m in enumerate(g_moves) if _is_player_move(g, 0, i)]
+        all_moves.extend(player_moves)
+        
+        n_p = len(player_moves)
+        if n_p == 0:
+            continue
+            
+        third = max(1, n_p // 3)
+        opening_moves.extend(player_moves[:third])
+        middlegame_moves.extend(player_moves[third : 2 * third])
+        endgame_moves.extend(player_moves[2 * third :])
+
     n = len(all_moves)
     if n == 0:
         return {
@@ -426,13 +440,11 @@ def progress_analytics() -> dict[str, Any]:
         1,
     )
 
-    # Per-phase accuracy (rough thirds like the review).
     phases: dict[str, float] = {}
-    third = max(1, n // 3)
     for label, sl in (
-        ("opening", all_moves[:third]),
-        ("middlegame", all_moves[third : 2 * third]),
-        ("endgame", all_moves[2 * third :]),
+        ("opening", opening_moves),
+        ("middlegame", middlegame_moves),
+        ("endgame", endgame_moves),
     ):
         if sl:
             phases[label] = round(sum(_move_quality(m) for m in sl) / len(sl), 1)
@@ -451,6 +463,7 @@ def progress_analytics() -> dict[str, Any]:
         "training_rating": training_rating,
         "games_count": len(finished),
         "moves_count": n,
+        "phases": phases,
         "skills": {
             "accuracy": accuracy,
             "blunder_rate": blunder_rate,

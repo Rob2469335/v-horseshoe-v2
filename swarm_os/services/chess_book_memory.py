@@ -78,18 +78,18 @@ def _concept_from(classification: str, query: str = "") -> str:
     return best
 
 
+
+import httpx
+_embed_client = httpx.AsyncClient(
+    timeout=httpx.Timeout(30.0, connect=10.0),
+    base_url=EMBED_URL,
+    headers={"Authorization": "Bearer llama"},
+)
 async def _embed(text: str) -> list[float]:
     try:
-        import httpx
-
-        async with httpx.AsyncClient(
-            timeout=httpx.Timeout(30.0, connect=10.0),
-            base_url=EMBED_URL,
-            headers={"Authorization": "Bearer llama"},
-        ) as client:
-            resp = await client.post("/embeddings", json={"input": text})
-            resp.raise_for_status()
-            return resp.json()["data"][0]["embedding"]
+        resp = await _embed_client.post("/embeddings", json={"input": text})
+        resp.raise_for_status()
+        return resp.json()["data"][0]["embedding"]
     except Exception as exc:
         log.warning("chess-book embed failed: %s", exc)
         return [0.0] * EMBED_DIM

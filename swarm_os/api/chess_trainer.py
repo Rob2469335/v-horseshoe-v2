@@ -71,17 +71,15 @@ PRACTICE_POSITIONS: list[dict[str, Any]] = [
 
 
 class EvaluateMoveRequest(BaseModel):
-    fen: str = Field(..., description="Current position FEN")
-    uci: str = Field(..., description="The move the learner played, UCI notation")
+    fen: str = Field(..., max_length=200, description="Current position FEN")
+    uci: str = Field(..., max_length=10, description="The move the learner played, UCI notation")
     rating: int = Field(500, ge=100, le=2500)
     want_explain: bool = Field(True)
-    game_id: str | None = Field(
-        None, description="Active game id to record this move into"
-    )
+    game_id: str | None = Field(None, max_length=64, description="Active game id to record this move into")
 
 
 class EngineMoveRequest(BaseModel):
-    fen: str = Field(..., description="Current position FEN")
+    fen: str = Field(..., max_length=200, description="Current position FEN")
     rating: int = Field(500, ge=100, le=2500)
     level: int = Field(
         1, ge=1, le=4, description="Engine strength (1=weak, 4=strong) for a fair game"
@@ -168,7 +166,7 @@ async def trainer_engine_move(req: EngineMoveRequest) -> dict[str, Any]:
 
 
 class EngineStrongRequest(BaseModel):
-    fen: str = Field(..., description="Current position FEN")
+    fen: str = Field(..., max_length=200, description="Current position FEN")
 
 
 @router.post("/engine-strong")
@@ -186,7 +184,7 @@ async def trainer_engine_strong(req: EngineStrongRequest) -> dict[str, Any]:
 
 
 class CoachHintRequest(BaseModel):
-    fen: str = Field(..., description="Current position FEN (side to move)")
+    fen: str = Field(..., max_length=200, description="Current position FEN (side to move)")
 
 
 @router.post("/coach/hint")
@@ -266,7 +264,7 @@ Return strictly JSON format: {{"hint_level_1": "...", "hint_level_2": "..."}}"""
 
 
 class SocraticRequest(BaseModel):
-    fen: str = Field(..., description="Current position FEN (side to move)")
+    fen: str = Field(..., max_length=200, description="Current position FEN (side to move)")
     history: list[dict[str, str]] = Field(
         default_factory=list,
         description="Rolling dialogue [{role: user|coach, content}], oldest first",
@@ -474,13 +472,13 @@ async def trainer_training_calibration() -> dict[str, Any]:
 
 
 class SafetyCheckRequest(BaseModel):
-    fen: str = Field(..., description="Current position FEN (side to move)")
-    uci: str = Field(..., description="The move to check for safety")
+    fen: str = Field(..., max_length=200, description="Current position FEN (side to move)")
+    uci: str = Field(..., max_length=10, description="The move to check for safety")
 
 
 class ThreatCheckRequest(BaseModel):
-    fen: str = Field(..., description="Current position FEN")
-    uci: str = Field(..., description="The last move played (to read its threats)")
+    fen: str = Field(..., max_length=200, description="Current position FEN")
+    uci: str = Field(..., max_length=10, description="The last move played (to read its threats)")
 
 
 @router.get("/drill/hanging")
@@ -513,9 +511,7 @@ async def trainer_threats(req: ThreatCheckRequest) -> dict[str, Any]:
 
 
 class GameIdRequest(BaseModel):
-    game_id: str | None = Field(
-        None, description="Game id (defaults to the most recent)"
-    )
+    game_id: str | None = Field(None, max_length=64, description="Game id (defaults to the most recent)")
 
 
 @router.post("/game/start")
@@ -561,13 +557,13 @@ async def trainer_analytics() -> dict[str, Any]:
 
 
 class GmGuessRequest(BaseModel):
-    game_id: str = Field(..., description="Curated GM game id")
+    game_id: str = Field(..., max_length=64, description="Curated GM game id")
     ply: int = Field(0, ge=0, description="The ply the learner is guessing")
-    guess_uci: str = Field(..., description="The learner's guessed move, UCI")
+    guess_uci: str = Field(..., max_length=10, description="The learner's guessed move, UCI")
 
 
 class GmExplainRequest(BaseModel):
-    game_id: str = Field(..., description="Curated GM game id")
+    game_id: str = Field(..., max_length=64, description="Curated GM game id")
     ply: int = Field(0, ge=0, description="The ply whose GM move to explain")
 
 
