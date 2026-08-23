@@ -245,7 +245,8 @@ async def run(
     """
     try:
         policy = agent_tool_policy(
-            tool_name, payload.get("operation") or payload.get("action")
+            tool_name,
+            payload.get("operation") or payload.get("action") or payload.get("op"),
         )
         if policy == ALLOW:
             return await _dispatch(tool_name, payload, trace_hook=trace_hook)
