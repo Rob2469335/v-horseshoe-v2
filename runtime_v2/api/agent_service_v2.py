@@ -1513,6 +1513,23 @@ class AgentServiceV2:
                     "and produce a substantive final that states the actual findings/fixes. Do NOT finalize "
                     "with a bare completion sentence."
                 )
+            elif agent_id in ("code_analyzer", "researcher") and not any(
+                tag in response_text for tag in ("[FACT]", "[INFERENCE]", "[UNKNOWN]")
+            ):
+                # Epistemic claim tags are a REPORT-agent contract (2026 SOTA:
+                # per-role output contracts). The reviewer's contract is a strict
+                # YES/NO verdict consumed by _verify_goal_with_reviewer via
+                # startswith("YES") — forcing tags onto reviewer finals broke
+                # goal verification in BOTH directions (bare "YES" was rejected
+                # by this gate, and gate-compliant "[FACT] YES" failed the
+                # consumer's prefix match), so reviewer is exempt from THIS
+                # check only (placeholder + read-path checks still apply).
+                contract_error = (
+                    "SYSTEM (L1 contract): Your final report is missing the required claim tags. "
+                    "You must strictly label your claims using [FACT] (directly verified), "
+                    "[INFERENCE] (deduced/assumed), or [UNKNOWN] (unverified). Review your "
+                    "findings and re-submit the final with the correct tags."
+                )
             else:
                 refs = set(re.findall(r"[\w./\\-]+\.py", response_text))
                 read_paths = {

@@ -429,7 +429,7 @@ async def test_internet_goal_final_allowed_after_web_search():
     gen = service._handle_final(
         {
             "action": "final",
-            "response": "The latest SOTA approach is documented on the official Qwen blog; the agent loop should route fixes to coder.",
+            "response": "[FACT] The latest SOTA approach is documented on the official Qwen blog; the agent loop should route fixes to coder.",
         },
         "code_analyzer",
         "m",
@@ -1718,7 +1718,7 @@ async def test_l1_legitimate_final_with_read_files_passes():
     gen = service._handle_final(
         {
             "action": "final",
-            "response": "runtime_v2/api/agent_service_v2.py hosts the agent loop; the read-before-write guard is sound.",
+            "response": "[FACT] runtime_v2/api/agent_service_v2.py hosts the agent loop; the read-before-write guard is sound.",
         },
         "code_analyzer",
         "m",
@@ -1732,6 +1732,39 @@ async def test_l1_legitimate_final_with_read_files_passes():
     events = [e async for e in gen]
     assert state.handler_status != "CONTINUE"
     assert any(e.get("type") == "final" for e in events)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("verdict_response", ["YES", "NO: the tests did not pass"])
+async def test_reviewer_verdict_finals_bypass_tag_gate_reach_done(verdict_response):
+    """Revert-proof seam pin: the L1 epistemic-tag contract applies to REPORT
+    agents only. The reviewer's contract is a strict YES/NO verdict consumed by
+    autonomous._verify_goal_with_reviewer via startswith('YES').
+
+    Regression (2026-08): forcing tags onto reviewer finals broke goal
+    verification in BOTH directions — a bare 'YES' (exactly what the verify
+    prompt demands) was rejected by the tag gate and never delivered, and a
+    gate-compliant '[FACT] YES' was delivered but failed the consumer's prefix
+    match, so passing goals were reported as verification-FAILED. Both verdict
+    shapes must flow straight through to DONE."""
+    service = AgentServiceV2()
+    state = _CallState()
+    messages = [{"role": "user", "content": "verify"}]
+    gen = service._handle_final(
+        {"action": "final", "response": verdict_response},
+        "reviewer",
+        "m",
+        "p",
+        messages,
+        0.0,
+        "did the agent achieve the goal",
+        True,
+        state,
+    )
+    events = [e async for e in gen]
+    assert state.handler_status == "DONE"
+    assert any(e.get("type") == "final" for e in events)
+    assert not any("claim tags" in str(e.get("content", "")) for e in events)
 
 
 @pytest.mark.asyncio
@@ -1792,7 +1825,7 @@ async def test_l1_legitimate_semantic_search_only_final_passes():
     gen = service._handle_final(
         {
             "action": "final",
-            "response": "Per the codebase index, runtime_v2/api/agent_service_v2.py implements _handle_final with the read-before-write guard.",
+            "response": "[FACT] Per the codebase index, runtime_v2/api/agent_service_v2.py implements _handle_final with the read-before-write guard.",
         },
         "code_analyzer",
         "m",
