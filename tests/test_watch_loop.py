@@ -246,3 +246,33 @@ def test_policy_missing_fails_closed(monkeypatch, tmp_path):
     monkeypatch.setattr(_ap_mod, "get_autonomy_policy", lambda **k: None)
     loop = wl.WatchLoop(_make_engine(), interval_seconds=0.01)
     assert loop._budget_available() is False
+
+
+@pytest.mark.asyncio
+async def test_schedule_due_canaries_tracks_task_no_duplicate_spawn(monkeypatch):
+    """Regression: _canary_tasks is a SET; the pre-fix code did dict item
+    assignment on it (TypeError swallowed by the scheduling except), so the rid
+    was never recorded and every tick re-spawned a duplicate _evaluate_canary
+    for the same canary. Post-fix: rid tracked, second schedule pass is a no-op."""
+    import runtime_v2.services.canary_registry as cr
+
+    canary = {"repair_id": "r1"}
+    ran = []
+
+    async def fake_eval(self, c):
+        ran.append(c)
+
+    monkeypatch.setattr(cr, "due_canaries", lambda: [canary])
+    monkeypatch.setattr(wl.WatchLoop, "_evaluate_canary", fake_eval)
+
+    loop = wl.WatchLoop(_make_engine(), interval_seconds=0.01)
+    loop._schedule_due_canaries()
+    assert "r1" in loop._canary_tasks
+    import asyncio as _aio
+
+    await _aio.sleep(0)  # let the spawned task run
+    assert len(ran) == 1
+
+    # Next tick: same due canary must NOT spawn a duplicate evaluation.
+    loop._schedule_due_canaries()
+    assert len(ran) == 1
