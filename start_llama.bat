@@ -59,6 +59,13 @@ if "%SWARM_LOCAL_MODEL%"=="qwen3.8-4b" (
     set "GEN_ALIAS=qwen3.8-4b"
     set "GEN_NGL=99"
 )
+if "%SWARM_LOCAL_MODEL%"=="qwen3.5-9b" (
+    rem Quality-upgrade opt-in (benchmarked ~3.8 t/s raw vs 6.5 on the 4B-MTP;
+    rem 24/25 benchmark wins incl BFCL-v4). Q4_K_M beats IQ4_XS on CPU/Vulkan.
+    set "GEN_MODEL=C:\Users\rober\models\Qwen3.5-9B-Q4_K_M.gguf"
+    set "GEN_ALIAS=qwen3.5-9b"
+    set "GEN_NGL=99"
+)
 rem BUG FIX: --cache-reuse 1024 is not supported by MTP GGUFs (kv_unified=false).
 rem The flag is silently dropped but generates a warning on every startup.
 rem Only set it for non-MTP models (plain Q4_K_M; MTP models have 'UD' in filename).

@@ -141,6 +141,13 @@ if ($env:SWARM_LOCAL_MODEL -eq "qwen3.8-4b") {
     $genAlias = "qwen3.8-4b"
     $genNgl = "99"
 }
+# Quality-upgrade opt-in (benchmarked ~3.8 t/s raw vs 6.5 on the 4B-MTP;
+# 24/25 benchmark wins incl BFCL-v4). Q4_K_M beats IQ4_XS on CPU/Vulkan.
+if ($env:SWARM_LOCAL_MODEL -eq "qwen3.5-9b") {
+    $genModel = "C:\Users\rober\models\Qwen3.5-9B-Q4_K_M.gguf"
+    $genAlias = "qwen3.5-9b"
+    $genNgl = "99"
+}
 # BUG FIX: cache-reuse is not supported by MTP GGUFs (kv_unified=false).
 # Passing it generates a warning on every boot and the flag is silently dropped.
 # Only set it for non-MTP models (plain Q4_K_M builds don't contain 'UD' in name).
