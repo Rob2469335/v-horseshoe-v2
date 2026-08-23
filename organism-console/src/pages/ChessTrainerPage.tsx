@@ -6,6 +6,7 @@ import { Badge } from "../components/ui/badge"
 import { ActionOnboardingCard } from "../components/ui/action-onboarding-card"
 import ChessBoard, { type BoardHighlights, BOARD_THEMES, type BoardThemeKey } from "../components/chess/ChessBoard"
 import { Play, RefreshCw, BookOpen, BrainCircuit } from "lucide-react"
+import { useUiStore } from "../state/ui-store"
 const FILES = "abcdefgh"
 const RANKS = "87654321"
 
@@ -455,7 +456,7 @@ function EvalCurveChart({
 }
 
 export default function ChessTrainerPage() {
-  const backendUrl = "http://127.0.0.1:8000"
+  const backendUrl = useUiStore((state) => state.backendUrl)
   const engineAbortRef = useRef<AbortController | null>(null)
   const autoAdvanceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [fen, setFen] = useState("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1")
