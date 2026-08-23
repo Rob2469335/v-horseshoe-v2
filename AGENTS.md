@@ -566,8 +566,20 @@ Dependency pairing: React 19 ↔ `@react-three/fiber` ^9.5 / `@react-three/drei`
 
 ## Recent Changes (do NOT re-apply)
 
-
 - **FIX: L1 epistemic-tag gate scoped to report agents — reviewer verdict seam restored (2026-08-22)**: the uncommitted L1 contract requiring `[FACT]/[INFERENCE]/[UNKNOWN]` tags on every `ANALYSIS_AGENTS` final broke goal verification at the reviewer seam, verified empirically in BOTH directions: `_verify_goal_with_reviewer` (`organism_console/loops/autonomous.py`) demands "Answer ONLY 'YES' or 'NO: <reason>'" and consumes the verdict via `startswith("YES")` — a bare `"YES"` was rejected by the tag gate and never delivered, while a gate-compliant `"[FACT] YES"` was delivered but failed the prefix match, so passing goals were reported as verification-FAILED. Per 2026 SOTA research (per-role output contracts: Agent Behavioral Contracts arXiv 2602.22302; Verifier Pattern structured-verdict agents; epistemic audit trails arXiv 2603.02960 for reports), the fix scopes the tag check to REPORT agents only — `agent_service_v2.py` tag-gate condition is now `agent_id in ("code_analyzer", "researcher")` (reviewer keeps its placeholder + read-path checks), and `system_prompts.py` adds the CRITICAL TAGGING RULE to researcher's role rules (it stays gated but was never told). Tests: new revert-proof `test_reviewer_verdict_finals_bypass_tag_gate_reach_done` (parametrized YES / NO-reason through real `_handle_final` → must reach DONE; proven FAILING on gate-without-exemption via manual temp revert — note a plain `git stash` of agent_service_v2.py is NOT a valid pre-fix state because the whole gate is uncommitted); the 2 drifted parity fixtures updated to tagged responses matching the intended report-agent contract. Gates: 154 passed across opencode_parity/outcome_fitness/tools_mcp_batch/autonomous_loop_bugs; ruff E9/F clean on all three changed files.
+
+- **Chess Subsystem Security & Logic Audit Fixes (2026-08)**:
+  - **Concurrency**: Fixed TOCTOU data-loss races in chess_training.py (	raining_due, uild_items_from_gm) by moving processing outside locks and enforcing safe read-merge-write under lock. Bound _jobs_lock in chess_analysis_job.py to prevent duplicate background job spawning. Bound _load_games() with cg._LOCK in chess_mistakes.py to fix Windows PermissionError save corruptions.
+  - **Resource Leaks**: Passed a stop_flag into _analyze_game to short-circuit the synchronous Stockfish thread when syncio.timeout fires (preventing thread exhaustion). Fixed chess_plans.py memory leak where finished games' plans were never purged because 
+eset was called on the new game_id. Lifted httpx.AsyncClient to a module-level global in chess_book_memory.py to prevent connection starvation.
+  - **Logic & Schema**: Fixed _think_time clock mixing in chess_import.py (properly isolating White/Black clocks). Fixed progress_analytics in chess_games.py to slice game phases per-game and correctly filter opponent moves. Stopped swallowing IO exceptions in _save_games. Enforced max_length limits across all chess_trainer.py Pydantic schemas (e.g., bounded SocraticRequest history list).
+
+- **Chess Trainer Pin-Awareness (2026-08)**: Fixed _attackers_of and _defenders_of in chess_trainer.py to be truly pin-aware instead of using raw geometric attack masks, resolving a major bug where pinned pieces were wrongly counted as attackers/defenders.
+  - Ported the _legal_captures approach from chess_hanging_rebuild.py directly into the trainer.
+  - Temporarily swaps the target square piece for an enemy Queen to ensure oard.legal_moves properly generates captures for defending pieces without full SEE static evaluations.
+  - Patched an inherited en-passant bug: _legal_captures now correctly targets the physical pawn's square instead of the empty EP landing square.
+  - Added a safety fallback for Kings: _attackers_of falls back to raw geometric counts for King squares to prevent breaking board state.
+
 
 - **MCP batch/parallel dispatch (2026-08)**: added mcp_batch tool action for executing independent MCP tools concurrently. stream_runner.py now includes mcp_batch in the tool decision schema (with an example) whenever mcp is allowed, and 	ool_executor.py processes the calls array via syncio.gather for true parallel fan-out.
 
@@ -1381,6 +1393,12 @@ Converted `except:` → `except Exception:` (or specific types) in `swarm_os/cor
 
 ## Self-Healing & Self-Learning Fixes
 
+- **Rule (code_analyzer)**: Failure: The code_analyzer agent attempted to analyze the auditing codebase filesystem but failed due to a "File not found" error for the file 'x.p...
+
+- **Rule (code_analyzer)**: Failure: The code_analyzer agent failed to analyze the auditing codebase filesystem while attempting to read the file 'x.py'. The file was not foun...
+
+- **Rule (code_analyzer)**: Failure: The code_analyzer agent attempted to analyze the auditing codebase filesystem but failed due to a "File not found: x.py" error, specifical...
+
 - **Rule (code_analyzer)**: Failure: The code_analyzer agent failed to analyze the auditing codebase filesystem due to a 'File not found: x.py' error, indicating that the agen...
 
 - **Rule (code_analyzer)**: Failure: The code_analyzer agent attempted to analyze the auditing codebase filesystem but failed due to a "File not found: x.py" error. The agent ...
@@ -2059,6 +2077,16 @@ Head-to-head across all spec types on the 4B (gen = long paragraph, dec = tool-d
 - **Skill Injection Hardening**: Implemented strict regex sanitization on `skill_manage add` to prevent agents from injecting prompt-override Markdown headings (e.g., `## `) into this policy file. Also implemented the `remove` action for full lifecycle management.
 - **Scheduler Epoch Drift**: Fixed a critical bug in `task_scheduler.py` where `_is_due(..., now=_now())` used a mutable default argument, capturing the module's load time rather than execution time, thereby breaking all time-based cron guards.
 
+
+- **Deep System Audits (3rd & 4th Pass)**: 
+  - Added strict concurrency bounds (syncio.Semaphore(10), limit 50) and parameter constraints (Query(..., le=1000)) across all Pydantic schemas and API gateways to prevent OOM and unbounded JSON lists.
+  - Hardened memory retrieval (memory_core.py) with chunked batching (size 50) and proper Stage 1 fallback extraction on HTTP timeouts.
+  - Addressed untrusted .get() logic (wrapping ints in str()) in Telegram/Browser integration paths to prevent AttributeError tracebacks.
+  - Handled RecursionError vectors in 	ool_executor.py (_truncate and _sanitize_tool_output) by enforcing a strict depth cap of 50.
+  - Eliminated silent Garbage Collection task drops in watch_loop.py by maintaining strong references to async canary tasks.
+  - Fixed a silent data corruption vulnerability in chess_store.py by forcing os.fsync() before atomic replaces.
+  - Handled IndexError on empty model API responses (llm_client.py) and fixed a fatal Python 2 syntax exception (volution_daemon.py).
+- **UI Novice Mode**: Refactored the CommandCenterPage.tsx front-end, translating highly technical system descriptions into simple, beginner-friendly explanations of the system's "brains" and "memory".
 
 ## Custom Learned Skills
 
