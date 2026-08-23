@@ -289,7 +289,7 @@ claim matters and isn't trivially re-derivable, verify it with the actual tool
 | `admin.py` | 405 | Health evaluation, heal cycles, simulation management, `GET /changes` live workspace diff (web console panel) |
 | `schemas.py` | 126 | Pydantic schemas |
 | `dependencies.py` | 41 | FastAPI DI: `runtime_dep()`, `get_orchestrator()` |
-| `chess_trainer.py` | 732 | Chess trainer routes: `/chess/trainer/{health, tips, practice, evaluate, engine-move, engine-strong, coach/hint, coach/socratic, index-books, review, review/{solved,failed,stats,top,coach}, review/training/{build,answer,progress,calibration}, blunder-radar, drill/hanging, safety, threats, game/{start,review,queue-mistakes}, games, analytics, gm-games, gm-games/{curate,play,study,guess,explain}, import/chesscom, import/chesscom/{username,profile}, analysis/{start,jobs,status/{job_id}}}` + curated `PRACTICE_POSITIONS` |
+| `chess_trainer.py` | 728 | Chess trainer routes: `/chess/trainer/{health, tips, practice, evaluate, engine-move, engine-strong, coach/hint, coach/socratic, index-books, review, review/{solved,failed,stats,top,coach}, review/training/{build,answer,progress,calibration}, blunder-radar, drill/hanging, safety, threats, game/{start,review,queue-mistakes}, games, analytics, gm-games, gm-games/{curate,play,study,guess,explain}, import/chesscom, import/chesscom/{username,profile}, analysis/{start,jobs,status/{job_id}}}` + curated `PRACTICE_POSITIONS` |
 
 ### swarm_os/services/ (Application Services)
 | File | Lines | Role |
@@ -329,13 +329,13 @@ claim matters and isn't trivially re-derivable, verify it with the actual tool
 | `deep_research.py` | 385 | Deep research fan-out (planner decomposition → isolated research units → gap evaluator → synthesis) |
 | `competitive_intel.py` | 1110 | Competitive Intelligence Monitor — the paid CI service: deterministic change detection (snapshots + noise-filtered diffing, no LLM in the detector), rule-based classification/significance/dedup with a 10–15-item curation cap, `IntelligenceSynthesizer` (remote→local→deterministic "so what" — the only LLM seam), delivery (email/Telegram/Slack + records), weekly `SWARM_INTEL=1` daemon |
 | `books_service.py` | 592 | Book library service (157-book manifest, genre/tier filters, search, LLM synthesis) |
-| `chess_trainer.py` | 1697 | Chess trainer service — python-chess legality, Stockfish 18 eval/classification, WDL win% bar, `engine_reply` human-like levels, coach hints, `_socratic_coach_turn` dialogue + `_proposal_eval` move-proposal evaluation, safety/hanging checks, `_eval_cache` |
+| `chess_trainer.py` | 1873 | Chess trainer service — python-chess legality, Stockfish 18 eval/classification, WDL win% bar, `engine_reply` human-like levels, coach hints, `_socratic_coach_turn` dialogue + `_proposal_eval` move-proposal evaluation, safety/hanging checks, `_eval_cache` |
 | `chess_book_memory.py` | 267 | Qdrant-backed 100-book chess library (768-dim embeddings, keyword fallback) |
-| `chess_mistakes.py` | 603 | Persists every Mistake/Blunder as a review position (Leitner spaced-repetition ladder 1d→3d→7d→14d) |
-| `chess_import.py` | 629 | Chess.com PGN archive import (ECO/Opening names, `%clk` time-pressure tags) |
-| `chess_analysis_job.py` | 450 | Resumable background engine analysis job over the game archive (ETA from completion slope, per-mistake `lead_in_moves` extraction) |
-| `chess_games.py` | 391 | Recorded game storage/analytics (training rating, per-skill bars) |
-| `chess_training.py` | 705 | Concept-level spaced repetition + transfer engine (Repair/Reinforce/Transfer ladders, curated-motif interleaving) |
+| `chess_mistakes.py` | 604 | Persists every Mistake/Blunder as a review position (Leitner spaced-repetition ladder 1d→3d→7d→14d) |
+| `chess_import.py` | 687 | Chess.com PGN archive import (ECO/Opening names, `%clk` time-pressure tags) |
+| `chess_analysis_job.py` | 507 | Resumable background engine analysis job over the game archive (ETA from completion slope, per-mistake `lead_in_moves` extraction) |
+| `chess_games.py` | 485 | Recorded game storage/analytics (training rating, per-skill bars) |
+| `chess_training.py` | 707 | Concept-level spaced repetition + transfer engine (Repair/Reinforce/Transfer ladders, curated-motif interleaving) |
 | `chess_tactics_library.py` | 113 | Hand-curated prototypical tactical motifs (Pins/Forks/Back-Rank/Opposition/Scholar's), injected into the training queue as `source="motif"` items |
 
 ### swarm_os/services/rv_finder/ (Used-RV Deal Finder package)
@@ -466,11 +466,11 @@ Package split from the deleted 1,275-line `rv_finder.py`. Exposed as `find_best_
 | `project_map.py` | 107 | Compact project map builder |
 | `run_snapshot.py` | 138 | Diff-scoped run snapshots |
 | `system_intel.py` | 592 | Read-only system intelligence tools |
-| `vision_router.py` | 78 | Llama.cpp Vision model router policy |
-| `memory_core.py` | 545 | `remember_fat()`, `get_relevant_memories()` — Qdrant-backed memory |
+| `vision_router.py` | 89 | Llama.cpp Vision model router policy |
+| `memory_core.py` | 554 | `remember_fat()`, `get_relevant_memories()` — Qdrant-backed memory |
 | `_llm_parser.py` | 313 | `extract_json()`, `normalize_decision()`, `normalize_model_json()`, `TOOL_CALL_SCHEMA`, `fire_and_forget()` |
 | `stream_runner.py` | 573 | `get_tool_decision()` — orchestration: MCP schema, memory injection, retry loop, LLM call |
-| `tool_executor.py` | 1073 | `run(tool_name, payload)` — dispatches tool calls |
+| `tool_executor.py` | 1115 | `run(tool_name, payload)` — dispatches tool calls |
 | `fallback_manager.py` | 700 | `get_live_fallbacks()` — cloud model fallbacks, cooldowns, DeepSeek/Ling/OpenCode chain |
 | `_llm_client.py` | 553 | `complete_for_tool_decision()`, `stream_content()`, `build_router()` (litellm Router, per-deployment endpoint/key), `build_kwargs()`, `_cloud_response_format()` (strict json_schema), `SSL setup`, `get_litellm_model()` |
 | `model_registry.py` | 107 | `get_model(agent_id)` — agent → model mapping (deepseek-coder → qwen3.5-4b) |
@@ -565,6 +565,12 @@ Dependency pairing: React 19 ↔ `@react-three/fiber` ^9.5 / `@react-three/drei`
 ---
 
 ## Recent Changes (do NOT re-apply)
+
+
+
+- **MODEL DECISION FINAL — Qwen3.5-4B-UD-MTP is the default generation model again (2026-08-22)**: the mid-session qwen3.8-4b experiment was reverted after evidence gathering. Facts on record: (a) deep research found NO official Alibaba Qwen3.8-4B open weight (official Qwen3.8 open set = 27B / 27B-FP8 / 2.4T-A95B); the local `Qwen3.8-4B-Q4_K_M.gguf` reads back `general.architecture=qwen35` with a relabeled name — it IS the 3.5 architecture under a different label; (b) cold head-to-head through direct llama.cpp servers with thinking off showed ~equal speed (3.8 ~4.0-4.4 t/s vs 3.5-MTP ~4.6-4.8 t/s) and equal output quality at the same token budget — the earlier "34 t/s" reading was a warm KV/prefix artifact; (c) the plain 3.8 quant has no MTP heads and forfeits spec decoding, while the UD-MTP file keeps ngram-mod/MTP (~21 t/s warm documented). Net: default restored to `qwen3.5-4b-mtp` everywhere (`model_router.py` env + `/v1/models` advertises `qwen3.5-4b`/`qwen3.5-0.8b`; all roles in `config/agent_models.json` = `qwen3.5-4b`; `start_llama.bat` default = `Qwen3.5-4B-UD-Q4_K_XL.gguf` alias `qwen3.5-4b`). A `qwen3.8-4b` branch remains as an OPT-IN launcher override only (`SWARM_LOCAL_MODEL=qwen3.8-4b`). **Record correction (self-correction rule):** commit `93fc65c`'s message says "wire qwen3.8-4b end-to-end" but its actual content is this MTP-default restore + proxy refactor (start-dev.ps1 delegates STEP 2 to start-proxy.ps1; anyio-shielded aclose; process-list cleanup llama-server→llama). The message misdescribed the diff because it was written from pre-revert context; left unrewritten since it is already pushed (no force-push), corrected here instead.
+
+- **CI: drop unused exception binding in mcp_batch handler (ruff F841) (`7905cb7`, 2026-08-22)**: `2a2d8ae` left `except Exception as e:` with the binding unused in tool_executor.py's mcp_batch handler — the only E9/F error on pushed master. Landed as a standalone one-line index-plumbing commit so master went green without pulling in unreviewed work.
 
 - **FIX: L1 epistemic-tag gate scoped to report agents — reviewer verdict seam restored (2026-08-22)**: the uncommitted L1 contract requiring `[FACT]/[INFERENCE]/[UNKNOWN]` tags on every `ANALYSIS_AGENTS` final broke goal verification at the reviewer seam, verified empirically in BOTH directions: `_verify_goal_with_reviewer` (`organism_console/loops/autonomous.py`) demands "Answer ONLY 'YES' or 'NO: <reason>'" and consumes the verdict via `startswith("YES")` — a bare `"YES"` was rejected by the tag gate and never delivered, while a gate-compliant `"[FACT] YES"` was delivered but failed the prefix match, so passing goals were reported as verification-FAILED. Per 2026 SOTA research (per-role output contracts: Agent Behavioral Contracts arXiv 2602.22302; Verifier Pattern structured-verdict agents; epistemic audit trails arXiv 2603.02960 for reports), the fix scopes the tag check to REPORT agents only — `agent_service_v2.py` tag-gate condition is now `agent_id in ("code_analyzer", "researcher")` (reviewer keeps its placeholder + read-path checks), and `system_prompts.py` adds the CRITICAL TAGGING RULE to researcher's role rules (it stays gated but was never told). Tests: new revert-proof `test_reviewer_verdict_finals_bypass_tag_gate_reach_done` (parametrized YES / NO-reason through real `_handle_final` → must reach DONE; proven FAILING on gate-without-exemption via manual temp revert — note a plain `git stash` of agent_service_v2.py is NOT a valid pre-fix state because the whole gate is uncommitted); the 2 drifted parity fixtures updated to tagged responses matching the intended report-agent contract. Gates: 154 passed across opencode_parity/outcome_fitness/tools_mcp_batch/autonomous_loop_bugs; ruff E9/F clean on all three changed files.
 
