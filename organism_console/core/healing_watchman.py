@@ -109,11 +109,13 @@ class HealingWatchman:
         elif mode == "approval_required":
             if not self._ask_approval(component, reasoning):
                 self._notify(f"[dim]  ✗ Skipped heal for {component}[/dim]")
+                loop.finalize(decision, {"ok": False, "action": "rejected_by_user"})
                 return
         else:
             self._notify(
                 f"[bold red]⛔ Rejected by Governor:[/bold red] [{component}] {reasoning}"
             )
+            loop.finalize(decision, {"ok": False, "action": "rejected_by_governor"})
             return
 
         symptom = (heal_result.get("all_signals") or [{}])[0] or {

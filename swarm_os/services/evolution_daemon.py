@@ -212,23 +212,13 @@ def _score_genome(genome: dict) -> float:
         )
 
         exact = best_fitness(genome.get("id", ""))
-        f = exact
-        if f is None:
-            f = best_aggregate_fitness()
-        if f is not None:
-            # Apply decayed fitness ONLY to an EXACT per-genome record. The
-            # aggregate fallback is the SHARED lineage baseline that every
-            # genome with no record ties on — decaying it would push every
-            # surviving elite below every fresh child (0.85^n), systematically
-            # vacating the elite slots to random children and killing selection
-            # pressure on tool_genes. Decay's purpose (prevent immortal elites)
-            # only applies once a genome has its OWN recorded signal to fade.
-            decay = (
-                FITNESS_DECAY ** genome.get("decay_generations", 0)
-                if exact is not None
-                else 1.0
-            )
-            return round(f * decay, 4)
+        if exact is not None:
+            decay = FITNESS_DECAY ** genome.get("decay_generations", 0)
+            return round(exact * decay, 4)
+
+        agg = best_aggregate_fitness()
+        if agg is not None:
+            return round(agg * 0.80, 4)
         return 0.05
     except Exception:
         return 0.05

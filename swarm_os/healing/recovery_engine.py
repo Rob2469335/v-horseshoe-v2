@@ -70,7 +70,7 @@ def _find_and_kill(match_str, exclude_pid=None):
             if match_str in cmdline:
                 proc.kill()
                 killed.append(proc.info["pid"])
-        except psutil.NoSuchProcess, psutil.AccessDenied:
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
     return killed
 

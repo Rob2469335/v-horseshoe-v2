@@ -351,7 +351,7 @@ def _run_related_tests(file_path: Path) -> Optional[Dict[str, Any]]:
             "initial_result": "error",
             "retry_result": None,
         }
-    # First run failed: re-run only the failed tests. Passing -> flaky, not broken.
+    # First run failed: re-run only the failed tests in the related suite. Passing -> flaky, not broken.
     retry_cmd = [
         sys.executable,
         "-m",
@@ -360,7 +360,7 @@ def _run_related_tests(file_path: Path) -> Optional[Dict[str, Any]]:
         "--tb=line",
         "--lf",
         "--no-header",
-    ]
+    ] + [str(t) for t in related]
     retry_code, retry_out = _run(retry_cmd)
     if retry_code == 0:
         return {
@@ -781,7 +781,7 @@ class T1ConstrainedRepair:
             if m:
                 missing_key = m.group(1)
                 for node in ast.walk(tree):
-                    if isinstance(node, ast.Subscript):
+                    if isinstance(node, ast.Subscript) and isinstance(getattr(node, "ctx", None), ast.Load):
                         try:
                             full = ast.unparse(node)
                             # Match the key in brackets with either quote style
@@ -1190,7 +1190,7 @@ class TieredRepairOrchestrator:
                             result["generated_test"] = diag.get(
                                 "test_patch"
                             ) or diag.get("test_code")
-                        except json.JSONDecodeError, ValueError:
+                        except (json.JSONDecodeError, ValueError):
                             result["repair_action"] = response_text[:500]
                     self.total_tokens += len(response_text) // 4 if response_text else 0
                 except Exception as e:

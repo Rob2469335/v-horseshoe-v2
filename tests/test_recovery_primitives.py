@@ -2,6 +2,7 @@ import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 
 from swarm_os.healing.recovery_primitives import (
+    kill_process_by_name,
     clean_directory,
     restart_service,
     RECOVERY_PRIMITIVES,
@@ -14,6 +15,16 @@ def test_recovery_primitives_registry_complete():
     assert "kill_process_by_name" in RECOVERY_PRIMITIVES
     assert "clean_directory" in RECOVERY_PRIMITIVES
     assert "restart_service" in RECOVERY_PRIMITIVES
+
+
+def test_kill_process_by_name_rejects_system_processes():
+    res = kill_process_by_name("svchost.exe")
+    assert res["ok"] is False
+    assert "targets protected system process" in res["error"]
+
+    res_exp = kill_process_by_name("explorer.exe")
+    assert res_exp["ok"] is False
+    assert "targets protected system process" in res_exp["error"]
 
 
 def test_clean_directory_path_traversal_guard(tmp_path):

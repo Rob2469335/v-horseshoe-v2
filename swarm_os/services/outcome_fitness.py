@@ -120,7 +120,7 @@ def record_outcome(
         return compute_fitness(completion, test_pass, tool_success, efficiency, human)
 
 
-def best_fitness(genome_id: str, window: int = 20) -> float | None:
+def best_fitness(genome_id: str, window: int = 100) -> float | None:
     """Best composite fitness recorded for a genome in the recent window. Used by
     the evolution daemon to select on real outcomes (elitism)."""
     if not FITNESS_PATH.exists():
@@ -171,7 +171,7 @@ def genome_has_fitness(genome_id: str) -> bool:
     return best_fitness(genome_id) is not None
 
 
-def best_aggregate_fitness(window: int = 20) -> float | None:
+def best_aggregate_fitness(window: int = 100) -> float | None:
     """Best composite fitness across ALL recent agent outcomes.
 
     The evolution population is a single shared tool-policy lineage consumed by

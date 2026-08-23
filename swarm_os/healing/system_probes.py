@@ -131,7 +131,7 @@ def check_runaway_processes(
                 continue
             proc.cpu_percent(None)  # baseline (returns 0.0)
             procs.append(proc)
-        except psutil.NoSuchProcess, psutil.AccessDenied:
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
 
     time.sleep(0.2)  # single global window — do not sleep per process
@@ -144,20 +144,16 @@ def check_runaway_processes(
             mem = proc.memory_info().rss / (1024**2)
             if cpu < float(cpu_threshold) and mem < float(memory_mb_threshold):
                 continue
-            # confirm sustained (second non-blocking sample over the same window)
-            cpu2 = proc.cpu_percent(None)
-            if cpu2 < 30.0 and mem < float(memory_mb_threshold):
-                continue
             runaway.append(
                 {
                     "pid": info["pid"],
                     "name": info["name"],
-                    "cpu_percent": round(max(cpu, cpu2), 1),
+                    "cpu_percent": round(cpu, 1),
                     "memory_mb": round(mem, 1),
                     "cmdline": " ".join(info["cmdline"] or [])[:200],
                 }
             )
-        except psutil.NoSuchProcess, psutil.AccessDenied:
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
     runaway.sort(key=lambda p: (p["cpu_percent"], p["memory_mb"]), reverse=True)
     if runaway:

@@ -184,10 +184,20 @@ async def get_tool_decision(
 
     # Memory augmentation: inject relevant memories within context budget
     try:
-        _last_user_msg = next(
-            (m["content"] for m in reversed(messages) if m.get("role") == "user"), ""
+        # Find original user task goal (skipping intermediate tool execution returns)
+        _orig_user_msg = next(
+            (
+                str(m.get("content", ""))
+                for m in messages
+                if m.get("role") == "user"
+                and not str(m.get("content", "")).startswith("TOOL RESULT")
+            ),
+            "",
         )
-        if _last_user_msg and len(_last_user_msg) > 20:
+        _last_user_msg = _orig_user_msg or next(
+            (str(m.get("content", "")) for m in reversed(messages) if m.get("role") == "user"), ""
+        )
+        if _last_user_msg and len(_last_user_msg) > 10:
             _approx_tokens = sum(len(str(m.get("content", ""))) for m in messages) // 4
             _approx_tokens += len(system_prompt) // 4
             _context_limit = 16384
@@ -197,25 +207,9 @@ async def get_tool_decision(
                 from runtime_v2.services.memory_core import get_relevant_memories
 
                 memory_query = f"agent:{agent_id} {_last_user_msg[:200]}"
-                memories_str = await asyncio.to_thread(
-                    get_relevant_memories, memory_query
-                )
+                
+                # 1. ReflexionMemory: inject distilled "do-not-repeat" hint from past failures first
                 injected_chars = 0
-                if memories_str:
-                    mem_budget = min(600, _headroom * 4)
-                    injected_mem = memories_str[:mem_budget]
-                    injected_chars = len(injected_mem)
-                    system_prompt = (
-                        system_prompt + f"\n\n[RELEVANT MEMORIES]\n{injected_mem}"
-                    )
-                    log.debug(
-                        "[%s] Injected %d chars of memory (%d token headroom)",
-                        agent_id,
-                        injected_chars,
-                        _headroom,
-                    )
-                # ReflexionMemory: inject a distilled "do-not-repeat" hint from past
-                # failures so the agent's own ASPO lessons steer this decision.
                 try:
                     from swarm_os.services.reflection_loop import get_reflection_service
 
@@ -223,21 +217,39 @@ async def get_tool_decision(
                         memory_query
                     )
                     if hint and len(hint) > 10:
-                        remaining = min(400, (_headroom * 4) - injected_chars)
-                        if remaining > 50:
-                            if len(hint) > remaining:
-                                hint = hint[: remaining - 3] + "..."
-                            system_prompt = (
-                                system_prompt
-                                + f"\n\n[PAST-MISTAKE WARNING]\n{hint[:remaining]}"
-                            )
-                            log.debug(
-                                "[%s] Injected reflexion warning (%d chars)",
-                                agent_id,
-                                min(400, len(hint)),
-                            )
+                        hint_budget = min(400, _headroom * 2)
+                        if len(hint) > hint_budget:
+                            hint = hint[: hint_budget - 3] + "..."
+                        system_prompt = (
+                            system_prompt
+                            + f"\n\n[PAST-MISTAKE WARNING]\n{hint}"
+                        )
+                        injected_chars += len(hint)
+                        log.debug(
+                            "[%s] Injected reflexion warning (%d chars)",
+                            agent_id,
+                            len(hint),
+                        )
                 except Exception as refl_err:
                     log.debug("Reflexion hint skipped: %s", refl_err)
+
+                # 2. Episodic fact memories within remaining budget
+                memories_str = await asyncio.to_thread(
+                    get_relevant_memories, memory_query
+                )
+                if memories_str:
+                    mem_budget = min(600, max(0, (_headroom * 4) - injected_chars))
+                    if mem_budget > 50:
+                        injected_mem = memories_str[:mem_budget]
+                        system_prompt = (
+                            system_prompt + f"\n\n[RELEVANT MEMORIES]\n{injected_mem}"
+                        )
+                        log.debug(
+                            "[%s] Injected %d chars of memory (%d token headroom)",
+                            agent_id,
+                            len(injected_mem),
+                            _headroom,
+                        )
             else:
                 log.debug(
                     "[%s] Skipping memory injection — only %d tokens headroom",

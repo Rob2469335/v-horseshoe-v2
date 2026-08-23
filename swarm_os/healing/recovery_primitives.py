@@ -12,30 +12,54 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 ALLOWED_SERVICES = {"llamacpp", "backend", "qdrant", "Qdrant"}
 
 
+_NEVER_TOUCH = {
+    "system",
+    "system idle process",
+    "registry",
+    "smss.exe",
+    "csrss.exe",
+    "wininit.exe",
+    "winlogon.exe",
+    "services.exe",
+    "lsass.exe",
+    "svchost.exe",
+    "dwm.exe",
+    "explorer.exe",
+    "taskmgr.exe",
+    "conhost.exe",
+    "msmpeng.exe",
+    "windowsdefender",
+    "llama.exe",
+    "llama-server.exe",
+    "opencode.exe",
+}
+
+
 def kill_process_by_port(port: int) -> Dict[str, Any]:
-    """Kill any process listening on a specified TCP/UDP port."""
+    """Kill any process listening on the specified network port (skips self)."""
     try:
         port = int(port)
     except (ValueError, TypeError):
         return {"ok": False, "error": f"Invalid port: {port}"}
 
-    killed = []
     my_pid = psutil.Process().pid
+    killed = []
+
     for conn in psutil.net_connections(kind="inet"):
-        if conn.laddr and conn.laddr.port == port and conn.pid:
-            if conn.pid == my_pid:
-                continue
-            try:
-                p = psutil.Process(conn.pid)
-                name = p.name()
-                p.terminate()
+        try:
+            if conn.laddr and conn.laddr.port == port and conn.status == psutil.CONN_LISTEN and conn.pid and conn.pid != my_pid:
+                proc = psutil.Process(conn.pid)
+                pname = (proc.name() or "").lower()
+                if any(nt in pname for nt in _NEVER_TOUCH):
+                    continue
+                proc.terminate()
                 try:
-                    p.wait(timeout=3.0)
+                    proc.wait(timeout=3.0)
                 except psutil.TimeoutExpired:
-                    p.kill()
-                killed.append({"pid": conn.pid, "name": name, "port": port})
-            except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
-                log.warning(f"Could not kill process {conn.pid} on port {port}: {e}")
+                    proc.kill()
+                killed.append({"pid": conn.pid, "name": proc.name(), "port": port})
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
 
     if killed:
         return {"ok": True, "action": "kill_process_by_port", "killed": killed}
@@ -48,6 +72,9 @@ def kill_process_by_name(pattern: str) -> Dict[str, Any]:
         return {"ok": False, "error": "Pattern too short or empty"}
 
     pattern = pattern.strip().lower()
+    if any(nt in pattern or pattern in nt for nt in _NEVER_TOUCH):
+        return {"ok": False, "error": f"Pattern '{pattern}' targets protected system process"}
+
     my_pid = psutil.Process().pid
     killed = []
 
@@ -57,6 +84,8 @@ def kill_process_by_name(pattern: str) -> Dict[str, Any]:
             if pid == my_pid:
                 continue
             name = (proc.info["name"] or "").lower()
+            if any(nt in name for nt in _NEVER_TOUCH):
+                continue
             cmdline = " ".join(proc.info["cmdline"] or []).lower()
             if pattern in name or pattern in cmdline:
                 p = psutil.Process(pid)

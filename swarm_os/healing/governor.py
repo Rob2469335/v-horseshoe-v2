@@ -46,6 +46,7 @@ class Governor:
                 decision = {
                     "incident_id": incident_id,
                     "hypotheses": hypotheses,
+                    "component": symptom.get("component"),
                     "mode": "approval_required",
                     "mode_reason": (
                         f"destructive system action for component "
@@ -80,7 +81,11 @@ class Governor:
         except Exception as exc:
             log.debug("Governor decide() early-return failed: %s", exc)
 
-        decision = {"incident_id": incident_id, "hypotheses": hypotheses}
+        decision = {
+            "incident_id": incident_id,
+            "hypotheses": hypotheses,
+            "component": symptom.get("component"),
+        }
 
         # consult policy engine if available to see if particular action types are gated
         try:

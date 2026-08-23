@@ -363,11 +363,12 @@ class ReflectionService:
                     cid = getattr(r, "id", None)
                     sim = r.score or 0.0
                     age = now - float(payload.get("timestamp", now))
-                    decay = max(0.3, 1.0 - (age / (30 * 86400)))  # halve after ~30 days
+                    # Exponential half-life (60 days) with a 0.40 floor so proven rules remain active
+                    decay = max(0.40, 0.5 ** (age / (60.0 * 86400.0)))
                     confidence = float(payload.get("confidence", 0.5))
                     # Minimum-confidence filter: never surface a rule whose
                     # confidence has decayed below the retrieval threshold.
-                    if confidence * decay < 0.3:
+                    if confidence * decay < 0.15:
                         continue
                     if cid is not None and cid in reranked_by_score:
                         # Rerank is PRIMARY; decay is the tiebreak.
@@ -499,13 +500,9 @@ class ReflectionService:
                     else:
                         count = 1
                         best_conf = prev_conf
-                    if (
-                        existing
-                        and existing.get("correction")
-                        and len(str(existing.get("correction"))) > len(correction or "")
-                    ):
+                    if not correction and existing and existing.get("correction"):
                         correction = existing.get("correction")
-                    if existing and existing.get("do_not_repeat"):
+                    if not do_not_repeat and existing and existing.get("do_not_repeat"):
                         do_not_repeat = existing.get("do_not_repeat")
                     best_conf = max(best_conf, confidence)
                 await self.client.upsert(

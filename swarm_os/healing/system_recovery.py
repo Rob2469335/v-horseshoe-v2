@@ -56,8 +56,8 @@ def free_memory(anomaly: Dict[str, Any]) -> Dict[str, Any]:
                 skipped += 1
                 continue
             handle = ctypes.windll.kernel32.OpenProcess(
-                0x0200, False, pid
-            )  # PROCESS_SET_QUOTA
+                0x0600, False, pid
+            )  # PROCESS_SET_QUOTA | PROCESS_QUERY_INFORMATION
             if not handle:
                 skipped += 1
                 continue
@@ -66,7 +66,7 @@ def free_memory(anomaly: Dict[str, Any]) -> Dict[str, Any]:
                 emptied.append({"pid": pid, "name": proc.info["name"]})
             finally:
                 ctypes.windll.kernel32.CloseHandle(handle)
-        except psutil.NoSuchProcess, psutil.AccessDenied:
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
     log.info(
         "Freed working sets of %d non-critical processes (skipped %d)",
