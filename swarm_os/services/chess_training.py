@@ -478,14 +478,18 @@ def record_answer(
             return {"ok": False, "error": "no such training item"}
         ladder = _ladder_for(it.get("stage", "repair"))
         it["attempts"] = (it.get("attempts", 0) or 0) + 1
-        it["correct_history"] = (it.get("correct_history", []) or []) + [bool(correct)]
+        it["correct_history"] = (it.get("correct_history", []) or []) + [
+            bool(correct)
+        ][-50:]
         it["confidence_history"] = (it.get("confidence_history", []) or []) + [
             confidence
-        ]
+        ][-50:]
         it["confidence_times"] = (it.get("confidence_times", []) or []) + [
             confidence_captured_at
+        ][-50:]
+        it["answer_times"] = (it.get("answer_times", []) or []) + [answer_time][
+            -50:
         ]
-        it["answer_times"] = (it.get("answer_times", []) or []) + [answer_time]
         if post_hoc:
             it["calibration_flags"] = (it.get("calibration_flags", []) or []) + [
                 "post-hoc-confidence"
