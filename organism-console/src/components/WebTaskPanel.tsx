@@ -21,6 +21,7 @@ type TaskResult = {
   message?: string
   pending_action?: string
   pending_params?: Record<string, unknown>
+  approval_token?: string
   failed?: Array<{ name: string; error: string }>
   error?: string
   history?: Step[]
@@ -34,14 +35,15 @@ export default function WebTaskPanel({ backendUrl }: Props) {
   const [running, setRunning] = useState(false)
   const [log, setLog] = useState<string[]>([])
 
-  const runTask = async (confirmCritical = false) => {
-    if (!goal.trim() && !confirmCritical) return
+  const runTask = async (approvalToken?: string) => {
+    if (!goal.trim()) return
     setRunning(true)
     setLog((l) => [...l, "▶ running browser task…"])
     setResult(null)
     try {
       const body: Record<string, unknown> = { goal, max_steps: 12 }
-      if (confirmCritical) body.confirm = true
+      // Single-use token from prior approval_requested stop (no wire self-approve).
+      if (approvalToken) body.approval_token = approvalToken
       const r = await (await fetch(`${backendUrl}/features/browser-task`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -124,7 +126,11 @@ export default function WebTaskPanel({ backendUrl }: Props) {
             {result.status === "approval_requested" && result.pending_action && (
               <div className="mt-3 flex items-center gap-2">
                 <span className="text-xs">Pending: {result.pending_action} {JSON.stringify(result.pending_params ?? {})}</span>
-                <Button size="sm" variant="destructive" onClick={() => runTask(true)}>Approve & continue</Button>
+                {result.approval_token ? (
+                  <Button size="sm" variant="destructive" onClick={() => runTask(result.approval_token)}>Approve & continue</Button>
+                ) : (
+                  <span className="text-xs text-red-300">no approval token issued</span>
+                )}
               </div>
             )}
           </div>
