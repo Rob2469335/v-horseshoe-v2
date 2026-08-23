@@ -91,10 +91,51 @@ def list_staged_generations() -> list[dict]:
     return out
 
 
-def promote_staged_generation(gen: str | int) -> dict:
+_TOOL_FLOORS = {
+    "filesystem": 0.50,
+    "web_search": 0.40,
+    "web_fetch": 0.40,
+}
+
+
+def validate_tool_floors(genomes: list[dict]) -> tuple[bool, str]:
+    """Verify that all genomes in a population satisfy the minimum tool genes floors."""
+    for g in genomes:
+        tool_genes = g.get("tool_genes") or {}
+        for tool, floor in _TOOL_FLOORS.items():
+            val = tool_genes.get(tool, 0.0)
+            if val < floor:
+                return (
+                    False,
+                    f"Genome {g.get('id')} tool_gene '{tool}' ({val}) below floor ({floor})",
+                )
+    return True, "All genomes satisfy tool floors"
+
+
+def rollback_promotion() -> dict:
+    """Callable recovery primitive: restore active genomes from genomes.jsonl.bak."""
+    bak = GENOMES_PATH.with_suffix(".jsonl.bak")
+    if not bak.exists():
+        return {
+            "ok": False,
+            "reason": "No backup snapshot (genomes.jsonl.bak) found to rollback",
+        }
+    try:
+        import os
+        import shutil
+
+        tmp = GENOMES_PATH.with_suffix(".jsonl.tmp")
+        shutil.copyfile(bak, tmp)
+        os.replace(tmp, GENOMES_PATH)
+        return {"ok": True, "action": "rollback_promotion"}
+    except Exception as e:
+        return {"ok": False, "reason": f"Rollback failed: {e}"}
+
+
+def promote_staged_generation(gen: str | int, enforce_floors: bool = True) -> dict:
     """Approve a staged generation: atomically replace the ACTIVE population
-    with the staged one. This is the ONLY path that changes the active genome
-    policy (human-approval gate, per autonomy_policy.json). Returns a summary."""
+    with the staged one. Creates an atomic backup (genomes.jsonl.bak).
+    Returns a summary."""
     staged_path = STAGED_DIR / f"gen_{gen}.jsonl"
     if not staged_path.exists():
         return {"ok": False, "reason": f"staged generation {gen} not found"}
@@ -102,11 +143,20 @@ def promote_staged_generation(gen: str | int) -> dict:
         staged = _load_population(staged_path)
         if not staged:
             return {"ok": False, "reason": f"staged generation {gen} is empty"}
-        # Atomic: write .tmp then os.replace so a crash mid-promotion never
-        # leaves a torn active population.
+
+        if enforce_floors:
+            ok, reason = validate_tool_floors(staged)
+            if not ok:
+                return {"ok": False, "reason": f"tool floor check failed: {reason}"}
+
         import os
+        import shutil
 
         GENOMES_PATH.parent.mkdir(parents=True, exist_ok=True)
+        if GENOMES_PATH.exists():
+            bak = GENOMES_PATH.with_suffix(".jsonl.bak")
+            shutil.copyfile(GENOMES_PATH, bak)
+
         tmp = GENOMES_PATH.with_suffix(".jsonl.tmp")
         _persist_population(staged, tmp)
         os.replace(tmp, GENOMES_PATH)
@@ -133,8 +183,9 @@ def _seed_population() -> list[dict]:
                 "model_tier": round(random.uniform(0.2, 0.8), 3),
                 "temperature": round(random.uniform(0.3, 0.8), 3),
                 "tool_genes": {
-                    "web_search": round(random.uniform(0.3, 0.8), 3),
-                    "filesystem": round(random.uniform(0.3, 0.8), 3),
+                    "filesystem": round(random.uniform(0.5, 0.8), 3),
+                    "web_search": round(random.uniform(0.4, 0.8), 3),
+                    "web_fetch": round(random.uniform(0.4, 0.8), 3),
                     "sandbox_repl": round(random.uniform(0.2, 0.7), 3),
                     "semantic_search": round(random.uniform(0.2, 0.7), 3),
                 },
@@ -230,22 +281,33 @@ def _crossover_mutate(a: dict, b: dict, generation: int) -> dict:
         vb = b.get(key, 0.5)
         v = (va + vb) / 2.0 + random.uniform(-0.1, 0.1)
         child[key] = round(max(0.0, min(1.0, v)), 3)
-    # Tool gene vectors (crossover per gene + mutation)
+    # Tool gene vectors (crossover per gene + mutation with essential tool floors)
     ta = a.get("tool_genes", {})
     tb = b.get("tool_genes", {})
     child["tool_genes"] = {}
-    for tool in set(list(ta.keys()) + list(tb.keys())):
-        va = ta.get(tool, 0.5)
-        vb = tb.get(tool, 0.5)
+    all_tools = set(list(ta.keys()) + list(tb.keys()) + list(_TOOL_FLOORS.keys()))
+    for tool in all_tools:
+        default_val = _TOOL_FLOORS.get(tool, 0.5)
+        va = ta.get(tool, default_val)
+        vb = tb.get(tool, default_val)
         v = random.choice([va, vb]) + random.uniform(-0.15, 0.15)
-        child["tool_genes"][tool] = round(max(0.05, min(0.95, v)), 3)
+        floor = _TOOL_FLOORS.get(tool, 0.05)
+        child["tool_genes"][tool] = round(max(floor, min(0.95, v)), 3)
     return child
 
 
-def evolve_one_generation() -> dict:
+def evolve_one_generation(
+    auto_promote: bool | None = None, min_improvement: float = 0.03
+) -> dict:
     """Run one evolution generation on real persisted fitness. Returns a summary
-    dict (for logging / tests). Idempotent-safe: never raises."""
+    dict (for logging / tests). Idempotent-safe: never raises.
+
+    When `auto_promote` is True (or env SWARM_EVOLUTION_AUTO_PROMOTE=1), the
+    generation is automatically evaluated against the active population and promoted
+    if `staged_best >= active_best + min_improvement` and tool floors are met."""
     try:
+        import os
+
         pop = _load_population(GENOMES_PATH)
         if not pop:
             pop = _seed_population()
@@ -256,6 +318,8 @@ def evolve_one_generation() -> dict:
 
         # Sort desc; decay fitness so old elites fade.
         pop.sort(key=lambda g: -g["fitness"])
+        active_best = max((g.get("fitness", 0.0) for g in pop), default=0.0)
+
         # EVO-1: derive the next generation number from what is ALREADY STAGED,
         # not the active population. The active pop stays at its last APPROVED
         # generation while a staged one awaits human approval — deriving from
@@ -285,21 +349,51 @@ def evolve_one_generation() -> dict:
             b = random.choice(parents)
             children.append(_crossover_mutate(a, b, gen))
 
+        for c in children:
+            c["fitness"] = _score_genome(c)
+
         new_pop = (elites + children)[:POPULATION_SIZE]
-        # 2026 (staging fix): write the new generation to the STAGED dir — do NOT
-        # touch the active GENOMES_PATH. It becomes the active tool policy only
-        # when a human approves via promote_staged_generation (the policy's
-        # staged_human_approved, now actually enforced).
+        new_pop.sort(key=lambda g: -g.get("fitness", 0.0))
+        # Write the new generation to the STAGED dir
         _staged_path = STAGED_DIR / f"gen_{gen}.jsonl"
         _persist_population(new_pop, _staged_path)
 
-        best = max((g.get("fitness", 0.0) for g in new_pop), default=0.0)
+        staged_best = max((g.get("fitness", 0.0) for g in new_pop), default=0.0)
+
+        should_auto_promote = (
+            auto_promote
+            if auto_promote is not None
+            else os.getenv("SWARM_EVOLUTION_AUTO_PROMOTE", "").lower()
+            in ("1", "true")
+        )
+
+        promoted = False
+        promotion_reason = ""
+        if should_auto_promote:
+            if staged_best >= (active_best + min_improvement) and staged_best > 0.0:
+                prom_res = promote_staged_generation(gen, enforce_floors=True)
+                promoted = prom_res.get("ok", False)
+                promotion_reason = (
+                    "Promoted to active population"
+                    if promoted
+                    else prom_res.get("reason", "Promotion failed")
+                )
+            else:
+                promotion_reason = (
+                    f"Staged best ({staged_best:.4f}) did not beat active best "
+                    f"({active_best:.4f}) by required margin ({min_improvement:.4f})"
+                )
+
         return {
             "generation": gen,
             "population": len(new_pop),
-            "best_fitness": round(best, 4),
+            "active_best": round(active_best, 4),
+            "staged_best": round(staged_best, 4),
+            "best_fitness": round(staged_best, 4),
             "elites": [e.get("id") for e in elites],
-            "staged": True,
+            "promoted": promoted,
+            "promotion_reason": promotion_reason,
+            "staged": not promoted,
             "staged_path": str(_staged_path),
         }
     except Exception as exc:

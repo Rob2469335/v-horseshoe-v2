@@ -92,6 +92,7 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
             "history": history,
             "focus_file": getattr(ctx, "focus_file", None),
             "delegation_chain": getattr(ctx, "delegation_chain", [agent_id]),
+            "resume": getattr(ctx, "resume_checkpoint_id", None),
         }
         try:
             resp = await call_api_async_stream(
@@ -402,6 +403,7 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                         perf["last"] = elapsed_total
 
                         ctx.last_stream_status = "completed"
+                        ctx.resume_checkpoint_id = None
                         ctx.save()
                         _tokens_counted = True
                         return new_history
@@ -548,14 +550,8 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                                 default="no",
                             )
                         approved = str(answer).strip().lower() in ("yes", "y")
-
-                        new_history = list(history)
-                        if prompt:
-                            new_history.append({"role": "user", "content": prompt})
-                        new_history.append(
-                            {"role": "assistant", "content": full_content}
-                        )
-                        new_history.append(
+                        ctx.resume_checkpoint_id = chunk.get("checkpoint_id")
+                        history = [
                             {
                                 "role": "user",
                                 "content": (
@@ -570,9 +566,7 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                                     )
                                 ),
                             }
-                        )
-
-                        history = new_history
+                        ]
                         prompt = ""
                         agent_id = chunk.get("agent_id", agent_id)
                         _approval_triggered = True

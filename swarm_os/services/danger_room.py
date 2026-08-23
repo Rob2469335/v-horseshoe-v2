@@ -122,13 +122,26 @@ class DangerRoom:
                 cmd += ["--"] + validated
         try:
             from swarm_os.services.security_gate import clean_sandbox_env
+            import site as _site
+            import os as _os
+
+            test_env = clean_sandbox_env()
+            user_site = _site.getusersitepackages()
+            if user_site and _os.path.exists(user_site):
+                existing_pp = test_env.get("PYTHONPATH", "")
+                test_env["PYTHONPATH"] = (
+                    f"{user_site}{_os.pathsep}{existing_pp}"
+                    if existing_pp
+                    else user_site
+                )
+                test_env.pop("PYTHONNOUSERSITE", None)
 
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 cwd=str(self.sandbox_dir),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
-                env=clean_sandbox_env(),
+                env=test_env,
             )
             try:
                 async with asyncio.timeout(timeout):

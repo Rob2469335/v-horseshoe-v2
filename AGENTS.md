@@ -566,6 +566,18 @@ Dependency pairing: React 19 ↔ `@react-three/fiber` ^9.5 / `@react-three/drei`
 
 ## Recent Changes (do NOT re-apply)
 
+- **FIX: ChessTrainerPage backendUrl now reads from useUiStore instead of hardcoded localhost (`6f440ac`, 2026-08-23)**: the chess trainer hardcoded `http://127.0.0.1:8000` as its backend URL, breaking if the backend runs on a different port. Now uses the shared `useUiStore` `backendUrl` like every other page.
+
+- **FIX: EmailPanel fetch calls guarded with res.ok check via fetchJson helper (`38993c3`, 2026-08-23)**: 7 of 10 fetch calls in `EmailPanel.tsx` parsed JSON without checking HTTP status — a 4xx/5xx with HTML body would crash with an opaque parse error. Added a `fetchJson` helper that throws on non-OK status, and wrapped all unguarded calls in `try/catch`.
+
+- **FIX: cap confidence/correct history append-only lists at 50 entries (`a12db70`, 2026-08-23)**: the four append-only lists in `record_answer` (`confidence_history`, `correct_history`, `confidence_times`, `answer_times`) grew without bound per training item, leaking memory on every review. Now sliced to the last 50 entries on append.
+
+- **FIX: F3 SocraticRequest history field capped at 50 entries (`44a38cf`, 2026-08-23)**: `SocraticRequest.history` (the chat history array for the Socratic coach) accepted unbounded input. Added `max_length=50` to the Pydantic `Field` to bound it.
+
+- **FIX: B4 email_manage sub-op classification (`59f2198`, 2026-08-23)**: the approval registry policy gate for `email_manage` didn't check the sub-operation (`op` field), so all sub-ops inherited the parent tool's classification. Added `payload.get("op")` fallback so `read`/`list` are classified as free while `delete`/`flag`/`unflag` are classified as important.
+
+- **FIX: B6 Telegram HTML injection (`52b7b82`, 2026-08-23)**: user-controlled content (digest text, task summaries, status text, update items, chat responses) was passed unescaped to `HTMLMessage`, which renders via Telegram's `parse_mode="HTML"`. Attackers could inject arbitrary HTML/Markdown formatting. Escaped 7 call sites in `telegram_center.py` and `task_scheduler.py` using `html.escape()`.
+
 
 
 
@@ -1417,6 +1429,14 @@ Converted `except:` → `except Exception:` (or specific types) in `swarm_os/cor
 
 ## Self-Healing & Self-Learning Fixes
 
+- **Auto-Heal (2026-08-23)**: Resolved anomaly `{'anomaly_type': 'disk_cache_pressure', 'error': 'Stale temp cache files in data/evolution/staged need cleanup', 'details': 'Directory data/evolution/staged has files older than 0 hours'}`. Action: Executed clean_directory({'target_dir': 'data/evolution/staged', 'extensions': [], 'max_age_hours': 
+
+- **Rule (researcher)**: Failure: The researcher agent attempted to analyze the auditing codebase by searching the internet for improvements on Episodic Memory (Hybrid Stac...
+
+- **Rule (researcher)**: Do NOT repeat the same tool call with identical arguments. If a tool failed, read the error, change the approach (different file/path/query/operati...
+
+- **Rule (researcher)**: Failure: The researcher agent attempted to search the internet for improvements on the Hybrid Stack, but the web search failed due to unconfigured ...
+
 - **Rule (code_analyzer)**: Failure: The code_analyzer agent attempted to analyze the auditing codebase filesystem but failed due to a "File not found" error for the file 'x.p...
 
 - **Rule (code_analyzer)**: Failure: The code_analyzer agent failed to analyze the auditing codebase filesystem while attempting to read the file 'x.py'. The file was not foun...
@@ -2110,7 +2130,14 @@ Head-to-head across all spec types on the 4B (gen = long paragraph, dec = tool-d
   - Eliminated silent Garbage Collection task drops in watch_loop.py by maintaining strong references to async canary tasks.
   - Fixed a silent data corruption vulnerability in chess_store.py by forcing os.fsync() before atomic replaces.
   - Handled IndexError on empty model API responses (llm_client.py) and fixed a fatal Python 2 syntax exception (volution_daemon.py).
-- **UI Novice Mode**: Refactored the CommandCenterPage.tsx front-end, translating highly technical system descriptions into simple, beginner-friendly explanations of the system's "brains" and "memory".
+- **Autonomous Self-Healing, Evolution & Runtime Hardening (2026-08-23)**:
+  - **Watchdog Signal Dispatch (`healing_watchman.py`)**: Fixed silent suppression of active healing signals in the CLI watchman loop; verified live watchdog aggregation and dispatch.
+  - **DangerRoom Sandbox Pytest (`danger_room.py`)**: Injected user site-packages into `PYTHONPATH` and unmasked environment isolation to ensure sandbox pytest execution succeeds on Windows.
+  - **Subagent Genome Propagation (`agent_service_v2.py`)**: Propagated `genome_id` and `genome_weights` across delegation chains and all three debugger handoff loops; outcomes now register on specific genome lineages.
+  - **Cloud LLM Routing & Web Search SSL (`_llm_client.py`, `web_search.py`)**: Stripped local Ollama `num_ctx` parameter from cloud endpoints, resolved native provider API keys in `_endpoint_for`, and injected `truststore` SSL cert handling for search providers.
+  - **Checkpoint-Linked Approval Resumption (`live_stream.py`, `agent_service_v2.py`)**: Replaced lossy history reconstruction with durable checkpoint resumption (`resume=checkpoint_id`) on human approval gates, eliminating Turn-0 amnesia and loop-trip circuit breaks; verified 3/3 consecutive runs on `researcher` scoring composite `0.95`.
+  - **Safe Recovery Primitives Registry (`recovery_primitives.py`, `recovery_engine.py`)**: Resolved the `DangerRoom` vs `SecurityGate` AST collision by replacing arbitrary script generation with a bounded recovery primitives registry (`kill_process_by_port`, `kill_process_by_name`, `clean_directory`, `restart_service`), verified with unit tests and live cloud LLM trigger.
+  - **Staged-Generation Promotion Gate (`evolution_daemon.py`)**: Implemented automated promotion gating with `min_improvement=0.03` margin, strict tool floor validation (`filesystem >= 0.50`, `web_search >= 0.40`, `web_fetch >= 0.40`), backup snapshots (`genomes.jsonl.bak`), and callable `rollback_promotion()`.
 
 ## Custom Learned Skills
 

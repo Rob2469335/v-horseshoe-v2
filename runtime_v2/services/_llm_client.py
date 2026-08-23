@@ -274,6 +274,16 @@ def _endpoint_for(litellm_model: str) -> tuple[str, str, str]:
                 litellm_model,
             )
         return "http://127.0.0.1:8080/v1", "llama", litellm_model
+    if litellm_model.startswith("nvidia_nim/"):
+        return None, os.getenv("NVIDIA_NIM_API_KEY") or os.getenv("NVIDIA_API_KEY", ""), litellm_model
+    if litellm_model.startswith("groq/"):
+        return None, os.getenv("GROQ_API_KEY", ""), litellm_model
+    if litellm_model.startswith("gemini/"):
+        return None, os.getenv("GEMINI_API_KEY", ""), litellm_model
+    if litellm_model.startswith("openrouter/"):
+        return None, os.getenv("OPENROUTER_API_KEY", ""), litellm_model
+    if litellm_model.startswith("deepseek/"):
+        return None, os.getenv("DEEPSEEK_API_KEY", ""), litellm_model
     return None, None, litellm_model
 
 
@@ -439,9 +449,9 @@ async def complete_for_tool_decision(
         "top_p": 0.95 if is_cloud else 0.9,
         "frequency_penalty": 0.1 if not is_cloud else 0.0,
         "presence_penalty": 0.1 if not is_cloud else 0.0,
-        "num_ctx": 16384,
     }
     if not is_cloud:
+        extra["num_ctx"] = 16384
         extra["extra_body"] = {
             "max_tokens": local_max_tokens,
             "n_predict": local_max_tokens,

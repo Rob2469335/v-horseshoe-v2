@@ -1,0 +1,138 @@
+import time
+import subprocess
+import logging
+from pathlib import Path
+from typing import Dict, Any, List
+
+import psutil
+
+log = logging.getLogger("zenith_healing")
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
+ALLOWED_SERVICES = {"llamacpp", "backend", "qdrant", "Qdrant"}
+
+
+def kill_process_by_port(port: int) -> Dict[str, Any]:
+    """Kill any process listening on a specified TCP/UDP port."""
+    try:
+        port = int(port)
+    except (ValueError, TypeError):
+        return {"ok": False, "error": f"Invalid port: {port}"}
+
+    killed = []
+    my_pid = psutil.Process().pid
+    for conn in psutil.net_connections(kind="inet"):
+        if conn.laddr and conn.laddr.port == port and conn.pid:
+            if conn.pid == my_pid:
+                continue
+            try:
+                p = psutil.Process(conn.pid)
+                name = p.name()
+                p.terminate()
+                try:
+                    p.wait(timeout=3.0)
+                except psutil.TimeoutExpired:
+                    p.kill()
+                killed.append({"pid": conn.pid, "name": name, "port": port})
+            except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
+                log.warning(f"Could not kill process {conn.pid} on port {port}: {e}")
+
+    if killed:
+        return {"ok": True, "action": "kill_process_by_port", "killed": killed}
+    return {"ok": False, "action": "kill_process_by_port", "error": f"No process found listening on port {port}"}
+
+
+def kill_process_by_name(pattern: str) -> Dict[str, Any]:
+    """Kill processes whose executable name or cmdline matches pattern."""
+    if not pattern or len(pattern.strip()) < 3:
+        return {"ok": False, "error": "Pattern too short or empty"}
+
+    pattern = pattern.strip().lower()
+    my_pid = psutil.Process().pid
+    killed = []
+
+    for proc in psutil.process_iter(["pid", "name", "cmdline"]):
+        try:
+            pid = proc.info["pid"]
+            if pid == my_pid:
+                continue
+            name = (proc.info["name"] or "").lower()
+            cmdline = " ".join(proc.info["cmdline"] or []).lower()
+            if pattern in name or pattern in cmdline:
+                p = psutil.Process(pid)
+                p.terminate()
+                try:
+                    p.wait(timeout=3.0)
+                except psutil.TimeoutExpired:
+                    p.kill()
+                killed.append({"pid": pid, "name": proc.info["name"]})
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+
+    if killed:
+        return {"ok": True, "action": "kill_process_by_name", "killed": killed}
+    return {"ok": False, "action": "kill_process_by_name", "error": f"No processes matching '{pattern}' found"}
+
+
+def clean_directory(target_dir: str, extensions: List[str] = None, max_age_hours: int = 24) -> Dict[str, Any]:
+    """Clean stale temporary or cache files within the project boundary."""
+    try:
+        target = (PROJECT_ROOT / target_dir).resolve()
+        if not str(target).startswith(str(PROJECT_ROOT)):
+            return {"ok": False, "error": f"Path '{target_dir}' escapes project root"}
+        if not target.exists() or not target.is_dir():
+            return {"ok": False, "error": f"Directory '{target_dir}' does not exist"}
+
+        cutoff = time.time() - (max_age_hours * 3600)
+        ext_set = set()
+        if extensions:
+            for e in extensions:
+                ext_set.add(e.lower() if e.startswith(".") else f".{e.lower()}")
+
+        removed = []
+        for f in target.rglob("*"):
+            if f.is_file():
+                if ext_set and f.suffix.lower() not in ext_set:
+                    continue
+                try:
+                    if f.stat().st_mtime < cutoff:
+                        f.unlink(missing_ok=True)
+                        removed.append(str(f.relative_to(PROJECT_ROOT)))
+                except Exception as ex:
+                    log.warning(f"Could not remove {f}: {ex}")
+
+        return {"ok": True, "action": "clean_directory", "removed_count": len(removed), "removed": removed[:20]}
+    except Exception as exc:
+        return {"ok": False, "action": "clean_directory", "error": str(exc)}
+
+
+def restart_service(service_name: str) -> Dict[str, Any]:
+    """Restart a bounded, pre-approved internal service or daemon."""
+    if service_name not in ALLOWED_SERVICES:
+        return {"ok": False, "action": "restart_service", "error": f"'{service_name}' not in allowed service list: {sorted(ALLOWED_SERVICES)}"}
+
+    s_lower = service_name.lower()
+    if s_lower == "llamacpp":
+        from swarm_os.healing.recovery_engine import restart_llamacpp
+        return restart_llamacpp({"service": "llamacpp"})
+    elif s_lower == "backend":
+        from swarm_os.healing.recovery_engine import restart_backend
+        return restart_backend({"service": "backend"})
+    elif s_lower == "qdrant":
+        try:
+            subprocess.run(["net", "stop", "Qdrant"], capture_output=True, timeout=15, text=True)
+            res_start = subprocess.run(["net", "start", "Qdrant"], capture_output=True, timeout=15, text=True)
+            ok = res_start.returncode == 0
+            return {"ok": ok, "action": "restart_service", "service": "Qdrant", "output": res_start.stdout}
+        except Exception as e:
+            return {"ok": False, "action": "restart_service", "service": "Qdrant", "error": str(e)}
+
+    return {"ok": False, "action": "restart_service", "error": f"Unhandled service: {service_name}"}
+
+
+RECOVERY_PRIMITIVES = {
+    "kill_process_by_port": kill_process_by_port,
+    "kill_process_by_name": kill_process_by_name,
+    "clean_directory": clean_directory,
+    "restart_service": restart_service,
+}

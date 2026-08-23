@@ -10,8 +10,6 @@ from pathlib import Path
 from typing import Optional
 
 from swarm_os.memory.memory_bridge import MemoryBridge
-from swarm_os.services.danger_room import DangerRoom
-from swarm_os.services.security_gate import SecurityGateViolation
 
 log = logging.getLogger("zenith_healing")
 
@@ -221,136 +219,90 @@ Historical Context from past recoveries:
 {historical_context}
 {web_context}
 
-Write a Python script to fix this issue (e.g. killing ports, clearing cache).
-Enclose the script in a ```python block.
+Choose ONE recovery primitive to resolve this anomaly from the safe recovery registry:
+1. `kill_process_by_port`: args: {{"port": int}}
+2. `kill_process_by_name`: args: {{"pattern": str}}
+3. `clean_directory`: args: {{"target_dir": str, "extensions": list[str], "max_age_hours": int}}
+4. `restart_service`: args: {{"service_name": "llamacpp" | "backend" | "qdrant"}}
+
+Respond strictly with a JSON object in a ```json markdown block:
+```json
+{{
+  "primitive": "primitive_name",
+  "args": {{ ... }}
+}}
+```
 """
 
     messages = [{"role": "user", "content": prompt}]
 
+    from swarm_os.healing.recovery_primitives import RECOVERY_PRIMITIVES
+
     for attempt in range(2):
         try:
-            # Recovery/repair script generation = complex reasoning — use cloud
-            # DeepSeek V4 Flash (funded, cheap) instead of local qwen3.5-4b.
-            import os as _os
+            from runtime_v2.services._llm_client import _endpoint_for
 
+            model_id = "nvidia_nim/deepseek-ai/deepseek-v4-flash-0731"
+            base, key, eff_model = _endpoint_for(model_id)
             _kwargs = {
-                "model": "openai/deepseek-v4-flash",
+                "model": eff_model,
                 "messages": messages,
             }
-            _base = _os.getenv("OPENAI_API_BASE", "")
-            _key = _os.getenv("OPENAI_API_KEY", "")
-            if _base:
-                _kwargs["api_base"] = _base
-            if _key:
-                _kwargs["api_key"] = _key
+            if base:
+                _kwargs["api_base"] = base
+            if key:
+                _kwargs["api_key"] = key
+
             async with asyncio.timeout(60):
                 res = await acompletion(**_kwargs)
-            script_full = res.choices[0].message.content
-            messages.append({"role": "assistant", "content": script_full})
+            resp_full = res.choices[0].message.content
+            messages.append({"role": "assistant", "content": resp_full})
 
-            match = re.search(r"```python(.*?)```", script_full, re.DOTALL)
-            script = match.group(1).strip() if match else script_full.strip()
+            match = re.search(r"```(?:json)?(.*?)```", resp_full, re.DOTALL)
+            raw_json = match.group(1).strip() if match else resp_full.strip()
 
-            root_dir = PROJECT_ROOT
+            decision = json.loads(raw_json)
+            primitive_name = decision.get("primitive")
+            args = decision.get("args") or {}
 
-            # BUG FIX: DangerRoom only implements async context management.
-            # Using `with` raised AttributeError, crashing every llm_guided_recovery.
-            async with DangerRoom(root_dir) as sandbox:
-                sandbox_file = sandbox.sandbox_dir / "recovery_script.py"
-                with open(sandbox_file, "w", encoding="utf-8") as f:
-                    f.write(script)
-
-                await sandbox.scan_sandbox()  # Security gate check
-
-                # BUG FIX: Use async subprocess to avoid blocking the event loop.
-                # subprocess.run() in an async context stalls all other coroutines.
-                # UPGRADE: run isolated — no network, hard memory/time limits.
-                # BUG FIX (hardening): force cwd INTO the sandbox staging dir so an
-                # LLM-generated script cannot write files to the repo root via a
-                # relative path, and strip sensitive env vars (API keys, feature
-                # gates) so a malicious mutation cannot exfiltrate them or trigger
-                # daemon loops (e.g. SWARM_EVOLUTION=1 spawning another generation).
-                clean_env = {
-                    k: v
-                    for k, v in os.environ.items()
-                    if not any(
-                        s in k.upper()
-                        for s in ("API_KEY", "TOKEN", "SECRET", "PASSWORD")
-                    )
-                    and not k.startswith("SWARM_")
-                }
-                clean_env["PYTHONNOUSERSITE"] = "1"
-                proc_handle = await asyncio.create_subprocess_exec(
-                    sys.executable,
-                    "-I",
-                    str(sandbox_file),
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    cwd=str(sandbox.sandbox_dir),
-                    env=clean_env,
+            if primitive_name not in RECOVERY_PRIMITIVES:
+                raise ValueError(
+                    f"Unknown primitive '{primitive_name}'. Allowed: {list(RECOVERY_PRIMITIVES.keys())}"
                 )
-                try:
-                    async with asyncio.timeout(10):
-                        stdout_b, stderr_b = await proc_handle.communicate()
-                except TimeoutError:
-                    proc_handle.kill()
-                    await proc_handle.wait()
-                    raise Exception("Recovery script timed out after 10 seconds.")
-                finally:
-                    # asyncio.CancelledError inherits BaseException — the except
-                    # TimeoutError above never fires on a cancelled task, so
-                    # without a finally an orphaned recovery script (up to 10s
-                    # of arbitrary code) is left running.
-                    if proc_handle.returncode is None:
-                        try:
-                            proc_handle.kill()
-                        except Exception:
-                            pass
-                        await proc_handle.wait()
 
-                class _ProcResult:
-                    def __init__(self, rc, out, err):
-                        self.returncode = rc
-                        self.stdout = out
-                        self.stderr = err
+            primitive_fn = RECOVERY_PRIMITIVES[primitive_name]
+            result = await asyncio.to_thread(primitive_fn, **args)
 
-                proc = _ProcResult(
-                    proc_handle.returncode,
-                    stdout_b.decode(errors="replace"),
-                    stderr_b.decode(errors="replace"),
-                )
-                if proc.returncode == 0:
-                    memory_bridge._add(
-                        {
-                            "event_type": "dynamic_recovery",
-                            "outcome": "success",
-                            "anomaly": anomaly,
-                            "script": script,
-                        }
-                    )
-                    await memory_bridge._flush()
-                    # _record_to_agents_md takes a blocking FileLock + writes
-                    # AGENTS.md — run it off the event loop.
-                    await asyncio.to_thread(_record_to_agents_md, str(anomaly), script)
-                    return {
-                        "ok": True,
-                        "action": "llm_guided_recovery",
-                        "output": proc.stdout,
+            if result.get("ok"):
+                memory_bridge._add(
+                    {
+                        "event_type": "dynamic_recovery",
+                        "outcome": "success",
+                        "anomaly": anomaly,
+                        "primitive": primitive_name,
+                        "args": args,
                     }
-                else:
-                    messages.append(
-                        {
-                            "role": "user",
-                            "content": f"Script failed with output:\n{proc.stderr}\nPlease fix it.",
-                        }
-                    )
+                )
+                await memory_bridge._flush()
+                lesson_summary = f"Executed {primitive_name}({args}) -> {result}"
+                await asyncio.to_thread(
+                    _record_to_agents_md, str(anomaly), lesson_summary
+                )
+                return {
+                    "ok": True,
+                    "action": f"primitive:{primitive_name}",
+                    "result": result,
+                }
+            else:
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": f"Primitive '{primitive_name}' returned error: {result.get('error')}. Please choose a different action or adjust arguments.",
+                    }
+                )
 
-        except SecurityGateViolation as e:
-            messages.append(
-                {"role": "user", "content": f"Security violation: {e}. Fix it."}
-            )
         except Exception as e:
-            messages.append({"role": "user", "content": f"Error: {e}. Fix it."})
+            messages.append({"role": "user", "content": f"Error: {e}. Please fix and return valid JSON."})
 
     memory_bridge._add(
         {"event_type": "dynamic_recovery", "outcome": "failure", "anomaly": anomaly}
@@ -359,7 +311,7 @@ Enclose the script in a ```python block.
     return {
         "ok": False,
         "action": "llm_guided_recovery",
-        "reason": "Failed to generate working recovery script",
+        "reason": "Failed to execute valid recovery primitive",
     }
 
 

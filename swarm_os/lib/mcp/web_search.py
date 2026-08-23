@@ -10,6 +10,18 @@ from typing import Any, Callable, Coroutine, Dict
 from urllib.parse import urlparse
 import httpx
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
+
+try:
+    import truststore
+    truststore.inject_into_ssl()
+except Exception:
+    pass
+
 logger = logging.getLogger(__name__)
 
 
@@ -974,7 +986,10 @@ def _has_key(name: str, min_len: int = 1) -> bool:
 
 async def _ddg_fallback(query: str, max_results: int) -> Dict[str, Any]:
     try:
-        from duckduckgo_search import DDGS
+        try:
+            from ddgs import DDGS
+        except ImportError:
+            from duckduckgo_search import DDGS
 
         def run_ddg():
             with DDGS() as ddgs:

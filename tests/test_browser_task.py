@@ -169,7 +169,7 @@ def test_failed_critical_action_is_not_auto_retried(monkeypatch):
 
     first = asyncio.run(bt.run_browser_task("buy"))
     assert first.get("status") == "approval_requested"
-    r = asyncio.run(
+    _ = asyncio.run(
         bt.run_browser_task(
             "buy",
             approval_token=first["approval_token"],

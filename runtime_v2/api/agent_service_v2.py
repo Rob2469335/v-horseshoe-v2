@@ -6,6 +6,12 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
+
 log = logging.getLogger(__name__)
 
 # Internet-involving goal keywords (used to force web_search-first on analysis
@@ -381,6 +387,7 @@ class _CallState:
     # genome before the turn loop starts (see _step_agent_stream_inner). Listed in
     # _CHECKPOINT_STATE_FIELDS so it is preserved across resume checkpoints.
     genome_id: str = ""
+    genome_weights: dict = field(default_factory=dict)
     # Design A pre-action authorization: pending_ids whose approval was already
     # resolved THIS run (consumed via execute_approved, or denied via
     # deny_pending). The CLI feeds the approve/deny answer back as an
@@ -650,6 +657,7 @@ class AgentServiceV2:
         "_tool_successes",
         "_turn",
         "genome_id",
+        "genome_weights",
         "_resolved_approvals",
     )
 
@@ -1023,7 +1031,23 @@ class AgentServiceV2:
         # pure research and it never edits (the repeated /upgrade dead-loop).
         # coder reads/edits first and uses web_search at its own discretion
         # (+ is still bound by the internet-goal web_fetch final guard).
-        if turn == 0 and agent_id in ANALYSIS_AGENTS and not research_discharged:
+        has_prior_search = any(
+            isinstance(m, dict)
+            and (
+                "TOOL RESULT (web_search)" in str(m.get("content", ""))
+                or "TOOL RESULT (web_fetch)" in str(m.get("content", ""))
+                or "TOOL RESULT (approved" in str(m.get("content", ""))
+            )
+            for m in trimmed_messages
+        )
+        is_approval_resume = _approval_from_history(trimmed_messages) is not None
+        if (
+            turn == 0
+            and agent_id in ANALYSIS_AGENTS
+            and not research_discharged
+            and not has_prior_search
+            and not is_approval_resume
+        ):
             query = (prompt or "").strip()
             internet_goal = bool(_INTERNET_GOAL_RE.search(query)) if query else False
             if internet_goal:
@@ -1119,7 +1143,12 @@ class AgentServiceV2:
         # never filesystem. Without this, the LLM's codebase bias reads files /
         # memory first and either never searches or burns the turn budget before
         # web_search. The user's goal is the query; the LLM takes over next turn.
-        if agent_id == "researcher" and turn < _RESEARCHER_FIRST_TURNS:
+        if (
+            agent_id == "researcher"
+            and turn < _RESEARCHER_FIRST_TURNS
+            and not has_prior_search
+            and not is_approval_resume
+        ):
             query = (prompt or "").strip()
             if query:
                 log.info("[researcher] fast-start turn %d → web_search", turn)
@@ -1351,7 +1380,13 @@ class AgentServiceV2:
             return
 
         # Reject premature final from analysis agents with no content fetched
-        if agent_id in ANALYSIS_AGENTS and not _fetched_content:
+        has_content = (
+            _fetched_content
+            or state.did_web_search
+            or state.did_web_fetch
+            or bool(state.read_paths)
+        )
+        if agent_id in ANALYSIS_AGENTS and not has_content:
             state.premature_finals += 1
             if state.premature_finals >= 2:
                 log.error(
@@ -1800,6 +1835,8 @@ class AgentServiceV2:
             delegation_chain=chain + [target],
             research_discharged=child_research_discharged,
             allowed_tools_override=child_tool_override,
+            genome_id=state.genome_id,
+            genome_weights=state.genome_weights,
         ):
             chunk.setdefault("delegated_by", agent_id)
             if chunk.get("type") == "final":
@@ -2107,6 +2144,8 @@ class AgentServiceV2:
         research_discharged: bool = False,
         resume: Optional[str] = None,
         allowed_tools_override: Optional[list] = None,
+        genome_id: Optional[str] = None,
+        genome_weights: Optional[dict] = None,
     ) -> AsyncGenerator[dict, None]:
         try:
             import runtime_v2.services.tool_executor as _te
@@ -2128,6 +2167,8 @@ class AgentServiceV2:
                 research_discharged,
                 resume=resume,
                 allowed_tools_override=allowed_tools_override,
+                genome_id=genome_id,
+                genome_weights=genome_weights,
             ):
                 yield chunk
         except GeneratorExit:
@@ -2136,16 +2177,18 @@ class AgentServiceV2:
             # a failed outcome (completed=False); the durable checkpoint stays
             # so a later resume re-runs and feeds its own outcome. Re-raise to
             # complete the generator close.
-            self._feed_aborted_outcome(agent_id, prompt)
+            self._feed_aborted_outcome(agent_id, prompt, genome_id=genome_id or "")
             raise
         except BaseException:
             # An unhandled exception escaped the inner generator (a crash, not a
             # normal terminal path) — same invisibility. Feed a failed outcome,
             # then re-raise so the exception still reaches the caller.
-            self._feed_aborted_outcome(agent_id, prompt)
+            self._feed_aborted_outcome(agent_id, prompt, genome_id=genome_id or "")
             raise
 
-    def _feed_aborted_outcome(self, agent_id: str, prompt: str) -> None:
+    def _feed_aborted_outcome(
+        self, agent_id: str, prompt: str, genome_id: str = ""
+    ) -> None:
         """Feed a failed outcome for a run that exited abnormally (client abort /
         unhandled exception) — the terminal paths never ran, so without this the
         abort is invisible to evolution/telemetry. Uses a fresh _CallState: an
@@ -2156,7 +2199,7 @@ class AgentServiceV2:
                 prompt,
                 _CallState(),
                 completed=False,
-                genome_id="",
+                genome_id=genome_id,
             )
         except Exception as exc:
             log.debug("[%s] aborted-outcome feed skipped: %s", agent_id, exc)
@@ -2170,21 +2213,29 @@ class AgentServiceV2:
         research_discharged: bool = False,
         resume: Optional[str] = None,
         allowed_tools_override: Optional[list] = None,
+        genome_id: Optional[str] = None,
+        genome_weights: Optional[dict] = None,
     ) -> AsyncGenerator[dict, None]:
         from runtime_v2.prompts.system_prompts import build
         from runtime_v2.services.memory_core import get_relevant_memories
 
-        genome_id, genome_weights = "", {}
+        genome_id, genome_weights = genome_id or "", genome_weights or {}
         try:
             import os as _os
 
-            if _os.environ.get("SWARM_EVOLUTION", "").strip() == "1":
+            if not genome_id and _os.environ.get("SWARM_EVOLUTION", "").strip() == "1":
                 from swarm_os.services.evolution_daemon import get_active_genome
 
                 # Offloaded: get_active_genome reads genomes.jsonl + fitness.jsonl
                 # synchronously (a blocking disk read on the event loop otherwise).
                 genome_id, genome_weights = await asyncio.to_thread(
                     get_active_genome, True
+                )
+            elif genome_id and not genome_weights and _os.environ.get("SWARM_EVOLUTION", "").strip() == "1":
+                from swarm_os.services.evolution_daemon import get_active_genome
+
+                _, genome_weights = await asyncio.to_thread(
+                    get_active_genome, False
                 )
         except Exception as exc:
             log.debug("active-genome load skipped for %r: %s", agent_id, exc)
@@ -2264,7 +2315,16 @@ class AgentServiceV2:
         _reviewer_fails = 0
         state = _CallState()
         state.genome_id = genome_id
+        state.genome_weights = genome_weights or {}
         state._start_time = start_time if start_time else time.time()
+        for m in history:
+            c = str(m.get("content", "") if isinstance(m, dict) else "")
+            if "TOOL RESULT (web_search)" in c or "web_search" in c:
+                state.did_web_search = True
+                _fetched_content = True
+            if "TOOL RESULT (web_fetch)" in c or "TOOL RESULT (approved" in c or "web_fetch" in c:
+                state.did_web_fetch = True
+                _fetched_content = True
         initial_messages_len = len(messages)
 
         # --- Resume from a durable checkpoint (2026 autonomy move 3) ---
@@ -2285,6 +2345,10 @@ class AgentServiceV2:
                 if ckpt:
                     prompt = str(ckpt.get("prompt") or prompt)
                     messages = list(ckpt.get("messages") or messages)
+                    if history:
+                        for h in history:
+                            if h not in messages:
+                                messages.append(h)
                     chain = list(ckpt.get("delegation_chain") or chain)
                     research_discharged = bool(
                         ckpt.get("research_discharged", research_discharged)
@@ -2417,6 +2481,11 @@ class AgentServiceV2:
 
                     approved_result = await execute_approved(pending_id)
                     state._resolved_approvals.add(pending_id)
+                    if isinstance(approved_result, dict) and approved_result.get("ok"):
+                        _fetched_content = True
+                        state.tool_success = True
+                        state.did_web_fetch = True
+                        state._tool_successes += 1
                 elif not approval["approved"]:
                     from runtime_v2.services.tool_executor import deny_pending
 
@@ -2521,6 +2590,8 @@ class AgentServiceV2:
                             heal_task,
                             history=messages[-6:],
                             delegation_chain=chain + ["debugger"],
+                            genome_id=state.genome_id,
+                            genome_weights=state.genome_weights,
                         ):
                             chunk.setdefault("delegated_by", agent_id)
                             yield chunk
@@ -2651,6 +2722,8 @@ class AgentServiceV2:
                         heal_task,
                         history=messages[-6:],
                         delegation_chain=chain + ["debugger"],
+                        genome_id=state.genome_id,
+                        genome_weights=state.genome_weights,
                     ):
                         chunk.setdefault("delegated_by", agent_id)
                         yield chunk
@@ -2971,9 +3044,39 @@ class AgentServiceV2:
                 state.tool_result
                 and state.tool_result.get("status") == "confirmation_required"
             ):
+                cur_ckpt_id = checkpoint_id(agent_id, prompt)
+                ckpt = {
+                    "checkpoint_id": cur_ckpt_id,
+                    "agent_id": agent_id,
+                    "prompt": prompt,
+                    "turn": state._turn,
+                    "messages": messages,
+                    "state": self._state_to_dict(state),
+                    "loop_guards": {
+                        "consecutive_errors": consecutive_errors,
+                        "unauthorized_tool_errors": unauthorized_tool_errors,
+                        "healing_attempts": healing_attempts,
+                        "_fetched_content": _fetched_content,
+                        "decision_counts": decision_counts,
+                        "history_actions": history_actions,
+                    },
+                    "delegation_chain": chain,
+                    "research_discharged": research_discharged,
+                    "genome_id": genome_id,
+                    "genome_weights": genome_weights,
+                    "resolved_model": resolved_model,
+                    "initial_messages_len": initial_messages_len,
+                }
+                try:
+                    from runtime_v2.services.checkpointing import write_checkpoint
+                    await asyncio.to_thread(write_checkpoint, cur_ckpt_id, ckpt)
+                except Exception as ckpt_err:
+                    log.debug("[%s] approval checkpoint write skipped: %s", agent_id, ckpt_err)
+
                 yield {
                     "agent_id": agent_id,
                     "type": "approval_request",
+                    "checkpoint_id": cur_ckpt_id,
                     "tool": action,
                     "action": state.tool_result.get("action"),
                     "pending_id": state.tool_result.get("pending_id"),
@@ -3037,6 +3140,8 @@ class AgentServiceV2:
                         heal_task,
                         history=messages[-6:],
                         delegation_chain=chain + ["debugger"],
+                        genome_id=state.genome_id,
+                        genome_weights=state.genome_weights,
                     ):
                         chunk.setdefault("delegated_by", agent_id)
                         yield chunk

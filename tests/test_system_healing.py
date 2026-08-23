@@ -147,3 +147,71 @@ def test_never_touch_protects_swarm_core():
     assert "llama.exe" in _NEVER_TOUCH
     assert "opencode.exe" in _NEVER_TOUCH
     assert "explorer.exe" in _NEVER_TOUCH
+
+
+def test_healing_watchman_stores_system_lesson_issue_resolution():
+    """Verify that _store_system_lesson extracts the issue name cleanly without defaulting to 'None'."""
+    from unittest.mock import AsyncMock, patch
+    from organism_console.core.healing_watchman import HealingWatchman
+
+    watchman = HealingWatchman()
+    stored_calls = []
+
+    mock_service = AsyncMock()
+    mock_service.store_reflexion = AsyncMock(
+        side_effect=lambda **kwargs: stored_calls.append(kwargs)
+    )
+
+    with patch(
+        "swarm_os.services.reflection_loop.get_reflection_service",
+        return_value=mock_service,
+    ):
+        # Case 1: Probe signal where detail is nested dict without top-level 'issue'
+        symptom1 = {
+            "component": "memory_pressure",
+            "ok": False,
+            "detail": {"ok": False, "detail": {"issue": "memory_pressure"}},
+        }
+        watchman._store_system_lesson(
+            component="memory_pressure",
+            symptom=symptom1,
+            result={"ok": True, "action": "free_memory"},
+        )
+
+        assert len(stored_calls) == 1
+        assert stored_calls[0]["component"] == "system:memory_pressure"
+        assert "None" not in stored_calls[0]["task"]
+        assert stored_calls[0]["action"] == "system:free_memory"
+
+        # Case 2: Direct issue in detail dict
+        symptom2 = {
+            "component": "disk_space",
+            "ok": False,
+            "detail": {"issue": "disk_space"},
+        }
+        watchman._store_system_lesson(
+            component="disk_space",
+            symptom=symptom2,
+            result={"ok": True, "action": "clean_temp"},
+        )
+
+        assert len(stored_calls) == 2
+        assert stored_calls[1]["component"] == "system:disk_space"
+        assert "None" not in stored_calls[1]["task"]
+
+        # Case 3: Detail without issue key (e.g. qdrant probe failure)
+        symptom3 = {
+            "component": "qdrant",
+            "ok": False,
+            "detail": {"ok": False, "error": "connection refused"},
+        }
+        watchman._store_system_lesson(
+            component="qdrant",
+            symptom=symptom3,
+            result={"ok": True, "action": "restart_service"},
+        )
+
+        assert len(stored_calls) == 3
+        assert stored_calls[2]["component"] == "system:qdrant"
+        assert "None" not in stored_calls[2]["task"]
+

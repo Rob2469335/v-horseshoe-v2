@@ -580,3 +580,84 @@ async def test_step_agent_stream_exception_feeds_failed_outcome(tmp_path, monkey
     assert recs, "crashed run must still feed an outcome"
     assert recs[-1]["completion"] == 0.0
     assert recs[-1]["agent_id"] == "coder"
+
+
+@pytest.mark.asyncio
+async def test_genome_id_propagation_across_delegation(tmp_path, monkeypatch):
+    """When an agent delegates to a child agent, the parent's genome_id and
+    genome_weights must be propagated down to the child's stream and recorded
+    in the outcome-fitness store."""
+    from runtime_v2.api.agent_service_v2 import AgentServiceV2, _CallState
+    from swarm_os.services import outcome_fitness as of
+
+    monkeypatch.setattr(of, "FITNESS_PATH", tmp_path / "fitness.jsonl")
+    monkeypatch.setenv("SWARM_EVOLUTION", "1")
+
+    service = AgentServiceV2()
+    service._remember = AsyncMock()
+    service._record_success = lambda *a, **k: None
+
+    passed_kwargs = {}
+
+    async def _mock_child_stream(agent_id, prompt, *args, **kwargs):
+        passed_kwargs["agent_id"] = agent_id
+        passed_kwargs["genome_id"] = kwargs.get("genome_id")
+        passed_kwargs["genome_weights"] = kwargs.get("genome_weights")
+        yield {"type": "final", "content": "child finished work"}
+
+    service.step_agent_stream = _mock_child_stream
+
+    state = _CallState()
+    state.genome_id = "genome_99999_123"
+    state.genome_weights = {"filesystem": 0.8, "web_search": 0.6}
+    state._start_time = 1.0
+
+    gen = service._handle_delegate(
+        {"action": "delegate", "target_agent": "coder", "task": "patch auth module"},
+        "coordinator",
+        ["coordinator"],
+        "test-model",
+        "test-provider",
+        [],
+        0.0,
+        "build a feature",
+        state,
+    )
+    async for _ in gen:
+        pass
+
+    assert passed_kwargs.get("agent_id") == "coder"
+    assert passed_kwargs.get("genome_id") == "genome_99999_123"
+    assert passed_kwargs.get("genome_weights") == {"filesystem": 0.8, "web_search": 0.6}
+
+    recs = of.recent_fitness()
+    assert recs, "coordinator success must feed an outcome"
+    assert recs[-1]["genome_id"] == "genome_99999_123"
+
+
+def test_endpoint_for_maps_provider_keys(monkeypatch):
+    """_endpoint_for must correctly resolve provider-specific API keys from env."""
+    from runtime_v2.services._llm_client import _endpoint_for
+
+    monkeypatch.setenv("NVIDIA_API_KEY", "test-nv-key")
+    monkeypatch.setenv("GROQ_API_KEY", "test-groq-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gem-key")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-or-key")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-ds-key")
+
+    _, key_nv, _ = _endpoint_for("nvidia_nim/deepseek-ai/deepseek-v4-flash-0731")
+    assert key_nv == "test-nv-key"
+
+    _, key_groq, _ = _endpoint_for("groq/llama3-70b-8192")
+    assert key_groq == "test-groq-key"
+
+    _, key_gem, _ = _endpoint_for("gemini/gemini-2.0-flash")
+    assert key_gem == "test-gem-key"
+
+    _, key_or, _ = _endpoint_for("openrouter/deepseek/deepseek-v4-flash-0731")
+    assert key_or == "test-or-key"
+
+    _, key_ds, _ = _endpoint_for("deepseek/deepseek-chat")
+    assert key_ds == "test-ds-key"
+
+

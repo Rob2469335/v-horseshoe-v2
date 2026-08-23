@@ -147,7 +147,7 @@ class HealingWatchman:
         with a [PAST-MISTAKE WARNING] the next time the same system issue appears.
         Mirrors the tool-failure reflexion loop in agent_service_v2."""
         detail = symptom.get("detail") or {}
-        issue = detail.get("issue") if isinstance(detail, dict) else component
+        issue = (detail.get("issue") if isinstance(detail, dict) else None) or component
         action = result.get("action") or "recovered"
         corrections = {
             "memory_pressure": "Check memory pressure; empty working sets of non-critical processes to relieve RAM (free_memory) before escalating.",

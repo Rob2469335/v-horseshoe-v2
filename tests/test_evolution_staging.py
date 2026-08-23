@@ -30,13 +30,23 @@ def _seed_active(tmp_path, fitness=0.5):
     pop = [
         {
             "id": "genome_0",
-            "tool_genes": {"web_search": 0.7},
+            "tool_genes": {
+                "filesystem": 0.6,
+                "web_search": 0.7,
+                "web_fetch": 0.5,
+                "sandbox_repl": 0.5,
+            },
             "fitness": fitness,
             "generation": 0,
         },
         {
             "id": "genome_1",
-            "tool_genes": {"web_search": 0.3},
+            "tool_genes": {
+                "filesystem": 0.6,
+                "web_search": 0.5,
+                "web_fetch": 0.5,
+                "sandbox_repl": 0.5,
+            },
             "fitness": fitness,
             "generation": 0,
         },
@@ -173,3 +183,116 @@ def test_evolve_ignores_malformed_staged_files(tmp_path, monkeypatch):
     assert summary["generation"] == 4
     # The malformed file is preserved (never deleted).
     assert (ev.STAGED_DIR / "gen_NOTANUMBER.jsonl").exists()
+
+
+def test_tool_gene_floors_enforced_in_seed_and_crossover():
+    """Verify that essential tool genes (filesystem, web_search, web_fetch) never drop below floors."""
+    pop = ev._seed_population()
+    for g in pop:
+        tg = g["tool_genes"]
+        assert tg["filesystem"] >= 0.50
+        assert tg["web_search"] >= 0.40
+        assert tg["web_fetch"] >= 0.40
+
+    # Test extreme parent with low/missing values
+    p1 = {"tool_genes": {"filesystem": 0.01, "web_search": 0.01, "semantic_search": 0.9}}
+    p2 = {"tool_genes": {"filesystem": 0.05, "web_search": 0.05, "sandbox_repl": 0.8}}
+
+    for _ in range(50):
+        child = ev._crossover_mutate(p1, p2, generation=10)
+        ctg = child["tool_genes"]
+        assert ctg["filesystem"] >= 0.50, f"filesystem fell below floor: {ctg['filesystem']}"
+        assert ctg["web_search"] >= 0.40, f"web_search fell below floor: {ctg['web_search']}"
+        assert ctg["web_fetch"] >= 0.40, f"web_fetch fell below floor: {ctg['web_fetch']}"
+
+
+# ── Automated Promotion Gating & Rollback ──────────────────────────────────
+def test_auto_promote_exceeds_margin(tmp_path, monkeypatch):
+    """When auto_promote=True and staged_best >= active_best + margin, promote."""
+    _seed_active(tmp_path, fitness=0.5)
+
+    # Active scores 0.5, new generation scores 0.7 (exceeds 0.03 margin)
+    def mock_score(g):
+        if g.get("generation", 0) == 0:
+            return 0.5
+        return 0.7
+
+    monkeypatch.setattr(ev, "_score_genome", mock_score)
+
+    summary = ev.evolve_one_generation(auto_promote=True, min_improvement=0.03)
+    assert summary["promoted"] is True
+    assert summary["active_best"] == 0.5
+    assert summary["staged_best"] == 0.7
+
+    active = ev._load_population(ev.GENOMES_PATH)
+    assert active[0].get("generation", 0) >= 1
+    # Check backup snapshot was created
+    assert (ev.GENOMES_PATH.with_suffix(".jsonl.bak")).exists()
+
+
+def test_auto_promote_rejects_tie_or_sub_margin(tmp_path, monkeypatch):
+    """When staged_best is a tie or within margin, auto_promote does NOT promote."""
+    _seed_active(tmp_path, fitness=0.5)
+
+    # Staged best is 0.51 (improvement is 0.01, below 0.03 margin)
+    def mock_score(g):
+        if g.get("generation", 0) == 0:
+            return 0.5
+        return 0.51
+
+    monkeypatch.setattr(ev, "_score_genome", mock_score)
+
+    summary = ev.evolve_one_generation(auto_promote=True, min_improvement=0.03)
+    assert summary["promoted"] is False
+    assert "did not beat active best" in summary["promotion_reason"]
+
+    # Active population stays at generation 0
+    active = ev._load_population(ev.GENOMES_PATH)
+    assert [g["id"] for g in active] == ["genome_0", "genome_1"]
+
+
+def test_auto_promote_rejects_tool_floor_violation(tmp_path, monkeypatch):
+    """If a staged generation violates tool floors, promotion is rejected."""
+    _seed_active(tmp_path, fitness=0.5)
+    ev.STAGED_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Create an invalid staged generation with low tool gene
+    invalid_pop = [
+        {
+            "id": "bad_genome",
+            "tool_genes": {"filesystem": 0.10, "web_search": 0.40, "web_fetch": 0.40},
+            "fitness": 0.99,
+            "generation": 1,
+        }
+    ]
+    ev._persist_population(invalid_pop, ev.STAGED_DIR / "gen_1.jsonl")
+
+    res = ev.promote_staged_generation(1, enforce_floors=True)
+    assert res["ok"] is False
+    assert "tool floor check failed" in res["reason"]
+
+
+def test_rollback_promotion_restores_backup(tmp_path, monkeypatch):
+    """rollback_promotion restores the active population from genomes.jsonl.bak."""
+    _seed_active(tmp_path, fitness=0.5)
+
+    def mock_score(g):
+        return 0.8 if g.get("generation", 0) > 0 else 0.5
+
+    monkeypatch.setattr(ev, "_score_genome", mock_score)
+
+    # Promote gen 1
+    summary = ev.evolve_one_generation(auto_promote=True, min_improvement=0.03)
+    assert summary["promoted"] is True
+    assert ev._load_population(ev.GENOMES_PATH)[0]["generation"] >= 1
+
+    # Execute rollback
+    rb = ev.rollback_promotion()
+    assert rb["ok"] is True
+    assert rb["action"] == "rollback_promotion"
+
+    # Active population restored to generation 0
+    restored = ev._load_population(ev.GENOMES_PATH)
+    assert [g["id"] for g in restored] == ["genome_0", "genome_1"]
+
+
