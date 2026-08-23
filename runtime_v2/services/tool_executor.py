@@ -902,7 +902,7 @@ async def _dispatch(tool_name: str, payload: dict, *, trace_hook=None) -> dict:
                         return {"ok": False, "server": server_name, "tool": mcp_tool, "error": str(e)}
                     except TimeoutError:
                         return {"ok": False, "server": server_name, "tool": mcp_tool, "error": "MCP operation timed out."}
-                    except Exception as e:
+                    except Exception:
                         log.exception("MCP tool execution failed: %s.%s", server_name, mcp_tool)
                         return {"ok": False, "server": server_name, "tool": mcp_tool, "error": "MCP tool execution failed"}
 
