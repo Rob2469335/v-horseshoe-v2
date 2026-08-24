@@ -216,6 +216,9 @@ class TelegramCommandCenter:
         if not cfg.get("token"):
             log.info("telegram disabled (no TELEGRAM_BOT_TOKEN)")
             return
+        if self._task and not self._task.done():
+            log.warning("telegram already running (suppressing duplicate start)")
+            return
         self._client = TelegramClient(cfg["token"])
         loop = asyncio.get_running_loop()
         self._task = loop.create_task(self._run())

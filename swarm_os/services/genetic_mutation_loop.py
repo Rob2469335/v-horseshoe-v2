@@ -373,6 +373,23 @@ async def run_genetic_mutation(
         except SecurityGateViolation as e:
             last_error = str(e)
             logger.warning(f"Security Gate Violation on attempt {attempt + 1}: {e}")
+            # Store as a structured failure in the memory graph so future mutation
+            # runs can learn via [PAST-MISTAKE WARNING] — not just a one-shot prompt
+            # update. The entry carries `component` so get_latest_failure() prefers it
+            # over genetic-kernel noise, and `fix_class` tags it for the distiller.
+            try:
+                memory_bridge._add(
+                    {
+                        "event_type": "engine_mutation_security_gate_violation",
+                        "model": MODEL,
+                        "outcome": "failure",
+                        "task_id": "engine_evolution",
+                        "details": f"SecurityGateViolation: {e}",
+                    }
+                )
+                await memory_bridge._flush()
+            except Exception:
+                pass
             prompt = (
                 prompt
                 + f"\n\nERROR ON LAST ATTEMPT:\nYour previous mutation failed the security gate with the following violation:\n{e}\nPlease fix the code so it passes the security scan."

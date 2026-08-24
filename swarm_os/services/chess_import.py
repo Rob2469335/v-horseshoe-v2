@@ -27,7 +27,7 @@ import logging
 import re
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 import chess
 import chess.pgn
@@ -401,6 +401,20 @@ def _parse_clock(comment: str) -> float | None:
     return None
 
 
+class BuildProfileStats(TypedDict):
+    games: int
+    wins: int
+    losses: int
+    draws: int
+    white_wins: int
+    black_wins: int
+    openings: dict[str, dict[str, int]]
+    time_controls: dict[str, dict[str, int]]
+    ratings: list[dict[str, int | str]]
+    think: dict[str, list[int]]
+    results_history: list[dict[str, int]]
+
+
 def _think_time(game) -> list[float]:
     """Per-move think time (seconds) from %clk annotations, or [] if absent."""
     clock = []
@@ -442,7 +456,7 @@ async def build_profile(
     if max_archives:
         data = data[-max_archives:]
 
-    stats = {
+    stats: BuildProfileStats = {
         "games": 0,
         "wins": 0,
         "losses": 0,
