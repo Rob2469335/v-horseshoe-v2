@@ -148,7 +148,8 @@ class SessionState:
             try:
                 payload = _snapshot_and_serialize()
                 self.session_file.parent.mkdir(parents=True, exist_ok=True)
-                tmp = self.session_file.with_suffix(f"{self.session_file.suffix}.tmp.{os.getpid()}")
+                import uuid as _uuid
+                tmp = self.session_file.with_suffix(f"{self.session_file.suffix}.tmp.{_uuid.uuid4().hex}")
                 with open(tmp, "w", encoding="utf-8") as fh:
                     fh.write(payload)
                 os.replace(tmp, self.session_file)
@@ -169,14 +170,15 @@ class SessionState:
         try:
             import copy, time
 
-            self.checkpoints[name] = {
-                "history": copy.deepcopy(self.history),
-                "history_pointer": self.history_pointer,
-                "scheduled_tasks": copy.deepcopy(self.scheduled_tasks),
-                "active_agent": self.active_agent,
-                "active_model": self.active_model,
-                "timestamp": time.time(),
-            }
+            with self._lock:
+                self.checkpoints[name] = {
+                    "history": copy.deepcopy(self.history),
+                    "history_pointer": self.history_pointer,
+                    "scheduled_tasks": copy.deepcopy(self.scheduled_tasks),
+                    "active_agent": self.active_agent,
+                    "active_model": self.active_model,
+                    "timestamp": time.time(),
+                }
             self.save(sync=True)
             return True
         except Exception:

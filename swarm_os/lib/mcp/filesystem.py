@@ -232,7 +232,9 @@ def filesystem_handler(
         elif operation == "write":
             content = str(params.get("content", ""))
             target_path.parent.mkdir(parents=True, exist_ok=True)
-            target_path.write_text(content, encoding="utf-8")
+            tmp_write = target_path.with_suffix(f"{target_path.suffix}.tmp.{os.getpid()}")
+            tmp_write.write_text(content, encoding="utf-8")
+            os.replace(tmp_write, target_path)
             if trace_hook:
                 trace_hook("filesystem_write", {"ok": True, "path": str(target_path)})
             return {"ok": True, "path": str(target_path)}
@@ -246,6 +248,12 @@ def filesystem_handler(
 
             old_str = str(params.get("old", params.get("old_string", "")))
             new_str = str(params.get("new", params.get("new_string", "")))
+
+            if not old_str:
+                return {
+                    "ok": False,
+                    "error": "Surgical Error: 'old' string cannot be empty.",
+                }
 
             content = target_path.read_bytes().decode("utf-8", errors="replace")
             if old_str not in content:

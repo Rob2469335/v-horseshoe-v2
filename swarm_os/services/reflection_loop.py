@@ -553,75 +553,56 @@ def get_reflection_service() -> ReflectionService:
 
 
 def get_latest_failure(filepath: Path) -> dict | None:
-    chunk_size = 4096
-    with open(filepath, "rb") as f:
-        f.seek(0, os.SEEK_END)
-        file_size = f.tell()
-        position = file_size
-        buffer = b""
+    """Return the most recent agent failure entry from the diary JSONL file.
 
-        while position > 0:
-            read_size = min(chunk_size, position)
-            position -= read_size
-            f.seek(position)
-            chunk = f.read(read_size)
-            buffer = chunk + buffer
+    Prefers entries tagged with a component/agent (real agent failures) over
+    raw kernel evaluation errors. Falls back to any entry carrying a non-null
+    error field if no agent-tagged failure is found.
 
-            lines = buffer.split(b"\n")
-            if position > 0:
-                buffer = lines.pop(0)
+    Uses read-all-lines-reversed instead of backward binary chunking so that
+    entries spanning more than 4 KiB (e.g. large tracebacks) are never split
+    across a chunk boundary and silently skipped.
+    """
+    try:
+        raw = filepath.read_bytes().decode("utf-8", errors="replace")
+    except Exception as exc:
+        logger.debug("get_latest_failure: cannot read %s: %s", filepath, exc)
+        return None
 
-            for line in reversed(lines):
-                if not line.strip():
-                    continue
-                try:
-                    entry = json.loads(line.decode("utf-8"))
-                    err = entry.get("error")
-                    if err is not None and err != "" and str(err).lower() != "null":
-                        # Prefer REAL agent failures (entries carrying a component or
-                        # agent id) over genetic-kernel evaluation noise. The diary is
-                        # dominated by kernel eval entries (event=action/evaluation with
-                        # org/generation/avg_fitness) whose errors are sandbox/fitness
-                        # artifacts ("http_422", "[WinError 10061]", ...) — distilling
-                        # those produced the 137 component:"unknown" noise rules that
-                        # swamped ReflexionMemory. Real agent tool failures carry a
-                        # component (agent_id) — those are what the distiller should learn from.
-                        is_agent_failure = bool(
-                            entry.get("component") or entry.get("agent")
-                        )
-                        if is_agent_failure:
-                            return entry
-                except Exception as exc:
-                    logger.debug("Failed to parse diary line: %s", exc)
-                    pass
-    # No agent-tagged failure found — fall back to the raw last error so the
+    lines = raw.splitlines()
+    last_error_entry: dict | None = None
+
+    for line in reversed(lines):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except Exception as exc:
+            logger.debug("Failed to parse diary line: %s", exc)
+            continue
+        err = entry.get("error")
+        if err is not None and err != "" and str(err).lower() != "null":
+            # Prefer REAL agent failures (entries carrying a component or
+            # agent id) over genetic-kernel evaluation noise. The diary is
+            # dominated by kernel eval entries (event=action/evaluation with
+            # org/generation/avg_fitness) whose errors are sandbox/fitness
+            # artifacts ("http_422", "[WinError 10061]", ...) — distilling
+            # those produced the 137 component:"unknown" noise rules that
+            # swamped ReflexionMemory. Real agent tool failures carry a
+            # component (agent_id) — those are what the distiller should learn from.
+            is_agent_failure = bool(entry.get("component") or entry.get("agent"))
+            if is_agent_failure:
+                return entry
+            # Keep the first (most-recent) raw error as fallback
+            if last_error_entry is None:
+                last_error_entry = entry
+
+    # No agent-tagged failure found — return the most-recent raw error so the
     # distiller still has SOMETHING rather than silently skipping.
-    with open(filepath, "rb") as f:
-        f.seek(0, os.SEEK_END)
-        file_size = f.tell()
-        position = file_size
-        buffer = b""
-        while position > 0:
-            read_size = min(chunk_size, position)
-            position -= read_size
-            f.seek(position)
-            chunk = f.read(read_size)
-            buffer = chunk + buffer
-            lines = buffer.split(b"\n")
-            if position > 0:
-                buffer = lines.pop(0)
-            for line in reversed(lines):
-                if not line.strip():
-                    continue
-                try:
-                    entry = json.loads(line.decode("utf-8"))
-                    err = entry.get("error")
-                    if err is not None and err != "" and str(err).lower() != "null":
-                        return entry
-                except Exception as exc:
-                    logger.debug("Failed to parse fallback diary line: %s", exc)
-                    pass
-    return None
+    return last_error_entry
+
+
 
 
 async def _distill(distiller_content: str, fix_class: str | None = None) -> str:

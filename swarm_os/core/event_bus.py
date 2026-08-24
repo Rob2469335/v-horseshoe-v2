@@ -45,10 +45,13 @@ class EventBus:
                         q.put_nowait(ev)
                     except asyncio.QueueFull:
                         try:
-                            q.get_nowait()
-                            q.put_nowait(ev)
-                        except Exception:
-                            pass
+                            q.get_nowait()  # evict oldest to make room
+                        except asyncio.QueueEmpty:
+                            pass  # consumer already drained it — slot is free
+                        try:
+                            q.put_nowait(ev)  # retry now that there's space
+                        except asyncio.QueueFull:
+                            pass  # filled again between eviction and retry — drop
                 self.main_loop.call_soon_threadsafe(_push)
 
     async def subscribe(self):

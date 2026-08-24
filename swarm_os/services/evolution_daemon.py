@@ -60,10 +60,14 @@ def _load_population(path: Path | None = None) -> list[dict]:
 
 
 def _persist_population(pop: list[dict], path: Path) -> None:
+    import os as _os
+
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
+    tmp = path.with_suffix(".jsonl.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
         for g in pop[-POPULATION_SIZE:]:
             f.write(json.dumps(g, ensure_ascii=False) + "\n")
+    _os.replace(tmp, path)
 
 
 def list_staged_generations() -> list[dict]:

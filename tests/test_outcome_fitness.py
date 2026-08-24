@@ -640,8 +640,10 @@ def test_endpoint_for_maps_provider_keys(monkeypatch):
     from runtime_v2.services._llm_client import _endpoint_for
 
     monkeypatch.setenv("NVIDIA_API_KEY", "test-nv-key")
+    monkeypatch.delenv("NVIDIA_NIM_API_KEY", raising=False)
     monkeypatch.setenv("GROQ_API_KEY", "test-groq-key")
     monkeypatch.setenv("GEMINI_API_KEY", "test-gem-key")
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-or-key")
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-ds-key")
 

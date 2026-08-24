@@ -70,7 +70,10 @@ def _load() -> dict:
 def _save(data: dict) -> None:
     try:
         _TASKS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        _TASKS_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        import os as _os
+        tmp = _TASKS_FILE.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        _os.replace(tmp, _TASKS_FILE)
     except OSError as exc:
         log.warning("task registry save failed: %s", exc)
 

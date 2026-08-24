@@ -11,7 +11,7 @@ Guarded: any parse error degrades to an empty string (agents keep working).
 from __future__ import annotations
 import logging
 import os
-from functools import lru_cache
+
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -23,13 +23,24 @@ _AGENTS_MD = os.getenv("AGENTS_MD_PATH", "").strip() or str(
 _MAX_CHARS = 6000
 
 
-@lru_cache(maxsize=1)
+_AGENTS_MD_CACHE: tuple[float, str] = (0.0, "")  # (mtime, content)
+
+
 def _load_agents_md() -> str:
+    """Return AGENTS.md content, re-reading whenever the file mtime changes."""
+    global _AGENTS_MD_CACHE
+    cached_mtime, cached_text = _AGENTS_MD_CACHE
     try:
-        return Path(_AGENTS_MD).read_text(encoding="utf-8", errors="replace")
+        p = Path(_AGENTS_MD)
+        current_mtime = p.stat().st_mtime
+        if current_mtime != cached_mtime:
+            text = p.read_text(encoding="utf-8", errors="replace")
+            _AGENTS_MD_CACHE = (current_mtime, text)
+            return text
+        return cached_text
     except Exception as exc:
         log.warning("Failed to read AGENTS.md (%s): %s", _AGENTS_MD, exc)
-        return ""
+        return cached_text
 
 
 def _pick_sections(text: str) -> str:

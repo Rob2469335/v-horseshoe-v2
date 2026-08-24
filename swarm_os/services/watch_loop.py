@@ -619,6 +619,16 @@ class WatchLoop:
             return
         try:
             current_size = _EVENTS_FILE.stat().st_size
+            if current_size < self._last_position:
+                # File was truncated or rotated — reset read position so we
+                # don't permanently stop reading events after a log rotation.
+                log.info(
+                    "WatchLoop: events file truncated/rotated (size %d < offset %d),"
+                    " resetting read position to start",
+                    current_size,
+                    self._last_position,
+                )
+                self._last_position = 0
             if current_size > self._last_position:
                 lines = []
                 with _EVENTS_FILE.open("r", encoding="utf-8") as f:

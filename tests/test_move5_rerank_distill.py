@@ -189,7 +189,9 @@ def test_distill_uses_deepseek_v4_flash_when_openai_key(monkeypatch):
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
     monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
+    monkeypatch.delenv("NVIDIA_NIM_API_KEY", raising=False)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     try:
         import asyncio
@@ -252,7 +254,9 @@ def _distill_capture_first_model(monkeypatch, env):
         "OPENROUTER_API_KEY",
         "GROQ_API_KEY",
         "NVIDIA_API_KEY",
+        "NVIDIA_NIM_API_KEY",
         "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
         "DEEPSEEK_API_KEY",
     ):
         monkeypatch.delenv(key, raising=False)

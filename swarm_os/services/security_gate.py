@@ -200,6 +200,10 @@ class BannedNodeVisitor(ast.NodeVisitor):
             "__reduce__",
             "__reduce_ex__",
             "_getframe",
+            "__class__",
+            "__base__",
+            "__bases__",
+            "__mro__",
         ):
             self.violations.append(
                 f"Banned dunder reflection access found: '{node.attr}' at line {node.lineno}"

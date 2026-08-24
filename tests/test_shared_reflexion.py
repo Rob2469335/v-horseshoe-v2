@@ -262,9 +262,9 @@ def test_corrections_similar_content_based():
         "call web_search for every goal",
         "never call web_search, use semantic_search instead",
     )
-    # Either side empty -> ambiguous -> treated as same (reinforce)
-    assert _corrections_similar("advice", "")
-    assert _corrections_similar("", "advice")
+    # Either side empty -> ambiguous -> treated as different (no overlap)
+    assert not _corrections_similar("advice", "")
+    assert not _corrections_similar("", "advice")
 
 
 def test_classify_rule_same_vs_conflict():

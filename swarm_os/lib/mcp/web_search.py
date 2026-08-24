@@ -410,7 +410,7 @@ class _QuotaStore:
         try:
             os.makedirs(os.path.dirname(_quota_file()) or ".", exist_ok=True)
             payload = {"month": self._month, "counts": self._counts}
-            tmp = _quota_file() + ".tmp"
+            tmp = _quota_file() + f".tmp.{os.getpid()}"
             with open(tmp, "w", encoding="utf-8") as fh:
                 json.dump(payload, fh)
             os.replace(tmp, _quota_file())
@@ -472,6 +472,13 @@ def _quota_authorized_providers(
         if _QUOTA_STORE.exhausted(name):
             logger.warning(
                 "web-search provider %s excluded: monthly quota exhausted", name
+            )
+            continue
+        # Skip providers that require an env key but don't have one set —
+        # avoids burning waterfall latency on guaranteed 401s.
+        if env_key and not os.getenv(env_key):
+            logger.debug(
+                "web-search provider %s skipped: env key %s not set", name, env_key
             )
             continue
         result.append((name, env_key, fn))

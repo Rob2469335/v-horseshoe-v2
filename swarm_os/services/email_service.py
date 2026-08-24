@@ -129,7 +129,15 @@ def _get_imap(acc: dict):
             return None
     ctx = ssl.create_default_context()
     conn = imaplib.IMAP4_SSL(imap_host, imap_port, ssl_context=ctx, timeout=30)
-    conn.login(imap_user, imap_pass)
+    if acc.get("oauth2") and not acc.get("app_password"):
+        # imap_pass is the XOAUTH2 string ("user=...\x01auth=Bearer ...\x01\x01").
+        # IMAP4.login() issues a standard LOGIN command and does NOT understand
+        # XOAUTH2 format — it would leak the token to server logs and fail auth.
+        # Must use authenticate() which properly encodes the SASL exchange.
+        xoauth2_str = imap_pass
+        conn.authenticate("XOAUTH2", lambda _challenge: xoauth2_str.encode("utf-8"))
+    else:
+        conn.login(imap_user, imap_pass)
     return conn
 
 
@@ -422,7 +430,10 @@ def email_send(send_token: str, confirmed: bool = False) -> dict:
         if time.time() - draft["created"] > _TOKEN_TTL_S:
             _SEND_TOKENS.pop(send_token, None)
             return {"ok": False, "error": "send token expired"}
-        # Do NOT pop yet — only consume on successful send.
+        # Consume token immediately inside the lock to prevent a concurrent caller
+        # with the same token from also passing the check and sending a duplicate.
+        # The token is restored in the except block if SMTP fails (not lost on retry).
+        _SEND_TOKENS.pop(send_token)
     try:
         acc = _account(draft["account"])
         if not acc:
@@ -436,17 +447,11 @@ def email_send(send_token: str, confirmed: bool = False) -> dict:
         )
         if _uses_gmail_api(acc):
             result = _gmail_transport(acc).gmail_send_mime(acc, msg.as_bytes())
-            if result.get("ok"):
-                with _SEND_LOCK:
-                    _SEND_TOKENS.pop(send_token, None)
             return result
         if _uses_gmail_browser(acc):
             result = _gmail_browser_transport(acc).gmail_browser_send(
                 acc, draft["to"], draft["subject"], draft["body"]
             )
-            if result.get("ok"):
-                with _SEND_LOCK:
-                    _SEND_TOKENS.pop(send_token, None)
             return result
         smtp_host = acc.get("smtp_host") or acc.get("host")
         smtp_port = int(acc.get("smtp_port", 587))
@@ -459,12 +464,13 @@ def email_send(send_token: str, confirmed: bool = False) -> dict:
             conn.starttls(context=ctx)
             conn.login(smtp_user, smtp_pass)
             conn.sendmail(smtp_user, [draft["to"]], msg.as_string())
-        # Consume token ONLY on success
-        with _SEND_LOCK:
-            _SEND_TOKENS.pop(send_token, None)
         return {"ok": True, "to": draft["to"], "subject": draft["subject"]}
     except Exception as exc:
         log.warning("email_send failed: %s", exc)
+        # Restore the token so the draft can be retried after a transient failure
+        with _SEND_LOCK:
+            if send_token not in _SEND_TOKENS:
+                _SEND_TOKENS[send_token] = draft
         return {"ok": False, "error": str(exc)}
 
 

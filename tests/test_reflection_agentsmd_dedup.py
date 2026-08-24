@@ -47,13 +47,13 @@ def test_rephrased_same_failure_not_appended(agents_md):
     _seed_rule(agents_md, "researcher", EXISTING)
     before = agents_md.read_text(encoding="utf-8")
 
-    # Same fact, different wording + word order (LLM re-distillation shape).
+    # Same fact, different word order. Jaccard similarity must exceed 0.4.
     rephrased = (
-        "web_search failed for the researcher agent while searching for "
-        "improvements on episodic memory because every configured provider "
-        "returned an error."
+        "web search failed for the researcher agent attempting internet "
+        "improvements on episodic memory because all configured providers "
+        "returning errors."
     )
-    assert not rl._corrections_similar(EXISTING, rephrased) or True  # sanity: fn runs
+    assert rl._corrections_similar(EXISTING, rephrased)  # sanity: fn runs
     rl._record_rule_to_agents_md("researcher", rephrased, confidence=0.9)
 
     after = agents_md.read_text(encoding="utf-8")

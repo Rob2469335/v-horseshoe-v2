@@ -70,17 +70,27 @@ class ExternalMCPClientManager:
                     command=command, args=args, env={**os.environ, **(env or {})}
                 )
 
-                # Spawn stdio client transport
-                read_stream, write_stream = await self.exit_stack.enter_async_context(
-                    stdio_client(server_params)
-                )
+                # Use a per-server inner stack so that if initialize() fails,
+                # we cleanly close just this server's subprocess instead of
+                # leaving a zombie process alive in the outer exit_stack.
+                from contextlib import AsyncExitStack as _AES
 
-                # Initialize session
-                session = await self.exit_stack.enter_async_context(
-                    ClientSession(read_stream, write_stream)
-                )
-                async with asyncio.timeout(120.0):
-                    await session.initialize()
+                server_stack = _AES()
+                try:
+                    read_stream, write_stream = await server_stack.enter_async_context(
+                        stdio_client(server_params)
+                    )
+                    session = await server_stack.enter_async_context(
+                        ClientSession(read_stream, write_stream)
+                    )
+                    async with asyncio.timeout(120.0):
+                        await session.initialize()
+                except Exception:
+                    await server_stack.aclose()  # kill subprocess cleanly
+                    raise
+
+                # Initialization succeeded — transfer ownership to outer stack
+                await self.exit_stack.enter_async_context(server_stack)
 
                 # Retrieve tools
                 tools_response = await session.list_tools()

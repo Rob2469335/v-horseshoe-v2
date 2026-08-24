@@ -192,7 +192,10 @@ def _anti_truncation_ok(
 def _load_breaker() -> Dict[str, Any]:
     if BREAKER_FILE.exists():
         try:
-            return json.loads(BREAKER_FILE.read_text(encoding="utf-8"))
+            from filelock import FileLock
+
+            with FileLock(str(BREAKER_FILE) + ".lock", timeout=5.0):
+                return json.loads(BREAKER_FILE.read_text(encoding="utf-8"))
         except Exception:
             pass
     return {}
@@ -663,9 +666,9 @@ def get_similar_lessons(error_text: str, top_k: int = 3) -> List[Dict]:
                 log.debug("reflexion rule merge skipped: %s", _re)
 
         try:
-            _ai.get_running_loop().run_in_executor(None, _pull_reflexion_lesson)
-        except RuntimeError:
             _pull_reflexion_lesson()
+        except Exception as _re:
+            log.debug("reflexion rule merge skipped (direct call): %s", _re)
     except Exception as _merr:
         log.debug("reflexion merge unavailable: %s", _merr)
 

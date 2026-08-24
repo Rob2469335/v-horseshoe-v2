@@ -86,8 +86,14 @@ class MemoryBridge:
                 self.maxsize = maxsize
                 super().__init__(*args, **kwds)
 
+            def __getitem__(self, key):
+                value = super().__getitem__(key)
+                self.move_to_end(key)
+                return value
+
             def __setitem__(self, key, value):
                 super().__setitem__(key, value)
+                self.move_to_end(key)
                 if len(self) > self.maxsize:
                     oldest = next(iter(self))
                     del self[oldest]
@@ -234,7 +240,14 @@ class MemoryBridge:
             return None
         self._bg_tasks.add(task)
         task.add_done_callback(self._bg_tasks.discard)
-        task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+
+        def _log_bg_exc(t: asyncio.Task) -> None:
+            if not t.cancelled() and (exc := t.exception()):
+                logger.error(
+                    "MemoryBridge background task failed: %s", exc, exc_info=exc
+                )
+
+        task.add_done_callback(_log_bg_exc)
         return task
 
     def _update_policy(self, model: str, et: str, outcome: str) -> None:
