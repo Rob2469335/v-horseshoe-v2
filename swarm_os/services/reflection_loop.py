@@ -149,9 +149,16 @@ def _record_rule_to_agents_md(component: str, correction: str, confidence: float
         clean_rule = correction.strip()
         if len(clean_rule) > 150:
             clean_rule = clean_rule[:147] + "..."
-        if clean_rule in content:
-            return
-        new_entry = f"- **Rule ({component})**: {clean_rule}\n"
+        # Content-similarity dedup against THIS component's existing rules (the
+        # same test the Qdrant store applies). The old exact-substring check let
+        # every LLM RE-DISTILLATION of the same failure append another slightly
+        # rephrased near-duplicate line to AGENTS.md.
+        line_prefix = f"- **Rule ({component})**: "
+        for line in content.splitlines():
+            if line.startswith(line_prefix):
+                if _corrections_similar(line[len(line_prefix) :], clean_rule):
+                    return
+        new_entry = f"{line_prefix}{clean_rule}\n"
         marker = "## Self-Healing & Self-Learning Fixes\n"
         if marker in content:
             content = content.replace(marker, marker + "\n" + new_entry, 1)
