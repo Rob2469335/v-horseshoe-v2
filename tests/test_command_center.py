@@ -165,3 +165,84 @@ def test_email_manage_destructive_ops_require_approval(monkeypatch):
     )
     assert r == {"ok": True}
     assert len(calls) == 2 and calls[1][0] == "mark_read"
+
+
+def test_screen_image_endpoint_serves_only_png(tmp_path, monkeypatch):
+    """/control/screen/image must refuse non-.png names (parity with
+    /control/browser/image). Revert-proof for the 2026-08-23 audit finding:
+    the old handler served ANY file sitting in logs/screenshots."""
+    from fastapi import HTTPException
+    from swarm_os.api import control as ctl
+
+    monkeypatch.chdir(tmp_path)
+    shots = tmp_path / "logs" / "screenshots"
+    shots.mkdir(parents=True)
+    (shots / "notes.txt").write_text("x", encoding="utf-8")
+
+    with pytest.raises(HTTPException):
+        asyncio.run(ctl.control_screen_image("notes.txt"))
+
+    (shots / "shot.png").write_bytes(b"\x89PNG fake")
+    resp = asyncio.run(ctl.control_screen_image("shot.png"))
+    assert resp.path.endswith("shot.png")
+
+
+def test_screen_reset_requires_approval(monkeypatch):
+    """POST /control/screen/reset refuses without approved=true and never
+    touches the cap; with approved=true it clears it. Revert-proof for the
+    2026-08-23 audit F3 (silent HTTP reset of the runaway-action cap)."""
+    from swarm_os.api import control as ctl
+    from swarm_os.lib.mcp import screen as screen_mod
+
+    screen_mod._screen_action_count = 5
+    try:
+        r = asyncio.run(ctl.control_screen_reset(ctl.ScreenResetRequest()))
+        assert r.get("approval_required") is True
+        assert screen_mod._screen_action_count == 5
+
+        r = asyncio.run(ctl.control_screen_reset(ctl.ScreenResetRequest(approved=True)))
+        assert r.get("status") == "executed"
+        assert screen_mod._screen_action_count == 0
+    finally:
+        screen_mod._screen_action_count = 0
+
+
+def test_overview_memory_counts_cached_across_polls(monkeypatch):
+    """/control/overview must serve Qdrant collection counts from a short-TTL
+    cache so the UI's ~10s poll does not re-run get_collections+count for every
+    collection each tick (2026-08-23 audit F5). Revert-proof: pre-fix code had
+    no cache, so both polls hit Qdrant."""
+    from types import SimpleNamespace
+
+    from swarm_os.api import control as ctl
+
+    calls = {"collections": 0}
+
+    class FakeInfo:
+        count = 3
+
+    class FakeClient:
+        async def get_collections(self):
+            calls["collections"] += 1
+            return SimpleNamespace(collections=[SimpleNamespace(name="chess_books")])
+
+        async def count(self, collection_name):
+            return FakeInfo()
+
+    import swarm_os.services.vector_store as vs_mod
+
+    monkeypatch.setattr(
+        vs_mod, "VectorStore", lambda: SimpleNamespace(client=FakeClient())
+    )
+    ctl._memory_counts_cache.update({"ts": 0.0, "value": {}})
+
+    req = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace()))
+    try:
+        r1 = asyncio.run(ctl.control_overview(req))
+        r2 = asyncio.run(ctl.control_overview(req))
+    finally:
+        ctl._memory_counts_cache.update({"ts": 0.0, "value": {}})
+
+    assert r1["memory_counts"] == {"chess_books": 3}
+    assert r2["memory_counts"] == {"chess_books": 3}
+    assert calls["collections"] == 1

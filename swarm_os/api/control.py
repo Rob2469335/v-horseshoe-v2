@@ -32,6 +32,8 @@ router = APIRouter(prefix="/control", tags=["control"])
 _HEAL_CACHE_TTL = 8.0
 _heal_cache: Dict[str, Any] = {"ts": 0.0, "value": {}}
 _heal_cache_lock = asyncio.Lock()
+_MEMORY_COUNTS_TTL = 30.0
+_memory_counts_cache: Dict[str, Any] = {"ts": 0.0, "value": {}}
 
 
 class RecoverRequest(BaseModel):
@@ -42,6 +44,10 @@ class RecoverRequest(BaseModel):
 class ScreenActionRequest(BaseModel):
     action: str
     kwargs: Dict[str, Any] = {}
+
+
+class ScreenResetRequest(BaseModel):
+    approved: bool = False
 
 
 class AutonomousRequest(BaseModel):
@@ -307,24 +313,31 @@ async def control_overview(request: Request) -> Dict[str, Any]:
                 "detail": detail,
             }
 
-    memory_counts: Dict[str, int] = {}
-    try:
-        from swarm_os.services.vector_store import VectorStore
+    memory_counts: Dict[str, int] = _memory_counts_cache["value"]
+    now = asyncio.get_running_loop().time()
+    if now - _memory_counts_cache["ts"] >= _MEMORY_COUNTS_TTL:
+        counts: Dict[str, int] = {}
+        try:
+            from swarm_os.services.vector_store import VectorStore
 
-        vs = VectorStore()
-        collections = (await vs.client.get_collections()).collections
-        for c in collections:
-            if c.name in ("codebase", "codebase_index"):
-                continue
-            try:
-                info = await vs.client.count(collection_name=c.name)
-                memory_counts[c.name] = (
-                    info.count if hasattr(info, "count") else int(info)
-                )
-            except Exception:
-                continue
-    except Exception as exc:
-        log.warning("Could not count memories: %s", exc)
+            vs = VectorStore()
+            collections = (await vs.client.get_collections()).collections
+            for c in collections:
+                if c.name in ("codebase", "codebase_index"):
+                    continue
+                try:
+                    info = await vs.client.count(collection_name=c.name)
+                    counts[c.name] = info.count if hasattr(info, "count") else int(info)
+                except Exception:
+                    continue
+        except Exception as exc:
+            log.warning("Could not count memories: %s", exc)
+        # Only cache a non-empty result — an empty dict (Qdrant briefly down)
+        # must not pin zeros in the UI for the whole TTL.
+        if counts or not memory_counts or _memory_counts_cache["ts"] == 0.0:
+            memory_counts = counts
+            _memory_counts_cache["value"] = counts
+            _memory_counts_cache["ts"] = now
 
     return {
         "health": {
@@ -481,9 +494,18 @@ async def control_screen_autonomous(req: AutonomousRequest) -> Dict[str, Any]:
 
 
 @router.post("/screen/reset")
-async def control_screen_reset() -> Dict[str, Any]:
+async def control_screen_reset(req: ScreenResetRequest) -> Dict[str, Any]:
+    """Clear the runaway-input-action cap. Requires approved=true — silently
+    resetting the cap over HTTP would defeat the runaway-loop protection
+    (2026-08-23 audit F3); the UI confirms before sending approved=true."""
     from swarm_os.lib.mcp.screen import reset_screen_action_count
 
+    if not req.approved:
+        return {
+            "ok": False,
+            "approval_required": True,
+            "reason": "Resetting the screen action cap requires confirmation. Set approved=true.",
+        }
     result = await asyncio.to_thread(reset_screen_action_count)
     return {"status": "executed", "result": result}
 
@@ -491,10 +513,12 @@ async def control_screen_reset() -> Dict[str, Any]:
 @router.get("/screen/image")
 async def control_screen_image(name: str) -> FileResponse:
     """Serve a screenshot PNG from logs/screenshots (basename only)."""
+    safe = os.path.basename(str(name))
+    if not safe.lower().endswith(".png"):
+        raise HTTPException(status_code=404, detail="only .png screenshots are served")
     root = os.getenv(
         "SWARM_SCREENSHOT_DIR", os.path.join(os.getcwd(), "logs", "screenshots")
     )
-    safe = os.path.basename(str(name))
     path = os.path.join(root, safe)
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail=f"screenshot '{safe}' not found")

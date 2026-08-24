@@ -400,7 +400,10 @@ export default function CommandCenterPage() {
               </Button>
               <Button
                 variant="outline"
-                onClick={() => runAction("reset action count", "/control/screen/reset")}
+                onClick={() => {
+                  if (!window.confirm("Reset the screen action count cap?")) return
+                  void runAction("reset action count", "/control/screen/reset", { approved: true })
+                }}
                 disabled={!screen?.action_count}
               >
                 Reset action count
