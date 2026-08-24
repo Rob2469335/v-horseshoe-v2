@@ -1429,6 +1429,16 @@ Converted `except:` → `except Exception:` (or specific types) in `swarm_os/cor
 
 ## Self-Healing & Self-Learning Fixes
 
+- **Rule (researcher)**: Failure: The researcher agent attempted to search the internet for improvements on "EPISODIC MEMORY (Hybrid Stack)" but failed due to all configure...
+
+- **Rule (researcher)**: Failure: The researcher agent attempted to search the internet for improvements on episodic memory using a hybrid stack, but the task failed due to...
+
+- **Rule (researcher)**: Failure: The researcher agent attempted to search the internet for improvements on the Hybrid Stack using Semantic Memories but failed due to uncon...
+
+- **Rule (researcher)**: Failure: The researcher agent attempted to search the internet for improvements on the topic of "EPISODIC MEMORY (Hybrid Stack)" but failed due to ...
+
+- **Rule (researcher)**: Failure: The researcher agent attempted to search the internet for improvements on the auditing codebase using the Hybrid Stack's Semantic Memories...
+
 - **Auto-Heal (2026-08-23)**: Resolved anomaly `{'anomaly_type': 'disk_cache_pressure', 'error': 'Stale temp cache files in data/evolution/staged need cleanup', 'details': 'Directory data/evolution/staged has files older than 0 hours'}`. Action: Executed clean_directory({'target_dir': 'data/evolution/staged', 'extensions': [], 'max_age_hours': 
 
 - **Rule (researcher)**: Failure: The researcher agent attempted to analyze the auditing codebase by searching the internet for improvements on Episodic Memory (Hybrid Stac...
@@ -2139,6 +2149,7 @@ Head-to-head across all spec types on the 4B (gen = long paragraph, dec = tool-d
   - **Safe Recovery Primitives Registry (`recovery_primitives.py`, `recovery_engine.py`)**: Resolved the `DangerRoom` vs `SecurityGate` AST collision by replacing arbitrary script generation with a bounded recovery primitives registry (`kill_process_by_port`, `kill_process_by_name`, `clean_directory`, `restart_service`), verified with unit tests and live cloud LLM trigger.
   - **Staged-Generation Promotion Gate (`evolution_daemon.py`)**: Implemented automated promotion gating with `min_improvement=0.03` margin, strict tool floor validation (`filesystem >= 0.50`, `web_search >= 0.40`, `web_fetch >= 0.40`), backup snapshots (`genomes.jsonl.bak`), and callable `rollback_promotion()`.
   - **Self-Healing & Self-Learning Audit Remediation (`system_recovery.py`, `reflection_loop.py`, `stream_runner.py`, `system_probes.py`, `governor.py`, `repair_engine.py`)**: Fixed Python 2 exception syntax errors across 4 modules; added `_NEVER_TOUCH` protection to process killing; eliminated the 21-day Reflexion rule expiration blackhole with 60-day half-life decay; fixed Turn 1+ memory query drift on tool outputs; resolved zero-delta CPU runaway detection; and closed orphaned healing records.
+  - **Cloud Fallback Cooldown & Mutation Sandbox Fixes (`reflection_loop.py`, `genetic_mutation_loop.py`, `agent_service_v2.py`)**: Reordered reflection distillation attempts to prioritize NVIDIA NIM, wired circuit-breaker cooldowns to skip dead endpoints, delegated genetic mutation testing to `DangerRoom.run_tests()`, and added offline fallback steering for web search.
 
 ## Custom Learned Skills
 

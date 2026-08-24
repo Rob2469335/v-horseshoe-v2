@@ -50,6 +50,12 @@ _PRICING = {
     "openrouter/deepseek/deepseek-chat": (0.0896, 0.0896, 0.1792),
     "openrouter/deepseek/deepseek-chat:free": (0.0, 0.0, 0.0),
     "nvidia_nim/deepseek-ai/deepseek-v4-flash": (0.0, 0.0, 0.0),
+    # NIM free tier: the plain v4-flash EOL'd 2026-08-07 (HTTP 410); -0731 is
+    # the surviving build, still $0 on the free tier.
+    "nvidia_nim/deepseek-ai/deepseek-v4-flash-0731": (0.0, 0.0, 0.0),
+    # OpenRouter stealth/ox-alpha — free shared-pool model (upstream 429s are
+    # transient; retry later).
+    "openrouter/stealth/ox-alpha": (0.0, 0.0, 0.0),
     # InclusionAI Ling — ultra-cheap worker tier (256K ctx, 104B MoE / 7.4B active).
     "openrouter/inclusionai/ling-2.6-flash": (0.01, 0.003, 0.03),
     "openrouter/inclusionai/ling-3.0-flash:free": (0.0, 0.0, 0.0),

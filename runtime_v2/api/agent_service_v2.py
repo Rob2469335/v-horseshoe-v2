@@ -853,13 +853,13 @@ class AgentServiceV2:
                 "AGENTS.md and the directory listing are the ground truth.",
                 f"Do NOT guess file paths; always list the parent directory first (path '{path}' does not exist).",
             )
-        if action == "web_search" and (
-            "timed out" in error.lower() or "timeout" in error.lower()
+        if action == "web_search" and any(
+            k in error.lower()
+            for k in ("unconfigured", "search provider", "timed out", "timeout", "failed")
         ):
             return (
-                "Web search timed out. Retry with a shorter, more specific query or "
-                "proceed with what is known from the codebase.",
-                "Do NOT spam repeated web_search calls with the same query.",
+                "Web search is unavailable or unconfigured. Immediately fall back to local codebase analysis using filesystem read/list tools instead of external search.",
+                "Do NOT repeatedly invoke web_search when search providers are unavailable; inspect the local codebase directly.",
             )
         return (
             f"Tool '{action}' failed ({str(error)[:200]}). Check the tool contract in "

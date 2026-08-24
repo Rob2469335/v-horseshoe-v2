@@ -251,9 +251,10 @@ async def run_genetic_mutation(
 
                 logger.info("Verifying mutation compiles...")
                 from swarm_os.services.security_gate import clean_sandbox_env
+                import sys
 
                 compile_check = await asyncio.create_subprocess_exec(
-                    "python",
+                    sys.executable,
                     "-m",
                     "py_compile",
                     str(sandbox_file),
@@ -276,8 +277,6 @@ async def run_genetic_mutation(
                     )
 
                 logger.info("Running real test suite against sandboxed mutation...")
-                from swarm_os.services.security_gate import clean_sandbox_env
-
                 # EVO-3: run the tests RELATED to the MUTATED file (never a
                 # hardcoded suite that may not exercise the change). Default to
                 # the agent-service suite when nothing matches (that is the
@@ -285,36 +284,22 @@ async def run_genetic_mutation(
                 # agent_service_v2.py target).
                 related = _find_related_test_files(str(rel_path))
                 test_targets = [
-                    "tests/" + str(Path(t).relative_to(ROOT_DIR)).replace("\\", "/")
+                    str((sandbox.sandbox_dir / Path(t).relative_to(ROOT_DIR)).resolve())
                     for t in related
+                    if (sandbox.sandbox_dir / Path(t).relative_to(ROOT_DIR)).exists()
                 ]
                 if not test_targets:
-                    test_targets = ["tests/test_agentic_loop.py"]
-                test_proc = await asyncio.create_subprocess_exec(
-                    "python",
-                    "-m",
-                    "pytest",
-                    *test_targets,
-                    "-v",
-                    cwd=str(sandbox.sandbox_dir),
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    env=clean_sandbox_env(),
-                )
-                try:
-                    async with asyncio.timeout(120):
-                        test_out, test_err = await test_proc.communicate()
-                except TimeoutError:
-                    test_proc.kill()
-                    raise Exception("Mutation test suite timed out after 120 seconds.")
-                if test_proc.returncode != 0:
-                    tail_out = test_out.decode()[-2000:]
-                    tail_err = test_err.decode()[-1000:]
+                    fallback_test = sandbox.sandbox_dir / "tests" / "test_agentic_loop.py"
+                    if fallback_test.exists():
+                        test_targets = [str(fallback_test.resolve())]
+                    else:
+                        test_targets = []
+
+                test_res = await sandbox.run_tests(test_targets, timeout=120.0)
+                if not test_res.get("ok"):
+                    out = test_res.get("output", "")
                     raise Exception(
-                        "Mutation failed real test suite:\n"
-                        + tail_out
-                        + "\n"
-                        + tail_err
+                        f"Mutation failed real test suite (exit {test_res.get('exit_code')}):\n{out[-2000:]}"
                     )
 
                 logger.info("Compile check and real test suite PASSED.")

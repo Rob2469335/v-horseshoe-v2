@@ -233,13 +233,79 @@ def test_distill_model_variability_still_short_circuits(monkeypatch):
                         content="<reflection>x</reflection>", reasoning_content=None
                     )
                 )
-            ]
+            ],
         )
 
     monkeypatch.setattr(rl, "acompletion", _fake_acompletion)
     out = asyncio.run(rl._distill("content", fix_class="model_variability"))
     assert out == ""
     assert called["n"] == 0
+
+
+def _distill_capture_first_model(monkeypatch, env):
+    """Common harness: set exactly `env`, capture the first distiller attempt's
+    model id (all other provider keys stripped so only one branch is active)."""
+    import asyncio
+
+    for key in (
+        "OPENAI_API_KEY",
+        "OPENROUTER_API_KEY",
+        "GROQ_API_KEY",
+        "NVIDIA_API_KEY",
+        "GEMINI_API_KEY",
+        "DEEPSEEK_API_KEY",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv(env[0], env[1])
+
+    captured = {"models": []}
+
+    async def _fake_acompletion(**cfg):
+        captured["models"].append(cfg.get("model"))
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content="<reflection>captured</reflection>",
+                        reasoning_content=None,
+                    )
+                )
+            ],
+        )
+
+    monkeypatch.setattr(rl, "acompletion", _fake_acompletion)
+    asyncio.run(rl._distill("content", fix_class="prompt_sensitivity"))
+    assert captured["models"], f"expected a distiller attempt for {env[0]}"
+    return captured["models"][0]
+
+
+def test_distill_openrouter_attempt_uses_free_ox_alpha(monkeypatch):
+    """The OpenRouter distiller attempt MUST use an openrouter/-prefixed model.
+    Pre-fix it used CLOUD_MODEL ('openai/deepseek-v4-flash') which litellm
+    routed to the OpenCode Go endpoint — re-hitting the already-dead provider
+    instead of ever reaching OpenRouter. The slot is stealth/ox-alpha because
+    OpenRouter hosts NO free deepseek-v4-flash variant."""
+    model = _distill_capture_first_model(
+        monkeypatch, ("OPENROUTER_API_KEY", "sk-or-test")
+    )
+    assert model == "openrouter/stealth/ox-alpha"
+
+
+def test_distill_nvidia_attempt_uses_surviving_v4_flash_0731(monkeypatch):
+    """The NVIDIA distiller attempt must use the -0731 build: the plain
+    deepseek-ai/deepseek-v4-flash reached end-of-life on NIM (HTTP 410 Gone,
+    2026-08-07) and only -0731 is still served (verified live 2026-08-23).
+    Also pins the litellm auth contract: nvidia_nim reads NVIDIA_NIM_API_KEY,
+    so _distill must mirror it from NVIDIA_API_KEY or the call 401s even with
+    a valid key (verified live 2026-08-23)."""
+    monkeypatch.delenv("NVIDIA_NIM_API_KEY", raising=False)
+    model = _distill_capture_first_model(
+        monkeypatch, ("NVIDIA_API_KEY", "nvapi-test")
+    )
+    assert model == "nvidia_nim/deepseek-ai/deepseek-v4-flash-0731"
+    import os
+
+    assert os.environ["NVIDIA_NIM_API_KEY"] == "nvapi-test"
 
 
 def test_init_memory_qdrant_no_duplicate_put_under_concurrency(monkeypatch):

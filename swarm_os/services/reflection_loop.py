@@ -634,26 +634,36 @@ async def _distill(distiller_content: str, fix_class: str | None = None) -> str:
         )
         return ""
 
+    from runtime_v2.services.fallback_manager import (
+        is_model_cooled_down,
+        record_model_failure,
+    )
+
     attempts = []
-    # Prioritize Gemini/Groq/DeepSeek if keys are present, since OpenCode DeepSeek is out of balance.
-    if os.environ.get("GEMINI_API_KEY"):
+    # 1. Verified free / healthy providers first (NVIDIA NIM DeepSeek-v4-Flash-0731)
+    if os.environ.get("NVIDIA_API_KEY") or os.environ.get("NVIDIA_NIM_API_KEY"):
+        os.environ.setdefault(
+            "NVIDIA_NIM_API_KEY", os.environ.get("NVIDIA_API_KEY", "")
+        )
         attempts.append(
             {
-                "model": "gemini/gemini-1.5-pro",
+                "model": "nvidia_nim/deepseek-ai/deepseek-v4-flash-0731",
+                "messages": [{"role": "user", "content": distiller_content}],
+                "max_tokens": DISTILLER_MAX_TOKENS_CLOUD,
+                "timeout": 180.0,
+            }
+        )
+    # 2. Gemini fallback
+    if os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"):
+        attempts.append(
+            {
+                "model": "gemini/gemini-2.0-flash",
                 "messages": [{"role": "user", "content": distiller_content}],
                 "max_tokens": DISTILLER_MAX_TOKENS_CLOUD,
                 "timeout": 90.0,
             }
         )
-    if os.environ.get("DEEPSEEK_API_KEY"):
-        attempts.append(
-            {
-                "model": "deepseek/deepseek-chat",
-                "messages": [{"role": "user", "content": distiller_content}],
-                "max_tokens": DISTILLER_MAX_TOKENS_CLOUD,
-                "timeout": 90.0,
-            }
-        )
+    # 3. Groq fallback
     if os.environ.get("GROQ_API_KEY"):
         attempts.append(
             {
@@ -663,6 +673,17 @@ async def _distill(distiller_content: str, fix_class: str | None = None) -> str:
                 "timeout": 90.0,
             }
         )
+    # 4. OpenRouter fallback
+    if os.environ.get("OPENROUTER_API_KEY"):
+        attempts.append(
+            {
+                "model": "openrouter/stealth/ox-alpha",
+                "messages": [{"role": "user", "content": distiller_content}],
+                "max_tokens": 2000,
+                "timeout": 120.0,
+            }
+        )
+    # 5. OpenCode / DeepSeek paid fallbacks
     if os.environ.get("OPENAI_API_KEY"):
         api_base = os.getenv("OPENAI_API_BASE", "https://api.opencode.go/v1")
         api_key = os.environ["OPENAI_API_KEY"]
@@ -677,24 +698,16 @@ async def _distill(distiller_content: str, fix_class: str | None = None) -> str:
                 "timeout": 90.0,
             }
         )
-    if os.environ.get("OPENROUTER_API_KEY"):
+    if os.environ.get("DEEPSEEK_API_KEY"):
         attempts.append(
             {
-                "model": CLOUD_MODEL,
+                "model": "deepseek/deepseek-chat",
                 "messages": [{"role": "user", "content": distiller_content}],
                 "max_tokens": DISTILLER_MAX_TOKENS_CLOUD,
                 "timeout": 90.0,
             }
         )
-    if os.environ.get("NVIDIA_API_KEY"):
-        attempts.append(
-            {
-                "model": "nvidia_nim/meta/llama-3.1-70b-instruct",
-                "messages": [{"role": "user", "content": distiller_content}],
-                "max_tokens": DISTILLER_MAX_TOKENS_CLOUD,
-                "timeout": 90.0,
-            }
-        )
+    # 6. Fast local summarizer
     attempts.append(
         {
             "model": "qwen3.5-0.8b",
@@ -712,6 +725,10 @@ async def _distill(distiller_content: str, fix_class: str | None = None) -> str:
 
     last_exc = None
     for cfg in attempts:
+        model_name = cfg.get("model", "")
+        if is_model_cooled_down(model_name):
+            logger.info("Distiller skipping cooled down model: %s", model_name)
+            continue
         try:
             async with asyncio.timeout(cfg["timeout"]):
                 res = await acompletion(**cfg)
@@ -728,6 +745,7 @@ async def _distill(distiller_content: str, fix_class: str | None = None) -> str:
         except Exception as e:
             last_exc = e
             msg = str(e)
+            record_model_failure(model_name, msg)
             logger.warning("Distiller via %s failed: %s", cfg["model"], e)
             # Retry cloud models with fewer tokens on 402 credit exhaustion
             if "can only afford" in msg and cfg.get("max_tokens", 0) > 128:
