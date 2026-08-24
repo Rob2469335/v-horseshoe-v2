@@ -312,7 +312,14 @@ async def _fetch_groq_models() -> list[dict]:
         data = resp.json().get("data", [])
         for m in data:
             m_id = m.get("id", "")
-            if "canopylabs" in m_id or "whisper" in m_id:
+            # Safety-classifier / TTS / STT models are not chat-completion
+            # targets — never offer them as fallbacks (Groq 2026-08 lineup).
+            if (
+                "canopylabs" in m_id
+                or "whisper" in m_id
+                or "prompt-guard" in m_id
+                or "safeguard" in m_id
+            ):
                 continue
             models.append(
                 {

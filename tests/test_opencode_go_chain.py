@@ -8,6 +8,10 @@ import pytest
 
 from runtime_v2.services import fallback_manager as fm
 
+# Captured BEFORE any test can replace it with an AsyncMock (several tests in
+# this file assign fm._fetch_* directly, which leaks into later tests).
+_REAL_GROQ_FETCH = fm._fetch_groq_models
+
 
 @pytest.fixture(autouse=True)
 def reset_chain_cache():
@@ -232,3 +236,45 @@ def test_fallbacks_scoped_to_own_endpoint_no_cross_provider_leak():
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
+
+
+def test_groq_fetch_filters_non_chat_models(monkeypatch):
+    """_fetch_groq_models must never offer safety-classifier / TTS / STT
+    models as chat fallbacks. Groq's 2026-08 free-tier rotation removed the
+    llama text models and now serves `meta-llama/llama-prompt-guard-2-*`
+    (safety classifier) and `openai/gpt-oss-safeguard-20b` (moderation) next
+    to real chat models — a prompt-guard entry occupying a chat-fallback slot
+    produces garbage decisions exactly when the chain is already degraded.
+    Mirrors the REAL live lineup returned by GET /openai/v1/models."""
+    monkeypatch.setenv("GROQ_API_KEY", "gsk-test")
+
+    class _FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {
+                "data": [
+                    {"id": "whisper-large-v3"},
+                    {"id": "canopylabs/orpheus-v1-english"},
+                    {"id": "meta-llama/llama-prompt-guard-2-86m"},
+                    {"id": "meta-llama/llama-prompt-guard-2-22m"},
+                    {"id": "openai/gpt-oss-safeguard-20b"},
+                    {"id": "openai/gpt-oss-20b"},
+                    {"id": "qwen/qwen3.6-27b"},
+                ]
+            }
+
+    class _FakeClient:
+        async def get(self, *a, **kw):
+            return _FakeResponse()
+
+    async def _fake_client():
+        return _FakeClient()
+
+    monkeypatch.setattr(fm, "get_http_client", _fake_client)
+    monkeypatch.setattr(fm, "_fetch_groq_models", _REAL_GROQ_FETCH)
+
+    models = asyncio.run(fm._fetch_groq_models())
+    ids = [m["model"] for m in models]
+    assert ids == ["groq/openai/gpt-oss-20b", "groq/qwen/qwen3.6-27b"]
