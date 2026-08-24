@@ -718,6 +718,12 @@ class MemoryBridge:
 
                 prompt = f"Summarize these agent swarm run summaries into a single cohesive sentence summarizing the outcome '{outcome}':\n{combined_text}"
 
+                # Track whether we used the LLM summary (vs fallback).
+                # Only delete raw memories when the LLM-produced summary is stored,
+                # not when a fallback/shallow summary was used (preserves high-quality
+                # source memories for future consolidation attempts).
+                used_llm_summary = False
+
                 try:
                     response = await self.http.post(
                         f"{LLAMA_SUMM}/v1/chat/completions",
@@ -734,6 +740,7 @@ class MemoryBridge:
                     new_summary = (
                         response.json()["choices"][0]["message"]["content"] or ""
                     ).strip()
+                    used_llm_summary = True
                 except (httpx.ReadError, httpx.ReadTimeout) as exc:
                     # Single llama.cpp slot often busy with a main-agent generation.
                     # Slot-busy is expected, not an error — log at debug and fall back
@@ -788,8 +795,15 @@ class MemoryBridge:
                     "indexed_at": time.time(),
                 }
 
+
+                if not used_llm_summary:
+                    # LLM failed or timed out — skip storing the fallback summary
+                    # to avoid polluting the vector database with duplicate entries.
+                    # Raw memories remain for a future consolidation attempt.
+                    consolidated_any = True
+                    continue
                 success = await self._store(vec, payload)
-                if success:
+                if success and used_llm_summary:
                     from qdrant_client.models import PointIdsList
 
                     async with self.lock_vector:
