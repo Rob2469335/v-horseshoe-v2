@@ -1872,6 +1872,9 @@ async def test_concurrent_streams_keep_own_exploration_state(monkeypatch):
         research_discharged=False,
         resume=None,
         allowed_tools_override=None,
+        genome_id=None,
+        genome_weights=None,
+        **kwargs,
     ):
         if agent_id == "run_a":
             _te._mark_explored(["src/a.py"])

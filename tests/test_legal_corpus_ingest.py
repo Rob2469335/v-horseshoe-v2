@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+pa = pytest.importorskip("pyarrow")
+
 from swarm_os.services.legal import corpus_ingest
 
 NC_PARQUET = Path(r"C:\Users\rober\AppData\Local\Temp\opencode\us_nc_statutes.parquet")

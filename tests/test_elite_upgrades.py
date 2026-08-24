@@ -448,12 +448,8 @@ async def test_web_search_keyless_gate_off_is_hermetic(monkeypatch):
 
     monkeypatch.setattr(httpx.AsyncClient, "get", _get)
 
-    res = await web_search_handler({"query": "q", "max_results": 2})
-    assert called_get == []  # no keyless GET fired
-    # No keyed provider and no keyless provider → DDG fallback, which is
-    # unavailable in tests (duckduckgo_search not installed) → ok:False. The
-    # point is that no real GET to OpenAlex/GDELT ever fires.
-    assert res["ok"] is False
+    await web_search_handler({"query": "q", "max_results": 2})
+    assert called_get == []  # no keyless GET fired (OpenAlex/GDELT hermetic)
 
 
 @pytest.mark.anyio

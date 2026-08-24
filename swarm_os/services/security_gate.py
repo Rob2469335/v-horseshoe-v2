@@ -416,8 +416,15 @@ def clean_sandbox_env(extra: dict | None = None) -> dict:
 # fallback-guess into an allow. Fail-closed: spawn error / timeout / non-zero
 # exit are all DENY with an explicit reason.
 _SCAN_RUNNER = r"""
+import site
 import sys
 sys.path.insert(0, {project_root!r})
+try:
+    user_site = site.getusersitepackages()
+    if user_site and user_site not in sys.path:
+        sys.path.append(user_site)
+except Exception:
+    pass
 from swarm_os.services.security_gate import SecurityGate, SecurityGateViolation
 code = sys.stdin.read()
 try:

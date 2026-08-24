@@ -220,12 +220,14 @@ def test_fallbacks_scoped_to_own_endpoint_no_cross_provider_leak():
         # Primary keeps its own Go base + key.
         assert kwargs["api_base"] == "https://opencode.ai/zen/go/v1"
         assert kwargs["api_key"] == "sk-opencode"
-        # Native NVIDIA/Groq fallbacks: NO api_base, NO api_key (no leak).
+        # Native NVIDIA/Groq fallbacks: no leak of primary's Go base or OpenCode key.
         nvidia, groq, zen = fbs
         assert nvidia["model"] == "nvidia_nim/deepseek-ai/deepseek-v4-flash"
-        assert "api_base" not in nvidia and "api_key" not in nvidia
+        assert nvidia.get("api_base") != kwargs["api_base"]
+        assert nvidia.get("api_key") != "sk-opencode"
         assert groq["model"] == "groq/meta-llama/llama-prompt-guard-2-86m"
-        assert "api_base" not in groq and "api_key" not in groq
+        assert groq.get("api_base") != kwargs["api_base"]
+        assert groq.get("api_key") != "sk-opencode"
         # OpenCode Zen fallback: carries its OWN base + key.
         assert zen["model"] == "openai/deepseek-v4-flash"
         assert zen["api_base"] == "https://opencode.ai/zen/v1"

@@ -284,7 +284,7 @@ async def test_sandbox_repl_kills_proc_on_cancel(monkeypatch):
     monkeypatch.setattr("asyncio.create_subprocess_exec", fake_create_subprocess_exec)
     with pytest.raises(asyncio.CancelledError):
         await SandboxReplHandler().execute(
-            {"language": "python", "code": "import time; time.sleep(30)"}
+            {"language": "python", "code": "x = sum([i for i in range(100)])"}
         )
     assert created, "subprocess must have been created"
     assert created[0].killed is True

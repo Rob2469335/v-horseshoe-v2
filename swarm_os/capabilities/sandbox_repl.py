@@ -172,13 +172,24 @@ class SandboxReplHandler:
             os.path.join(os.path.dirname(__file__), "..", "..")
         )
 
+        env_extra = {}
+        if language == "pytest":
+            import site
+
+            user_site = site.getusersitepackages()
+            env_extra["PYTHONNOUSERSITE"] = "0"
+            existing_pp = os.environ.get("PYTHONPATH", "")
+            env_extra["PYTHONPATH"] = (
+                f"{user_site}{os.pathsep}{existing_pp}" if user_site else existing_pp
+            )
+
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=project_root,
-                env=clean_sandbox_env(),
+                env=clean_sandbox_env(extra=env_extra),
             )
             try:
                 async with asyncio.timeout(timeout):
