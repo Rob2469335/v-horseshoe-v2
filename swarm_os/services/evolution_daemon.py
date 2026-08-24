@@ -72,7 +72,14 @@ def list_staged_generations() -> list[dict]:
     if not STAGED_DIR.exists():
         return []
     out = []
-    for p in sorted(STAGED_DIR.glob("gen_*.jsonl"), key=lambda p: p.name):
+
+    def _gen_num(p: Path) -> int:
+        try:
+            return int(p.stem.split("_")[1])
+        except (IndexError, ValueError):
+            return 0
+
+    for p in sorted(STAGED_DIR.glob("gen_*.jsonl"), key=_gen_num):
         try:
             pop = _load_population(p)
             best = max((g.get("fitness", 0.0) for g in pop), default=0.0)
