@@ -84,6 +84,33 @@ async def run_genetic_mutation(
     # Keep only the last N entries to avoid unbounded file growth
     mutation_history = mutation_history[-50:]
 
+    # Fail-fast when the cloud chain is entirely down (2026-08-24: a fully dead
+    # provider chain — 402/401/capped — burned 3 x 90s retries per hourly tick
+    # and tripped the 3-consecutive-failure Extinction Event, "halting"
+    # evolution over what is INFRA downtime, not mutation quality). Skip the
+    # cycle WITHOUT recording a failure; the next tick re-checks liveness.
+    try:
+        from runtime_v2.services.fallback_manager import (
+            _is_local_model,
+            get_live_fallbacks,
+        )
+
+        routing_mode = os.getenv("SWARM_ROUTING_MODE", "auto")
+        live_cloud = [
+            f["model"]
+            for f in await get_live_fallbacks(mode=routing_mode)
+            if not _is_local_model(f["model"])
+        ]
+        if not live_cloud and not _is_local_model(MODEL):
+            logger.warning(
+                "No live cloud provider available (all cooling down or empty "
+                "chain) — skipping mutation cycle this tick instead of burning "
+                "retries on a dead chain."
+            )
+            return
+    except Exception as e:
+        logger.debug("Provider liveness pre-check skipped: %s", e)
+
     target_file = Path(target_file_path).resolve()
     # to_thread: don't block the shared async event loop (the API + daemons run
     # on the same loop) on synchronous disk I/O.
@@ -289,7 +316,9 @@ async def run_genetic_mutation(
                     if (sandbox.sandbox_dir / Path(t).relative_to(ROOT_DIR)).exists()
                 ]
                 if not test_targets:
-                    fallback_test = sandbox.sandbox_dir / "tests" / "test_agentic_loop.py"
+                    fallback_test = (
+                        sandbox.sandbox_dir / "tests" / "test_agentic_loop.py"
+                    )
                     if fallback_test.exists():
                         test_targets = [str(fallback_test.resolve())]
                     else:
