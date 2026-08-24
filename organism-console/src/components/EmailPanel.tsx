@@ -112,12 +112,18 @@ export default function EmailPanel({ backendUrl }: Props) {
     }
   }
 
+  const DESTRUCTIVE_MANAGE_OPS = new Set(["archive", "move", "delete"])
+
   const manage = async (op: string) => {
     if (!selected) return
+    if (DESTRUCTIVE_MANAGE_OPS.has(op)) {
+      const ok = window.confirm(`Confirm: ${op} "${selected.subject}"?`)
+      if (!ok) return
+    }
     try {
       const r = await fetchJson(`${backendUrl}/control/email/manage`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ op, uid: selected.id }),
+        body: JSON.stringify({ op, uid: selected.id, approved: true }),
       })
       setDraftResult(r.ok ? `✓ ${op} ${selected.subject}` : `${op} failed: ${r.error}`)
       if (r.ok) refresh()

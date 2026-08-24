@@ -104,6 +104,7 @@ class EmailManageRequest(BaseModel):
     folder: str = "INBOX"
     target_folder: str | None = None
     account: str | None = None
+    approved: bool = False
 
 
 class EmailSummarizeThreadRequest(BaseModel):
@@ -632,12 +633,26 @@ async def control_email_unsubscribe_scan(
     )
 
 
+_EMAIL_DESTRUCTIVE_OPS = {"archive", "move", "delete"}
+
+
 @router.post("/email/manage")
 async def control_email_manage(req: EmailManageRequest) -> Dict[str, Any]:
     """Inbox mutations: mark_read, mark_unread, archive, move, delete. Destructive
-    ops (archive/move/delete) require approval upstream (the console gates them)."""
+    ops (archive/move/delete) are approval-gated HERE server-side — an unapproved
+    destructive request is refused (the UI shows a confirm dialog and re-sends
+    with approved=true), matching the email-send + file-write pattern."""
     from swarm_os.services.email_service import email_manage
 
+    if (req.op or "").lower() in _EMAIL_DESTRUCTIVE_OPS and not req.approved:
+        return {
+            "ok": False,
+            "approval_required": True,
+            "reason": (
+                f"email manage '{req.op}' is destructive — human confirmation "
+                "required. Set approved=true to execute."
+            ),
+        }
     return await asyncio.to_thread(
         email_manage, req.op, req.uid, req.folder, req.target_folder, req.account
     )

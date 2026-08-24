@@ -126,3 +126,42 @@ def test_browser_image_endpoint_cannot_disclose_root_files(tmp_path, monkeypatch
     resp = asyncio.run(ctl.control_browser_image("shot.png"))
     assert resp.path.endswith("shot.png")
 
+
+def test_email_manage_destructive_ops_require_approval(monkeypatch):
+    """Destructive email manage ops (archive/move/delete) are refused
+    server-side without approved=true; the service is never invoked. Read ops
+    (mark_read/mark_unread) pass through freely."""
+    from swarm_os.api import control as ctl
+
+    calls: list[tuple] = []
+    monkeypatch.setattr(es, "email_manage", lambda *a: calls.append(a) or {"ok": True})
+
+    # Destructive WITHOUT approval -> refused, service never called.
+    r = asyncio.run(
+        ctl.control_email_manage(ctl.EmailManageRequest(op="delete", uid="1"))
+    )
+    assert r.get("approval_required") is True
+    assert r.get("ok") is False
+    assert calls == []
+
+    for op in ("archive", "move"):
+        r = asyncio.run(
+            ctl.control_email_manage(ctl.EmailManageRequest(op=op, uid="1"))
+        )
+        assert r.get("approval_required") is True, op
+
+    # Destructive WITH approval -> dispatched to the service.
+    r = asyncio.run(
+        ctl.control_email_manage(
+            ctl.EmailManageRequest(op="delete", uid="1", approved=True)
+        )
+    )
+    assert r == {"ok": True}
+    assert len(calls) == 1 and calls[0][0] == "delete"
+
+    # Read ops stay free (no approval demanded).
+    r = asyncio.run(
+        ctl.control_email_manage(ctl.EmailManageRequest(op="mark_read", uid="2"))
+    )
+    assert r == {"ok": True}
+    assert len(calls) == 2 and calls[1][0] == "mark_read"
