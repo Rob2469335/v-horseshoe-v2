@@ -568,6 +568,8 @@ Dependency pairing: React 19 ↔ `@react-three/fiber` ^9.5 / `@react-three/drei`
 
 - **FIX: ChessTrainerPage backendUrl now reads from useUiStore instead of hardcoded localhost (`6f440ac`, 2026-08-23)**: the chess trainer hardcoded `http://127.0.0.1:8000` as its backend URL, breaking if the backend runs on a different port. Now uses the shared `useUiStore` `backendUrl` like every other page.
 
+- **FIX: filter Groq safety-classifier models out of chat fallback chain (`f4a817c`, 2026-08-23)**: live provider triage (Gemini 401 / Groq 403 in the boot log) found Groq's 2026-08 free-tier rotation removed every Llama text model and now serves `meta-llama/llama-prompt-guard-2-*` (safety classifier) + `openai/gpt-oss-safeguard-20b` (moderation) next to real chat models — the junk filter only skipped `whisper`/`canopylabs`, so a classifier could occupy a chat-fallback slot and produce garbage decisions exactly when the chain is already degraded. Filter extended with `prompt-guard`/`safeguard`; revert-proof test drives Groq's REAL live lineup through `_fetch_groq_models` (fails on stash). Also verified live: the Gemini key itself was fine once propagation settled (the `AQ.`-format AI Studio keys are valid; both query-param and `x-goog-api-key` auth return 200; litellm e2e clean on `gemini/gemini-2.5-flash`) and `gemini-2.0-flash` is retired (Google points to `gemini-3.6-flash`; the dynamic catalog fetch picks current models so no code change needed). Known pre-existing test failure documented: `test_fallbacks_scoped_to_own_endpoint_no_cross_provider_leak` fails whenever `NVIDIA_API_KEY` is set in env (assertion message embeds the real key — local-only exposure, rotate if logs leave the machine); latent AsyncMock pollution in `test_opencode_go_chain.py` (bare `fm._fetch_* =` assignments leak into later tests) defended against, not rewritten.
+
 - **FIX: EmailPanel fetch calls guarded with res.ok check via fetchJson helper (`38993c3`, 2026-08-23)**: 7 of 10 fetch calls in `EmailPanel.tsx` parsed JSON without checking HTTP status — a 4xx/5xx with HTML body would crash with an opaque parse error. Added a `fetchJson` helper that throws on non-OK status, and wrapped all unguarded calls in `try/catch`.
 
 - **FIX: cap confidence/correct history append-only lists at 50 entries (`a12db70`, 2026-08-23)**: the four append-only lists in `record_answer` (`confidence_history`, `correct_history`, `confidence_times`, `answer_times`) grew without bound per training item, leaking memory on every review. Now sliced to the last 50 entries on append.
@@ -1428,6 +1430,10 @@ Converted `except:` → `except Exception:` (or specific types) in `swarm_os/cor
 ---
 
 ## Self-Healing & Self-Learning Fixes
+
+- **Rule (researcher)**: Failure: The researcher agent invoked web_search with the query "search internet for improvements" (with episodic-memory text concatenated into the...
+
+- **Rule (researcher)**: Failure: The researcher agent invoked web_search with the query "search internet for improvements" while analyzing the auditing codebase, and the c...
 
 - **Rule (researcher)**: Failure: The researcher agent attempted to search the internet for improvements on "EPISODIC MEMORY (Hybrid Stack)" but failed due to all configure...
 
