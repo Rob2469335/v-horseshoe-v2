@@ -431,9 +431,6 @@ def ast_slice(source_code: str, target_func: str) -> str:
                 slice_lines = lines[start_line:end_line]
                 if not slice_lines:
                     continue
-                slice_lines[0] = slice_lines[0][node.col_offset :]
-                if node.end_col_offset is not None:
-                    slice_lines[-1] = slice_lines[-1][: node.end_col_offset]
                 return "".join(slice_lines)
     except Exception as exc:
         log.debug("ast_slice failed for %r: %s", target_func, exc)

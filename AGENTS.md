@@ -1435,6 +1435,8 @@ Converted `except:` → `except Exception:` (or specific types) in `swarm_os/cor
 
 ## Self-Healing & Self-Learning Fixes
 
+- **Rule (researcher)**: Failure: Agent attempted to use web_search for 'search internet for improvements' without verifying that search providers were configured with vali...
+
 - **Rule (researcher)**: Failure: The researcher agent attempted a web_search ("search internet for improvements") while auditing a codebase, but every call failed because ...
 
 - **Rule (researcher)**: Failure: The researcher agent invoked web_search with a polluted query ("search internet for improvements [EPISODIC MEMORY ...]") and the call fail...
@@ -2168,6 +2170,7 @@ Head-to-head across all spec types on the 4B (gen = long paragraph, dec = tool-d
   - **Staged-Generation Promotion Gate (`evolution_daemon.py`)**: Implemented automated promotion gating with `min_improvement=0.03` margin, strict tool floor validation (`filesystem >= 0.50`, `web_search >= 0.40`, `web_fetch >= 0.40`), backup snapshots (`genomes.jsonl.bak`), and callable `rollback_promotion()`.
   - **Self-Healing & Self-Learning Audit Remediation (`system_recovery.py`, `reflection_loop.py`, `stream_runner.py`, `system_probes.py`, `governor.py`, `repair_engine.py`)**: Fixed Python 2 exception syntax errors across 4 modules; added `_NEVER_TOUCH` protection to process killing; eliminated the 21-day Reflexion rule expiration blackhole with 60-day half-life decay; fixed Turn 1+ memory query drift on tool outputs; resolved zero-delta CPU runaway detection; and closed orphaned healing records.
   - **Cloud Fallback Cooldown & Mutation Sandbox Fixes (`reflection_loop.py`, `genetic_mutation_loop.py`, `agent_service_v2.py`)**: Reordered reflection distillation attempts to prioritize NVIDIA NIM, wired circuit-breaker cooldowns to skip dead endpoints, delegated genetic mutation testing to `DangerRoom.run_tests()`, and added offline fallback steering for web search.
+  - **Genetic AST Slicing Indentation & Generation Monotonicity (`genetics.py`, `evolution_daemon.py`)**: Preserved full leading indentation in `ast_slice` to eliminate `SyntaxError: expected an indented block` when splicing class methods, and aligned next-generation derivation with active population metadata.
 
 ## Custom Learned Skills
 

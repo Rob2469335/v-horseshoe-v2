@@ -322,7 +322,8 @@ def evolve_one_generation(
                 staged_gens.append(int(p.stem.split("_")[1]))
             except (IndexError, ValueError):
                 log.warning(f"Malformed staged file ignored in gen calc: {p}")
-        gen = max(staged_gens, default=0) + 1
+        max_active_gen = max((g.get("generation", 0) for g in pop), default=0)
+        gen = max(max(staged_gens, default=0), max_active_gen) + 1
 
         # Elitism: keep top ELITE_COUNT unchanged.
         elites = pop[:ELITE_COUNT]
