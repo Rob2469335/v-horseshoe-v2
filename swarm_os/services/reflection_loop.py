@@ -116,8 +116,8 @@ def _corrections_similar(a: str, b: str, threshold: float = 0.5) -> bool:
 
     wa, wb = _words(a), _words(b)
     if not wa or not wb:
-        return True  # nothing substantive -> ambiguous, treat as same (reinforce)
-    overlap = len(wa & wb) / max(1.0, min(len(wa), len(wb)))
+        return False
+    overlap = len(wa & wb) / len(wa | wb)
     return overlap >= threshold
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Any, Dict
 
@@ -246,7 +247,7 @@ def filesystem_handler(
             old_str = str(params.get("old", params.get("old_string", "")))
             new_str = str(params.get("new", params.get("new_string", "")))
 
-            content = target_path.read_text(encoding="utf-8")
+            content = target_path.read_bytes().decode("utf-8", errors="replace")
             if old_str not in content:
                 return {
                     "ok": False,
@@ -261,7 +262,9 @@ def filesystem_handler(
                 }
 
             updated_content = content.replace(old_str, new_str)
-            target_path.write_text(updated_content, encoding="utf-8")
+            tmp_path = target_path.with_suffix(f"{target_path.suffix}.tmp.{os.getpid()}")
+            tmp_path.write_text(updated_content, encoding="utf-8")
+            os.replace(tmp_path, target_path)
 
             return {
                 "ok": True,

@@ -288,14 +288,17 @@ def _endpoint_for(litellm_model: str) -> tuple[str, str, str]:
 
 
 def _fallback_entry(model_id: str) -> dict:
-    """litellm fallback dict scoped to its own endpoint. A plain string fallback
-    would inherit the primary's kwargs (api_base/api_key) — this prevents that."""
+    """Per-fallback deployment config for litellm.acompletion(fallbacks=[...])."""
     base, key, eff = _endpoint_for(model_id)
     entry = {"model": eff}
     if base:
         entry["api_base"] = base
     if key:
         entry["api_key"] = key
+    from runtime_v2.services.fallback_manager import _is_local_model
+    if not _is_local_model(model_id):
+        # Cloud providers must not inherit llama.cpp engine-specific extra_body (id_slot, n_predict)
+        entry["extra_body"] = {}
     return entry
 
 
@@ -342,6 +345,9 @@ def _deployment_entry(model_id: str) -> dict:
         params["api_base"] = base
     if key:
         params["api_key"] = key
+    from runtime_v2.services.fallback_manager import _is_local_model
+    if not _is_local_model(model_id):
+        params["extra_body"] = {}
     return {"model_name": model_id, "litellm_params": params}
 
 
@@ -352,15 +358,19 @@ def build_router(primary_model: str, fallback_models: list) -> object:
     returning None when litellm's Router API is unavailable."""
     global _router, _router_model_list
     model_list = [_deployment_entry(primary_model)]
+    fallbacks_list = []
     for f in fallback_models or []:
         if f and f != primary_model:
             model_list.append(_deployment_entry(f))
+            fallbacks_list.append(f)
     with _router_lock:
         if _router is not None and _router_model_list == model_list:
             return _router
         try:
+            router_fallbacks = [{primary_model: fallbacks_list}] if fallbacks_list else None
             _router = litellm.Router(
                 model_list=model_list,
+                fallbacks=router_fallbacks,
                 routing_strategy="simple-shuffle",
                 num_retries=0,
             )

@@ -62,9 +62,9 @@ def _save():
 
 
 def _entry(agent_id: str) -> dict:
-    if not _data:
-        _load()
     with _lock:
+        if not _data:
+            _load()
         return _data.setdefault(agent_id, {"success": 0, "failure": 0})
 
 
@@ -73,35 +73,40 @@ def cloud_allowed_for_agent(agent_id: str) -> bool:
     we defer to the legacy rule (allow) so nothing changes out of the box."""
     if not _enabled():
         return True
-    e = _entry(agent_id)
-    total = e.get("success", 0) + e.get("failure", 0)
-    if total < _MIN_SAMPLES:
-        return True
-    winrate = e.get("success", 0) / total
-    allowed = winrate >= _FLOOR
-    if not allowed:
-        log.info(
-            "[winrate] %s win-rate %.0f%% below floor %.0f%% — routing analysis back to local",
-            agent_id,
-            winrate * 100,
-            _FLOOR * 100,
-        )
-    return allowed
+    with _lock:
+        if not _data:
+            _load()
+        e = _data.setdefault(agent_id, {"success": 0, "failure": 0})
+        total = e.get("success", 0) + e.get("failure", 0)
+        if total < _MIN_SAMPLES:
+            return True
+        winrate = e.get("success", 0) / total
+        allowed = winrate >= _FLOOR
+        if not allowed:
+            log.info(
+                "[winrate] %s win-rate %.0f%% below floor %.0f%% — routing analysis back to local",
+                agent_id,
+                winrate * 100,
+                _FLOOR * 100,
+            )
+        return allowed
 
 
 def record_analysis_outcome(agent_id: str, ok: bool) -> None:
     """Record one analysis outcome so future routing reflects real success."""
     if not _enabled():
         return
-    e = _entry(agent_id)
     with _lock:
+        if not _data:
+            _load()
+        e = _data.setdefault(agent_id, {"success": 0, "failure": 0})
         if ok:
             e["success"] = e.get("success", 0) + 1
         else:
             e["failure"] = e.get("failure", 0) + 1
         total = e["success"] + e["failure"]
         if total > _WINDOW:
-            drop = total - _WINDOW
-            e["success"] = max(0, e["success"] - drop)
-            e["failure"] = max(0, e["failure"] - drop)
-    _save()
+            scale = _WINDOW / total
+            e["success"] = int(round(e["success"] * scale))
+            e["failure"] = _WINDOW - e["success"]
+        _save()

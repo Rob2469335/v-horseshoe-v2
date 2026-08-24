@@ -81,12 +81,19 @@ def list_tasks() -> list[dict]:
 
 
 def create_task(goal: str, schedule: str = "daily 08:00", enabled: bool = True) -> dict:
+    hm = _parse_daily(schedule)
+    initial_last_run = None
+    if hm is not None:
+        now_dt = datetime.now()
+        hour, minute = hm
+        if (now_dt.hour > hour) or (now_dt.hour == hour and now_dt.minute >= minute):
+            initial_last_run = now_dt.isoformat()
     task = {
         "id": uuid.uuid4().hex[:12],
         "goal": goal,
         "schedule": schedule,
         "enabled": enabled,
-        "last_run": None,
+        "last_run": initial_last_run,
         "result": None,
     }
     with _LOCK:
@@ -183,7 +190,7 @@ def _is_due(task: dict, now: float | None = None) -> bool:
         except ImportError:
             pass
 
-        def match_part(part: str, value: int) -> bool:
+        def match_part(part: str, value: int, is_dow: bool = False) -> bool:
             if part == "*":
                 return True
             if part.startswith("*/"):
@@ -192,9 +199,21 @@ def _is_due(task: dict, now: float | None = None) -> bool:
                 except ValueError:
                     return False
             if "," in part:
-                return any(match_part(p, value) for p in part.split(","))
+                return any(match_part(p, value, is_dow=is_dow) for p in part.split(","))
+            if "-" in part:
+                try:
+                    start_s, end_s = part.split("-", 1)
+                    start, end = int(start_s), int(end_s)
+                    if is_dow and end == 7:
+                        return True
+                    return start <= value <= end
+                except ValueError:
+                    return False
             try:
-                return value == int(part)
+                part_int = int(part)
+                if is_dow and part_int == 7:
+                    part_int = 0
+                return value == part_int
             except ValueError:
                 return False
 
@@ -203,7 +222,7 @@ def _is_due(task: dict, now: float | None = None) -> bool:
             and match_part(parts[1], now_dt.hour)
             and match_part(parts[2], now_dt.day)
             and match_part(parts[3], now_dt.month)
-            and match_part(parts[4], now_dt.isoweekday() % 7)
+            and match_part(parts[4], now_dt.isoweekday() % 7, is_dow=True)
         )
 
     return False
@@ -482,3 +501,5 @@ class TaskSchedulerDaemon:
 
     def stop(self) -> None:
         self._running = False
+        if self._loop_task and not self._loop_task.done():
+            self._loop_task.cancel()

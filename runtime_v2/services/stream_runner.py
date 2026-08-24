@@ -392,6 +392,8 @@ async def get_tool_decision(
                 )
                 if "filesystem" in allowed:
                     result["action"] = "filesystem"
+                    if "operation" not in result:
+                        result["operation"] = "read" if "path" in result else "list"
                     if "path" not in result and "content" not in result:
                         result["action"] = "final"
                         result["response"] = result.get(

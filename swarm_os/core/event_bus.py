@@ -40,21 +40,31 @@ class EventBus:
         # This part requires the main event loop for the subscribers' queues
         if self.main_loop and not self.main_loop.is_closed():
             for queue in list(self.subscribers):
-                self.main_loop.call_soon_threadsafe(queue.put_nowait, event)
+                def _push(q=queue, ev=event):
+                    try:
+                        q.put_nowait(ev)
+                    except asyncio.QueueFull:
+                        try:
+                            q.get_nowait()
+                            q.put_nowait(ev)
+                        except Exception:
+                            pass
+                self.main_loop.call_soon_threadsafe(_push)
 
     async def subscribe(self):
-        """Creates a new queue for a subscriber and yields events."""
+        """Creates a new bounded queue for a subscriber and yields events."""
         if self.main_loop is None or self.main_loop.is_closed():
             self.main_loop = asyncio.get_running_loop()
 
-        queue = asyncio.Queue()
+        queue = asyncio.Queue(maxsize=1000)
         self.subscribers.append(queue)
         try:
             while True:
                 event = await queue.get()
                 yield event
         finally:
-            self.subscribers.remove(queue)
+            if queue in self.subscribers:
+                self.subscribers.remove(queue)
 
 
 # Global Singleton

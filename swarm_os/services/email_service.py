@@ -215,6 +215,8 @@ def email_list(
                 acc, folder=folder or "INBOX", limit=limit, unread_only=unread_only
             )
         conn = _get_imap(acc)
+        if conn is None:
+            return {"ok": False, "error": "IMAP connection / authentication failed"}
         try:
             conn.select(folder)
             typ, data = conn.uid("SEARCH", None, "UNSEEN" if unread_only else "ALL")
@@ -258,6 +260,8 @@ def email_read(uid: str, folder: str = "INBOX", account: str | None = None) -> d
                 acc, uid=uid, folder=folder or "INBOX"
             )
         conn = _get_imap(acc)
+        if conn is None:
+            return {"ok": False, "error": "IMAP connection / authentication failed"}
         try:
             conn.select(folder)
             typ, msg_data = conn.uid("FETCH", uid, "(RFC822)")
@@ -293,6 +297,8 @@ def email_search(
                 acc, query=query, folder=folder or "INBOX", limit=limit
             )
         conn = _get_imap(acc)
+        if conn is None:
+            return {"ok": False, "error": "IMAP connection / authentication failed"}
         try:
             conn.select(folder)
             # IMAP TEXT search over a multi-word query: AND the terms.

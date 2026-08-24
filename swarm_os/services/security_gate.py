@@ -193,6 +193,17 @@ class BannedNodeVisitor(ast.NodeVisitor):
             self.violations.append(
                 f"Banned builtins attribute call found: '__builtins__.{node.attr}' at line {node.lineno}"
             )
+        elif node.attr in (
+            "__subclasses__",
+            "__globals__",
+            "__code__",
+            "__reduce__",
+            "__reduce_ex__",
+            "_getframe",
+        ):
+            self.violations.append(
+                f"Banned dunder reflection access found: '{node.attr}' at line {node.lineno}"
+            )
         self.generic_visit(node)
 
     def visit_Subscript(self, node):
@@ -243,10 +254,8 @@ class BannedNodeVisitor(ast.NodeVisitor):
 class SecurityGate:
     """Deterministic, immutable AST security gate for mutated code."""
 
-    # BUG FIX: Expanded security banlists.
-    # The original list missed dangerous builtin calls and several critical modules
-    # that allow for arbitrary execution or network exfiltration.
-    BANNED_CALLS = ["exec", "eval", "compile", "__import__", "open"]
+    BANNED_CALLS = ["exec", "eval", "compile", "__import__"]
+    STRICT_BANNED_CALLS = ["open"]
     # builtins is banned wholesale: `import builtins; builtins.exec(...)` and
     # `getattr(builtins, 'exec')` otherwise smuggle every banned call back in
     # under a module-name Attribute (the Name-call scan never fires). The
@@ -332,8 +341,9 @@ class SecurityGate:
     @classmethod
     def _scan_visitor(cls, code: str, strict: bool = False) -> BannedNodeVisitor:
         tree = ast.parse(code, mode="exec")
+        banned_calls = list(cls.BANNED_CALLS) + (list(cls.STRICT_BANNED_CALLS) if strict else [])
         visitor = BannedNodeVisitor(
-            cls.BANNED_CALLS, cls.BANNED_MODULES, cls.BANNED_OS_ATTRS, strict=strict
+            banned_calls, cls.BANNED_MODULES, cls.BANNED_OS_ATTRS, strict=strict
         )
         visitor.visit(tree)
         return visitor

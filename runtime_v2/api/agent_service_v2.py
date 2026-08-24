@@ -523,7 +523,7 @@ class AgentServiceV2:
         try:
             from pathlib import Path
 
-            repo = Path(__file__).resolve().parent.parent.parent.parent
+            repo = Path(__file__).resolve().parent.parent.parent
             tests_dir = repo / "tests"
             if not tests_dir.exists():
                 return []
@@ -564,7 +564,7 @@ class AgentServiceV2:
             from pathlib import Path
 
             if repo is None:
-                repo = Path(__file__).resolve().parent.parent.parent.parent
+                repo = Path(__file__).resolve().parent.parent.parent
             p = repo / (file_path or "")
             if not p.exists() or p.is_dir():
                 return False
@@ -612,7 +612,7 @@ class AgentServiceV2:
             from pathlib import Path
             from swarm_os.services.danger_room import DangerRoom
 
-            root = Path(__file__).resolve().parent.parent.parent.parent
+            root = Path(__file__).resolve().parent.parent.parent
             async with DangerRoom(root) as dr:
                 targets = [dr.sandbox_dir / "tests" / t.name for t in tests]
                 targets = [t for t in targets if t.exists()]

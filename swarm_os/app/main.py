@@ -404,6 +404,7 @@ async def lifespan(app: FastAPI):
 
         _sched = TaskSchedulerDaemon(interval_seconds=60.0)
         _sched.start()
+        app.state.scheduler = _sched
         log.info("Recurring task scheduler daemon started")
     except Exception as exc:
         log.warning(f"Task scheduler unavailable: {exc}")
@@ -450,6 +451,32 @@ async def lifespan(app: FastAPI):
             await asyncio.gather(*bg_tasks, return_exceptions=True)
         except Exception as e:
             log.warning(f"Error during background task shutdown: {e}")
+
+    # Stop recurring task scheduler
+    try:
+        sched = getattr(app.state, "scheduler", None)
+        if sched is not None:
+            sched.stop()
+    except Exception as exc:
+        log.warning(f"Error stopping task scheduler: {exc}")
+
+    # Stop external MCP manager and node/npx subprocesses
+    try:
+        from swarm_os.lib.mcp.mcp_client import get_mcp_manager
+
+        mgr = get_mcp_manager()
+        if mgr is not None:
+            await mgr.stop()
+    except Exception as exc:
+        log.warning(f"Error stopping MCP manager: {exc}")
+
+    # Close Playwright browser context
+    try:
+        from swarm_os.lib.mcp.playwright import close_browser
+
+        await close_browser()
+    except Exception as exc:
+        log.warning(f"Error closing Playwright browser: {exc}")
 
     # Close shared httpx clients to release connection pools
     try:

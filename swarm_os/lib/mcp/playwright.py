@@ -106,6 +106,23 @@ async def _ensure_browser():
         _context = context
 
 
+async def close_browser() -> None:
+    global _browser, _context
+    async with _lock:
+        if _context is not None:
+            try:
+                await _context.close()
+            except Exception as exc:
+                logger.debug("Playwright context close failed: %s", exc)
+            _context = None
+        if _browser is not None:
+            try:
+                await _browser.stop()
+            except Exception as exc:
+                logger.debug("Playwright browser stop failed: %s", exc)
+            _browser = None
+
+
 async def _a11y_snapshot(page) -> list[dict]:
     """Extract the interactive elements (buttons/links/inputs/selects) as TEXT
     with their labels — the DOM-equivalent of an accessibility tree.
@@ -450,28 +467,34 @@ async def _playwright_impl(params: Dict[str, Any], trace_hook=None) -> Dict[str,
                 from swarm_os.infra.llama_client import LlamaClient
 
                 vision = LlamaClient(base_url="http://127.0.0.1:8083")
-                async with asyncio.timeout(60.0):
-                    text = await vision.generate(
-                        model="qwen3-vl",
-                        messages=[
-                            {
-                                "role": "user",
-                                "content": [
-                                    {
-                                        "type": "image_url",
-                                        "image_url": {
-                                            "url": f"data:image/png;base64,{b64}"
+                try:
+                    async with asyncio.timeout(60.0):
+                        text = await vision.generate(
+                            model="qwen3-vl",
+                            messages=[
+                                {
+                                    "role": "user",
+                                    "content": [
+                                        {
+                                            "type": "image_url",
+                                            "image_url": {
+                                                "url": f"data:image/png;base64,{b64}"
+                                            },
                                         },
-                                    },
-                                    {
-                                        "type": "text",
-                                        "text": "Describe what is on this webpage, focusing on interactive elements (buttons, links, inputs) and their visible labels.",
-                                    },
-                                ],
-                            }
-                        ],
-                    )
-                return {"ok": True, "described": True, "description": str(text)[:2000]}
+                                        {
+                                            "type": "text",
+                                            "text": "Describe what is on this webpage, focusing on interactive elements (buttons, links, inputs) and their visible labels.",
+                                        },
+                                    ],
+                                }
+                            ],
+                        )
+                    return {"ok": True, "described": True, "description": str(text)[:2000]}
+                finally:
+                    try:
+                        await vision.aclose()
+                    except Exception:
+                        pass
             except Exception as exc:
                 logger.warning("browser_describe vision unavailable: %s", exc)
                 return {"ok": False, "error": f"vision describe unavailable: {exc}"}

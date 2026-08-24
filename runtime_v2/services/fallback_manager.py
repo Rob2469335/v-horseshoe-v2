@@ -638,31 +638,32 @@ async def refresh_fallbacks_if_needed(mode: str = "auto"):
         # the OpenCode account pair (Zen FREE first, Go PAID last), and local
         # llama.cpp as the final fallback.
         #
-        # 1) NVIDIA free NIM v4-flash — $0 free tier.
-        all_fallbacks.extend(nvidia_models[:1])
-        # 2) Groq / Gemini free tiers (non-DeepSeek backup clouds).
-        all_fallbacks.extend(groq_models[:2])
-        all_fallbacks.extend(gemini_models[:1])
-        # 3) Ling ultra-cheap worker tier ($0.01/$0.03, plus free ling-3.0 lead-in)
-        #    for high-volume routing/classification fan-out.
-        _ling = _get_ling_flash_fallback()
-        if _ling:
-            all_fallbacks.extend(_ling)
-        # 4) OpenRouter — free-credit last resort (OpenRouter-hosted DeepSeek first,
-        #    then other cheap/free models).
-        _deepseek_or = _get_deepseek_openrouter_fallback()
-        if _deepseek_or:
-            all_fallbacks.extend(_deepseek_or)
-        all_fallbacks.extend(openrouter_models[:3])
-        # 5) DeepSeek DIRECT (paid api.deepseek.com) — first PAID provider.
-        _deepseek_direct = _get_deepseek_direct_fallback()
-        if _deepseek_direct:
-            all_fallbacks.extend(_deepseek_direct)
-        # 6) OpenCode account pair — Zen FREE deepseek-v4-flash ($0) first, then
-        #    Go PAID deepseek-v4-flash (funded account) last of the cloud chain.
-        _opencode_models = _get_opencode_fallback()
-        if _opencode_models:
-            all_fallbacks.extend(_opencode_models)
+        if mode != "local_only":
+            # 1) NVIDIA free NIM v4-flash — $0 free tier.
+            all_fallbacks.extend(nvidia_models[:1])
+            # 2) Groq / Gemini free tiers (non-DeepSeek backup clouds).
+            all_fallbacks.extend(groq_models[:2])
+            all_fallbacks.extend(gemini_models[:1])
+            # 3) Ling ultra-cheap worker tier ($0.01/$0.03, plus free ling-3.0 lead-in)
+            #    for high-volume routing/classification fan-out.
+            _ling = _get_ling_flash_fallback()
+            if _ling:
+                all_fallbacks.extend(_ling)
+            # 4) OpenRouter — free-credit last resort (OpenRouter-hosted DeepSeek first,
+            #    then other cheap/free models).
+            _deepseek_or = _get_deepseek_openrouter_fallback()
+            if _deepseek_or:
+                all_fallbacks.extend(_deepseek_or)
+            all_fallbacks.extend(openrouter_models[:3])
+            # 5) DeepSeek DIRECT (paid api.deepseek.com) — first PAID provider.
+            _deepseek_direct = _get_deepseek_direct_fallback()
+            if _deepseek_direct:
+                all_fallbacks.extend(_deepseek_direct)
+            # 6) OpenCode account pair — Zen FREE deepseek-v4-flash ($0) first, then
+            #    Go PAID deepseek-v4-flash (funded account) last of the cloud chain.
+            _opencode_models = _get_opencode_fallback()
+            if _opencode_models:
+                all_fallbacks.extend(_opencode_models)
         all_fallbacks.extend(valid_llama[:2])
 
         # Dedup by model id (the guaranteed OpenRouter DeepSeek entries can also

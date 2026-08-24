@@ -75,28 +75,36 @@ def get_cache_key(messages: list, agent_id: str) -> str:
     return f"{agent_id}:default"
 
 
+import threading
+import uuid
+
+_cache_lock = threading.Lock()
+
+
 def _get_exact(cache_key: str) -> Optional[dict]:
-    entry = _decision_cache.get(cache_key)
-    if not entry:
+    with _cache_lock:
+        entry = _decision_cache.get(cache_key)
+        if not entry:
+            return None
+        decision, timestamp = entry
+        if datetime.now() - timestamp < timedelta(seconds=_cache_ttl):
+            return decision
+        _decision_cache.pop(cache_key, None)
         return None
-    decision, timestamp = entry
-    if datetime.now() - timestamp < timedelta(seconds=_cache_ttl):
-        return decision
-    del _decision_cache[cache_key]
-    return None
 
 
 def _put_exact(cache_key: str, decision: dict):
-    if len(_decision_cache) > _max_cache_entries:
-        stale = sorted(_decision_cache, key=lambda k: _decision_cache[k][1])[:100]
-        for k in stale:
-            _decision_cache.pop(k, None)
-    _decision_cache[cache_key] = (decision, datetime.now())
+    with _cache_lock:
+        if len(_decision_cache) > _max_cache_entries:
+            stale = sorted(list(_decision_cache.keys()), key=lambda k: _decision_cache[k][1])[:100]
+            for k in stale:
+                _decision_cache.pop(k, None)
+        _decision_cache[cache_key] = (decision, datetime.now())
 
 
 def _hash_point_id(text: str) -> str:
     digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
-    return "".join(c for c in digest if c.isalnum())[:32] or "0" * 32
+    return str(uuid.UUID(hex=digest[:32]))
 
 
 async def _ensure_components():

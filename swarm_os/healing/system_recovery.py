@@ -40,9 +40,11 @@ def _is_never_touch(pid: int, name: str | None = None) -> bool:
     return (name or _process_name(pid)).lower() in _NEVER_TOUCH
 
 
-def free_memory(anomaly: Dict[str, Any]) -> Dict[str, Any]:
-    """Empty the working set of non-critical processes to relieve RAM pressure.
-    Non-destructive (no kills); safe enough to auto-run under governor gate."""
+def free_memory(anomaly: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    """Free working sets of non-critical processes via Windows API EmptyWorkingSet.
+    Leaves _NEVER_TOUCH and current process untouched."""
+    if os.name != "nt":
+        return {"ok": False, "action": "free_memory", "reason": "Windows-only"}
     import psutil
     import ctypes
 
@@ -155,7 +157,12 @@ def kill_runaway_process(anomaly: Dict[str, Any]) -> Dict[str, Any]:
             except psutil.TimeoutExpired:
                 if proc.is_running():
                     proc.kill()
-            killed.append({"pid": pid, "name": name})
+                    try:
+                        proc.wait(timeout=2.0)
+                    except psutil.TimeoutExpired:
+                        pass
+            if not proc.is_running():
+                killed.append({"pid": pid, "name": name})
         except (psutil.NoSuchProcess, psutil.AccessDenied) as exc:
             log.warning("Could not kill %s (%s): %s", pid, name, exc)
     return {"ok": bool(killed), "action": "kill_runaway_process", "killed": killed}
@@ -213,6 +220,7 @@ def tail_event_log(
                 win32evtlog.EVENTLOG_BACKWARDS_READ
                 | win32evtlog.EVENTLOG_SEQUENTIAL_READ
             )
+            past_cutoff = False
             while len(events) < max_events:
                 batch = win32evtlog.ReadEventLog(handle, flags, 0)
                 if not batch:
@@ -221,6 +229,7 @@ def tail_event_log(
                     try:
                         ts = evt.TimeGenerated
                         if ts < cutoff:
+                            past_cutoff = True
                             break  # backwards read — older than window
                         level = {
                             1: "Error",
@@ -245,6 +254,8 @@ def tail_event_log(
                         continue
                     if len(events) >= max_events:
                         break
+                if past_cutoff:
+                    break
         except Exception as exc:
             log.warning("event-log read failed for %s: %s", log_name, exc)
             continue

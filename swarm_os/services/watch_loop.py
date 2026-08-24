@@ -613,6 +613,7 @@ class WatchLoop:
             log.warning("Canary unverifiable resolve failed (%s): %s", rid, exc)
 
     async def _tick(self) -> None:
+        self._main_loop = asyncio.get_running_loop()
         if not _EVENTS_FILE.exists():
             self._write_heartbeat(self._repairs_in_window)
             return
@@ -797,21 +798,23 @@ class WatchLoop:
                     confidence=0.6,
                 )
 
-            try:
-                # Keep a strong reference to the fire-and-forget reflexion task so
-                # the event loop's GC cannot silently reap it mid-await, and
-                # surface any exception it raises instead of dropping it.
-                _record_task = asyncio.get_running_loop().create_task(_record())
+            def _consume(_t: asyncio.Task) -> None:
+                if not _t.cancelled() and _t.exception():
+                    log.warning(
+                        "WatchLoop: turn-budget reflexion task failed (%s).",
+                        _t.exception(),
+                    )
 
-                def _consume(_t: asyncio.Task) -> None:
-                    if not _t.cancelled() and _t.exception():
-                        log.warning(
-                            "WatchLoop: turn-budget reflexion task failed (%s).",
-                            _t.exception(),
-                        )
-
-                _record_task.add_done_callback(_consume)
-            except RuntimeError:
-                asyncio.run(_record())
+            if getattr(self, "_main_loop", None) and self._main_loop.is_running():
+                def _spawn():
+                    task = self._main_loop.create_task(_record())
+                    task.add_done_callback(_consume)
+                self._main_loop.call_soon_threadsafe(_spawn)
+            else:
+                try:
+                    _record_task = asyncio.get_running_loop().create_task(_record())
+                    _record_task.add_done_callback(_consume)
+                except RuntimeError:
+                    pass
         except Exception as exc:
             log.warning("WatchLoop: turn-budget reflexion failed (%s).", exc)

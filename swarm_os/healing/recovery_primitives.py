@@ -45,7 +45,12 @@ def kill_process_by_port(port: int) -> Dict[str, Any]:
     my_pid = psutil.Process().pid
     killed = []
 
-    for conn in psutil.net_connections(kind="inet"):
+    try:
+        conns = psutil.net_connections(kind="inet")
+    except (psutil.AccessDenied, PermissionError, OSError) as exc:
+        return {"ok": False, "action": "kill_process_by_port", "error": f"Access denied reading net connections: {exc}"}
+
+    for conn in conns:
         try:
             if conn.laddr and conn.laddr.port == port and conn.status == psutil.CONN_LISTEN and conn.pid and conn.pid != my_pid:
                 proc = psutil.Process(conn.pid)
