@@ -43,7 +43,6 @@ _SR_LADDER_DAYS = [1, 3, 7, 14]
 _PIECE_VALUE_MAP = {"p": 1, "n": 3, "b": 3, "r": 5, "q": 9}
 
 
-
 def _ladder_days() -> list[int]:
     raw = __import__("os").environ.get("CHESS_SR_LADDER", "")
     if raw:
@@ -168,22 +167,24 @@ def get_blunder_radar(limit: int = 10) -> dict[str, Any]:
 
     with _LOCK:
         mistakes = _load()
-    
+
     radar_items = []
     num_mistakes = min(limit // 2, len(mistakes))
     chosen_mistakes = random.sample(mistakes, num_mistakes) if num_mistakes else []
     for m in chosen_mistakes:
-        radar_items.append({
-            "id": m.get("id", uuid.uuid4().hex[:12]),
-            "fen": m.get("pre_fen"),
-            "has_tactic": True,
-            "best_uci": m.get("best_uci"),
-            "best_san": m.get("best_san"),
-            "concept": m.get("concept"),
-            "played_uci": m.get("played_uci"),
-            "played_san": m.get("played_san"),
-            "classification": m.get("classification", "Mistake")
-        })
+        radar_items.append(
+            {
+                "id": m.get("id", uuid.uuid4().hex[:12]),
+                "fen": m.get("pre_fen"),
+                "has_tactic": True,
+                "best_uci": m.get("best_uci"),
+                "best_san": m.get("best_san"),
+                "concept": m.get("concept"),
+                "played_uci": m.get("played_uci"),
+                "played_san": m.get("played_san"),
+                "classification": m.get("classification", "Mistake"),
+            }
+        )
 
     num_solid = limit - len(radar_items)
     if num_solid > 0:
@@ -192,31 +193,40 @@ def get_blunder_radar(limit: int = 10) -> dict[str, Any]:
         for g in games:
             for m in g.get("moves", []):
                 # Pick positions where a good move was played, so there is no massive blunder/missed tactic
-                if m.get("classification") in ("Best", "Excellent", "Good", "Brilliant", "Book"):
+                if m.get("classification") in (
+                    "Best",
+                    "Excellent",
+                    "Good",
+                    "Brilliant",
+                    "Book",
+                ):
                     all_solid.append(m)
-        
-        chosen_solid = random.sample(all_solid, min(num_solid, len(all_solid))) if all_solid else []
+
+        chosen_solid = (
+            random.sample(all_solid, min(num_solid, len(all_solid)))
+            if all_solid
+            else []
+        )
         for m in chosen_solid:
-            radar_items.append({
-                "id": uuid.uuid4().hex[:12],
-                # PRE-move FEN — the board BEFORE the good move, so the listed
-                # best_uci/best_san is a legal answer on the shown position
-                # (the old code used the post-move fen, making the move illegal).
-                "fen": m.get("pre_fen") or m.get("fen"),
-                "has_tactic": False,
-                "best_uci": m.get("uci"),
-                "best_san": m.get("san"),
-                "concept": "solid position",
-                "played_uci": m.get("uci"),
-                "played_san": m.get("san"),
-                "classification": m.get("classification")
-            })
+            radar_items.append(
+                {
+                    "id": uuid.uuid4().hex[:12],
+                    # PRE-move FEN — the board BEFORE the good move, so the listed
+                    # best_uci/best_san is a legal answer on the shown position
+                    # (the old code used the post-move fen, making the move illegal).
+                    "fen": m.get("pre_fen") or m.get("fen"),
+                    "has_tactic": False,
+                    "best_uci": m.get("uci"),
+                    "best_san": m.get("san"),
+                    "concept": "solid position",
+                    "played_uci": m.get("uci"),
+                    "played_san": m.get("san"),
+                    "classification": m.get("classification"),
+                }
+            )
 
     random.shuffle(radar_items)
-    return {
-        "ok": True,
-        "items": radar_items
-    }
+    return {"ok": True, "items": radar_items}
 
 
 def _resolve(entry_id: str) -> dict[str, Any] | None:
@@ -320,8 +330,6 @@ def _classify_concept(
     after = b.copy()
     after.push(played)
 
-
-
     # Hanging piece: after the move, one of the mover's non-king pieces is
     # attacked more than defended (opponent can capture it next move).
     # Check this FIRST — it's the most specific/actionable error (e.g. Qxf7?? where
@@ -345,11 +353,14 @@ def _classify_concept(
         if b.is_en_passant(played):
             cap_val = 1
         else:
-            cap_val = _PIECE_VALUE_MAP.get(cap_piece.symbol().lower(), 0) if cap_piece else 0
-        moved_val = _PIECE_VALUE_MAP.get(moved_piece.symbol().lower(), 0) if moved_piece else 0
+            cap_val = (
+                _PIECE_VALUE_MAP.get(cap_piece.symbol().lower(), 0) if cap_piece else 0
+            )
+        moved_val = (
+            _PIECE_VALUE_MAP.get(moved_piece.symbol().lower(), 0) if moved_piece else 0
+        )
         if moved_val > cap_val + 1:  # losing >1 pawn of material on the exchange
             return "bad exchange"
-
 
     # Missed a strong check/mate: the best move gives check but the played move doesn't.
     if best_uci:
@@ -520,7 +531,7 @@ def coach_report() -> dict[str, Any]:
     concept_counts: dict[str, int] = {}
     concept_blunders: dict[str, int] = {}
     concept_positions: dict[str, set] = {}
-    
+
     impulse_blunders = 0
     timed_out_blunders = 0
     comfortable_blunders = 0

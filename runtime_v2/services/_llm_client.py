@@ -8,6 +8,7 @@ import threading
 from typing import AsyncGenerator
 
 import litellm
+from runtime_v2.services.fallback_manager import _is_local_model
 from runtime_v2.services.model_registry import get_model
 from runtime_v2.services._grammar_schema import TOOL_DECISION_JSON_SCHEMA
 
@@ -132,6 +133,8 @@ def _analysis_cloud_enabled() -> bool:
             "NVIDIA_API_KEY",
             "GROQ_API_KEY",
             "GEMINI_API_KEY",
+            "OPENAI_API_KEY",
+            "DEEPSEEK_API_KEY",
             "OPENROUTER_API_KEY",
         )
     )
@@ -174,6 +177,7 @@ def get_litellm_model(
         not force_local
         and agent_id in _ANALYSIS_CLOUD_AGENTS
         and _analysis_cloud_enabled()
+        and not _is_local_model(model)
     ):
         # UPGRADE (Item #8): win-rate-gated online routing — keep the cloud hop
         # only while the tracked success rate is healthy; repeated failures decay
@@ -275,7 +279,11 @@ def _endpoint_for(litellm_model: str) -> tuple[str, str, str]:
             )
         return "http://127.0.0.1:8080/v1", "llama", litellm_model
     if litellm_model.startswith("nvidia_nim/"):
-        return None, os.getenv("NVIDIA_NIM_API_KEY") or os.getenv("NVIDIA_API_KEY", ""), litellm_model
+        return (
+            None,
+            os.getenv("NVIDIA_NIM_API_KEY") or os.getenv("NVIDIA_API_KEY", ""),
+            litellm_model,
+        )
     if litellm_model.startswith("groq/"):
         return None, os.getenv("GROQ_API_KEY", ""), litellm_model
     if litellm_model.startswith("gemini/"):
@@ -296,6 +304,7 @@ def _fallback_entry(model_id: str) -> dict:
     if key:
         entry["api_key"] = key
     from runtime_v2.services.fallback_manager import _is_local_model
+
     if not _is_local_model(model_id):
         # Cloud providers must not inherit llama.cpp engine-specific extra_body (id_slot, n_predict)
         entry["extra_body"] = {}
@@ -330,9 +339,8 @@ def build_kwargs(litellm_model: str, extra: dict, fallbacks: list) -> dict:
 # endpoints/credentials can never leak across providers) and lets Router handle
 # health-checked failover, cooldowns and retries. We build the model_list from
 # the same get_live_fallbacks() chain so ordering/priorities are preserved.
-_router: object | None = None
+_routers = {}
 _router_lock = threading.Lock()
-_router_model_list: list = []
 
 
 def _deployment_entry(model_id: str) -> dict:
@@ -346,6 +354,7 @@ def _deployment_entry(model_id: str) -> dict:
     if key:
         params["api_key"] = key
     from runtime_v2.services.fallback_manager import _is_local_model
+
     if not _is_local_model(model_id):
         params["extra_body"] = {}
     return {"model_name": model_id, "litellm_params": params}
@@ -356,32 +365,33 @@ def build_router(primary_model: str, fallback_models: list) -> object:
     Each entry carries its own endpoint/key so Router's failover never leaks a
     provider's credentials to another. Falls back to the raw acompletion path by
     returning None when litellm's Router API is unavailable."""
-    global _router, _router_model_list
+    global _routers
     model_list = [_deployment_entry(primary_model)]
     fallbacks_list = []
     for f in fallback_models or []:
         if f and f != primary_model:
             model_list.append(_deployment_entry(f))
             fallbacks_list.append(f)
+    key = (primary_model, tuple(fallbacks_list))
     with _router_lock:
-        if _router is not None and _router_model_list == model_list:
-            return _router
+        if key in _routers:
+            return _routers[key]
         try:
-            router_fallbacks = [{primary_model: fallbacks_list}] if fallbacks_list else None
-            _router = litellm.Router(
+            router_fallbacks = (
+                [{primary_model: fallbacks_list}] if fallbacks_list else None
+            )
+            _routers[key] = litellm.Router(
                 model_list=model_list,
                 fallbacks=router_fallbacks,
                 routing_strategy="simple-shuffle",
                 num_retries=0,
             )
-            _router_model_list = model_list
-            return _router
+            return _routers[key]
         except Exception as exc:
             log.warning(
                 "litellm Router construction failed (%s) — using legacy acompletion",
                 exc,
             )
-            _router = None
             return None
 
 
@@ -529,7 +539,7 @@ async def stream_content(
         "top_p": 0.8,
         "top_k": 20,
         "repetition_penalty": 1.05,
-        "max_tokens": 32768,
+        # "max_tokens": 32768,
         "num_ctx": 32768,
     }
     kwargs = build_kwargs(litellm_model, extra, fallbacks)
@@ -591,3 +601,5 @@ async def stream_content(
     except Exception as exc:
         log.error("[%s] stream error: %s", agent_id, exc)
         yield str(exc), "error"
+
+

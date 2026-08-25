@@ -78,13 +78,15 @@ def _concept_from(classification: str, query: str = "") -> str:
     return best
 
 
-
 import httpx
+
 _embed_client = httpx.AsyncClient(
     timeout=httpx.Timeout(30.0, connect=10.0),
     base_url=EMBED_URL,
     headers={"Authorization": "Bearer llama"},
 )
+
+
 async def _embed(text: str) -> list[float]:
     try:
         resp = await _embed_client.post("/embeddings", json={"input": text})

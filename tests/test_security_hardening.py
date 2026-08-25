@@ -228,13 +228,17 @@ def test_legacy_runtime_classifies_playwright_writes_as_state_changing():
     rt.approved_actions = []
 
     for op in ("click", "browser_type", "fill_form", "browser_press_key", "select"):
-        assert rt.is_state_changing(
-            "playwright", {"operation": op, "name": "Transfer"}
-        ) is True, op
+        assert (
+            rt.is_state_changing("playwright", {"operation": op, "name": "Transfer"})
+            is True
+        ), op
     for op in ("navigate", "screenshot", "extract_text", "browser_state", "wait"):
-        assert rt.is_state_changing(
-            "playwright", {"operation": op, "url": "https://example.com"}
-        ) is False, op
+        assert (
+            rt.is_state_changing(
+                "playwright", {"operation": op, "url": "https://example.com"}
+            )
+            is False
+        ), op
 
     async def _expect_approval():
         try:
@@ -323,7 +327,10 @@ async def test_sandbox_repl_pytest_runs_real_target():
     from swarm_os.capabilities.sandbox_repl import SandboxReplHandler
 
     r = await SandboxReplHandler().execute(
-        {"language": "pytest", "path": "tests/test_security_hardening.py::test_security_gate_scan_code"}
+        {
+            "language": "pytest",
+            "path": "tests/test_security_hardening.py::test_security_gate_scan_code",
+        }
     )
     assert r.get("returncode") == 0, r.get("stdout", "")[-200:]
     assert "1 passed" in r.get("stdout", "")

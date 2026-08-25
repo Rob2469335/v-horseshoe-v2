@@ -302,7 +302,12 @@ Respond strictly with a JSON object in a ```json markdown block:
                 )
 
         except Exception as e:
-            messages.append({"role": "user", "content": f"Error: {e}. Please fix and return valid JSON."})
+            messages.append(
+                {
+                    "role": "user",
+                    "content": f"Error: {e}. Please fix and return valid JSON.",
+                }
+            )
 
     memory_bridge._add(
         {"event_type": "dynamic_recovery", "outcome": "failure", "anomaly": anomaly}

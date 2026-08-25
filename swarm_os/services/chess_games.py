@@ -52,6 +52,7 @@ def _load_games() -> list[dict[str, Any]]:
 
 def _save_games(games: list[dict[str, Any]]) -> None:
     from .chess_store import save_jsonl
+
     save_jsonl(_GAMES_FILE, games)
 
 
@@ -401,11 +402,11 @@ def progress_analytics() -> dict[str, Any]:
         g_moves = g.get("moves", [])
         player_moves = [m for i, m in enumerate(g_moves) if _is_player_move(g, 0, i)]
         all_moves.extend(player_moves)
-        
+
         n_p = len(player_moves)
         if n_p == 0:
             continue
-            
+
         third = max(1, n_p // 3)
         opening_moves.extend(player_moves[:third])
         middlegame_moves.extend(player_moves[third : 2 * third])

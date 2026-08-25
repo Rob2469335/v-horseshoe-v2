@@ -58,6 +58,7 @@ def _clear_claim(task_id: str) -> None:
         if task and task.pop("claimed_at", None) is not None:
             _save(data)
 
+
 def _load() -> dict:
     try:
         if _TASKS_FILE.exists():
@@ -71,6 +72,7 @@ def _save(data: dict) -> None:
     try:
         _TASKS_FILE.parent.mkdir(parents=True, exist_ok=True)
         import os as _os
+
         tmp = _TASKS_FILE.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
         _os.replace(tmp, _TASKS_FILE)
@@ -449,7 +451,9 @@ async def _notify_task_complete(task_id: str, task: dict, result: dict) -> None:
             detail = f" — {result.get('count', 0)} emails"
         elif result.get("ingested") is not None:
             detail = f" — {result.get('ingested')} new items"
-        await notify(f"{status} Task <b>{html.escape(goal)}</b> done{html.escape(detail)}")
+        await notify(
+            f"{status} Task <b>{html.escape(goal)}</b> done{html.escape(detail)}"
+        )
     except Exception as exc:
         log.warning("task notify failed: %s", exc)
 

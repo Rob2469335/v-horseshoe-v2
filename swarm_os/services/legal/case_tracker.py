@@ -95,7 +95,7 @@ def load_case(docket_id: str) -> CaseRecord | None:
     try:
         with _LOCK:
             data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError, OSError:
+    except (json.JSONDecodeError, OSError):
         return None
     return CaseRecord(
         docket_id=data.get("docket_id", docket_id),

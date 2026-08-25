@@ -149,7 +149,10 @@ class SessionState:
                 payload = _snapshot_and_serialize()
                 self.session_file.parent.mkdir(parents=True, exist_ok=True)
                 import uuid as _uuid
-                tmp = self.session_file.with_suffix(f"{self.session_file.suffix}.tmp.{_uuid.uuid4().hex}")
+
+                tmp = self.session_file.with_suffix(
+                    f"{self.session_file.suffix}.tmp.{_uuid.uuid4().hex}"
+                )
                 with open(tmp, "w", encoding="utf-8") as fh:
                     fh.write(payload)
                 os.replace(tmp, self.session_file)

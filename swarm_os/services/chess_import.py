@@ -62,7 +62,9 @@ async def _last_archives(username: str, n: int = 3) -> list[str]:
     return archives[-n:] if archives else []
 
 
-def _parse_game_pgn(pgn_text: str) -> tuple[dict[str, Any], chess.Board, chess.pgn.Game] | None:
+def _parse_game_pgn(
+    pgn_text: str,
+) -> tuple[dict[str, Any], chess.Board, chess.pgn.Game] | None:
     """Parse a PGN into (headers, board-with-moves). Returns None on failure or
     when the game has no moves.
 
@@ -90,7 +92,12 @@ def _parse_game_pgn(pgn_text: str) -> tuple[dict[str, Any], chess.Board, chess.p
         return None
 
 
-def _analyze_game(board: chess.Board, max_plies: int = 100000, game_obj: chess.pgn.Game | None = None, stop_flag: list[bool] | None = None) -> list[dict[str, Any]]:
+def _analyze_game(
+    board: chess.Board,
+    max_plies: int = 100000,
+    game_obj: chess.pgn.Game | None = None,
+    stop_flag: list[bool] | None = None,
+) -> list[dict[str, Any]]:
     """Evaluate up to `max_plies` moves in the game, classifying each. Returns
     per-move records like the trainer's evaluate_move output (uci, san, pre_fen,
     classification, win_delta_pct, best_uci, best_move_san). Bounded so a long
@@ -156,7 +163,9 @@ def _analyze_game(board: chess.Board, max_plies: int = 100000, game_obj: chess.p
                 "was_best": was_best,
                 "eval_before_cp": round(before_cp, 1),
                 "eval_after_cp": round(mover_after, 1),
-                "clock_remaining_secs": clock_remaining[i] if i < len(clock_remaining) else None,
+                "clock_remaining_secs": clock_remaining[i]
+                if i < len(clock_remaining)
+                else None,
                 "think_time_secs": think_times[i] if i < len(think_times) else None,
             }
         )
@@ -241,7 +250,9 @@ async def import_games(
                 stop_flag = [False]
                 try:
                     async with asyncio.timeout(600):
-                        records = await asyncio.to_thread(_analyze_game, board, 100000, game_obj, stop_flag)
+                        records = await asyncio.to_thread(
+                            _analyze_game, board, 100000, game_obj, stop_flag
+                        )
                 except Exception as exc:
                     stop_flag[0] = True
                     raise exc
@@ -258,7 +269,9 @@ async def import_games(
                 # a live interactive game the user is mid-way through. The game
                 # is built fully in memory then written once (record_game) — the
                 # old per-move record_move rewrote the whole file per move.
-                gid = start_game(finalize_existing=False, player_color=("w" if is_white else "b"))["id"]
+                gid = start_game(
+                    finalize_existing=False, player_color=("w" if is_white else "b")
+                )["id"]
                 game_moves = []
                 for i, rec in enumerate(records):
                     # Only the user's own moves belong in their recorded game
@@ -562,14 +575,16 @@ async def build_profile(
             # Opening: extract readable name from chess.com ECOUrl header or Opening header
             eco_url = game_obj.headers.get("ECOUrl", "")
             opening_name = game_obj.headers.get("Opening", "")
-            
+
             if eco_url:
                 slug = eco_url.strip("/").split("/")[-1]
                 opening_key = slug.replace("-", " ")
             elif opening_name:
                 opening_key = opening_name
             else:
-                opening_key = " ".join(m.uci() for m in board.move_stack[:6]) or "unknown"
+                opening_key = (
+                    " ".join(m.uci() for m in board.move_stack[:6]) or "unknown"
+                )
 
             o = stats["openings"].setdefault(opening_key, {"games": 0, "score": 0.0})
             o["games"] += 1

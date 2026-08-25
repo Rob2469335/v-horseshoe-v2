@@ -345,7 +345,9 @@ class SecurityGate:
     @classmethod
     def _scan_visitor(cls, code: str, strict: bool = False) -> BannedNodeVisitor:
         tree = ast.parse(code, mode="exec")
-        banned_calls = list(cls.BANNED_CALLS) + (list(cls.STRICT_BANNED_CALLS) if strict else [])
+        banned_calls = list(cls.BANNED_CALLS) + (
+            list(cls.STRICT_BANNED_CALLS) if strict else []
+        )
         visitor = BannedNodeVisitor(
             banned_calls, cls.BANNED_MODULES, cls.BANNED_OS_ATTRS, strict=strict
         )

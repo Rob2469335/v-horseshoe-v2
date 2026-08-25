@@ -232,7 +232,9 @@ def filesystem_handler(
         elif operation == "write":
             content = str(params.get("content", ""))
             target_path.parent.mkdir(parents=True, exist_ok=True)
-            tmp_write = target_path.with_suffix(f"{target_path.suffix}.tmp.{os.getpid()}")
+            tmp_write = target_path.with_suffix(
+                f"{target_path.suffix}.tmp.{os.getpid()}"
+            )
             tmp_write.write_text(content, encoding="utf-8")
             os.replace(tmp_write, target_path)
             if trace_hook:
@@ -270,7 +272,9 @@ def filesystem_handler(
                 }
 
             updated_content = content.replace(old_str, new_str)
-            tmp_path = target_path.with_suffix(f"{target_path.suffix}.tmp.{os.getpid()}")
+            tmp_path = target_path.with_suffix(
+                f"{target_path.suffix}.tmp.{os.getpid()}"
+            )
             tmp_path.write_text(updated_content, encoding="utf-8")
             os.replace(tmp_path, target_path)
 

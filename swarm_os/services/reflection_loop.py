@@ -55,7 +55,7 @@ DISTILLER_MAX_TOKENS_CLOUD = 300
 DISTILLER_MAX_TOKENS_LOCAL = 512
 
 
-def _corrections_similar(a: str, b: str, threshold: float = 0.5) -> bool:
+def _corrections_similar(a: str, b: str, threshold: float = 0.4) -> bool:
     """Content-based test of whether two reflexion corrections say the SAME thing
     (2026 L5: judge repeat-vs-conflict on the fact's content, not on the key
     having been written before). Deterministic, no LLM.
@@ -603,8 +603,6 @@ def get_latest_failure(filepath: Path) -> dict | None:
     return last_error_entry
 
 
-
-
 async def _distill(distiller_content: str, fix_class: str | None = None) -> str:
     """Run the distiller LLM call. Cloud DeepSeek V4 flash first (fast, no
     thinking tokens), local qwen3.5-4b fallback (needs /no_think system lead +
@@ -870,3 +868,36 @@ async def run_reflection():
 
 if __name__ == "__main__":
     asyncio.run(run_reflection())
+
+# --- Phase 4 addition (2026-08-24): routing-bias warning, additive only ---
+_bridge_singleton = None
+_bridge_lock = None
+
+async def _get_bridge():
+    """Lazily create one shared MemoryBridge instance so a reliability check doesn't spin up a new embedding/HTTP client on every call."""
+    global _bridge_singleton, _bridge_lock
+    if _bridge_lock is None:
+        _bridge_lock = asyncio.Lock()
+    if _bridge_singleton is None:
+        async with _bridge_lock:
+            if _bridge_singleton is None:
+                from swarm_os.memory.memory_bridge import MemoryBridge
+                _bridge_singleton = MemoryBridge()
+    return _bridge_singleton
+
+async def check_model_reliability(model: str, event_type: str = "tool_decision") -> str:
+    """Look up memory_bridge's routing/outcome bias for this model+event_type and return a [MODEL RELIABILITY] warning if the model has a poor track record, or "" if there is no signal. Additive-only: never touches check_for_past_mistakes()'s own retrieval/reranking logic."""
+    try:
+        bridge = await _get_bridge()
+        signal = bridge.routing_signal(model, event_type)
+        if signal.get("decision") == "avoid":
+            fr = signal.get("failure_rate", 0.0)
+            conf = signal.get("confidence", 0.0)
+            return (
+                f"[MODEL RELIABILITY] Model '{model}' has a "
+                f"{fr * 100:.0f}% recorded failure rate on '{event_type}' tasks "
+                f"(confidence {conf:.2f}). Consider an alternative model or extra care."
+            )
+    except Exception as exc:
+        logger.debug("Model reliability check skipped: %s", exc)
+    return ""

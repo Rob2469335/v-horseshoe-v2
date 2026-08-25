@@ -61,6 +61,9 @@ def compute_fitness(
     efficiency = max(0.0, min(1.0, efficiency))
     human = max(0.0, min(1.0, human))
 
+    if test_pass == 0.0:
+        completion = 0.0
+
     composite = (
         _W["completion"] * completion
         + _W["test_pass"] * test_pass
@@ -209,3 +212,4 @@ def _fitness_env_enabled() -> bool:
     SWARM_EVOLUTION=1, else off (keeps the runtime lean; no overhead when the
     kernel isn't being evolved)."""
     return os.environ.get("SWARM_EVOLUTION", "").strip() == "1"
+

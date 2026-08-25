@@ -100,24 +100,7 @@ class AgentRuntime:
 
                 raise ApprovalRequiredError(capability_name, payload)
 
-        # Redirection logic for filesystem write
-        if (
-            capability_name == "filesystem"
-            and isinstance(payload, dict)
-            and payload.get("operation") == "write"
-        ):
-            from swarm_os.tools.file_tools import write_file
-            import asyncio
 
-            path = payload.get("path")
-            content = payload.get("content")
-            if not path or not content:
-                return {"error": "Missing path or content for write operation"}
-            result_msg = await asyncio.to_thread(write_file, path, content)
-            return {
-                "status": "success" if "Success" in result_msg else "error",
-                "message": result_msg,
-            }
 
         if capability_name not in self._active_tools:
             raise RuntimeError(

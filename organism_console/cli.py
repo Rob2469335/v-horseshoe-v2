@@ -470,9 +470,7 @@ def main():
                     ):
                         truncate_idx += 1
                     truncate_idx = max(1, min(truncate_idx, len(ctx.history) - 1))
-                    # BUG FIX: Explicitly preserve ctx.history[0] (system message) using [0:1]
-                    # instead of [:1] which could fail if ctx.history[0] is unintentionally sliced
-                    ctx.history = ctx.history[0:1] + ctx.history[truncate_idx:]
+                    # COMPRESS FIX: /compress now preserves the system message correctly
                     registry.handle_line("/compress", cmd_ctx)
 
                 run_agentic(ctx, execute_prompt, json_flag)

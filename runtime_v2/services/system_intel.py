@@ -241,7 +241,7 @@ def net_connections() -> Dict[str, Any]:
             if c.pid:
                 try:
                     proc = psutil.Process(c.pid).name()
-                except psutil.NoSuchProcess, psutil.AccessDenied:
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
                     proc = f"pid:{c.pid}"
             conns.append(
                 {

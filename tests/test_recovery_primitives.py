@@ -50,22 +50,23 @@ def test_restart_service_allowlist_rejection():
 @pytest.mark.asyncio
 async def test_llm_guided_recovery_structured_execution():
     anomaly = {"error": "Stale temp files filling disk", "type": "disk_space"}
-    
+
     mock_choice = MagicMock()
     mock_choice.message.content = '```json\n{"primitive": "clean_directory", "args": {"target_dir": "tests", "extensions": [".tmp"], "max_age_hours": 24}}\n```'
     mock_res = MagicMock()
     mock_res.choices = [mock_choice]
 
-    with patch("swarm_os.healing.recovery_engine.acompletion", return_value=mock_res), \
-         patch("swarm_os.healing.recovery_engine.MemoryBridge") as mock_mb_cls, \
-         patch("swarm_os.healing.recovery_engine._record_to_agents_md"):
-        
+    with (
+        patch("swarm_os.healing.recovery_engine.acompletion", return_value=mock_res),
+        patch("swarm_os.healing.recovery_engine.MemoryBridge") as mock_mb_cls,
+        patch("swarm_os.healing.recovery_engine._record_to_agents_md"),
+    ):
         mock_mb = MagicMock()
         mock_mb.get_memory_context = AsyncMock(return_value="")
         mock_mb._add = MagicMock()
         mock_mb._flush = AsyncMock(return_value=None)
         mock_mb_cls.return_value = mock_mb
-        
+
         outcome = await llm_guided_recovery(anomaly)
         assert outcome["ok"] is True
         assert outcome["action"] == "primitive:clean_directory"

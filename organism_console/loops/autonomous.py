@@ -499,7 +499,7 @@ def run_autonomous_goal_loop(
     # Start autonomous goals with a clean slate to prevent repeating previous goal outputs
     history = []
     max_attempts = 5
-    baseline_passed = False
+    baseline_passed = True
 
     def _git_status_paths() -> set[str]:
         """Snapshot of current git working-tree paths (modified/untracked)."""

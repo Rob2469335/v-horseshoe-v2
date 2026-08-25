@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+    volumes:
+      - ./.qdrant:/qdrant/storage
+    restart: unless-stopped
+
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./litellm-config.yaml:/app/config.yaml
+    command: [ "--config", "/app/config.yaml", "--port", "4000", "--num_workers", "8" ]
+    environment:
+      - OPENAI_API_KEY=\
+      - GROQ_API_KEY=\
+      - DEEPSEEK_API_KEY=\
+      - OPENROUTER_API_KEY=\
+    restart: unless-stopped
+
+  backend:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - SWARM_VECTOR_STORE=http://qdrant:6333
+      - SWARM_LITELLM_PROXY=http://litellm:4000
+    depends_on:
+      - qdrant
+      - litellm
+    restart: unless-stopped
+
+  frontend:
+    image: node:20
+    working_dir: /app
+    volumes:
+      - ./organism-console:/app
+    command: npm run dev -- --host 0.0.0.0
+    ports:
+      - "5173:5173"
+    restart: unless-stopped

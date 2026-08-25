@@ -12,12 +12,14 @@ import httpx
 
 try:
     from dotenv import load_dotenv
+
     load_dotenv()
 except Exception:
     pass
 
 try:
     import truststore
+
     truststore.inject_into_ssl()
 except Exception:
     pass

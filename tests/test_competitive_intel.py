@@ -758,7 +758,11 @@ def test_email_delivery_offloaded_to_worker_thread(monkeypatch):
 
     monkeypatch.setattr(es, "email_draft", fake_draft)
     monkeypatch.setattr(es, "email_send", fake_send)
-    monkeypatch.setattr(ci.os, "getenv", lambda k, d=None: "me@example.com" if k == "INTEL_EMAIL_TO" else d)
+    monkeypatch.setattr(
+        ci.os,
+        "getenv",
+        lambda k, d=None: "me@example.com" if k == "INTEL_EMAIL_TO" else d,
+    )
 
     loop_name = {}
 
@@ -908,6 +912,7 @@ def test_manual_run_intel_advances_scheduler_window(monkeypatch):
     weekly daemon's duplicate-run protection sees no last_run and fires a second
     full run inside the same cadence right after the manual one. Pre-fix only the
     daemon path wrote last_run; manual API runs left the window open."""
+
     async def _scan(include=None):
         return {
             "scanned": 1,

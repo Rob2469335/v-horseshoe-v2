@@ -10,7 +10,6 @@ EMBED_URL = os.getenv(
 )
 OLLAMA_URL = EMBED_URL  # Backward compatibility alias
 QDRANT_URL = os.getenv("QDRANT_URL", "http://127.0.0.1:6333")
-COLLECTION_NAME = "agent_episodic_memory_v2"
 EMBEDDING_MODEL = "gte-modernbert-base-Q8_0.gguf"
 RERANKER_MODEL = "gte-reranker-modernbert-base-Q8_0.gguf"
 EMBEDDING_DIM = 768  # Dimension for gte-modernbert-base
@@ -124,9 +123,9 @@ def rerank_memories(query: str, memories: List[Dict[str, Any]]) -> List[Dict[str
         with _RERANK_SEM:
             chunk_size = 50
             all_scored = []
-            
+
             for i in range(0, len(texts), chunk_size):
-                chunk = texts[i:i + chunk_size]
+                chunk = texts[i : i + chunk_size]
                 resp = requests.post(
                     f"{RERANK_URL}/v1/rerank",
                     headers={"Authorization": "Bearer llama"},
@@ -145,7 +144,11 @@ def rerank_memories(query: str, memories: List[Dict[str, Any]]) -> List[Dict[str
                         if abs_idx < len(memories):
                             mem = memories[abs_idx]
                             payload = mem.get("payload", {})
-                            fact = payload.get("fact", "") or payload.get("correction", "") or payload.get("correction", "")
+                            fact = (
+                                payload.get("fact", "")
+                                or payload.get("correction", "")
+                                or payload.get("correction", "")
+                            )
                             all_scored.append(
                                 {
                                     "score": float(res.get("relevance_score", 0.0)),
@@ -262,7 +265,7 @@ def remember_fact(fact: str, category: str = "general") -> bool:
     # 1. Store in Qdrant (Vector DB) with Timestamp
     try:
         resp = requests.put(
-            f"{QDRANT_URL}/collections/{collection}/points",
+            f"{QDRANT_URL}/collections/{collection}/points?wait=true",
             json={
                 "points": [
                     {
@@ -430,7 +433,7 @@ def dump_all_failures(limit: int = 200) -> str:
     a complete unfiltered dump of every failure the system has recorded, sorted
     by timestamp (newest first). The model can then synthesize patterns.
     """
-    collection = _get_shard_name("self_reflection")
+    collection = "ReflexionMemory"
 
     # First check the collection exists
     try:

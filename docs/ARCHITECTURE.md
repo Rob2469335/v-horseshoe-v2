@@ -114,10 +114,10 @@ This document describes the upgraded Zenith OS architecture integrating cutting-
 **Configuration**:
 ```python
 config = MemoryConfig(
-    vector_dimension=768,           # Embedding dimension
+    vector_dimension=768,  # Embedding dimension
     vector_similarity_threshold=0.75,  # Cosine similarity threshold
-    vector_cache_size=10000,        # LRU cache size
-    vector_similarity_metric="cosine", # cosine|dot_product|euclidean
+    vector_cache_size=10000,  # LRU cache size
+    vector_similarity_metric="cosine",  # cosine|dot_product|euclidean
 )
 ```
 
@@ -182,14 +182,16 @@ episode = await episodic_store.add(
 )
 
 # Query with filters
-episodes = await episodic_store.query(EpisodicQuery(
-    agent_id="agent_1",
-    episode_types=[EpisodeType.TASK_COMPLETE],
-    time_range=(start_ts, end_ts),
-    tags={"python"},
-    min_importance=0.5,
-    limit=50,
-))
+episodes = await episodic_store.query(
+    EpisodicQuery(
+        agent_id="agent_1",
+        episode_types=[EpisodeType.TASK_COMPLETE],
+        time_range=(start_ts, end_ts),
+        tags={"python"},
+        min_importance=0.5,
+        limit=50,
+    )
+)
 
 # Get conversation thread
 thread = await episodic_store.get_conversation_thread(root_episode_id)
@@ -209,9 +211,9 @@ thread = await episodic_store.get_conversation_thread(root_episode_id)
 **Configuration**:
 ```python
 working_memory = LRUWorkingMemory[str](
-    max_size=1000,              # Entries per partition
-    default_ttl=3600.0,         # 1 hour default TTL
-    partition_by="agent_id",    # Partition strategy
+    max_size=1000,  # Entries per partition
+    default_ttl=3600.0,  # 1 hour default TTL
+    partition_by="agent_id",  # Partition strategy
     enable_persistence=True,
     persistence_path="data/working_memory.json",
 )
@@ -301,11 +303,11 @@ prompt_context = context.get_combined_context(max_chars=8000)
 **Configuration**:
 ```python
 config = CircuitBreakerConfig(
-    failure_threshold=5,          # Failures before OPEN
-    success_threshold=2,          # Successes in HALF_OPEN to CLOSE
-    timeout=30.0,                 # Seconds before HALF_OPEN
-    failure_rate_threshold=0.5,   # Failure rate to trigger OPEN
-    minimum_requests=10,          # Min requests before rate evaluation
+    failure_threshold=5,  # Failures before OPEN
+    success_threshold=2,  # Successes in HALF_OPEN to CLOSE
+    timeout=30.0,  # Seconds before HALF_OPEN
+    failure_rate_threshold=0.5,  # Failure rate to trigger OPEN
+    minimum_requests=10,  # Min requests before rate evaluation
     expected_exceptions=(Exception,),
     excluded_exceptions=(ValidationError,),
 )
@@ -317,9 +319,7 @@ breaker = CircuitBreaker("agent_1", config)
 
 # With fallback
 result = await breaker.call(
-    agent_function,
-    args,
-    fallback=lambda: fallback_agent_function(args)
+    agent_function, args, fallback=lambda: fallback_agent_function(args)
 )
 
 # Check state
@@ -366,9 +366,11 @@ healthy = monitor.get_healthy_agents()
 degraded = monitor.get_degraded_agents()
 unhealthy = monitor.get_unhealthy_agents()
 
+
 # Alert callbacks
 def on_critical(health: AgentHealth):
     send_alert(f"Agent {health.agent_id} critical: {health.critical_issues}")
+
 
 monitor.add_alert_callback(on_critical)
 ```
@@ -384,9 +386,9 @@ node = PolicyNode(
     agent_ids=["agent_1", "agent_2", "agent_3"],
     weight_config=NodeWeight(
         base_weight=1.0,
-        health_factor=0.5,      # 50% weight from health score
-        latency_factor=0.3,     # 30% from latency
-        success_factor=0.2,     # 20% from success rate
+        health_factor=0.5,  # 50% weight from health score
+        latency_factor=0.3,  # 30% from latency
+        success_factor=0.2,  # 20% from success rate
     ),
     priority=0,  # For failover chain
 )
@@ -454,9 +456,11 @@ router.register_agent(
     max_concurrent=10,
 )
 
+
 # Route requests
 async def handler(route, request):
     return await call_agent(route.endpoint, request.payload)
+
 
 request = RoutingRequest(
     request_id="req_1",
@@ -479,12 +483,12 @@ result = await router.route_request(request, handler)
 ```python
 retry_policy = RetryPolicy(
     max_retries=3,
-    base_delay=1.0,           # Initial delay (seconds)
-    max_delay=60.0,           # Maximum delay
-    exponential_base=2.0,     # Exponential backoff
-    jitter_factor=0.1,        # ±10% jitter
-    retry_on=(Exception,),    # Retry on these exceptions
-    stop_on=(ValidationError,), # Don't retry on these
+    base_delay=1.0,  # Initial delay (seconds)
+    max_delay=60.0,  # Maximum delay
+    exponential_base=2.0,  # Exponential backoff
+    jitter_factor=0.1,  # ±10% jitter
+    retry_on=(Exception,),  # Retry on these exceptions
+    stop_on=(ValidationError,),  # Don't retry on these
 )
 ```
 
@@ -528,6 +532,7 @@ def modify_for_retry(original_payload, retry_count):
         return {**original_payload, "model": "fast_model", "temperature": 0.1}
     return original_payload
 
+
 runtime.register_param_modifier("coding_task", modify_for_retry)
 ```
 
@@ -546,8 +551,8 @@ runtime.register_param_modifier("coding_task", modify_for_retry)
 ```python
 escalation_policy = EscalationPolicy(
     max_escalation_level=EscalationLevel.LEVEL_2_FALLBACK,
-    escalation_threshold=3,     # Failures before escalating
-    escalation_delay=5.0,       # Delay before escalation
+    escalation_threshold=3,  # Failures before escalating
+    escalation_delay=5.0,  # Delay before escalation
     fallback_agents=["fallback_1", "fallback_2"],
     human_webhook="https://alerts.example.com/webhook",
 )
@@ -568,7 +573,9 @@ healing_config = SelfHealingConfig(
     enable_hybrid_memory=True,
 )
 
-runtime = SelfHealingAgentRuntime(config=base_config, self_healing_config=healing_config)
+runtime = SelfHealingAgentRuntime(
+    config=base_config, self_healing_config=healing_config
+)
 
 # Initialize orchestration
 await runtime.initialize()
@@ -582,18 +589,22 @@ runtime.register_agent(
     capabilities={"python", "javascript", "refactoring"},
 )
 
+
 # Register task handlers
 async def coding_handler(payload):
     # Execute coding task
     return await execute_coding(payload)
 
+
 runtime.register_handler("coding_task", coding_handler)
+
 
 # Register parameter modifier for retries
 def coding_modifier(payload, retry_count):
     if retry_count >= 2:
         return {**payload, "model": "fast_coder", "temperature": 0.1}
     return payload
+
 
 runtime.register_param_modifier("coding_task", coding_modifier)
 
@@ -671,8 +682,12 @@ prompt = f"{context.get_combined_context()}\n\nUser: New question..."
 
 ```python
 from src.orchestration import (
-    DynamicRouter, HealthMonitor, PolicyGraph,
-    RoutingPolicy, RoutingStrategy, PolicyNode
+    DynamicRouter,
+    HealthMonitor,
+    PolicyGraph,
+    RoutingPolicy,
+    RoutingStrategy,
+    PolicyNode,
 )
 
 # Create routing infrastructure
@@ -696,17 +711,21 @@ router.register_agent("reviewer", "review", "http://reviewer:8000", {"code_revie
 router.register_agent("fallback_coder", "fallback", "http://fallback:8000", {"python"})
 
 # Configure policies
-graph.add_policy(RoutingPolicy(
-    name="coding",
-    strategy=RoutingStrategy.WEIGHTED_RANDOM,
-    required_tags={"coding"},
-))
-graph.add_policy(RoutingPolicy(
-    name="fallback",
-    strategy=RoutingStrategy.PRIORITY_FAILOVER,
-    enable_failover=True,
-    max_failover_attempts=2,
-))
+graph.add_policy(
+    RoutingPolicy(
+        name="coding",
+        strategy=RoutingStrategy.WEIGHTED_RANDOM,
+        required_tags={"coding"},
+    )
+)
+graph.add_policy(
+    RoutingPolicy(
+        name="fallback",
+        strategy=RoutingStrategy.PRIORITY_FAILOVER,
+        enable_failover=True,
+        max_failover_attempts=2,
+    )
+)
 
 # Route with automatic failover
 result = await router.route_request(
@@ -716,7 +735,7 @@ result = await router.route_request(
         context={"session_id": "sess_1"},
         policy_name="coding",
     ),
-    handler=call_agent_endpoint
+    handler=call_agent_endpoint,
 )
 ```
 
@@ -867,11 +886,13 @@ async def health_check():
 ```python
 # Old: zenith.memory.ZenithMemory
 from zenith.memory import ZenithMemory
+
 memory = ZenithMemory(".")
 memory.add_vector(text, embedding)
 
 # New: HybridMemory
 from src.agent_memory import HybridMemory, MemoryConfig
+
 memory = HybridMemory(MemoryConfig())
 await memory.initialize(embed_fn)
 await memory.remember(agent_id, content, episode_type, metadata)
@@ -885,9 +906,9 @@ result = await agent_1.execute(task)
 
 # New: Dynamic routing with failover
 from src.orchestration import DynamicRouter, RoutingRequest
+
 result = await router.route_request(
-    RoutingRequest(task_type=task.type, payload=task.payload),
-    handler=call_agent
+    RoutingRequest(task_type=task.type, payload=task.payload), handler=call_agent
 )
 ```
 
@@ -896,10 +917,12 @@ result = await router.route_request(
 ```python
 # Old: Basic runtime
 from swarm_os.agent_runtime import AgentRuntime
+
 runtime = AgentRuntime(config)
 
 # New: Self-healing runtime
 from src.core.agent_runtime import SelfHealingAgentRuntime, SelfHealingConfig
+
 runtime = SelfHealingAgentRuntime(config, SelfHealingConfig())
 await runtime.initialize()
 await runtime.start()

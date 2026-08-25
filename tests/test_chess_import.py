@@ -196,7 +196,9 @@ def test_username_match_is_exact_not_substring(monkeypatch, tmp_path):
     pgn_robert = SAMPLE_PGN.replace('[White "tester"]', '[White "robert_locust"]')
 
     async def fake_fetch_robert(url, timeout=20.0):
-        return {"games": [{"pgn": pgn_robert, "url": "https://www.chess.com/game/live/2"}]}
+        return {
+            "games": [{"pgn": pgn_robert, "url": "https://www.chess.com/game/live/2"}]
+        }
 
     monkeypatch.setattr(ci, "_fetch", fake_fetch_robert)
     monkeypatch.setattr(cg, "_DATA_DIR", tmp_path / "chess")
@@ -253,5 +255,3 @@ def test_opponent_moves_not_recorded(monkeypatch, tmp_path):
             assert board.turn == chess.WHITE, (
                 f"recorded an opponent (black) move at ply {i}: {m['uci']}"
             )
-
-

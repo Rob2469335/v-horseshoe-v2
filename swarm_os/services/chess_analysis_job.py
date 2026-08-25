@@ -225,7 +225,9 @@ async def _analyze_one(username: str, game: dict) -> dict[str, Any]:
         # Pass game_obj so clock/think data survives into bulk records (the
         # import path does; the bulk path previously stripped it).
         async with asyncio.timeout(300):
-            records = await asyncio.to_thread(_analyze_game, board, 100000, game_obj, stop_flag)
+            records = await asyncio.to_thread(
+                _analyze_game, board, 100000, game_obj, stop_flag
+            )
     except Exception as exc:
         stop_flag[0] = True
         return {"records": [], "mistakes": 0, "error": f"analysis: {exc}"}
@@ -236,7 +238,9 @@ async def _analyze_one(username: str, game: dict) -> dict[str, Any]:
 
     # finalize_existing=False: a background bulk job must NOT truncate a live
     # interactive game the user is mid-way through.
-    gid = start_game(finalize_existing=False, player_color=("w" if is_white else "b"))["id"]
+    gid = start_game(finalize_existing=False, player_color=("w" if is_white else "b"))[
+        "id"
+    ]
     game_moves = []
     mistakes = 0
     for i, rec in enumerate(records):
@@ -319,15 +323,17 @@ async def _analyze_one(username: str, game: dict) -> dict[str, Any]:
     return {"records": records, "mistakes": mistakes, "error": None}
 
 
-
 async def _run_job(job: dict[str, Any]) -> None:
     try:
         await _run_job_impl(job)
     except Exception as exc:
-        log.error("Fatal error in background analysis job %s: %s", job.get("job_id"), exc)
+        log.error(
+            "Fatal error in background analysis job %s: %s", job.get("job_id"), exc
+        )
         job["status"] = "error"
         job["error"] = f"Fatal crash: {exc}"
         _save_job(job)
+
 
 async def _run_job_impl(job: dict[str, Any]) -> None:
     """Process every game in the job, updating progress + persisting per game.
@@ -470,7 +476,7 @@ async def start_analysis(
                 task = asyncio.create_task(_run_job(job))
                 job["_live_task"] = task
             return {"ok": True, "job_id": existing, "resumed": True}
-    
+
         job_id = uuid.uuid4().hex[:12]
         job = {
             "job_id": job_id,

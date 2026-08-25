@@ -83,6 +83,7 @@ API calls per session:             5-7 (30% reduction)
 _decision_cache = {}  # {"agent_id:hash": (decision, timestamp)}
 _cache_ttl = 300  # 5 minutes
 
+
 def _get_cached_decision(cache_key):
     if cache_key in _decision_cache:
         decision, timestamp = _decision_cache[cache_key]
@@ -135,6 +136,7 @@ GROQ_TIMEOUT = 3.0  # API fetch timeout (default: 3s)
 ```python
 # Manual cache clear (if needed)
 from runtime_v2.services.stream_runner import _decision_cache
+
 _decision_cache.clear()
 
 # Cache is auto-cleared on TTL (300s)

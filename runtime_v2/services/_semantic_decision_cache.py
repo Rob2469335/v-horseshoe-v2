@@ -67,7 +67,7 @@ def decision_cache_stats() -> dict:
 def get_cache_key(messages: list, agent_id: str) -> str:
     """Exact-match key: SHA-256 of the final user content scoped by agent."""
     if messages:
-        last_msg = messages[-1].get("content", "")
+        last_msg = messages.get("content", "")
         if not isinstance(last_msg, str):
             last_msg = json.dumps(last_msg)
         h = hashlib.sha256(last_msg.encode("utf-8")).hexdigest()
@@ -96,7 +96,9 @@ def _get_exact(cache_key: str) -> Optional[dict]:
 def _put_exact(cache_key: str, decision: dict):
     with _cache_lock:
         if len(_decision_cache) > _max_cache_entries:
-            stale = sorted(list(_decision_cache.keys()), key=lambda k: _decision_cache[k][1])[:100]
+            stale = sorted(
+                list(_decision_cache.keys()), key=lambda k: _decision_cache[k][1]
+            )[:100]
             for k in stale:
                 _decision_cache.pop(k, None)
         _decision_cache[cache_key] = (decision, datetime.now())
@@ -133,7 +135,7 @@ async def _ensure_components():
 def _last_user_text(messages: list) -> str:
     if not messages:
         return ""
-    last_msg = messages[-1].get("content", "") if messages else ""
+    last_msg = messages.get("content", "") if messages else ""
     if not isinstance(last_msg, str):
         last_msg = json.dumps(last_msg)
     return last_msg
@@ -237,3 +239,4 @@ async def cache_tool_decision(messages: list, agent_id: str, decision: dict):
         )
     except Exception as exc:
         log.debug("decision cache write failed (non-fatal): %s", exc)
+

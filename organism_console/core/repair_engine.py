@@ -784,7 +784,9 @@ class T1ConstrainedRepair:
             if m:
                 missing_key = m.group(1)
                 for node in ast.walk(tree):
-                    if isinstance(node, ast.Subscript) and isinstance(getattr(node, "ctx", None), ast.Load):
+                    if isinstance(node, ast.Subscript) and isinstance(
+                        getattr(node, "ctx", None), ast.Load
+                    ):
                         try:
                             full = ast.unparse(node)
                             # Match the key in brackets with either quote style

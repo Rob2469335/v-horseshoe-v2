@@ -25,11 +25,13 @@ _mcp_manager = None
 # Lock initialized at module level so all concurrent callers share exactly one
 # instance (previously it was created inside the if-None check — two awaiters
 # racing could each create their own asyncio.Lock and double-init the manager).
-_mcp_manager_lock = asyncio.Lock()
+_mcp_manager_lock = None
 
 
 async def get_mcp_manager():
-    global _mcp_manager
+    global _mcp_manager, _mcp_manager_lock
+    if _mcp_manager_lock is None:
+        _mcp_manager_lock = asyncio.Lock()
     if _mcp_manager is None:
         async with _mcp_manager_lock:
             if _mcp_manager is None:
@@ -784,7 +786,23 @@ async def _dispatch(tool_name: str, payload: dict, *, trace_hook=None) -> dict:
                 eval_flag_used = isinstance(args, list) and any(
                     isinstance(a, str)
                     and a.strip().lower()
-                    in ("-c", "-e", "--eval", "-p", "-i", "--call", "timeit", "os", "subprocess", "sys", "pty", "runpy", "pdb", "cprofile", "profile")
+                    in (
+                        "-c",
+                        "-e",
+                        "--eval",
+                        "-p",
+                        "-i",
+                        "--call",
+                        "timeit",
+                        "os",
+                        "subprocess",
+                        "sys",
+                        "pty",
+                        "runpy",
+                        "pdb",
+                        "cprofile",
+                        "profile",
+                    )
                     and cmd in ("python", "python3", "node", "npx", "uvx")
                     for a in args
                 )
@@ -884,38 +902,81 @@ async def _dispatch(tool_name: str, payload: dict, *, trace_hook=None) -> dict:
             manager = await get_mcp_manager()
             calls = payload.get("calls", [])
             if not isinstance(calls, list):
-                result = {"ok": False, "error": "'calls' must be a list of tool invocations."}
+                result = {
+                    "ok": False,
+                    "error": "'calls' must be a list of tool invocations.",
+                }
             elif len(calls) > 50:
-                result = {"ok": False, "error": "Maximum of 50 concurrent calls allowed in a single batch."}
+                result = {
+                    "ok": False,
+                    "error": "Maximum of 50 concurrent calls allowed in a single batch.",
+                }
             else:
                 sem = asyncio.Semaphore(10)
-                
+
                 async def _call_one(call: dict):
                     if not isinstance(call, dict):
-                        return {"ok": False, "error": f"Invalid call object, expected dict got {type(call).__name__}"}
-                        
+                        return {
+                            "ok": False,
+                            "error": f"Invalid call object, expected dict got {type(call).__name__}",
+                        }
+
                     server_name = call.get("server")
                     mcp_tool = call.get("tool")
                     arguments = call.get("arguments", {})
                     try:
                         if not server_name or not mcp_tool:
-                            return {"ok": False, "error": "MCP action requires 'server' and 'tool' arguments."}
-                        
+                            return {
+                                "ok": False,
+                                "error": "MCP action requires 'server' and 'tool' arguments.",
+                            }
+
                         async with sem:
                             async with asyncio.timeout(180.0):
-                                call_res = await manager.call_tool(server_name, mcp_tool, arguments)
-                        
+                                call_res = await manager.call_tool(
+                                    server_name, mcp_tool, arguments
+                                )
+
                         if hasattr(call_res, "content"):
-                            text_output = "\n".join([c.text for c in call_res.content if hasattr(c, "text")])
-                            return {"ok": True, "server": server_name, "tool": mcp_tool, "result": text_output}
-                        return {"ok": True, "server": server_name, "tool": mcp_tool, "result": str(call_res)}
+                            text_output = "\n".join(
+                                [c.text for c in call_res.content if hasattr(c, "text")]
+                            )
+                            return {
+                                "ok": True,
+                                "server": server_name,
+                                "tool": mcp_tool,
+                                "result": text_output,
+                            }
+                        return {
+                            "ok": True,
+                            "server": server_name,
+                            "tool": mcp_tool,
+                            "result": str(call_res),
+                        }
                     except KeyError as e:
-                        return {"ok": False, "server": server_name, "tool": mcp_tool, "error": str(e)}
+                        return {
+                            "ok": False,
+                            "server": server_name,
+                            "tool": mcp_tool,
+                            "error": str(e),
+                        }
                     except TimeoutError:
-                        return {"ok": False, "server": server_name, "tool": mcp_tool, "error": "MCP operation timed out."}
+                        return {
+                            "ok": False,
+                            "server": server_name,
+                            "tool": mcp_tool,
+                            "error": "MCP operation timed out.",
+                        }
                     except Exception:
-                        log.exception("MCP tool execution failed: %s.%s", server_name, mcp_tool)
-                        return {"ok": False, "server": server_name, "tool": mcp_tool, "error": "MCP tool execution failed"}
+                        log.exception(
+                            "MCP tool execution failed: %s.%s", server_name, mcp_tool
+                        )
+                        return {
+                            "ok": False,
+                            "server": server_name,
+                            "tool": mcp_tool,
+                            "error": "MCP tool execution failed",
+                        }
 
                 # Run concurrently
                 results = await asyncio.gather(*[_call_one(c) for c in calls])
@@ -1078,7 +1139,9 @@ async def _dispatch(tool_name: str, payload: dict, *, trace_hook=None) -> dict:
 
         # Aggressive truncation for context window safety (traverse nested dicts)
         def _truncate(obj, limit=5000, _depth=0):
-            if _depth > 50: return "<Truncated: Recursion depth exceeded>"
+            if tool_name == "web_fetch": limit = 20000
+            if _depth > 50:
+                return "<Truncated: Recursion depth exceeded>"
             if isinstance(obj, str):
                 return (
                     obj
@@ -1086,7 +1149,9 @@ async def _dispatch(tool_name: str, payload: dict, *, trace_hook=None) -> dict:
                     else obj[:limit] + "\n\n...[OUTPUT TRUNCATED]..."
                 )
             elif isinstance(obj, dict):
-                return {k: _truncate(v, limit, _depth=_depth + 1) for k, v in obj.items()}
+                return {
+                    k: _truncate(v, limit, _depth=_depth + 1) for k, v in obj.items()
+                }
             elif isinstance(obj, list):
                 return [_truncate(v, limit, _depth + 1) for v in obj]
             elif isinstance(obj, (int, float, bool, type(None))):
@@ -1114,3 +1179,5 @@ async def _dispatch(tool_name: str, payload: dict, *, trace_hook=None) -> dict:
     except Exception as exc:
         log.exception("Tool %s failed", tool_name)
         return {"ok": False, "error": _sanitize_string(str(exc))}
+
+

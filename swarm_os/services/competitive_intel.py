@@ -574,7 +574,10 @@ def _extract_added_snippet(new_text: str, old_text: str) -> str:
 
 
 def _score_significance(
-    kind: str, cls: str, tier: str, added_tokens: collections.Counter[str, int] | set[str]
+    kind: str,
+    cls: str,
+    tier: str,
+    added_tokens: collections.Counter[str, int] | set[str],
 ) -> float:
     score = _SIG_WEIGHTS.get(kind, 1.0)
     if cls == "pricing":
@@ -1107,4 +1110,3 @@ async def intel_daemon(
         except Exception as exc:
             log.warning("intel daemon run failed: %s", exc)
         await asyncio.sleep(interval_seconds)
-

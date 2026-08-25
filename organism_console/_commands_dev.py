@@ -622,8 +622,12 @@ def cmd_compress(ctx: CommandContext, args: List[str]) -> None:
             "[yellow]History is too short to compress (requires > 4 messages).[/yellow]"
         )
         return
-    to_summarize = history[:-4]
+    sys_msg = history[0:1]
+    to_summarize = history[1:-4]
     keep = history[-4:]
+    if not to_summarize:
+        ctx.console.print("[yellow]Nothing to summarize.[/yellow]")
+        return
     conv_text = ""
     for msg in to_summarize:
         conv_text += (
@@ -642,7 +646,7 @@ def cmd_compress(ctx: CommandContext, args: List[str]) -> None:
         )
         if resp and resp.status_code == 200:
             summary = resp.json().get("response", "").strip()
-            ctx.state.history = [
+            ctx.state.history = sys_msg + [
                 {"role": "system", "content": f"[Conversation Compressed: {summary}]"}
             ] + keep
             ctx.state.save()

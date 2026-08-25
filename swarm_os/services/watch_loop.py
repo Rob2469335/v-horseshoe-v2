@@ -816,9 +816,11 @@ class WatchLoop:
                     )
 
             if getattr(self, "_main_loop", None) and self._main_loop.is_running():
+
                 def _spawn():
                     task = self._main_loop.create_task(_record())
                     task.add_done_callback(_consume)
+
                 self._main_loop.call_soon_threadsafe(_spawn)
             else:
                 try:

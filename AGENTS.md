@@ -1441,6 +1441,10 @@ Converted `except:` → `except Exception:` (or specific types) in `swarm_os/cor
 
 ## Self-Healing & Self-Learning Fixes
 
+- **[CANARY-FLAGGED: human review] (2026-08-25T00:21:38.223977+00:00)**: swarm_os/api/routes.py — test regression NOT attributable to swarm_os/api/routes.py; HUMAN REVIEW
+
+- **[CANARY-FLAGGED: human review] (2026-08-24T23:48:09.659086+00:00)**: swarm_os/api/routes.py — test regression NOT attributable to swarm_os/api/routes.py; HUMAN REVIEW
+
 - **Rule (researcher)**: Failure: Agent attempted to use web_search for 'search internet for improvements' without verifying that search providers were configured with vali...
 
 - **Rule (researcher)**: Failure: The researcher agent attempted a web_search ("search internet for improvements") while auditing a codebase, but every call failed because ...

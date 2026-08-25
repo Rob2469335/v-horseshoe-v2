@@ -8,6 +8,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 
 try:
     from dotenv import load_dotenv
+
     load_dotenv()
 except Exception:
     pass
@@ -594,9 +595,11 @@ class AgentServiceV2:
                                               a verified 1.0 in selection)
         Never raises; an error records None (treated as unverified downstream)."""
         try:
-            tests = self._find_related_tests(changed_file or "")
+            import asyncio
+            tests = await asyncio.to_thread(self._find_related_tests, changed_file or "")
             if not tests:
-                if self._structural_verify(changed_file):
+                structurally_sound = await asyncio.to_thread(self._structural_verify, changed_file)
+                if structurally_sound:
                     state.test_pass_result = 0.5  # untested but sound -> discounted
                     log.info(
                         "[coder] L3: no related tests for %s; unverified change scored 0.5 (discounted)",
@@ -855,7 +858,13 @@ class AgentServiceV2:
             )
         if action == "web_search" and any(
             k in error.lower()
-            for k in ("unconfigured", "search provider", "timed out", "timeout", "failed")
+            for k in (
+                "unconfigured",
+                "search provider",
+                "timed out",
+                "timeout",
+                "failed",
+            )
         ):
             return (
                 "Web search is unavailable or unconfigured. Immediately fall back to local codebase analysis using filesystem read/list tools instead of external search.",
@@ -2231,12 +2240,14 @@ class AgentServiceV2:
                 genome_id, genome_weights = await asyncio.to_thread(
                     get_active_genome, True
                 )
-            elif genome_id and not genome_weights and _os.environ.get("SWARM_EVOLUTION", "").strip() == "1":
+            elif (
+                genome_id
+                and not genome_weights
+                and _os.environ.get("SWARM_EVOLUTION", "").strip() == "1"
+            ):
                 from swarm_os.services.evolution_daemon import get_active_genome
 
-                _, genome_weights = await asyncio.to_thread(
-                    get_active_genome, False
-                )
+                _, genome_weights = await asyncio.to_thread(get_active_genome, False)
         except Exception as exc:
             log.debug("active-genome load skipped for %r: %s", agent_id, exc)
 
@@ -2322,7 +2333,11 @@ class AgentServiceV2:
             if "TOOL RESULT (web_search)" in c or "web_search" in c:
                 state.did_web_search = True
                 _fetched_content = True
-            if "TOOL RESULT (web_fetch)" in c or "TOOL RESULT (approved" in c or "web_fetch" in c:
+            if (
+                "TOOL RESULT (web_fetch)" in c
+                or "TOOL RESULT (approved" in c
+                or "web_fetch" in c
+            ):
                 state.did_web_fetch = True
                 _fetched_content = True
         initial_messages_len = len(messages)
@@ -2417,7 +2432,7 @@ class AgentServiceV2:
                     "checkpoint_id": checkpoint_id(agent_id, prompt),
                     "agent_id": agent_id,
                     "prompt": prompt,
-                    "turn": state._turn,
+                    "turn": turn,
                     "messages": messages,
                     "state": self._state_to_dict(state),
                     "loop_guards": {
@@ -3049,7 +3064,7 @@ class AgentServiceV2:
                     "checkpoint_id": cur_ckpt_id,
                     "agent_id": agent_id,
                     "prompt": prompt,
-                    "turn": state._turn,
+                    "turn": turn,
                     "messages": messages,
                     "state": self._state_to_dict(state),
                     "loop_guards": {
@@ -3069,9 +3084,12 @@ class AgentServiceV2:
                 }
                 try:
                     from runtime_v2.services.checkpointing import write_checkpoint
+
                     await asyncio.to_thread(write_checkpoint, cur_ckpt_id, ckpt)
                 except Exception as ckpt_err:
-                    log.debug("[%s] approval checkpoint write skipped: %s", agent_id, ckpt_err)
+                    log.debug(
+                        "[%s] approval checkpoint write skipped: %s", agent_id, ckpt_err
+                    )
 
                 yield {
                     "agent_id": agent_id,

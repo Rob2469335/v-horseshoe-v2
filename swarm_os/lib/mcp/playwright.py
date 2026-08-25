@@ -489,7 +489,11 @@ async def _playwright_impl(params: Dict[str, Any], trace_hook=None) -> Dict[str,
                                 }
                             ],
                         )
-                    return {"ok": True, "described": True, "description": str(text)[:2000]}
+                    return {
+                        "ok": True,
+                        "described": True,
+                        "description": str(text)[:2000],
+                    }
                 finally:
                     try:
                         await vision.aclose()

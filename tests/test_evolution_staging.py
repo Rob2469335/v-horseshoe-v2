@@ -195,15 +195,23 @@ def test_tool_gene_floors_enforced_in_seed_and_crossover():
         assert tg["web_fetch"] >= 0.40
 
     # Test extreme parent with low/missing values
-    p1 = {"tool_genes": {"filesystem": 0.01, "web_search": 0.01, "semantic_search": 0.9}}
+    p1 = {
+        "tool_genes": {"filesystem": 0.01, "web_search": 0.01, "semantic_search": 0.9}
+    }
     p2 = {"tool_genes": {"filesystem": 0.05, "web_search": 0.05, "sandbox_repl": 0.8}}
 
     for _ in range(50):
         child = ev._crossover_mutate(p1, p2, generation=10)
         ctg = child["tool_genes"]
-        assert ctg["filesystem"] >= 0.50, f"filesystem fell below floor: {ctg['filesystem']}"
-        assert ctg["web_search"] >= 0.40, f"web_search fell below floor: {ctg['web_search']}"
-        assert ctg["web_fetch"] >= 0.40, f"web_fetch fell below floor: {ctg['web_fetch']}"
+        assert ctg["filesystem"] >= 0.50, (
+            f"filesystem fell below floor: {ctg['filesystem']}"
+        )
+        assert ctg["web_search"] >= 0.40, (
+            f"web_search fell below floor: {ctg['web_search']}"
+        )
+        assert ctg["web_fetch"] >= 0.40, (
+            f"web_fetch fell below floor: {ctg['web_fetch']}"
+        )
 
 
 # ── Automated Promotion Gating & Rollback ──────────────────────────────────
@@ -294,5 +302,3 @@ def test_rollback_promotion_restores_backup(tmp_path, monkeypatch):
     # Active population restored to generation 0
     restored = ev._load_population(ev.GENOMES_PATH)
     assert [g["id"] for g in restored] == ["genome_0", "genome_1"]
-
-

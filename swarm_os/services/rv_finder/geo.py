@@ -79,7 +79,8 @@ def _load_cache() -> dict[str, list[float]]:
         if _CACHE_PATH.exists():
             cache = {}
             for line in _CACHE_PATH.read_text(encoding="utf-8").splitlines():
-                if not line.strip(): continue
+                if not line.strip():
+                    continue
                 data = json.loads(line)
                 cache[data["key"]] = data["val"]
             return cache

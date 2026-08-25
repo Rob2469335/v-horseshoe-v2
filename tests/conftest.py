@@ -140,9 +140,7 @@ def global_chess_engine_mock():
     route through it and fail closed (return None) when it returns None, so no
     subprocess is ever started.
     """
-    with patch(
-        "swarm_os.services.chess_trainer._get_engine", return_value=None
-    ):
+    with patch("swarm_os.services.chess_trainer._get_engine", return_value=None):
         yield
 
 

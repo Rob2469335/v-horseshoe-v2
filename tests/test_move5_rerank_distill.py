@@ -303,9 +303,7 @@ def test_distill_nvidia_attempt_uses_surviving_v4_flash_0731(monkeypatch):
     so _distill must mirror it from NVIDIA_API_KEY or the call 401s even with
     a valid key (verified live 2026-08-23)."""
     monkeypatch.delenv("NVIDIA_NIM_API_KEY", raising=False)
-    model = _distill_capture_first_model(
-        monkeypatch, ("NVIDIA_API_KEY", "nvapi-test")
-    )
+    model = _distill_capture_first_model(monkeypatch, ("NVIDIA_API_KEY", "nvapi-test"))
     assert model == "nvidia_nim/deepseek-ai/deepseek-v4-flash-0731"
     import os
 

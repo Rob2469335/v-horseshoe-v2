@@ -40,6 +40,7 @@ class EventBus:
         # This part requires the main event loop for the subscribers' queues
         if self.main_loop and not self.main_loop.is_closed():
             for queue in list(self.subscribers):
+
                 def _push(q=queue, ev=event):
                     try:
                         q.put_nowait(ev)
@@ -52,6 +53,7 @@ class EventBus:
                             q.put_nowait(ev)  # retry now that there's space
                         except asyncio.QueueFull:
                             pass  # filled again between eviction and retry — drop
+
                 self.main_loop.call_soon_threadsafe(_push)
 
     async def subscribe(self):

@@ -174,9 +174,7 @@ async def get_tool_decision(
                     )
                 else:
                     tool_names = ", ".join(t["name"] for t in tools[:10])
-                    mcp_schema = (
-                        f"AVAILABLE MCP TOOLS (use action=mcp or action=mcp_batch): {tool_names}\n\n"
-                    )
+                    mcp_schema = f"AVAILABLE MCP TOOLS (use action=mcp or action=mcp_batch): {tool_names}\n\n"
         except Exception as e:
             log.error(f"Failed to fetch MCP schemas: {e}")
 
@@ -195,7 +193,12 @@ async def get_tool_decision(
             "",
         )
         _last_user_msg = _orig_user_msg or next(
-            (str(m.get("content", "")) for m in reversed(messages) if m.get("role") == "user"), ""
+            (
+                str(m.get("content", ""))
+                for m in reversed(messages)
+                if m.get("role") == "user"
+            ),
+            "",
         )
         if _last_user_msg and len(_last_user_msg) > 10:
             _approx_tokens = sum(len(str(m.get("content", ""))) for m in messages) // 4
@@ -207,7 +210,7 @@ async def get_tool_decision(
                 from runtime_v2.services.memory_core import get_relevant_memories
 
                 memory_query = f"agent:{agent_id} {_last_user_msg[:200]}"
-                
+
                 # 1. ReflexionMemory: inject distilled "do-not-repeat" hint from past failures first
                 injected_chars = 0
                 try:
@@ -221,8 +224,7 @@ async def get_tool_decision(
                         if len(hint) > hint_budget:
                             hint = hint[: hint_budget - 3] + "..."
                         system_prompt = (
-                            system_prompt
-                            + f"\n\n[PAST-MISTAKE WARNING]\n{hint}"
+                            system_prompt + f"\n\n[PAST-MISTAKE WARNING]\n{hint}"
                         )
                         injected_chars += len(hint)
                         log.debug(
@@ -230,6 +232,10 @@ async def get_tool_decision(
                             agent_id,
                             len(hint),
                         )
+                    from swarm_os.services.reflection_loop import check_model_reliability
+                    reliability_note = await check_model_reliability(model)
+                    if reliability_note:
+                        system_prompt = system_prompt + f"\n\n{reliability_note}"
                 except Exception as refl_err:
                     log.debug("Reflexion hint skipped: %s", refl_err)
 
@@ -435,8 +441,8 @@ async def get_tool_decision(
                 pass
             try:
                 from runtime_v2.services.online_routing import record_analysis_outcome
-
-                record_analysis_outcome(agent_id, True)
+                import asyncio
+                await asyncio.to_thread(record_analysis_outcome, agent_id, True)
             except Exception as e:
                 log.debug("Failed to record outcome: %s", e)
                 pass
@@ -575,8 +581,8 @@ async def get_tool_decision(
                 )
             try:
                 from runtime_v2.services.online_routing import record_analysis_outcome
-
-                record_analysis_outcome(agent_id, False)
+                import asyncio
+                await asyncio.to_thread(record_analysis_outcome, agent_id, False)
             except Exception as e:
                 log.debug("Failed to record outcome: %s", e)
                 pass

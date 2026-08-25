@@ -10,11 +10,13 @@ MODEL_GLM = "glm-ocr"
 
 _client = None
 
+
 def get_client() -> httpx.AsyncClient:
     global _client
     if _client is None or _client.is_closed:
         _client = httpx.AsyncClient(timeout=120.0)
     return _client
+
 
 class VisionRouter:
     def __init__(self):
@@ -25,7 +27,9 @@ class VisionRouter:
     # the per-request "model" field and loads/unloads child processes itself.
     # (The previous explicit hot-swap calls 404'd in production.)
 
-    async def _chat_completion(self, model: str, prompt: str, b64_image: str, temp: float) -> str:
+    async def _chat_completion(
+        self, model: str, prompt: str, b64_image: str, temp: float
+    ) -> str:
         payload = {
             "model": model,
             "temperature": temp,
@@ -36,12 +40,17 @@ class VisionRouter:
                     "role": "user",
                     "content": [
                         {"type": "text", "text": prompt},
-                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64_image}"}}
-                    ]
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{b64_image}"},
+                        },
+                    ],
                 }
-            ]
+            ],
         }
-        resp = await get_client().post(f"{LLAMA_BASE}/v1/chat/completions", json=payload, headers=self.headers)
+        resp = await get_client().post(
+            f"{LLAMA_BASE}/v1/chat/completions", json=payload, headers=self.headers
+        )
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"]
 
@@ -52,7 +61,9 @@ class VisionRouter:
         b64_image = base64.b64encode(Path(image_path).read_bytes()).decode("utf-8")
         return await self._chat_completion(MODEL_QWEN, goal, b64_image, temp=0.2)
 
-    async def extract_document_region(self, image_path: str, schema: Optional[str] = None) -> str:
+    async def extract_document_region(
+        self, image_path: str, schema: Optional[str] = None
+    ) -> str:
         """
         Tool for dense tables, forms, or receipts. Routes to GLM-OCR at temp=0.
         The router loads the preset on demand; no manual swap needed.
@@ -60,10 +71,14 @@ class VisionRouter:
         b64_image = base64.b64encode(Path(image_path).read_bytes()).decode("utf-8")
 
         prompt = (
-            "Extract the visible table exactly. Return JSON with: "
-            '{ "rows": [{"rank": "", "title": "", "gross": "", "year": ""}], "uncertain_fields": [] } '
-            "Do not infer missing values. Use empty strings when unreadable."
-        ) if not schema else schema
+            (
+                "Extract the visible table exactly. Return JSON with: "
+                '{ "rows": [{"rank": "", "title": "", "gross": "", "year": ""}], "uncertain_fields": [] } '
+                "Do not infer missing values. Use empty strings when unreadable."
+            )
+            if not schema
+            else schema
+        )
 
         print("[glm-ocr] Extracting dense text...")
         return await self._chat_completion(MODEL_GLM, prompt, b64_image, temp=0.0)

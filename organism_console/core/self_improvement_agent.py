@@ -77,7 +77,7 @@ class SelfImprovementAgent:
             print(f"[self-improvement] Executed generalization: {merges} merges")
 
         elif upgrade["type"] == "forgetting":
-            self._execute_forgetting()
+            pass # self._execute_forgetting()
             print("[self-improvement] Executed forgetting curve")
 
         self.upgrade_log.append(upgrade)

@@ -404,7 +404,11 @@ async def test_reviewer_fail_abort_feeds_failed_outcome(tmp_path, monkeypatch):
     state.reviewer_fails = 2  # next failure trips the abort
     messages = []
     gen = service._handle_final(
-        {"action": "final", "response": "[FACT] FAIL: this review failed", "verdict": "FAIL"},
+        {
+            "action": "final",
+            "response": "[FACT] FAIL: this review failed",
+            "verdict": "FAIL",
+        },
         "reviewer",
         "m",
         "p",
@@ -661,5 +665,3 @@ def test_endpoint_for_maps_provider_keys(monkeypatch):
 
     _, key_ds, _ = _endpoint_for("deepseek/deepseek-chat")
     assert key_ds == "test-ds-key"
-
-

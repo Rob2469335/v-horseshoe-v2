@@ -310,8 +310,16 @@ def build_items_from_gm(force: bool = False) -> dict[str, Any]:
                 existing_refs.add((t["ref"], "transfer"))
     with _LOCK:
         merged = _load()
-        present_refs = {(it.get("source_ref"), it.get("stage")) for it in merged if it.get("source") == "gm"}
-        fresh = [it for it in new_items if (it.get("source_ref"), it.get("stage")) not in present_refs]
+        present_refs = {
+            (it.get("source_ref"), it.get("stage"))
+            for it in merged
+            if it.get("source") == "gm"
+        }
+        fresh = [
+            it
+            for it in new_items
+            if (it.get("source_ref"), it.get("stage")) not in present_refs
+        ]
         _save(merged + fresh)
     return {"ok": True, "created": len(fresh)}
 
@@ -373,7 +381,6 @@ def training_due(limit: int = 10, concept: str | None = None) -> dict[str, Any]:
             )
         )
     if not concept:
-
         # Inject tactical motifs (curated, engine-free prototypes). Motifs are
         # persisted on first serve (deduped by source+concept+pre_fen) so the
         # answer path can find them and the spaced ladder advances — an
@@ -383,7 +390,7 @@ def training_due(limit: int = 10, concept: str | None = None) -> dict[str, Any]:
 
         motifs = get_motif_items()
         motif_ids = {f"{m.get('concept')}|{m.get('pre_fen')}" for m in motifs}
-        
+
         with _LOCK:
             items = _load()
             existing = {
@@ -478,18 +485,16 @@ def record_answer(
             return {"ok": False, "error": "no such training item"}
         ladder = _ladder_for(it.get("stage", "repair"))
         it["attempts"] = (it.get("attempts", 0) or 0) + 1
-        it["correct_history"] = (it.get("correct_history", []) or []) + [
-            bool(correct)
-        ][-50:]
+        it["correct_history"] = (it.get("correct_history", []) or []) + [bool(correct)][
+            -50:
+        ]
         it["confidence_history"] = (it.get("confidence_history", []) or []) + [
             confidence
         ][-50:]
         it["confidence_times"] = (it.get("confidence_times", []) or []) + [
             confidence_captured_at
         ][-50:]
-        it["answer_times"] = (it.get("answer_times", []) or []) + [answer_time][
-            -50:
-        ]
+        it["answer_times"] = (it.get("answer_times", []) or []) + [answer_time][-50:]
         if post_hoc:
             it["calibration_flags"] = (it.get("calibration_flags", []) or []) + [
                 "post-hoc-confidence"

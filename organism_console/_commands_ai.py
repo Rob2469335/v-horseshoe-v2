@@ -1,3 +1,7 @@
+from swarm_os.core.settings import get_settings
+_s = get_settings()
+_qdrant_url = _s.qdrant_url
+_emb_url = f'http://{_s.host}:{_s.port}/v1/embeddings'
 """AI, memory, and maintenance CLI commands."""
 
 import concurrent.futures
@@ -41,7 +45,7 @@ def cmd_memory(ctx: CommandContext, args: List[str]) -> None:
         import requests as _rq
 
         try:
-            resp = _rq.get("http://127.0.0.1:6333/collections", timeout=5)
+            resp = _rq.get(f"{_qdrant_url}/collections", timeout=5)
             if resp.status_code != 200:
                 return None
             names = [
@@ -51,7 +55,6 @@ def cmd_memory(ctx: CommandContext, args: List[str]) -> None:
             for preferred in (
                 "agent_memory_general_v2",
                 "general",
-                "agent_episodic_memory",
                 "swarm_memory",
             ):
                 if preferred in names:
@@ -80,7 +83,7 @@ def cmd_memory(ctx: CommandContext, args: List[str]) -> None:
                 )
                 return
             emb_resp = requests.post(
-                "http://127.0.0.1:8081/v1/embeddings",
+                _emb_url,
                 json={"input": text[:7000]},
                 headers={"Authorization": "Bearer llama"},
                 timeout=10.0,
@@ -91,7 +94,7 @@ def cmd_memory(ctx: CommandContext, args: List[str]) -> None:
                 else [0.0] * 768
             )
             q_resp = requests.post(
-                f"http://127.0.0.1:6333/collections/{collection}/points/search",
+                f"{_qdrant_url}/collections/{collection}/points/search",
                 json={"vector": vector, "limit": 5, "with_payload": True},
                 timeout=10.0,
             )
@@ -130,7 +133,7 @@ def cmd_memory(ctx: CommandContext, args: List[str]) -> None:
                 )
                 return
             emb_resp = requests.post(
-                "http://127.0.0.1:8081/v1/embeddings",
+                _emb_url,
                 json={"input": text[:7000]},
                 headers={"Authorization": "Bearer llama"},
                 timeout=10.0,
@@ -140,7 +143,7 @@ def cmd_memory(ctx: CommandContext, args: List[str]) -> None:
                 return
             vector = emb_resp.json().get("data", [{}])[0].get("embedding", [0.0] * 768)
             q_resp = requests.put(
-                f"http://127.0.0.1:6333/collections/{collection}/points",
+                f"{_qdrant_url}/collections/{collection}/points",
                 json={
                     "points": [
                         {

@@ -613,7 +613,7 @@ class MemoryBridge:
             boosted_results = []
             for hit in results:
                 payload = hit.get("payload", {}) or {}
-                summary = payload.get("summary", "")
+                summary = payload.get("summary", "") or payload.get("text", "")
 
                 boost = 0.0
                 summary_words = set(summary.lower().split())
@@ -634,7 +634,7 @@ class MemoryBridge:
             context_parts = ["### Relevant historical context from swarm runs:"]
             for hit in top_hits:
                 payload = hit.get("payload", {}) or {}
-                summary = payload.get("summary", "")
+                summary = payload.get("summary", "") or payload.get("text", "")
                 models = payload.get("models", [])
                 outcome = payload.get("dominant_outcome", "unknown")
                 session_id = payload.get("session", "")
@@ -710,7 +710,7 @@ class MemoryBridge:
                     continue
 
                 summaries = [
-                    it.payload.get("summary", "")
+                    it.payload.get("summary", "") or it.payload.get("text", "")
                     for it in items
                     if it.payload.get("summary")
                 ]

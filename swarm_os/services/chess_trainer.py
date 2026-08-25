@@ -307,9 +307,7 @@ def _classify(
     # Inaccuracy, no matter how much the engine's eval swings.
     if material_delta >= 0.0:
         return (
-            "Inaccuracy"
-            if loss >= 0.05
-            else ("Excellent" if loss < 0.02 else "Good")
+            "Inaccuracy" if loss >= 0.05 else ("Excellent" if loss < 0.02 else "Good")
         )
     # Material WAS lost — floor it so a hung pawn/piece is never missed even if
     # the engine's eval didn't swing much: a piece (-3+) is always a Blunder, a
@@ -696,7 +694,7 @@ def _legal_captures(board: chess.Board, sq: int, color: bool) -> list[chess.Move
         target_sq = m.to_square
         if board.is_en_passant(m):
             target_sq = m.to_square - 8 if color == chess.WHITE else m.to_square + 8
-            
+
         if target_sq == sq:
             p = board.piece_at(m.from_square)
             if p is not None and p.color == color:
@@ -710,27 +708,27 @@ def _attackers_of(board: chess.Board, sq: int, color: bool) -> int:
     Pin-aware: temporarily places an enemy piece on sq if needed to
     evaluate legal captures via board.legal_moves (lila#19100)."""
     original_piece = board.piece_at(sq)
-    
-    # Fallback to raw geometric attackers for kings. Capturing a king is never a 
+
+    # Fallback to raw geometric attackers for kings. Capturing a king is never a
     # "legal move", and replacing a king with a queen breaks board validity.
     if original_piece is not None and original_piece.piece_type == chess.KING:
         return len(board.attackers(color, sq))
-        
+
     target_color = not color
     changed = False
-    
+
     if original_piece is None or original_piece.color == color:
         board.set_piece_at(sq, chess.Piece(chess.QUEEN, target_color))
         changed = True
-        
+
     caps = _legal_captures(board, sq, color)
-    
+
     if changed:
         if original_piece is None:
             board.remove_piece_at(sq)
         else:
             board.set_piece_at(sq, original_piece)
-            
+
     return len(caps)
 
 
@@ -1349,9 +1347,7 @@ async def evaluate_move(
             if (
                 bm in probe.legal_moves
                 and probe.piece_at(bm.from_square)
-                and _PIECE_VALUE.get(
-                    probe.piece_at(bm.from_square).symbol().lower(), 0
-                )
+                and _PIECE_VALUE.get(probe.piece_at(bm.from_square).symbol().lower(), 0)
                 >= 3
                 and _move_hangs_piece(probe, bm)
             ):
@@ -1359,9 +1355,9 @@ async def evaluate_move(
                 # _best_move_and_cp returns the eval from the NEW side-to-move
                 # (the opponent). Negate to the MOVER's perspective before
                 # comparing against before_cp.
-                mover_after_best = -(
-                    await asyncio.to_thread(_best_move_and_cp, probe)
-                )[1]
+                mover_after_best = -(await asyncio.to_thread(_best_move_and_cp, probe))[
+                    1
+                ]
                 # Sound sacrifice: giving up the piece kept/improved the eval.
                 if mover_after_best >= before_cp - 60.0:
                     result["missed_sacrifice"] = {
@@ -1716,7 +1712,9 @@ async def _proposal_eval(fen: str, uci: str) -> dict[str, Any]:
                 reply_san = reply_uci
         mover_after = -after_cp
         was_best = before_best == uci
-        classification = _classify(500, before_cp, mover_after, was_best, material_delta)
+        classification = _classify(
+            500, before_cp, mover_after, was_best, material_delta
+        )
         win_before = _expected_points(500, before_cp)
         win_after = _expected_points(500, mover_after)
         best_win_pct = round(win_before * 100, 1)

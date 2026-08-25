@@ -206,3 +206,5 @@ data/evolution/staged/
 /browser.png
 /browser_describe.png
 /browser-*.png
+snapshots/
+*.snapshot

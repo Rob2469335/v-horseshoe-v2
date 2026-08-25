@@ -553,7 +553,9 @@ def _classify_event_outcome(event: dict) -> str:
 
 
 @router.get("/timeline", response_model=TimelineResponse)
-async def timeline(window_minutes: int = Query(60, le=1440), runtime: Any = Depends(runtime_dep)):
+async def timeline(
+    window_minutes: int = Query(60, le=1440), runtime: Any = Depends(runtime_dep)
+):
     events_path = Path("data/events/events.jsonl")
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=window_minutes)
     buckets = defaultdict(

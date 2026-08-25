@@ -1,2 +1,0 @@
-Add a concise class-level docstring to AgentService in swarm_os/services/agent_service.py.
-exit

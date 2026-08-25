@@ -551,8 +551,7 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                             )
                         approved = str(answer).strip().lower() in ("yes", "y")
                         ctx.resume_checkpoint_id = chunk.get("checkpoint_id")
-                        history = [
-                            {
+                        history.append({
                                 "role": "user",
                                 "content": (
                                     "Observation: "
@@ -565,8 +564,7 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                                         }
                                     )
                                 ),
-                            }
-                        ]
+                            })
                         prompt = ""
                         agent_id = chunk.get("agent_id", agent_id)
                         _approval_triggered = True

@@ -156,7 +156,10 @@ def _parse_msg(uid: str, raw: bytes) -> dict:
             disp = str(part.get("Content-Disposition", ""))
             if part.get_filename():
                 attachments += 1
-            elif ctype in ("text/plain", "text/html") and "attachment" not in disp.lower():
+            elif (
+                ctype in ("text/plain", "text/html")
+                and "attachment" not in disp.lower()
+            ):
                 payload = part.get_payload(decode=True)
                 if payload is not None:
                     try:
@@ -182,7 +185,7 @@ def _parse_msg(uid: str, raw: bytes) -> dict:
                     body_parts.append(payload.decode("utf-8", errors="replace"))
             except Exception:
                 pass
-    
+
     if not body_parts and html_parts:
         body_parts = html_parts
     return {

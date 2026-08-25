@@ -244,14 +244,35 @@ def make_swarm_brain(
         user_message = _build_user_message(genome, task, mem_ctx)
 
         try:
-            from swarm_os.services.reflection_loop import get_reflection_service
+            from swarm_os.services.reflection_loop import get_reflection_service, check_model_reliability
             import asyncio
+            import concurrent.futures
 
-            warning = asyncio.run(
-                get_reflection_service().check_for_past_mistakes(task)
-            )
+            def _run_isolated(coro):
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    return loop.run_until_complete(coro)
+                finally:
+                    loop.close()
+            
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+
+            if loop and loop.is_running():
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                    warning = pool.submit(_run_isolated, get_reflection_service().check_for_past_mistakes(task)).result()
+                    reliability_note = pool.submit(_run_isolated, check_model_reliability(requested_model or _safe_model(genome))).result()
+            else:
+                warning = asyncio.run(get_reflection_service().check_for_past_mistakes(task))
+                reliability_note = asyncio.run(check_model_reliability(requested_model or _safe_model(genome)))
+
             if warning:
                 system_prompt += f"\n\n[CRITICAL AVOIDANCE MEMORY]\n{warning}"
+            if reliability_note:
+                system_prompt += f"\n\n{reliability_note}"
         except Exception as e:
             log.warning("Reflexion check failed: %s", e)
 

@@ -1,3 +1,0 @@
-Create a file named ZENITH_TEST.txt with content 'Zenith is alive'.
-What is the latest version of the Gemini API?
-exit

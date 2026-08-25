@@ -74,7 +74,7 @@ Write-Host "OpenCode Base URL:        $([bool]$env:OPENAI_API_BASE)" -Foreground
 # STEP 1 - Cleanup
 Write-Host "`n[STEP 1] Cleaning up..." -ForegroundColor Yellow
 foreach ($svc in @("llama","qdrant","node","python")) {
-    Get-Process -Name $svc -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    # # Get-Process -Name $svc -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 }
 Start-Sleep -Seconds 1
 Write-Host "Cleanup complete ✔" -ForegroundColor Green
@@ -310,6 +310,7 @@ try {
     Stop-Job $proxyJob, $backendJob, $frontendJob -ErrorAction SilentlyContinue
     Remove-Job $proxyJob, $backendJob, $frontendJob -ErrorAction SilentlyContinue
     foreach ($svc in @("llama","qdrant","node","python")) {
-        Get-Process -Name $svc -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        # # Get-Process -Name $svc -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     }
 }
+

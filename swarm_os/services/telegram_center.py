@@ -61,6 +61,7 @@ def _generate_pin() -> str:
 async def _add_owner(user_id: Any) -> None:
     import json
     from pathlib import Path
+
     global _dynamic_owners_cache
 
     config_path = Path("swarm_config.json")
@@ -76,7 +77,7 @@ async def _add_owner(user_id: Any) -> None:
         owners.append(str(user_id))
     config["telegram_owners"] = owners
     config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
-    
+
     _dynamic_owners_cache = owners
 
 
@@ -91,7 +92,7 @@ def _cfg() -> dict:
 
     global _dynamic_owners_cache, _dynamic_owners_mtime
     config_path = Path("swarm_config.json")
-    
+
     try:
         mtime = config_path.stat().st_mtime if config_path.exists() else 0.0
         if _dynamic_owners_cache is None or mtime > _dynamic_owners_mtime:
@@ -412,7 +413,9 @@ class TelegramCommandCenter:
                 return
             success = delete_task(parts[1])
             if success:
-                await self._client.send_message(chat_id, f"✅ Task {html.escape(parts[1])} removed.")
+                await self._client.send_message(
+                    chat_id, f"✅ Task {html.escape(parts[1])} removed."
+                )
             else:
                 await self._client.send_message(
                     chat_id, f"❌ Task {html.escape(parts[1])} not found."
@@ -456,20 +459,30 @@ class TelegramCommandCenter:
     async def _send_news_digest(self, chat_id: Any) -> None:
         async def _run():
             from .news_digest import digest
+
             res = await digest(max_items=30)
-            text = res.get("digest", "no digest") if res.get("ok") else "digest unavailable"
-            await self._client.send_message(chat_id, f"<b>Today's digest</b>\n\n{html.escape(text)}")
-            
+            text = (
+                res.get("digest", "no digest")
+                if res.get("ok")
+                else "digest unavailable"
+            )
+            await self._client.send_message(
+                chat_id, f"<b>Today's digest</b>\n\n{html.escape(text)}"
+            )
+
         asyncio.create_task(_run())
 
     async def _send_research(self, chat_id: Any, goal: str) -> None:
         if not goal:
             await self._client.send_message(chat_id, "Usage: /research <goal>")
             return
-        await self._client.send_message(chat_id, f"🔬 Researching: {html.escape(goal[:200])}…")
+        await self._client.send_message(
+            chat_id, f"🔬 Researching: {html.escape(goal[:200])}…"
+        )
 
         async def _run():
             from .deep_research import deep_research
+
             try:
                 res = await deep_research(goal, max_sub_questions=5, max_iterations=1)
                 answer = res.get("answer", "") or "no synthesis"
@@ -505,6 +518,7 @@ class TelegramCommandCenter:
         """Route a free-form message to the swarm's goal machinery. The ceiling
         gate (task_scheduler.is_scheduler_allowed) bounds it — nothing
         state-changing runs unattended."""
+
         async def _run():
             try:
                 from .task_scheduler import (
@@ -521,7 +535,7 @@ class TelegramCommandCenter:
                 await _default_runner(task)
             except Exception as exc:
                 log.warning("telegram goal dispatch failed: %s", exc)
-                
+
         asyncio.create_task(_run())
 
     # -- approval bridge ------------------------------------------------------
@@ -594,6 +608,7 @@ class TelegramCommandCenter:
         atomically consumed via consume_any() (which verifies the stored
         payload), so direct dispatch of the stored payload is the correct seam.
         """
+
         async def _run():
             try:
                 from runtime_v2.services.tool_executor import _dispatch

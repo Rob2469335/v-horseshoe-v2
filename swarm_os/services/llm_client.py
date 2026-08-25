@@ -210,7 +210,7 @@ class SwarmBrainClient:
             "prompt_tokens": prompt_tokens,
             "finish_reason": finish_reason,
             "tool_calls": [],
-            "cost": total_tokens / 1000.0 if total_tokens else 0.0,
+            "cost": total_tokens / 1000000.0 if total_tokens else 0.0,
             "retrieval_top_k": top_k,
             "system_prompt_len": system_prompt_len,
         }
@@ -326,7 +326,7 @@ class SwarmBrainClient:
             "prompt_tokens": usage.get("prompt_tokens", 0),
             "finish_reason": choice.get("finish_reason", ""),
             "tool_calls": message.get("tool_calls", []),
-            "cost": total_tokens / 1000.0,
+            "cost": total_tokens / 1000000.0,
             "retrieval_top_k": top_k,
             "system_prompt_len": system_prompt_len,
         }

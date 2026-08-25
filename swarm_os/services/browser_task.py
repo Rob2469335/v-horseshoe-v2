@@ -71,6 +71,7 @@ def _sweep_approvals() -> None:
     for k in [k for k, (_, _, exp) in _PENDING_APPROVALS.items() if exp <= now]:
         _PENDING_APPROVALS.pop(k, None)
 
+
 _SENSITIVE_FIELD_RE = re.compile(
     r"passw|cvv|cvc|card|ssn|social.security|routing|sort.code|iban|otp|2fa"
 )

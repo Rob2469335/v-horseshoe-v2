@@ -214,4 +214,3 @@ def test_healing_watchman_stores_system_lesson_issue_resolution():
         assert len(stored_calls) == 3
         assert stored_calls[2]["component"] == "system:qdrant"
         assert "None" not in stored_calls[2]["task"]
-

@@ -229,7 +229,7 @@ def _score_genome(genome: dict) -> float:
 
         agg = best_aggregate_fitness()
         if agg is not None:
-            return round(agg * 0.80, 4)
+            return round(agg * 0.10, 4)
         return 0.05
     except Exception:
         return 0.05
@@ -362,12 +362,7 @@ def evolve_one_generation(
 
         staged_best = max((g.get("fitness", 0.0) for g in new_pop), default=0.0)
 
-        should_auto_promote = (
-            auto_promote
-            if auto_promote is not None
-            else os.getenv("SWARM_EVOLUTION_AUTO_PROMOTE", "").lower()
-            in ("1", "true")
-        )
+        should_auto_promote = False # Policy strictly requires staged_human_approved
 
         promoted = False
         promotion_reason = ""

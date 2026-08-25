@@ -72,10 +72,14 @@ PRACTICE_POSITIONS: list[dict[str, Any]] = [
 
 class EvaluateMoveRequest(BaseModel):
     fen: str = Field(..., max_length=200, description="Current position FEN")
-    uci: str = Field(..., max_length=10, description="The move the learner played, UCI notation")
+    uci: str = Field(
+        ..., max_length=10, description="The move the learner played, UCI notation"
+    )
     rating: int = Field(500, ge=100, le=2500)
     want_explain: bool = Field(True)
-    game_id: str | None = Field(None, max_length=64, description="Active game id to record this move into")
+    game_id: str | None = Field(
+        None, max_length=64, description="Active game id to record this move into"
+    )
 
 
 class EngineMoveRequest(BaseModel):
@@ -184,7 +188,9 @@ async def trainer_engine_strong(req: EngineStrongRequest) -> dict[str, Any]:
 
 
 class CoachHintRequest(BaseModel):
-    fen: str = Field(..., max_length=200, description="Current position FEN (side to move)")
+    fen: str = Field(
+        ..., max_length=200, description="Current position FEN (side to move)"
+    )
 
 
 @router.post("/coach/hint")
@@ -223,11 +229,12 @@ async def trainer_coach_hint(req: CoachHintRequest) -> dict[str, Any]:
     )
 
     from ..services.chess_trainer import _LLM_EXPLAIN_ENABLED
+
     if _LLM_EXPLAIN_ENABLED and plan.get("best_move_san"):
         prompt = f"""You are a Socratic chess coach. The learner made a mistake.
-Concept/Issue: {plan.get('concept', 'Unknown')}
-The correct plan is: {plan.get('plan', '')}
-The best move to find is: {plan.get('best_move_san')}
+Concept/Issue: {plan.get("concept", "Unknown")}
+The correct plan is: {plan.get("plan", "")}
+The best move to find is: {plan.get("best_move_san")}
 
 Provide two short hints to guide them without giving away the move.
 1. A perceptual hint (point their attention to the right area of the board, a loose piece, or a threat).
@@ -238,17 +245,23 @@ Return strictly JSON format: {{"hint_level_1": "...", "hint_level_2": "..."}}"""
             from litellm import acompletion
             import json
             import os
-            
+
             # Fast model attempt
             res = await acompletion(
-                model="deepseek/deepseek-v4-flash" if os.environ.get("OPENROUTER_API_KEY") else "qwen3.5-4b",
+                model="deepseek/deepseek-v4-flash"
+                if os.environ.get("OPENROUTER_API_KEY")
+                else "qwen3.5-4b",
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=300,
                 timeout=15.0,
                 response_format={"type": "json_object"},
-                api_base="http://127.0.0.1:8080/v1" if not os.environ.get("OPENROUTER_API_KEY") else None,
+                api_base="http://127.0.0.1:8080/v1"
+                if not os.environ.get("OPENROUTER_API_KEY")
+                else None,
                 api_key="llama" if not os.environ.get("OPENROUTER_API_KEY") else None,
-                custom_llm_provider="openai" if not os.environ.get("OPENROUTER_API_KEY") else None,
+                custom_llm_provider="openai"
+                if not os.environ.get("OPENROUTER_API_KEY")
+                else None,
             )
             content = res.choices[0].message.content
             if content:
@@ -258,13 +271,17 @@ Return strictly JSON format: {{"hint_level_1": "...", "hint_level_2": "..."}}"""
                 if data.get("hint_level_2"):
                     plan["hint_level_2"] = data["hint_level_2"]
         except Exception as exc:
-            log.warning("Socratic LLM hint failed, using deterministic fallback: %s", exc)
+            log.warning(
+                "Socratic LLM hint failed, using deterministic fallback: %s", exc
+            )
 
     return plan
 
 
 class SocraticRequest(BaseModel):
-    fen: str = Field(..., max_length=200, description="Current position FEN (side to move)")
+    fen: str = Field(
+        ..., max_length=200, description="Current position FEN (side to move)"
+    )
     history: list[dict[str, str]] = Field(
         default_factory=list,
         max_length=50,
@@ -286,7 +303,11 @@ async def trainer_coach_socratic(req: SocraticRequest) -> dict[str, Any]:
     name-dropping the best move). The coach never names the best move until the
     learner has been stuck several turns (fail-open reveal). Fail-closed: LLM
     outage degrades to a deterministic plan nudge."""
-    from ..services.chess_trainer import coach_plan, _socratic_coach_turn, _best_move_and_cp
+    from ..services.chess_trainer import (
+        coach_plan,
+        _socratic_coach_turn,
+        _best_move_and_cp,
+    )
     import asyncio
     import chess
 
@@ -473,13 +494,17 @@ async def trainer_training_calibration() -> dict[str, Any]:
 
 
 class SafetyCheckRequest(BaseModel):
-    fen: str = Field(..., max_length=200, description="Current position FEN (side to move)")
+    fen: str = Field(
+        ..., max_length=200, description="Current position FEN (side to move)"
+    )
     uci: str = Field(..., max_length=10, description="The move to check for safety")
 
 
 class ThreatCheckRequest(BaseModel):
     fen: str = Field(..., max_length=200, description="Current position FEN")
-    uci: str = Field(..., max_length=10, description="The last move played (to read its threats)")
+    uci: str = Field(
+        ..., max_length=10, description="The last move played (to read its threats)"
+    )
 
 
 @router.get("/drill/hanging")
@@ -512,7 +537,9 @@ async def trainer_threats(req: ThreatCheckRequest) -> dict[str, Any]:
 
 
 class GameIdRequest(BaseModel):
-    game_id: str | None = Field(None, max_length=64, description="Game id (defaults to the most recent)")
+    game_id: str | None = Field(
+        None, max_length=64, description="Game id (defaults to the most recent)"
+    )
 
 
 @router.post("/game/start")
@@ -560,7 +587,9 @@ async def trainer_analytics() -> dict[str, Any]:
 class GmGuessRequest(BaseModel):
     game_id: str = Field(..., max_length=64, description="Curated GM game id")
     ply: int = Field(0, ge=0, description="The ply the learner is guessing")
-    guess_uci: str = Field(..., max_length=10, description="The learner's guessed move, UCI")
+    guess_uci: str = Field(
+        ..., max_length=10, description="The learner's guessed move, UCI"
+    )
 
 
 class GmExplainRequest(BaseModel):
