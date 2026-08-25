@@ -46,7 +46,7 @@ _MAX_MESSAGE_LEN = 4000
 
 
 _pending_pairing = {}
-_pairing_lock = asyncio.Lock()
+_pairing_lock = None  # lazy-init
 
 _dynamic_owners_cache = None
 _dynamic_owners_mtime = 0.0
@@ -272,6 +272,9 @@ class TelegramCommandCenter:
             now = time.time()
             clean_text = str(text).strip()
 
+            global _pairing_lock
+            if _pairing_lock is None:
+                _pairing_lock = asyncio.Lock()
             async with _pairing_lock:
                 expired = [
                     uid for uid, v in _pending_pairing.items() if now - v[1] > 300

@@ -67,7 +67,7 @@ def decision_cache_stats() -> dict:
 def get_cache_key(messages: list, agent_id: str) -> str:
     """Exact-match key: SHA-256 of the final user content scoped by agent."""
     if messages:
-        last_msg = messages.get("content", "")
+        last_msg = messages[-1].get("content", "")
         if not isinstance(last_msg, str):
             last_msg = json.dumps(last_msg)
         h = hashlib.sha256(last_msg.encode("utf-8")).hexdigest()
@@ -135,7 +135,7 @@ async def _ensure_components():
 def _last_user_text(messages: list) -> str:
     if not messages:
         return ""
-    last_msg = messages.get("content", "") if messages else ""
+    last_msg = messages[-1].get("content", "") if messages else ""
     if not isinstance(last_msg, str):
         last_msg = json.dumps(last_msg)
     return last_msg

@@ -31,7 +31,7 @@ EMBED_DIM = 768
 
 # Serializes the check-and-create collection init so concurrent index_books
 # calls can't both see "missing" and both create it (TOCTOU race).
-_init_lock = asyncio.Lock()
+_init_lock = None  # lazy-init
 
 # Concept keywords -> deterministic fallback scoring (used when the embedder
 # or Qdrant is down). Maps the blunder type to the books that teach it.
@@ -108,6 +108,9 @@ async def index_books(force: bool = False) -> dict:
         return {"ok": False, "error": "no chess books found in manifest"}
     client = AsyncQdrantClient(url=QDRANT_URL, api_key=os.getenv("QDRANT_API_KEY"))
     try:
+        global _init_lock
+        if _init_lock is None:
+            _init_lock = asyncio.Lock()
         async with _init_lock:
             # Check-and-create under the lock: two concurrent index_books calls
             # must not both see the collection missing and both create it.

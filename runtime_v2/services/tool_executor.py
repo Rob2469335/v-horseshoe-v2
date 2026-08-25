@@ -17,6 +17,9 @@ from swarm_os.services.approval_registry import (
 log = logging.getLogger(__name__)
 import os
 
+# Hard cap on tool output returned to the LLM context window
+_MAX_TOOL_OUTPUT_BYTES = int(os.environ.get("SWARM_MAX_TOOL_OUTPUT_BYTES", str(64 * 1024)))  # 64 KB default
+
 _ROOT = Path(
     os.getenv("ZENITH_PROJECT_ROOT", Path(__file__).resolve().parent.parent.parent)
 )
@@ -26,6 +29,20 @@ _mcp_manager = None
 # instance (previously it was created inside the if-None check — two awaiters
 # racing could each create their own asyncio.Lock and double-init the manager).
 _mcp_manager_lock = None
+
+
+
+def _truncate_tool_output(result: Any, label: str = "") -> Any:
+    """Cap tool output at _MAX_TOOL_OUTPUT_BYTES to prevent LLM context overflow."""
+    if isinstance(result, str) and len(result.encode("utf-8", errors="replace")) > _MAX_TOOL_OUTPUT_BYTES:
+        truncated = result.encode("utf-8", errors="replace")[:_MAX_TOOL_OUTPUT_BYTES].decode("utf-8", errors="replace")
+        import logging as _l
+        _l.getLogger(__name__).warning(
+            "Tool output truncated to %d bytes (was %d bytes) for %s",
+            _MAX_TOOL_OUTPUT_BYTES, len(result.encode("utf-8", errors="replace")), label
+        )
+        return truncated + f"\n\n[... output truncated at {_MAX_TOOL_OUTPUT_BYTES // 1024}KB ...]"
+    return result
 
 
 async def get_mcp_manager():

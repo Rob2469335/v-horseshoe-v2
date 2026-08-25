@@ -194,9 +194,9 @@ def _seed_population() -> list[dict]:
                 "model_tier": round(random.uniform(0.2, 0.8), 3),
                 "temperature": round(random.uniform(0.3, 0.8), 3),
                 "tool_genes": {
-                    "filesystem": round(random.uniform(0.5, 0.8), 3),
-                    "web_search": round(random.uniform(0.4, 0.8), 3),
-                    "web_fetch": round(random.uniform(0.4, 0.8), 3),
+                    "filesystem": round(random.uniform(0.55, 0.8), 3),
+                    "web_search": round(random.uniform(0.45, 0.8), 3),
+                    "web_fetch": round(random.uniform(0.45, 0.8), 3),
                     "sandbox_repl": round(random.uniform(0.2, 0.7), 3),
                     "semantic_search": round(random.uniform(0.2, 0.7), 3),
                 },
@@ -229,7 +229,10 @@ def _score_genome(genome: dict) -> float:
 
         agg = best_aggregate_fitness()
         if agg is not None:
-            return round(agg * 0.10, 4)
+            # Use 5% of best aggregate (down from 10%) to reduce inflation bias
+            # for unproven genomes. A truly unproven genome should score near zero
+            # but still above the 0.05 prior so it competes with other new genomes.
+            return round(agg * 0.05, 4)
         return 0.05
     except Exception:
         return 0.05
@@ -264,7 +267,7 @@ def get_active_genome(explore: bool = True) -> tuple[str, dict]:
                 s = 0.0
             scored.append((s, g.get("id", ""), g.get("tool_genes", {})))
         scored.sort(key=lambda x: -x[0])
-        return scored[0][1], scored[0][2] if scored else {}
+        return (scored[0][1], scored[0][2]) if scored else ("", {})
     except Exception:
         return "", {}
 
@@ -359,6 +362,17 @@ def evolve_one_generation(
         # Write the new generation to the STAGED dir
         _staged_path = STAGED_DIR / f"gen_{gen}.jsonl"
         _persist_population(new_pop, _staged_path)
+
+        # Auto-prune old staged files: keep only the 20 most recent
+        try:
+            staged_files = sorted(
+                STAGED_DIR.glob("gen_*.jsonl"),
+                key=lambda p: int(p.stem.split("_")[1]) if p.stem.split("_")[1:] and p.stem.split("_")[1].isdigit() else 0
+            )
+            for old_file in staged_files[:-20]:
+                old_file.unlink(missing_ok=True)
+        except Exception as _prune_exc:
+            log.debug("staged prune skipped: %s", _prune_exc)
 
         staged_best = max((g.get("fitness", 0.0) for g in new_pop), default=0.0)
 

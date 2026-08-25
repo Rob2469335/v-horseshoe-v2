@@ -36,7 +36,7 @@ log = logging.getLogger(__name__)
 
 _JOBS_DIR = Path("data/chess/analysis_jobs")
 _jobs: dict[str, dict[str, Any]] = {}
-_jobs_lock = asyncio.Lock()
+_jobs_lock = None  # lazy-init
 
 # Max wall-clock per single game analysis. A 100+ move game is genuinely slow,
 # but a wedged engine (leaked lock) must never stall the whole run — games
@@ -447,6 +447,9 @@ async def start_analysis(
     if not username:
         return {"ok": False, "error": "username is required"}
 
+    global _jobs_lock
+    if _jobs_lock is None:
+        _jobs_lock = asyncio.Lock()
     async with _jobs_lock:
         # If a running/incomplete job exists for this username, resume it.
         existing = None

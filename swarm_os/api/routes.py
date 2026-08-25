@@ -239,7 +239,7 @@ async def status(runtime: Any = Depends(runtime_dep)):
         ready=getattr(runtime, "orchestrator", None) is not None,
         events_path=".swarm/patch_log.jsonl",
         event_count=len(events) + total_qdrant_points,
-        llamacpp_base_url="http://127.0.0.1:8080",  # Updated to llama.cpp primary
+        llamacpp_base_url=os.getenv("LLAMACPP_URL", "http://127.0.0.1:8080"),
         environment="development",
         llamacpp_reachable=ollama_reachable,
         vision_configured=True,
@@ -450,7 +450,7 @@ async def generate(payload: GenerateRequest, orch=Depends(get_orchestrator)):
     }
 
     if is_local:
-        kwargs["api_base"] = "http://127.0.0.1:8080/v1"
+        kwargs["api_base"] = os.getenv("LLAMACPP_URL", "http://127.0.0.1:8080") + "/v1"
         kwargs["api_key"] = "llama"
     else:
         # Cloud fix/correction path: give the model its own endpoint/key so the

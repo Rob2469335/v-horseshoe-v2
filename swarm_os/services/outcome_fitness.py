@@ -130,8 +130,8 @@ def best_fitness(genome_id: str, window: int = 100) -> float | None:
         return None
     best = None
     try:
-        with open(FITNESS_PATH, "r", encoding="utf-8") as f:
-            lines = f.readlines()[-window:]
+        with open(FITNESS_PATH, "r", encoding="utf-8") as fh:
+            lines = fh.readlines()[-window:]
         for line in lines:
             line = line.strip()
             if not line:
@@ -141,9 +141,9 @@ def best_fitness(genome_id: str, window: int = 100) -> float | None:
             except json.JSONDecodeError:
                 continue
             if rec.get("genome_id") == genome_id:
-                f = rec.get("fitness", {}).get("composite")
-                if f is not None and (best is None or f > best):
-                    best = f
+                fitness_val = rec.get("fitness", {}).get("composite")
+                if fitness_val is not None and (best is None or fitness_val > best):
+                    best = fitness_val
     except OSError:
         return None
     return best
@@ -189,8 +189,8 @@ def best_aggregate_fitness(window: int = 100) -> float | None:
         return None
     best = None
     try:
-        with open(FITNESS_PATH, "r", encoding="utf-8") as f:
-            lines = f.readlines()[-window:]
+        with open(FITNESS_PATH, "r", encoding="utf-8") as fh:
+            lines = fh.readlines()[-window:]
         for line in lines:
             line = line.strip()
             if not line:
@@ -199,9 +199,9 @@ def best_aggregate_fitness(window: int = 100) -> float | None:
                 rec = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            f = rec.get("fitness", {}).get("composite")
-            if f is not None and (best is None or f > best):
-                best = f
+            fitness_val = rec.get("fitness", {}).get("composite")
+            if fitness_val is not None and (best is None or fitness_val > best):
+                best = fitness_val
     except OSError:
         return None
     return best

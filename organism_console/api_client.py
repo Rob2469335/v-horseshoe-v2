@@ -63,17 +63,19 @@ def call_api(
 import httpx
 
 _async_client: httpx.AsyncClient | None = None
+_async_client_lock = __import__("threading").Lock()
 
 
 def _get_async_client() -> httpx.AsyncClient:
     global _async_client
-    if _async_client is None or _async_client.is_closed:
-        _async_client = httpx.AsyncClient(
-            timeout=httpx.Timeout(600.0, connect=15.0),
-            verify=settings.ssl_verify,
-            limits=httpx.Limits(max_keepalive_connections=5, max_connections=20),
-        )
-    return _async_client
+    with _async_client_lock:
+        if _async_client is None or _async_client.is_closed:
+            _async_client = httpx.AsyncClient(
+                timeout=httpx.Timeout(600.0, connect=15.0),
+                verify=settings.ssl_verify,
+                limits=httpx.Limits(max_keepalive_connections=5, max_connections=20),
+            )
+        return _async_client
 
 
 async def call_api_async_stream(

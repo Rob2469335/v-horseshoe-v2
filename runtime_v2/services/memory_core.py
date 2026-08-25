@@ -96,7 +96,7 @@ def get_embedding(text: str) -> Optional[List[float]]:
     return None
 
 
-RERANK_URL = "http://127.0.0.1:8082"
+RERANK_URL = os.getenv("RERANK_URL", "http://127.0.0.1:8082")
 RERANK_MODEL = "gte-reranker-modernbert-base-Q8_0.gguf"
 
 # Bound concurrent rerank HTTP calls. When analysis agents launch, semantic
@@ -263,6 +263,9 @@ def remember_fact(fact: str, category: str = "general") -> bool:
     current_time = time.time()
 
     # 1. Store in Qdrant (Vector DB) with Timestamp
+    if vector is None:
+        _log.warning("store_memory: embedding returned None for shard=%s; skipping Qdrant upsert", collection)
+        return False
     try:
         resp = requests.put(
             f"{QDRANT_URL}/collections/{collection}/points?wait=true",
@@ -555,3 +558,36 @@ def deprecate_memory(point_id: str, category: str = "general") -> bool:
             "Failed to deprecate memory %s in shard '%s': %s", point_id, category, e
         )
     return False
+
+
+def prune_old_memories(shard: str = "general", days: int = 90, dry_run: bool = False) -> dict:
+    """Delete Qdrant points older than `days` days from a memory shard.
+    
+    Uses payload filter on `created_at` timestamp (ISO8601 strings stored by store_memory).
+    Returns a summary dict. Never raises.
+    """
+    import time as _time
+    collection = _get_shard_name(shard)
+    cutoff_ts = _time.time() - (days * 86400)
+    cutoff_iso = __import__("datetime").datetime.utcfromtimestamp(cutoff_ts).isoformat()
+    try:
+        if dry_run:
+            count_resp = requests.post(
+                f"{QDRANT_URL}/collections/{collection}/points/count",
+                json={"filter": {"must": [{"key": "created_at", "range": {"lt": cutoff_iso}}]}},
+                timeout=10.0,
+            )
+            count = count_resp.json().get("result", {}).get("count", 0) if count_resp.status_code == 200 else -1
+            return {"dry_run": True, "would_delete": count, "cutoff_iso": cutoff_iso, "shard": shard}
+        
+        delete_resp = requests.post(
+            f"{QDRANT_URL}/collections/{collection}/points/delete",
+            json={"filter": {"must": [{"key": "created_at", "range": {"lt": cutoff_iso}}]}},
+            timeout=30.0,
+        )
+        if delete_resp.status_code == 200:
+            return {"ok": True, "shard": shard, "cutoff_iso": cutoff_iso, "days": days}
+        return {"ok": False, "status": delete_resp.status_code, "body": delete_resp.text[:200]}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+

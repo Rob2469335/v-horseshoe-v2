@@ -71,7 +71,7 @@ _PROFILE_DIR = Path(os.getenv("ZENITH_BROWSER_PROFILE", "data/browser_profile"))
 # A single persistent browser+context shared across calls (module-level lazy).
 _browser = None
 _context = None
-_lock = asyncio.Lock()
+_lock = None  # lazy-init
 _pages: dict[str, Any] = {}
 
 
@@ -85,6 +85,9 @@ async def _ensure_browser():
     global _browser, _context
     if _context is not None:
         return
+    global _lock
+    if _lock is None:
+        _lock = asyncio.Lock()
     async with _lock:
         if _context is not None:
             return
@@ -108,6 +111,9 @@ async def _ensure_browser():
 
 async def close_browser() -> None:
     global _browser, _context
+    global _lock
+    if _lock is None:
+        _lock = asyncio.Lock()
     async with _lock:
         if _context is not None:
             try:

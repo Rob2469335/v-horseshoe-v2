@@ -32,18 +32,21 @@ _cached_stats = {
     "ollama": 0,
     "total": 0,
 }
-_refresh_lock = asyncio.Lock()
+_refresh_lock = None  # lazy-init inside running event loop
 
 # UPGRADE: pooled httpx client reused across all provider probes instead of a
 # fresh AsyncClient per call (fresh clients defeat keep-alive + TLS reuse).
 _http_client: httpx.AsyncClient | None = None
 
 
-_client_lock = asyncio.Lock()
+_client_lock = None  # lazy-init inside running event loop
 
 
 async def get_http_client() -> httpx.AsyncClient:
     global _http_client
+    global _client_lock
+    if _client_lock is None:
+        _client_lock = asyncio.Lock()
     async with _client_lock:
         if _http_client is None or _http_client.is_closed:
             _http_client = httpx.AsyncClient(
@@ -560,6 +563,9 @@ async def refresh_fallbacks_if_needed(mode: str = "auto"):
     ):
         return
 
+    global _refresh_lock
+    if _refresh_lock is None:
+        _refresh_lock = asyncio.Lock()
     async with _refresh_lock:
         if (
             time.time() - _last_fetch_time < _CACHE_TTL

@@ -31,7 +31,7 @@ router = APIRouter(prefix="/control", tags=["control"])
 # (probe scan ~16s, heal status ~18s when infra is down). Warmed at startup.
 _HEAL_CACHE_TTL = 8.0
 _heal_cache: Dict[str, Any] = {"ts": 0.0, "value": {}}
-_heal_cache_lock = asyncio.Lock()
+_heal_cache_lock = None  # lazy-init
 _MEMORY_COUNTS_TTL = 30.0
 _memory_counts_cache: Dict[str, Any] = {"ts": 0.0, "value": {}}
 
@@ -212,6 +212,9 @@ async def _heal_status() -> Dict[str, Any]:
     cannot stampede: a concurrent waiter blocks on the lock, then reads the
     fresh value written by the first caller instead of re-running the ~16s
     probe set."""
+    global _heal_cache_lock
+    if _heal_cache_lock is None:
+        _heal_cache_lock = asyncio.Lock()
     async with _heal_cache_lock:
         now = asyncio.get_running_loop().time()
         if now - _heal_cache["ts"] < _HEAL_CACHE_TTL and _heal_cache["value"]:

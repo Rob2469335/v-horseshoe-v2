@@ -263,8 +263,8 @@ def make_swarm_brain(
 
             if loop and loop.is_running():
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                    warning = pool.submit(_run_isolated, get_reflection_service().check_for_past_mistakes(task)).result()
-                    reliability_note = pool.submit(_run_isolated, check_model_reliability(requested_model or _safe_model(genome))).result()
+                    warning = pool.submit(_run_isolated, lambda: get_reflection_service().check_for_past_mistakes(task)).result()
+                    reliability_note = pool.submit(_run_isolated, lambda: check_model_reliability(requested_model or _safe_model(genome))).result()
             else:
                 warning = asyncio.run(get_reflection_service().check_for_past_mistakes(task))
                 reliability_note = asyncio.run(check_model_reliability(requested_model or _safe_model(genome)))
@@ -340,20 +340,24 @@ class BrainRegistry:
     """Registry for AI brain generation factories."""
 
     def __init__(self):
+        import threading
         self._factories: Dict[str, Callable] = {}
+        self._lock = threading.Lock()
         self.register("swarm", make_swarm_brain)
         self.register("simple", make_swarm_brain)
 
     def register(self, name: str, factory: Callable) -> None:
-        self._factories[name] = factory
+        with self._lock:
+            self._factories[name] = factory
         log.debug("registered brain: %s", name)
 
     def get(self, name: str) -> Callable:
-        if name not in self._factories:
-            raise KeyError(
-                f"Unknown brain: {name!r}. Available: {list(self._factories)}"
-            )
-        return self._factories[name]
+        with self._lock:
+            if name not in self._factories:
+                raise KeyError(
+                    f"Unknown brain: {name!r}. Available: {list(self._factories)}"
+                )
+            return self._factories[name]
 
     def make(
         self, name: str, genome, task_domain: str = "general", generate_fn=None

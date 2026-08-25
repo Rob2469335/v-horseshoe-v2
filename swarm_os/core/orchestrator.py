@@ -41,13 +41,13 @@ async def close_global_client() -> None:
 
 _cached_models: list[str] = []
 _models_cache_time: float = 0.0
-_models_cache_lock = asyncio.Lock()
+_models_cache_lock = None  # lazy-init
 
 # ISSUE 17: Guard against duplicate concurrent generation requests.
 # Dict[hash -> timestamp] with 5-minute TTL auto-expiry to prevent leaks
 # even if an exception skips the explicit discard() call.
 _active_generations: dict[str, float] = {}
-_generation_lock = asyncio.Lock()
+_generation_lock = None  # lazy-init
 _GEN_LOCK_TTL = 300.0
 
 
@@ -66,6 +66,9 @@ async def _acquire_generation_slot(dedup_hash: str):
     Returns (True, Future) if an identical generation is ALREADY running,
     or (False, None) if this caller acquired the slot."""
     import asyncio
+    global _generation_lock
+    if _generation_lock is None:
+        _generation_lock = asyncio.Lock()
     async with _generation_lock:
         now = time.time()
         # Prune stale entries older than TTL
@@ -85,10 +88,15 @@ async def _acquire_generation_slot(dedup_hash: str):
         return False, None
 
 async def _release_generation_slot(dedup_hash: str, result=None) -> None:
+    global _generation_lock
+    if _generation_lock is None:
+        _generation_lock = asyncio.Lock()
     async with _generation_lock:
         entry = _active_generations.pop(dedup_hash, None)
         if entry and not entry["fut"].done():
             entry["fut"].set_result(result)
+
+
 
 
 class Orchestrator:
@@ -235,7 +243,9 @@ class Orchestrator:
         return "fast"
 
     async def _fetch_installed_models(self) -> list[str]:
-        global _cached_models, _models_cache_time
+        global _cached_models, _models_cache_time, _models_cache_lock
+        if _models_cache_lock is None:
+            _models_cache_lock = asyncio.Lock()
         async with _models_cache_lock:
             if _cached_models and time.time() - _models_cache_time < 60.0:
                 return _cached_models
@@ -612,7 +622,7 @@ class Orchestrator:
             )
 
         finally:
-            await _release_generation_slot(_dedup_hash, result=(content, model_used))
+            await _release_generation_slot(_dedup_hash, result=(content, chosen_model))
 
         # Record the SUCCESS in the bandit — without this the model's
         # successes counter never advances (record_failure at the except above
@@ -927,7 +937,7 @@ class Orchestrator:
                     yield f"\n[Stream Error: {exc}]", chosen_model, trace_id
                     break
         finally:
-            await _release_generation_slot(_dedup_hash, result=(content, model_used))
+            await _release_generation_slot(_dedup_hash, result=(content, chosen_model))
 
         duration_ms = (time.time() * 1000.0) - start_ms
         log.info(
@@ -972,7 +982,7 @@ class Orchestrator:
             except Exception as exc:
                 log.debug("Failed to record success: %s", exc)
 
-        await _release_generation_slot(_dedup_hash, result=(content, model_used))
+        await _release_generation_slot(_dedup_hash, result=(content, chosen_model))
 
     async def evolve(self) -> None:
         pass

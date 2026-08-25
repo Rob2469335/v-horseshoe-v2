@@ -29,7 +29,7 @@ _CACHE_PATH = Path(
 )
 
 _GEO_CLIENT: "httpx.AsyncClient | None" = None
-_GEO_LOCK = asyncio.Lock()
+_GEO_LOCK = None  # lazy-init
 _last_request_at = 0.0
 _MIN_GEO_INTERVAL = 1.1  # Nominatim politely asks for >=1s between requests
 
@@ -131,6 +131,9 @@ async def resolve_lat_lng(
         return float(hit[0]), float(hit[1])
 
     global _last_request_at
+    global _GEO_LOCK
+    if _GEO_LOCK is None:
+        _GEO_LOCK = asyncio.Lock()
     async with _GEO_LOCK:
         now = time.monotonic()
         wait = _MIN_GEO_INTERVAL - (now - _last_request_at)
