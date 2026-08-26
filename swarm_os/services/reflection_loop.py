@@ -643,7 +643,7 @@ async def _distill(distiller_content: str, fix_class: str | None = None) -> str:
     if os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"):
         attempts.append(
             {
-                "model": "gemini/gemini-2.0-flash",
+                "model": "gemini/gemini-2.5-flash",
                 "messages": [{"role": "user", "content": distiller_content}],
                 "max_tokens": DISTILLER_MAX_TOKENS_CLOUD,
                 "timeout": 90.0,
@@ -698,9 +698,9 @@ async def _distill(distiller_content: str, fix_class: str | None = None) -> str:
         {
             "model": "qwen3.5-0.8b",
             "messages": [
-                {"role": "system", "content": "/no_think\n\n"},
                 {"role": "user", "content": distiller_content},
             ],
+            "chat_template_kwargs": {"enable_thinking": False},
             "api_base": "http://127.0.0.1:8084/v1",
             "api_key": "llama",
             "custom_llm_provider": "openai",
