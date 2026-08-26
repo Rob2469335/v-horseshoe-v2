@@ -6,6 +6,7 @@ import html
 import logging
 import re
 from pathlib import Path
+from typing import Any
 
 from swarm_os.services.approval_registry import (
     ALLOW,
