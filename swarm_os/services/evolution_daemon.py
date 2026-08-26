@@ -309,7 +309,21 @@ def evolve_one_generation(
 
     When `auto_promote` is True (or env SWARM_EVOLUTION_AUTO_PROMOTE=1), the
     generation is automatically evaluated against the active population and promoted
-    if `staged_best >= active_best + min_improvement` and tool floors are met."""
+    if `staged_best >= active_best + min_improvement` and tool floors are met.
+
+    CHALLENGE ROTATION (2026-08-25): even without the improvement gate, every
+    SWARM_EVOLUTION_CHALLENGE_EVERY generations (default 12 ≈ hourly at the
+    5-min tick) the newest staged generation is promoted ANYWAY. Reason: a
+    child genome that has never been fielded has no exact fitness record, so it
+    can only score the aggregate fallback (agg*0.80 = 0.76) — mathematically
+    below an elite's decayed exact score (0.95*0.85 = 0.8075). Under the old
+    promote-only-if-better rule NO child could ever beat an elite BY
+    DEFINITION, so nothing was ever fielded and no child ever earned a real
+    score (~320 generations bred into the void, gen 884 -> 1206). Rotation
+    makes promotion mean "field the challengers", not "crown the champion" —
+    selection pressure then happens at scoring/parent-selection time on REAL
+    per-genome outcomes (epsilon-greedy feeds them once active). The human
+    safety net stays: rollback_promotion() restores genomes.jsonl.bak."""
     try:
         import os
 
@@ -384,6 +398,19 @@ def evolve_one_generation(
             auto_promote = os.getenv("SWARM_EVOLUTION_AUTO_PROMOTE", "0") == "1"
         should_auto_promote = bool(auto_promote)
 
+        # Challenge rotation: field staged candidates periodically even when
+        # they don't beat the active best — otherwise children can never earn
+        # a real score (see docstring arithmetic).
+        try:
+            challenge_every = max(
+                1, int(os.getenv("SWARM_EVOLUTION_CHALLENGE_EVERY", "12"))
+            )
+        except ValueError:
+            challenge_every = 12
+        should_rotate = (not should_auto_promote) and (
+            gen % challenge_every == 0
+        )
+
         promoted = False
         promotion_reason = ""
         if should_auto_promote:
@@ -400,6 +427,15 @@ def evolve_one_generation(
                     f"Staged best ({staged_best:.4f}) did not beat active best "
                     f"({active_best:.4f}) by required margin ({min_improvement:.4f})"
                 )
+        elif should_rotate:
+            prom_res = promote_staged_generation(gen, enforce_floors=True)
+            promoted = prom_res.get("ok", False)
+            promotion_reason = (
+                "Challenge rotation: fielded staged candidates so children earn "
+                "real scores (selection happens on outcomes, not on this gate)"
+                if promoted
+                else prom_res.get("reason", "Challenge rotation failed")
+            )
 
         return {
             "generation": gen,

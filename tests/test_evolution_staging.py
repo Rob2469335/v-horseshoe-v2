@@ -302,3 +302,47 @@ def test_rollback_promotion_restores_backup(tmp_path, monkeypatch):
     # Active population restored to generation 0
     restored = ev._load_population(ev.GENOMES_PATH)
     assert [g["id"] for g in restored] == ["genome_0", "genome_1"]
+
+
+# ── challenge rotation (#1, 2026-08-25) ────────────────────────────────────
+def test_challenge_rotation_fields_candidates_without_improvement(
+    tmp_path, monkeypatch
+):
+    """Children that have never been fielded have no exact fitness record, so
+    they can only score the aggregate fallback (agg*0.80 = 0.76) — below an
+    elite's decayed exact score (0.95*0.85 = 0.8075). Under promote-only-if-
+    better NO child could ever be promoted BY DEFINITION (~320 generations
+    bred into the void, gen 884 -> 1206). Challenge rotation promotes the
+    staged generation every SWARM_EVOLUTION_CHALLENGE_EVERY generations even
+    when it doesn't beat the active best — fielding candidates so epsilon-
+    greedy can feed them real outcomes. Revert-proof: pre-fix code ignores
+    the env entirely and leaves promoted=False."""
+    _seed_active(tmp_path)
+    monkeypatch.setattr(ev, "_score_genome", lambda g: g.get("fitness", 0.5))
+    monkeypatch.setenv("SWARM_EVOLUTION_CHALLENGE_EVERY", "1")
+
+    summary = ev.evolve_one_generation()
+
+    assert summary.get("promoted") is True
+    assert "Challenge rotation" in summary.get("promotion_reason", "")
+    # active population now CONTAINS the staged children (they were fielded)
+    active = ev._load_population(ev.GENOMES_PATH)
+    assert len(active) == 4  # elites + children per POPULATION_SIZE fixture
+
+
+def test_no_rotation_when_improve_gate_or_env_off(tmp_path, monkeypatch):
+    """Default policy holds: without the env opt-in and without beating the
+    improvement margin, the generation stays STAGED (staged_human_approved)."""
+    _seed_active(tmp_path)
+    monkeypatch.setattr(ev, "_score_genome", lambda g: g.get("fitness", 0.5))
+    monkeypatch.delenv("SWARM_EVOLUTION_CHALLENGE_EVERY", raising=False)
+
+    summary = ev.evolve_one_generation()
+    assert summary.get("promoted") is False
+    assert summary.get("staged") is True
+
+    # explicit auto_promote wins over rotation; a failing improvement gate
+    # must NOT fall through to rotation
+    monkeypatch.setenv("SWARM_EVOLUTION_CHALLENGE_EVERY", "1")
+    summary2 = ev.evolve_one_generation(auto_promote=True)
+    assert summary2.get("promoted") is False
