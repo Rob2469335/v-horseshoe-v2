@@ -80,3 +80,59 @@ def test_mutation_loop_llm_call_fails_over_across_providers():
     # The chosen model must be the free-first analysis-cloud default when a free
     # key is present, never a hardcoded single provider.
     assert "_analysis_cloud_model()" in inspect.getsource(gml)
+
+
+def test_mutation_history_entries_are_dicts_with_error_field():
+    """mutation_history.json entries must be dicts with outcome/ts/error keys so
+    failure bodies are durable across process restarts (the gap that made the
+    15:04 evolution halt undiagnosable — body only went to live console).
+
+    Pins: success append carries error='', failure append carries error=last_error[-2000:].
+    Also verifies legacy bare-string entries are coerced on load (no migration required).
+    """
+    import inspect
+    import swarm_os.services.genetic_mutation_loop as gml
+
+    src = inspect.getsource(gml.run_genetic_mutation)
+
+    # Success entry must carry outcome/ts/error keys
+    assert '"outcome": "success"' in src
+    assert '"ts": datetime.now(timezone.utc).isoformat()' in src.replace("    ", " ")
+    assert '"error": ""' in src  # success: empty error
+
+    # Failure entry must carry outcome/ts/error with the capped last_error body
+    assert '"outcome": "failure"' in src
+    assert 'last_error[-2000:]' in src  # failure body capped at 2 kB
+
+    # Load path must coerce legacy bare strings to dicts
+    assert 'isinstance(e, dict)' in src
+    assert '"outcome": e' in src.replace("    ", " ")
+
+
+def test_mutation_history_load_tolerates_legacy_bare_strings(tmp_path, monkeypatch):
+    """If mutation_history.json contains old bare strings ('success'/'failure'),
+    the load path must coerce them to dicts without raising — so existing
+    deployments need no manual migration step."""
+    import json
+
+    import swarm_os.services.genetic_mutation_loop as gml
+
+    # Write a mixed legacy file (bare strings + a new-style dict)
+    history_file = tmp_path / "mutation_history.json"
+    history_file.write_text(
+        json.dumps(["success", "failure", {"outcome": "success", "ts": "t", "error": ""}])
+    )
+    monkeypatch.setattr(gml, "HISTORY_FILE", history_file)
+
+    # Read and coerce manually (mirrors the load block in run_genetic_mutation)
+    raw = json.loads(history_file.read_text())
+    coerced = [
+        e if isinstance(e, dict) else {"outcome": e, "ts": "", "error": ""}
+        for e in raw
+    ]
+
+    assert len(coerced) == 3
+    assert all(isinstance(e, dict) for e in coerced)
+    assert coerced[0] == {"outcome": "success", "ts": "", "error": ""}
+    assert coerced[1] == {"outcome": "failure", "ts": "", "error": ""}
+    assert coerced[2] == {"outcome": "success", "ts": "t", "error": ""}

@@ -73,11 +73,18 @@ async def run_genetic_mutation(
 ):
     logger.info("Initializing Genetic Evolution Loop...")
 
-    # BUG FIX: Load persistent mutation history from disk
-    mutation_history: list[str] = []
+    # BUG FIX: Load persistent mutation history from disk.
+    # Each entry is a dict: {"outcome": "success"|"failure", "ts": <iso>, "error": <str>}
+    # Legacy bare-string entries ("success"/"failure") are coerced on load so the
+    # existing file needs no migration.
+    mutation_history: list[dict] = []
     if HISTORY_FILE.exists():
         try:
-            mutation_history = json.loads(HISTORY_FILE.read_text(encoding="utf-8"))
+            raw = json.loads(HISTORY_FILE.read_text(encoding="utf-8"))
+            mutation_history = [
+                e if isinstance(e, dict) else {"outcome": e, "ts": "", "error": ""}
+                for e in raw
+            ]
         except Exception:
             mutation_history = []
 
@@ -138,7 +145,7 @@ async def run_genetic_mutation(
             [
                 m
                 for m in mutation_history[-CONSECUTIVE_FAILURES_FOR_EXTINCTION:]
-                if m == "failure"
+                if (m.get("outcome") if isinstance(m, dict) else m) == "failure"
             ]
         )
         if recent_failures >= CONSECUTIVE_FAILURES_FOR_EXTINCTION:
@@ -367,7 +374,13 @@ async def run_genetic_mutation(
                 # Record success to memory graph
                 memory_bridge._add(metadata)
                 await memory_bridge._flush()
-                mutation_history.append("success")
+                mutation_history.append(
+                    {
+                        "outcome": "success",
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                        "error": "",
+                    }
+                )
                 break  # Success! Exit the retry loop.
 
         except SecurityGateViolation as e:
@@ -439,7 +452,17 @@ async def run_genetic_mutation(
             }
         )
         await memory_bridge._flush()
-        mutation_history.append("failure")
+        mutation_history.append(
+            {
+                "outcome": "failure",
+                "ts": datetime.now(timezone.utc).isoformat(),
+                # Store up to 2 kB of the failure body so post-mortem debugging
+                # is possible without console access (the gap that made the 15:04
+                # evolution halt undiagnosable: failure body only went to live
+                # console and was not recoverable after the process exited).
+                "error": last_error[-2000:] if last_error else "",
+            }
+        )
 
     # BUG FIX: Persist mutation_history to disk so Extinction Events survive across invocations
     try:
