@@ -229,10 +229,11 @@ def _score_genome(genome: dict) -> float:
 
         agg = best_aggregate_fitness()
         if agg is not None:
-            # Use 5% of best aggregate (down from 10%) to reduce inflation bias
-            # for unproven genomes. A truly unproven genome should score near zero
-            # but still above the 0.05 prior so it competes with other new genomes.
-            return round(agg * 0.05, 4)
+            # Aggregate fallback = fresh/unproven genomes inherit the shared
+            # lineage signal so selection pressure survives (the V5/V6 plateau
+            # fix). Discounting it below the 0.05 no-signal prior re-freezes
+            # the population.
+            return round(agg * 0.80, 4)
         return 0.05
     except Exception:
         return 0.05
@@ -376,7 +377,12 @@ def evolve_one_generation(
 
         staged_best = max((g.get("fitness", 0.0) for g in new_pop), default=0.0)
 
-        should_auto_promote = False # Policy strictly requires staged_human_approved
+        # Honor the documented gate (docstring above): explicit param wins,
+        # else opt-in via SWARM_EVOLUTION_AUTO_PROMOTE=1. Default stays OFF —
+        # the staged_human_approved policy holds unless explicitly enabled.
+        if auto_promote is None:
+            auto_promote = os.getenv("SWARM_EVOLUTION_AUTO_PROMOTE", "0") == "1"
+        should_auto_promote = bool(auto_promote)
 
         promoted = False
         promotion_reason = ""
