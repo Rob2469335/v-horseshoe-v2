@@ -39,7 +39,7 @@ if (-not $env:ZENITH_WEATHER_CITY)  { $env:ZENITH_WEATHER_CITY  = "New York" }
 
 # Warn when a cloud API key is missing so degraded startup is visible, not silent.
 $missingKeys = @()
-foreach ($k in @("OPENROUTER_API_KEY","NVIDIA_API_KEY","GEMINI_API_KEY","GROQ_API_KEY","OPENAI_API_KEY","API_KEY","TAVILY_API_KEY","SERPER_API_KEY","BRAVE_API_KEY","EXA_API_KEY","SERPAPI_KEY","TINYFISH_API_KEY")) {
+foreach ($k in @("OPENROUTER_API_KEY","NVIDIA_API_KEY","GEMINI_API_KEY","GROQ_API_KEY","OPENAI_API_KEY","API_KEY","ALIBABA_API_KEY","TAVILY_API_KEY","SERPER_API_KEY","BRAVE_API_KEY","EXA_API_KEY","SERPAPI_KEY","TINYFISH_API_KEY")) {
     if (-not [Environment]::GetEnvironmentVariable($k)) { $missingKeys += $k }
 }
 if ($missingKeys.Count -gt 0) {
@@ -68,6 +68,7 @@ Write-Host "TinyFish key present:     $([bool]$env:TINYFISH_API_KEY)" -Foregroun
 Write-Host "Firecrawl key present:    $([bool]$env:FIRECRAWL_API_KEY)" -ForegroundColor Gray
 Write-Host "Scavio key present:       $([bool]$env:SCAVIO_API_KEY)" -ForegroundColor Gray
 Write-Host "OpenAI/OpenCode key:      $([bool]$env:OPENAI_API_KEY)" -ForegroundColor Gray
+Write-Host "Alibaba/DashScope key:    $([bool]$env:ALIBABA_API_KEY)" -ForegroundColor Gray
 Write-Host "Generic API key:          $([bool]$env:API_KEY)" -ForegroundColor Gray
 Write-Host "OpenCode Base URL:        $([bool]$env:OPENAI_API_BASE)" -ForegroundColor Gray
 
@@ -224,6 +225,7 @@ $backendEnv = @{
     VH2_QDRANT_ENABLED  = $env:VH2_QDRANT_ENABLED
     VH2_RERANKER_ENABLED = $env:VH2_RERANKER_ENABLED
     OPENAI_API_BASE     = $env:OPENAI_API_BASE
+    ALIBABA_API_KEY     = $env:ALIBABA_API_KEY
     ZENITH_WEATHER_CITY = $env:ZENITH_WEATHER_CITY
     SWARM_GRAMMAR_DECODE = $env:SWARM_GRAMMAR_DECODE
     SWARM_SEMANTIC_CACHE = $env:SWARM_SEMANTIC_CACHE
