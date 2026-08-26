@@ -61,40 +61,32 @@ def _dedup_key(messages: list[dict]) -> str:
     return hashlib.sha256(_dedup_input.encode()).hexdigest()[:16]
 
 
-async def _acquire_generation_slot(dedup_hash: str):
-    """Register a generation in _active_generations under the lock.
-    Returns (True, Future) if an identical generation is ALREADY running,
-    or (False, None) if this caller acquired the slot."""
+async def _acquire_generation_slot(dedup_hash: str) -> bool:
+    """Register a generation in _active_generations under the lock. Returns True
+    if an identical generation is ALREADY running (caller should suppress)."""
     import asyncio
+
     global _generation_lock
     if _generation_lock is None:
         _generation_lock = asyncio.Lock()
     async with _generation_lock:
         now = time.time()
         # Prune stale entries older than TTL
-        stale = []
-        for k, entry in _active_generations.items():
-            if now - entry["ts"] > _GEN_LOCK_TTL:
-                stale.append(k)
+        stale = [k for k, ts in _active_generations.items() if now - ts > _GEN_LOCK_TTL]
         for k in stale:
-            fut = _active_generations.pop(k).get("fut")
-            if fut and not fut.done():
-                fut.set_exception(TimeoutError("Generation lock TTL expired"))
-        
+            del _active_generations[k]
         if dedup_hash in _active_generations:
-            return True, _active_generations[dedup_hash]["fut"]
-        
-        _active_generations[dedup_hash] = {"ts": now, "fut": asyncio.Future()}
-        return False, None
+            return True
+        _active_generations[dedup_hash] = now
+        return False
 
-async def _release_generation_slot(dedup_hash: str, result=None) -> None:
+
+async def _release_generation_slot(dedup_hash: str) -> None:
     global _generation_lock
     if _generation_lock is None:
         _generation_lock = asyncio.Lock()
     async with _generation_lock:
-        entry = _active_generations.pop(dedup_hash, None)
-        if entry and not entry["fut"].done():
-            entry["fut"].set_result(result)
+        _active_generations.pop(dedup_hash, None)
 
 
 
@@ -337,19 +329,15 @@ class Orchestrator:
 
         # ISSUE 17: Dedup key based on input messages — await duplicate concurrent generation.
         _dedup_hash = _dedup_key(messages)
-        is_duplicate, fut = await _acquire_generation_slot(_dedup_hash)
-        if is_duplicate:
+        if await _acquire_generation_slot(_dedup_hash):
             log.warning(
-                "[Orchestrator] Duplicate generation blocked (hash=%s). Awaiting existing generation.",
+                "[Orchestrator] Duplicate generation blocked (hash=%s). A generation with identical messages is already running.",
                 _dedup_hash,
             )
-            try:
-                # We expect the future to resolve to (content, model)
-                content, model = await fut
-                return content, model
-            except Exception as e:
-                log.error("Duplicate generation future failed: %s", e)
-                return "Error: Duplicate generation failed.", model
+            return (
+                "Duplicate generation suppressed — an identical request is already in progress.",
+                model,
+            )
 
         try:
             target_role = self._infer_task_role(messages)
@@ -622,7 +610,7 @@ class Orchestrator:
             )
 
         finally:
-            await _release_generation_slot(_dedup_hash, result=(content, chosen_model))
+            await _release_generation_slot(_dedup_hash)
 
         # Record the SUCCESS in the bandit — without this the model's
         # successes counter never advances (record_failure at the except above
@@ -700,18 +688,16 @@ class Orchestrator:
         # Dedup parity with generate(): rapid double-clicks on a streaming
         # endpoint would otherwise spawn duplicate concurrent LLM requests.
         _dedup_hash = _dedup_key(messages)
-        is_duplicate, fut = await _acquire_generation_slot(_dedup_hash)
-        if is_duplicate:
+        if await _acquire_generation_slot(_dedup_hash):
             log.warning(
                 "[Orchestrator] Duplicate stream generation blocked (hash=%s). An identical stream is already running.",
                 _dedup_hash,
             )
-            try:
-                content, model_used = await fut
-                yield content, model_used, trace_id
-            except Exception as e:
-                yield f"Error: duplicate stream failed: {e}", "none", trace_id
-            return
+            yield (
+                "Duplicate generation suppressed — an identical request is already in progress.",
+                "none",
+                trace_id,
+            )
             return
 
         target_role = self._infer_task_role(messages)
@@ -937,7 +923,7 @@ class Orchestrator:
                     yield f"\n[Stream Error: {exc}]", chosen_model, trace_id
                     break
         finally:
-            await _release_generation_slot(_dedup_hash, result=(content, chosen_model))
+            await _release_generation_slot(_dedup_hash)
 
         duration_ms = (time.time() * 1000.0) - start_ms
         log.info(
@@ -982,7 +968,7 @@ class Orchestrator:
             except Exception as exc:
                 log.debug("Failed to record success: %s", exc)
 
-        await _release_generation_slot(_dedup_hash, result=(content, chosen_model))
+        await _release_generation_slot(_dedup_hash)
 
     async def evolve(self) -> None:
         pass
