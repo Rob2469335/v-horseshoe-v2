@@ -76,3 +76,67 @@ def test_timeline_reads_bounded_events(monkeypatch, client):
     finally:
         if wrote:
             events_path.unlink(missing_ok=True)
+
+
+def test_safe_ollama_models_reuses_pooled_probe_client(monkeypatch):
+    """The per-port model probes must share ONE pooled AsyncClient — a fresh
+    client per port per /status poll wasted a TCP/TLS handshake every call
+    (8 clients across two polls pre-fix) and its 1.0s timeout produced
+    transient 'Failed checking port' warnings during busy startup windows.
+    Revert-proof: on pre-fix source this test fails with 8 instantiations."""
+    import asyncio
+
+    import httpx as httpx_mod
+
+    import swarm_os.api.routes as routes_mod
+
+    created: list[object] = []
+
+    class FakeResp:
+        status_code = 200
+
+        def json(self):
+            return {"data": [{"id": "qwen3.5-4b"}]}
+
+    class FakeClient:
+        def __init__(self, *, timeout=None, limits=None):
+            created.append(self)
+            self.seen_timeout = timeout
+
+        @property
+        def is_closed(self):
+            return False
+
+        async def get(self, *args, **kwargs):
+            return FakeResp()
+
+    monkeypatch.setattr(routes_mod.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(routes_mod, "_PROBE_CLIENT", None)
+
+    m1 = asyncio.run(routes_mod._safe_ollama_models(None))
+    m2 = asyncio.run(routes_mod._safe_ollama_models(None))
+
+    # 4 ports x 2 calls = 8 fresh clients pre-fix; exactly 1 post-fix
+    assert len(created) == 1
+    # probe budget widened from the old hard 1.0s so busy-startup false
+    # positives stop warning
+    assert isinstance(created[0].seen_timeout, httpx_mod.Timeout)
+    assert created[0].seen_timeout.read == 3.0
+    # behavior unchanged: model ids still normalized and reported
+    assert "qwen3.5-4b" in m1 and m1 == m2
+
+
+def test_probe_client_rebuilt_after_close():
+    """If the pooled probe client was closed underneath us (lifespan teardown),
+    the getter must self-heal with a fresh client instead of failing forever."""
+    import asyncio
+
+    import swarm_os.api.routes as routes_mod
+
+    first = routes_mod._get_probe_client()
+    second = routes_mod._get_probe_client()
+    assert first is second
+    asyncio.run(first.aclose())
+    third = routes_mod._get_probe_client()
+    assert third is not first
+    asyncio.run(third.aclose())

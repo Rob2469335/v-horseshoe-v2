@@ -49,31 +49,47 @@ from swarm_os.services.chat_service import ChatService
 
 
 # --- Helper Functions ---
+# Shared pooled client for the per-port model probes: a fresh AsyncClient per
+# port per /status poll wasted a TCP/TLS handshake every call and, with the
+# old 1.0s timeout, produced transient "Failed checking port" warnings when
+# the event loop was busy at startup (the ports were actually up).
+_PROBE_CLIENT: httpx.AsyncClient | None = None
+
+
+def _get_probe_client() -> httpx.AsyncClient:
+    global _PROBE_CLIENT
+    if _PROBE_CLIENT is None or _PROBE_CLIENT.is_closed:
+        _PROBE_CLIENT = httpx.AsyncClient(
+            timeout=httpx.Timeout(3.0),
+            limits=httpx.Limits(max_keepalive_connections=5, max_connections=10),
+        )
+    return _PROBE_CLIENT
+
+
 async def _safe_ollama_models(runtime: Any) -> list[str]:
     models = set()
     import asyncio
 
     async def fetch_port(port: int):
         try:
-            async with httpx.AsyncClient() as client:
-                resp = await client.get(
-                    f"http://127.0.0.1:{port}/v1/models",
-                    headers={"Authorization": "Bearer llama"},
-                    timeout=1.0,
-                )
-                if resp.status_code == 200:
-                    for m in resp.json().get("data", []):
-                        mid = m.get("id")
-                        if not mid:
-                            continue
-                        # Normalize Windows file-path model ids like ".\models\foo.gguf" to "foo"
-                        if ".gguf" in mid or "\\" in mid or "/" in mid:
-                            mid = (
-                                mid.replace("\\", "/")
-                                .split("/")[-1]
-                                .replace(".gguf", "")
-                            )
-                        models.add(mid)
+            client = _get_probe_client()
+            resp = await client.get(
+                f"http://127.0.0.1:{port}/v1/models",
+                headers={"Authorization": "Bearer llama"},
+            )
+            if resp.status_code == 200:
+                for m in resp.json().get("data", []):
+                    mid = m.get("id")
+                    if not mid:
+                        continue
+                    # Normalize Windows file-path model ids like ".\models\foo.gguf" to "foo"
+                    if ".gguf" in mid or "\\" in mid or "/" in mid:
+                        mid = (
+                            mid.replace("\\", "/")
+                            .split("/")[-1]
+                            .replace(".gguf", "")
+                        )
+                    models.add(mid)
         except Exception as exc:
             log.warning("Failed checking port %s: %s", port, exc)
 
