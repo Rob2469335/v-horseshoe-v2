@@ -491,8 +491,35 @@ async def generate(payload: GenerateRequest, orch=Depends(get_orchestrator)):
         except Exception as usage_err:
             log.debug("usage log skipped: %s", usage_err)
     except Exception:
-        log.exception("Generation failed")
-        raise HTTPException(status_code=502, detail="LLM generation failed")
+        # Cloud failure (e.g. OpenCode Go 'Insufficient balance') must NOT take
+        # /generate down — degrade to the local llama.cpp model like every
+        # other consumer of the fallback chain does.
+        if not is_local:
+            log.exception(
+                "Generation failed on cloud model %s — falling back to local", _model
+            )
+            try:
+                local_kwargs = dict(kwargs)
+                local_kwargs["model"] = "openai/qwen3.5-4b"
+                local_kwargs["api_base"] = (
+                    os.getenv("LLAMACPP_URL", "http://127.0.0.1:8080") + "/v1"
+                )
+                local_kwargs["api_key"] = "llama"
+                resp = await litellm.acompletion(**local_kwargs)
+                content = resp.choices[0].message.content or ""
+                _model = "qwen3.5-4b"
+                try:
+                    from runtime_v2.services.usage_log import record_response
+
+                    record_response(resp, local_kwargs["model"], source="api_generate_local_fallback")
+                except Exception as usage_err:
+                    log.debug("usage log skipped: %s", usage_err)
+            except Exception:
+                log.exception("Local fallback generation also failed")
+                raise HTTPException(status_code=502, detail="LLM generation failed")
+        else:
+            log.exception("Generation failed")
+            raise HTTPException(status_code=502, detail="LLM generation failed")
 
     return GenerateResponse(
         content=content,
