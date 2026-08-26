@@ -665,3 +665,76 @@ def test_endpoint_for_maps_provider_keys(monkeypatch):
 
     _, key_ds, _ = _endpoint_for("deepseek/deepseek-chat")
     assert key_ds == "test-ds-key"
+
+
+# ── time-based fitness window (#3, 2026-08-25) ────────────────────────────
+def _write_rec(path, genome_id, composite, ts):
+    import json
+
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(
+            json.dumps(
+                {
+                    "ts": ts,
+                    "genome_id": genome_id,
+                    "agent_id": genome_id,
+                    "fitness": {"composite": composite},
+                }
+            )
+            + "\n"
+        )
+
+
+def test_recent_zeros_do_not_mask_recent_success(tmp_path, monkeypatch):
+    """A burst of >100 failed runs must not push a recent success out of view.
+    Pre-fix the lookup read only the LAST 100 LINES: 150 newer zeros hid a
+    5-minute-old 0.95 record and best_aggregate_fitness() misreported the
+    population as collapsed (the 0.05 crash/recover cycling)."""
+    from datetime import datetime, timedelta, timezone
+
+    from swarm_os.services import outcome_fitness as of
+
+    monkeypatch.setattr(of, "FITNESS_PATH", tmp_path / "fitness.jsonl")
+    recent = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+    # good record FIRST (older in file order), then 150 newer zero-runs
+    _write_rec(of.FITNESS_PATH, "genome_x", 0.95, recent)
+    for _ in range(150):
+        _write_rec(of.FITNESS_PATH, "agent:coder", 0.0, recent)
+
+    assert of.best_aggregate_fitness(max_age_s=21600) == 0.95
+    assert of.best_fitness("genome_x", max_age_s=21600) == 0.95
+
+
+def test_stale_records_excluded_by_age_window(tmp_path, monkeypatch):
+    """Records older than max_age_s must not count — recency is time-based."""
+    from datetime import datetime, timedelta, timezone
+
+    from swarm_os.services import outcome_fitness as of
+
+    monkeypatch.setattr(of, "FITNESS_PATH", tmp_path / "fitness.jsonl")
+    old = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+    fresh = datetime.now(timezone.utc).isoformat()
+    _write_rec(of.FITNESS_PATH, "genome_old", 0.95, old)
+    _write_rec(of.FITNESS_PATH, "genome_new", 0.5, fresh)
+
+    # default horizon (env unset -> 6h): the 24h-old 0.95 is out of window
+    monkeypatch.delenv("SWARM_FITNESS_MAX_AGE_S", raising=False)
+    assert of.best_aggregate_fitness() == 0.5
+    assert of.best_fitness("genome_old") is None
+    # widening the horizon brings it back
+    assert of.best_fitness("genome_old", max_age_s=86400 * 2) == 0.95
+
+
+def test_malformed_or_missing_ts_records_are_included(tmp_path, monkeypatch):
+    """Lenient on unparseable/missing ts: never silently drop legacy records."""
+    import json as _json
+
+    from swarm_os.services import outcome_fitness as of
+
+    monkeypatch.setattr(of, "FITNESS_PATH", tmp_path / "fitness.jsonl")
+    with open(of.FITNESS_PATH, "w", encoding="utf-8") as f:
+        f.write(_json.dumps({"genome_id": "g1", "fitness": {"composite": 0.7}}) + "\n")
+        f.write("not-json\n")
+
+    assert of.best_fitness("g1") == 0.7
+    assert of.best_aggregate_fitness() == 0.7

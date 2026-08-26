@@ -123,11 +123,44 @@ def record_outcome(
         return compute_fitness(completion, test_pass, tool_success, efficiency, human)
 
 
-def best_fitness(genome_id: str, window: int = 100) -> float | None:
-    """Best composite fitness recorded for a genome in the recent window. Used by
-    the evolution daemon to select on real outcomes (elitism)."""
+def _default_max_age_s() -> float:
+    """Recency horizon for fitness lookups. Time-based, not line-count-based:
+    a burst of failed runs (>100 records) used to push good results out of the
+    last-100-lines window, making the population look collapsed when it
+    wasn't (the 0.05 crash/recover cycling). Env-overridable."""
+    try:
+        return float(os.getenv("SWARM_FITNESS_MAX_AGE_S", "21600"))
+    except ValueError:
+        return 21600.0
+
+
+def _rec_within_age(rec: dict, max_age_s: float) -> bool:
+    """True if the record's `ts` is missing/unparseable (lenient: include) or
+    within max_age_s of now."""
+    ts = rec.get("ts")
+    if not ts:
+        return True
+    try:
+        age = (
+            datetime.now(timezone.utc)
+            - datetime.fromisoformat(str(ts))
+        ).total_seconds()
+    except (TypeError, ValueError):
+        return True
+    return age <= max_age_s
+
+
+def best_fitness(
+    genome_id: str, window: int = 2000, max_age_s: float | None = None
+) -> float | None:
+    """Best composite fitness recorded for a genome among RECENT outcomes.
+    Recency is time-based (`max_age_s`, default SWARM_FITNESS_MAX_AGE_S or 6h)
+    so a burst of newer failures cannot hide a recent success; `window` is only
+    a cheap tail cap on how far back we scan."""
     if not FITNESS_PATH.exists():
         return None
+    if max_age_s is None:
+        max_age_s = _default_max_age_s()
     best = None
     try:
         with open(FITNESS_PATH, "r", encoding="utf-8") as fh:
@@ -139,6 +172,8 @@ def best_fitness(genome_id: str, window: int = 100) -> float | None:
             try:
                 rec = json.loads(line)
             except json.JSONDecodeError:
+                continue
+            if not _rec_within_age(rec, max_age_s):
                 continue
             if rec.get("genome_id") == genome_id:
                 fitness_val = rec.get("fitness", {}).get("composite")
@@ -174,7 +209,9 @@ def genome_has_fitness(genome_id: str) -> bool:
     return best_fitness(genome_id) is not None
 
 
-def best_aggregate_fitness(window: int = 100) -> float | None:
+def best_aggregate_fitness(
+    window: int = 2000, max_age_s: float | None = None
+) -> float | None:
     """Best composite fitness across ALL recent agent outcomes.
 
     The evolution population is a single shared tool-policy lineage consumed by
@@ -184,9 +221,15 @@ def best_aggregate_fitness(window: int = 100) -> float | None:
     exact-ID `best_fitness()` lookup returns None and every genome scores the
     flat 0.05 prior (frozen population, 0.0425 elite plateau). Aggregate over
     all outcomes so the real signal reaches the kernel.
-    """
+
+    Recency is TIME-based (`max_age_s`, default SWARM_FITNESS_MAX_AGE_S or 6h),
+    not line-count-based: with a line window, >=100 newer failed runs pushed
+    recent successes out of view and the whole population misreported as
+    collapsed (the 0.05 crash/recover cycling)."""
     if not FITNESS_PATH.exists():
         return None
+    if max_age_s is None:
+        max_age_s = _default_max_age_s()
     best = None
     try:
         with open(FITNESS_PATH, "r", encoding="utf-8") as fh:
@@ -198,6 +241,8 @@ def best_aggregate_fitness(window: int = 100) -> float | None:
             try:
                 rec = json.loads(line)
             except json.JSONDecodeError:
+                continue
+            if not _rec_within_age(rec, max_age_s):
                 continue
             fitness_val = rec.get("fitness", {}).get("composite")
             if fitness_val is not None and (best is None or fitness_val > best):
