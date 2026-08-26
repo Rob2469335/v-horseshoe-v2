@@ -112,9 +112,17 @@ def test_safe_ollama_models_reuses_pooled_probe_client(monkeypatch):
 
     monkeypatch.setattr(routes_mod.httpx, "AsyncClient", FakeClient)
     monkeypatch.setattr(routes_mod, "_PROBE_CLIENT", None)
+    monkeypatch.setattr(routes_mod, "_PROBE_CLIENT_LOOP", None)
 
-    m1 = asyncio.run(routes_mod._safe_ollama_models(None))
-    m2 = asyncio.run(routes_mod._safe_ollama_models(None))
+    # both polls run on the SAME event loop (the production shape) -> exactly
+    # one pooled client; cross-loop rebuild is pinned by its own test below
+    async def _two_polls():
+        return (
+            await routes_mod._safe_ollama_models(None),
+            await routes_mod._safe_ollama_models(None),
+        )
+
+    m1, m2 = asyncio.run(_two_polls())
 
     # 4 ports x 2 calls = 8 fresh clients pre-fix; exactly 1 post-fix
     assert len(created) == 1
@@ -140,3 +148,27 @@ def test_probe_client_rebuilt_after_close():
     third = routes_mod._get_probe_client()
     assert third is not first
     asyncio.run(third.aclose())
+
+
+def test_probe_client_rebuilt_on_different_event_loop(monkeypatch):
+    """The pooled probe client is bound to the loop that created it; a caller
+    on a DIFFERENT (e.g. closed) loop must get a fresh client, not a
+    loop-bound corpse ('RuntimeError: Event loop is closed')."""
+    import asyncio
+
+    import swarm_os.api.routes as routes_mod
+
+    monkeypatch.setattr(routes_mod, "_PROBE_CLIENT", None)
+    monkeypatch.setattr(routes_mod, "_PROBE_CLIENT_LOOP", None)
+
+    async def _in_loop():
+        c1 = routes_mod._get_probe_client()
+        c2 = routes_mod._get_probe_client()
+        assert c1 is c2  # same loop -> reuse
+        return c1
+
+    first = asyncio.run(_in_loop())
+    # a NEW event loop must NOT receive the previous loop's client
+    second = asyncio.run(_in_loop())
+    assert second is not first
+    asyncio.run(second.aclose())

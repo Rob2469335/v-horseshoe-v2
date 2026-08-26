@@ -10,6 +10,7 @@ from statistics import mean
 from typing import Any
 
 import httpx
+import asyncio
 from fastapi import APIRouter, Query, Depends, HTTPException, Request
 
 from swarm_os.api import admin
@@ -50,19 +51,36 @@ from swarm_os.services.chat_service import ChatService
 
 # --- Helper Functions ---
 # Shared pooled client for the per-port model probes: a fresh AsyncClient per
-# port per /status poll wasted a TCP/TLS handshake every call and, with the
+# port per /status poll wasted a TCP/TLS handshake each call and, with the
 # old 1.0s timeout, produced transient "Failed checking port" warnings when
 # the event loop was busy at startup (the ports were actually up).
+# The client is bound to the event loop that created it — cache the loop too
+# and rebuild when the caller runs on a different (or closed) loop.
 _PROBE_CLIENT: httpx.AsyncClient | None = None
+_PROBE_CLIENT_LOOP: asyncio.AbstractEventLoop | None = None
 
 
 def _get_probe_client() -> httpx.AsyncClient:
-    global _PROBE_CLIENT
-    if _PROBE_CLIENT is None or _PROBE_CLIENT.is_closed:
+    global _PROBE_CLIENT, _PROBE_CLIENT_LOOP
+    try:
+        loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if (
+        _PROBE_CLIENT is None
+        or _PROBE_CLIENT.is_closed
+        or (_PROBE_CLIENT_LOOP is not None and _PROBE_CLIENT_LOOP.is_closed())
+        or (
+            _PROBE_CLIENT_LOOP is not None
+            and loop is not None
+            and _PROBE_CLIENT_LOOP is not loop
+        )
+    ):
         _PROBE_CLIENT = httpx.AsyncClient(
             timeout=httpx.Timeout(3.0),
             limits=httpx.Limits(max_keepalive_connections=5, max_connections=10),
         )
+        _PROBE_CLIENT_LOOP = loop
     return _PROBE_CLIENT
 
 
