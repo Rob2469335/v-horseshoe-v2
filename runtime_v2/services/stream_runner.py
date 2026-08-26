@@ -441,7 +441,7 @@ async def get_tool_decision(
                 pass
             try:
                 from runtime_v2.services.online_routing import record_analysis_outcome
-                import asyncio
+
                 await asyncio.to_thread(record_analysis_outcome, agent_id, True)
             except Exception as e:
                 log.debug("Failed to record outcome: %s", e)
@@ -581,7 +581,7 @@ async def get_tool_decision(
                 )
             try:
                 from runtime_v2.services.online_routing import record_analysis_outcome
-                import asyncio
+
                 await asyncio.to_thread(record_analysis_outcome, agent_id, False)
             except Exception as e:
                 log.debug("Failed to record outcome: %s", e)
