@@ -100,6 +100,7 @@ async def run_genetic_mutation(
         from runtime_v2.services.fallback_manager import (
             _is_local_model,
             get_live_fallbacks,
+            is_model_cooled_down,
         )
 
         routing_mode = os.getenv("SWARM_ROUTING_MODE", "auto")
@@ -107,8 +108,14 @@ async def run_genetic_mutation(
             f["model"]
             for f in await get_live_fallbacks(mode=routing_mode)
             if not _is_local_model(f["model"])
+            and not is_model_cooled_down(f["model"])
         ]
-        if not live_cloud and not _is_local_model(MODEL):
+        # Also treat MODEL itself as dead if it is on cooldown from a prior tick —
+        # the catalog-based _fetch_nvidia_models() returns the model even when the
+        # inference endpoint is quota-hung (verified: /v1/models 200 OK while
+        # /v1/chat/completions hangs until timeout).
+        primary_live = not _is_local_model(MODEL) and not is_model_cooled_down(MODEL)
+        if not live_cloud and not primary_live and not _is_local_model(MODEL):
             logger.warning(
                 "No live cloud provider available (all cooling down or empty "
                 "chain) — skipping mutation cycle this tick instead of burning "
