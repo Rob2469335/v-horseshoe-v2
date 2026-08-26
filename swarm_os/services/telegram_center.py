@@ -43,6 +43,7 @@ log = logging.getLogger(__name__)
 _API_BASE = "https://api.telegram.org/bot{token}"
 _POLL_TIMEOUT_S = 25  # long-poll (seconds); Telegram allows up to 50
 _MAX_MESSAGE_LEN = 4000
+_MAX_POLL_BACKOFF_S = 30.0
 
 
 _pending_pairing = {}
@@ -157,7 +158,7 @@ class TelegramClient:
             log.warning("telegram %s error: %s", method, exc)
             return None
 
-    async def get_updates(self, offset: int) -> list[dict]:
+    async def get_updates(self, offset: int) -> list[dict] | None:
         result = await self._call(
             "getUpdates",
             {
@@ -166,7 +167,9 @@ class TelegramClient:
                 "allowed_updates": ["message", "callback_query"],
             },
         )
-        return result or []
+        if result is None:
+            return None  # API failure (_call logged it) — caller must back off
+        return result
 
     async def send_message(
         self,
@@ -241,9 +244,18 @@ class TelegramCommandCenter:
     async def _run(self) -> None:
         if not self._client:
             return
+        backoff = 1.0
         while True:
             try:
                 updates = await self._client.get_updates(self._offset)
+                if updates is None:
+                    # API-level failure (e.g. 502 Bad Gateway): _call already
+                    # logged it — back off exponentially instead of re-polling
+                    # at round-trip speed and soft-throttling the bot IP.
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 2, _MAX_POLL_BACKOFF_S)
+                    continue
+                backoff = 1.0
                 for u in updates:
                     self._offset = max(self._offset, int(u.get("update_id", 0)) + 1)
                     await self._handle_update(u)

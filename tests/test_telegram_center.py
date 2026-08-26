@@ -315,3 +315,81 @@ def test_notify_sends_to_owner():
     assert sent is True
     sent_messages = [c for c in calls if c["kind"] == "send_message"]
     assert sent_messages and sent_messages[0]["text"] == "task done"
+
+# ── Poll failure backoff ───────────────────────────────────────────────────
+def test_poll_failure_backs_off_instead_of_hammering(monkeypatch):
+    """A getUpdates API failure (e.g. 502 Bad Gateway) must back off
+    exponentially — _call() swallows the error internally, so without this
+    the long-poll loop re-polls at round-trip speed (~80ms) and risks
+    Telegram soft-throttling the bot IP. Revert-proof: on pre-fix code
+    (get_updates returns [] on failure) zero sleeps happen and the poll
+    count explodes."""
+    import asyncio
+
+    center = tc.TelegramCommandCenter()
+    polls = {"n": 0}
+    sleeps: list[float] = []
+
+    class FailingClient:
+        async def aclose(self):
+            pass
+
+        async def get_updates(self, offset):
+            polls["n"] += 1
+            return None  # what get_updates now returns on API failure
+
+    center._client = FailingClient()
+
+    real_sleep = asyncio.sleep
+
+    async def fake_sleep(delay):
+        sleeps.append(delay)
+        # stop after the 3rd failure so the test terminates deterministically
+        if len(sleeps) >= 3:
+            raise asyncio.CancelledError()
+        await real_sleep(0)
+
+    monkeypatch.setattr(tc.asyncio, "sleep", fake_sleep)
+
+    # _run() treats CancelledError as a clean stop signal (breaks the loop)
+    asyncio.run(center._run())
+
+    # exponential backoff: 1s -> 2s -> 4s (capped at 30s), NOT tight-looping
+    assert sleeps == [1.0, 2.0, 4.0]
+    # one poll per failure cycle — not dozens per second
+    assert polls["n"] == 3
+
+
+def test_poll_success_resets_backoff(monkeypatch):
+    """After a clean (even empty) long-poll, a later failure starts from the
+    1s floor again, not an accumulated cap."""
+    import asyncio
+
+    center = tc.TelegramCommandCenter()
+    # two failures, a SUCCESS (resets backoff), then one more failure to observe
+    responses = [None, None, [], None]
+    sleeps: list[float] = []
+
+    class Client:
+        async def aclose(self):
+            pass
+
+        async def get_updates(self, offset):
+            return responses.pop(0)
+
+    center._client = Client()
+
+    real_sleep = asyncio.sleep
+
+    async def fake_sleep(delay):
+        sleeps.append(delay)
+        if len(sleeps) >= 3:
+            raise asyncio.CancelledError()
+        await real_sleep(0)
+
+    monkeypatch.setattr(tc.asyncio, "sleep", fake_sleep)
+
+    asyncio.run(center._run())
+
+    # 1s, 2s after the failures; then a SUCCESS resets; next failure is 1s again
+    assert sleeps == [1.0, 2.0, 1.0]
