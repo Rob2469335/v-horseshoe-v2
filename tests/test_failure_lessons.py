@@ -35,7 +35,10 @@ async def test_failure_lesson_falls_back_to_generic_guidance():
 
 
 @pytest.mark.asyncio
-async def test_remember_failure_stores_reflexion_with_do_not_repeat():
+async def test_remember_failure_stores_reflexion_with_do_not_repeat(tmp_path, monkeypatch):
+    import swarm_os.services.reflection_loop as RL
+
+    monkeypatch.setattr(RL, "DIARY_PATH", tmp_path / "diary.jsonl")
     service = AgentServiceV2()
     service._remember = AsyncMock()
     store_mock = AsyncMock()
@@ -62,7 +65,10 @@ async def test_remember_failure_stores_reflexion_with_do_not_repeat():
 
 
 @pytest.mark.asyncio
-async def test_remember_failure_dedupes_identical_errors():
+async def test_remember_failure_dedupes_identical_errors(tmp_path, monkeypatch):
+    import swarm_os.services.reflection_loop as RL
+
+    monkeypatch.setattr(RL, "DIARY_PATH", tmp_path / "diary.jsonl")
     service = AgentServiceV2()
     service._remember = AsyncMock()
     store_mock = AsyncMock()
