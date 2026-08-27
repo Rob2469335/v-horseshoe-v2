@@ -111,9 +111,11 @@ _ANALYSIS_CLOUD_AGENTS = (
 
 
 def _analysis_cloud_model() -> str:
-    return os.getenv(
-        "ANALYSIS_CLOUD_MODEL", "nvidia_nim/deepseek-ai/deepseek-v4-flash-0731"
-    )
+    # User-chosen free-provider lead (2026-08-26): Gemini 2.5 Flash first
+    # (verified live HTTP 200), with the OpenRouter DeepSeek V4 Flash slots as
+    # fallbacks in the live chain. The previous default (NVIDIA NIM
+    # deepseek-v4-flash-0731) has been flaky/timing out on the free tier.
+    return os.getenv("ANALYSIS_CLOUD_MODEL", "gemini/gemini-2.5-flash")
 
 
 def _analysis_cloud_enabled() -> bool:

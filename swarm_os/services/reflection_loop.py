@@ -626,7 +626,38 @@ async def _distill(distiller_content: str, fix_class: str | None = None) -> str:
     )
 
     attempts = []
-    # 1. Verified free / healthy providers first (NVIDIA NIM DeepSeek-v4-Flash-0731)
+    # 1. Gemini 2.5 Flash first — verified live HTTP 200 free provider (user-chosen
+    # lead for the distiller; Google AI Studio free tier, no quota flakes observed).
+    if os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"):
+        attempts.append(
+            {
+                "model": "gemini/gemini-2.5-flash",
+                "messages": [{"role": "user", "content": distiller_content}],
+                "max_tokens": DISTILLER_MAX_TOKENS_CLOUD,
+                "timeout": 90.0,
+            }
+        )
+    # 2. OpenRouter DeepSeek V4 Flash — verified live HTTP 200 free/cheap DeepSeek
+    # (user-chosen second). Non-corporate: routes across ~22 upstream providers.
+    if os.environ.get("OPENROUTER_API_KEY"):
+        attempts.append(
+            {
+                "model": "openrouter/deepseek/deepseek-v4-flash-0731",
+                "messages": [{"role": "user", "content": distiller_content}],
+                "max_tokens": DISTILLER_MAX_TOKENS_CLOUD,
+                "timeout": 120.0,
+            }
+        )
+        attempts.append(
+            {
+                "model": "openrouter/deepseek/deepseek-v4-flash",
+                "messages": [{"role": "user", "content": distiller_content}],
+                "max_tokens": DISTILLER_MAX_TOKENS_CLOUD,
+                "timeout": 120.0,
+            }
+        )
+    # 3. NVIDIA NIM DeepSeek-v4-Flash-0731 — kept (was the lead), but moved down:
+    # its inference endpoint has been flaky/timing out on the free tier today.
     if os.environ.get("NVIDIA_API_KEY") or os.environ.get("NVIDIA_NIM_API_KEY"):
         os.environ.setdefault(
             "NVIDIA_NIM_API_KEY", os.environ.get("NVIDIA_API_KEY", "")
@@ -639,17 +670,8 @@ async def _distill(distiller_content: str, fix_class: str | None = None) -> str:
                 "timeout": 180.0,
             }
         )
-    # 2. Gemini fallback
-    if os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"):
-        attempts.append(
-            {
-                "model": "gemini/gemini-2.5-flash",
-                "messages": [{"role": "user", "content": distiller_content}],
-                "max_tokens": DISTILLER_MAX_TOKENS_CLOUD,
-                "timeout": 90.0,
-            }
-        )
-    # 3. Groq fallback
+    # 4. Groq — key currently returns 403 (blocked), so kept but low; cooldown
+    # tracker will skip it after the first rejection rather than burning 90s.
     if os.environ.get("GROQ_API_KEY"):
         attempts.append(
             {
@@ -659,7 +681,7 @@ async def _distill(distiller_content: str, fix_class: str | None = None) -> str:
                 "timeout": 90.0,
             }
         )
-    # 4. OpenRouter fallback
+    # 5. OpenRouter generic agentic fallback
     if os.environ.get("OPENROUTER_API_KEY"):
         attempts.append(
             {
