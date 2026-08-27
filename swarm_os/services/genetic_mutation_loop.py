@@ -436,7 +436,12 @@ async def run_genetic_mutation(
                 f"slice ({indent_prefix!r})."
             )
         except Exception as e:
-            last_error = str(e)
+            # TimeoutError (from asyncio.timeout() around the acall) has
+            # str() == "" — an empty last_error would write an empty "error"
+            # body and recreate the exact undiagnosable-halt problem the
+            # durability fix exists to prevent. Fall back to a descriptive
+            # class-name message when str(e) is empty.
+            last_error = str(e) or f"{type(e).__name__} (no message)"
             logger.warning(f"Sandbox test failed on attempt {attempt + 1}: {e}")
             prompt = (
                 prompt

@@ -109,6 +109,27 @@ def test_mutation_history_entries_are_dicts_with_error_field():
     assert '"outcome": e' in src.replace("    ", " ")
 
 
+def test_mutation_loop_timeouterror_does_not_yield_empty_error_body():
+    """A TimeoutError (e.g. from asyncio.timeout() around the hung NIM acall)
+    has str() == '', so assigning last_error = str(e) would persist an empty
+    "error" body — recreating the exact undiagnosable-halt problem the
+    durability fix exists to prevent (the live 23:08 entry had error='').
+    The generic except handler must fall back to a non-empty class-name
+    message when str(e) is empty.
+
+    Revert-proof: str(e) of a bare TimeoutError is ''; without the fallback
+    the recorded body is empty (the bug)."""
+    import inspect
+    import swarm_os.services.genetic_mutation_loop as gml
+
+    src = inspect.getsource(gml.run_genetic_mutation)
+    # The generic except handler must not blindly assign str(e): an empty
+    # str(e) (TimeoutError) must fall back to a class-name message.
+    assert 'last_error = str(e) or f"{type(e).__name__} (no message)"' in src
+    # And the durability record must use that non-empty body.
+    assert 'last_error[-2000:] if last_error else ""' in src
+
+
 def test_mutation_history_load_tolerates_legacy_bare_strings(tmp_path, monkeypatch):
     """If mutation_history.json contains old bare strings ('success'/'failure'),
     the load path must coerce them to dicts without raising — so existing
