@@ -110,12 +110,16 @@ async def run_genetic_mutation(
             if not _is_local_model(f["model"])
             and not is_model_cooled_down(f["model"])
         ]
-        # Also treat MODEL itself as dead if it is on cooldown from a prior tick —
-        # the catalog-based _fetch_nvidia_models() returns the model even when the
-        # inference endpoint is quota-hung (verified: /v1/models 200 OK while
-        # /v1/chat/completions hangs until timeout).
-        primary_live = not _is_local_model(MODEL) and not is_model_cooled_down(MODEL)
-        if not live_cloud and not primary_live and not _is_local_model(MODEL):
+        # REGRESSION FIX (cfa3ee6): "not on cooldown" is NOT "reachable". A freshly
+        # started process has no cooldown records, so a cloud MODEL with nothing
+        # cooled-down would set primary_live=True and the empty-chain fail-fast
+        # never fired — the loop then called the LLM 3x against a dead chain and
+        # tripped "Evolution halted". Liveness = an actually-reachable fallback
+        # (live_cloud), not the absence of a cooldown marker. A qualifying-hung
+        # catalog model is still handled: the cooldown filter above excludes it
+        # from live_cloud, so with MODEL cloud + an empty chain we fail fast here.
+        # (local MODEL stays usable — local always reachable, never fails fast.)
+        if not live_cloud and not _is_local_model(MODEL):
             logger.warning(
                 "No live cloud provider available (all cooling down or empty "
                 "chain) — skipping mutation cycle this tick instead of burning "
