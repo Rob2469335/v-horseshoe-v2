@@ -27,7 +27,7 @@ from transformers import (
     TrainingArguments, DataCollatorForLanguageModeling,
 )
 from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training
-from transformers import Trainer
+from transformers import Trainer, TrainerCallback
 
 def _init_msvc():
     vcvars = r"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
@@ -52,6 +52,31 @@ DATA_FILE = r"C:\Users\rober\Projects\qwen_train_data\real_25_dataset_v4.jsonl"
 MAX_LEN = 2528  # measured ceiling; dataset rows peak ~2466 -> headroom
 
 SMOKE = "--smoke" in sys.argv
+MEM_TRACE = os.environ.get("V4_MEM_TRACE") == "1"          # observation only
+PROBE_STEPS = int(os.environ.get("V4_PROBE_STEPS") or 0)    # cap for a short growth probe (0 = off)
+DATA_FILE = os.environ.get("V4_DATA_FILE") or DATA_FILE      # test-suite override
+
+
+class MemTrace(TrainerCallback):
+    """Per-step XPU memory sampler (observation only by default).
+    When V4_EMPTY_CACHE=1 it ALSO calls torch.xpu.empty_cache() each step to tell
+    level_zero to return idle reserved blocks to the driver. This targets the
+    2026-08-29 finding: reserved flat at 13.5 GiB while allocated is only 4.1 GiB
+    (~9.4 GiB reserved-but-idle), so the transient backward spike (~1.95 GiB)
+    exhausts the shared-DRAM's actually-writable memory. NOT a training-logic
+    change — only frees cached idle blocks between steps."""
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        if not MEM_TRACE:
+            return
+        try:
+            if os.environ.get("V4_EMPTY_CACHE") == "1":
+                torch.xpu.empty_cache()
+            alloc = torch.xpu.memory_allocated() / (1024 ** 3)
+            res = torch.xpu.memory_reserved() / (1024 ** 3)
+            print(f"[MEM] step={state.global_step} alloc={alloc:.3f}GiB reserved={res:.3f}GiB "
+                  f"free(approx)={16.40 - alloc:.3f}GiB loss={logs.get('loss') if logs else '?'}", flush=True)
+        except Exception as e:
+            print(f"[MEM] sampler error: {e}", flush=True)
 
 
 def load_data(filepath):
@@ -174,14 +199,15 @@ def main():
             report_to="none",
             gradient_checkpointing=True,
             remove_unused_columns=False,
+            max_steps=PROBE_STEPS if PROBE_STEPS else None,
         )
-
     collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
     trainer = Trainer(
         model=model,
         args=training_args,
         train_dataset=dataset,
         data_collator=collator,
+        callbacks=[MemTrace()] if MEM_TRACE else [],
     )
 
     print("Starting XPU training...")
