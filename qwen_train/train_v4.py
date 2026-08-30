@@ -151,6 +151,7 @@ def main():
         device_map="xpu",
         torch_dtype=torch.float16,
         low_cpu_mem_usage=True,
+        attn_implementation="sdpa",
     )
 
     model.config.use_cache = False
@@ -180,7 +181,7 @@ def main():
         )
         print("SMOKE MODE: 2 steps, no save.")
     else:
-        training_args = TrainingArguments(
+        _base_args = dict(
             output_dir=OUTPUT_DIR,
             per_device_train_batch_size=1,
             # accum=1: this is the exact footprint the smoke test validated.
@@ -199,8 +200,10 @@ def main():
             report_to="none",
             gradient_checkpointing=True,
             remove_unused_columns=False,
-            max_steps=PROBE_STEPS if PROBE_STEPS else None,
         )
+        if PROBE_STEPS:
+            _base_args["max_steps"] = PROBE_STEPS
+        training_args = TrainingArguments(**_base_args)
     collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
     trainer = Trainer(
         model=model,
