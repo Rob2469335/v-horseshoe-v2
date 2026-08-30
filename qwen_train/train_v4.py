@@ -158,7 +158,12 @@ def main():
         training_args = TrainingArguments(
             output_dir=OUTPUT_DIR,
             per_device_train_batch_size=1,
-            gradient_accumulation_steps=4,
+            # accum=1: this is the exact footprint the smoke test validated.
+            # v3 inherited gradient_accumulation_steps=4, which OOM'd the combined
+            # run (peak `9.84 GiB allocated`) — the accumulation window holds 4
+            # micro-batches of backward work + the ~2.4GB fp32 logits before the
+            # optimizer step. batch=1 on only 23 rows means accum>1 buys nothing.
+            gradient_accumulation_steps=1,
             learning_rate=2e-4,
             num_train_epochs=5,
             save_strategy="epoch",
