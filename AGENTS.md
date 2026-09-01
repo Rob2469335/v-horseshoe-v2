@@ -602,24 +602,130 @@ Dependency pairing: React 19 ↔ `@react-three/fiber` ^9.5 / `@react-three/drei`
 > cross-check `qwen_train/results/` + running processes. If primary is stuck/
 > idle here, pick the thread up.
 
-**CURRENT (2026-08-31 ~01:55):** V4.1 diagfix EVAL DONE — **NULL/NEGATIVE RESULT.**
+**CURRENT (2026-09-01 ~13:50):** Discriminator experiment DONE. Budget-raise
+test (1200) on diagfix adapter: pre-registered discriminator outcome MIXED.
+`8bedf38` + `e861842` are budget-limited (localize at 1200); `ba4bc86` is a
+genuine capability gap (5475ch reasoning, no file ID even with oracle). Full
+10-item gate at 1200: finish=10/10, struct=10/10, **diag_content=4/10**
+(vs 2/10 at 600, 4/10 V4 baseline); **diag_c+r=10/10** (perfect — all files
+named in reasoning). The 4/10 content-gate is still the same ceiling as V4
+baseline — the content-only path-naming is a separate generation-structure
+issue from the budget. **Production serving fix:** raise `--reasoning-budget`
+to 1200 (fixes 2/3 residual failures; fixes 2/10→4/10 content-gate lift).
+`ba4bc86` remains unresolved — scaffolding needed (pre-narrow file before
+reasoning). Eval server shutting down. AGENTS.md commit pending.
+
+**Live servers:** eval server stopping. Production stack OFF (user: do not
+relaunch in this session).
 Full 10-item exam (diagfix GGUF on :8087, budget 600): finish_stop **10/10**,
 structure **10/10**, content-only diag_gate **2/10** (BELOW both the pre-registered
 ≥8/10 bar AND the V4-baseline's 4/10); content+reasoning 7/10 (baseline 8/10).
 Decisive read: the trained path-led DIAGNOSIS format did NOT transfer — zero of
 the 10 outputs open DIAGNOSIS with "File: <path> —" despite 5 epochs on 21
 spliced examples. No-regression check PASSED (structure 10/10, finish 10/10,
-answers read naturally — the splice didn't degrade readability). This is the
-**third null at 23-example scale** (adj flicking after Treat-A prompt +2/10
-and FILES:-habit refuted): at this LoRA scale the model does not change its
-answer-formatting habit even when explicitly trained to lead DIAGNOSIS with the
-path. Path-carry needs a generation-structure change or a fundamentally larger/
-different training regime — not more trace-format tweaks. ~57.6 GB of scratch
-intermediates deleted (sandbox/f32/merged/probe dirs). Production llama stack
-still OFF — relaunch after eval servers shut down.
+answers read naturally). This is the **third null at 23-example scale**. Then —
+**TWO-CALL STRUCTURED EXTRACTION TESTED (same session, GBNF mechanism): 7/10
+vs free-text 2/10 — mechanism WORKS, bar just missed.** Given the manual
+`response_format: json_schema` path fails on this build (systematic empty/
+truncated output — schema→grammar constraint too heavy on the thinking-phase
+budget), the GBNF `/completion` grammar path was used: reason freely (existing
+`reasoning_full`), then a SECOND grammar-constrained extraction call forces
+`{files:[],diagnosis,plan,validation}`. Result: **7/10 correct path recovery**
+(2729510→email_service, 7905cb7→tool_executor, 8307faf→control.py,
+bedddcf/ccf628d/e2e6b5c→competitive_intel, c4f410f→email_service). 3 failures:
+`8bedf38`+`ba4bc86` = CONTENT hallucination (extractor invented
+`tasks/test_is_due_daily.py`, `telegram_notifications.py` not in reasoning —
+grammar constrains FORMAT not CONTENT, the documented llama.cpp limitation);
+`e861842` = grammar string truncation (1 syntax fail). So the constrained-
+extraction approach robustly fixes the path-carry gap (2/10→7/10) but does NOT
+clear ≥8/10, and inherits the content-hallucination risk when reasoning lacks
+the verbatim path. **v2 refinement runs (same session, same GBNF path) — the
+"PASS" framing was WRONG once grounding-audited; the truthful result stays
+7/10.** Two near-zero-cost tweaks were applied: `n_predict` 500→1500 + an
+explicit anti-fabrication instruction ("files array must contain ONLY paths
+VERBATIM in the reasoning; if none, empty []"). Gate output was **9/10
+(numerically PASS)** and zero syntax failures — BUT a grounding audit
+(extracted-file-present-in-reasoning check) shows the real number is **7/10**:
+`ba4bc86` + `e861842` 'passed' only because the extractor FABRICATED
+`competitive_intel.py` (their reasoning contains ZERO `.py` mentions — nothing
+to extract), and `8bedf38` fabricated a wrong file (hit=False). The 2 'extra'
+hits are lucky guesses that match GT, not grounded extractions — the
+anti-fabrication rule did NOT stop the guessing on exactly the items whose
+reasoning lacks a path. **Honest bottom line:** GBNF two-call extraction
+mechanically improves path-carry (2/10 → 7/10 grounded), but a free `string`
+grammar rule cannot enforce *content* grounding, and `competitive_intel.py`
+is a strong prior the extractor latches onto even when absent. The residual
+failure is upstream (reasoning that lacks a verbatim path on 3 items), not the
+extraction step per se. ~57.6 GB scratch deleted. Production llama stack OFF.
+**THREE-ITEM REASONING AUDIT (2026-08-31, read-only, no server): the residual
+"reasoning lacks a verbatim path" gap is Category-2 GENUINE NON-LOCALIZATION,
+not or with budget-cutoff.** Read the full `reasoning_full` of the 3 items whose
+extraction couldn't find a path (8bedf38, ba4bc86, e861842): all 3 reason about
+the bug's WHAT (behavior/symptom) but NEVER name a file or perform the WHERE
+step at all — e.g. 8bedf38 discusses the flaky test's time-dependence without
+ever writing `tests/test_command_center_sota.py` (which IS in prompt context +
+`RELEVANT FILES`); ba4bc86 says "the Telegram notification service" without
+`competitive_intel.py`; e861842 says "the stored snapshot" without the file.
+Two (ba4bc86 at ~679 tok, e861842 at ~792 tok) ALSO hit the 600-token reasoning
+budget mid-approach (reasoning tails: "9. We can use", "the system is"),
+i.e. transition forced before any localization step; 8bedf38 (~592 tok) ends
+naturally without localizing. Unifying: at this budget the adapter tends to
+stop reasoning before reaching file identification — whether from
+non-spontaneous localization (8bedf38) or budget-clipping mid-approach
+(ba4bc86, e861842), and it ignores the RELEVANT FILES oracle line sitting in
+the prompt. Open lever (bounded, next-session): test whether raising the
+reasoning budget on these 3 items (e.g. 900-1200) lets the model reach and
+name the file, vs. Category-2 being a fixed property of these particular bugs.
+**Pre-registered discriminator for the budget-raise test (2026-08-31, so the
+next run is decisive, not partial): the two hypotheses are NOT independent —
+localization may be structurally LAST in the model's reasoning sequence, so
+ANY budget that interrupts mid-reasoning hits it, and 8bedf38's ~592-token
+"natural ending" may be under-budget under-reasoning (gave up when ~600 felt
+like the expected length), not genuine completion. THEREFORE run ALL THREE at
+the raised budget (e.g. --reasoning-budget 1200), not just the 2 budget-clipped
+ones, and read the discriminator on 8bedf38 specifically:
+  (a) IF 8bedf38 ALSO localizes at 1200  -> all 3 are the SAME phenomenon
+      (localization-late + budget-limited); the ~592 "natural end" was
+      under-reasoning. ONE uniform fix: raise budget / stop under-forcing
+      transitions. => the whole 3-item gap is budget/serving, and the answer
+      to "why does reasoning drop the path" is "because it's cut off (or
+      self-stops short) before the late localization step."
+  (b) IF 8bedf38 STILL does not localize at 1200 -> genuinely distinct:
+      8bedf38 = capability gap independent of budget (held ~592 natural end,
+      still no where-step); ba4bc86 + e861842 = budget-clipped. TWO distinct
+      fixes: budget/transition tuning for the latter, scaffolding (pre-narrow
+      the file before reasoning) for the former.
+Re-run = same 10-item exam path, `--reasoning-budget 1200`, temp 0, only these
+3 items needed but running all 10 keeps the tally comparable. Record the
+8bedf38 discriminator outcome explicitly either way.
 
-**Live servers:** diagfix eval :8087 UP (shut down per standing note after
-record). XPU done. Eval 8086 down. Production llama stack OFF.
+**BUDGET-RAISE DISCRIMINATOR — RESULT (2026-09-01, `diagfix_budget1200_full.jsonl`):**
+pre-registered discriminator outcome is **MIXED**, not a clean (a) or (b):
+- `8bedf38` **(a) budget-limited**: localizes `tests/test_command_center_sota.py`
+  at budget 1200 (was ~592-tok natural end without file at 600)
+- `e861842` **(a) budget-limited**: localizes `competitive_intel.py` at budget 1200
+  (was ~792-tok budget-clipped without file at 600)
+- `ba4bc86` **(b) genuine capability gap**: 5475ch reasoning at budget 1200,
+  GT file `competitive_intel.py` present in `RELEVANT FILES` oracle, model
+  never performs the "where" step. UNRESOLVED — needs scaffolding (pre-narrow
+  the file before reasoning), not scale.
+
+**Full 10-item gate at budget 1200:**
+| gate | diagfix @600 | diagfix @1200 |
+|---|---|---|
+| finish=stop | 10/10 | 10/10 |
+| structure | 10/10 | 10/10 |
+| **diag_content** | **2/10** | **4/10** |
+| diag_c+r | 7/10 | **10/10** |
+
+The 4/10 content-gate ceiling is the same as the V4 baseline — the path-string
+is still lost between reasoning and final answer even with the extra budget.
+The budget lift fixes LOCALIZATION (diag_c+r 7→10/10) but does not fix the
+FINAL-ANSWER path restatement (content-only remains 4/10). That's a separate
+generation-structure issue.
+
+**Live servers:** none running. Eval done. XPU done. Production stack OFF —
+relaunch via start-dev.ps1 when ready.
 
 ---
 
