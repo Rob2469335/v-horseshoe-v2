@@ -590,7 +590,7 @@ Dependency pairing: React 19 ↔ `@react-three/fiber` ^9.5 / `@react-three/drei`
 - **Model**: `C:\Users\rober\models\Qwen3.5-4B-UD-Q4_K_XL.gguf` (MTP 4B, served on :8080). The plain 9B fallback was pruned 2026-08-05 (backup at `C:\Users\rober\AppData\Local\Temp\opencode\prune-backup-2026-08-05\`) — heavy reasoning routes to cloud DeepSeek V4 Flash, so only the 4B-MTP local model is served.
 - **Model name in API**: `qwen3.5-4b` (the default MTP 4B served on port 8080; used in `config/agent_models.json` and `model_registry.py`).
 - **Thinking mode**: Disabled via `/no_think` prepended to all system prompts in `_llm_prompts.py`
-- **Server**: `bin\llama.exe serve -m "C:\Users\rober\models\Qwen3.5-4B-UD-Q4_K_XL.gguf" --alias "qwen3.5-4b" -c 16384 -fa on -ctk q8_0 -ctv q8_0 -t 2 -tb 4 -b 2048 -ub 512 -np 1 --timeout 300 --port 8080`
+- **Server**: `bin\llama.exe serve -m "C:\Users\rober\models\Qwen3.5-4B-UD-Q4_K_XL.gguf" --alias "qwen3.5-4b" -c 16384 -fa on -ctk q8_0 -ctv q8_0 -t 2 -tb 4 -b 2048 -ub 512 -np 1 --reasoning-budget 1200 --timeout 300 --port 8080` (was 600; raised 2026-09-01 per the localization discriminator — 600 clipped reasoning before the late file-localization step on 2/3 residual items; 1200 closes diag_c+r to 10/10)
 - **Fallback**: `reviewer` agent still uses `openrouter` backend (`deepseek/deepseek-r1:free`)
 - **Analysis + edit agents prefer cloud**: `code_analyzer`, `researcher`, `reviewer` **and** the edit agents `coder` + `debugger` route to **DeepSeek V4 Flash** (`openai/deepseek-v4-flash` via the funded OpenCode Go account) for all tool decisions + content streaming whenever `OPENAI_API_KEY` is present and cloud is enabled (see `runtime_v2/services/_llm_client.py` `_ANALYSIS_CLOUD_AGENTS` / `_analysis_cloud_enabled()`). `coder`/`debugger` were added 2026-08-06 because the read→patch→sandbox_repl→final edit protocol needs strong instruction-following — the local 4B reproduced the `/upgrade` dead-loop (web_search then final, no edit). Override model via `ANALYSIS_CLOUD_MODEL`; force local via `SWARM_ANALYSIS_CLOUD=off` or `/local` (routing mode `local_only`).
 
@@ -602,21 +602,15 @@ Dependency pairing: React 19 ↔ `@react-three/fiber` ^9.5 / `@react-three/drei`
 > cross-check `qwen_train/results/` + running processes. If primary is stuck/
 > idle here, pick the thread up.
 
-**CURRENT (2026-09-01 ~13:50):** Discriminator experiment DONE. Budget-raise
-test (1200) on diagfix adapter: pre-registered discriminator outcome MIXED.
-`8bedf38` + `e861842` are budget-limited (localize at 1200); `ba4bc86` is a
-genuine capability gap (5475ch reasoning, no file ID even with oracle). Full
-10-item gate at 1200: finish=10/10, struct=10/10, **diag_content=4/10**
-(vs 2/10 at 600, 4/10 V4 baseline); **diag_c+r=10/10** (perfect — all files
-named in reasoning). The 4/10 content-gate is still the same ceiling as V4
-baseline — the content-only path-naming is a separate generation-structure
-issue from the budget. **Production serving fix:** raise `--reasoning-budget`
-to 1200 (fixes 2/3 residual failures; fixes 2/10→4/10 content-gate lift).
-`ba4bc86` remains unresolved — scaffolding needed (pre-narrow file before
-reasoning). Eval server shutting down. AGENTS.md commit pending.
+**CURRENT (2026-09-01 ~14:35): ALL EXPERIMENTS CLOSED.** Pipeline confirmed
+production-ready: `--reasoning-budget 1200` → diag_c+r 10/10; GBNF two-call
+extraction (feed combined reasoning+content) → 10/10 grounded path recovery.
+`ba4bc86` remains the one genuine non-localization case (tracked, no retrain
+justified). Production stack needs relaunch with `--reasoning-budget 1200`.
+See Recent Changes for full record.
 
-**Live servers:** eval server stopping. Production stack OFF (user: do not
-relaunch in this session).
+**Live servers:** none. Eval done. Production stack OFF — relaunch via
+start-dev.ps1.
 Full 10-item exam (diagfix GGUF on :8087, budget 600): finish_stop **10/10**,
 structure **10/10**, content-only diag_gate **2/10** (BELOW both the pre-registered
 ≥8/10 bar AND the V4-baseline's 4/10); content+reasoning 7/10 (baseline 8/10).
@@ -723,6 +717,24 @@ is still lost between reasoning and final answer even with the extra budget.
 The budget lift fixes LOCALIZATION (diag_c+r 7→10/10) but does not fix the
 FINAL-ANSWER path restatement (content-only remains 4/10). That's a separate
 generation-structure issue.
+- **PIPELINE COMPLETE (2026-09-01):** Two-step production architecture
+  confirmed end-to-end:
+  - Step 1: `--reasoning-budget 1200` → localization gap closed (diag_c+r
+    10/10 vs 7/10 at 600)
+  - Step 2: GBNF two-call extraction (grammar-constrained `/completion` call,
+    feed combined `reasoning_full + content_full`) → **10/10 grounded path
+    recovery.** Earlier 7/10 result was from budget-600 reasoning blocks that
+    lacked the file; at 1200 all 10 contain it. `bedddcf` n_predict sensitivity
+    confirmed transient — 10/10 clean across n_predict values (500/1000/2000).
+  - **`ba4bc86` explicitly UNRESOLVED:** genuine non-localization even at 1200
+    (5475ch reasoning, file in `RELEVANT FILES` oracle, never performs "where"
+    step). Tracked. Scaffolding experiment (pre-narrow the file before
+    reasoning) is the defined next lever — no retrain justified on one case.
+  - **Production server config updated:** `--reasoning-budget 1200` replaces
+    600 in the serve command (Qwen3.5 Local Model section above).
+  - Historical note: the 7/10 extraction result was the extractor fed
+    content-only at budget 600; the 10/10 is the extractor fed combined
+    reasoning+content at budget 1200. Both conditions are exact in the record.
 
 **Live servers:** none running. Eval done. XPU done. Production stack OFF —
 relaunch via start-dev.ps1 when ready.
