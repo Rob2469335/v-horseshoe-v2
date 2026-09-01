@@ -55,6 +55,7 @@ SMOKE = "--smoke" in sys.argv
 MEM_TRACE = os.environ.get("V4_MEM_TRACE") == "1"          # observation only
 PROBE_STEPS = int(os.environ.get("V4_PROBE_STEPS") or 0)    # cap for a short growth probe (0 = off)
 DATA_FILE = os.environ.get("V4_DATA_FILE") or DATA_FILE      # test-suite override
+OUTPUT_DIR = os.environ.get("V4_OUTPUT_DIR") or OUTPUT_DIR   # allows a fresh adapter dir per experiment (diagfix etc.)
 
 
 class MemTrace(TrainerCallback):

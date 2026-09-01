@@ -602,18 +602,24 @@ Dependency pairing: React 19 ↔ `@react-three/fiber` ^9.5 / `@react-three/drei`
 > cross-check `qwen_train/results/` + running processes. If primary is stuck/
 > idle here, pick the thread up.
 
-**CURRENT (2026-08-31 ~22:20):** Experiment A fully closed (adapter 6/10,
-base 8/10 content-gate — refuted "generic" prediction, gap is adapter-disproportionate).
-Follow-up mechanism check DONE: adapter's Treat-A failures (#2729510, #8307faf,
-#e2e6b5c, #e861842) do NOT have the path in a `FILES:` section either — the path
-is absent from the ENTIRE final answer on all 4, so "learned non-redundancy
-(FILES: is enough)" is REFUTED; the path-string is lost across the
-reasoning→final boundary worse in the adapter, and the trained FILES: habit
-doesn't carry it. Next (when resumed): decide the trace-format fix (force path
-into DIAGNOSIS line of training answers) vs context-precision (B); commit the
-AGENTS.md refinement below.
+**CURRENT (2026-08-31 ~01:55):** V4.1 diagfix EVAL DONE — **NULL/NEGATIVE RESULT.**
+Full 10-item exam (diagfix GGUF on :8087, budget 600): finish_stop **10/10**,
+structure **10/10**, content-only diag_gate **2/10** (BELOW both the pre-registered
+≥8/10 bar AND the V4-baseline's 4/10); content+reasoning 7/10 (baseline 8/10).
+Decisive read: the trained path-led DIAGNOSIS format did NOT transfer — zero of
+the 10 outputs open DIAGNOSIS with "File: <path> —" despite 5 epochs on 21
+spliced examples. No-regression check PASSED (structure 10/10, finish 10/10,
+answers read naturally — the splice didn't degrade readability). This is the
+**third null at 23-example scale** (adj flicking after Treat-A prompt +2/10
+and FILES:-habit refuted): at this LoRA scale the model does not change its
+answer-formatting habit even when explicitly trained to lead DIAGNOSIS with the
+path. Path-carry needs a generation-structure change or a fundamentally larger/
+different training regime — not more trace-format tweaks. ~57.6 GB of scratch
+intermediates deleted (sandbox/f32/merged/probe dirs). Production llama stack
+still OFF — relaunch after eval servers shut down.
 
-**Live servers:** none — all eval servers shut down.
+**Live servers:** diagfix eval :8087 UP (shut down per standing note after
+record). XPU done. Eval 8086 down. Production llama stack OFF.
 
 ---
 
