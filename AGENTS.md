@@ -15,6 +15,38 @@ Build: setuptools, `organism` CLI entrypoint
 
 ---
 
+## Machine Specs (verified 2026-08-30 — this is the only supported hardware)
+
+- **CPU**: Intel Core Ultra 5 135U (Meteor Lake) — 2 P-cores + 8 E-cores + 2 LP E-cores, 12 cores / 14 threads, 1.60 GHz base / 4.4 GHz turbo, 15 W base / 57 W turbo.
+- **iGPU**: Intel Arc integrated graphics (Meteor Lake) — **4 Xe-cores / 64 EU**. Shared system RAM (UMA), no dedicated VRAM.
+- **NPU**: Intel AI Boost (present; OpenVINO-rejected for Qwen3.5 — see NPU note in Recent Changes).
+- **System RAM**: 32 GB DDR5-5600.
+- **GPU/NPU memory**: shared DRAM. Intel Graphics Software → Graphics → General has **"Shared GPU/NPU Memory Override" = On, Memory Limit 27.3 GB** — this is what lets the XPU trainer reserve ~13.5 GiB. It is NOT a discrete GPU and does NOT make iGPU inference fast (token gen stays DDR5-bandwidth-bound).
+- **Driver**: Graphics driver 32.0.101.8991, Vulkan 1.4.356, D3D12, SM 6.7.
+
+> **Correction (2026-08-30):** there is **NO Arc A770** on this machine. Earlier entries
+> (and the QLoRA training notes) attributed training to a "16GB Arc A770" — that was
+> wrong. The training GPU is the Meteor Lake integrated Arc iGPU using shared DDR5.
+> The A770 claims below in the training notes are historical errors; the real hardware
+> is the table above.
+
+---
+
+## PROTECTED PATHS / DIRECTORIES (do NOT delete during disk-cleanup passes)
+
+These are live active-session artifacts that look like "intermediate files" but
+are NOT safe to prune without explicit approval — a cleanup sweep deleting them
+silently halts active work (2026-08-30: a housekeeping pass deleted the base
+model mid-session, stalling the eval for ~30 min; it had to be re-cloned).
+
+- `C:\Users\rober\models\` — ALL model weights (base, adapter GGUFs, embedders, vision). Treat as download-once.
+- `C:\Users\rober\Projects\qwen_train_data\` — train + exam datasets (`real_25_dataset_v4.jsonl`, `v4_exam_inputs.jsonl`, `v4_extracted_traces.jsonl`, `exam/` blind-judge records).
+- `C:\Users\rober\Projects\v-horseshoe-v2\qwen_train\` — pipeline scripts + `v4_lora_q4km.gguf` (the evaluation-ready merged adapter GGUF) + `results/` (exam outputs, verdicts).
+- `C:\Users\rober\Projects\qwen3_5_4b_real25_v4_lora\adapter\` — the trained LoRA weights (the product; re-trainable ~2h but wasteful).
+- Base model restore status: `C:\Users\rober\models\Qwen3.5-4B-Base-HF` (HF safetensors, ~8.6 GB) is mid-restore 2026-08-30 via curl/git-lfs; re-verify full checksum before treating it as complete. NOTE: llama.cpp serves GGUFs, so the base HF must be converted+quantized (or the Q4_K_XL GGUF re-obtained) before it can serve port 8086.
+
+Rule of thumb: **before deleting anything under `models/`, `qwen_train_data/`, or `qwen_train/`, confirm no training/eval run is active and no model is mid-download.**
+
 ## Standing Building Rules (read BEFORE every build — the Copilot guardrail, codified 2026-08-08)
 
 This is a production codebase that is already complete and CI-green — NOT a
@@ -564,7 +596,297 @@ Dependency pairing: React 19 ↔ `@react-three/fiber` ^9.5 / `@react-three/drei`
 
 ---
 
+## LIVE WORK LOG (updated in real time — Gemini can read this standalone)
+
+> Live status of what the primary agent is doing right now. Audit: check this,
+> cross-check `qwen_train/results/` + running processes. If primary is stuck/
+> idle here, pick the thread up.
+
+**CURRENT (2026-08-31 ~22:05):** Experiment A is fully DONE (adapter + base
+control both landed). Result: the "path-loss is a generic Qwen3.5-4B property"
+PREDICTION WAS REFUTED — base under the same Treat-A instruction reaches
+content-only diag_gate 8/10 (vs adapter 6/10) and names the file in final
+content where the adapter shows zero .py lines. So path-loss is DISPROPORTIONATE
+IN THE ADAPTER, not architecture-wide. Details in the Experiments record below.
+NEXT: decide whether a trace-format fix (adapter learned to put path in FILES:
+but not DIAGNOSIS) or context-precision (B) is worth it; then one clean
+commit+CI+push pass.
+
+**Live servers:** none — both eval runs done, eval servers shut down.
+
+---
+
 ## Recent Changes (do NOT re-apply)
+
+### V4 Adapter Evaluation — Base vs Adapter Loop-Rate Investigation (SETTLED FINDINGS — 2026-08-30)
+
+The loop is an INHERENT Qwen3.5-4B decoding property, NOT a V4-training defect.
+Dependency order (tally → isolation test → verdict) completed.
+
+FINAL RATES: **base 8/10 looped vs adapter 7/10 looped** — the adapter loops at
+essentially the SAME rate as the unmodified base (if anything base loops MORE).
+This lands in the pre-registered **≥6/10 → inherent base-model property**
+bucket, decisively ruling out "V4 training induced a degeneration."
+
+- **repeat_penalty does NOT fix it**: rp=1.2 and rp=1.3 both leave the adapter's
+  worst item (`real_exam_7905cb7`) at `finish=length`, 0 content, full 4096-token
+  burn; rp=1.3 produced MORE reasoning chars (20445 vs 18383) — the model resists
+  the penalty. Not a serving-config fix.
+- **Cross-pattern is symmetric, not V4-specific**: each model succeeds on some
+  items where the other loops. Base cleared `7905cb7` (adapter's 261× worst); base
+  looped `8307faf`/`e861842` where the adapter succeeded. The loop-prone items
+  DIFFER per model → the trigger is the model's own decoding path, not prompt
+  difficulty.
+- **ISOLATION TEST (settled the determinism/contamination question):** restarted
+  base on fresh `-np 1` (single slot, `kv_unified=false`, no contention). Three
+  clean reruns of item 1 produced **byte-identical output** (0 content, 19248ch
+  reasoning, 4096 tokens, 8-gram dup ratio 0.839 → a real loop, not long
+  reasoning) — so generation at temp=0 under clean serving is DETERMINISTIC
+  (mechanism 1 ruled out). A post-abandon-resend also gave identical 19248ch. The
+  earlier `finish=stop / 5556ch` base item-1 result — the ONE clean read — came
+  from the `n_slots=4` server and was the ANOMALY, not the norm: on the cleanest
+  serving, item 1 natively, deterministically loops. The tally does not need a
+  `-np 1` re-run to change its conclusion.
+- **PRACTICAL TAKEAWAY (keep both halves):** "not V4's fault" does NOT mean "V4
+  is validated/shippable." The adapter at 7/10 looped is a real integration
+  problem regardless of blame. The actionable conclusion: this model in this
+  serving config is not reliable enough to wire live, and no fine-tuning
+  (V4) fixed or worsened the fragility — it is a Qwen3.5-4B thinking-mode
+  stop-signal weakness under greedy decoding at this context length.
+- **Eval-harness lesson for any future V5 run:** serve comparisons with
+  `-np 1 -t 2 -tb 4` (the documented production config, NOT the n_slots=4 default)
+  so single-pass tallies are directly trustworthy rather than needing an isolation
+  re-run to back them.
+
+Known gap, recorded honestly: the `5556ch` clean-stop read was never reproduced
+in isolation; item 1 only ever loops under clean serving. The content-density
+comparison ("base pads vs adapter dense") is therefore only testable on the 2
+items where BOTH bases produced content (`8bedf38`, `7905cb7`) — n=2, not n=3.
+
+> **Caveat if the early "base 3× richer than adapter" item-1 density read is ever
+> referenced:** it was built on the `5556ch` clean-stop result, which this same
+> investigation later proved was the ANOMALY (base natively loops on item 1 under
+> clean serving). Not wrong as a read of that specific text, but it should NOT be
+> cited as representative of what base typically does on that item — base usually
+> loops there instead.
+
+## V4 Loop Investigation — SETTLED FINDINGS UPDATED (2026-08-31): `--reasoning-budget` eliminates the loop at serving time
+
+The open questions from the 2026-08-30 next-session list are now ANSWERED.
+The loop is confirmed to be a **serving-configuration problem, externally
+fixable with one llama.cpp flag** — it was never a training-quality problem,
+and a V5 retrain is NOT the right lever.
+
+**The mechanism (verified):** llama.cpp's native `--reasoning-budget N`
+(real sampler-level feature) forces a hard reasoning-token cutoff at N and
+closes the thinking phase (optionally injecting a transition message via
+`--reasoning-budget-message`, though plain budget-600 worked without one on
+our items). This is the production version of the manual budget-forcing +
+forced-transition approach the V4 dataset generation already used. Our build
+`b10107-c0bc8591e` supports it (`--reasoning-budget/-message`,
+`--reasoning [on|off|auto]`, full DRY set; `--no-repeat-ngram-size` does NOT
+exist in this build — DRY is the n-gram block that does).
+
+**Baseline (re-confirmed this session, `-np 1 -t 2 -tb 4 -b 2048 -ub 512`):**
+- Adapter `7905cb7`: 0 content, 15939ch reasoning loop, 8-gram dup 0.819, `finish=length`, 4096 tok / 812s.
+- Base item 1 (`8307faf`): natively loops under clean `-np 1` (per 2026-08-30 isolation proof).
+
+**With `--reasoning-budget 600` added (identical config, temp 0):**
+- **Adapter: 9/10 `finish=stop`, real content (1096–1785ch), reasoning dup <0.02**
+  (was 7/10 looped). Item 10 (`2729510`) still loops — but in the CONTENT
+  phase (18009ch content, dup 0.144, `finish=length`), matching the documented
+  Qwen3.5 low-budget failure mode where it ignores the end-of-reasoning marker
+  / emits a second response tag. Untested next: `--reasoning-budget-message`.
+- **Base: 10/10 `finish=stop`, real content (967–5009ch), reasoning dup <0.03**
+  (was 8/10 looped; item 1's *proven* deterministic loop → `stop`, 3264ch).
+  No crashes, no OOM on the clean solo run.
+- The identical config comparison is verified apples-to-apples: only `-m`,
+  `--alias`, `--port` differ between the two runs (full launch args on disk).
+
+**Honest asymmetry to record (do NOT elide):** base solved the loop MORE
+completely than the adapter (10/10 vs 9/10). The adapter's training-time
+budget alignment at 600 tokens did NOT give it an edge here — the honest
+reading is "the training didn't hurt, and wasn't necessary either; the serving
+fix works independent of what's trained."
+
+**What this settles:** the loop was never a trainable/retrainable property.
+V5 training is off the table as a fix for the loop. The adapter's earlier
+content-density edge (item-1 dense vs base padded) is the remaining `V4`
+differentiator, not loop rate — and that is still the OPEN question, now
+scoreable because both models produce content on all 10 items.
+
+**Density/quality comparison — RAN TO COMPLETION (2026-08-31): INCONCLUSIVE + null result.**
+The full pre-registered blind protocol ran end to end for the first time
+(10/10 scorable pairs — no empty-content exclusions). Results:
+- **The blind judge was unusable (position-sensitive).** 4/10 items were
+  swap-inconsistent (A-wins forward but A-wins swapped, i.e. judge flipped
+  with the letter order) — above the pre-registered cap of 2, so the pairwise
+  verdict is INCONCLUSIVE and only deterministic gates are usable. The tally
+  (adapter 4, base 2, 4 inconsistent) is void per the frozen policy. Do NOT
+  retry with a "better" judge and re-adjudicate the same pairs — the frozen
+  policy bars re-judging the same items (unblind_v4.py).
+- **The deterministic gates are the real finding, and they favor BASE, not
+  the adapter:**
+  | gate | adapter | base |
+  |---|---|---|
+  | finish=stop | 9/10 | 10/10 |
+  | structure 3-of-3 | 9/10 | 10/10 |
+  | **diagnosis names a GT file** | **4/10** | **3/10** |
+  Item 10 (`2729510`): adapter fails completely (content-phase loop, no
+  structure, no GT grounding) — base fully clean.
+- **PRACTICAL VOLUME-VS-VALUE READING (the V5 gating question) — SEE the
+  SELF-CORRECTION bullet below before reading further:** a 23-example
+  LoRA produced answer QUALITY statistically indistinguishable from base.
+  The initially-reported "both fail correct-file grounding 6-7/10" was
+  later corrected (bullets below): both models DO localize the correct file
+  in reasoning (base 10/10, adapter 8/10) — the apparent failure was a
+  content-only-gate artifact. The honest reading that SURVIVES the
+  correction: no evidence the adapter beats base on answer QUALITY (the
+  blind pairwise was INCONCLUSIVE), so a V5 retrain that is just "V4 with
+  more examples" would scale a result that hasn't demonstrated value at
+  small scale against a baseline it isn't clearly beating. Before ANY
+  retraining: the training signal itself needs re-examination (23-example set
+  and/or budget-forced TRACE quality — the operand, not the quantity — and
+  the trace format should force the GT path into the final answer), or a
+  different approach entirely. Judge-inconsistent pairs individually worth
+  human review before drawing ANY per-item conclusion from the tally.
+- **PHASE 1+2 AUDIT (2026-08-31, same session) + SELF-CORRECTION: the
+  "models can't localize" reading was a CONTENT-ONLY-GATE ARTIFACT — the
+  corrected finding is that both models DO localize reliably. (a) Gate
+  soundness (no near-miss problem): answers' path tokens compared to GT — no
+  differently-formatted-but-correct path was ever named; the gate never
+  false-passed. BUT the `diag_ok` gate checks `content` (final answer) ONLY,
+  so "localized correctly in the ` reasoning` block but didn't restate the
+  canonical path in the final diagnosis prose" was counted as a FAILURE.
+  (b) Corrected measure (gate over content+reasoning): **base 10/10, adapter
+  8/10** localize the correct GT file (adapter's only true misses: `8bedf38`,
+  `e861842`; base got both via reasoning). Every exam prompt also carries an
+  explicit `RELEVANT FILES:` oracle line, so "the path is buried in context"
+  was never the issue — the path is stated outright in the prompt. The real
+  gap is OUTPUT FORMAT: the final DIAGNOSIS doesn't always restate the
+  canonical path — a trace-format/training-signal artifact (V4 traces didn't
+  force the path into the final answer), NOT an attention/reasoning deficit
+  and NOT a data-quantity problem. Corrected takeaway: base localizes the
+  file perfectly under this eval (10/10), adapter near-perfectly (8/10);
+  the remaining V4-vs-base question is answer DENSITY/QUALITY, and the
+  density/quality blind-compare's "conclusion" must be re-read with this
+  corrected gate understanding (the 4/10-vs-3/10 gate table above overstated
+  adapter-vs-base as worse, when both actually localize in reasoning).
+- **MANUAL BLIND READ OF THE 4 SWAP-INCONSISTENT PAIRS (2026-08-31): the
+  null result is REINFORCED, and the judge's failure mode is now explained.**
+  Read each pair blind (A/B, before touching `blind_key_v4.json`), then
+  unblinded. Result: my picks split **2 base / 2 adapter**, and each pick
+  reconciled with the documented real-world fix: `8bedf38`→adapter (named the
+  real fixed-09:00-epoch fix), `bedddcf`→adapter (named `webpage_snapshot` +
+  `html.unescape`, the real root cause) — both correct-side wins; `8307faf`→base,
+  `e861842`→base (won on clarity/structure). Takeaways: (1) on 3 of 4 pairs the
+  sides were GENUINELY close (near-parity — that is why the judge flipped; the
+  "position-sensitivity" is largely a legitimate-close-call signal), reinforcing
+  **quality parity between adapter and base**. (2) On `bedddcf` the judge was
+  decisively WRONG — it preferred a 5009ch confident-but-fabricated answer over
+  the correct dense 1400ch one, i.e. it rewarded **length over correctness**
+  on exactly the item where length was a lie. So a length-blind / correctness-
+  weighted judge is required for any future compress, not a re-judge of these
+  pairs (still barred by the frozen policy). (3) Net: the 23-example adapter
+  does not systematically beat base on answer quality; wins are case-by-case
+  (adapter on correctness where it matched the real fix, base on clarity).
+  This is the honest shape of "null result at current scale."
+- Evidence: `qwen_train/results/` — `adapter_budget600_full2.jsonl`,
+  `base_budget600_full.jsonl`, `blind_packet_v4.jsonl`(+swapped,+key,+gates),
+  `judge_scores_v4.jsonl`, `exam_verdict_v4.json`. Note: `exam_adapter_results.jsonl`
+  / `exam_base_only_results.jsonl` now hold the CONVERTED budget-600 results
+  (schema shim `convert_results_for_packet.py`; prior protocol-shape copies
+  backed up as `.bak_protocol`).
+- **FIX: blind judge made length-blind (2026-08-31, `blind_judge_v4.py`)** —
+  the manual read of the 4 inconsistent pairs pinned the judge's flip to a
+  **length-over-correctness bias** (on `bedddcf` it preferred the 5009ch
+  confident-but-fabricated answer over the correct dense 1400ch one). Fixed by
+  **structural length-blindness**: both answers truncated to the shorter one's
+  length before judging (length differences GONE by construction, cannot be
+  gamed by prompt wording), plus a worked counter-example (the real `bedddcf`
+  case) added to the rubric primed against volume. **Validated: the length-blind
+  judge is 4/4 swap-consistent on exactly the 4 pairs that were 0/4
+  inconsistent before**, and on `bedddcf` it now correctly prefers the dense
+  correct answer over the long wrong one. Ready for any future comparison;
+  do NOT re-adjudicate the V4 pairs themselves (frozen policy — their verdict
+  stays INCONCLUSIVE). This judge fix is the one-time infra win that makes the
+  next comparison (e.g. path-restatement V4.1 vs base) trustworthy on the
+  first run.
+- **TRAINING-SIGNAL AUDIT (2026-08-31): answer-schema MISMATCH is real in the
+  data, but it does NOT explain the structure gap.** Auditing the 23 training
+  traces (`real_25_dataset_v4.jsonl`) found a genuine defect: **all 23 emit
+  `DIAGNOSIS/…/VERIFICATION:` and ZERO emit `VALIDATION:`**, while the eval
+  gate (`struct_ok`) looks for `DIAGNOSIS|PLAN|VALIDATION` — with path-
+  restatement already well-covered (22/23 restate a `.py` path in the answer).
+  **BUT — verification of cause-vs-number (the discipline that caught the
+  earlier localization near-miss):** the adapter's actual eval OUTPUTS all
+  contain `VALIDATION`, not `VERIFICATION` — at eval time the model followed
+  the run_exam.py system prompt (DIAGNOSIS/PLAN/VALIDATION), not its trained
+  trace schema. Recomputing the structure gate with `VERIFICATION` accepted as
+  equivalent changes NOTHING: adapter stays 9/10, base stays 10/10. So the
+  trace/eval schema mismatch is a **real training-data bug but NOT the cause
+  of the observed structure gap** — the adapter's sole structure miss
+  (`2729510`) is a genuine content-phase-loop failure, unrelated to section
+  naming. (Self-correction: an earlier 2026-08-31 entry in this section said
+  the mismatch "explains part of the structural story" — that attribution was
+  wrong; the mismatch is real but no adapter structure score was suppressed by
+  it.) Net actionable: the mismatch SHOULD still be fixed for any future
+  retrain (traces and eval should share one canonical schema), but it is NOT a
+  zero-cost rewind of the current verdict — the adapter-vs-base structure gap
+  (and overall null result) stands independent of it.
+  **Behavioral data point buried in the verification (worth keeping, 2026-08-31):**
+  the adapter followed the eval-time system prompt's `DIAGNOSIS/PLAN/VALIDATION`
+  schema over its own trained-in `VERIFICATION` habit on all 10 items — meaning
+  the LoRA's influence on output FORMAT is weak / overridable by instruction at
+  this training scale. Consistent with the null result: much of what the adapter
+  "does" at eval is the base model following instructions, not the LoRA weights
+  reshaping behavior. Implication: judging format compliance at eval measures
+  instruction-following, not LoRA effect — another reason a bigger V4 retrain is
+  not an evidence-backed lever until the training signal does something the base
+  doesn't already do.
+- **EXPERIMENT A — prompt-level path-enforcement (2026-08-31): REAL BUT PARTIAL,
+  below the pre-registered bar; the gap is NOT instruction-following.** The only
+  remaining no-retrain lever was "just tell the model to restate the path in the
+  final DIAGNOSIS." Pre-registered bar (adapter): content-only `diag_ok` ≥8/10 +
+  no structure regression. Ran the SAME 10-item exam on the adapter, same
+  `-np 1 -t 2 -tb 4 -b 2048 -ub 512 --reasoning-budget 600` config, with an added
+  system-prompt rule ("final DIAGNOSIS MUST restate the exact file path(s) from
+  RELEVANT FILES verbatim"). Result: content-only diag **4→6/10** (improved
+  `8bedf38`, `ccf628d`), structure stayed 9/10, content+reasoning diag reached
+  **10/10**. **Below the ≥8/10 bar = NOT a closing fix.** The decisive finding:
+  on the four still-failing items (`8307faf`, `2729510`, `e2e6b5c`, `e861842`)
+  the model had the EXACT path in reasoning (content+reasoning=True) AND was
+  explicitly instructed to restate it, yet STILL omitted it from the final
+  answer. So the miss is **NOT instruction-compliance and NOT retrieval** (context
+  is already GT-narrowed, verified 9/9) — it is the path-string being LOST between
+  the reasoning block and the final-answer phase (generation-architecture /
+  attention-recency), which no prompt rule overcomes while the thinking-then-answer
+  split exists. Implication for any real fix: change the GENERATION STRUCTURE
+  (e.g., a forced/tool-returned field that carries the path out of reasoning, or
+  removing/compressing the reasoning-to-answer handoff), not prompt wording,
+  not more training data. Adapter run: `adapter_treatA.jsonl`. (Base control run
+  not yet done — same treatment is trivial to run and would confirm whether base
+  behaves identically.)
+- **EXPERIMENT A BASE CONTROL (2026-08-31, `base_treatA.jsonl`): the
+  architecture-wide PREDICTION WAS REFUTED — path-loss is DISPROPORTIONATE IN
+  THE ADAPTER, not a generic Qwen3.5-4B property.** Same Treat-A instruction,
+  `-np 1 --reasoning-budget 600`, base on :8086. Result: content-only diag_gate
+  **base 8/10** vs **adapter 6/10** (baseline: base 3/10, adapter 4/10 — so the
+  instruction lifted base +5, adapter +2). Base names the correct file in final
+  CONTENT on `8307faf`/`e2e6b5c` (`swarm_os/api/control.py`, `competitive_intel.py`)
+  and reaches diag_content+reasoning 10/10. Adapter's final content on the same
+  items shows **zero .py lines**. Both finish/structure roughly par (base 9/10
+  stop, 8/10 struct; adapter 8/10 stop, 9/10 struct — `bedddcf`/`e861842`
+  run-specific finish=length). Interpretation: the adapter's answer-generation
+  habit differs from base's — a 23-example LoRA whose final-answer schema puts
+  the path in `FILES:` (22/23 traces) but NOT reliably in the DIAGNOSIS line,
+  so the instruction lands less effectively on it. The generic "just prompt it"
+  fix works on base but under-delivers on the adapter; a trace-format fix
+  (force the path into the final DIAGNOSIS of the training answers) targets
+  exactly the adapter's gap, and a "base-wired" deployment would not need it.
+
+Standing note: the eval servers :8086/:8087 should be shut down when not
+actively in use (merged — they have been shut down after each session).
 
 - **SERVICE: persist mutation-loop failure bodies to disk (`0aac128`, 2026-08-26)**: the 15:04 evolution halt was undiagnosable because the mutation failed its sandbox real-test suite 3x but the failure body (`out[-2000:]` at `genetic_mutation_loop.py:331`) only went to live console and evaporated with the process — `mutation_history.json` held only bare `"success"`/`"failure"` strings. `mutation_history` entries are now dicts `{"outcome", "ts", "error"}`; the success and max-retries-failure branches persist `last_error[-2000:]` (with the real-test failure message) so post-mortem debugging works without console access. Legacy bare-string files are coerced on load (no separate migration); the extinction check is tolerant of both shapes. On-disk `logs/mutation_history.json` migrated in place (25 entries). Tests: +2 (dict shape pinned in source; legacy bare-string load tolerates mixed old/new). 6/6 pass; ruff E9/F clean. **Follow-up from the same investigation (not code):** the upstream "Evolution halted" was characterized as a mutation-QUALITY failure — the same `nvidia_nim/deepseek-v4-flash-0731` produced a passing mutation on `agent_service_v2.py` an hour earlier; the 3 halted attempts failed the related-test suite. With this change, the next halt's body is recoverable.
 - **FIX: isolate organism-diary writes in failure-lesson tests (`9bb9d0b`, 2026-08-26)**: `test_remember_failure_stores_reflexion_with_do_not_repeat` and `test_remember_failure_dedupes_identical_errors` called `_remember_failure(... {"path":"x.py"}, "File not found: x.py")` with `time.time→1000.0` patched but **`RL.DIARY_PATH` not monkeypatched** — the method's local `from swarm_os.services.reflection_loop import DIARY_PATH` (agent_service_v2.py:827) resolved to the REAL shared `organism_diary.jsonl`, appending a synthetic `ts:1000.0` entry on every run. 292 such phantom entries accumulated, which `get_latest_failure()` (reads the diary reversed) kept re-distilling into ReflexionMemory every ~10min — driving the chronic "Distilling failure: File not found: x.py" rule churn that never converged (the file never exists). Both tests now monkeypatch `RL.DIARY_PATH` to a tmp path. Verified: 56/56 across failure_lessons/distill_gate/shared_reflexion/outcome_fitness; live diary byte-identical during the fixed run; ruff clean; 292 phantom `x.py` entries cleaned from `organism_diary.jsonl` (runtime state). **Diagnostic context (keep):** the `x.py` failures were TEST fixtures all along (`test_failure_lessons.py`, `test_shared_reflexion.py`, `test_repair_guards.py`), never real agent events — the distiller has no `x.py` to learn.
@@ -1449,6 +1771,141 @@ Converted `except:` → `except Exception:` (or specific types) in `swarm_os/cor
 
 ## Self-Healing & Self-Learning Fixes
 
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+The
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+The `
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+The
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+The
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+The `
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+The `
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+The
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+The researcher
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+The `
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+The `
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+The `
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+The
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+The researcher
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+The researcher
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+The
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+The researcher
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+The
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+The `
+
 - **[CANARY-FLAGGED: human review] (2026-08-25T00:21:38.223977+00:00)**: swarm_os/api/routes.py — test regression NOT attributable to swarm_os/api/routes.py; HUMAN REVIEW
 
 - **[CANARY-FLAGGED: human review] (2026-08-24T23:48:09.659086+00:00)**: swarm_os/api/routes.py — test regression NOT attributable to swarm_os/api/routes.py; HUMAN REVIEW
@@ -2200,6 +2657,12 @@ outes.py; (11) made pi_client.py async client creation thread-safe; (12) guarde
 
 ## QLoRA XPU Training (Aug 29, 2026): Lessons Learned
 
+### 8-API fan-out research: best-path for the OOM (2026-08-29)
+Ruled OUT (evidence from the fan-out, not opinion):
+- **IPEX-LLM is EOL/archived** (Intel set the repo read-only 2026-01-28, ~8 months old). It *would* be the canonical memory-managed nf4 QLoRA-on-Arc stack (`ipex_llm.transformers` loader + `load_in_low_bit="nf4"` + its own `prepare_model_for_kbit_training`/`get_peft_model`), and the trainer does run BARE `torch.xpu` + bitsandbytes with NO Intel layer installed. But building on an archived repo as the fix is a dead-end path — do NOT re-architect onto IPEX-LLM.
+- **`ipex` / `intel_extension_for_pytorch` is NOT even installed** in `qlora-xpu-test` (probed: `find_spec` returns None for both). So IPEX-specific memory knobs (`ipex.optimize(weights_prepack=False)`) are not in play at all — the whole stack is bare torch.xpu.
+- **Surviving untested lever: `attn_implementation="sdpa"`** — torch is 2.13.0+xpu (SDPA exists), transformers 5.16.0.dev0, model config has NO explicit attn_implementation. SDPA is the memory-efficient attention backend (fused, low-intermediate-memory backward) and is the ONE axis tonight never touched (everything else touched activation-volume/arena, not attention-intermediate storage). Directly targets the transient backward spike. Test at 2528 with row 3 back; if it clears the spike, keep all 23 rows. If not, the honest fallback stands (MAX_LEN≤2048 or drop >2048 rows, both compromising answer tails).
+
 ### Infrastructure: Intel XPU iGPU Memory Locks
 - **The Problem:** `torch.xpu.empty_cache()` does not reliably release shared VRAM on Intel iGPUs. Loading and unloading multiple models sequentially within the same long-running Python process will eventually trigger an Out-Of-Memory error or a silent hang.
 - **The Fix:** Architecture your pipeline so that each major stage (extraction, formatting, training, generation, judging) runs in its own isolated Python subprocess. Memory is guaranteed to be reclaimed when the process fully exits.
@@ -2219,7 +2682,8 @@ outes.py; (11) made pi_client.py async client creation thread-safe; (12) guarde
 
 ## V4 Dataset Architecture: The Oracle Context Pivot
 
-During the transition from V2 to V3, we discovered a fatal structural flaw in the dataset: the eal_25_dataset_v1.jsonl files only contained high-level summaries (TASK and EVIDENCE) but completely lacked the raw code. Because the ground-truth targets (DIAGNOSIS, PLAN) contained specific variable names (e.g., _PROBE_CLIENT_LOOP), we were inadvertently training models to confidently hallucinate code answers from vague text.
+During the transition from V2 to V3, we discovered a fatal structural flaw in the dataset: the 
+eal_25_dataset_v1.jsonl files only contained high-level summaries (TASK and EVIDENCE) but completely lacked the raw code. Because the ground-truth targets (DIAGNOSIS, PLAN) contained specific variable names (e.g., _PROBE_CLIENT_LOOP), we were inadvertently training models to confidently hallucinate code answers from vague text.
 
 To fix this in V4, we implemented the SWE-bench **Oracle Context** standard:
 1. We trace the SOURCE_COMMIT to extract the modified files at their pre-fix state (<commit>~1).
@@ -2237,8 +2701,14 @@ During V4 trace generation using the `Qwen3.5-4B-Base` model, two major mechanic
 
 ### V4 Environment Fixes & Training OOMs
 - **SPV_INTEL_bfloat16_arithmetic Crash:** When loading Qwen3.5 on Intel Windows XPU with bitsandbytes 4-bit, PyTorch crashed instantly with a SPIR-V arithmetic error. **Root cause:** The model's `config.json` specifies `bfloat16`. Without explicit typing in `from_pretrained`, PyTorch tries to load the unquantized weights in `bf16` which the Windows IPEX driver does not support natively. **Fix:** Passing `torch_dtype=torch.float16` explicitly during `from_pretrained` bypassed the crash entirely for both inference and training.
-- **Measured context ceiling (2026-08-29, worst-case probes on the longest 3522-token row, batch=1, gc=True, dynamic per-batch padding, 4-bit NF4 + LoRA r=8 all-4-attn-proj):** on the 16GB Arc A770, `max_seq_length` **2048/2432/2528 FIT, 2576+ OOM** (level_zero error 40 / torch OutOfMemory). The hard ceiling is ~2528; operate with headroom, **not at the edge** (memory reclaim is unreliable between processes on this stack). 4096 OOMs during cross-entropy (final logits tensor ~5GB).
+- **Measured context ceiling (2026-08-29, worst-case probes on the longest 3522-token row, batch=1, gc=True, dynamic per-batch padding, 4-bit NF4 + LoRA r=8 all-4-attn-proj):** on the Meteor Lake iGPU (shared DRAM, ~27.3 GB override), `max_seq_length` **2048/2432/2528 FIT, 2576+ OOM** (level_zero error 40 / torch OutOfMemory). The hard ceiling is ~2528; operate with headroom, **not at the edge** (memory reclaim is unreliable between processes on this stack). 4096 OOMs during cross-entropy (final logits tensor ~5GB).
   - **CORRECTION (2026-08-29, full-run curve via V4_MEM_TRACE over real steps):** "fits at the probe" was measured at **log boundaries only**. The REAL full 23-row run shows `torch.xpu.memory_allocated()` **flat at 4.10 GiB** across steps and `memory_reserved()` **flat at 13.51 GiB**, but OOMs at the **backward of the longest row** with a **transient ~1.95 GiB spike** (`Tried to allocate 1.95 GiB ... 9.84 GiB allocated`). So: no per-step growth/leak, **not** accumulation-dependent (identical 9.84 GiB spike at accum=1 and accum=4), **not** grad-checkpointing (disabling it OOM'd even earlier — level_zero error 40 on step 0), and NOT fixed by re-budgeting code context (longest row 2483→2466, both still spike). Root cause is a **level_zero reserved-vs-usable mismatch**: the arena reserves 13.5 GiB but the driver can't writably provide the transient backward peak on shared iGPU DRAM. The flat `reserved=13.5 / allocated=4.1` gap (~9.4 GiB reserved-but-unused) makes 2528 NOT reliably trainable despite the probe green-light. **Do not assume a max_length≤2528 row trains just because a 2-step probe fit.**
   - **FINAL MECHANISM (2026-08-29, exhaustive one-at-a-time):** the wall is the **single-step working set**, not the arena and not any one outlier row. Tested in isolation: (a) gradient-accumulation 4→1 — no change, same 9.84 GiB spike; (b) gradient-checkpointing OFF — OOM'd *earlier* (level_zero 40 on step 0, activations not released); (c) `torch.xpu.empty_cache()` per-step — `reserved` drops 13.5→5.36 GiB (works!) and reach improves step-4→step-8, but still OOMs; (d) dropping the longest row 3 (2483→max 2120) — reach improves one step but STILL OOMs, because 5 rows remain ≥2048 (2120/2104/2070/2059/2049) and each triggers the same transient ~8.8-9.8 GiB backward peak. **Conclusion: on this shared-DRAM iGPU, a 4B-model LoRA forward+backward at seq_len≥~2048 transiently needs ~8.8-9.8 GiB all-at-once, exceeding what level_zero can physically write, regardless of reserved-arena management or row removal.** empty_cache is available and helps reach but is NOT sufficient. The lever that actually reduces per-step peak is lowering `MAX_LEN` (seq-len-scaled logits/attention) — but that truncates the answer tail on rows >2048, which is exactly the field the pipeline must preserve (see the 2048-vs-answer-tension note).
 - **Global Context Budgeting (updated):** budget the code-context by **real tokenizer output, not characters** — Python source tokenizes at ~3.0-3.3 chars/token, so the old 8000-char target silently produced ~2400+ tokens and blew training max_seq_length. `get_prefix_code` (in the standalone `build_v4.py` pipeline) now truncates the code context to a **token** budget (`V4_CODE_TOKEN_BUDGET`, default 800) measured with the Qwen3.5 tokenizer, and the old char `<...TRUNCATED BY CHAR LIMIT...>` suffix (which leaked ~35 chars over budget per truncated file) is removed. Code context ~800 tokens + worst-overhead (prompt 152 + trace 616 + answer 877 = 1645) → worst assembled row ~2445, under the 2528 ceiling; trained dataset median ~1960 tokens, 0 rows over 2528. The `thinking` trace is budget-forced ≤600 tokens per AGENTS.md. **Training MUST use a dynamic-padding dataset** (tokenize with `truncation=True, max_length=<cap>` and NO `padding`; let `DataCollatorForLanguageModeling` pad per-batch, batch=1) — a fixed `padding="max_length"` pre-tokenization forces every step to pay for the longest example and OOMs at 3584.
+
+- **V4 Training Completed (2026-08-30):** Full 115-step run completed on the Meteor Lake iGPU XPU (no OOM). Runtime: 7099s (~2h). Train loss: 1.134 (started ~1.6, ended ~1.1). Grad norm was `nan` for first 3 steps (QLoRA warmup expected), normalized after. Memory stable at 4.11 GiB alloc / 5.38 GiB reserved throughout. Learning rate peaked at `2e-4` then decayed linearly. `train_v4.py` patched with `attn_implementation="sdpa"` (torch SDPA memory-efficient attention) and `max_steps` conditional (only set when `PROBE_STEPS > 0`, avoiding `None` → TrainingArguments crash). Adapter saved to `C:\Users\rober\Projects\qwen3_5_4b_real25_v4_lora\adapter\` (6.3 MB, LoRA r=8 all-4-attn-proj). Base model: `C:/Users/rober/Models/Qwen3.5-4B-Base-HF` (426 tensors). Adapter smoke test (`test_adapter.py`) confirmed model loads and produces coherent chain-of-thought reasoning. **CPU inference bottleneck**: merge+generate on CPU is extremely slow (~1200s+ timeout), so adapter validation should use `adapter_chat.py` or `inference.py` to avoid full merge, or run on XPU with small `max_new_tokens`. Correct Python env: `C:\Users\rober\Projects\qlora-xpu-test\Scripts\python.exe` (has peft/torch/transformers; default 3.14 Python lacks peft).
+- **V4 adapter serving + held-out exam harness (2026-08-30):** Merge→GGUF pipeline on llama.cpp b10107: the merged HF config carries `mtp_num_hidden_layers: 1`, so a default `convert_hf_to_gguf.py` run inflates block_count to 33 and produces a GGUF that fails to load with missing `blk.32.*` tensors — **`--no-mtp` is required**; converted+quantized artifact is `qwen_train/v4_lora_q4km.gguf` (Q4_K_M, 426 tensors). Adapter served on **:8087** (alias `qwen3.5-4b-v4lora`), base control on **:8086** (Q4_K_XL); CPU decode ~5-7 tok/s. **Qwen3.5 thinking-mode budget lesson (measured sweep, real exam prompt):** llama.cpp serves with `reasoning_in_content: False` — `content` appears ONLY after `</think>` closes; at 1024 AND 1536 completion tokens a real exam prompt produced 4814-7373 chars of pure reasoning and **zero content** (`finish=length`); 2048 produced real content but truncated mid-answer; 3072 completed naturally at 2061 tokens. **Evaluation budget: max_tokens=4096**, and both sides of any adapter-vs-base comparison must run the identical script/budget (`qwen_train/run_exam.py`, temp 0). Ground-truth correction: **all 10 V4 exam items DO have ground truth** — the ids reuse the hidden-exam space and `C:\Users\rober\Projects\qwen_train_data\exam\blind_hidden_exam_ground_truth.jsonl` covers 10/10 (task/evidence/relevant_files/fix commit); an earlier session note claiming otherwise was wrong. Blind-judge protocol scripted (previously it existed only as conversational artifacts = un-reproducible): `build_blind_packet.py` emits machine-checked gates (finish=stop; 3-of-3 DIAGNOSIS/PLAN/VALIDATION; diagnosis must name a GT relevant file) + seeded A/B blinding + a position-swapped twin packet + a sealed key; `unblind_v4.py` carries the **pre-registered** policy frozen in code: >2 swap-flips ⇒ pairwise verdict printed as INCONCLUSIVE (gates carry the conclusion, re-judging the same items is barred); significance at n=10 fixed as 10-0/9-1 strong, 8-2 suggestive, ≤7-margin NOT strong (symmetric). Early generalization signal: held-out item `real_exam_8bedf38` diagnosis independently reproduced the actual documented fix (fixed 09:00 epoch for the flaky `test_is_due_daily`).
+- **Alibaba Coding Plan key wiring + CN/INTL endpoint fix (2026-08-30, RESOLVED same night — see correction below):** `.env` carried **two definitions of the same name `ALIBABA_API_KEY`** (last-wins parsers were silently corrupting the DashScope key) — the second is the Model Studio **Coding Plan (~$6/mo)** key; renamed to `ALIBABA_CODING_API_KEY` and wired everywhere via env-reference only: `.env`, user registry var, `start-dev.ps1` (missing-keys list + banner line + `$backendEnv` passthrough), `qwen_train/set_env.py` (name list — also note that script echoes values on FAILED lines; avoid pasting its output), and opencode.json gained an `alibaba-coding` provider (`@ai-sdk/openai-compatible`, `https://coding-intl.dashscope.aliyuncs.com/v1`, 10 catalog IDs). Second verified fix: the old `sk-ws-` key is **INTL-site** — it returns 200 on `dashscope-intl.aliyuncs.com/compatible-mode/v1` and 401 on the CN endpoint; the existing opencode `alibaba` provider pointed at the CN URL and was dead. Two traps proven live, recorded so future probes don't trust the wrong signal: (1) on the coding hosts **`GET /v1/models` answers 200 even for a bogus key** — the catalog is public; only an inference probe proves a key; (2) the Coding Plan key itself currently returns `401 invalid access token or token expired` at inference on both intl and CN hosts across 3 spaced retries — plumbing is done, **key activation is the open half**: confirm the Coding Plan subscription is active and the key was copied from the Coding Plan section of the console (or wait out new-key propagation), then re-run one chat completion against `coding-intl.../v1/chat/completions` before trusting the provider.
+  - **CORRECTION (later same night): the "key activation" diagnosis was WRONG — the plan was active all along (console shows Lite Plan Active, 0% quota used). The real failure was the HOST.** The Token Plan's OpenAI-compatible endpoint is **`https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1`** (region-scoped `maas` host), NOT `coding-intl.dashscope.aliyuncs.com` — every key 401'd on the wrong host regardless of validity. Resolution path that actually worked: install Alibaba's own CLI (`npm i -g bailian-cli`, provides `bl`) and run the console's "Quick Configuration" command `bl config agent --agent opencode --region ap-southeast-1 --key <o1_...> --model qwen3.8-max` — it **merges** into `~/.config/opencode/opencode.json` (does not clobber existing providers/mcp/permissions) and writes the CURRENT plan-specific `sk-sp-...` key (the console's one-time "Get Plan-specific API Key" dialog key — different from any earlier copy) plus the correct baseURL. Post-hygiene applied: replaced the CLI's plaintext `apiKey` with `{env:ALIBABA_CODING_API_KEY}` (real key persisted to user registry + `.env`), populated the provider's models from the LIVE `/models` on the token-plan host (`qwen3.8-max`, `qwen3.7-max/plus`, `qwen3.8-flash`, `qwen3.6-flash`, `glm-5.2`, `deepseek-v4-flash-0731`, `deepseek-v4-pro` — note the public catalog's `qwen3-coder-plus` list was stale), removed the now-superseded `alibaba-coding` provider. Verified end-to-end: `qwen3.8-max` chat completion 200 with correct arithmetic + real usage counts. The `o1_...` token in the `bl` command is the CLI's own credential — it is NOT a chat-completions Bearer key (401s everywhere). Lesson matching tonight's recurring theme: when a vendor tool exists that writes the config (`bl config agent`), run it and read its output as ground truth instead of guessing endpoints from public docs.
+- **OpenCode "all providers broken" outage — missing `@ai-sdk/openai-compatible` + stale model slugs (2026-08-30):** every opencode provider failed at once (all use `@ai-sdk/openai-compatible` as their npm package) because that package was **absent from `C:\Users\rober\.config\opencode\node_modules`** — only opencode's core runtime deps were there; provider auto-install had never succeeded. Fix: `npm install @ai-sdk/openai-compatible` in that directory (v3.0.41) + opencode restart. Diagnostic lesson worth keeping: when N providers from different vendors all fail simultaneously, suspect the shared dependency — verify all the keys first, but don't stop there. Live-probing each endpoint (the correct provider check — config edits need a restart anyway) surfaced three more stale-slug failures, fixed in `opencode.json`: **Groq** rotated its free chat lineup (`llama-3.3-70b-versatile` and `llama-3.1-8b-instant` now 404; working: `qwen/qwen3.8-27b`, `qwen/qwen3.6-27b`), **Gemini** retired `gemini-2.5-pro` at the openai-compat endpoint (working: `gemini-3-flash-preview`, `gemini-flash-latest`; `gemini-2.5-flash` valid but 429 quota-limited), and the **vision router on :8083** needs `Authorization: Bearer llama` (the `--api-key llama` the start scripts pass) — the local-models/assistant MCP vision tools fail 400/401 without it (the assistant's own vision tools still need that header added). Also re-proven during server relaunch: `llama.exe serve -f auto` is NOT a valid flag spelling (instant exit, hidden-window launch made it look like a slow load) — the flag is `-fa`/`--flash-attn auto`; and the adapter server must be relaunched after a reboot with redirect-captured stderr so a crash is diagnosable instead of "process GONE."
 
