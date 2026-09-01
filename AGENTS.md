@@ -606,8 +606,10 @@ Dependency pairing: React 19 ↔ `@react-three/fiber` ^9.5 / `@react-three/drei`
 production-ready: `--reasoning-budget 1200` → diag_c+r 10/10; GBNF two-call
 extraction (feed combined reasoning+content) → 10/10 grounded path recovery.
 `ba4bc86` remains the one genuine non-localization case (tracked, no retrain
-justified). Production stack needs relaunch with `--reasoning-budget 1200`.
-See Recent Changes for full record.
+justified). **GBNF deployment to the healing loop HOLDING** — seam audit found
+the auto-repair path already attributes `file` from the event, not LLM text, so
+the extraction doesn't add value there (see PIPELINE COMPLETE entry). Production
+stack relaunching with `--reasoning-budget 1200`.
 
 **Live servers:** none. Eval done. Production stack OFF — relaunch via
 start-dev.ps1.
@@ -735,6 +737,14 @@ generation-structure issue.
   - Historical note: the 7/10 extraction result was the extractor fed
     content-only at budget 600; the 10/10 is the extractor fed combined
     reasoning+content at budget 1200. Both conditions are exact in the record.
+  - **Seam audit (2026-09-01): GBNF deployment target was wrong.**
+    `recovery_engine.py` is infra-recovery only (no file path). `watch_loop.py`
+    repair path already correctly attributes `file` from the failing
+    `tool_result` event — not from LLM free-text. The GBNF extraction adds
+    value to the exam/diagnosis use case (identifying files from bug
+    descriptions) but not to the auto-repair loop (file already known).
+    Deployment deferred pending clearer scope. Do not re-attempt without
+    reading both call sites first.
 
 **Live servers:** none running. Eval done. XPU done. Production stack OFF —
 relaunch via start-dev.ps1 when ready.
