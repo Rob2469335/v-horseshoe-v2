@@ -602,17 +602,18 @@ Dependency pairing: React 19 ↔ `@react-three/fiber` ^9.5 / `@react-three/drei`
 > cross-check `qwen_train/results/` + running processes. If primary is stuck/
 > idle here, pick the thread up.
 
-**CURRENT (2026-08-31 ~22:05):** Experiment A is fully DONE (adapter + base
-control both landed). Result: the "path-loss is a generic Qwen3.5-4B property"
-PREDICTION WAS REFUTED — base under the same Treat-A instruction reaches
-content-only diag_gate 8/10 (vs adapter 6/10) and names the file in final
-content where the adapter shows zero .py lines. So path-loss is DISPROPORTIONATE
-IN THE ADAPTER, not architecture-wide. Details in the Experiments record below.
-NEXT: decide whether a trace-format fix (adapter learned to put path in FILES:
-but not DIAGNOSIS) or context-precision (B) is worth it; then one clean
-commit+CI+push pass.
+**CURRENT (2026-08-31 ~22:20):** Experiment A fully closed (adapter 6/10,
+base 8/10 content-gate — refuted "generic" prediction, gap is adapter-disproportionate).
+Follow-up mechanism check DONE: adapter's Treat-A failures (#2729510, #8307faf,
+#e2e6b5c, #e861842) do NOT have the path in a `FILES:` section either — the path
+is absent from the ENTIRE final answer on all 4, so "learned non-redundancy
+(FILES: is enough)" is REFUTED; the path-string is lost across the
+reasoning→final boundary worse in the adapter, and the trained FILES: habit
+doesn't carry it. Next (when resumed): decide the trace-format fix (force path
+into DIAGNOSIS line of training answers) vs context-precision (B); commit the
+AGENTS.md refinement below.
 
-**Live servers:** none — both eval runs done, eval servers shut down.
+**Live servers:** none — all eval servers shut down.
 
 ---
 
@@ -884,6 +885,20 @@ The full pre-registered blind protocol ran end to end for the first time
   fix works on base but under-delivers on the adapter; a trace-format fix
   (force the path into the final DIAGNOSIS of the training answers) targets
   exactly the adapter's gap, and a "base-wired" deployment would not need it.
+  **Mechanism refinement (2026-08-31, same session): "learned non-redundancy
+  via FILES:" is REFUTED.** Inspected the adapter's 4 Treat-A content-gate
+  failures — on ALL of them the path is absent from the ENTIRE final answer,
+  not just DIAGNOSIS: `2729510` has DIAGNOSIS/PLAN/VALIDATION but no FILES
+  section at all; `8307faf`'s "FILES" mention is descriptive prose ("files from
+  the project root"), not the canonical path section; `e2e6b5c` no path;
+  `e861842` no section headers at all (content loop). So the adapter did NOT
+  "say it once in FILES and suppress repeating it" — it never carried the path
+  into any part of the final answer, despite the trained FILES: habit (22/23
+  traces) and the Treat-A instruction. The mechanism is a weaker
+  reasoning→ENTIRE-final-answer string-carry in the adapter (worse than base),
+  and the trained FILES: habit does not function as a carrier. Trace-format fix
+  still the target, but it must force the path into the DIAGNOSIS line (FILES:
+  alone demonstrably does not transfer).
 
 Standing note: the eval servers :8086/:8087 should be shut down when not
 actively in use (merged — they have been shut down after each session).
