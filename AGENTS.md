@@ -653,6 +653,43 @@ unproven assumptions below; use the corrected version.
 
 Evidence artifacts: `qwen_train/results/` + deep-research outputs in Temp (v6_audit_research.json).
 Do NOT build mine_v6.py with the 3-file-cap design.
+
+## NIGHTLY SELF-IMPROVEMENT DISTILLER — AUDITED + CORRECTED (2026-09-02, deep-research 8-API + github + live-code verification)
+
+The proposed "nightly distiller" (autonomously collect execution-verified successes + Oracle-corrected
+failures from live runtime, SFT, retrain 4B LoRA nightly) is **NOT supported as an unsupervised nightly
+training loop** — but IS worth building as an instrument-forward data-collection + verification + eval
+pipeline. Recorded decision-ready.
+
+**DECISIVE BLOCKER (verified in code): historical trajectory reconstruction is impossible.**
+- `_record_event` (agent_service_v2.py:455) builds events with NO `run_id` — event log cannot be joined
+  to fitness records.
+- `run_id` is `""` on all ~4,484 historical `fitness.jsonl` records (only populates going forward).
+- Real events path is `data/events/events.jsonl`, NOT `logs/events.jsonl` as the plan said.
+- `test_pass=1.0` is a REAL execution signal only for `coder` (DangerRoom pytest run, ~1,459 records);
+  the other ~2,117 `test_pass=1.0` are the `1.0 if completed` completion proxy — NOISE, must be filtered.
+
+**Deep-research verdict (evidence-cited):**
+- **Self-training collapse is real**: learned-error self-repair showed null benefit (8-8 vs placebo);
+  self-generated data collapse even with filters; AI self-gates devolve to rubber-stamp acceptance.
+- **Oracle correction is ONLY safe if re-executed**: deceptive-fix rates 57-71%; every Oracle-corrected
+  sample must be re-run in the sandbox and transition real FAIL->real PASS before SFT.
+- **No daily-yield threshold** makes small-window nightly retrain net-positive; more likely overfits the
+  runtime's recurring bug patterns than bakes in expertise.
+- **Use LoRA not full SFT; exclude raw loop-burn/SecurityGate/tool-error rollouts** (policy events, not
+  repair negatives).
+
+**CORRECTED ARCHITECTURE (build this):**
+1. Instrument forward: thread `run_id`+`span_id` into `_record_event`, AND write a run-end structured
+   trajectory file per run (ATIF-like: task->reasoning->tools->sandbox->final fix + final_verdict).
+   Least-lossy standard (ATIF, SWE-agent `.traj`, OpenHands session). Do NOT backfill history.
+2. Re-execution-verify every sample (successes AND Oracle-corrections) in DangerRoom: final Fail->Pass.
+3. Eval gate: held-out tasks before registering any new adapter; discard regressors.
+4. Retrain periodically on accumulated verified+curated data, not nightly on tiny yields.
+5. Prefer harness/agent-level improvements over weight updates where possible.
+
+**Immediate prerequisite patch:** `run_id` into `_record_event` + per-run trajectory-file writer.
+Everything else in the distiller is gated on this. Deep-research out: `nightly_distiller_research.json` (Temp).
 Decisive read: the trained path-led DIAGNOSIS format did NOT transfer — zero of
 the 10 outputs open DIAGNOSIS with "File: <path> —" despite 5 epochs on 21
 spliced examples. No-regression check PASSED (structure 10/10, finish 10/10,
