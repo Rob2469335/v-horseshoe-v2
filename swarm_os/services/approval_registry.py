@@ -293,6 +293,13 @@ def agent_tool_policy(tool: str, action: str | None = None) -> str:
     if t == "todo":
         return ALLOW
 
+    # github_research: read-only sub-commands (discover/verify/merge/build_gallery)
+    # are ALLOW; install mutates the local filesystem → CONFIRM.
+    if t == "github_research":
+        if a in ("discover", "verify", "merge", "build_gallery"):
+            return ALLOW
+        return CONFIRM
+
     # Unknown tool -> fail-closed DENY.
     return DENY
 

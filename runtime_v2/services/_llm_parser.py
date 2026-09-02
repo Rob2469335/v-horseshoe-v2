@@ -39,6 +39,7 @@ TOOL_CALL_SCHEMA = {
                 "mcp_register",
                 "self_heal",
                 "final",
+                "github_research",
             ],
         },
         "target_agent": {"type": "string"},
@@ -58,6 +59,8 @@ TOOL_CALL_SCHEMA = {
         "fact": {"type": "string"},
         "category": {"type": "string"},
         "question": {"type": "string"},
+        "mode": {"type": "string"},
+        "target_repo": {"type": "string"},
     },
     "required": ["action"],
 }
