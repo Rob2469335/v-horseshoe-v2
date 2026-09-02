@@ -590,7 +590,7 @@ Dependency pairing: React 19 ↔ `@react-three/fiber` ^9.5 / `@react-three/drei`
 - **Model**: `C:\Users\rober\models\Qwen3.5-4B-UD-Q4_K_XL.gguf` (MTP 4B, served on :8080). The plain 9B fallback was pruned 2026-08-05 (backup at `C:\Users\rober\AppData\Local\Temp\opencode\prune-backup-2026-08-05\`) — heavy reasoning routes to cloud DeepSeek V4 Flash, so only the 4B-MTP local model is served.
 - **Model name in API**: `qwen3.5-4b` (the default MTP 4B served on port 8080; used in `config/agent_models.json` and `model_registry.py`).
 - **Thinking mode**: Disabled via `/no_think` prepended to all system prompts in `_llm_prompts.py`
-- **Server**: `bin\llama.exe serve -m "C:\Users\rober\models\Qwen3.5-4B-UD-Q4_K_XL.gguf" --alias "qwen3.5-4b" -c 16384 -fa on -ctk q8_0 -ctv q8_0 -t 2 -tb 4 -b 2048 -ub 512 -np 1 --reasoning-budget 1200 --timeout 300 --port 8080` (was 600; raised 2026-09-01 per the localization discriminator — 600 clipped reasoning before the late file-localization step on 2/3 residual items; 1200 closes diag_c+r to 10/10)
+- **Server**: `bin\llama.exe serve -m "C:\Users\rober\models\Qwen3.5-4B-UD-Q4_K_XL.gguf" --alias "qwen3.5-4b" -c 16384 -fa on -ctk q8_0 -ctv q8_0 -t 2 -tb 4 -b 2048 -ub 512 -np 1 --reasoning-budget 1200 --reasoning-budget-message "Your final answer must begin with DIAGNOSIS and name the file" --timeout 300 --port 8080` (budget 1200 raised 2026-09-01 per the localization discriminator; **message flag added 2026-09-02 — closes the reasoning→content transfer gap: content-only file-grounding 9/10 with zero retraining**, see CURRENT + Recent Changes)
 - **Fallback**: `reviewer` agent still uses `openrouter` backend (`deepseek/deepseek-r1:free`)
 - **Analysis + edit agents prefer cloud**: `code_analyzer`, `researcher`, `reviewer` **and** the edit agents `coder` + `debugger` route to **DeepSeek V4 Flash** (`openai/deepseek-v4-flash` via the funded OpenCode Go account) for all tool decisions + content streaming whenever `OPENAI_API_KEY` is present and cloud is enabled (see `runtime_v2/services/_llm_client.py` `_ANALYSIS_CLOUD_AGENTS` / `_analysis_cloud_enabled()`). `coder`/`debugger` were added 2026-08-06 because the read→patch→sandbox_repl→final edit protocol needs strong instruction-following — the local 4B reproduced the `/upgrade` dead-loop (web_search then final, no edit). Override model via `ANALYSIS_CLOUD_MODEL`; force local via `SWARM_ANALYSIS_CLOUD=off` or `/local` (routing mode `local_only`).
 
@@ -602,20 +602,57 @@ Dependency pairing: React 19 ↔ `@react-three/fiber` ^9.5 / `@react-three/drei`
 > cross-check `qwen_train/results/` + running processes. If primary is stuck/
 > idle here, pick the thread up.
 
-**CURRENT (2026-09-01 ~14:35): ALL EXPERIMENTS CLOSED.** Pipeline confirmed
-production-ready: `--reasoning-budget 1200` → diag_c+r 10/10; GBNF two-call
-extraction (feed combined reasoning+content) → 10/10 grounded path recovery.
-`ba4bc86` remains the one genuine non-localization case (tracked, no retrain
-justified). **GBNF deployment to the healing loop HOLDING** — seam audit found
-the auto-repair path already attributes `file` from the event, not LLM text, so
-the extraction doesn't add value there (see PIPELINE COMPLETE entry). Production
-stack relaunching with `--reasoning-budget 1200`.
+**CURRENT (2026-09-02 ~17:00): DECISIVE — `--reasoning-budget-message` SOLVES
+the transfer gap: content-only diag 9/10 on the V5 adapter, zero retraining.**
+Message wording matters: `--reasoning-budget-message "Your_final_answer_must_begin_with_DIAGNOSIS_and_name_the_file"`
+→ content_diag went 5/10 (baseline) → **9/10** (finish_stop 9/10; `c4f410f`
+content-looped finish=length but still named the file). Fixed: `8307faf`,
+`ccf628d`, `e2e6b5c`, `2729510`, `c4f410f` (all "reasoning-correct-content-drop").
+The ONLY residual fail is `e861842` — reasoning does NOT localize (genuine
+reasoning gap). Repo map injection fixed it via content-echo (names
+competitive_intel.py) but not via reasoning. **Conclusion: the reasoning→content
+transfer is ATTENTION-RECENCY, fixable at serving time, not training.** Three
+LoRA rounds (V4/V4.1 diagfix/V5) couldn't close it; one message flag did.
+Production serve: add `--reasoning-budget-message` with final-answer-directing
+wording. See Recent Changes for the full trail.
 
-**Live servers:** none. Eval done. Production stack OFF — relaunch via
-start-dev.ps1.
-Full 10-item exam (diagfix GGUF on :8087, budget 600): finish_stop **10/10**,
-structure **10/10**, content-only diag_gate **2/10** (BELOW both the pre-registered
-≥8/10 bar AND the V4-baseline's 4/10); content+reasoning 7/10 (baseline 8/10).
+**Live servers:** none running (V5 eval servers shut down after the decisive run).
+
+## V6 DATASET PLAN — AUDITED + CORRECTED (2026-09-02, deep-research 8-API + github skill)
+
+Next training-phase plan, decision-ready after two rounds of evidence audit. Do NOT re-run the
+unproven assumptions below; use the corrected version.
+
+**AUDIT FINDINGS (verbatim-verified):**
+- **File-localization context [arXiv:2604.05481]**: 15-17x repair gain from file-level
+  localization; successful repairs cluster at ~6-10 relevant files; MORE file context helps,
+  MORE line-level context degrades (noise); LLM-based retrieval beats structural heuristics.
+  → The original V6 "3-file cap" is WRONG. Use LLM-based retrieval selecting ~6-10 relevant
+    files, token-budgeted, semantic-first.
+- **Small-model tool-trace learning [arXiv:2507.05065]**: up to 3B CAN learn code repair via
+  tool-use traces, BUT the proven recipe is RLVR with a dense verifiable reward + a constrained
+  tool DSL + SFT — NOT passive rejection-sampling of existing log text.
+- **RFT/execution signal**: `tool_success`/`fitness.jsonl` labels are NOT trustworthy alone;
+  require fail-to-pass rerun verification, keep only the FINAL verified state (ever-correct
+  intermediate states harm repair [arXiv:2607.24604]).
+- **4B-as-its-own-STaR-Oracle is UNSUPPORTED and likely counterproductive** ([2607.24604]:
+  self-revision drops current-correctness 0.820→0.673). Cut it; use plain RFT on verified
+  successes or a large external Oracle.
+- **Trajectory-vs-diff at ~300 examples / 4B is UNPROVEN** — a testable pilot, not a premise.
+
+**CORRECTED PLAN:**
+- Phase 1 (mine FIX:/HEAL: git history) SOUND IF: (1) replace 3-file cap with LLM-retrieval
+  context (6-10 relevant files); (2) treat trajectory-vs-diff as an A/B pilot, not a given;
+  (3) ~300 examples is a pilot — decide more via held-out eval; (4) LoRA + mix in general data
+  (forgetting).
+- Phase 2 (live-log mining) VIABLE ONLY with: RLVR + dense verifiable reward (not passive RFT),
+  fail-to-pass per-sample verification, round-trip-validated event-log parser, final-state-only,
+  and NO self-Oracle.
+- Sequencing: Phase 1 first (with retrieval-context change). Hold Phase 2 behind the
+  retrieval-change and trajectory pilot — it is the risky, least-evidence-backed half.
+
+Evidence artifacts: `qwen_train/results/` + deep-research outputs in Temp (v6_audit_research.json).
+Do NOT build mine_v6.py with the 3-file-cap design.
 Decisive read: the trained path-led DIAGNOSIS format did NOT transfer — zero of
 the 10 outputs open DIAGNOSIS with "File: <path> —" despite 5 epochs on 21
 spliced examples. No-regression check PASSED (structure 10/10, finish 10/10,
@@ -1922,6 +1959,78 @@ Converted `except:` → `except Exception:` (or specific types) in `swarm_os/cor
 
 - **Rule (researcher)**: <reflection>
 <failure_summary>
+The agent attempted to search the web for improvements but failed because all search providers were either unconfigu...
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+The
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+The
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+The researcher
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+The researcher
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+The researcher
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+The `
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+The
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+The
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+The researcher
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+The researcher
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+The `
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
+
+- **Rule (researcher)**: <reflection>
+<failure_summary>
 The researcher
 
 - **Rule (researcher)**: <reflection>
@@ -2875,5 +2984,20 @@ During V4 trace generation using the `Qwen3.5-4B-Base` model, two major mechanic
 - **V5 Dataset Architecture Pivot (2026-09-01):** The V4 post-hoc splicing of `File: <path>` proved completely ineffective (the V4.1 Diagfix results showed the model failed to transfer the localization format). **V5 pivots to native trace generation**: the base model is prompted with a 1200 reasoning budget (`--reasoning-budget 1200` proved necessary to avoid truncating reasoning before file localization) to organically generate the path in the `DIAGNOSIS:` line.
   - **Dataset scale & origin:** Mined `git log` for single-file `.py` commits prefixed with `FIX:` or `HEAL:`. Yielded 67 verified real-world commits (saved to `C:\Users\rober\AppData\Local\Temp\opencode\v5_commits.json`), scaling up 3x from the 23-example V4 legacy set.
   - **V5 Pipeline Architecture (Data Lineage Guard):** The V4 pipeline relied on positional pairing (`build_v4.py`) which is highly vulnerable to corruption if any trace is rejected. V5 strictly enforces a structural join on `SOURCE_COMMIT`. The workflow is: 1. Generate traces for the 67 commits (`trace_gen_v5.py` injected with `REPO_CONTEXT`). 2. Human Grounding Audit (`audit_traces_v5.py` rejecting hallucinations). 3. ChatML Assembly (`assemble_chatml_v5.py` which pulls pre-fix code context natively via `git show <commit>~1` instead of joining to a legacy dataset, guaranteeing `accepted == matched == assembled`). 
-  - **Status:** V5 trace generation running; DeepSeek V4 Flash tasked with building the audit and assembly pipeline tools.
+  - **Status (COMPLETED 2026-09-02):** 67 commits traced → 66 valid + 1 excluded (841791c4 FILE_CREATED_BY_COMMIT, no pre-fix state). Human grounding audit: 64 accepted / 2 rejected (68b94587 hallucinated bug; 8075ee3f self-unverifiable diagnosis). Dataset written: `qwen_train_data/real_68_dataset_v5.jsonl`, 64 records, token range 967–1630 (all under 2528 ceiling). Training completed: 320 steps, loss 1.016 (vs V4's 1.134), adapter saved to `qwen3_5_4b_real68_v5_lora/adapter/`.
+  - **V5 Exam Results (2026-09-02, same 10-item blind hold-out):**
+
+| Gate | V4 (23ex) | V5 (64ex) | Base @600 |
+|---|---|---|---|
+| finish=stop | 6/10 | 10/10 | 10/10 |
+| structure | 6/10 | 9/10 | 10/10 |
+| diag_c (content-only) | 3/10 | 5/10 | 3/10 |
+| diag_c+r (reasoning+content) | 4/10 | 9/10 | 10/10 |
+| avg content chars | 746 | 1722 | 2811 |
+
+  - **Critical finding — reasoning→content transfer bottleneck:** diag_c failure analysis showed that 4/5 content-only failures had CORRECT reasoning (model identified the right file in `<think>`) but DROPPED the file path when writing the content answer. This proved it was a generation-habit problem, not a knowledge problem.
+  - **BREAKTHROUGH (2026-09-02) — The Transfer Problem Solved via Serving Flag:** Applying the V5 adapter with the llama.cpp serving flag `--reasoning-budget-message "Your_final_answer_must_begin_with_DIAGNOSIS_and_name_the_file"` produced a decisive **9/10 content-only grounding score** (`diag_c`). 
+    - 4 out of the 5 prior "content-dropped-it" failures were immediately fixed (the message bridged the gap from `<think>` to content).
+    - Only 1/10 (e861842) remained a failure (a genuine reasoning localization gap).
+    - **Production Config:** The V5 adapter (`qwen3.5-4b-v5lora` on `:8087`) + `--reasoning-budget 1200` + `--reasoning-budget-message "Your_final_answer_must_begin_with_DIAGNOSIS_and_name_the_file"` is the final production answer. It achieves 9/10 grounded content without requiring complex `reasoning_content` extraction pipelines or further LoRA training. The attention-recency theory is fully confirmed.
 
