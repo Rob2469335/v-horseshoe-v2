@@ -673,6 +673,7 @@ class AgentServiceV2:
         "genome_weights",
         "run_id",
         "parent_id",
+        "delegated_by",
         "_resolved_approvals",
     )
 
