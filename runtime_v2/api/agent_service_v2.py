@@ -389,6 +389,16 @@ class _CallState:
     # _CHECKPOINT_STATE_FIELDS so it is preserved across resume checkpoints.
     genome_id: str = ""
     genome_weights: dict = field(default_factory=dict)
+    # Per-run trace-tree linkage (2026-09, step-level fitness prerequisite):
+    # run_id = one UUID minted per top-level step_agent_stream; parent_id = the
+    # delegating agent's run_id, or "" at the top level. A delegated child keeps a
+    # DIFFERENT run_id but points parent_id back at its delegator, so a whole
+    # delegation subtree is reconstructable. Additive to outcome/event records.
+    run_id: str = ""
+    parent_id: str = ""
+    # Which agent delegated to this run (empty at top level). Persisted alongside
+    # run_id/parent_id on outcome records for the who-delegated axis.
+    delegated_by: str = ""
     # Design A pre-action authorization: pending_ids whose approval was already
     # resolved THIS run (consumed via execute_approved, or denied via
     # deny_pending). The CLI feeds the approve/deny answer back as an
@@ -661,6 +671,8 @@ class AgentServiceV2:
         "_turn",
         "genome_id",
         "genome_weights",
+        "run_id",
+        "parent_id",
         "_resolved_approvals",
     )
 
@@ -731,6 +743,9 @@ class AgentServiceV2:
                     efficiency=efficiency,
                     task=str(prompt)[:200],
                     agent_id=agent_id,
+                    run_id=getattr(state, "run_id", ""),
+                    parent_id=getattr(state, "parent_id", ""),
+                    delegated_by=getattr(state, "delegated_by", ""),
                 )
 
             try:
@@ -1849,6 +1864,8 @@ class AgentServiceV2:
             allowed_tools_override=child_tool_override,
             genome_id=state.genome_id,
             genome_weights=state.genome_weights,
+            parent_id=state.run_id,  # child links its trace back to this delegator
+            delegated_by=agent_id,   # and records who delegated it
         ):
             chunk.setdefault("delegated_by", agent_id)
             if chunk.get("type") == "final":
@@ -1937,6 +1954,7 @@ class AgentServiceV2:
                 trace_hook=lambda etype, epayload: self._record_event(
                     "tool_trace", agent_id, {"tool": action, "type": etype, **epayload}
                 ),
+                run_id=getattr(state, "run_id", ""),
             )
         except Exception as exc:
             log.exception(
@@ -2158,6 +2176,8 @@ class AgentServiceV2:
         allowed_tools_override: Optional[list] = None,
         genome_id: Optional[str] = None,
         genome_weights: Optional[dict] = None,
+        parent_id: Optional[str] = None,
+        delegated_by: Optional[str] = None,
     ) -> AsyncGenerator[dict, None]:
         try:
             import runtime_v2.services.tool_executor as _te
@@ -2170,6 +2190,16 @@ class AgentServiceV2:
         except Exception:
             _te = None
 
+        # Trace-tree linkage: mint a fresh run_id for THIS invocation. A
+        # delegated child passes its delegator's run_id as parent_id, so each
+        # node has a distinct run_id and points back at its parent. This is the
+        # step-level fitness prerequisite (attribute a step to its exact run /
+        # delegator). parent_id=None => top level.
+        import uuid as _uuid
+        run_id = str(_uuid.uuid4())  # fresh per invocation; a child links back via parent_id
+        if not parent_id:
+            parent_id = ""  # top-level normalized
+
         try:
             async for chunk in self._step_agent_stream_inner(
                 agent_id,
@@ -2181,6 +2211,9 @@ class AgentServiceV2:
                 allowed_tools_override=allowed_tools_override,
                 genome_id=genome_id,
                 genome_weights=genome_weights,
+                run_id=run_id,
+                parent_id=parent_id,
+                delegated_by=delegated_by or "",
             ):
                 yield chunk
         except GeneratorExit:
@@ -2227,6 +2260,9 @@ class AgentServiceV2:
         allowed_tools_override: Optional[list] = None,
         genome_id: Optional[str] = None,
         genome_weights: Optional[dict] = None,
+        run_id: str = "",
+        parent_id: str = "",
+        delegated_by: str = "",
     ) -> AsyncGenerator[dict, None]:
         from runtime_v2.prompts.system_prompts import build
         from runtime_v2.services.memory_core import get_relevant_memories
@@ -2330,6 +2366,9 @@ class AgentServiceV2:
         state = _CallState()
         state.genome_id = genome_id
         state.genome_weights = genome_weights or {}
+        state.run_id = run_id
+        state.parent_id = parent_id
+        state.delegated_by = delegated_by
         state._start_time = start_time if start_time else time.time()
         for m in history:
             c = str(m.get("content", "") if isinstance(m, dict) else "")
@@ -2610,6 +2649,8 @@ class AgentServiceV2:
                             delegation_chain=chain + ["debugger"],
                             genome_id=state.genome_id,
                             genome_weights=state.genome_weights,
+                            parent_id=state.run_id,
+                            delegated_by=agent_id,
                         ):
                             chunk.setdefault("delegated_by", agent_id)
                             yield chunk
@@ -2742,6 +2783,8 @@ class AgentServiceV2:
                         delegation_chain=chain + ["debugger"],
                         genome_id=state.genome_id,
                         genome_weights=state.genome_weights,
+                        parent_id=state.run_id,
+                        delegated_by=agent_id,
                     ):
                         chunk.setdefault("delegated_by", agent_id)
                         yield chunk
@@ -3163,6 +3206,8 @@ class AgentServiceV2:
                         delegation_chain=chain + ["debugger"],
                         genome_id=state.genome_id,
                         genome_weights=state.genome_weights,
+                        parent_id=state.run_id,
+                        delegated_by=agent_id,
                     ):
                         chunk.setdefault("delegated_by", agent_id)
                         yield chunk

@@ -59,6 +59,14 @@ def build_prompt(commit, file_path):
 
 def trace(client, commit, file_path):
     prompt = build_prompt(commit, file_path)
+    # REPO_CONTEXT injection (Task 1): opt-in via V5_REPO_CONTEXT=1 so the current
+    # live trace run (started without it) stays consistent. Enabled for future runs.
+    if os.environ.get("V5_REPO_CONTEXT") == "1":
+        try:
+            from repo_context import build_prompt_with_context
+            prompt = build_prompt_with_context(prompt, enabled=True)
+        except Exception:
+            pass  # never break a trace run if the context import fails
     payload = {
         "model": MODEL,
         "messages": [
@@ -86,22 +94,35 @@ def main():
     print(f"commits to trace: {len(commits)}")
     client = httpx.Client(timeout=400.0)
     rows = []
+    done_commits = set()
+    # resume support: skip commits already in the output file
+    if OUT.exists():
+        for line in OUT.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                r = json.loads(line)
+                if r.get("source_commit"):
+                    done_commits.add(r["source_commit"])
+                    rows.append(r)
+    print(f"resuming: {len(done_commits)} already traced, {len(commits) - len(done_commits)} remaining", flush=True)
     for i, c in enumerate(commits):
+        if c["sha"] in done_commits:
+            continue
         print(f"[{i+1}/{len(commits)}] {c['sha'][:8]} {c['path']}", flush=True)
         try:
             blob, reasoning, content = trace(client, c["sha"], c["path"])
             if not content:
                 print("  !! empty content — server may be down or reasoning only", flush=True)
                 rows.append({"source_commit": c["sha"], "raw_extracted": blob, "trace_error": "empty_content"})
-                continue
-            rows.append({"source_commit": c["sha"], "raw_extracted": blob})
-            print(f"  content={len(content)}ch", flush=True)
+            else:
+                rows.append({"source_commit": c["sha"], "raw_extracted": blob})
+                print(f"  content={len(content)}ch", flush=True)
         except Exception as e:
             print(f"  FAILED: {e}", flush=True)
             rows.append({"source_commit": c["sha"], "raw_extracted": "", "trace_error": str(e)})
+        # incremental write after each commit (crash-safe)
+        OUT.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n", encoding="utf-8")
         time.sleep(0.5)
     client.close()
-    OUT.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n", encoding="utf-8")
     print(f"\nwrote {OUT}: {len(rows)} rows ({sum(1 for r in rows if r.get('raw_extracted'))} with content)")
 
 

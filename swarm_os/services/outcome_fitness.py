@@ -94,6 +94,9 @@ def record_outcome(
     human: float = 0.0,
     task: str = "",
     agent_id: str = "",
+    run_id: str = "",
+    parent_id: str = "",
+    delegated_by: str = "",
 ) -> dict:
     """Persist a real outcome for a genome and return the computed fitness.
     Thread-safe append to data/evolution/fitness.jsonl. Never raises."""
@@ -113,6 +116,14 @@ def record_outcome(
             "human": human,
             "fitness": fitness,
         }
+        # Optional trace-tree linkage (2026-09, step-level fitness prereq). Additive:
+        # only set when non-empty so old records and non-tracing callers stay as-is.
+        if run_id:
+            record["run_id"] = run_id
+        if parent_id:
+            record["parent_id"] = parent_id
+        if delegated_by:
+            record["delegated_by"] = delegated_by
         with _LOCK:
             FITNESS_PATH.parent.mkdir(parents=True, exist_ok=True)
             with open(FITNESS_PATH, "a", encoding="utf-8") as f:
