@@ -280,7 +280,8 @@ def setup_readline():
 
 
 def main():
-    ctx.cloud_enabled = False
+    # Preserve the persisted cloud_enabled from .session.json (state store loads
+    # it; do NOT clobber to False here or the banner ignores `/cloud on`).
     # Default to local-first routing with cloud fan-out (DeepSeek + ultra-cheap
     # Ling) as fallback. `/local` forces the fully offline local_only mode.
     os.environ.setdefault("SWARM_ROUTING_MODE", "auto")
