@@ -227,7 +227,14 @@ def filesystem_handler(
             content = _read_file_capped(target_path, 50000)
             if trace_hook:
                 trace_hook("filesystem_read", {"ok": True, "path": str(target_path)})
-            return {"ok": True, "content": content, "path": str(target_path)}
+            result = {"ok": True, "content": content, "path": str(target_path)}
+            try:
+                from swarm_os.lib.symbol_context import symbol_context_for_read
+
+                result.update(symbol_context_for_read(target_path, content, root))
+            except Exception:  # noqa: BLE001 - symbol context is additive-only
+                logger.debug("symbol context injection skipped", exc_info=True)
+            return result
 
         elif operation == "write":
             content = str(params.get("content", ""))
