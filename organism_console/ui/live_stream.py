@@ -51,6 +51,34 @@ RE_PLAN_MATCH = re.compile(r"<plan>(.*?)</plan>", re.DOTALL)
 RE_THINK_MATCH = re.compile(r"<think>(.*?)(?:</think>|$)", re.DOTALL)
 
 
+def format_inline_diff(old: str, new: str, max_lines: int = 24) -> list:
+    """Render a unified-style inline diff (red removed / green added).
+
+    Pure function returning Rich-markup lines. Used by the TUI to show
+    filesystem patch/write changes inline (opencode/aider-style).
+    """
+    import difflib
+
+    old_lines = old.splitlines()
+    new_lines = new.splitlines()
+    out = []
+    matcher = difflib.SequenceMatcher(None, old_lines, new_lines)
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            continue
+        if tag in ("delete", "replace"):
+            for ln in old_lines[i1:i2]:
+                out.append(f"[red]- {escape(ln)}[/red]")
+        if tag in ("insert", "replace"):
+            for ln in new_lines[j1:j2]:
+                out.append(f"[green]+ {escape(ln)}[/green]")
+    if len(out) > max_lines:
+        extra = len(out) - max_lines
+        out = out[:max_lines]
+        out.append(f"[dim]… {extra} more diff line(s)[/dim]")
+    return out
+
+
 def status_footer(ctx, agent, model, phase, ram_pct, tps: float = 0.0):
     stats = get_system_stats()
     phase_colors = {
@@ -128,6 +156,8 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
 
             def safe_print(*args, **kwargs):
                 live.console.print(*args, **kwargs)
+
+            pending_fs = None
 
             try:
                 async for line in resp.aiter_lines():
@@ -260,6 +290,10 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                     if chunk_type in ("tool_call", "tool_start"):
                         tool_name = chunk.get("tool") or chunk.get("name")
                         args_dict = chunk.get("arguments", {})
+                        if tool_name == "filesystem" and isinstance(args_dict, dict):
+                            op = args_dict.get("operation")
+                            if op in ("patch", "write"):
+                                pending_fs = args_dict
                         if args_dict:
                             safe_print(
                                 f"  [bold cyan]⚡[/bold cyan] [white]{tool_name}[/white]({json.dumps(args_dict, default=str)[:120]})"
@@ -290,6 +324,26 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                         safe_print(
                             f"  {icon} [bold]{tool}[/bold] [dim]{escape(result_str)}[/dim]"
                         )
+                        if (
+                            ok
+                            and tool == "filesystem"
+                            and isinstance(pending_fs, dict)
+                        ):
+                            op = pending_fs.get("operation")
+                            if op == "patch":
+                                old_s = str(
+                                    pending_fs.get(
+                                        "old", pending_fs.get("old_string", "")
+                                    )
+                                )
+                                new_s = str(
+                                    pending_fs.get(
+                                        "new", pending_fs.get("new_string", "")
+                                    )
+                                )
+                                for dl in format_inline_diff(old_s, new_s):
+                                    safe_print(f"    {dl}")
+                            pending_fs = None
                         continue
 
                     if (

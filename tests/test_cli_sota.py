@@ -246,3 +246,53 @@ def test_notifications_noop_safe():
     notif.set_enabled(False)
     notif.notify("t", "b")  # must not raise
     notif.set_enabled(True)
+
+
+class TestInlineDiff:
+    """SOTA upgrade: inline per-tool diff rendering in the TUI."""
+
+    def test_patch_diff_shows_removed_and_added(self):
+        from organism_console.ui.live_stream import format_inline_diff
+
+        lines = format_inline_diff("x = 1\ny = 2\n", "x = 1\ny = 3\n")
+        joined = "\n".join(lines)
+        assert "[red]- y = 2[/red]" in joined
+        assert "[green]+ y = 3[/green]" in joined
+        # unchanged context line is not emitted as a diff line
+        assert "x = 1" not in joined
+
+    def test_insert_only(self):
+        from organism_console.ui.live_stream import format_inline_diff
+
+        lines = format_inline_diff("a\n", "a\nb\n")
+        assert any("+ b" in ln for ln in lines)
+        assert not any(ln.startswith("[red]") for ln in lines)
+
+    def test_delete_only(self):
+        from organism_console.ui.live_stream import format_inline_diff
+
+        lines = format_inline_diff("a\nb\n", "a\n")
+        assert any("- b" in ln for ln in lines)
+        assert not any("[green]" in ln for ln in lines)
+
+    def test_no_change_empty(self):
+        from organism_console.ui.live_stream import format_inline_diff
+
+        assert format_inline_diff("same\n", "same\n") == []
+
+    def test_caps_long_diffs(self):
+        from organism_console.ui.live_stream import format_inline_diff
+
+        old = "\n".join(f"old{i}" for i in range(40))
+        new = "\n".join(f"new{i}" for i in range(40))
+        lines = format_inline_diff(old, new, max_lines=10)
+        # 10 diff lines + 1 "more" notice
+        assert len(lines) == 11
+        assert "more diff line(s)" in lines[-1]
+
+    def test_escapes_rich_markup_in_content(self):
+        from organism_console.ui.live_stream import format_inline_diff
+
+        lines = format_inline_diff("", "[bold]injected[/bold]\n")
+        # the literal brackets must be escaped so Rich does not parse them
+        assert "\\[bold]injected\\[/bold]" in lines[0]
