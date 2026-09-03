@@ -32,6 +32,8 @@ import time
 from pathlib import Path
 from xml.etree import ElementTree
 
+from swarm_os.lib.opencode_session import opencode_headers
+
 log = logging.getLogger(__name__)
 
 _DATA_DIR = Path("data/news")
@@ -288,6 +290,7 @@ async def _acomplete(prompt: str, max_tokens: int = 800, timeout: float = 120.0)
         custom_llm_provider="openai",
         max_tokens=max_tokens,
         timeout=timeout,
+        extra_headers=opencode_headers(),
     )
     return resp.choices[0].message.content or ""
 

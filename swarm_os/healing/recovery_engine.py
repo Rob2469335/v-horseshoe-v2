@@ -5,6 +5,8 @@ import json
 import asyncio
 import os
 from litellm import acompletion
+
+from swarm_os.lib.opencode_session import opencode_headers
 import re
 from pathlib import Path
 from typing import Optional
@@ -252,6 +254,7 @@ Respond strictly with a JSON object in a ```json markdown block:
                 _kwargs["api_base"] = base
             if key:
                 _kwargs["api_key"] = key
+            _kwargs["extra_headers"] = opencode_headers()
 
             async with asyncio.timeout(60):
                 res = await acompletion(**_kwargs)

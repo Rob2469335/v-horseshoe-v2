@@ -28,6 +28,8 @@ import os
 import re
 from typing import Any
 
+from swarm_os.lib.opencode_session import opencode_headers
+
 log = logging.getLogger(__name__)
 
 # Bounded fan-out: cap the number of concurrent sub-research units so a 30-sub
@@ -58,6 +60,7 @@ async def _complete(prompt: str, max_tokens: int = 800, timeout: float = 120.0) 
         custom_llm_provider="openai",
         max_tokens=max_tokens,
         timeout=timeout,
+        extra_headers=opencode_headers(),
     )
     content = resp.choices[0].message.content or ""
     # A synthesis that hit the token cap is silently truncated mid-sentence — a

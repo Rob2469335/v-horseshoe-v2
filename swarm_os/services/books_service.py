@@ -24,6 +24,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from swarm_os.lib.opencode_session import opencode_headers
+
 log = logging.getLogger(__name__)
 
 MANIFEST = (
@@ -578,6 +580,7 @@ class BooksService:
             custom_llm_provider="openai",
             max_tokens=1200,
             timeout=120,
+            extra_headers=opencode_headers(),
         )
         return resp.choices[0].message.content or ""
 

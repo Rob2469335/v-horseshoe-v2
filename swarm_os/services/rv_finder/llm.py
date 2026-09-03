@@ -11,6 +11,7 @@ import asyncio
 import logging
 import os
 
+from swarm_os.lib.opencode_session import opencode_headers
 from .models import RVListing
 
 logger = logging.getLogger(__name__)
@@ -91,6 +92,7 @@ async def _llm_deep_dive(listings: list[RVListing], budget: int) -> str:
                         "OPENAI_API_BASE", "https://opencode.ai/zen/go/v1"
                     ),
                     "api_key": os.getenv("OPENAI_API_KEY"),
+                    "extra_headers": opencode_headers(),
                 }
             )
         attempts.append(

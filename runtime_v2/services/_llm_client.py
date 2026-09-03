@@ -304,10 +304,13 @@ def _fallback_entry(model_id: str) -> dict:
     if key:
         entry["api_key"] = key
     from runtime_v2.services.fallback_manager import _is_local_model
+    from swarm_os.lib.opencode_session import is_opencode_base, opencode_headers
 
     if not _is_local_model(model_id):
         # Cloud providers must not inherit llama.cpp engine-specific extra_body (id_slot, n_predict)
         entry["extra_body"] = {}
+    if is_opencode_base(base):
+        entry["extra_headers"] = opencode_headers()
     return entry
 
 
@@ -327,6 +330,10 @@ def build_kwargs(litellm_model: str, extra: dict, fallbacks: list) -> dict:
         kwargs["api_key"] = key
     if eff != litellm_model:
         kwargs["model"] = eff
+    from swarm_os.lib.opencode_session import is_opencode_base, opencode_headers
+
+    if is_opencode_base(base):
+        kwargs["extra_headers"] = opencode_headers()
     return kwargs
 
 
@@ -354,9 +361,12 @@ def _deployment_entry(model_id: str) -> dict:
     if key:
         params["api_key"] = key
     from runtime_v2.services.fallback_manager import _is_local_model
+    from swarm_os.lib.opencode_session import is_opencode_base, opencode_headers
 
     if not _is_local_model(model_id):
         params["extra_body"] = {}
+    if is_opencode_base(base):
+        params["extra_headers"] = opencode_headers()
     return {"model_name": model_id, "litellm_params": params}
 
 

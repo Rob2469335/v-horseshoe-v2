@@ -30,6 +30,8 @@ import chess
 import chess.pgn
 import json
 
+from swarm_os.lib.opencode_session import opencode_headers
+
 log = logging.getLogger(__name__)
 
 _COLLECTION = "gm_games"
@@ -522,6 +524,7 @@ async def explain_move(game_id: str, ply: int) -> dict[str, Any]:
                         api_key=ds_key,
                         max_tokens=500,
                         timeout=45,
+                        extra_headers=opencode_headers(),
                     )
                 else:
                     resp = await litellm.acompletion(
@@ -535,6 +538,7 @@ async def explain_move(game_id: str, ply: int) -> dict[str, Any]:
                         custom_llm_provider="openai",
                         max_tokens=2000,
                         timeout=45,
+                        extra_headers=opencode_headers(),
                     )
             prose = (resp.choices[0].message.content or "").strip()
         except Exception as exc:

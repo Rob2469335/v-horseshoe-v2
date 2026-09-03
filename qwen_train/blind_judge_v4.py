@@ -11,6 +11,8 @@ import time
 import httpx
 from pathlib import Path
 
+from swarm_os.lib.opencode_session import opencode_headers
+
 RESULTS = Path("C:/Users/rober/Projects/v-horseshoe-v2/qwen_train/results")
 PACKET = RESULTS / "blind_packet_v4.jsonl"
 SWAPPED = RESULTS / "blind_packet_v4_swapped.jsonl"
@@ -62,6 +64,7 @@ def judge_answers(client: httpx.Client, task: str, a: str, b: str) -> str:
         "temperature": 0.0,
     }
     headers = {"Authorization": f"Bearer {KEY}", "Content-Type": "application/json"}
+    headers.update(opencode_headers())
     last_err = None
     for attempt in range(5):
         try:

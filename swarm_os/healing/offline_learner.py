@@ -6,6 +6,8 @@ from collections import defaultdict, deque
 from litellm import acompletion
 from runtime_v2.services.memory_core import remember_fact
 
+from swarm_os.lib.opencode_session import opencode_headers
+
 MODEL = "openai/deepseek-v4-flash"  # rule extraction = correction reasoning → cloud DeepSeek (funded)
 
 
@@ -92,6 +94,7 @@ Format your output as a simple list of rules, one per line. No markdown formatti
                 _kwargs["api_base"] = _base
             if _key:
                 _kwargs["api_key"] = _key
+            _kwargs["extra_headers"] = opencode_headers()
         else:
             _kwargs.update(
                 api_base="http://127.0.0.1:8080/v1",

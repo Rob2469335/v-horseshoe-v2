@@ -4,6 +4,8 @@ from __future__ import annotations
 import asyncio
 import logging
 from fastapi import APIRouter, HTTPException, Request
+
+from swarm_os.lib.opencode_session import opencode_headers
 from pydantic import BaseModel, Field
 from ..capabilities.models import VSCodeAutomationRequest
 from .schemas import CreateApprovalRequest, ApprovalDecisionRequest
@@ -84,6 +86,7 @@ async def _llm_complete(prompt: str, max_tokens: int = 800) -> str:
             custom_llm_provider="openai",
             max_tokens=max_tokens,
             timeout=120,
+            extra_headers=opencode_headers(),
         )
         return resp.choices[0].message.content or ""
     except Exception as exc:

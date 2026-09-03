@@ -31,6 +31,8 @@ import smtplib
 import ssl
 import threading
 import time
+
+from swarm_os.lib.opencode_session import opencode_headers
 from email.header import decode_header
 from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
@@ -694,6 +696,7 @@ async def _acomplete(prompt: str, max_tokens: int = 800, timeout: float = 120.0)
         custom_llm_provider="openai",
         max_tokens=max_tokens,
         timeout=timeout,
+        extra_headers=opencode_headers(),
     )
     return resp.choices[0].message.content or ""
 

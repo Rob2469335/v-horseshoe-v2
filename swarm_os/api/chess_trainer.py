@@ -22,6 +22,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from swarm_os.lib.opencode_session import opencode_headers
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
@@ -257,7 +259,8 @@ Return strictly JSON format: {{"hint_level_1": "...", "hint_level_2": "..."}}"""
                 response_format={"type": "json_object"},
                 api_base="http://127.0.0.1:8080/v1"
                 if not os.environ.get("OPENROUTER_API_KEY")
-                else None,
+                else os.getenv("OPENAI_API_BASE", "https://opencode.ai/zen/go/v1"),
+                extra_headers=opencode_headers(),
                 api_key="llama" if not os.environ.get("OPENROUTER_API_KEY") else None,
                 custom_llm_provider="openai"
                 if not os.environ.get("OPENROUTER_API_KEY")

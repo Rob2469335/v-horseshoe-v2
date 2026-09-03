@@ -7,6 +7,8 @@ import uuid
 from pathlib import Path
 from datetime import datetime, timezone
 from litellm import acompletion
+
+from swarm_os.lib.opencode_session import opencode_headers
 import re
 import textwrap
 
@@ -220,6 +222,7 @@ async def run_genetic_mutation(
             )
             kwargs["max_retries"] = 0
             kwargs["timeout"] = 90.0
+            kwargs["extra_headers"] = opencode_headers()
             async with asyncio.timeout(90):
                 res = await acompletion(**kwargs)
             mutated_code_full = res.choices[0].message.content

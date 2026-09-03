@@ -34,6 +34,8 @@ import secrets
 import time
 from pathlib import Path
 
+from swarm_os.lib.opencode_session import opencode_headers
+
 from swarm_os.lib.mcp.playwright import playwright_handler
 
 log = logging.getLogger(__name__)
@@ -150,6 +152,7 @@ async def _get_planner_decision(prompt: str) -> dict:
         # accepts (verified in _llm_client._cloud_response_format) and
         # guarantees the decision is emitted in `content`, not just reasoning.
         response_format={"type": "json_object"},
+        extra_headers=opencode_headers(),
     )
     choice = resp.choices[0].message
     text = (choice.content or "").strip()

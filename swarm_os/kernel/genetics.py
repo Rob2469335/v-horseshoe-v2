@@ -11,6 +11,8 @@ from dataclasses import asdict, dataclass, field
 from typing import Dict, List, Optional, Protocol
 from litellm import acompletion
 
+from swarm_os.lib.opencode_session import opencode_headers
+
 log = logging.getLogger(__name__)
 
 MCP_TOOL_REGISTRY: List[str] = [
@@ -392,6 +394,7 @@ Do not include markdown blocks, just raw JSON.
                 model=MODEL_TIERS["fast"],
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.7,
+                extra_headers=opencode_headers(),
             )
         content = res.choices[0].message.content.strip()
         if content.startswith("```json"):
@@ -465,6 +468,7 @@ Intelligently splice the best sub-trees from both variants (e.g. combine a speed
                 model=MODEL_TIERS["fast"],
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
+                extra_headers=opencode_headers(),
             )
         content = res.choices[0].message.content.strip()
         if content.startswith("```python"):

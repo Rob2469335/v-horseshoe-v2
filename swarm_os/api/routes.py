@@ -13,6 +13,8 @@ import httpx
 import asyncio
 from fastapi import APIRouter, Query, Depends, HTTPException, Request
 
+from swarm_os.lib.opencode_session import opencode_headers
+
 from swarm_os.api import admin
 from swarm_os.api.api_features import router as api_features_router
 from swarm_os.api.legal import router as legal_router
@@ -500,7 +502,7 @@ async def generate(payload: GenerateRequest, orch=Depends(get_orchestrator)):
     try:
         import litellm
 
-        resp = await litellm.acompletion(**kwargs)
+        resp = await litellm.acompletion(**kwargs, extra_headers=opencode_headers())
         content = resp.choices[0].message.content or ""
         try:
             from runtime_v2.services.usage_log import record_response
@@ -523,7 +525,7 @@ async def generate(payload: GenerateRequest, orch=Depends(get_orchestrator)):
                     os.getenv("LLAMACPP_URL", "http://127.0.0.1:8080") + "/v1"
                 )
                 local_kwargs["api_key"] = "llama"
-                resp = await litellm.acompletion(**local_kwargs)
+                resp = await litellm.acompletion(**local_kwargs, extra_headers=opencode_headers())
                 content = resp.choices[0].message.content or ""
                 _model = "qwen3.5-4b"
                 try:

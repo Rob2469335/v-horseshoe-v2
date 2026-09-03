@@ -31,6 +31,8 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from swarm_os.lib.opencode_session import opencode_headers
+
 import chess
 
 log = logging.getLogger(__name__)
@@ -1586,6 +1588,7 @@ async def _llm_enhancement(
                         api_key=ds_key,
                         max_tokens=500,
                         timeout=_EXPLAIN_TIMEOUT_S,
+                        extra_headers=opencode_headers(),
                     )
                 text = (resp.choices[0].message.content or "").strip()
                 if text:
@@ -1615,6 +1618,7 @@ async def _llm_enhancement(
                 custom_llm_provider="openai",
                 max_tokens=2000,
                 timeout=_EXPLAIN_TIMEOUT_S,
+                extra_headers=opencode_headers(),
             )
         msg = resp.choices[0].message
         # Only return clean prose content; empty (reasoning-only) -> "" and the
@@ -1827,6 +1831,7 @@ async def _socratic_coach_turn(
                         api_key=ds_key,
                         max_tokens=300,
                         timeout=_EXPLAIN_TIMEOUT_S,
+                        extra_headers=opencode_headers(),
                     )
                 text = (resp.choices[0].message.content or "").strip()
                 if text:
@@ -1851,6 +1856,7 @@ async def _socratic_coach_turn(
                     custom_llm_provider="openai",
                     max_tokens=1500,
                     timeout=_EXPLAIN_TIMEOUT_S,
+                    extra_headers=opencode_headers(),
                 )
             msg = resp.choices[0].message
             text = (msg.content or "").strip()

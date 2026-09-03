@@ -7,6 +7,8 @@ import uuid
 import re
 from pathlib import Path
 from litellm import acompletion
+
+from swarm_os.lib.opencode_session import opencode_headers
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import (
     PointStruct,
@@ -704,6 +706,7 @@ async def _distill(distiller_content: str, fix_class: str | None = None) -> str:
                 "custom_llm_provider": "openai",
                 "max_tokens": DISTILLER_MAX_TOKENS_CLOUD,
                 "timeout": 90.0,
+                "extra_headers": opencode_headers(),
             }
         )
     if os.environ.get("DEEPSEEK_API_KEY"):
