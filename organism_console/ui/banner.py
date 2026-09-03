@@ -284,7 +284,7 @@ def print_banner(ctx):
 
     cloud_status = (
         "[bold #00ffcc]\\[ON][/bold #00ffcc]"
-        if ctx.cloud_enabled
+        if (ctx.state.cloud_enabled if ctx.state else ctx.cloud_enabled)
         else "[bold #ff00ea]\\[OFF][/bold #ff00ea]"
     )
 

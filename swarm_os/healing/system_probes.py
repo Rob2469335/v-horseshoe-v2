@@ -40,6 +40,22 @@ _NEVER_TOUCH = {
     "opencode.exe",
 }
 
+# Substrings that identify the legitimate Swarm stack workload (backend, model
+# router, qdrant, frontend, training). These are high-CPU/RAM BY DESIGN and must
+# not be flagged as runaway_process on startup — recovery would refuse to kill
+# them anyway ("no safe kill targets"), producing pure alert noise.
+_SWARM_WORKLOAD_CMDLINE = (
+    "swarm_os",
+    "model_router",
+    "uvicorn",
+    "qdrant",
+    "vite",
+    "train_v4",
+    "train_v5",
+    "organism_console",
+    "start-dev",
+)
+
 # Subdirectories inside the OS temp folder that are never deleted wholesale
 # (actively-used caches / app-private state).
 _TEMP_KEEP_DIRS = {"node_modules", "pip", "npm-cache", "uv", ".cache"}
@@ -140,6 +156,10 @@ def check_runaway_processes(
         try:
             info = proc.info
             name = (info["name"] or "").lower()
+            cmdline = " ".join(info["cmdline"] or []).lower()
+            # Skip the legitimate Swarm stack (high CPU/RAM by design).
+            if any(s in cmdline for s in _SWARM_WORKLOAD_CMDLINE):
+                continue
             cpu = proc.cpu_percent(None)
             mem = proc.memory_info().rss / (1024**2)
             if cpu < float(cpu_threshold) and mem < float(memory_mb_threshold):
