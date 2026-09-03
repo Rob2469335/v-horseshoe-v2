@@ -148,7 +148,7 @@ def test_schema_remains_synced():
     assert gs["required"] == ["action"]
 
     assert gs["properties"]["action"]["enum"] == ps["properties"]["action"]["enum"]
-    assert len(gs["properties"]["action"]["enum"]) == 13
+    assert len(gs["properties"]["action"]["enum"]) == 14
 
     assert set(gs["properties"].keys()) == set(ps["properties"].keys())
     for key in gs["properties"]:
