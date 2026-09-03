@@ -125,16 +125,16 @@ if ($env:SWARM_SPEC_DECODE -ne "0") {
 # Override with $env:SWARM_LOCAL_MODEL:
 #   - "qwen3.5-4b"     : plain 4B Q4_K_M on the iGPU (same alias)
 #   - "qwen3.5-4b-mtp" : MTP 4B (same as default)
-$genModel = "C:\Users\rober\models\Qwen3.5-4B-UD-Q4_K_XL.gguf"
+$genModel = "C:\Users\rober\Projects\v-horseshoe-v2\qwen_train\qwen3.5-4b-base-q4km.gguf"
 $genAlias = "qwen3.5-4b"
 $genNgl = "99"
 if ($env:SWARM_LOCAL_MODEL -eq "qwen3.5-4b") {
-    $genModel = "C:\Users\rober\models\Qwen3.5-4B-Q4_K_M.gguf"
+    $genModel = "C:\Users\rober\Projects\v-horseshoe-v2\qwen_train\qwen3.5-4b-base-q4km.gguf"
     $genAlias = "qwen3.5-4b"
     $genNgl = "99"
 }
 if ($env:SWARM_LOCAL_MODEL -eq "qwen3.5-4b-mtp") {
-    $genModel = "C:\Users\rober\models\Qwen3.5-4B-UD-Q4_K_XL.gguf"
+    $genModel = "C:\Users\rober\Projects\v-horseshoe-v2\qwen_train\qwen3.5-4b-base-q4km.gguf"
     $genAlias = "qwen3.5-4b"
     $genNgl = "99"
 }
