@@ -283,16 +283,18 @@ def _distill_capture_first_model(monkeypatch, env):
     return captured["models"][0]
 
 
-def test_distill_openrouter_attempt_uses_free_ox_alpha(monkeypatch):
+def test_distill_openrouter_attempt_leads_with_deepseek_flash_0731(monkeypatch):
     """The OpenRouter distiller attempt MUST use an openrouter/-prefixed model.
     Pre-fix it used CLOUD_MODEL ('openai/deepseek-v4-flash') which litellm
     routed to the OpenCode Go endpoint — re-hitting the already-dead provider
-    instead of ever reaching OpenRouter. The slot is stealth/ox-alpha because
-    OpenRouter hosts NO free deepseek-v4-flash variant."""
+    instead of ever reaching OpenRouter. Since 59ede70 the OpenRouter lead is
+    deepseek/deepseek-v4-flash-0731 (verified live HTTP 200 free/cheap); the
+    stealth/ox-alpha slot remains only as the later generic fallback."""
     model = _distill_capture_first_model(
         monkeypatch, ("OPENROUTER_API_KEY", "sk-or-test")
     )
-    assert model == "openrouter/stealth/ox-alpha"
+    assert model == "openrouter/deepseek/deepseek-v4-flash-0731"
+    assert model.startswith("openrouter/")
 
 
 def test_distill_nvidia_attempt_uses_surviving_v4_flash_0731(monkeypatch):
