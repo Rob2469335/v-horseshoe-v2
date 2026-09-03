@@ -768,7 +768,9 @@ async def test_web_fetch_result_not_truncated_to_tool_cap(monkeypatch):
         "content": "X" * 5000,
     }  # 5KB of fetched page body
 
-    async def fake_run_tool(tool_name, payload, *, auth=None, trace_hook=None):
+    async def fake_run_tool(
+        tool_name, payload, *, auth=None, trace_hook=None, run_id=""
+    ):
         return big_fetch
 
     monkeypatch.setattr("runtime_v2.services.tool_executor.run", fake_run_tool)
