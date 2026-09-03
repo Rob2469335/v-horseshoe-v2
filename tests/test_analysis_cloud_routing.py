@@ -2,6 +2,7 @@
 the funded OpenCode Go account)."""
 
 import os
+from contextlib import contextmanager
 from unittest.mock import patch
 
 from runtime_v2.services._llm_client import get_litellm_model
@@ -11,8 +12,20 @@ def _patch_env(**overrides):
     return patch.dict(os.environ, overrides, clear=False)
 
 
+@contextmanager
+def _no_analysis_model_override():
+    """Isolate from a real .env's ANALYSIS_CLOUD_MODEL override so these tests
+    pin the DEFAULT analysis-cloud lead, not whatever the operator configured."""
+    saved = os.environ.pop("ANALYSIS_CLOUD_MODEL", None)
+    try:
+        yield
+    finally:
+        if saved is not None:
+            os.environ["ANALYSIS_CLOUD_MODEL"] = saved
+
+
 def test_analysis_agent_routes_to_cloud_when_key_present():
-    with _patch_env(
+    with _no_analysis_model_override(), _patch_env(
         NVIDIA_API_KEY="sk-test",
         SWARM_ANALYSIS_CLOUD="auto",
         SWARM_ROUTING_MODE="auto",
@@ -27,7 +40,7 @@ def test_analysis_agent_routes_to_cloud_when_key_present():
 def test_edit_agents_route_to_cloud_when_key_present():
     # coder/debugger need strong instruction-following for the read->edit->
     # verify protocol; the local 4B reproduced the /upgrade dead-loop instead.
-    with _patch_env(
+    with _no_analysis_model_override(), _patch_env(
         NVIDIA_API_KEY="sk-test",
         SWARM_ANALYSIS_CLOUD="auto",
         SWARM_ROUTING_MODE="auto",
@@ -42,7 +55,7 @@ def test_edit_agents_route_to_cloud_when_key_present():
 def test_executor_routes_to_cloud_when_key_present():
     # executor now orchestrates compound goals (chaining researcher->coder->
     # tool-runner); the local 4B cannot follow a multi-agent chain reliably.
-    with _patch_env(
+    with _no_analysis_model_override(), _patch_env(
         NVIDIA_API_KEY="sk-test",
         SWARM_ANALYSIS_CLOUD="auto",
         SWARM_ROUTING_MODE="auto",
