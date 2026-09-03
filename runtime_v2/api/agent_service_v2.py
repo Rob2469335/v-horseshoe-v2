@@ -4,6 +4,7 @@ import asyncio
 import time
 import re
 from dataclasses import dataclass, field
+from pathlib import Path as _Path
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 try:
@@ -453,8 +454,21 @@ class AgentServiceV2:
         }
 
     def _record_event(
-        self, event_type: str, source: str, payload: dict[str, Any]
+        self,
+        event_type: str,
+        source: str,
+        payload: dict[str, Any],
+        run_id: str = "",
+        parent_id: str = "",
     ) -> None:
+        # Forward-instrumentation (2026-09): attach run_id/parent_id to the event
+        # payload so the event log can be joined to fitness/outcome records by run.
+        # Injected into payload (not the frozen envelope) to keep serialization simple
+        # and backward-compatible; absent run_id stays out for historical/external events.
+        if run_id:
+            payload["run_id"] = run_id
+        if parent_id:
+            payload["parent_id"] = parent_id
         store = getattr(self, "event_store", None) or getattr(
             self.orchestrator, "events", None
         )
@@ -469,6 +483,52 @@ class AgentServiceV2:
                 )
             except Exception as e:
                 log.warning("Failed to record event to EventStore: %s", e)
+
+    _TRAJ_DIR = _Path("data/trajectories")
+
+    def _write_run_trajectory(
+        self, *, run_id: str, agent_id: str, parent_id: str, delegated_by: str,
+        prompt: str, genome_id: str, last_chunk: dict = None,
+    ) -> None:
+        """Write one ATIF-like trajectory record per completed run.
+
+        This is the durable source of truth for reconstructing a run's
+        task/reasoning/tools/outcome for SFT/RFT. The event log (events.jsonl)
+        is append-only and historical records lack run_id linkage; this file
+        IS the joinable trace keyed by run_id. Written to data/trajectories/
+        as one JSONL record per run (idempotent on resume: same run_id
+        overwrites if the generator ran twice).
+        """
+        if not run_id:
+            return  # top-level call or no-run context — nothing to capture
+        try:
+            self._TRAJ_DIR.mkdir(parents=True, exist_ok=True)
+            # derive status from the last chunk's action/handler_status
+            status = "unknown"
+            last_content = ""
+            if last_chunk:
+                action = last_chunk.get("action", "")
+                handler_status = last_chunk.get("handler_status", "")
+                if handler_status:
+                    status = handler_status.lower()
+                elif action == "final":
+                    status = "completed"
+                last_content = str(last_chunk.get("content", ""))[:5000]
+            record = {
+                "run_id": run_id,
+                "agent_id": agent_id,
+                "parent_id": parent_id,
+                "delegated_by": delegated_by,
+                "task": str(prompt)[:300],
+                "genome_id": genome_id,
+                "status": status,
+                "last_content": last_content,
+            }
+            out = self._TRAJ_DIR / f"{run_id}.jsonl"
+            with open(out, "a", encoding="utf-8") as f:
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        except Exception as traj_err:
+            log.debug("trajectory write failed for run %s: %s", run_id, traj_err)
 
     def list_agents(self) -> List[dict]:
         return list(self._agents.values())
@@ -1953,7 +2013,9 @@ class AgentServiceV2:
                 tool_payload,
                 auth={"agent_id": agent_id, "turn": turn},
                 trace_hook=lambda etype, epayload: self._record_event(
-                    "tool_trace", agent_id, {"tool": action, "type": etype, **epayload}
+                    "tool_trace", agent_id, {"tool": action, "type": etype, **epayload},
+                    run_id=getattr(state, "run_id", ""),
+                    parent_id=getattr(state, "parent_id", ""),
                 ),
                 run_id=getattr(state, "run_id", ""),
             )
@@ -2201,6 +2263,7 @@ class AgentServiceV2:
         if not parent_id:
             parent_id = ""  # top-level normalized
 
+        _last_chunk = {}
         try:
             async for chunk in self._step_agent_stream_inner(
                 agent_id,
@@ -2216,6 +2279,7 @@ class AgentServiceV2:
                 parent_id=parent_id,
                 delegated_by=delegated_by or "",
             ):
+                _last_chunk = chunk
                 yield chunk
         except GeneratorExit:
             # Client aborted mid-stream: the run never reached a terminal path,
@@ -2231,6 +2295,21 @@ class AgentServiceV2:
             # then re-raise so the exception still reaches the caller.
             self._feed_aborted_outcome(agent_id, prompt, genome_id=genome_id or "")
             raise
+        finally:
+            # Per-run trajectory file (2026-09, prerequisite for distiller/eval).
+            # Writes an ATIF-like record capturing: run_id, agent, task, status,
+            # outcome counters, and the last chunk's content. This file is the
+            # single source of truth for reconstructing the run for SFT/RFT — the
+            # event log is append-only and lacks run_id linkage for historical records.
+            try:
+                self._write_run_trajectory(
+                    run_id=run_id, agent_id=agent_id,
+                    parent_id=parent_id, delegated_by=delegated_by or "",
+                    prompt=prompt, genome_id=genome_id or "",
+                    last_chunk=_last_chunk,
+                )
+            except Exception:
+                pass  # trajectory write is best-effort; never kill the stream
 
     def _feed_aborted_outcome(
         self, agent_id: str, prompt: str, genome_id: str = ""
@@ -2839,7 +2918,9 @@ class AgentServiceV2:
             action = decision.get("action", "final").strip()
             log.info("[%s] action=%s", agent_id, action)
             self._record_event(
-                "agent_action", agent_id, {"action": action, "turn": turn}
+                "agent_action", agent_id, {"action": action, "turn": turn},
+                run_id=getattr(state, "run_id", ""),
+                parent_id=getattr(state, "parent_id", ""),
             )
             yield {"agent_id": agent_id, "content": f"[{action}]", "model": model}
 
@@ -3305,6 +3386,8 @@ class AgentServiceV2:
                         json.dumps(a, ensure_ascii=False)[:100] for a in history_actions
                     ][-6:],
                 },
+                run_id=getattr(state, "run_id", ""),
+                parent_id=getattr(state, "parent_id", ""),
             )
         except Exception as evt_err:
             log.debug("[%s] turn_budget event skipped: %s", agent_id, evt_err)
