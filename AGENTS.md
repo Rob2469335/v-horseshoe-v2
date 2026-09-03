@@ -602,21 +602,15 @@ Dependency pairing: React 19 ↔ `@react-three/fiber` ^9.5 / `@react-three/drei`
 > cross-check `qwen_train/results/` + running processes. If primary is stuck/
 > idle here, pick the thread up.
 
-**CURRENT (2026-09-02 ~17:00): DECISIVE — `--reasoning-budget-message` SOLVES
-the transfer gap: content-only diag 9/10 on the V5 adapter, zero retraining.**
-Message wording matters: `--reasoning-budget-message "Your_final_answer_must_begin_with_DIAGNOSIS_and_name_the_file"`
-→ content_diag went 5/10 (baseline) → **9/10** (finish_stop 9/10; `c4f410f`
-content-looped finish=length but still named the file). Fixed: `8307faf`,
-`ccf628d`, `e2e6b5c`, `2729510`, `c4f410f` (all "reasoning-correct-content-drop").
-The ONLY residual fail is `e861842` — reasoning does NOT localize (genuine
-reasoning gap). Repo map injection fixed it via content-echo (names
-competitive_intel.py) but not via reasoning. **Conclusion: the reasoning→content
-transfer is ATTENTION-RECENCY, fixable at serving time, not training.** Three
-LoRA rounds (V4/V4.1 diagfix/V5) couldn't close it; one message flag did.
-Production serve: add `--reasoning-budget-message` with final-answer-directing
-wording. See Recent Changes for the full trail.
+**CURRENT (2026-09-02 ~20:50):** Forward-instrumentation prerequisite patch
+DONE (`abc2777`). `run_id`/`parent_id` injected into events via `_record_event`
+payload at key sites (tool_trace, agent_action, turn_budget_exhausted). Per-run
+ATIF-like trajectory writer (`_write_run_trajectory`) attached in the outer
+step_agent_stream wrapper via `finally` block — writes to
+`data/trajectories/<run_id>.jsonl`. Verified: ruff E9/F clean, app imports OK.
+Production stack OFF — launch via start-dev.ps1 when ready.
 
-**Live servers:** none running (V5 eval servers shut down after the decisive run).
+**Live servers:** none. Production stack OFF.
 
 ## V6 DATASET PLAN — AUDITED + CORRECTED (2026-09-02, deep-research 8-API + github skill)
 
