@@ -602,15 +602,20 @@ Dependency pairing: React 19 ↔ `@react-three/fiber` ^9.5 / `@react-three/drei`
 > cross-check `qwen_train/results/` + running processes. If primary is stuck/
 > idle here, pick the thread up.
 
-**CURRENT (2026-09-02 ~20:50):** Forward-instrumentation prerequisite patch
-DONE (`abc2777`). `run_id`/`parent_id` injected into events via `_record_event`
-payload at key sites (tool_trace, agent_action, turn_budget_exhausted). Per-run
-ATIF-like trajectory writer (`_write_run_trajectory`) attached in the outer
-step_agent_stream wrapper via `finally` block — writes to
-`data/trajectories/<run_id>.jsonl`. Verified: ruff E9/F clean, app imports OK.
-Production stack OFF — launch via start-dev.ps1 when ready.
+**CURRENT (2026-09-04 ~10:00):** V6 training pipeline running. Trace-gen
+accelerated via RunPod RTX 3090 pod (GPU tunnel: local:8086 → pod:8086).
+232/284 traces complete (~82%), ETA ~17 min for remainder. Pod: v6-train
+(jbbpiw91jtwhj1), $0.22/hr community, CUDA working. Training script
+(train_v4_cuda.py) adapted for CUDA: device_map="cuda", MAX_LEN=2528 (full
+context, no truncation — 24GB VRAM eliminates iGPU OOM). Smoke test passed:
+2 steps in 8.7s (~4.4s/step). After trace-gen completes: audit new 84 traces,
+assemble full 284-example dataset, upload to pod, train (~65 min at $0.24).
+Key finding this session: iGPU OOM is from backward-pass activation memory
+scaling with seq_len, NOT from `<think>` blocks (V6 dataset already has zero).
+The 3090's 24GB removes the constraint entirely.
 
-**Live servers:** none. Production stack OFF.
+**Live servers:** RunPod pod v6-train (RTX 3090, port 8086 serving base model
+via SSH tunnel). Local base model server OFF. Production stack OFF.
 
 ## V6 DATASET PLAN — AUDITED + CORRECTED (2026-09-02, deep-research 8-API + github skill)
 
@@ -820,6 +825,100 @@ relaunch via start-dev.ps1 when ready.
 ---
 
 ## Recent Changes (do NOT re-apply)
+
+### CLI crash + banner fix + OpenCode session header + test suite audit + SOTA upgrades + V6 pipeline (2026-09-04, session with opencode)
+
+**FIX: CLI crash — banner reads `ctx.cloud_enabled` (`eb16d05`):**
+`cli.py:283` clobbered `ctx.cloud_enabled = False` on every startup, overriding the
+persisted `.session.json` value. `banner.py` then read `ctx.state.cloud_enabled`
+but `CLIContext` has no `.state` — `AttributeError`. Fixed: removed the clobber
+line (state store already defaults to False + loads persisted), banner reads
+`ctx.cloud_enabled` directly.
+
+**FIX: OpenCode Go `x-opencode-session` header (`c6a3338`):**
+OpenCode Go requires `x-opencode-session` header per request (deadline 2026-09-06).
+Created `swarm_os/lib/opencode_session.py` (stable per-process UUID, zero internal
+imports). Wired into `build_kwargs`, `_fallback_entry`, `_deployment_entry` in
+`_llm_client.py` + 17 direct `litellm.acompletion` call sites across services,
+API routes, healing, kernel, and `blind_judge_v4.py` (httpx). Header is conditional
+on `is_opencode_base(base)` — harmless on non-OpenCode providers. Ruff E9/F clean.
+
+**FIX: test suite audit — 6 failures fixed (`eb16d05`→`510aaf0`):**
+Full suite: **6 failed → 0 failed** (1454 passed). Root causes:
+1. Grammar schema drift (`da894ab`): `_grammar_schema.py` missed `github_research`
+   action + `mode`/`target_repo` props (commit `ae35291` wired action but forgot
+   grammar). Synced + test pin 13→14.
+2. Analysis-cloud routing tests (`f9f0f70`): leaked `.env`'s `ANALYSIS_CLOUD_MODEL`
+   override; code default is correctly gemini. Made tests hermetic (unsets key).
+3. Move5 distill test (`3016262`): stale `ox-alpha` expectation; commit `59ede70`
+   intentionally moved OpenRouter lead to `deepseek-v4-flash-0731`. Updated.
+4. OpenCode parity mock (`510aaf0`): `fake_run_tool` predates `run_id` instrumentation;
+   added `run_id=""` to mock signature.
+
+**SOTA CLI: inline diff rendering (`0f61ce9`):**
+`format_inline_diff()` in `live_stream.py` — pure function, Rich-markup-escaped,
+capped at 24 lines. Wired into `tool_call`→`tool_result` stream: tracks pending
+filesystem patch args, renders unified-style diff (red `-` / green `+`) on success.
+6 new unit tests in `TestInlineDiff`. Full CLI suites 33 passed.
+
+**SOTA CLI: AST symbol context on read (`d5f1c79`):**
+`swarm_os/lib/symbol_context.py` — `extract_symbol_map()` (stdlib-ast, zero deps)
+extracts indented class/function signatures; `find_direct_importers()` reuses cached
+`KnowledgeGraph` for reverse-import lookup. Wired into `filesystem` `read` for
+`.py` files: result now carries `symbol_map` + `importers` (additive, degrades to
+`{}`). 17 new tests in `test_symbol_context.py`. Full filesystem suites 226 passed.
+
+**V6 training pipeline — retrieval-context assembler + trace-gen + audit:**
+- `mine_v6.py`: mined 284 commit examples from git history (201 single-file +
+  83 multi-file-primary). Written to `v6_commits.json`.
+- `assemble_chatml_v6.py`: retrieval-context assembler — primary file (full, capped
+  150 lines) + AST import dependencies (25 lines each). Token-budgeted (1500 ctx
+  budget) with per-record total cap (2300). Produced `real_68_dataset_v6.jsonl`:
+  178 records, median 3 context files, max 7, all under 2400 tokens.
+- `trace_gen_v6.py`: V5's proven method (`--reasoning-budget 1200`, path-led
+  DIAGNOSIS). Resume-safe + incremental writes. Resumed from checkpoint-200 after
+  initial run.
+- `v6_audited_traces.jsonl`: 178/200 accepted (21 errors: git failures + timeouts
+  during server downtime).
+- V6 assembled dataset: 178 records, retrieval-context enriched (median 3 files vs
+  V5's 1 file). All under 2400 tokens.
+
+**V6 iGPU OOM investigation — root cause identified + resolved via rented GPU:**
+OOM happened every ~50 steps during backward-pass cross-entropy spike, NOT from
+`<think>` blocks (V6 dataset has zero). Steady-state memory was fine (alloc 4.1 GiB /
+reserved 5.4 GiB); the backward transient needed ~1.46 GiB more than iGPU shared
+DRAM could provide. Empty-cache helped (reserved 13.5→5.4 GiB) but wasn't sufficient.
+Root cause: activation memory scales with seq_len × hidden_dim; Qwen3.5-4B's 3072
+hidden_dim pushes the backward spike past the ~13.5 GiB arena at any seq_len > ~2000.
+Fix: rented RTX 3090 (24GB VRAM, $0.22/hr community, pod `v6-train`). CUDA training
+script (`train_v4_cuda.py`) adapted: `device_map="cuda"`, MAX_LEN=2528 (full context,
+no truncation). Smoke test: 2 steps in 8.7s (~4.4s/step), no OOM. Full 890-step run
+estimated ~65 min at $0.24 total.
+
+**GPU-accelerated trace generation:**
+Served base model on pod via `serve_model.py` (minimal FastAPI + transformers).
+SSH tunnel local:8086 → pod:8086 for trace-gen. GPU inference ~22s/trace vs CPU
+~4 min/trace — 10x speedup. 232/284 traces complete, ETA ~17 min for remainder.
+
+**Deep research: thinking-mode training — settled finding:**
+`<think>` blocks are a serving config (`enable_thinking=True/False`), NOT weight-gated.
+Training without `<think>` reduces sequence length proportionally (fewer tokens to
+backward through). However, V6 assembled dataset already has zero `<think>` blocks
+(assembler strips them via `extract_target` from DIAGNOSIS onward). The iGPU OOM
+was from regular content length, not thinking tokens. Unsloth guidance: include
+~15% thinking examples if training with thinking to preserve reasoning quality.
+
+**Disk cleanup (~10.5 GB reclaimed):**
+Removed `qwen3.5-4b-base-f16.gguf` (~8 GB, never served), `diagfix_lora_q4km.gguf`
+(~2.5 GB, old adapter), 18 scratch scripts, `agent_core/` (incomplete extraction),
+`models.json` (stale catalog). All verified zero codebase references before deletion.
+
+**Cleanup: `qwen_train/` scratch scripts (18 removed):**
+`probe_alibaba_matrix.py`, `probe_providers.py`, `probe_providers2.py`,
+`find_ggufs.py`, `list_groq_gemini.py`, `debug_span.py`, `peek_assistant.py`,
+`cleanup_bailian.py`, `check_empties_circular.py`, `check_base_format.py`,
+`analyze_empties.py`, `sweep_tokens.py`, `test_512.py`, `test_exam_1024.py`,
+`test_exam_1536.py`, `test_exam_2048.py`, `test_exam_3072.py`, `test_real_exam.py`.
 
 ### V4 Adapter Evaluation — Base vs Adapter Loop-Rate Investigation (SETTLED FINDINGS — 2026-08-30)
 
@@ -1987,6 +2086,8 @@ Converted `except:` → `except Exception:` (or specific types) in `swarm_os/cor
 ---
 
 ## Self-Healing & Self-Learning Fixes
+
+- **Rule (code_analyzer)**: Prefer completing the goal with the FEWEST tool calls. If a compound goal requires both codebase reads and web research, interleave them — do not s...
 
 - **Rule (researcher)**: <reflection>
 <failure_summary>

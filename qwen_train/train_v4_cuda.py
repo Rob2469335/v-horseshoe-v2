@@ -46,10 +46,10 @@ try:
 except Exception:
     pass
 
-MODEL_PATH = r"C:\Users\rober\models\Qwen3.5-4B-Base-HF"
-OUTPUT_DIR = r"C:\Users\rober\Projects\qwen3_5_4b_real25_v4_lora"
-DATA_FILE = r"C:\Users\rober\Projects\qwen_train_data\real_25_dataset_v4.jsonl"
-MAX_LEN = 2048  # reduced from 2528 — V6 rows peak 2281, backward spike OOMs above ~2100
+MODEL_PATH = "/workspace/hf_cache/models--Qwen--Qwen3.5-4B/snapshots/851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a"
+OUTPUT_DIR = "/workspace/v6_adapter"
+DATA_FILE = "/workspace/v6_dataset.jsonl"
+MAX_LEN = 2528  # reduced from 2528 — V6 rows peak 2281, backward spike OOMs above ~2100
 
 SMOKE = "--smoke" in sys.argv
 MEM_TRACE = os.environ.get("V4_MEM_TRACE") == "1"          # observation only
@@ -60,7 +60,7 @@ OUTPUT_DIR = os.environ.get("V4_OUTPUT_DIR") or OUTPUT_DIR   # allows a fresh ad
 
 class MemTrace(TrainerCallback):
     """Per-step XPU memory sampler (observation only by default).
-    When V4_EMPTY_CACHE=1 it ALSO calls torch.xpu.empty_cache() each step to tell
+    When V4_EMPTY_CACHE=1 it ALSO calls torch.cuda.empty_cache() each step to tell
     level_zero to return idle reserved blocks to the driver. This targets the
     2026-08-29 finding: reserved flat at 13.5 GiB while allocated is only 4.1 GiB
     (~9.4 GiB reserved-but-idle), so the transient backward spike (~1.95 GiB)
@@ -71,9 +71,9 @@ class MemTrace(TrainerCallback):
             return
         try:
             if os.environ.get("V4_EMPTY_CACHE") == "1":
-                torch.xpu.empty_cache()
-            alloc = torch.xpu.memory_allocated() / (1024 ** 3)
-            res = torch.xpu.memory_reserved() / (1024 ** 3)
+                torch.cuda.empty_cache()
+            alloc = torch.cuda.memory_allocated() / (1024 ** 3)
+            res = torch.cuda.memory_reserved() / (1024 ** 3)
             print(f"[MEM] step={state.global_step} alloc={alloc:.3f}GiB reserved={res:.3f}GiB "
                   f"free(approx)={16.40 - alloc:.3f}GiB loss={logs.get('loss') if logs else '?'}", flush=True)
         except Exception as e:
@@ -164,7 +164,7 @@ def main():
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_PATH,
         quantization_config=bnb_config,
-        device_map="xpu",
+        device_map="cuda",
         torch_dtype=torch.float16,
         low_cpu_mem_usage=True,
         attn_implementation="sdpa",
@@ -247,7 +247,7 @@ def main():
 
     del trainer, model
     gc.collect()
-    torch.xpu.empty_cache()
+    torch.cuda.empty_cache()
 
 
 if __name__ == "__main__":
