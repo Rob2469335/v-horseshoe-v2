@@ -2299,7 +2299,7 @@ def test_approval_deny_does_not_reenter():
     a second pass through the approval block would re-enter the deny
     branch and yield a second approval_result, causing the agent to spin.
     """
-    from runtime_v2.api.agent_service_v2 import AgentServiceV2, _CallState
+    from runtime_v2.api.agent_service_v2 import _CallState
 
     state = _CallState()
     pending_id = "fake-pending-abc"
