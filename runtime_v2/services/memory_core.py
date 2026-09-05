@@ -531,6 +531,9 @@ def get_failure_digest() -> dict:
                 count = resp.json().get("result", {}).get("points_count", 0)
                 digest["shards"][shard] = count
                 digest["total"] += count
+            else:
+                # 404 or other non-200: shard doesn't exist yet, count as 0
+                digest["shards"][shard] = 0
         except Exception as e:
             # BUG FIX: was silently swallowing shard info failures.
             _log.debug("Shard info failed for '%s': %s", shard, e)
@@ -574,7 +577,7 @@ def prune_old_memories(shard: str = "general", days: int = 90, dry_run: bool = F
         if dry_run:
             count_resp = requests.post(
                 f"{QDRANT_URL}/collections/{collection}/points/count",
-                json={"filter": {"must": [{"key": "created_at", "range": {"lt": cutoff_iso}}]}},
+                json={"filter": {"must": [{"key": "timestamp", "range": {"lt": cutoff_ts}}]}},
                 timeout=10.0,
             )
             count = count_resp.json().get("result", {}).get("count", 0) if count_resp.status_code == 200 else -1
@@ -582,7 +585,7 @@ def prune_old_memories(shard: str = "general", days: int = 90, dry_run: bool = F
         
         delete_resp = requests.post(
             f"{QDRANT_URL}/collections/{collection}/points/delete",
-            json={"filter": {"must": [{"key": "created_at", "range": {"lt": cutoff_iso}}]}},
+            json={"filter": {"must": [{"key": "timestamp", "range": {"lt": cutoff_ts}}]}},
             timeout=30.0,
         )
         if delete_resp.status_code == 200:
