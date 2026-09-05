@@ -602,25 +602,328 @@ Dependency pairing: React 19 ↔ `@react-three/fiber` ^9.5 / `@react-three/drei`
 > cross-check `qwen_train/results/` + running processes. If primary is stuck/
 > idle here, pick the thread up.
 
-**CURRENT (2026-09-04 ~10:00):** V6 training pipeline running. Trace-gen
-accelerated via RunPod RTX 3090 pod (GPU tunnel: local:8086 → pod:8086).
-232/284 traces complete (~82%), ETA ~17 min for remainder. Pod: v6-train
-(jbbpiw91jtwhj1), $0.22/hr community, CUDA working. Training script
-(train_v4_cuda.py) adapted for CUDA: device_map="cuda", MAX_LEN=2528 (full
-context, no truncation — 24GB VRAM eliminates iGPU OOM). Smoke test passed:
-2 steps in 8.7s (~4.4s/step). After trace-gen completes: audit new 84 traces,
-assemble full 284-example dataset, upload to pod, train (~65 min at $0.24).
-Key finding this session: iGPU OOM is from backward-pass activation memory
-scaling with seq_len, NOT from `<think>` blocks (V6 dataset already has zero).
-The 3090's 24GB removes the constraint entirely.
+**CURRENT (2026-09-05 ~03:00):** Rob's 4B fully trained, gated (10/10 finish, 9/10 structure, 10/10
+grounds-file), merged+quantized to GGUF. V6 code-repair base also trained + gated 10/10.
+297-row dataset (234 repair + 63 persona). Audit fixes: 3/11 committed (Approval Replay
+Loop, Silently Dropped Shards, AWS Key Leak — all with revert-proof tests).
+Model routing renamed to `robs4b` across serving/CLI/agents. All pods terminated ($0).
+iGPU training stopped (stale). Remaining audit findings tracked for follow-up.
 
-**Live servers:** RunPod pod v6-train (RTX 3090, port 8086 serving base model
-via SSH tunnel). Local base model server OFF. Production stack OFF.
+**Live servers:** all OFF. Pods terminated. Production stack OFF.
+
+### swarm_os/repositories/ (Data Access Layer)
+| `graph_repo.py` | 145 | Persists `networkx.DiGraph` as GraphML with async save/lock/eviction |
+| `event_log_repo.py` | 99 | Tail-reads `events.jsonl` using file offsets, watermark resume |
+| `mutation_repo.py` | 168 | Manages pending code mutations with approve/reject/rollback |
+| `file_snapshot_repository.py` | 49 | Concrete JSON-file snapshots |
+| `snapshot_repository.py` | 18 | Abstract base class for snapshot persistence |
+
+### swarm_os/kernel/ (Kernel)
+| File | Lines | Role |
+|------|-------|------|
+| `environment.py` | 11 | Environment settings |
+| `genetics_compat.py` | 19 | Genetics compatibility layer |
+| `metrics.py` | 26 | Run metrics models |
+| `migrations.py` | 15 | Snapshot migrations |
+| `restore.py` | 31 | Snapshot restoration |
+| `snapshot_index.py` | 16 | Snapshot indexing |
+| `status.py` | 17 | Kernel status models |
+| `swarm_kernel.py` | 362 | Swarm evolutionary loop |
+| `genetics.py` | 482 | Genetic mutation engine (consolidated from genetics + genetics_v2) |
+| `selection.py` | 499 | Selection/mating logic |
+| `organism.py` | 167 | Organism lifecycle |
+| `brain.py` | 179 | Brain logic |
+
+### swarm_os/lib/vector/ (Vector Search)
+| `qdrant_store.py` | 103 | `search(collection, query, top_k)` — dense-vector search: embeds via :8081 (nomic-embed), `query_points` by vector (was `query_text`, which silently returned nothing on 768-dim collections). Never raises; degrades to `[]`. |
+| `reranker.py` | 139 | `rerank(query, candidates, top_k)` — BGE cross-encoder rerank via :8082, semaphore-bounded, graceful fallback to original ordering on outage. Was an EMPTY stub (caused `/features/search` ImportError → 503). |
+
+> Note: the former `code_indexer.py` / `context_retriever.py` were deleted in the
+> 2026-08-05 dead-code sweep. The live code indexing lives in
+> `runtime_v2/services/indexer.py` (`codebase` collection, chunking via :8081) and
+> `runtime_v2/services/semantic_search.py` (code-chunk retrieval for agent prompts).
+
+### swarm_os/rest/
+
+> **Removed 2026-08**: this directory never existed in the tree — the module map
+> below was a stale doc entry. The live evolutionary kernel lives in
+> `swarm_os/kernel/`; `swarm_os/swarm_kernel.py` is a thin re-export of it.
+
+### runtime_v2/api/ (Agent Execution)
+| `agent_service_v2.py` | 3141 | `AgentServiceV2` class — `step_agent_stream()` main agent loop. Orchestrates decisions, actions, healing. Persists tool_result failure events + diary writes + turn-budget reflexions. |
+| `_agent_config.py` | 45 | Constants: `MAX_TURNS`, `MAX_DEPTH`, `_DEFAULTS`, `ANALYSIS_AGENTS`, `INTERNET_GOAL_AGENTS` |
+| `_agent_routing.py` | 477 | `fast_route_coordinator()`, `fast_start_for_agent()`, `matches_task_keywords()`, `best_route_target()`, `is_compound_goal()`, `lookup_model()` — keyword routing + warmup (code_analyzer + coder) + researcher web-first turn |
+
+### runtime_v2/services/ (LLM & Tool Services)
+| File | Lines | Role |
+|------|-------|------|
+| `_semantic_decision_cache.py` | 231 | Semantic decision cache |
+| `canary_registry.py` | 184 | Canary registry for rollback |
+| `checkpointing.py` | 102 | Durable agent-run checkpointing |
+| `mapper.py` | 80 | Data mapping utilities |
+| `online_routing.py` | 107 | Online win-rate routing |
+| `project_map.py` | 107 | Compact project map builder |
+| `run_snapshot.py` | 138 | Diff-scoped run snapshots |
+| `system_intel.py` | 592 | Read-only system intelligence tools |
+| `vision_router.py` | 59 | Llama.cpp Vision model router policy |
+| `memory_core.py` | 554 | `remember_fat()`, `get_relevant_memories()` — Qdrant-backed memory |
+| `_llm_parser.py` | 313 | `extract_json()`, `normalize_decision()`, `normalize_model_json()`, `TOOL_CALL_SCHEMA`, `fire_and_forget()` |
+| `stream_runner.py` | 573 | `get_tool_decision()` — orchestration: MCP schema, memory injection, retry loop, LLM call |
+| `tool_executor.py` | 1115 | `run(tool_name, payload)` — dispatches tool calls |
+| `fallback_manager.py` | 700 | `get_live_fallbacks()` — cloud model fallbacks, cooldowns, DeepSeek/Ling/OpenCode chain |
+| `_llm_client.py` | 553 | `complete_for_tool_decision()`, `stream_content()`, `build_router()` (litellm Router, per-deployment endpoint/key), `build_kwargs()`, `_cloud_response_format()` (strict json_schema), `SSL setup`, `get_litellm_model()` |
+| `model_registry.py` | 107 | `get_model(agent_id)` — agent → model mapping (deepseek-coder → qwen3.5-4b) |
+| `_llm_prompts.py` | 92 | `build_tool_decision_system()`, `JSON_REPAIR_PROMPT` (includes `/no_think` for Qwen3) |
+| `_grammar_schema.py` | 61 | GBNF grammar for local tool-decision constrained decoding (`SWARM_GRAMMAR_DECODE=1`) |
+| `usage_log.py` | 301 | Durable per-model cost telemetry to `data/usage/usage.jsonl` |
+| `indexer.py` | 327 | Codebase indexer (`codebase` collection, chunking via :8081 embeddings, token-budget splitter) |
+| `semantic_search.py` | 47 | Code-chunk retrieval for agent prompts (graceful when index not ready) |
+| `learning/evolving_critic.py` | 54 | `EvolvingCritic.score()` — metacognition feedback; seeds weights from journal history |
+| `learning/critic_journal.py` | 45 | `CriticJournal.log()`/`load()` — durable JSONL journal of critic predictions (read-back enables restart persistence) |
+| `learning/meta_critic.py` | 67 | `MetaCritic` self-adjusting critic; `from_history()` replays journal entries to seed weights |
+
+### src/ (REMOVED 2026-08 — was a test-only third agent stack)
+
+> **Removed 2026-08**: `src/` was a third, parallel agent-runtime stack (HybridMemory,
+> DynamicRouter, SelfHealingAgentRuntime, ~6.6k lines) that the live app never
+> imported — only `tests/test_routing.py` and `tests/test_divide_by_zero.py`
+> exercised it. Both the stack and those two tests were deleted; the live swarm
+> runs `runtime_v2/` (agent loop) + `swarm_os/` (kernel/memory/healing). Deleted
+> with it: the now-unused `scipy` dependency (only `src/` imported it). The
+> resilience patterns it tested (circuit-breaker cooldowns, health monitoring,
+> escalation) are served live by `swarm_os/healing/` + `fallback_manager.py`
+> cooldowns.
+
+### organism_console/ (CLI Frontend)
+| File | Lines | Role |
+|------|-------|------|
+| `api_client.py` | 92 | Console API client |
+| `config.py` | 13 | Console config |
+| `speech.py` | 80 | Speech utilities |
+| `_commands_dev.py` | 801 | Dev commands: `diff`, `commit`, `branch`, `debug`, `patch`, `impact`, `compress` |
+| `_commands_ai.py` | 876 | AI commands: `heal`, `upgrade`, `goal`, `vote`, `memory`, `simulation` |
+| `_commands_system.py` | 714 | System commands: `help`, `status`, `trace`, `cloud`, `tools`, `mcp`, `routing` |
+| `_commands_opencode.py` | 499 | opencode-parity commands: `build`, `analyze`, `chat`, `undo`, `redo`, `modes` + worktree snapshot/restore helpers + `permissions`, `auto`, `toasts`, `diff-last` (alias `changes`) + `build_run_diff`/`render_run_diff`/`last_snapshot` |
+| `cli.py` | 493 | CLI entrypoint and main loop (BUILD/ANALYZE/CHAT mode, project-aware prompt, undo snapshot, `--continue`/`--json` run modes, change-summary panel, desktop toasts, auto-mode badge) |
+| `permissions.py` | 131 | opencode-style tri-state policy (allow/ask/deny) persisted to `.permissions.json`; `policy_for`/`set_policy`/`auto_mode`/`should_ask`/`blocked` |
+| `notifications.py` | 69 | Windows toast notifications via PowerShell NotifyIcon (no-op off-Windows) |
+| `token_tracker.py` | 304 | Token and model tracking display |
+| `state_store.py` | 197 | CLI state persistence (+ runtime `undo_stack`/`last_prompt`, persisted `toasts_enabled`) |
+| `renderer.py` | 190 | Output rendering |
+| `command_registry.py` | 164 | `CommandRegistry` class + `registry` instance |
+| `_command_routing.py` | 188 | `route_natural_language_keywords()`, `classify_intent_with_llm()` |
+| `_command_deps.py` | 121 | AST import dependency analysis (`ImportVisitor`, `resolve_module_path`) |
+| `_command_context.py` | 27 | `CommandContext` data class |
+
+### start-console/ (Current-Gen Web Console — TanStack Start SSR + React 19)
+
+| File | Role |
+|------|------|
+| `src/routes/api/chat.ts` | AI SDK v7 chat endpoint: `createFileRoute` + `server.handlers.POST`, `convertToModelMessages`, `createUIMessageStreamResponse` |
+| `src/pages/AgentPage.tsx` | Agent chat UI — `useChat` v4 (`DefaultChatTransport`), renders `messages[].parts` (text + tool parts) |
+| `src/pages/OpsPage.tsx` | Ops/tutor page (dead trace/admin queries pruned) |
+| `src/pages/LearnedMemoriesPage.tsx` | Memory browser |
+| `src/components/SwarmTopology3D.tsx` | R3F v9 3D topology (constructor `args`, `[undefined, undefined, n]` instancedMesh) |
+| `src/components/organism/OrganismConstellation.tsx` | Genomes visualization (R3F v9) |
+| `src/shell/ShellLayout.tsx` | Shell layout via `@tanstack/react-router` |
+| `src/lib/types.ts` | Shared types (`StatusResponse.llamacpp_reachable`, `PanelKey` incl. `"memories"`) |
+| `src/routeTree.gen.ts` | Generated route tree (regenerate via `npm run generate-routes`) |
+
+Dependency pairing: React 19 ↔ `@react-three/fiber` ^9.5 / `@react-three/drei` ^10, `ai` ^7.0.44, `@ai-sdk/react` ^4, `zod` ^4. Both consoles `tsc` clean; `start-console npm run build` succeeds.
+
+---
+
+
+### start-console/src/
+| `router.tsx` | 19 | Frontend router |
+| `styles.css` | 139 | Frontend styles |
+
+## Key Patterns
+
+- **Agent loop** (`step_agent_stream`): turn-based loop (max 8 turns). Each turn: context trim → warmup/fast-route → LLM tool-decision → action dispatch → loop guard. Yields AsyncGenerator[dict].
+- **Tool decision**: `get_tool_decision()` in `stream_runner.py` orchestrates MCP schema + memory injection + LLM call + retry + JSON extraction + action coercion.
+- **JSON extraction**: `extract_json()` in `_llm_parser.py`. Multiple salvage strategies (brace matching, ast.literal_eval, fence stripping, think-block recovery).
+- **Delegation**: recursive `step_agent_stream` call. Max depth 15. Circular delegation blocked. Coordinator always finalizes after first delegation.
+- **Healing**: circuit breaker after 3 consecutive errors or loop detection. Delegates to `debugger` agent.
+- **Memory**: Qdrant vector store (`memory_core.py`). `remember_fact(category="general"|"self_reflection")`. `get_relevant_memories()` for RAG.
+- **Async**: All new services use `asyncio` (AsyncQdrantClient, asyncio.Lock, asyncio.Queue, asyncio.to_thread).
+- **Control Plane**: `services/control_plane/` — 12 modules for model routing, task planning, critic evaluation, strategy selection.
+- **Repository Pattern**: `repositories/` — Data access layer with EventLog, Graph, Mutation, Snapshot repos.
+
+---
+
+## Qwen3.5 Local Model
+
+- **Model**: `C:\Users\rober\models\Qwen3.5-4B-UD-Q4_K_XL.gguf` (MTP 4B, served on :8080). The plain 9B fallback was pruned 2026-08-05 (backup at `C:\Users\rober\AppData\Local\Temp\opencode\prune-backup-2026-08-05\`) — heavy reasoning routes to cloud DeepSeek V4 Flash, so only the 4B-MTP local model is served.
+- **Model name in API**: `qwen3.5-4b` (the default MTP 4B served on port 8080; used in `config/agent_models.json` and `model_registry.py`).
+- **Thinking mode**: Disabled via `/no_think` prepended to all system prompts in `_llm_prompts.py`
+- **Server**: `bin\llama.exe serve -m "C:\Users\rober\models\Qwen3.5-4B-UD-Q4_K_XL.gguf" --alias "qwen3.5-4b" -c 16384 -fa on -ctk q8_0 -ctv q8_0 -t 2 -tb 4 -b 2048 -ub 512 -np 1 --reasoning-budget 1200 --reasoning-budget-message "Your final answer must begin with DIAGNOSIS and name the file" --timeout 300 --port 8080` (budget 1200 raised 2026-09-01 per the localization discriminator; **message flag added 2026-09-02 — closes the reasoning→content transfer gap: content-only file-grounding 9/10 with zero retraining**, see CURRENT + Recent Changes)
+- **Fallback**: `reviewer` agent still uses `openrouter` backend (`deepseek/deepseek-r1:free`)
+- **Analysis + edit agents prefer cloud**: `code_analyzer`, `researcher`, `reviewer` **and** the edit agents `coder` + `debugger` route to **DeepSeek V4 Flash** (`openai/deepseek-v4-flash` via the funded OpenCode Go account) for all tool decisions + content streaming whenever `OPENAI_API_KEY` is present and cloud is enabled (see `runtime_v2/services/_llm_client.py` `_ANALYSIS_CLOUD_AGENTS` / `_analysis_cloud_enabled()`). `coder`/`debugger` were added 2026-08-06 because the read→patch→sandbox_repl→final edit protocol needs strong instruction-following — the local 4B reproduced the `/upgrade` dead-loop (web_search then final, no edit). Override model via `ANALYSIS_CLOUD_MODEL`; force local via `SWARM_ANALYSIS_CLOUD=off` or `/local` (routing mode `local_only`).
+
+---
+
+## LIVE WORK LOG (updated in real time — Gemini can read this standalone)
+
+> Live status of what the primary agent is doing right now. Audit: check this,
+> cross-check `qwen_train/results/` + running processes. If primary is stuck/
+> idle here, pick the thread up.
+
+**CURRENT (2026-09-04 ~15:45):** V6 optimized training RUNNING on RTX 3090 pod
+(ba7zcpki76q9d1, $0.22/hr community). Config: QLoRA NF4, LoRA r=16 alpha=32 on
+[attention + MLP targets], NEFTune noise_alpha=5, cosine LR, warmup 5, weight_decay
+0.01, epochs=3, batch=1 + accum=8 (effective 8). Dataset: 233 examples (234 audited
+traces, MAX_LEN 2528). 81 steps (~26s/step) ≈ 35 min total. Adapter → v6_adapter/.
+SSH: root@64.119.209.250:13053 (key ~/.ssh/runpod_ed25519). Local base server OFF.
+
+**Live servers:** RunPod pod v6-train (ba7zcpki76q9d1, RTX 3090, SSH tunnel for
+training). Local base model server OFF. Production stack OFF.
+
+## ROBS_4B — PERSONAL MONEY-GOAL ADVISOR MODEL (research-backed plan, exec after V6 testing)
+
+**Vision:** a 4B Qwen3.5 adapter specialized to Rob personally — knows his codebase
+deeply AND his income/money goals well enough to propose opportunities and next
+moves. Single-user, local-only. Full deep research was done (8-API fan-out +
+GitHub + RAG-vs-finetuning guides) before this plan was written.
+
+**Core architectural decision — HYBRID (RAG + fine-tune), from the research:**
+- **Fine-tune = BEHAVIOR + KNOWLEDGE OF THE USER'S WORLD**: how Rob talks, his
+  codebase conventions, his income streams, his recurring patterns. This lives in
+  weights and is what makes the model feel "tuned to only me."
+- **RAG (existing memory store) = LIVE FACTS**: current earnings, upcoming gigs,
+  recent activity, changing preferences. Injected at query time so it stays fresh
+  WITHOUT retraining. Do NOT bake volatile facts into weights.
+- **NEVER bake secrets into training data**: API keys, bank/BIN numbers, passwords,
+  SSN/PII stay OUT of weights (risky even single-user; file can leak). They live in
+  the memory store / secret manager only.
+
+**The 3-layer stack:**
+1. **Layer 1 — Codebase specialist (DONE, V6 adapter).** 233 code-repair traces.
+   Teaches the model how to diagnose/fix YOUR repo. Foundation, already trained.
+2. **Layer 2 — Money-goal personalization (NEW).** A second LoRA pass (same
+   hardware recipe) teaching the model:
+   - Rob's identity/who he is (subtle, not celebrity trivia).
+   - His income streams & skills (e.g. the swarm platform, freelancing, the apps).
+   - His money goals & how he prefers to be given suggestions.
+   - Format: ~100-300 curated Q&A examples (Rob asks → the answer he wants).
+3. **Layer 3 — Live personal/money data (RAG, already built).** Qdrant memory +
+   `remember_about` + assistant prefs inject current facts at query time (recent
+   activity, earnings trend, upcoming opportunities) so the model grounds answers
+   in TODAY's reality, not stale training data.
+
+**SOTA Audit Findings & Replay Defense:** 
+Research shows LoRA does *not* inherently prevent catastrophic forgetting. Overwriting low-rank matrices will destroy prior skills (like V6 codebase expertise) if trained purely on persona. 
+- **The Defense:** The ~80% code / ~20% money-goal Q&A mix (Replay-Based Fine-Tuning) is doing the actual protective work.
+- **The Fallback:** If code-repair still degrades, use Interpolation-based LoRA (I-LoRA) to blend old and new weights rather than fully overwriting.
+
+**Phased Execution Pipeline (Audited for SOTA Alignment):**
+*Do NOT execute full DPO on a base that has forgotten how to code. Follow this exact sequence:*
+
+**Phase A: Identity SFT & Regression Gate**
+1. Draft 100-200 SFT Q&A pairs to establish identity, tone, and strict refusals (script: `qwen_train/draft_persona_sft.py`).
+2. Train the 80/20 mixed pass (V6 traces + SFT persona pairs).
+3. **The Gate:** Run the V6 10-item blind hold-out exam. If it fails, apply I-LoRA or adjust replay. If it passes, proceed.
+
+**Phase B: Direct Preference Optimization (DPO)**
+4. Generate DPO preference triples to teach *values* and contrastive loss without PPO (script: `qwen_train/draft_dpo_pairs.py`). 
+   - *Oracle (DeepSeek) generates 3 responses:* Sycophantic/Greedy, Balanced/Strategic, Safe/Generic.
+   - *Rob scores:* "Chosen" (Balanced) vs "Rejected" (Sycophantic).
+5. Train DPO on the Phase A base. 
+
+**Guardrail & Sycophancy Training:** 
+Financial advisors easily fall into "sycophancy" (blindly agreeing to risky user ideas). Both SFT and DPO datasets MUST include 15-20 strong pushback/refusal examples. Ensure DPO "Rejected" targets explicitly punish sycophantic variants, not just generic bad math. Keep Rob in the loop on any big move.
+
+## RUNPOD OPERATIONS — LESSONS LEARNED (do this, avoid repeating the pain, 2026-09-05)
+
+### Step-by-step workflow (copy-paste this, don't improvise)
+
+**1. Create pod:**
+```
+runpod_create-pod → templateId=runpod-torch-v280, gpuTypeIds=["NVIDIA GeForce RTX 3090"], sshPublicKey=<our ed25519 .pub>
+```
+
+**2. Get SSH details** (must be AFTER pod shows RUNNING with runtime ports):
+```
+runpod_get-pod → parse direct.host + direct.port
+```
+Proxy SSH (ssh.runpod.io) **always denies the key** — ALWAYS use the direct IP:port.
+
+**3. Upload small files ONLY** (adapter ~80MB, scripts, exam inputs, .py files):
+```
+scp -O -i key -P port file user@host:/workspace/
+```
+- `-O` forces legacy SCP protocol (bypasses Win32 SFTP truncation bug)
+- NEVER upload GGUFs or models (>100MB always truncates on Windows OpenSSH)
+- Base model downloads from HuggingFace directly on the pod
+
+**4. Install deps on pod:**
+```
+ssh ... "pip install peft transformers bitsandbytes accelerate fastapi uvicorn --break-system-packages -q"
+```
+
+**5. Download base model on pod:**
+Write a .py script locally, SCP it up, run it:
+```python
+# dl_model.py
+from transformers import AutoModelForCausalLM, AutoTokenizer
+AutoTokenizer.from_pretrained("Qwen/Qwen3.5-4B", cache_dir="/workspace/hf")
+AutoModelForCausalLM.from_pretrained("Qwen/Qwen3.5-4B", cache_dir="/workspace/hf", torch_dtype="auto")
+print("MODEL_OK")
+```
+Run: `python3 /workspace/dl_model.py`
+
+**6. Run training/gate — NEVER use foreground SSH:**
+- Write results to a file, never rely on SSH output
+- Use `nohup python3 script.py > log.txt 2>&1 &` to launch detached
+- Poll results via separate SSH calls: `wc -l results.jsonl`
+- The bash tool times out on long SSH — always detach long jobs
+
+**7. Download adapter after training:**
+```
+scp -O -i key -P port user@host:/workspace/adapter/adapter_model.safetensors ./local_dir/
+```
+
+**8. ALWAYS terminate when done** — stopped pods still bill ~$0.014/hr for the 50GB volume.
+
+### Key traps and how to avoid them
+
+| Trap | Cause | Fix |
+|---|---|---|
+| SSH proxy denies key | Proxy rotates session tokens on migration | Use DIRECT SSH (root@ip -p port), never proxy |
+| SCP truncates at ~94MB | Win32-OpenSSH SFTP buffer bug | Use `-O` flag (legacy SCP); or upload only <100MB files |
+| Multi-command SSH hangs | Windows → RunPod SSH session stability | **Never chain commands.** One SSH call = one command. Use separate calls. |
+| PowerShell mangles Python | Backslashes, quotes, `from` keywords | Write .py scripts locally, SCP up, `python3 script.py` |
+| sed fails on paths | Regex delimiter/escaping issues | Use python for string replacement, not sed |
+| Script paths still point to Windows after SCP | sed only fixes ONE path per pattern; misses others | After SCP, always run a python fixup that does `file.read().replace(ALL_windows_paths, /workspace/...)` |
+| Exam writes to C:\ path on Linux | OUTPUT_DIR wasn't fixed alongside EXAM_PATH | Fix BOTH paths in every script with python replace, verify with `grep C:/ Users` |
+| `nohup` doesn't write output | Shell exits before nohup redirects apply | Use: `nohup cmd > log 2>&1 &` then verify with separate SSH call |
+| HF model download slow | First run downloads ~8GB | Cache persists on pod volume; subsequent starts are instant |
+
+### CUDA training config (RTX 3090)
+
+```python
+device_map="cuda"           # NOT "xpu" — pod is NVIDIA
+torch_dtype=torch.float16   # fp16 on CUDA
+per_device_train_batch_size=1
+gradient_accumulation_steps=8
+num_train_epochs=3
+save_strategy="steps"
+save_steps=50               # checkpoint every 50 steps (survives OOM)
+neftune_noise_alpha=5
+```
+
+### Complete training flow (RTX 3090)
+
+1. Create pod → get direct SSH
+2. SCP: adapter (~80MB) + train script + dl_model.py
+3. Install deps on pod
+4. Run dl_model.py (downloads base model from HF, ~3min)
+5. Launch training: `V4_DATA_FILE=/workspace/dataset.jsonl V4_OUTPUT_DIR=/workspace/output python3 train.py`
+6. Wait ~35min, poll `wc -l output/adapter/adapter_model.safetensors`
+7. SCP adapter back to local
+8. **Terminate pod** (stop billing)
 
 ## V6 DATASET PLAN — AUDITED + CORRECTED (2026-09-02, deep-research 8-API + github skill)
-
-Next training-phase plan, decision-ready after two rounds of evidence audit. Do NOT re-run the
-unproven assumptions below; use the corrected version.
 
 **AUDIT FINDINGS (verbatim-verified):**
 - **File-localization context [arXiv:2604.05481]**: 15-17x repair gain from file-level
@@ -2086,6 +2389,49 @@ Converted `except:` → `except Exception:` (or specific types) in `swarm_os/cor
 ---
 
 ## Self-Healing & Self-Learning Fixes
+
+- **Rule (code_analyzer)**: <reflection>
+<failure_summary>
+
+- **Rule (code_analyzer)**: <reflection>
+<failure_summary>
+
+- **Rule (code_analyzer)**: <reflection>
+<failure_summary>
+The
+
+- **Rule (code_analyzer)**: <reflection>
+<failure_summary>
+The
+
+- **Rule (code_analyzer)**: <reflection>
+<failure_summary>
+The
+
+- **Rule (code_analyzer)**: <reflection>
+<failure_summary>
+
+- **Rule (code_analyzer)**: <reflection>
+<failure_summary>
+The `
+
+- **Rule (code_analyzer)**: <reflection>
+<failure_summary>
+The
+
+- **Rule (code_analyzer)**: <reflection>
+<failure_summary>
+
+- **Rule (code_analyzer)**: <reflection>
+<failure_summary>
+The `
+
+- **Rule (code_analyzer)**: <reflection>
+<failure_summary>
+
+- **Rule (code_analyzer)**: <reflection>
+<failure_summary>
+The
 
 - **Rule (code_analyzer)**: Prefer completing the goal with the FEWEST tool calls. If a compound goal requires both codebase reads and web research, interleave them — do not s...
 
