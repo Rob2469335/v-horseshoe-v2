@@ -405,7 +405,7 @@ def clean_sandbox_env(extra: dict | None = None) -> dict:
     clean = {
         k: v
         for k, v in os.environ.items()
-        if not any(s in k.upper() for s in ("API_KEY", "TOKEN", "SECRET", "PASSWORD"))
+        if not any(s in k.upper() for s in ("API_KEY", "TOKEN", "SECRET", "PASSWORD", "AWS_ACCESS", "AWS_SECRET"))
         and not k.startswith("SWARM_")
     }
     clean["PYTHONNOUSERSITE"] = "1"

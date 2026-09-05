@@ -1086,3 +1086,28 @@ def test_swarm_config_mcp_servers_are_valid():
             f"{name}: args must be list[str]"
         )
         assert not any(ch in "".join(args) for ch in meta), f"{name}: metachar in args"
+
+
+def test_clean_sandbox_env_strips_aws_credentials():
+    """REVERT-PROOF: AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY must be
+    stripped by clean_sandbox_env — they are credentials that would leak
+    into the LLM sandbox. Benign AWS env vars like AWS_REGION must be kept."""
+    import os
+
+    os.environ["AWS_ACCESS_KEY_ID"] = "AKIAIOSFODNN7EXAMPLE"
+    os.environ["AWS_SECRET_ACCESS_KEY"] = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+    os.environ["AWS_REGION"] = "us-east-1"
+    os.environ["API_KEY"] = "test-key"
+    os.environ["NORMAL_VAR"] = "should-remain"
+
+    from swarm_os.services.security_gate import clean_sandbox_env
+    env = clean_sandbox_env()
+
+    # AWS credentials must be stripped
+    assert "AWS_ACCESS_KEY_ID" not in env, "AWS_ACCESS_KEY_ID leaked to sandbox"
+    assert "AWS_SECRET_ACCESS_KEY" not in env, "AWS_SECRET_ACCESS_KEY leaked to sandbox"
+    # Normal API_KEY stripped (pre-existing)
+    assert "API_KEY" not in env
+    # Benign vars must remain
+    assert env["AWS_REGION"] == "us-east-1"
+    assert env["NORMAL_VAR"] == "should-remain"
