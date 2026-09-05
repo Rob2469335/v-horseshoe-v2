@@ -604,10 +604,11 @@ Dependency pairing: React 19 ↔ `@react-three/fiber` ^9.5 / `@react-three/drei`
 
 **CURRENT (2026-09-05 ~03:00):** Rob's 4B fully trained, gated (10/10 finish, 9/10 structure, 10/10
 grounds-file), merged+quantized to GGUF. V6 code-repair base also trained + gated 10/10.
-297-row dataset (234 repair + 63 persona). Audit fixes: 3/11 committed (Approval Replay
-Loop, Silently Dropped Shards, AWS Key Leak — all with revert-proof tests).
-Model routing renamed to `robs4b` across serving/CLI/agents. All pods terminated ($0).
-iGPU training stopped (stale). Remaining audit findings tracked for follow-up.
+297-row dataset (234 repair + 63 persona). Audit fixes: 5/11 committed with revert-proof
+tests (Approval Replay Loop, Silently Dropped Shards, AWS Key Leak, --continue REPL
+crash, Rollback thread lock). Model routing renamed to `robs4b` across serving/CLI/agents.
+Remaining audit items tracked: UTF-8 DoS, case-insensitive bypasses, 3 evolution bugs,
+2x except:pass violations. All pods terminated ($0). Production stack OFF.
 
 **Live servers:** all OFF. Pods terminated. Production stack OFF.
 
