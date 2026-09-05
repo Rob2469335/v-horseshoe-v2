@@ -603,12 +603,12 @@ Dependency pairing: React 19 ↔ `@react-three/fiber` ^9.5 / `@react-three/drei`
 > idle here, pick the thread up.
 
 **CURRENT (2026-09-05 ~03:00):** Rob's 4B fully trained, gated (10/10 finish, 9/10 structure, 10/10
-grounds-file), merged+quantized to GGUF. V6 code-repair base also trained + gated 10/10.
-297-row dataset (234 repair + 63 persona). Audit fixes: 5/11 committed with revert-proof
-tests (Approval Replay Loop, Silently Dropped Shards, AWS Key Leak, --continue REPL
-crash, Rollback thread lock). Model routing renamed to `robs4b` across serving/CLI/agents.
-Remaining audit items tracked: UTF-8 DoS, case-insensitive bypasses, 3 evolution bugs,
-2x except:pass violations. All pods terminated ($0). Production stack OFF.
+grounds-file), merged+quantized to GGUF (robs4b_q4km.gguf). V6 code-repair base also trained + gated 10/10.
+297-row dataset (234 repair + 63 persona). Model routing renamed to `robs4b`.
+Audit fixes: 7/11 committed (Approval Replay Loop, Silently Dropped Shards, AWS Key
+Leak, --continue REPL crash, Rollback thread lock, .ENV case-insensitive, MODEL_TIERS rename).
+Remaining audit items: AST Sandbox Escapes (complex/architectural), 3 evolution bugs
+(investigation needed). All pods terminated ($0). Production stack OFF.
 
 **Live servers:** all OFF. Pods terminated. Production stack OFF.
 
@@ -867,8 +867,11 @@ Write a .py script locally, SCP it up, run it:
 ```python
 # dl_model.py
 from transformers import AutoModelForCausalLM, AutoTokenizer
+
 AutoTokenizer.from_pretrained("Qwen/Qwen3.5-4B", cache_dir="/workspace/hf")
-AutoModelForCausalLM.from_pretrained("Qwen/Qwen3.5-4B", cache_dir="/workspace/hf", torch_dtype="auto")
+AutoModelForCausalLM.from_pretrained(
+    "Qwen/Qwen3.5-4B", cache_dir="/workspace/hf", torch_dtype="auto"
+)
 print("MODEL_OK")
 ```
 Run: `python3 /workspace/dl_model.py`
@@ -903,14 +906,14 @@ scp -O -i key -P port user@host:/workspace/adapter/adapter_model.safetensors ./l
 ### CUDA training config (RTX 3090)
 
 ```python
-device_map="cuda"           # NOT "xpu" — pod is NVIDIA
-torch_dtype=torch.float16   # fp16 on CUDA
-per_device_train_batch_size=1
-gradient_accumulation_steps=8
-num_train_epochs=3
-save_strategy="steps"
-save_steps=50               # checkpoint every 50 steps (survives OOM)
-neftune_noise_alpha=5
+device_map = "cuda"  # NOT "xpu" — pod is NVIDIA
+torch_dtype = torch.float16  # fp16 on CUDA
+per_device_train_batch_size = 1
+gradient_accumulation_steps = 8
+num_train_epochs = 3
+save_strategy = "steps"
+save_steps = 50  # checkpoint every 50 steps (survives OOM)
+neftune_noise_alpha = 5
 ```
 
 ### Complete training flow (RTX 3090)
