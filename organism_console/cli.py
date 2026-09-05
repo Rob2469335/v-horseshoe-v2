@@ -114,7 +114,7 @@ def get_installed_models():
         coordinator_model, _ = get_model("coordinator")
         return (coordinator_model,)
     except Exception:
-        return ("qwen3.5-4b",)
+        return ("robs4b",)
 
 
 def build_command_context(cmd_ctx_console=None, cmd_ctx_state=None) -> CommandContext:
@@ -313,6 +313,9 @@ def main():
         elif args[i] == "--model" and i + 1 < len(args):
             model_override = args[i + 1]
             i += 2
+        elif args[i] in ("--continue", "--json"):
+            # already captured above — skip from args so REPL starts
+            i += 1
         else:
             filtered_args.append(args[i])
             i += 1
@@ -490,3 +493,4 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+
