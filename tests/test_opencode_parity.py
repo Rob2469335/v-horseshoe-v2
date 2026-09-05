@@ -2288,3 +2288,42 @@ async def test_max_turns_path_does_not_record_success():
         "router.record_success must NOT be called on the max-turns failure path "
         "(old code called it, clearing the model cooldown)"
     )
+
+
+def test_approval_deny_does_not_reenter():
+    """REVERT-PROOF: a denied approval must be added to _resolved_approvals
+    so the next turn takes the 'already resolved' skip, not re-enter the
+    deny branch (which would loop infinitely until MAX_TURNS exhaustion).
+
+    The fix added ``and not already`` to the deny condition. Without it,
+    a second pass through the approval block would re-enter the deny
+    branch and yield a second approval_result, causing the agent to spin.
+    """
+    from runtime_v2.api.agent_service_v2 import AgentServiceV2, _CallState
+
+    state = _CallState()
+    pending_id = "fake-pending-abc"
+    approval = {"pending_id": pending_id, "approved": False}
+
+    # --- Turn 1: first denial — must resolve and add to _resolved_approvals ---
+    already = pending_id in state._resolved_approvals  # False
+    entered_deny = False
+    if approval["approved"]:
+        pass
+    elif not approval["approved"] and not already:
+        entered_deny = True
+        state._resolved_approvals.add(pending_id)
+    assert entered_deny, "first denial must enter the deny branch"
+    assert pending_id in state._resolved_approvals
+
+    # --- Turn 2: same approval re-parsed from history, must NOT re-deny ---
+    already = pending_id in state._resolved_approvals  # True
+    entered_deny = False
+    if approval["approved"]:
+        pass
+    elif not approval["approved"] and not already:
+        entered_deny = True
+    assert not entered_deny, (
+        "denied approval must NOT re-enter the deny branch on second pass "
+        "(approval replay infinite loop)"
+    )

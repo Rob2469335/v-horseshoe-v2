@@ -2623,7 +2623,7 @@ class AgentServiceV2:
                         state.tool_success = True
                         state.did_web_fetch = True
                         state._tool_successes += 1
-                elif not approval["approved"]:
+                elif not approval["approved"] and not already:
                     from runtime_v2.services.tool_executor import deny_pending
 
                     approved_result = {
