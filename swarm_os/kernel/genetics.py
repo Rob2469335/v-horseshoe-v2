@@ -24,9 +24,9 @@ MCP_TOOL_REGISTRY: List[str] = [
 ]
 
 MODEL_TIERS: Dict[str, str] = {
-    "triage": "qwen3.5-4b",
-    "fast": "qwen3.5-4b",
-    "heavy": "qwen3.5-4b",
+    "triage": "robs4b",
+    "fast": "robs4b",
+    "heavy": "robs4b",
 }
 
 
@@ -51,24 +51,34 @@ def tool_activation_rng(seed: Optional[int] = None) -> RandomLike:
 
 
 def model_distribution(tier: float, smoke: bool = False) -> Dict[str, float]:
+    dist = {}
     if smoke:
         triage_weight = clamp(1.0 - (tier * 2.0))
         fast_weight = clamp(1.0 - abs((tier - 0.5) * 2.0))
         total = triage_weight + fast_weight + 1e-9
-        return {
-            MODEL_TIERS["triage"]: triage_weight / total,
-            MODEL_TIERS["fast"]: fast_weight / total,
-        }
+        dist[MODEL_TIERS["triage"]] = dist.get(MODEL_TIERS["triage"], 0.0) + (
+            triage_weight / total
+        )
+        dist[MODEL_TIERS["fast"]] = dist.get(MODEL_TIERS["fast"], 0.0) + (
+            fast_weight / total
+        )
+        return dist
 
     triage_weight = clamp(1.0 - (tier * 2.0))
     heavy_weight = clamp((tier * 2.0) - 1.0)
     fast_weight = clamp(1.0 - abs((tier - 0.5) * 2.0))
     total = triage_weight + fast_weight + heavy_weight + 1e-9
-    return {
-        MODEL_TIERS["triage"]: triage_weight / total,
-        MODEL_TIERS["fast"]: fast_weight / total,
-        MODEL_TIERS["heavy"]: heavy_weight / total,
-    }
+
+    dist[MODEL_TIERS["triage"]] = dist.get(MODEL_TIERS["triage"], 0.0) + (
+        triage_weight / total
+    )
+    dist[MODEL_TIERS["fast"]] = dist.get(MODEL_TIERS["fast"], 0.0) + (
+        fast_weight / total
+    )
+    dist[MODEL_TIERS["heavy"]] = dist.get(MODEL_TIERS["heavy"], 0.0) + (
+        heavy_weight / total
+    )
+    return dist
 
 
 def sample_model(tier: float, smoke: bool = False) -> str:
@@ -272,8 +282,8 @@ class Genome:
         return genome
 
 
-def mutate(genome: Genome) -> None:
-    fitness_modifier = 1.0 - clamp(genome.average_fitness)
+def mutate(genome: Genome, parent_fitness: float = 0.0) -> None:
+    fitness_modifier = 1.0 - clamp(parent_fitness)
     adaptive_delta = clamp(genome.mutation_rate * (0.5 + fitness_modifier), 0.01, 0.5)
     for fname in [
         "model_tier",
@@ -481,3 +491,4 @@ Intelligently splice the best sub-trees from both variants (e.g. combine a speed
         return content.strip()
     except Exception:
         return slice_a  # fallback to parent A
+
