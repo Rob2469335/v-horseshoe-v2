@@ -16,7 +16,7 @@ class SessionState:
 
         # Default states
         self.active_agent: str = "coordinator"
-        self.active_model: str = "qwen3.5-4b"
+        self.active_model: str = "robs4b"
         self.execution_phase: str = "thinking"
         self.last_tool_call: Optional[Dict[str, Any]] = None
         self.last_error: Optional[str] = None
@@ -193,15 +193,17 @@ class SessionState:
         try:
             import copy
 
-            cp = self.checkpoints[name]
-            self.history = copy.deepcopy(cp.get("history", []))
-            self.history_pointer = cp.get("history_pointer", -1)
-            self.scheduled_tasks = copy.deepcopy(cp.get("scheduled_tasks", []))
-            if "active_agent" in cp:
-                self.active_agent = cp["active_agent"]
-            if "active_model" in cp:
-                self.active_model = cp["active_model"]
+            with self._lock:
+                cp = self.checkpoints[name]
+                self.history = copy.deepcopy(cp.get("history", []))
+                self.history_pointer = cp.get("history_pointer", -1)
+                self.scheduled_tasks = copy.deepcopy(cp.get("scheduled_tasks", []))
+                if "active_agent" in cp:
+                    self.active_agent = cp["active_agent"]
+                if "active_model" in cp:
+                    self.active_model = cp["active_model"]
             self.save(sync=True)
             return True
         except Exception:
             return False
+
