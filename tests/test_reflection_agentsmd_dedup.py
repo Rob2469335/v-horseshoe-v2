@@ -114,3 +114,42 @@ def test_other_component_rules_do_not_block(agents_md):
     rl._record_rule_to_agents_md("code_analyzer", EXISTING, confidence=0.9)
 
     assert len(agents_md.read_text(encoding="utf-8")) > before_len
+
+
+@pytest.mark.parametrize(
+    "shell",
+    [
+        "<reflection>",
+        "<failure_summary>",
+        "<reflection>\n<failure_summary>\nThe agent attempted...",
+        "The `",
+        "The",
+        "  ",
+    ],
+)
+def test_unrendered_shell_never_recorded(agents_md, shell):
+    """An unrendered reflexion XML shell / bare stub must NEVER be auto-
+    documented into AGENTS.md, even at high confidence. Regression for the
+    months of bare '<reflection>' + '<failure_summary>' shells and truncated
+    'The ...' stumps that polluted the Self-Healing rule list (root-caused to
+    the distiller emitting an unfilled structured template). The old guard
+    (confidence<0.85 or not correction) only caught the truly-empty string."""
+    before = agents_md.read_text(encoding="utf-8")
+
+    rl._record_rule_to_agents_md("code_analyzer", shell, confidence=0.95)
+
+    assert agents_md.read_text(encoding="utf-8") == before
+
+
+def test_real_rule_despite_high_confidence_not_blocked_by_shell_guard(agents_md):
+    """The shell guard must not swallow a genuine high-confidence rule."""
+    _seed_rule(agents_md, "researcher", EXISTING)
+    before_len = len(agents_md.read_text(encoding="utf-8"))
+
+    rl._record_rule_to_agents_md(
+        "researcher",
+        "List the parent directory first before attempting a File-not-found read.",
+        confidence=0.9,
+    )
+
+    assert len(agents_md.read_text(encoding="utf-8")) > before_len

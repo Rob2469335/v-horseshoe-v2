@@ -139,9 +139,37 @@ def _classify_rule(existing: dict | None, correction: str) -> str:
     return _RULE_CONFLICT
 
 
+_REFL_UNRENDERED = re.compile(
+    r"^\s*(?:<reflection>|<failure_summary>|</failure_summary>|</reflection>|[Tt]he[\s`]*$|The [a-z_]+$)\s*$"
+)
+
+
+def _is_unrendered_shell(correction: str) -> bool:
+    """True when a 'correction' carries no actionable content — the unrendered
+    reflexion XML shells and bare stub fragments the distiller emitted when its
+    structured template failed to fill (they polluted the AGENTS.md rule list
+    for months: e.g. '- **Rule (code_analyzer)**: <reflection>' followed by a
+    bare '<failure_summary>' and a truncated stump). Such corrections must never
+    be auto-documented regardless of confidence. A real rule always contains a
+    concrete directive over a word-completeness threshold."""
+    if not correction:
+        return True
+    s = correction.strip()
+    if not s:
+        return True
+    # unrendered XML shell (open/close tags, nothing between / only stubs)
+    if _REFL_UNRENDERED.match(s):
+        return True
+    # contains an unrendered reflexion tag anywhere (e.g. a fragment starting
+    # with one after failed extraction)
+    if "<reflection>" in s or "<failure_summary>" in s or "failure_summary>" in s:
+        return True
+    return False
+
+
 def _record_rule_to_agents_md(component: str, correction: str, confidence: float):
     """SOTA 2026: Auto-document high-confidence ASPO reflection rules into AGENTS.md."""
-    if confidence < 0.85 or not correction:
+    if confidence < 0.85 or _is_unrendered_shell(correction):
         return
     try:
         agents_file = ROOT_DIR / "AGENTS.md"
