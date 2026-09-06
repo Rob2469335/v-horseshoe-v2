@@ -208,3 +208,15 @@ data/evolution/staged/
 /browser-*.png
 snapshots/
 *.snapshot
+
+# CLI session-state churn (test harness / user session artifacts at repo root)
+/test_session*.json
+/*.json.tmp.*
+/.sandbox_test/
+/.sandbox_*/
+
+# Root-level one-off debug probes (not part of the app; avoid re-committing)
+/dummy_pytest.py
+/test_bug.py
+/test_syn.py
+/test_syntax.py
