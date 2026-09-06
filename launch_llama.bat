@@ -1,7 +1,7 @@
 @echo off
 echo Starting llama.cpp Server with Vulkan acceleration and KV cache quantization...
 echo.
-echo Model: Qwen3.5-4B-UD-Q4_K_XL (MTP) on the iGPU (-ngl 99)
+echo Model: Rob's trained 4B persona model (robs4b_q4km.gguf) on the iGPU (-ngl 99)
 echo Context: 16384 tokens
 echo Memory Optimizations: Flash Attention (-fa on), 8-bit KV Cache (-ctk q8_0 -ctv q8_0), iGPU via Vulkan (-ngl 99)
 echo.
@@ -34,21 +34,22 @@ if not defined SWARM_GRAMMAR_DECODE set "SWARM_GRAMMAR_DECODE=1"
 set "SWARM_SEMANTIC_CACHE=%SWARM_SEMANTIC_CACHE%"
 if not defined SWARM_SEMANTIC_CACHE set "SWARM_SEMANTIC_CACHE=1"
 
-rem Local generation model (DEFAULT): the unsloth MTP 4B (UD-Q4_K_XL) on the iGPU
-rem (-ngl 99) - ~21 t/s (tool-decision) with SWARM_SPEC_DECODE=1 (ngram-mod default),
-rem or ~6.4 t/s plain. Served under the honest alias "qwen3.5-4b".
+rem Local generation model (DEFAULT): Rob's trained 4B persona model
+rem (qwen_train\robs4b_q4km.gguf, merged persona+SFT+code LoRA) served on the
+rem iGPU (-ngl 99) under the honest alias "robs4b". All agent routing
+rem (config/agent_models.json, model_registry.py, model_router.py) resolves to
+rem robs4b, so the DEFAULT must be this file or agents get the untrained base.
 rem Override with SWARM_LOCAL_MODEL:
-rem   qwen3.5-4b     = plain 4B Q4_K_M on the iGPU (same alias)
-rem   qwen3.5-4b-mtp = MTP 4B (same as default)
-set "GEN_MODEL=C:\Users\rober\models\Qwen3.5-4B-UD-Q4_K_XL.gguf"
-set "GEN_ALIAS=qwen3.5-4b"
+rem   robs4b        = trained persona 4B (same as default)
+rem   qwen3.5-4b-mtp = base MTP 4B under alias qwen3.5-4b
+set "GEN_MODEL=C:\Users\rober\Projects\v-horseshoe-v2\qwen_train\robs4b_q4km.gguf"
+set "GEN_ALIAS=robs4b"
 set "GEN_NGL=99"
-rem NOTE: qwen3.5-4b override disabled — Qwen3.5-4B-Q4_K_M.gguf (plain, non-MTP) was never downloaded.
-rem if "%SWARM_LOCAL_MODEL%"=="qwen3.5-4b" (
-rem     set "GEN_MODEL=C:\Users\rober\models\Qwen3.5-4B-Q4_K_M.gguf"
-rem     set "GEN_ALIAS=qwen3.5-4b"
-rem     set "GEN_NGL=99"
-rem )
+if "%SWARM_LOCAL_MODEL%"=="robs4b" (
+    set "GEN_MODEL=C:\Users\rober\Projects\v-horseshoe-v2\qwen_train\robs4b_q4km.gguf"
+    set "GEN_ALIAS=robs4b"
+    set "GEN_NGL=99"
+)
 if "%SWARM_LOCAL_MODEL%"=="qwen3.5-4b-mtp" (
     set "GEN_MODEL=C:\Users\rober\models\Qwen3.5-4B-UD-Q4_K_XL.gguf"
     set "GEN_ALIAS=qwen3.5-4b"

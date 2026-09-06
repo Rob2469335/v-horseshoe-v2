@@ -90,23 +90,16 @@ if ($env:SWARM_SPEC_DECODE -ne "0") {
     if ($env:SWARM_DRAFT_MODEL)            { $specArgs += @("--model-draft", $env:SWARM_DRAFT_MODEL) }
 }
 
-# Local generation model (DEFAULT): the unsloth MTP 4B (UD-Q4_K_XL) on the iGPU
-# (-ngl 99) - ~21 t/s (tool-decision) with SWARM_SPEC_DECODE=1 (ngram-mod default),
-# or ~6.4 t/s plain. Served under the honest alias "qwen3.5-4b".
-# Override with $env:SWARM_LOCAL_MODEL:
-#   - "qwen3.5-4b"     : plain 4B Q4_K_M on the iGPU (same alias)
-#   - "qwen3.5-4b-mtp" : MTP 4B (same as default)
-$genModel = "C:\Users\rober\models\Qwen3.5-4B-UD-Q4_K_XL.gguf"
-$genAlias = "qwen3.5-4b"
+# Local generation model (DEFAULT): Rob's trained 4B persona model served on
+# the iGPU (-ngl 99) under the honest alias "robs4b". All agent routing resolves
+# to robs4b — the default must be qwen_train\robs4b_q4km.gguf or agents get the
+# untrained base model under the robs4b name.
+$genModel = "C:\Users\rober\Projects\v-horseshoe-v2\qwen_train\robs4b_q4km.gguf"
+$genAlias = "robs4b"
 $genNgl = "99"
-if ($env:SWARM_LOCAL_MODEL -eq "qwen3.5-4b") {
-    $genModel = "C:\Users\rober\models\Qwen3.5-4B-Q4_K_M.gguf"
-    $genAlias = "qwen3.5-4b"
-    $genNgl = "99"
-}
-if ($env:SWARM_LOCAL_MODEL -eq "qwen3.5-4b-mtp") {
-    $genModel = "C:\Users\rober\models\Qwen3.5-4B-UD-Q4_K_XL.gguf"
-    $genAlias = "qwen3.5-4b"
+if ($env:SWARM_LOCAL_MODEL -eq "robs4b") {
+    $genModel = "C:\Users\rober\Projects\v-horseshoe-v2\qwen_train\robs4b_q4km.gguf"
+    $genAlias = "robs4b"
     $genNgl = "99"
 }
 $llamaGenJob = Start-Job -ScriptBlock { param($r, $spec, $m, $a, $ngl); Set-Location $r; & .\bin\llama.exe serve -m $m --alias $a -c 16384 -ctk q8_0 -ctv q8_0 -fa on -t 2 -tb 4 -b 2048 -ub 512 -np 1 --timeout 300 --cache-reuse 1024 --api-key "llama" --cors-origins "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000" -ngl $ngl --port 8080 @spec 2>&1 } -ArgumentList $root, $specArgs, $genModel, $genAlias, $genNgl
@@ -252,3 +245,4 @@ try {
         Get-Process -Name $svc -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     }
 }
+

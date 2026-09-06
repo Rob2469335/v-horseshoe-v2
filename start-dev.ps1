@@ -119,23 +119,22 @@ if ($env:SWARM_SPEC_DECODE -ne "0") {
     if ($env:SWARM_DRAFT_MODEL)            { $specArgs += @("--model-draft", $env:SWARM_DRAFT_MODEL) }
 }
 
-# Local generation model (DEFAULT): the unsloth MTP 4B (UD-Q4_K_XL) on the iGPU
-# (-ngl 99) - ~21 t/s (tool-decision) with SWARM_SPEC_DECODE=1 (ngram-mod default),
-# or ~6.4 t/s plain. Served under the honest alias "qwen3.5-4b".
+# Local generation model (DEFAULT): Rob's trained 4B persona model
+# (qwen_train\robs4b_q4km.gguf) on the iGPU (-ngl 99) under the alias "robs4b".
 # Override with $env:SWARM_LOCAL_MODEL:
-#   - "qwen3.5-4b"     : plain 4B Q4_K_M on the iGPU (same alias)
-#   - "qwen3.5-4b-mtp" : MTP 4B (same as default)
-$genModel = "C:\Users\rober\Projects\v-horseshoe-v2\qwen_train\qwen3.5-4b-base-q4km.gguf"
-$genAlias = "qwen3.5-4b"
+#   - "robs4b"     : trained persona 4B (same as default)
+#   - "qwen3.5-4b-mtp" : base MTP 4B under alias "qwen3.5-4b"
+$genModel = "C:\Users\rober\Projects\v-horseshoe-v2\qwen_train\robs4b_q4km.gguf"
+$genAlias = "robs4b"
 $genNgl = "99"
-if ($env:SWARM_LOCAL_MODEL -eq "qwen3.5-4b") {
-    $genModel = "C:\Users\rober\Projects\v-horseshoe-v2\qwen_train\qwen3.5-4b-base-q4km.gguf"
-    $genAlias = "qwen3.5-4b"
+if ($env:SWARM_LOCAL_MODEL -eq "robs4b") {
+    $genModel = "C:\Users\rober\Projects\v-horseshoe-v2\qwen_train\robs4b_q4km.gguf"
+    $genAlias = "robs4b"
     $genNgl = "99"
 }
-if ($env:SWARM_LOCAL_MODEL -eq "qwen3.5-4b-mtp") {
-    $genModel = "C:\Users\rober\Projects\v-horseshoe-v2\qwen_train\qwen3.5-4b-base-q4km.gguf"
-    $genAlias = "qwen3.5-4b"
+if ($env:SWARM_LOCAL_MODEL -eq "robs4b") {
+    $genModel = "C:\Users\rober\Projects\v-horseshoe-v2\qwen_train\robs4b_q4km.gguf"
+    $genAlias = "robs4b"
     $genNgl = "99"
 }
 if ($env:SWARM_LOCAL_MODEL -eq "qwen3.8-4b") {
@@ -317,4 +316,5 @@ try {
         # # Get-Process -Name $svc -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     }
 }
+
 
