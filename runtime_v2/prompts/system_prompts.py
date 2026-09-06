@@ -178,6 +178,36 @@ def _project_map_context(agent_id: str) -> str:
         return ""
 
 
+# Roles that get the always-on skill-metadata block injected into their system
+# prompt. Deliberately minimal (see audit watch-oracle): metadata rides in the
+# persistent per-run system message (built once at step_agent_stream entry), so
+# injecting it into a role that never uses a skill is pure per-window context
+# cost. Start with debugger only (no deterministic warmup + diagnosis/repair
+# role rules); add a role only after logged evidence shows it needed a skill it
+# didn't have. This does NOT load skill bodies — list_metadata() returns only
+# name + one-line description.
+_SKILL_METADATA_ROLES = ("debugger",)
+
+
+def _skills_context(agent_id: str) -> str:
+    """Repository skill metadata (name + description only) for agents that act
+    on them, appended after the project map. Fail-open: empty skills tree or a
+    scan error returns "" so agents keep working."""
+    if agent_id not in _SKILL_METADATA_ROLES:
+        return ""
+    try:
+        from runtime_v2.services.skills_registry import list_metadata
+
+        meta = list_metadata()
+        if not meta:
+            return ""
+        lines = "\n".join(f"- {m['name']}: {m['description']}" for m in meta)
+        return f"\n\n[AVAILABLE SKILLS — on-disk, ask/read only]\n{lines}"
+    except Exception as exc:
+        log.warning("Failed to inject skill metadata for %s: %s", agent_id, exc)
+        return ""
+
+
 _TOOL_DEFINITIONS = {
     "delegate": "- action=delegate  → target_agent, task",
     "web_search": "- action=web_search  → query",
@@ -329,6 +359,10 @@ def build(agent_id: str) -> str:
     tools_str = "\n".join(
         [_TOOL_DEFINITIONS[t] for t in allowed_tools if t in _TOOL_DEFINITIONS]
     )
-    return _BASE.format(
-        agent_id=agent_id, role_rules=rules, tools=tools_str
-    ) + _project_map_context(agent_id)
+    return (
+        _BASE.format(
+            agent_id=agent_id, role_rules=rules, tools=tools_str
+        )
+        + _project_map_context(agent_id)
+        + _skills_context(agent_id)
+    )
