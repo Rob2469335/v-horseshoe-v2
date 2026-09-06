@@ -898,6 +898,7 @@ if __name__ == "__main__":
 _bridge_singleton = None
 _bridge_lock = None
 
+
 async def _get_bridge():
     """Lazily create one shared MemoryBridge instance so a reliability check doesn't spin up a new embedding/HTTP client on every call."""
     global _bridge_singleton, _bridge_lock
@@ -907,8 +908,10 @@ async def _get_bridge():
         async with _bridge_lock:
             if _bridge_singleton is None:
                 from swarm_os.memory.memory_bridge import MemoryBridge
+
                 _bridge_singleton = MemoryBridge()
     return _bridge_singleton
+
 
 async def check_model_reliability(model: str, event_type: str = "tool_decision") -> str:
     """Look up memory_bridge's routing/outcome bias for this model+event_type and return a [MODEL RELIABILITY] warning if the model has a poor track record, or "" if there is no signal. Additive-only: never touches check_for_past_mistakes()'s own retrieval/reranking logic."""

@@ -9,6 +9,7 @@ The grounding audit (audit_traces_v5.py) later rejects weak/hallucinated traces,
 
 Writes: qwen_train_data/v6_commits.json  (array of {"sha","path"})
 """
+
 import json
 import subprocess
 from pathlib import Path
@@ -28,13 +29,18 @@ def git(args):
 
 
 def is_test_path(p):
-    return p.startswith("test") or "test_" in p or "/tests/" in p or p.startswith("tests/")
+    return (
+        p.startswith("test") or "test_" in p or "/tests/" in p or p.startswith("tests/")
+    )
 
 
 def modified_py(commit):
     out = git(f"git diff-tree --no-commit-id --name-only -r {commit}")
-    return [f.strip() for f in out.split("\n")
-            if f.strip().endswith(".py") and not is_test_path(f.strip())]
+    return [
+        f.strip()
+        for f in out.split("\n")
+        if f.strip().endswith(".py") and not is_test_path(f.strip())
+    ]
 
 
 def diff_span(commit, path):

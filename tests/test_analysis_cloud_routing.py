@@ -25,45 +25,45 @@ def _no_analysis_model_override():
 
 
 def test_analysis_agent_routes_to_cloud_when_key_present():
-    with _no_analysis_model_override(), _patch_env(
-        NVIDIA_API_KEY="sk-test",
-        SWARM_ANALYSIS_CLOUD="auto",
-        SWARM_ROUTING_MODE="auto",
+    with (
+        _no_analysis_model_override(),
+        _patch_env(
+            NVIDIA_API_KEY="sk-test",
+            SWARM_ANALYSIS_CLOUD="auto",
+            SWARM_ROUTING_MODE="auto",
+        ),
     ):
         for agent in ("code_analyzer", "researcher", "reviewer"):
-            assert (
-                get_litellm_model(agent, "qwen3.5-4b")
-                == "gemini/gemini-2.5-flash"
-            )
+            assert get_litellm_model(agent, "qwen3.5-4b") == "gemini/gemini-2.5-flash"
 
 
 def test_edit_agents_route_to_cloud_when_key_present():
     # coder/debugger need strong instruction-following for the read->edit->
     # verify protocol; the local 4B reproduced the /upgrade dead-loop instead.
-    with _no_analysis_model_override(), _patch_env(
-        NVIDIA_API_KEY="sk-test",
-        SWARM_ANALYSIS_CLOUD="auto",
-        SWARM_ROUTING_MODE="auto",
+    with (
+        _no_analysis_model_override(),
+        _patch_env(
+            NVIDIA_API_KEY="sk-test",
+            SWARM_ANALYSIS_CLOUD="auto",
+            SWARM_ROUTING_MODE="auto",
+        ),
     ):
         for agent in ("coder", "debugger"):
-            assert (
-                get_litellm_model(agent, "qwen3.5-4b")
-                == "gemini/gemini-2.5-flash"
-            )
+            assert get_litellm_model(agent, "qwen3.5-4b") == "gemini/gemini-2.5-flash"
 
 
 def test_executor_routes_to_cloud_when_key_present():
     # executor now orchestrates compound goals (chaining researcher->coder->
     # tool-runner); the local 4B cannot follow a multi-agent chain reliably.
-    with _no_analysis_model_override(), _patch_env(
-        NVIDIA_API_KEY="sk-test",
-        SWARM_ANALYSIS_CLOUD="auto",
-        SWARM_ROUTING_MODE="auto",
+    with (
+        _no_analysis_model_override(),
+        _patch_env(
+            NVIDIA_API_KEY="sk-test",
+            SWARM_ANALYSIS_CLOUD="auto",
+            SWARM_ROUTING_MODE="auto",
+        ),
     ):
-        assert (
-            get_litellm_model("executor", "qwen3.5-4b")
-            == "gemini/gemini-2.5-flash"
-        )
+        assert get_litellm_model("executor", "qwen3.5-4b") == "gemini/gemini-2.5-flash"
 
 
 def test_analysis_agent_stays_local_without_cloud_key():

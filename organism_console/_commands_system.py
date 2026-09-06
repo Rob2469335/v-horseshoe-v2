@@ -46,7 +46,7 @@ def cmd_model(ctx: CommandContext, args: List[str]) -> None:
         return
     if len(args) < 2:
         ctx.console.print(
-            "[yellow]Error: Specify a model name. Example: `/model set qwen3.5-4b`[/yellow]"
+            "[yellow]Error: Specify a model name. Example: `/model set robs4b`[/yellow]"
         )
         return
     model_name = args[1]
@@ -417,7 +417,7 @@ def cmd_tools(ctx: CommandContext, args: List[str]) -> None:
         {description}
         Return ONLY valid python code inside a single ```python ``` codeblock.
         """
-        model = ctx.state.active_model or "qwen3.5-4b"
+        model = ctx.state.active_model or "robs4b"
         code = ""
         try:
             resp = ctx.call_api("/generate", "POST", {"model": model, "prompt": prompt})

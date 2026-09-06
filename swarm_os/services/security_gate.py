@@ -56,6 +56,13 @@ class BannedNodeVisitor(ast.NodeVisitor):
         # (with or without `as`), so a later `system(...)` call is caught.
         self._os_func_aliases: set[str] = set()
 
+    def visit_Name(self, node):
+        if node.id == "__builtins__":
+            self.violations.append(
+                f"Banned access to __builtins__ at line {node.lineno}"
+            )
+        self.generic_visit(node)
+
     def visit_Call(self, node):
         if isinstance(node.func, ast.Name):
             if node.func.id in self.banned_calls:
@@ -66,11 +73,28 @@ class BannedNodeVisitor(ast.NodeVisitor):
                 self.violations.append(
                     f"Banned os call found: '{node.func.id}' at line {node.lineno}"
                 )
+            # Reflection into dunders
+            elif (
+                node.func.id in ("getattr", "setattr", "delattr")
+                and len(node.args) >= 2
+                and isinstance(node.args[1], ast.Constant)
+                and node.args[1].value
+                in (
+                    "__class__",
+                    "__subclasses__",
+                    "__bases__",
+                    "__mro__",
+                    "__globals__",
+                )
+            ):
+                self.violations.append(
+                    f"Banned dunder reflection: '{node.func.id}' at line {node.lineno}"
+                )
             # Reflection that lifts a dangerous os attribute WITHOUT a Name call
             # or a direct os.attr scan: `getattr(os, 'system')('rm -rf /')`.
             # The attr name rides as a string argument, so visit_Attribute
             # never fires. Block when the target string is a banned os attr, or
-            # is a non-literal (var-driven, unverifiable → fail-closed).
+            # is a non-literal (var-driven, unverifiable = fail-closed).
             elif (
                 node.func.id in ("getattr", "setattr", "delattr")
                 and node.args
@@ -85,7 +109,7 @@ class BannedNodeVisitor(ast.NodeVisitor):
                 self.violations.append(
                     f"Banned reflection on os module: '{node.func.id}' at line {node.lineno}"
                 )
-            # `getattr(__builtins__, 'exec')` — reflection INTO the builtins dict
+            # `getattr(__builtins__, 'exec')` - reflection INTO the builtins dict
             # lifts a banned call without a Name-call ever matching (the target
             # rides as a string arg, and `__builtins__` is not an os name).
             elif (
@@ -186,7 +210,7 @@ class BannedNodeVisitor(ast.NodeVisitor):
             and node.value.id == "__builtins__"
             and node.attr in self.banned_calls
         ):
-            # `__builtins__.exec(...)` — attribute access into the builtins
+            # `__builtins__.exec(...)` - attribute access into the builtins
             # namespace escapes the Name-call scan (the func is an Attribute,
             # not a Name). Mirrors the existing __builtins__[...] subscript
             # block below: __builtins__ is never a legitimate sandbox target.
@@ -405,7 +429,17 @@ def clean_sandbox_env(extra: dict | None = None) -> dict:
     clean = {
         k: v
         for k, v in os.environ.items()
-        if not any(s in k.upper() for s in ("API_KEY", "TOKEN", "SECRET", "PASSWORD", "AWS_ACCESS", "AWS_SECRET"))
+        if not any(
+            s in k.upper()
+            for s in (
+                "API_KEY",
+                "TOKEN",
+                "SECRET",
+                "PASSWORD",
+                "AWS_ACCESS",
+                "AWS_SECRET",
+            )
+        )
         and not k.startswith("SWARM_")
     }
     clean["PYTHONNOUSERSITE"] = "1"
@@ -461,13 +495,17 @@ def scan_code_isolated(
         )
     runner = _SCAN_RUNNER.format(project_root=project_root)
     cmd = [sys.executable, "-I", "-c", runner]
+    scan_env = clean_sandbox_env()
+    # Force UTF-8 in the subprocess to prevent cp1252 default on Windows
+    # (-I mode) from crashing on non-ASCII chars in LLM-generated code.
+    scan_env["PYTHONIOENCODING"] = "utf-8"
     try:
         proc = subprocess.Popen(
             cmd,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            env=clean_sandbox_env(),
+            env=scan_env,
         )
     except Exception as exc:
         return (False, f"Security gate scan process could not start: {exc}")

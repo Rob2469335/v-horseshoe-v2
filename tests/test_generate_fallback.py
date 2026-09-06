@@ -60,7 +60,7 @@ def test_generate_falls_back_to_local_when_cloud_fails(_cloud_down_local_up):
     models = _cloud_down_local_up
     assert len(models) == 2
     assert "deepseek" in models[0]
-    assert "qwen3.5-4b" in models[1]
+    assert "robs4b" in models[1]
 
 
 def test_generate_still_502_when_local_also_fails(monkeypatch):

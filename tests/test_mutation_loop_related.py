@@ -102,10 +102,10 @@ def test_mutation_history_entries_are_dicts_with_error_field():
 
     # Failure entry must carry outcome/ts/error with the capped last_error body
     assert '"outcome": "failure"' in src
-    assert 'last_error[-2000:]' in src  # failure body capped at 2 kB
+    assert "last_error[-2000:]" in src  # failure body capped at 2 kB
 
     # Load path must coerce legacy bare strings to dicts
-    assert 'isinstance(e, dict)' in src
+    assert "isinstance(e, dict)" in src
     assert '"outcome": e' in src.replace("    ", " ")
 
 
@@ -141,15 +141,16 @@ def test_mutation_history_load_tolerates_legacy_bare_strings(tmp_path, monkeypat
     # Write a mixed legacy file (bare strings + a new-style dict)
     history_file = tmp_path / "mutation_history.json"
     history_file.write_text(
-        json.dumps(["success", "failure", {"outcome": "success", "ts": "t", "error": ""}])
+        json.dumps(
+            ["success", "failure", {"outcome": "success", "ts": "t", "error": ""}]
+        )
     )
     monkeypatch.setattr(gml, "HISTORY_FILE", history_file)
 
     # Read and coerce manually (mirrors the load block in run_genetic_mutation)
     raw = json.loads(history_file.read_text())
     coerced = [
-        e if isinstance(e, dict) else {"outcome": e, "ts": "", "error": ""}
-        for e in raw
+        e if isinstance(e, dict) else {"outcome": e, "ts": "", "error": ""} for e in raw
     ]
 
     assert len(coerced) == 3

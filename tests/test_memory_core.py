@@ -21,7 +21,9 @@ class TestGetFailureDigest:
             resp.json.return_value = {"status": "error"}
             return resp
 
-        with patch("runtime_v2.services.memory_core.requests.get", side_effect=fake_get):
+        with patch(
+            "runtime_v2.services.memory_core.requests.get", side_effect=fake_get
+        ):
             digest = get_failure_digest()
 
         # ALL 6 shards were 404'd → every one must appear with count=0

@@ -232,7 +232,10 @@ async def get_tool_decision(
                             agent_id,
                             len(hint),
                         )
-                    from swarm_os.services.reflection_loop import check_model_reliability
+                    from swarm_os.services.reflection_loop import (
+                        check_model_reliability,
+                    )
+
                     reliability_note = await check_model_reliability(model)
                     if reliability_note:
                         system_prompt = system_prompt + f"\n\n{reliability_note}"
@@ -485,7 +488,7 @@ async def get_tool_decision(
                         import runtime_v2.services._llm_client as _llm_client_mod
 
                         litellm_model = _llm_client_mod.get_litellm_model(
-                            agent_id, fallback_model="qwen3.5-4b", force_local=True
+                            agent_id, fallback_model="robs4b", force_local=True
                         )
                         # Clear the cloud fallback chain — it contains the doomed
                         # provider (and other cloud models). litellm would otherwise

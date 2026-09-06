@@ -104,11 +104,7 @@ async def _safe_ollama_models(runtime: Any) -> list[str]:
                         continue
                     # Normalize Windows file-path model ids like ".\models\foo.gguf" to "foo"
                     if ".gguf" in mid or "\\" in mid or "/" in mid:
-                        mid = (
-                            mid.replace("\\", "/")
-                            .split("/")[-1]
-                            .replace(".gguf", "")
-                        )
+                        mid = mid.replace("\\", "/").split("/")[-1].replace(".gguf", "")
                     models.add(mid)
         except Exception as exc:
             log.warning("Failed checking port %s: %s", port, exc)
@@ -446,7 +442,7 @@ async def generate(payload: GenerateRequest, orch=Depends(get_orchestrator)):
         if _analysis_cloud_enabled():
             _model = _analysis_cloud_model()  # openai/deepseek-v4-flash by default
         else:
-            _model = "qwen3.5-4b"
+            _model = "robs4b"
     except Exception:
         _model = "openai/deepseek-v4-flash"
     _model = (payload.model or "").strip() or _model
@@ -520,18 +516,24 @@ async def generate(payload: GenerateRequest, orch=Depends(get_orchestrator)):
             )
             try:
                 local_kwargs = dict(kwargs)
-                local_kwargs["model"] = "openai/qwen3.5-4b"
+                local_kwargs["model"] = "openai/robs4b"
                 local_kwargs["api_base"] = (
                     os.getenv("LLAMACPP_URL", "http://127.0.0.1:8080") + "/v1"
                 )
                 local_kwargs["api_key"] = "llama"
-                resp = await litellm.acompletion(**local_kwargs, extra_headers=opencode_headers())
+                resp = await litellm.acompletion(
+                    **local_kwargs, extra_headers=opencode_headers()
+                )
                 content = resp.choices[0].message.content or ""
-                _model = "qwen3.5-4b"
+                _model = "robs4b"
                 try:
                     from runtime_v2.services.usage_log import record_response
 
-                    record_response(resp, local_kwargs["model"], source="api_generate_local_fallback")
+                    record_response(
+                        resp,
+                        local_kwargs["model"],
+                        source="api_generate_local_fallback",
+                    )
                 except Exception as usage_err:
                     log.debug("usage log skipped: %s", usage_err)
             except Exception:
@@ -843,7 +845,7 @@ async def get_router_stats(
         m = str(raw).strip().lower()
         if not m or m == "unknown":
             return "unknown"
-        if m in ("qwen3.5-4b", "deepseek-v4-flash") or "3.5-4b" in m:
+        if m in ("robs4b", "deepseek-v4-flash") or "3.5-4b" in m or "robs4b" in m:
             return m
         if any(
             x in m
@@ -860,7 +862,7 @@ async def get_router_stats(
                 "3b-instruct",
             )
         ):
-            return "qwen3.5-4b"
+            return "robs4b"
         return str(raw)
 
     try:

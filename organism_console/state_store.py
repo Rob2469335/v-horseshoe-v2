@@ -206,4 +206,3 @@ class SessionState:
             return True
         except Exception:
             return False
-

@@ -85,7 +85,9 @@ class TestFindDirectImporters:
 
     def test_from_import_found(self, tmp_path: Path):
         (tmp_path / "target.py").write_text("VALUE = 1\n", encoding="utf-8")
-        (tmp_path / "user.py").write_text("from target import VALUE\n", encoding="utf-8")
+        (tmp_path / "user.py").write_text(
+            "from target import VALUE\n", encoding="utf-8"
+        )
         importers = find_direct_importers(tmp_path / "target.py", tmp_path)
         assert "user" in importers
 
@@ -119,7 +121,9 @@ class TestFilesystemReadIntegration:
         from swarm_os.lib.mcp.filesystem import filesystem_handler
 
         f = tmp_path / "sample.py"
-        f.write_text("class Widget:\n    def render(self):\n        pass\n", encoding="utf-8")
+        f.write_text(
+            "class Widget:\n    def render(self):\n        pass\n", encoding="utf-8"
+        )
         res = filesystem_handler(
             {"operation": "read", "path": "sample.py"}, root=tmp_path
         )
@@ -134,6 +138,8 @@ class TestFilesystemReadIntegration:
 
         f = tmp_path / "data.txt"
         f.write_text("hello world", encoding="utf-8")
-        res = filesystem_handler({"operation": "read", "path": "data.txt"}, root=tmp_path)
+        res = filesystem_handler(
+            {"operation": "read", "path": "data.txt"}, root=tmp_path
+        )
         assert res["ok"] is True
         assert "symbol_map" not in res

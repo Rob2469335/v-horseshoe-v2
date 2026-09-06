@@ -38,10 +38,7 @@ class Router:
         if model not in self.states:
             profile = self.profiles.get(model)
             role = profile.role if profile else self.default_role
-            if profile:
-                self.states[model] = ModelState(name=model, role=role)
-            else:
-                return ModelState(name=model, role=role)
+            self.states[model] = ModelState(name=model, role=role)
         return self.states[model]
 
     def is_in_cooldown(self, model: str) -> bool:

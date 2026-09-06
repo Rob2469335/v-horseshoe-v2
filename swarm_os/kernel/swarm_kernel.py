@@ -132,6 +132,13 @@ class SwarmKernel:
         )
 
     def _breed_children(self, task) -> list:
+        # Decay each organism's accumulated composite each generation so old
+        # performance fades — keeps `o.fitness` as the recency-weighted "good
+        # lately" signal (distinct from genome.average_fitness, the cumulative
+        # lifetime average). Snapshot/metrics/memory readers all report on this
+        # decayed value, so it must stay live across generations; selection
+        # pressure stays responsive rather than letting a good-once organism
+        # squat a frozen score (see the elitism-stagnation history in AGENTS.md).
         for o in self.organisms:
             o.fitness *= self.fitness_decay
 
@@ -146,7 +153,8 @@ class SwarmKernel:
             a = parents[i]
             b = parents[(i + 1) % len(parents)]
             child_genome = crossover(a.genome, b.genome)
-            mutate(child_genome)
+            parent_fitness = max(a.genome.average_fitness, b.genome.average_fitness)
+            mutate(child_genome, parent_fitness)
             child_genome.parent_id = a.id
             child = _make_organism(
                 org_id=f"g{self.generation}_c{random.randint(0, 9999)}",

@@ -934,6 +934,76 @@ def test_security_gate_object_method_named_exec_not_blocked():
     SecurityGate.scan_code("result = my_object.exec(argument)")
 
 
+def test_security_gate_allows_duck_typed_methods_with_banned_names():
+    """Duck-typed methods on NON-os objects must NOT be blocked by banned-os-attr
+    name matching. Regression guard for the working-tree change that widened
+    visit_Attribute to flag `*.replace`/`*.remove`/`*.rename`/etc. on ANY
+    receiver in strict mode — that false-denied ubiquitous benign code like
+    `text.replace(...)` / `list.remove(...)` / pathlib renames. Matching is
+    receiver-aware (only os-bound names or __builtins__ matter), consistent
+    with test_security_gate_object_method_named_exec_not_blocked."""
+    from swarm_os.services.security_gate import SecurityGate
+
+    # benign, non-os receivers using names that ARE in BANNED_OS_ATTRS
+    SecurityGate.scan_code("out = text.replace('a', 'b')")          # attr 'replace'
+    SecurityGate.scan_code("rows.remove(item)")                     # attr 'remove'
+    SecurityGate.scan_code("p = Path('x'); p.rename('y')")          # attr 'rename'... but pathlib is strict-banned
+    SecurityGate.scan_code("s = x.name.replace('_', '-')")
+    SecurityGate.scan_code("y = ''.join(parts).replace(' ', '')")
+    SecurityGate.scan_code("l = [1, 2]; l.remove(1); l.append(3)")
+
+
+def test_security_gate_os_bound_receiver_still_blocked_after_scoping_restore():
+    """The receiver-aware restore must NOT weaken the real defense: os-bound
+    attribute calls that were blocked before must still be blocked."""
+    from swarm_os.services.security_gate import SecurityGate, SecurityGateViolation
+
+    for bad in (
+        "import os\nos.remove('x.py')",
+        "import os as o\no.system('whoami')",
+        "import os\nos.rename('a', 'b')",
+        "from os import system\nsystem('whoami')",
+    ):
+        with pytest.raises(SecurityGateViolation):
+            SecurityGate.scan_code(bad)
+
+
+def test_security_gate_blocks_bare_builtins_name():
+    """A bare reference to `__builtins__` (new hardening branch) is blocked —
+    it is never a legitimate sandbox target."""
+    from swarm_os.services.security_gate import SecurityGate, SecurityGateViolation
+
+    for bad in (
+        "__builtins__['__import__']('os')",
+        "b = __builtins__\nb['exec']('print')",
+        "x = __builtins__",
+    ):
+        with pytest.raises(SecurityGateViolation):
+            SecurityGate.scan_code(bad)
+
+
+def test_security_gate_blocks_dunder_reflection_constant():
+    """getattr/setattr/delattr with a constant dunder target (new hardening
+    branch) is blocked; a benign getattr with a NON-dunder OR non-literal arg
+    must NOT be (receiver-agnostic for the constant dunder tuple only)."""
+    from swarm_os.services.security_gate import SecurityGate, SecurityGateViolation
+
+    for bad in (
+        "getattr(x, '__class__')",
+        "getattr(obj, '__subclasses__')",
+        "setattr(self, '__bases__', [])",
+        "delattr(y, '__mro__')",
+        "getattr(thing, '__globals__')",
+    ):
+        with pytest.raises(SecurityGateViolation):
+            SecurityGate.scan_code(bad)
+
+    # benign: non-literal (dynamic) name, or a literal that is not a blocked dunder
+    SecurityGate.scan_code("getattr(obj, attr_name)")
+    SecurityGate.scan_code("getattr(obj, 'replace')")   # a benign attr name, not a dunder
+    SecurityGate.scan_code("getattr(self, '__doc__')")  # not in the blocked dunder tuple
+
+
 @pytest.mark.asyncio
 async def test_dangerroom_rejects_pytest_flags(monkeypatch):
     """A flag-like test target (--junitxml=..., -x, -k) must be rejected before
@@ -1101,6 +1171,7 @@ def test_clean_sandbox_env_strips_aws_credentials():
     os.environ["NORMAL_VAR"] = "should-remain"
 
     from swarm_os.services.security_gate import clean_sandbox_env
+
     env = clean_sandbox_env()
 
     # AWS credentials must be stripped

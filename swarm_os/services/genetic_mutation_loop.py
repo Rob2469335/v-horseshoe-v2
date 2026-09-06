@@ -109,8 +109,7 @@ async def run_genetic_mutation(
         live_cloud = [
             f["model"]
             for f in await get_live_fallbacks(mode=routing_mode)
-            if not _is_local_model(f["model"])
-            and not is_model_cooled_down(f["model"])
+            if not _is_local_model(f["model"]) and not is_model_cooled_down(f["model"])
         ]
         # REGRESSION FIX (cfa3ee6): "not on cooldown" is NOT "reachable". A freshly
         # started process has no cooldown records, so a cloud MODEL with nothing

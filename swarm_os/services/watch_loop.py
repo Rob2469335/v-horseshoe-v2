@@ -251,13 +251,14 @@ class WatchLoop:
             due = due_canaries()
             for c in due:
                 rid = c.get("repair_id")
-                if rid in self._canary_tasks:
+                # We need to track the actual task objects to prevent garbage collection
+                # check if there's already a task running for this rid (we can check by name)
+                if any(getattr(t, "get_name", lambda: "")() == rid for t in self._canary_tasks):
                     continue
                 task = asyncio.create_task(self._evaluate_canary(c))
-                self._canary_tasks.add(rid)
-                task.add_done_callback(
-                    lambda t, _rid=rid: self._canary_tasks.discard(_rid)
-                )
+                task.set_name(rid)
+                self._canary_tasks.add(task)
+                task.add_done_callback(self._canary_tasks.discard)
         except Exception as exc:
             log.warning("WatchLoop: canary scheduling failed (%s).", exc)
 

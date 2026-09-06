@@ -71,7 +71,7 @@ async def test_memories_handles_missing_and_garbage_timestamps():
 
 
 def test_memory_timestamp_except_handlers_are_parenthesized():
-    """The `except TypeError, ValueError:` comma form was a formatter-sweep
+    """The `except (TypeError, ValueError):` comma form was a formatter-sweep
     regression (routes.py:926/:932). It still parses as a tuple on Python 3.14
     (so the /memories tests pass either way), but it is non-portable and
     non-idiomatic. Pin the AST to the parenthesized tuple so a future sweep

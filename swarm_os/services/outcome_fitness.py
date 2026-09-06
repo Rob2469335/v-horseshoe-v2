@@ -153,8 +153,7 @@ def _rec_within_age(rec: dict, max_age_s: float) -> bool:
         return True
     try:
         age = (
-            datetime.now(timezone.utc)
-            - datetime.fromisoformat(str(ts))
+            datetime.now(timezone.utc) - datetime.fromisoformat(str(ts))
         ).total_seconds()
     except (TypeError, ValueError):
         return True
@@ -268,4 +267,3 @@ def _fitness_env_enabled() -> bool:
     SWARM_EVOLUTION=1, else off (keeps the runtime lean; no overhead when the
     kernel isn't being evolved)."""
     return os.environ.get("SWARM_EVOLUTION", "").strip() == "1"
-

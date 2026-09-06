@@ -100,8 +100,6 @@ class AgentRuntime:
 
                 raise ApprovalRequiredError(capability_name, payload)
 
-
-
         if capability_name not in self._active_tools:
             raise RuntimeError(
                 f"Tool '{capability_name}' is disabled. "

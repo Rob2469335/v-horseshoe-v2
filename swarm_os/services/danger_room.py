@@ -27,7 +27,7 @@ class DangerRoom:
             return [
                 c
                 for c in contents
-                if c
+                if c.lower()
                 in (
                     ".git",
                     ".venv",
@@ -42,8 +42,9 @@ class DangerRoom:
                     ".env",
                     ".env.example",
                 )
-                or c.startswith(".sandbox")
-                or c.startswith(".gemini")
+                or c.lower() in (".env", ".env.example")
+                or c.lower().startswith(".sandbox")
+                or c.lower().startswith(".gemini")
             ]
 
         await asyncio.to_thread(
@@ -180,7 +181,7 @@ class DangerRoom:
             f"Merging {len(relative_files)} files back to main workspace from Danger Room..."
         )
         for rel_file in relative_files:
-            if "swarm_os/evals" in rel_file.replace("\\", "/"):
+            if "swarm_os/evals" in rel_file.replace("\\", "/").lower():
                 logger.critical(
                     f"SHIELD VIOLATION: Attempted merge into shielded fitness directory: {rel_file}"
                 )

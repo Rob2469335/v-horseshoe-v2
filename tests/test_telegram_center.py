@@ -316,6 +316,7 @@ def test_notify_sends_to_owner():
     sent_messages = [c for c in calls if c["kind"] == "send_message"]
     assert sent_messages and sent_messages[0]["text"] == "task done"
 
+
 # ── Poll failure backoff ───────────────────────────────────────────────────
 def test_poll_failure_backs_off_instead_of_hammering(monkeypatch):
     """A getUpdates API failure (e.g. 502 Bad Gateway) must back off

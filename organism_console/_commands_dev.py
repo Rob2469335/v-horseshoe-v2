@@ -141,7 +141,7 @@ def cmd_commit(ctx: CommandContext, args: List[str]) -> None:
             "[bold cyan]Analyzing diff and generating Conventional Commit message...[/bold cyan]"
         )
         prompt = f"Analyze this git diff and write a concise, professional commit message adhering strictly to Conventional Commits:\n\n{diff_text[:3000]}\n\nYour output must follow this format:\n<type>(<scope>): <short description>\n\nDo not output any introductory or concluding text, only the commit message itself."
-        model = ctx.state.active_model or "qwen3.5-4b"
+        model = ctx.state.active_model or "robs4b"
         resp = ctx.call_api("/generate", "POST", {"model": model, "prompt": prompt})
         if resp and resp.status_code == 200:
             commit_msg = resp.json().get("response", "").strip().splitlines()[0]
@@ -340,7 +340,7 @@ def cmd_debug(ctx: CommandContext, args: List[str]) -> None:
         "[bold cyan]Submitting failure trace to LLM for automated diagnostic guide...[/bold cyan]"
     )
     prompt = f"The following developer command failed:\nCommand: {' '.join(command)}\nExit Code: {exit_code}\n\nStderr / Traceback:\n{stderr or stdout}\n\nExplain what caused this crash and provide a clear, step-by-step diagnostic guide on how to fix it."
-    model = ctx.state.active_model or "qwen3.5-4b"
+    model = ctx.state.active_model or "robs4b"
     resp = ctx.call_api("/generate", "POST", {"model": model, "prompt": prompt})
     if resp and resp.status_code == 200:
         diag = resp.json().get("response", "").strip()
@@ -377,7 +377,7 @@ def cmd_plan(ctx: CommandContext, args: List[str]) -> None:
         )
         prompt = f"""You are an elite software architect. Create a structured markdown Implementation Plan for: "{objective}".
 Structure: Goal Description, Proposed Changes (files to modify), Verification Plan (tests). Return ONLY markdown."""
-        model = ctx.state.active_model or "qwen3.5-4b"
+        model = ctx.state.active_model or "robs4b"
         try:
             resp = ctx.call_api("/generate", "POST", {"model": model, "prompt": prompt})
             if resp and resp.status_code == 200:
@@ -635,7 +635,7 @@ def cmd_compress(ctx: CommandContext, args: List[str]) -> None:
         )
     prompt = f"Summarize the following conversation in 2-3 sentences focusing on key actions and decisions:\n\n{conv_text}"
     fast_model = next(
-        (m for m in ctx.installed_models if "3b" in m or "7b" in m), "qwen3.5-4b"
+        (m for m in ctx.installed_models if "3b" in m or "7b" in m), "robs4b"
     )
     ctx.console.print(
         f"[cyan]Compressing {len(to_summarize)} messages using [bold green]{fast_model}[/bold green]...[/cyan]"
@@ -646,9 +646,16 @@ def cmd_compress(ctx: CommandContext, args: List[str]) -> None:
         )
         if resp and resp.status_code == 200:
             summary = resp.json().get("response", "").strip()
-            ctx.state.history = sys_msg + [
-                {"role": "system", "content": f"[Conversation Compressed: {summary}]"}
-            ] + keep
+            ctx.state.history = (
+                sys_msg
+                + [
+                    {
+                        "role": "system",
+                        "content": f"[Conversation Compressed: {summary}]",
+                    }
+                ]
+                + keep
+            )
             ctx.state.save()
             ctx.console.print("[green]✓ History compressed![/green]")
             ctx.console.print(

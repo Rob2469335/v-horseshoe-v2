@@ -12,6 +12,7 @@ trace regeneration needed.
 
 Output: real_25_dataset_v4_diagfix.jsonl (same schema, text modified).
 """
+
 import json
 import subprocess
 import re
@@ -25,13 +26,23 @@ REPO = r"C:/Users/rober/Projects/v-horseshoe-v2"
 
 def gt_files_for(commit: str) -> list[str]:
     try:
-        files = subprocess.check_output(
-            f"git diff-tree --no-commit-id --name-only -r {commit}",
-            shell=True, cwd=REPO).decode("utf-8", errors="ignore").split()
+        files = (
+            subprocess.check_output(
+                f"git diff-tree --no-commit-id --name-only -r {commit}",
+                shell=True,
+                cwd=REPO,
+            )
+            .decode("utf-8", errors="ignore")
+            .split()
+        )
     except subprocess.CalledProcessError:
         return []
     # mirror build_v4.py's filter: keep .py, drop test files
-    return [f for f in files if f.endswith(".py") and "test" not in f.lower() and "tests/" not in f]
+    return [
+        f
+        for f in files
+        if f.endswith(".py") and "test" not in f.lower() and "tests/" not in f
+    ]
 
 
 def splice_diagnosis(text: str, files: list[str]) -> str:
@@ -62,7 +73,9 @@ def main():
     out = []
     touched = 0
     missing_files = []
-    v4_records = [json.loads(l) for l in V4.read_text(encoding="utf-8").splitlines() if l.strip()]
+    v4_records = [
+        json.loads(l) for l in V4.read_text(encoding="utf-8").splitlines() if l.strip()
+    ]
     for i, rec in enumerate(v4_records):
         if i >= len(v1_records):
             missing_files.append(rec)
@@ -80,15 +93,23 @@ def main():
         rec["text"] = new_text
         out.append(rec)
 
-    OUT.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in out) + "\n", encoding="utf-8")
-    print(f"wrote {OUT} : {len(out)} rows, {touched} DIAGNOSIS-spliced (positional map)")
+    OUT.write_text(
+        "\n".join(json.dumps(r, ensure_ascii=False) for r in out) + "\n",
+        encoding="utf-8",
+    )
+    print(
+        f"wrote {OUT} : {len(out)} rows, {touched} DIAGNOSIS-spliced (positional map)"
+    )
     print(f"rows without commit/files: {len(missing_files)}")
     for m in missing_files[:5]:
         print("   unmatched:", m["text"][:80].replace("\n", " ")[:80])
 
 
 def _diag_body(text: str) -> str:
-    m = re.search(r"DIAGNOSIS:\s*\n([\s\S]*?)(?=\n\s*EVIDENCE:|\n\s*FILES:|\n\s*PLAN:|\n\s*VERIFICATION:|\n\s*VALIDATION:|\Z)", text)
+    m = re.search(
+        r"DIAGNOSIS:\s*\n([\s\S]*?)(?=\n\s*EVIDENCE:|\n\s*FILES:|\n\s*PLAN:|\n\s*VERIFICATION:|\n\s*VALIDATION:|\Z)",
+        text,
+    )
     return m.group(1).strip() if m else ""
 
 

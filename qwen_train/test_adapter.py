@@ -1,4 +1,5 @@
 """Quick adapter smoke test: load base + LoRA, generate text, verify coherence."""
+
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import PeftModel
@@ -26,8 +27,14 @@ print(f"Merged. Params: {sum(p.numel() for p in model.parameters()) / 1e9:.2f}B"
 
 # --- Test 1: multi-layer reasoning ---
 messages = [
-    {"role": "system", "content": "You are an expert developer. Think step by step, then provide a concise answer."},
-    {"role": "user", "content": "What is the output of this Python code?\n```python\nimport math\nresult = math.sqrt(144) + math.factorial(4)\nprint(result)\n```"},
+    {
+        "role": "system",
+        "content": "You are an expert developer. Think step by step, then provide a concise answer.",
+    },
+    {
+        "role": "user",
+        "content": "What is the output of this Python code?\n```python\nimport math\nresult = math.sqrt(144) + math.factorial(4)\nprint(result)\n```",
+    },
 ]
 prompt = tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 inputs = tok(prompt, return_tensors="pt")
@@ -47,7 +54,10 @@ print(f"Test 1 output:\n{text.strip()}")
 # --- Test 2: structured format ---
 messages2 = [
     {"role": "system", "content": "Answer concisely."},
-    {"role": "user", "content": "List 3 Python built-in functions that start with the letter 'm'. Format as a numbered list."},
+    {
+        "role": "user",
+        "content": "List 3 Python built-in functions that start with the letter 'm'. Format as a numbered list.",
+    },
 ]
 prompt2 = tok.apply_chat_template(messages2, tokenize=False, add_generation_prompt=True)
 inputs2 = tok(prompt2, return_tensors="pt")

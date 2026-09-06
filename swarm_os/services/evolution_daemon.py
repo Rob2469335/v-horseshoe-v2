@@ -67,6 +67,8 @@ def _persist_population(pop: list[dict], path: Path) -> None:
     with open(tmp, "w", encoding="utf-8") as f:
         for g in pop[-POPULATION_SIZE:]:
             f.write(json.dumps(g, ensure_ascii=False) + "\n")
+        f.flush()
+        _os.fsync(f.fileno())
     _os.replace(tmp, path)
 
 
@@ -80,7 +82,7 @@ def list_staged_generations() -> list[dict]:
     def _gen_num(p: Path) -> int:
         try:
             return int(p.stem.split("_")[1])
-        except (IndexError, ValueError):
+        except IndexError, ValueError:
             return 0
 
     for p in sorted(STAGED_DIR.glob("gen_*.jsonl"), key=_gen_num):
@@ -137,6 +139,8 @@ def rollback_promotion() -> dict:
 
         tmp = GENOMES_PATH.with_suffix(".jsonl.tmp")
         shutil.copyfile(bak, tmp)
+        with open(tmp, 'ab') as f:
+            os.fsync(f.fileno())
         os.replace(tmp, GENOMES_PATH)
         return {"ok": True, "action": "rollback_promotion"}
     except Exception as e:
@@ -349,7 +353,7 @@ def evolve_one_generation(
         for p in STAGED_DIR.glob("gen_*.jsonl"):
             try:
                 staged_gens.append(int(p.stem.split("_")[1]))
-            except (IndexError, ValueError):
+            except IndexError, ValueError:
                 log.warning(f"Malformed staged file ignored in gen calc: {p}")
         max_active_gen = max((g.get("generation", 0) for g in pop), default=0)
         gen = max(max(staged_gens, default=0), max_active_gen) + 1
@@ -382,7 +386,11 @@ def evolve_one_generation(
         try:
             staged_files = sorted(
                 STAGED_DIR.glob("gen_*.jsonl"),
-                key=lambda p: int(p.stem.split("_")[1]) if p.stem.split("_")[1:] and p.stem.split("_")[1].isdigit() else 0
+                key=lambda p: (
+                    int(p.stem.split("_")[1])
+                    if p.stem.split("_")[1:] and p.stem.split("_")[1].isdigit()
+                    else 0
+                ),
             )
             for old_file in staged_files[:-20]:
                 old_file.unlink(missing_ok=True)
@@ -407,9 +415,7 @@ def evolve_one_generation(
             )
         except ValueError:
             challenge_every = 12
-        should_rotate = (not should_auto_promote) and (
-            gen % challenge_every == 0
-        )
+        should_rotate = (not should_auto_promote) and (gen % challenge_every == 0)
 
         promoted = False
         promotion_reason = ""

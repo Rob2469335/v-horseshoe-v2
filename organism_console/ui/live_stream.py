@@ -324,11 +324,7 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                         safe_print(
                             f"  {icon} [bold]{tool}[/bold] [dim]{escape(result_str)}[/dim]"
                         )
-                        if (
-                            ok
-                            and tool == "filesystem"
-                            and isinstance(pending_fs, dict)
-                        ):
+                        if ok and tool == "filesystem" and isinstance(pending_fs, dict):
                             op = pending_fs.get("operation")
                             if op == "patch":
                                 old_s = str(
@@ -605,7 +601,8 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                             )
                         approved = str(answer).strip().lower() in ("yes", "y")
                         ctx.resume_checkpoint_id = chunk.get("checkpoint_id")
-                        history.append({
+                        history.append(
+                            {
                                 "role": "user",
                                 "content": (
                                     "Observation: "
@@ -618,7 +615,8 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                                         }
                                     )
                                 ),
-                            })
+                            }
+                        )
                         prompt = ""
                         agent_id = chunk.get("agent_id", agent_id)
                         _approval_triggered = True

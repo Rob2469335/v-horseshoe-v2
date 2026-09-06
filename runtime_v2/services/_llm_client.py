@@ -611,5 +611,3 @@ async def stream_content(
     except Exception as exc:
         log.error("[%s] stream error: %s", agent_id, exc)
         yield str(exc), "error"
-
-

@@ -70,6 +70,36 @@ async def test_elite_clones_do_not_alias_parent_fitness():
     assert org.genome.lifetime_fitness.get("composite") != 0.99
 
 
+def test_breed_decays_organism_fitness():
+    """_breed_children must decay each organism's accumulated `o.fitness` by
+    fitness_decay each generation, keeping it as the recency-weighted "good
+    lately" signal (distinct from genome.average_fitness, the cumulative
+    lifetime average). Regression guard: a partial refactor removed both writers
+    of `o.fitness` (the += in selection and this decay loop in _breed_children),
+    leaving the field stuck at 0.0 for the snapshot/metrics/memory readers that
+    still report on it. This pins the decay writer so it cannot silently go dead
+    again. (See AGENTS.md elitism-stagnation history: a frozen score lets a
+    good-once organism squat the top; decay keeps selection pressure live.)"""
+    import random as _random
+
+    _random.seed(7)
+    env = Environment()
+    brain = make_brain()
+    orgs = [Organism(f"o{i}", brain, Genome()) for i in range(2)]
+    for o in orgs:
+        o.fitness = 1.0
+    kernel = SwarmKernel(orgs, env, generate_fn=brain)
+
+    class _Task:
+        domain = "general"
+
+    kids = kernel._breed_children(_Task())
+    assert kids  # breeding produced children
+    assert all(o.fitness == 0.85 for o in orgs), (
+        f"fitness should have decayed by fitness_decay (0.85), got {[o.fitness for o in orgs]}"
+    )
+
+
 def test_genome_mutation_boundaries():
     g = Genome()
     g.reasoning_depth = 0.5

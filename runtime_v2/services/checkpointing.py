@@ -65,7 +65,10 @@ def write_checkpoint(cid: str, payload: dict) -> None:
         tmp = path.with_suffix(".json.tmp")
         lock = FileLock(str(path) + ".lock", timeout=5.0)
         with lock:
-            tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            with open(tmp, "w", encoding="utf-8") as fh:
+                fh.write(json.dumps(payload, ensure_ascii=False))
+                fh.flush()
+                os.fsync(fh.fileno())
             os.replace(tmp, path)
     except Exception as exc:
         log.warning("Checkpoint write failed (%s): %s", cid, exc)
@@ -88,15 +91,22 @@ def load_checkpoint(cid: str) -> dict | None:
 
 def delete_checkpoint(cid: str) -> None:
     """Remove the checkpoint. Called ONLY after a final was ACCEPTED by L1
-    (handler_status == DONE) — never on a rejected/aborted/max-turns exit."""
+    (handler_status == DONE) - never on a rejected/aborted/max-turns exit."""
     try:
         path = _checkpoint_path(cid)
-        lock = FileLock(str(path) + ".lock", timeout=5.0)
+        lock_path = str(path) + ".lock"
+        lock = FileLock(lock_path, timeout=5.0)
         with lock:
             if path.exists():
                 path.unlink()
         tmp = path.with_suffix(".json.tmp")
         if tmp.exists():
             tmp.unlink(missing_ok=True)
+
+        if path.parent.exists():
+            try:
+                path.parent.rmdir()
+            except OSError:
+                pass
     except Exception as exc:
         log.warning("Checkpoint delete failed (%s): %s", cid, exc)

@@ -463,17 +463,6 @@ def main():
                     ctx.console.print(
                         "[dim]Context pressure warning: tokens exceed 15000. Auto-truncating oldest history...[/dim]"
                     )
-                    keep = min(10, len(ctx.history) - 2)
-                    truncate_idx = len(ctx.history) - keep
-                    # BUG FIX: Add bounds check before indexing to prevent IndexError
-                    if (
-                        0 < truncate_idx < len(ctx.history)
-                        and ctx.history[truncate_idx].get("role") == "user"
-                        and "Result:"
-                        in str(ctx.history[truncate_idx].get("content", ""))
-                    ):
-                        truncate_idx += 1
-                    truncate_idx = max(1, min(truncate_idx, len(ctx.history) - 1))
                     # COMPRESS FIX: /compress now preserves the system message correctly
                     registry.handle_line("/compress", cmd_ctx)
 
@@ -493,4 +482,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-

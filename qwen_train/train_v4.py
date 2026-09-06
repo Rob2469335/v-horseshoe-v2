@@ -20,26 +20,35 @@ Usage:
   python train_v4.py --smoke     # 2-step validation pass (no save)
   python train_v4.py             # full 5-epoch training -> OUTPUT_DIR/adapter
 """
+
 import os, gc, json, subprocess, sys, torch
 from torch.utils.data import Dataset
 from transformers import (
-    AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig,
-    TrainingArguments, DataCollatorForLanguageModeling,
+    AutoTokenizer,
+    AutoModelForCausalLM,
+    BitsAndBytesConfig,
+    TrainingArguments,
+    DataCollatorForLanguageModeling,
 )
 from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training
 from transformers import Trainer, TrainerCallback
+
 
 def _init_msvc():
     vcvars = r"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
     if os.path.exists(vcvars):
         try:
-            output = subprocess.check_output(f'cmd /c "{vcvars}" && set', shell=True).decode('utf-8')
+            output = subprocess.check_output(
+                f'cmd /c "{vcvars}" && set', shell=True
+            ).decode("utf-8")
             for line in output.splitlines():
-                if '=' in line:
-                    key, val = line.split('=', 1)
+                if "=" in line:
+                    key, val = line.split("=", 1)
                     os.environ[key] = val
         except Exception:
             pass
+
+
 _init_msvc()
 try:
     import intel_extension_for_pytorch as ipex  # noqa: F401  (optional on XPU)
@@ -52,10 +61,14 @@ DATA_FILE = r"C:\Users\rober\Projects\qwen_train_data\real_25_dataset_v4.jsonl"
 MAX_LEN = 2048  # reduced from 2528 — V6 rows peak 2281, backward spike OOMs above ~2100
 
 SMOKE = "--smoke" in sys.argv
-MEM_TRACE = os.environ.get("V4_MEM_TRACE") == "1"          # observation only
-PROBE_STEPS = int(os.environ.get("V4_PROBE_STEPS") or 0)    # cap for a short growth probe (0 = off)
-DATA_FILE = os.environ.get("V4_DATA_FILE") or DATA_FILE      # test-suite override
-OUTPUT_DIR = os.environ.get("V4_OUTPUT_DIR") or OUTPUT_DIR   # allows a fresh adapter dir per experiment (diagfix etc.)
+MEM_TRACE = os.environ.get("V4_MEM_TRACE") == "1"  # observation only
+PROBE_STEPS = int(
+    os.environ.get("V4_PROBE_STEPS") or 0
+)  # cap for a short growth probe (0 = off)
+DATA_FILE = os.environ.get("V4_DATA_FILE") or DATA_FILE  # test-suite override
+OUTPUT_DIR = (
+    os.environ.get("V4_OUTPUT_DIR") or OUTPUT_DIR
+)  # allows a fresh adapter dir per experiment (diagfix etc.)
 
 
 class MemTrace(TrainerCallback):
@@ -66,16 +79,20 @@ class MemTrace(TrainerCallback):
     (~9.4 GiB reserved-but-idle), so the transient backward spike (~1.95 GiB)
     exhausts the shared-DRAM's actually-writable memory. NOT a training-logic
     change — only frees cached idle blocks between steps."""
+
     def on_log(self, args, state, control, logs=None, **kwargs):
         if not MEM_TRACE:
             return
         try:
             if os.environ.get("V4_EMPTY_CACHE") == "1":
                 torch.xpu.empty_cache()
-            alloc = torch.xpu.memory_allocated() / (1024 ** 3)
-            res = torch.xpu.memory_reserved() / (1024 ** 3)
-            print(f"[MEM] step={state.global_step} alloc={alloc:.3f}GiB reserved={res:.3f}GiB "
-                  f"free(approx)={16.40 - alloc:.3f}GiB loss={logs.get('loss') if logs else '?'}", flush=True)
+            alloc = torch.xpu.memory_allocated() / (1024**3)
+            res = torch.xpu.memory_reserved() / (1024**3)
+            print(
+                f"[MEM] step={state.global_step} alloc={alloc:.3f}GiB reserved={res:.3f}GiB "
+                f"free(approx)={16.40 - alloc:.3f}GiB loss={logs.get('loss') if logs else '?'}",
+                flush=True,
+            )
         except Exception as e:
             print(f"[MEM] sampler error: {e}", flush=True)
 
@@ -98,18 +115,29 @@ class DynTextDataset(Dataset):
     """Dynamic-padding dataset: truncate to MAX_LEN but do NOT pre-pad.
     DataCollatorForLanguageModeling pads per-batch to the longest sample in that
     batch. With batch=1, each step's memory == that sample's real length."""
+
     def __init__(self, texts, tokenizer):
         self.items = []
         for t in texts:
-            enc = tokenizer(t, truncation=True, max_length=MAX_LEN, return_tensors=None, padding=False)
-            self.items.append({
-                "input_ids": torch.tensor(enc["input_ids"]),
-                "attention_mask": torch.tensor(enc["attention_mask"]),
-            })
+            enc = tokenizer(
+                t,
+                truncation=True,
+                max_length=MAX_LEN,
+                return_tensors=None,
+                padding=False,
+            )
+            self.items.append(
+                {
+                    "input_ids": torch.tensor(enc["input_ids"]),
+                    "attention_mask": torch.tensor(enc["attention_mask"]),
+                }
+            )
+
     def __getitem__(self, idx):
         item = {k: v.clone() for k, v in self.items[idx].items()}
         item["labels"] = item["input_ids"].clone()
         return item
+
     def __len__(self):
         return len(self.items)
 
@@ -139,15 +167,17 @@ def main():
             kept.append(t)
     pct = (skipped / len(texts) * 100) if texts else 0
     lengths = [len(tokenizer.encode(t, add_special_tokens=False)) for t in kept]
-    print(f"\n{'='*60}")
-    print(f"DATASET FILTER SUMMARY")
+    print(f"\n{'=' * 60}")
+    print("DATASET FILTER SUMMARY")
     print(f"  Loaded:  {len(texts)} examples")
     print(f"  MAX_LEN: {MAX_LEN} tokens")
     print(f"  Kept:    {len(kept)} examples")
     print(f"  Skipped: {skipped} examples ({pct:.1f}%)")
     if lengths:
-        print(f"  Token range: min={min(lengths)} median={sorted(lengths)[len(lengths)//2]} max={max(lengths)}")
-    print(f"{'='*60}\n")
+        print(
+            f"  Token range: min={min(lengths)} median={sorted(lengths)[len(lengths) // 2]} max={max(lengths)}"
+        )
+    print(f"{'=' * 60}\n")
     texts = kept
 
     dataset = DynTextDataset(texts, tokenizer)
@@ -175,8 +205,18 @@ def main():
 
     peft_config = LoraConfig(
         task_type=TaskType.CAUSAL_LM,
-        r=8, lora_alpha=16, lora_dropout=0.05,
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+        r=16,
+        lora_alpha=32,
+        lora_dropout=0.05,
+        target_modules=[
+            "q_proj",
+            "k_proj",
+            "v_proj",
+            "o_proj",  # attention
+            "gate_proj",
+            "up_proj",
+            "down_proj",  # MLP — code transformations
+        ],
     )
     model = get_peft_model(model, peft_config)
     model.print_trainable_parameters()
@@ -200,28 +240,33 @@ def main():
         _base_args = dict(
             output_dir=OUTPUT_DIR,
             per_device_train_batch_size=1,
-            # accum=1: this is the exact footprint the smoke test validated.
-            # v3 inherited gradient_accumulation_steps=4, which OOM'd the combined
-            # run (peak `9.84 GiB allocated`) — the accumulation window holds 4
-            # micro-batches of backward work + the ~2.4GB fp32 logits before the
-            # optimizer step. batch=1 on only 23 rows means accum>1 buys nothing.
-            gradient_accumulation_steps=1,
+            per_device_eval_batch_size=1,
+            gradient_accumulation_steps=8,  # effective batch=8
             learning_rate=2e-4,
-            num_train_epochs=5,
-            save_strategy="steps",
-            save_steps=50,
+            lr_scheduler_type="cosine",
             warmup_steps=5,
+            weight_decay=0.01,
+            num_train_epochs=3,
+            save_strategy="epoch",
+            save_total_limit=2,
+            bf16=True,
             optim="adamw_torch",
-            fp16=True,
-            logging_steps=2,
+            logging_steps=5,
             report_to="none",
             gradient_checkpointing=True,
             remove_unused_columns=False,
+            neftune_noise_alpha=5,
+            seed=42,
         )
         if PROBE_STEPS:
             _base_args["max_steps"] = PROBE_STEPS
         training_args = TrainingArguments(**_base_args)
     collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
+
+    # NOTE: no eval split. An earlier version carved 10% into eval_dataset via
+    # random_split but never passed it to the Trainer (no eval_dataset=, no
+    # evaluation_strategy), so ~10% of an already-small corpus was silently
+    # discarded with no evaluation occurring. Train on the full dataset instead.
     trainer = Trainer(
         model=model,
         args=training_args,

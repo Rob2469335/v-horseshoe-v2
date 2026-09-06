@@ -4,6 +4,7 @@ into judge_scores_v4.jsonl using the go deepseek-v4-flash model.
 Strictly blind: only reads the packet files (never blind_key_v4.json). Rubric is
 fixed and printed. Each item scored twice (forward + swapped), temp 0.
 """
+
 import json
 import os
 import re
@@ -69,7 +70,8 @@ def judge_answers(client: httpx.Client, task: str, a: str, b: str) -> str:
     for attempt in range(5):
         try:
             r = client.post(
-                f"{BASE}/chat/completions", json=payload, headers=headers, timeout=120.0)
+                f"{BASE}/chat/completions", json=payload, headers=headers, timeout=120.0
+            )
             r.raise_for_status()
             c = (r.json()["choices"][0]["message"]["content"] or "").strip()
             m = re.match(r"\s*([AB])", c, re.IGNORECASE)
@@ -82,7 +84,7 @@ def judge_answers(client: httpx.Client, task: str, a: str, b: str) -> str:
             return "TIE"
         except Exception as e:
             last_err = e
-            print(f"  judge attempt {attempt+1}/5 failed: {e}", flush=True)
+            print(f"  judge attempt {attempt + 1}/5 failed: {e}", flush=True)
             time.sleep(3)
     # FAIL LOUDLY: a judge call that cannot complete must NOT become a TIE —
     # a run full of default-TIEs would look like a real (boring) result.
@@ -91,7 +93,11 @@ def judge_answers(client: httpx.Client, task: str, a: str, b: str) -> str:
 
 def main():
     def load(p):
-        return [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()]
+        return [
+            json.loads(l)
+            for l in p.read_text(encoding="utf-8").splitlines()
+            if l.strip()
+        ]
 
     fwd = load(PACKET)
     swp = load(SWAPPED)
@@ -110,8 +116,14 @@ def main():
         v_swp = judge_answers(client, p_s["task"], p_s["answer_A"], p_s["answer_B"])
         print(f"  swapped:  {v_swp}", flush=True)
         time.sleep(1)
-        rows.append({"exam_id": eid, "forward": v_fwd, "swapped": v_swp,
-                     "notes": "blind judge, temp0"})
+        rows.append(
+            {
+                "exam_id": eid,
+                "forward": v_fwd,
+                "swapped": v_swp,
+                "notes": "blind judge, temp0",
+            }
+        )
 
     client.close()
     with open(OUT, "w", encoding="utf-8") as f:

@@ -795,7 +795,6 @@ class MemoryBridge:
                     "indexed_at": time.time(),
                 }
 
-
                 if not used_llm_summary:
                     # LLM failed or timed out — skip storing the fallback summary
                     # to avoid polluting the vector database with duplicate entries.

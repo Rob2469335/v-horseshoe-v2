@@ -26,18 +26,38 @@ def _is_placeholder_final(text: str) -> bool:
     # Allow a short substantive answer, but flag bare completion-verbs-only.
     short = len(t) <= 40
     verbs = (
-        "task completed", "task complete", "done", "all done", "completed",
-        "finished", "success", "goal achieved", "task done", "complete.",
+        "task completed",
+        "task complete",
+        "done",
+        "all done",
+        "completed",
+        "finished",
+        "success",
+        "goal achieved",
+        "task done",
+        "complete.",
         # French
-        "terminé", "fini", "accompli", "complété",
+        "terminé",
+        "fini",
+        "accompli",
+        "complété",
         # German
-        "fertig", "erledigt", "abgeschlossen",
+        "fertig",
+        "erledigt",
+        "abgeschlossen",
         # Spanish
-        "listo", "hecho", "completado", "terminado",
+        "listo",
+        "hecho",
+        "completado",
+        "terminado",
         # Italian
-        "fatto", "completato", "finito",
+        "fatto",
+        "completato",
+        "finito",
         # Portuguese
-        "feito", "concluído", "terminado",
+        "feito",
+        "concluído",
+        "terminado",
     )
     if not short:
         return False

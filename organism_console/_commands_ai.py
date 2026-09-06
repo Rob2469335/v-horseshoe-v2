@@ -1,7 +1,8 @@
 from swarm_os.core.settings import get_settings
+
 _s = get_settings()
 _qdrant_url = _s.qdrant_url
-_emb_url = f'http://{_s.host}:{_s.port}/v1/embeddings'
+_emb_url = f"http://{_s.host}:{_s.port}/v1/embeddings"
 """AI, memory, and maintenance CLI commands."""
 
 import concurrent.futures
@@ -489,7 +490,7 @@ def cmd_vote(ctx: CommandContext, args: List[str]) -> None:
         if resp and resp.status_code == 200:
             models = resp.json().get("installed_models", [])
     if not models:
-        models = ["qwen3.5-4b", "qwen3.5-4b", "qwen3.5-4b"]
+        models = ["robs4b", "robs4b", "robs4b"]
     targets = models[:3]
     while len(targets) < 3:
         targets.append(targets[0])

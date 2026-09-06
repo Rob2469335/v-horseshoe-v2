@@ -8,17 +8,17 @@ log = logging.getLogger(__name__)
 LLAMA_URL = "http://127.0.0.1:8080/v1/chat/completions"
 
 AGENT_MODELS: dict[str, Tuple[str, str]] = {
-    # All agents use Qwen3.5-4B (MTP) on port 8080.
-    "coordinator": ("qwen3.5-4b", "llama"),
-    "planner": ("qwen3.5-4b", "llama"),
-    "executor": ("qwen3.5-4b", "llama"),
-    "tool-runner": ("qwen3.5-4b", "llama"),
-    "reviewer": ("qwen3.5-4b", "llama"),
-    "researcher": ("qwen3.5-4b", "llama"),
-    "coder": ("qwen3.5-4b", "llama"),
-    "debugger": ("qwen3.5-4b", "llama"),
-    "tool-maker": ("qwen3.5-4b", "llama"),
-    "code_analyzer": ("qwen3.5-4b", "llama"),
+    # All agents use robs4b (MTP) on port 8080.
+    "coordinator": ("robs4b", "llama"),
+    "planner": ("robs4b", "llama"),
+    "executor": ("robs4b", "llama"),
+    "tool-runner": ("robs4b", "llama"),
+    "reviewer": ("robs4b", "llama"),
+    "researcher": ("robs4b", "llama"),
+    "coder": ("robs4b", "llama"),
+    "debugger": ("robs4b", "llama"),
+    "tool-maker": ("robs4b", "llama"),
+    "code_analyzer": ("robs4b", "llama"),
 }
 
 
@@ -60,7 +60,7 @@ def update_model_mapping(new_mapping: dict[str, str]):
 
 
 def get_model(agent_id: str) -> Tuple[str, str]:
-    return AGENT_MODELS.get(agent_id, ("qwen3.5-4b", "llama"))
+    return AGENT_MODELS.get(agent_id, ("robs4b", "llama"))
 
 
 PREDICTIVE_TOPOLOGY: dict[str, str] = {

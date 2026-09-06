@@ -72,6 +72,7 @@ async def _add_owner(user_id: Any) -> None:
             config = json.loads(config_path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError) as exc:
             log.error("swarm_config.json corrupt: %s", exc)
+            return
 
     owners = config.get("telegram_owners", [])
     if str(user_id) not in owners:

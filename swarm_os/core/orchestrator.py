@@ -89,8 +89,6 @@ async def _release_generation_slot(dedup_hash: str) -> None:
         _active_generations.pop(dedup_hash, None)
 
 
-
-
 class Orchestrator:
     """
     The central brain of Swarm OS.
@@ -115,10 +113,10 @@ class Orchestrator:
 
         self.router = Router(
             profiles=[
-                ModelProfile(name="qwen3.5-4b", role="fast", max_tokens=16384),
-                ModelProfile(name="qwen3.5-4b", role="coding", max_tokens=16384),
-                ModelProfile(name="qwen3.5-4b", role="reasoning", max_tokens=16384),
-                ModelProfile(name="qwen3.5-4b", role="reviewer", max_tokens=16384),
+                ModelProfile(name="robs4b", role="fast", max_tokens=16384),
+                ModelProfile(name="robs4b", role="coding", max_tokens=16384),
+                ModelProfile(name="robs4b", role="reasoning", max_tokens=16384),
+                ModelProfile(name="robs4b", role="reviewer", max_tokens=16384),
                 ModelProfile(
                     name="Qwen3VL-2B-Instruct",
                     role="vision",

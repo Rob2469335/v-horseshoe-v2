@@ -14,6 +14,7 @@ For each commit:
 3. prompt base model: pre-fix code + diff + path-led format rule
 4. write row
 """
+
 import json
 import os
 import subprocess
@@ -22,7 +23,11 @@ import time
 from pathlib import Path
 import httpx
 
-COMMITS_FILE = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(r"C:/Users/rober/Projects/qwen_train_data/v6_commits.json")
+COMMITS_FILE = (
+    Path(sys.argv[1])
+    if len(sys.argv) > 1
+    else Path(r"C:/Users/rober/Projects/qwen_train_data/v6_commits.json")
+)
 OUT = Path(r"C:/Users/rober/Projects/qwen_train_data/v6_traces_raw.jsonl")
 REPO = r"C:/Users/rober/Projects/v-horseshoe-v2"
 PORT = 8086
@@ -42,7 +47,9 @@ SYSTEM_PROMPT = (
 
 
 def git(*args):
-    return subprocess.check_output(list(args), cwd=REPO, shell=False).decode("utf-8", "ignore")
+    return subprocess.check_output(list(args), cwd=REPO, shell=False).decode(
+        "utf-8", "ignore"
+    )
 
 
 def build_prompt(commit, file_path):
@@ -64,6 +71,7 @@ def trace(client, commit, file_path):
     if os.environ.get("V5_REPO_CONTEXT") == "1":
         try:
             from repo_context import build_prompt_with_context
+
             prompt = build_prompt_with_context(prompt, enabled=True)
         except Exception:
             pass  # never break a trace run if the context import fails
@@ -76,7 +84,9 @@ def trace(client, commit, file_path):
         "max_tokens": 2048,
         "temperature": 0.0,
     }
-    r = client.post(f"http://127.0.0.1:{PORT}/v1/chat/completions", json=payload, timeout=400.0)
+    r = client.post(
+        f"http://127.0.0.1:{PORT}/v1/chat/completions", json=payload, timeout=400.0
+    )
     r.raise_for_status()
     msg = r.json()["choices"][0]["message"]
     reasoning = (msg.get("reasoning_content") or "").strip()
@@ -87,7 +97,11 @@ def trace(client, commit, file_path):
 
 
 def main():
-    commits = json.loads(COMMITS_FILE.read_text(encoding="utf-8")) if COMMITS_FILE.exists() else []
+    commits = (
+        json.loads(COMMITS_FILE.read_text(encoding="utf-8"))
+        if COMMITS_FILE.exists()
+        else []
+    )
     if not commits:
         print("no commits loaded")
         sys.exit(1)
@@ -103,30 +117,49 @@ def main():
                 if r.get("source_commit"):
                     done_commits.add(r["source_commit"])
                     rows.append(r)
-    print(f"resuming: {len(done_commits)} already traced, {len(commits) - len(done_commits)} remaining", flush=True)
+    print(
+        f"resuming: {len(done_commits)} already traced, {len(commits) - len(done_commits)} remaining",
+        flush=True,
+    )
     for i, c in enumerate(commits):
         if c["sha"] in done_commits:
             continue
-        print(f"[{i+1}/{len(commits)}] {c['sha'][:8]} {c['path']}", flush=True)
+        print(f"[{i + 1}/{len(commits)}] {c['sha'][:8]} {c['path']}", flush=True)
         try:
             blob, reasoning, content = trace(client, c["sha"], c["path"])
             if not content:
-                print("  !! empty content — server may be down or reasoning only", flush=True)
-                rows.append({"source_commit": c["sha"], "raw_extracted": blob, "trace_error": "empty_content"})
+                print(
+                    "  !! empty content — server may be down or reasoning only",
+                    flush=True,
+                )
+                rows.append(
+                    {
+                        "source_commit": c["sha"],
+                        "raw_extracted": blob,
+                        "trace_error": "empty_content",
+                    }
+                )
             else:
                 rows.append({"source_commit": c["sha"], "raw_extracted": blob})
                 print(f"  content={len(content)}ch", flush=True)
         except Exception as e:
             print(f"  FAILED: {e}", flush=True)
-            rows.append({"source_commit": c["sha"], "raw_extracted": "", "trace_error": str(e)})
+            rows.append(
+                {"source_commit": c["sha"], "raw_extracted": "", "trace_error": str(e)}
+            )
         # incremental write after each commit (crash-safe)
-        OUT.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n", encoding="utf-8")
+        OUT.write_text(
+            "\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n",
+            encoding="utf-8",
+        )
         if len(rows) >= int(os.environ.get("V6_TRACE_LIMIT", 0) or 0):
             print(f"\nreached limit {len(rows)} rows — stopping early", flush=True)
             break
         time.sleep(0.5)
     client.close()
-    print(f"\nwrote {OUT}: {len(rows)} rows ({sum(1 for r in rows if r.get('raw_extracted'))} with content)")
+    print(
+        f"\nwrote {OUT}: {len(rows)} rows ({sum(1 for r in rows if r.get('raw_extracted'))} with content)"
+    )
 
 
 if __name__ == "__main__":

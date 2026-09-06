@@ -19,7 +19,9 @@ log = logging.getLogger(__name__)
 import os
 
 # Hard cap on tool output returned to the LLM context window
-_MAX_TOOL_OUTPUT_BYTES = int(os.environ.get("SWARM_MAX_TOOL_OUTPUT_BYTES", str(64 * 1024)))  # 64 KB default
+_MAX_TOOL_OUTPUT_BYTES = int(
+    os.environ.get("SWARM_MAX_TOOL_OUTPUT_BYTES", str(64 * 1024))
+)  # 64 KB default
 
 # Per-run call cap for github_research (prevents a confused 4B model from
 # looping discover→verify→discover→verify). Resets when any OTHER tool fires.
@@ -37,17 +39,27 @@ _mcp_manager = None
 _mcp_manager_lock = None
 
 
-
 def _truncate_tool_output(result: Any, label: str = "") -> Any:
     """Cap tool output at _MAX_TOOL_OUTPUT_BYTES to prevent LLM context overflow."""
-    if isinstance(result, str) and len(result.encode("utf-8", errors="replace")) > _MAX_TOOL_OUTPUT_BYTES:
-        truncated = result.encode("utf-8", errors="replace")[:_MAX_TOOL_OUTPUT_BYTES].decode("utf-8", errors="replace")
+    if (
+        isinstance(result, str)
+        and len(result.encode("utf-8", errors="replace")) > _MAX_TOOL_OUTPUT_BYTES
+    ):
+        truncated = result.encode("utf-8", errors="replace")[
+            :_MAX_TOOL_OUTPUT_BYTES
+        ].decode("utf-8", errors="replace")
         import logging as _l
+
         _l.getLogger(__name__).warning(
             "Tool output truncated to %d bytes (was %d bytes) for %s",
-            _MAX_TOOL_OUTPUT_BYTES, len(result.encode("utf-8", errors="replace")), label
+            _MAX_TOOL_OUTPUT_BYTES,
+            len(result.encode("utf-8", errors="replace")),
+            label,
         )
-        return truncated + f"\n\n[... output truncated at {_MAX_TOOL_OUTPUT_BYTES // 1024}KB ...]"
+        return (
+            truncated
+            + f"\n\n[... output truncated at {_MAX_TOOL_OUTPUT_BYTES // 1024}KB ...]"
+        )
     return result
 
 
@@ -227,15 +239,17 @@ def _sanitize_string(text: str, html_escape: bool = True) -> str:
     return text
 
 
-def _sanitize_tool_output(obj, html_escape: bool = True):
+def _sanitize_tool_output(obj, html_escape: bool = True, _depth: int = 0):
+    if _depth > 50:
+        return "<Truncated: Recursion depth exceeded>"
     if isinstance(obj, str):
         return _sanitize_string(obj, html_escape=html_escape)
     if isinstance(obj, dict):
         return {
-            k: _sanitize_tool_output(v, html_escape=html_escape) for k, v in obj.items()
+            k: _sanitize_tool_output(v, html_escape=html_escape, _depth=_depth + 1) for k, v in obj.items()
         }
     if isinstance(obj, list):
-        return [_sanitize_tool_output(v, html_escape=html_escape) for v in obj]
+        return [_sanitize_tool_output(v, html_escape=html_escape, _depth=_depth + 1) for v in obj]
     return obj
 
 
@@ -275,7 +289,9 @@ async def run(
             payload.get("operation") or payload.get("action") or payload.get("op"),
         )
         if policy == ALLOW:
-            return await _dispatch(tool_name, payload, trace_hook=trace_hook, run_id=run_id)
+            return await _dispatch(
+                tool_name, payload, trace_hook=trace_hook, run_id=run_id
+            )
         if policy == DENY:
             return {
                 "ok": False,
@@ -297,7 +313,9 @@ async def run(
                 expected_payload=payload,
             )
             if consumed is not None:
-                return await _dispatch(tool_name, payload, trace_hook=trace_hook, run_id=run_id)
+                return await _dispatch(
+                    tool_name, payload, trace_hook=trace_hook, run_id=run_id
+                )
             return {
                 "ok": False,
                 "error": (
@@ -380,7 +398,9 @@ def pending_stats() -> dict:
     return get_registry().stats()
 
 
-async def _dispatch(tool_name: str, payload: dict, *, trace_hook=None, run_id: str = "") -> dict:
+async def _dispatch(
+    tool_name: str, payload: dict, *, trace_hook=None, run_id: str = ""
+) -> dict:
     # Per-run cap: reset the github_research counter when ANY other tool fires
     # on this run (the model breaking out of the github loop = new sub-run).
     # Keyed by run_id so concurrent runs don't share or reset each other's budget.
@@ -786,11 +806,20 @@ async def _dispatch(tool_name: str, payload: dict, *, trace_hook=None, run_id: s
                         ),
                     }
                 elif not query and mode in ("discover", "build_gallery"):
-                    result = {"ok": False, "error": "query is required for discover/build_gallery modes"}
+                    result = {
+                        "ok": False,
+                        "error": "query is required for discover/build_gallery modes",
+                    }
                 elif mode == "verify" and not target_repo:
-                    result = {"ok": False, "error": "target_repo (owner/name) is required for verify mode"}
+                    result = {
+                        "ok": False,
+                        "error": "target_repo (owner/name) is required for verify mode",
+                    }
                 elif mode == "install" and not target_repo:
-                    result = {"ok": False, "error": "target_repo (owner/name) is required for install mode"}
+                    result = {
+                        "ok": False,
+                        "error": "target_repo (owner/name) is required for install mode",
+                    }
                 else:
                     script = _GITHUB_SCRIPTS.get(mode)
                     cmd = ["pwsh", "-NoProfile", "-File", str(script)]
@@ -803,7 +832,9 @@ async def _dispatch(tool_name: str, payload: dict, *, trace_hook=None, run_id: s
                         cmd += ["-Repo", target_repo, "-Ecosystem", ecosystem]
                     elif mode == "build_gallery":
                         # write the candidates JSON to a temp file
-                        candidates_json = _json.dumps(payload.get("candidates", []), ensure_ascii=False)
+                        candidates_json = _json.dumps(
+                            payload.get("candidates", []), ensure_ascii=False
+                        )
                         tmp = tempfile.NamedTemporaryFile(
                             mode="w", suffix=".json", delete=False, encoding="utf-8"
                         )
@@ -821,8 +852,13 @@ async def _dispatch(tool_name: str, payload: dict, *, trace_hook=None, run_id: s
                         )
                         out_text = stdout.decode("utf-8", errors="replace").strip()
                         if proc.returncode != 0:
-                            err_text = stderr.decode("utf-8", errors="replace").strip()[:500]
-                            result = {"ok": False, "error": f"github_research failed (rc={proc.returncode}): {err_text}"}
+                            err_text = stderr.decode("utf-8", errors="replace").strip()[
+                                :500
+                            ]
+                            result = {
+                                "ok": False,
+                                "error": f"github_research failed (rc={proc.returncode}): {err_text}",
+                            }
                         else:
                             # Parse JSON output if present, else return raw text.
                             # README text in results is automatically sanitized
@@ -830,12 +866,18 @@ async def _dispatch(tool_name: str, payload: dict, *, trace_hook=None, run_id: s
                             try:
                                 parsed = _json.loads(out_text)
                                 result = {"ok": True, "result": parsed}
-                            except (_json.JSONDecodeError, ValueError):
+                            except _json.JSONDecodeError, ValueError:
                                 result = {"ok": True, "result": out_text[:4000]}
                     except asyncio.TimeoutError:
-                        result = {"ok": False, "error": "github_research timed out (180s)"}
+                        result = {
+                            "ok": False,
+                            "error": "github_research timed out (180s)",
+                        }
                     except Exception as exc:
-                        result = {"ok": False, "error": f"github_research error: {str(exc)[:300]}"}
+                        result = {
+                            "ok": False,
+                            "error": f"github_research error: {str(exc)[:300]}",
+                        }
 
         elif tool_name == "mcp_register":
             import json
@@ -1258,7 +1300,8 @@ async def _dispatch(tool_name: str, payload: dict, *, trace_hook=None, run_id: s
 
         # Aggressive truncation for context window safety (traverse nested dicts)
         def _truncate(obj, limit=5000, _depth=0):
-            if tool_name == "web_fetch": limit = 20000
+            if tool_name == "web_fetch":
+                limit = 20000
             if _depth > 50:
                 return "<Truncated: Recursion depth exceeded>"
             if isinstance(obj, str):
@@ -1298,5 +1341,3 @@ async def _dispatch(tool_name: str, payload: dict, *, trace_hook=None, run_id: s
     except Exception as exc:
         log.exception("Tool %s failed", tool_name)
         return {"ok": False, "error": _sanitize_string(str(exc))}
-
-

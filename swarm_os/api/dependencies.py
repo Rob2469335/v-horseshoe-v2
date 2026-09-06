@@ -31,7 +31,9 @@ async def _safe_events(runtime: Any) -> list[Any]:
         event_store = getattr(runtime, "event_store", None)
         if event_store is None:
             return []
-        if hasattr(event_store, "read_all"):
+        if hasattr(event_store, "tail"):
+            return await asyncio.to_thread(event_store.tail, 500)
+        elif hasattr(event_store, "read_all"):
             return await asyncio.to_thread(event_store.read_all)
         elif hasattr(event_store, "list_all"):
             return await asyncio.to_thread(event_store.list_all)

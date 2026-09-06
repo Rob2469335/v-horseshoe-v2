@@ -8,6 +8,7 @@ build_blind_packet.py reads:
 Our fresh full_exam.py output uses: content_full, content_len, reasoning_len, etc.
 This converts in place. Protocol scripts stay untouched.
 """
+
 import json
 from pathlib import Path
 
@@ -42,11 +43,14 @@ def convert(src: Path, dst: Path):
         rows.append(new)
     dst.write_text(
         "\n".join(json.dumps(x, ensure_ascii=False) for x in rows) + "\n",
-        encoding="utf-8")
+        encoding="utf-8",
+    )
     print(f"wrote {dst.name}: {len(rows)} rows")
     # report content summary to confirm the schema load will be sane
     for r in rows:
-        print(f"  {r['exam_id']}: finish={r['finish_reason']} content={r['content_length_chars']}ch error={r['error']}")
+        print(
+            f"  {r['exam_id']}: finish={r['finish_reason']} content={r['content_length_chars']}ch error={r['error']}"
+        )
 
 
 for dst_name, src_path in SRC.items():

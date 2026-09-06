@@ -239,4 +239,3 @@ async def cache_tool_decision(messages: list, agent_id: str, decision: dict):
         )
     except Exception as exc:
         log.debug("decision cache write failed (non-fatal): %s", exc)
-

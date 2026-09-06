@@ -1,44 +1,45 @@
 {
   "coordinator": [
-    "qwen3.5-4b",
+    "robs4b",
     "llama"
   ],
   "planner": [
-    "qwen3.5-4b",
+    "robs4b",
     "llama"
   ],
   "executor": [
-    "qwen3.5-4b",
+    "robs4b",
     "llama"
   ],
   "tool-runner": [
-    "qwen3.5-4b",
+    "robs4b",
     "llama"
   ],
   "reviewer": [
-    "qwen3.5-4b",
+    "robs4b",
     "llama"
   ],
   "researcher": [
-    "qwen3.5-4b",
+    "robs4b",
     "llama"
   ],
   "coder": [
-    "qwen3.5-4b",
+    "robs4b",
     "llama"
   ],
   "debugger": [
-    "qwen3.5-4b",
+    "robs4b",
     "llama"
   ],
   "tool-maker": [
-    "qwen3.5-4b",
+    "robs4b",
     "llama"
   ],
   "code_analyzer": [
-    "qwen3.5-4b",
+    "robs4b",
     "llama"
   ]
 }
+
 
 

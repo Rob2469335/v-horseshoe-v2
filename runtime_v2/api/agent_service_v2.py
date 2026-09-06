@@ -12,7 +12,7 @@ try:
 
     load_dotenv()
 except Exception:
-    pass
+    pass  # dotenv optional; missing .env is not fatal
 
 log = logging.getLogger(__name__)
 
@@ -487,8 +487,15 @@ class AgentServiceV2:
     _TRAJ_DIR = _Path("data/trajectories")
 
     def _write_run_trajectory(
-        self, *, run_id: str, agent_id: str, parent_id: str, delegated_by: str,
-        prompt: str, genome_id: str, last_chunk: dict = None,
+        self,
+        *,
+        run_id: str,
+        agent_id: str,
+        parent_id: str,
+        delegated_by: str,
+        prompt: str,
+        genome_id: str,
+        last_chunk: dict = None,
     ) -> None:
         """Write one ATIF-like trajectory record per completed run.
 
@@ -666,9 +673,14 @@ class AgentServiceV2:
         Never raises; an error records None (treated as unverified downstream)."""
         try:
             import asyncio
-            tests = await asyncio.to_thread(self._find_related_tests, changed_file or "")
+
+            tests = await asyncio.to_thread(
+                self._find_related_tests, changed_file or ""
+            )
             if not tests:
-                structurally_sound = await asyncio.to_thread(self._structural_verify, changed_file)
+                structurally_sound = await asyncio.to_thread(
+                    self._structural_verify, changed_file
+                )
                 if structurally_sound:
                     state.test_pass_result = 0.5  # untested but sound -> discounted
                     log.info(
@@ -1926,7 +1938,7 @@ class AgentServiceV2:
             genome_id=state.genome_id,
             genome_weights=state.genome_weights,
             parent_id=state.run_id,  # child links its trace back to this delegator
-            delegated_by=agent_id,   # and records who delegated it
+            delegated_by=agent_id,  # and records who delegated it
         ):
             chunk.setdefault("delegated_by", agent_id)
             if chunk.get("type") == "final":
@@ -2013,7 +2025,9 @@ class AgentServiceV2:
                 tool_payload,
                 auth={"agent_id": agent_id, "turn": turn},
                 trace_hook=lambda etype, epayload: self._record_event(
-                    "tool_trace", agent_id, {"tool": action, "type": etype, **epayload},
+                    "tool_trace",
+                    agent_id,
+                    {"tool": action, "type": etype, **epayload},
                     run_id=getattr(state, "run_id", ""),
                     parent_id=getattr(state, "parent_id", ""),
                 ),
@@ -2259,7 +2273,10 @@ class AgentServiceV2:
         # step-level fitness prerequisite (attribute a step to its exact run /
         # delegator). parent_id=None => top level.
         import uuid as _uuid
-        run_id = str(_uuid.uuid4())  # fresh per invocation; a child links back via parent_id
+
+        run_id = str(
+            _uuid.uuid4()
+        )  # fresh per invocation; a child links back via parent_id
         if not parent_id:
             parent_id = ""  # top-level normalized
 
@@ -2303,13 +2320,18 @@ class AgentServiceV2:
             # event log is append-only and lacks run_id linkage for historical records.
             try:
                 self._write_run_trajectory(
-                    run_id=run_id, agent_id=agent_id,
-                    parent_id=parent_id, delegated_by=delegated_by or "",
-                    prompt=prompt, genome_id=genome_id or "",
+                    run_id=run_id,
+                    agent_id=agent_id,
+                    parent_id=parent_id,
+                    delegated_by=delegated_by or "",
+                    prompt=prompt,
+                    genome_id=genome_id or "",
                     last_chunk=_last_chunk,
                 )
-            except Exception:
-                pass  # trajectory write is best-effort; never kill the stream
+            except Exception as _e:
+                log.debug(
+                    "trajectory write failed (best-effort, stream continues): %s", _e
+                )  # trajectory write is best-effort; never kill the stream
 
     def _feed_aborted_outcome(
         self, agent_id: str, prompt: str, genome_id: str = ""
@@ -2918,7 +2940,9 @@ class AgentServiceV2:
             action = decision.get("action", "final").strip()
             log.info("[%s] action=%s", agent_id, action)
             self._record_event(
-                "agent_action", agent_id, {"action": action, "turn": turn},
+                "agent_action",
+                agent_id,
+                {"action": action, "turn": turn},
                 run_id=getattr(state, "run_id", ""),
                 parent_id=getattr(state, "parent_id", ""),
             )

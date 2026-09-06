@@ -267,7 +267,7 @@ async def test_schedule_due_canaries_tracks_task_no_duplicate_spawn(monkeypatch)
 
     loop = wl.WatchLoop(_make_engine(), interval_seconds=0.01)
     loop._schedule_due_canaries()
-    assert "r1" in loop._canary_tasks
+    assert any(t.get_name() == "r1" for t in loop._canary_tasks)
     import asyncio as _aio
 
     await _aio.sleep(0)  # let the spawned task run

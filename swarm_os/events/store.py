@@ -46,3 +46,22 @@ class EventStore:
                         )
                         continue
         return items
+
+    def tail(self, limit: int = 500) -> list[dict]:
+        if not self.path.exists():
+            return []
+        import collections
+        items = []
+        with self.path.open("r", encoding="utf-8") as f:
+            for line in collections.deque(f, maxlen=limit):
+                line = line.strip()
+                if line:
+                    try:
+                        items.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        import logging
+                        logging.getLogger(__name__).warning(
+                            "Skipping corrupted event line: %r", line[:80]
+                        )
+                        continue
+        return items
