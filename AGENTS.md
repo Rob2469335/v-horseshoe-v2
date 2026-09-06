@@ -1133,6 +1133,47 @@ relaunch via start-dev.ps1 when ready.
 
 ## Recent Changes (do NOT re-apply)
 
+### Metadata-only skill registry: on-disk SKILL.md awareness for the agent loop (2026-09-06, audited design)
+
+Root `skills/` hierarchy + `runtime_v2/services/skills_registry.py` (metadata-only
+frontmatter parser, stdlib-no-YAML, fail-open to `[]`, mtime cache) + `_skills_context()`
+in `system_prompts.py`, allowlist `("debugger",)`. Compiled agent system prompts for
+`debugger` now carry a `[AVAILABLE SKILLS]` block listing each skill's **name + one-line
+description only** — never the body. One real skill is seeded:
+`skills/troubleshooting-history/SKILL.md` (digested failure patterns, not changelog copy).
+
+Design constraints that came out of the audit (do NOT relax without re-deriving):
+- **Metadata only in the always-on channel.** Bodies are never loaded at build-time. The
+  `[AVAILABLE SKILLS]` block lives in the persistent per-run system message (built once at
+  `step_agent_stream` entry, agent_service_v2.py:2430, and carried across every decision
+  window), so full bodies there would be pure per-window context cost for zero payoff.
+- **Single-role gate, evidence-extended only.** `debugger` only. `code_analyzer` was
+  excluded for a *checked* reason: it gets a deterministic AGENTS.md read+warmup
+  (`_agent_routing.py` `_AGENT_WARMUP`), so it already has changelog history in grounding
+  and the block is more redundant; `debugger` has no warmup. An earlier rationale ("code_
+  analyzer is cloud-rate-limited") was FALSIFIED — both are in `_ANALYSIS_CLOUD_AGENTS`
+  (`_llm_client.py`). Verified excluded at test time: coordinator/coder/researcher/
+  code_analyzer all skip the block.
+- **No schema/grammar/action surface touched.** `TOOL_CALL_SCHEMA`, `_grammar_schema.py`,
+  `_TOOL_DEFINITIONS`, `_AGENT_TOOLS` all unmodified; `test_schema_remains_synced` still
+  asserts enum length `==14`. `skill_manage` was NOT assumed agent-reachable — audit confirmed
+  it is dead in the LLM decision loop (not in the enum, not in any `_AGENT_TOOLS`), reachable
+  only by non-LLM callers.
+- **AGENTS.md itself untouched for this feature** (kept the 6 lock-guarded writers intact).
+
+Tests: `tests/test_skills_registry.py` 6/6 (frontmatter parse + no-body-leak + fail-open ×2 +
+no-description-omitted + injection gated to debugger only). Gates: 95 passed across the
+related 4 suites, ruff E9/F clean.
+
+**WATCH-ORACLE (pre-registered flip condition, do NOT act preemptively):** add a role to
+`_SKILL_METADATA_ROLES`, or build a *runtime* body-load (`skill_activate`), only on LOGGED
+EVIDENCE that an agent had a skill's description but improvised/guessed instead of using the
+skill's body. A runtime action carries a real cost (3-touchpoint: `_TOOL_DEFINITIONS` +
+`_AGENT_TOOLS[role]` + the enum in both `_llm_parser.py` and `_grammar_schema.py` + bump
+`test_schema_remains_synced` length `==14`→`==15`) — do not pay it on anticipation. Until
+evidence arrives, this feature is complete: build-time metadata injection only.
+
+
 ### CLI crash + banner fix + OpenCode session header + test suite audit + SOTA upgrades + V6 pipeline (2026-09-04, session with opencode)
 
 **FIX: CLI crash — banner reads `ctx.cloud_enabled` (`eb16d05`):**
