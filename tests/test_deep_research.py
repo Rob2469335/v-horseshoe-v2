@@ -106,7 +106,7 @@ def _install_mocks(monkeypatch, plan_out, gap_out, complete_reply):
         }
 
     async def fake_fetch(params):
-        return {"ok": True, "text": f"deep content for {params['url']}"}
+        return {"ok": True, "text": f"deep content for {params['url']} " * 10}
 
     monkeypatch.setattr(dr, "_complete", fake_complete)
     monkeypatch.setattr("swarm_os.lib.mcp.web_search.web_search_handler", fake_search)
@@ -230,12 +230,16 @@ def test_failed_sub_synthesis_returns_raw_sources(monkeypatch):
         return {
             "ok": True,
             "results": [
-                {"url": "http://raw1", "title": "Raw One", "snippet": ""},
+                {
+                    "url": "http://raw1",
+                    "title": "Raw One",
+                    "snippet": "A short search snippet.",
+                },
             ],
         }
 
     async def fake_fetch(params):
-        return {"ok": True, "text": "RAW SOURCE TEXT THAT MUST SURVIVE"}
+        return {"ok": True, "text": "RAW SOURCE TEXT THAT MUST SURVIVE. " * 10}
 
     async def fake_complete(prompt, **kw):
         raise RuntimeError("synthesis down")
@@ -246,4 +250,4 @@ def test_failed_sub_synthesis_returns_raw_sources(monkeypatch):
     rep = asyncio_run(dr._run_sub_unit("q", max_results=1, max_tokens=100))
     assert rep["degraded"] is True
     assert rep["answer"] == ""
-    assert "RAW SOURCE TEXT THAT MUST SURVIVE" in rep["raw_sources"]
+    assert "RAW SOURCE TEXT THAT MUST SURVIVE" in rep.get("raw_sources", "")

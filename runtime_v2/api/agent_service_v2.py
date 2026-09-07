@@ -69,10 +69,8 @@ def _is_authorization_denial(result: dict | None) -> bool:
     if result.get("authorization") == "DENY":
         return True
     err = str(result.get("error", ""))
-    return (
-        "pending approval no longer valid" in err
-        or "Authorization DENIED" in err
-    )
+    return "pending approval no longer valid" in err or "Authorization DENIED" in err
+
 
 # L1 (2026 structural verifier): template / placeholder finals. These are the
 # "the agent short-circuited instead of doing the work" responses — a bare
@@ -84,6 +82,8 @@ _PLACEHOLDER_RE = re.compile(
     r"success|goal\s+achieved|ok|okay|no\s+(changes|issues|errors|improvements))\s*[.!]?\s*$",
     re.IGNORECASE,
 )
+
+
 def _is_placeholder_final(text: str) -> bool:
     """True when a final response is a bare completion/template placeholder with
     no substantive content (e.g. 'Task completed.' / 'Done.' / 'No changes.'),
@@ -272,17 +272,19 @@ def _approval_from_history(messages: list) -> dict | None:
     approval Observation; otherwise None. Used by the deterministic
     approval-resolution hook (the approval decision is a CODE decision, never
     left to the LLM)."""
-    for m in reversed(messages):
-        if m.get("role") != "user":
-            continue
-        content = str(m.get("content", ""))
-        if content.strip().startswith("Observation:"):
-            match = _OBSERVATION_APPROVAL_RE.search(content)
-            if match:
-                return {
-                    "pending_id": match.group(1),
-                    "approved": match.group(2) == "true",
-                }
+    if not messages:
+        return None
+    last_msg = messages[-1]
+    if last_msg.get("role") != "user":
+        return None
+    content = str(last_msg.get("content", ""))
+    if content.strip().startswith("Observation:"):
+        match = _OBSERVATION_APPROVAL_RE.search(content)
+        if match:
+            return {
+                "pending_id": match.group(1),
+                "approved": match.group(2) == "true",
+            }
     return None
 
 
@@ -1355,6 +1357,7 @@ class AgentServiceV2:
             "name",
             "args",
             "items",
+            "response",
         )
         _dup_sig = json.dumps(
             {k: v for k, v in decision.items() if k in _essential_keys and v},
@@ -1666,23 +1669,6 @@ class AgentServiceV2:
                     f"({response_text!r}). This is a short-circuit, not a completed task. Re-run the goal "
                     "and produce a substantive final that states the actual findings/fixes. Do NOT finalize "
                     "with a bare completion sentence."
-                )
-            elif agent_id in ("code_analyzer", "researcher") and not any(
-                tag in response_text for tag in ("[FACT]", "[INFERENCE]", "[UNKNOWN]")
-            ):
-                # Epistemic claim tags are a REPORT-agent contract (2026 SOTA:
-                # per-role output contracts). The reviewer's contract is a strict
-                # YES/NO verdict consumed by _verify_goal_with_reviewer via
-                # startswith("YES") — forcing tags onto reviewer finals broke
-                # goal verification in BOTH directions (bare "YES" was rejected
-                # by this gate, and gate-compliant "[FACT] YES" failed the
-                # consumer's prefix match), so reviewer is exempt from THIS
-                # check only (placeholder + read-path checks still apply).
-                contract_error = (
-                    "SYSTEM (L1 contract): Your final report is missing the required claim tags. "
-                    "You must strictly label your claims using [FACT] (directly verified), "
-                    "[INFERENCE] (deduced/assumed), or [UNKNOWN] (unverified). Review your "
-                    "findings and re-submit the final with the correct tags."
                 )
             else:
                 refs = set(re.findall(r"[\w./\\-]+\.py", response_text))
@@ -2461,11 +2447,12 @@ class AgentServiceV2:
 
         model, provider = await lookup_model(agent_id)
 
+        injected_memories = ""
         if not history and prompt:
             try:
                 memories = await asyncio.to_thread(get_relevant_memories, prompt)
                 if memories:
-                    prompt = f"{prompt}\n\n{memories}"
+                    injected_memories = f"\n\n{memories}"
             except Exception as exc:
                 log.warning("Failed to fetch relevant memories: %s", exc)
 
@@ -2480,7 +2467,7 @@ class AgentServiceV2:
                 model = decision.model
             provider = "router"
 
-        sys_prompt = build(agent_id)
+        sys_prompt = build(agent_id) + injected_memories
         if len(chain) > 1:
             sys_prompt += f"\n\nAlready visited: {' -> '.join(chain)}. Do NOT re-delegate to these agents."
 

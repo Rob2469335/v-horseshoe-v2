@@ -155,7 +155,8 @@ class SessionState:
                 )
                 with open(tmp, "w", encoding="utf-8") as fh:
                     fh.write(payload)
-                os.replace(tmp, self.session_file)
+                with self._lock:
+                    os.replace(tmp, self.session_file)
             except Exception as e:
                 import logging
 

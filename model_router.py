@@ -39,7 +39,7 @@ def _kill_sync():
             cwd = proc.info.get("cwd") or ""
             if name and "llama" in name.lower() and "v-horseshoe-v2" in cwd.lower():
                 proc.kill()
-        except psutil.NoSuchProcess, psutil.AccessDenied, AttributeError:
+        except (psutil.NoSuchProcess, psutil.AccessDenied, AttributeError):
             pass
 
 

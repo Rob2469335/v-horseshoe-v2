@@ -77,7 +77,7 @@ async def _complete(prompt: str, max_tokens: int = 800, timeout: float = 120.0) 
     last_err = None
     for i, (model, base, key, provider) in enumerate(lanes):
         try:
-            is_zen = (model == "zen")
+            is_zen = model == "zen"
             if is_zen:
                 from swarm_os.lib.opencode_session import opencode_headers
 
@@ -87,8 +87,12 @@ async def _complete(prompt: str, max_tokens: int = 800, timeout: float = 120.0) 
                 provider = "openai"
             if base is None and key is None and provider is None:
                 base = key = provider = None
-            kw = {"model": model, "messages": [{"role": "user", "content": prompt}],
-                  "max_tokens": max_tokens, "timeout": timeout}
+            kw = {
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": max_tokens,
+                "timeout": timeout,
+            }
             if is_zen:
                 kw["extra_headers"] = opencode_headers()
             if base:
@@ -103,14 +107,18 @@ async def _complete(prompt: str, max_tokens: int = 800, timeout: float = 120.0) 
             if finish == "length":
                 log.warning(
                     "deep_research completion (lane %s) hit max_tokens=%s; "
-                    "marking truncated response", i, max_tokens,
+                    "marking truncated response",
+                    i,
+                    max_tokens,
                 )
                 content = content.rstrip() + "\n\n[… report truncated at token cap]"
             return content
         except Exception as exc:
             last_err = exc
             log.warning("deep_research lane %s failed (%s): %s", i, model, exc)
-    raise RuntimeError(f"deep_research synthesis: all {len(lanes)} lanes failed. Last: {last_err}")
+    raise RuntimeError(
+        f"deep_research synthesis: all {len(lanes)} lanes failed. Last: {last_err}"
+    )
 
 
 def _extract_json_array(text: str) -> list | None:
@@ -290,6 +298,7 @@ async def _run_sub_unit(question: str, max_results: int, max_tokens: int) -> dic
             "citations": [],
             "degraded": True,
             "note": "no sources found",
+            "raw_sources": "",
         }
     block = "\n\n".join(
         f"[{s['n']}] {s['title']} — {s['url']}\n{s['text']}"

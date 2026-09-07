@@ -491,4 +491,3 @@ Intelligently splice the best sub-trees from both variants (e.g. combine a speed
         return content.strip()
     except Exception:
         return slice_a  # fallback to parent A
-

@@ -230,12 +230,16 @@ _COMPOUND_WEB_KEYWORDS = (
     "internet",
     "via web",
     "web research",
-    "improvements",
-    "upgrades",
+    # NOTE: "improvements", "upgrades", "latest", "current state" were here
+    # but REMOVED — they are TOPIC words, not web-intent words. "analyze my
+    # codebase for upgrades" means "find things to upgrade in my code," not
+    # "search the web." This false-positive routed every /upgrade-style goal
+    # through executor→researcher (which searched for generic articles instead
+    # of analyzing local code). Explicit web phrases ("internet", "search the
+    # web") still catch genuine compound goals like "search internet for
+    # improvements and upgrade my codebase."
     "sota",
     "best practices",
-    "latest",
-    "current state",
 )
 
 
@@ -309,6 +313,7 @@ def fast_route_coordinator(user_prompt: str) -> dict | None:
         "to fix the",
         "fix broken",
         "fix failing",
+        "refactor",
     )
     fix_intent = (
         any(kw in msg for kw in _FIX_KEYWORDS)
@@ -386,6 +391,7 @@ def best_route_target(user_prompt: str) -> str:
         "to fix the",
         "fix broken",
         "fix failing",
+        "refactor",
     )
     if (
         any(kw in msg for kw in _FIX_KEYWORDS)

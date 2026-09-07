@@ -201,13 +201,17 @@ def test_concurrent_delete_serializes_with_live_write_hold():
     # have removed the writer's .lock file from disk. A reintroduced manual
     # unlink would delete this live lock file here.
     lock_file_path = str(lock_path) + ".lock"
-    assert os.path.exists(lock_file_path), "concurrent delete removed the writer's live .lock file"
+    assert os.path.exists(lock_file_path), (
+        "concurrent delete removed the writer's live .lock file"
+    )
     release.set()
     t.join(timeout=5)
     td.join(timeout=5)
     assert not holder_error, holder_error
     assert not del_error, del_error
-    assert delete_done.is_set(), "delete_checkpoint did not complete after writer released"
+    assert delete_done.is_set(), (
+        "delete_checkpoint did not complete after writer released"
+    )
     # After both complete, the per-cid json is gone (deleted) and no .lock remains
     # orphaned by delete_checkpoint (filelock cleaned its own up).
     assert ck.load_checkpoint(cid) is None

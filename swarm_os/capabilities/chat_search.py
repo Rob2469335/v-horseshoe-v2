@@ -77,6 +77,7 @@ class ChatSearchHandler:
 
     async def execute(self, payload: ChatSearchRequest | dict) -> ChatSearchResponse:
         import asyncio
+
         if isinstance(payload, dict):
             payload = ChatSearchRequest(**payload)
         return await asyncio.to_thread(self._sync_search, payload)

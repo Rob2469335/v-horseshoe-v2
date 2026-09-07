@@ -253,7 +253,10 @@ class WatchLoop:
                 rid = c.get("repair_id")
                 # We need to track the actual task objects to prevent garbage collection
                 # check if there's already a task running for this rid (we can check by name)
-                if any(getattr(t, "get_name", lambda: "")() == rid for t in self._canary_tasks):
+                if any(
+                    getattr(t, "get_name", lambda: "")() == rid
+                    for t in self._canary_tasks
+                ):
                     continue
                 task = asyncio.create_task(self._evaluate_canary(c))
                 task.set_name(rid)

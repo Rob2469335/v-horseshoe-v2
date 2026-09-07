@@ -169,7 +169,7 @@ def _process_entry(proc: psutil.Process) -> Dict[str, Any]:
             if proc.create_time()
             else None,
         }
-    except psutil.NoSuchProcess, psutil.AccessDenied, OSError:
+    except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
         return None
 
 

@@ -360,9 +360,7 @@ def build(agent_id: str) -> str:
         [_TOOL_DEFINITIONS[t] for t in allowed_tools if t in _TOOL_DEFINITIONS]
     )
     return (
-        _BASE.format(
-            agent_id=agent_id, role_rules=rules, tools=tools_str
-        )
+        _BASE.format(agent_id=agent_id, role_rules=rules, tools=tools_str)
         + _project_map_context(agent_id)
         + _skills_context(agent_id)
     )

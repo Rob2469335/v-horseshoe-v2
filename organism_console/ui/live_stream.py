@@ -590,18 +590,56 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                             )
                         )
 
-                        from organism_console.renderer import INPUT_LOCK
-                        from rich.prompt import Prompt
+                        # AUTO-MODE (opencode parity): when auto mode is ON, only
+                        # an explicit `deny` policy still prompts (deny always
+                        # wins). Everything else auto-approves so an autonomous
+                        # goal run does not stall on a per-tool interactive
+                        # prompt — the client demo runs unattended. Interactive
+                        # prompts stay the DEFAULT (auto mode off).
+                        from organism_console.permissions import (
+                            auto_mode as _perms_auto_mode,
+                            blocked,
+                        )
 
-                        with INPUT_LOCK:
-                            answer = Prompt.ask(
-                                "[bold yellow]Approve this action?[/bold yellow]",
-                                choices=["yes", "no"],
-                                default="no",
-                            )
-                        approved = str(answer).strip().lower() in ("yes", "y")
+                        auto_resolved = False
+                        if _perms_auto_mode():
+                            # opencode parity: auto mode auto-approves everything
+                            # except an explicit `deny` (deny always wins).
+                            auto_resolved = True
+                            if blocked(tool) or blocked(action):
+                                approved = False  # explicit deny: never auto-ok
+                                live.stop()
+                                ctx.console.print(
+                                    f"[dim]auto-approve: deny {tool} ({action}) "
+                                    f"(explicit deny policy)[/dim]"
+                                )
+                            else:
+                                approved = True
+                                live.stop()
+                                ctx.console.print(
+                                    f"[dim]auto-approve: {tool} ({action})[/dim]"
+                                )
+
+                        if not auto_resolved:
+                            from organism_console.renderer import INPUT_LOCK
+                            from rich.prompt import Prompt
+
+                            with INPUT_LOCK:
+                                answer = Prompt.ask(
+                                    "[bold yellow]Approve this action?[/bold yellow]",
+                                    choices=["yes", "no"],
+                                    default="no",
+                                )
+                            approved = str(answer).strip().lower() in ("yes", "y")
                         ctx.resume_checkpoint_id = chunk.get("checkpoint_id")
-                        history.append(
+                        new_history = list(history)
+                        if prompt:
+                            new_history.append({"role": "user", "content": prompt})
+                        if full_content:
+                            new_history.append(
+                                {"role": "assistant", "content": full_content}
+                            )
+                        new_history.append(
                             {
                                 "role": "user",
                                 "content": (
@@ -617,6 +655,7 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                                 ),
                             }
                         )
+                        history = new_history
                         prompt = ""
                         agent_id = chunk.get("agent_id", agent_id)
                         _approval_triggered = True

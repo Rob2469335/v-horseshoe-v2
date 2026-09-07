@@ -51,6 +51,7 @@ class EventStore:
         if not self.path.exists():
             return []
         import collections
+
         items = []
         with self.path.open("r", encoding="utf-8") as f:
             for line in collections.deque(f, maxlen=limit):
@@ -60,6 +61,7 @@ class EventStore:
                         items.append(json.loads(line))
                     except json.JSONDecodeError:
                         import logging
+
                         logging.getLogger(__name__).warning(
                             "Skipping corrupted event line: %r", line[:80]
                         )

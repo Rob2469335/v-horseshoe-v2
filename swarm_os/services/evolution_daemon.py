@@ -82,7 +82,7 @@ def list_staged_generations() -> list[dict]:
     def _gen_num(p: Path) -> int:
         try:
             return int(p.stem.split("_")[1])
-        except IndexError, ValueError:
+        except (IndexError, ValueError):
             return 0
 
     for p in sorted(STAGED_DIR.glob("gen_*.jsonl"), key=_gen_num):
@@ -139,7 +139,7 @@ def rollback_promotion() -> dict:
 
         tmp = GENOMES_PATH.with_suffix(".jsonl.tmp")
         shutil.copyfile(bak, tmp)
-        with open(tmp, 'ab') as f:
+        with open(tmp, "ab") as f:
             os.fsync(f.fileno())
         os.replace(tmp, GENOMES_PATH)
         return {"ok": True, "action": "rollback_promotion"}
@@ -353,7 +353,7 @@ def evolve_one_generation(
         for p in STAGED_DIR.glob("gen_*.jsonl"):
             try:
                 staged_gens.append(int(p.stem.split("_")[1]))
-            except IndexError, ValueError:
+            except (IndexError, ValueError):
                 log.warning(f"Malformed staged file ignored in gen calc: {p}")
         max_active_gen = max((g.get("generation", 0) for g in pop), default=0)
         gen = max(max(staged_gens, default=0), max_active_gen) + 1

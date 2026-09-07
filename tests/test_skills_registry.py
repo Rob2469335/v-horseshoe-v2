@@ -54,9 +54,7 @@ def test_parses_real_frontmatter_metadata(skills_tree):
         }
     ]
     # Metadata-only guarantee: bodies are never surfaced by list_metadata().
-    joined = " ".join(
-        f"{m['name']}{m['description']}" for m in meta
-    )
+    joined = " ".join(f"{m['name']}{m['description']}" for m in meta)
     assert "# Digest" not in joined
     assert "Real body text" not in joined
 
@@ -88,9 +86,7 @@ def test_ignores_non_skill_files(skills_tree):
     # A stray file directly under skills/ (not a <name>/SKILL.md) is skipped.
     skills_tree.mkdir(parents=True)
     (skills_tree / "NOT_A_SKILL.md").write_text("---\nname: x\n---\n", encoding="utf-8")
-    _write_skill(
-        skills_tree, "real", "real", "A real skill with a description."
-    )
+    _write_skill(skills_tree, "real", "real", "A real skill with a description.")
     names = [m["name"] for m in sr.list_metadata()]
     assert names == ["real"]
 

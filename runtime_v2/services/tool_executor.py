@@ -246,10 +246,14 @@ def _sanitize_tool_output(obj, html_escape: bool = True, _depth: int = 0):
         return _sanitize_string(obj, html_escape=html_escape)
     if isinstance(obj, dict):
         return {
-            k: _sanitize_tool_output(v, html_escape=html_escape, _depth=_depth + 1) for k, v in obj.items()
+            k: _sanitize_tool_output(v, html_escape=html_escape, _depth=_depth + 1)
+            for k, v in obj.items()
         }
     if isinstance(obj, list):
-        return [_sanitize_tool_output(v, html_escape=html_escape, _depth=_depth + 1) for v in obj]
+        return [
+            _sanitize_tool_output(v, html_escape=html_escape, _depth=_depth + 1)
+            for v in obj
+        ]
     return obj
 
 
@@ -847,9 +851,8 @@ async def _dispatch(
                             stdout=asyncio.subprocess.PIPE,
                             stderr=asyncio.subprocess.PIPE,
                         )
-                        stdout, stderr = await asyncio.wait_for(
-                            proc.communicate(), timeout=180.0
-                        )
+                        async with asyncio.timeout(180.0):
+                            stdout, stderr = await proc.communicate()
                         out_text = stdout.decode("utf-8", errors="replace").strip()
                         if proc.returncode != 0:
                             err_text = stderr.decode("utf-8", errors="replace").strip()[
@@ -866,7 +869,7 @@ async def _dispatch(
                             try:
                                 parsed = _json.loads(out_text)
                                 result = {"ok": True, "result": parsed}
-                            except _json.JSONDecodeError, ValueError:
+                            except (_json.JSONDecodeError, ValueError):
                                 result = {"ok": True, "result": out_text[:4000]}
                     except asyncio.TimeoutError:
                         result = {
