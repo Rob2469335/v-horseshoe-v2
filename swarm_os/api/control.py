@@ -19,13 +19,18 @@ import logging
 import os
 from typing import Any, Dict
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Depends
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+import secrets
+import time
+from swarm_os.api.dependencies import verify_api_key
 
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/control", tags=["control"])
+
+_WRITE_TOKENS = {}
 
 # Short-TTL caches so the command center's 10s poll never re-runs heavy work
 # (probe scan ~16s, heal status ~18s when infra is down). Warmed at startup.
@@ -56,6 +61,13 @@ class AutonomousRequest(BaseModel):
 
 class HealRunRequest(BaseModel):
     force: bool = False
+
+
+class FileWriteRequest(BaseModel):
+    path: str
+    content: str
+    approved: bool = False
+    approval_token: str | None = None
 
 
 class EmailListRequest(BaseModel):
@@ -144,12 +156,6 @@ class BrowserActionRequest(BaseModel):
 
 class FileReadRequest(BaseModel):
     path: str
-
-
-class FileWriteRequest(BaseModel):
-    path: str
-    content: str
-    approved: bool = False
 
 
 class GrantRequest(BaseModel):
@@ -765,6 +771,14 @@ def _resolve_project_file(raw: str) -> str:
         common = ""
     if common != os.path.abspath(root):
         raise HTTPException(status_code=400, detail="path escapes project root")
+
+    rel_path = os.path.relpath(joined, root).replace("\\", "/").lower()
+    sensitive_starts = (".git/", ".env", "data/", "swarm_config.json", ".gitconfig")
+    if any(rel_path.startswith(s) or ("/" + s in rel_path) for s in sensitive_starts):
+        raise HTTPException(status_code=403, detail="access to sensitive path denied")
+    if rel_path in (".env", "swarm_config.json", ".gitconfig"):
+        raise HTTPException(status_code=403, detail="access to sensitive path denied")
+
     return joined
 
 
@@ -785,16 +799,32 @@ async def control_file_read(path: str) -> Dict[str, Any]:
         return {"ok": False, "error": str(exc)}
 
 
-@router.post("/file/write")
+@router.post("/file/write", dependencies=[Depends(verify_api_key)])
 async def control_file_write(req: FileWriteRequest) -> Dict[str, Any]:
-    """Write a project file — human-approved only. Refuses without approved=true,
-    matching the email-send + destructive-recovery approval pattern."""
-    if not req.approved:
+    """Write a project file — human-approved only. Refuses without approved=true
+    and a valid server-generated approval_token."""
+    now = time.time()
+    # prune expired tokens (older than 10 mins)
+    for k in list(_WRITE_TOKENS.keys()):
+        if now - _WRITE_TOKENS[k]["ts"] > 600:
+            del _WRITE_TOKENS[k]
+
+    if not req.approved or not req.approval_token:
+        token = secrets.token_urlsafe(16)
+        _WRITE_TOKENS[token] = {"path": req.path, "content": req.content, "ts": now}
         return {
             "ok": False,
             "approved_required": True,
-            "reason": f"Writing {req.path} requires human approval. Set approved=true to confirm.",
+            "approval_token": token,
+            "reason": f"Writing {req.path} requires human approval. Set approval_token='{token}' and approved=true to confirm.",
         }
+
+    if req.approval_token not in _WRITE_TOKENS:
+        return {"ok": False, "error": "invalid or expired approval token"}
+    record = _WRITE_TOKENS.pop(req.approval_token)
+    if record["path"] != req.path or record["content"] != req.content:
+        return {"ok": False, "error": "token payload mismatch"}
+
     try:
         full = _resolve_project_file(req.path)
         os.makedirs(os.path.dirname(full), exist_ok=True)

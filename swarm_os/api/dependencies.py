@@ -5,6 +5,16 @@ import asyncio
 
 logger = logging.getLogger(__name__)
 
+import os
+from fastapi import Header
+
+SWARM_API_KEY = os.getenv("SWARM_API_KEY")
+
+
+async def verify_api_key(x_api_key: str | None = Header(default=None)):
+    if SWARM_API_KEY and x_api_key != SWARM_API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key")
+
 
 def runtime_dep(request: Request) -> Any:
     runtime = getattr(request.app.state, "runtime", None)

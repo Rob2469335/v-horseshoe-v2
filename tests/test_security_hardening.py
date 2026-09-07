@@ -945,9 +945,11 @@ def test_security_gate_allows_duck_typed_methods_with_banned_names():
     from swarm_os.services.security_gate import SecurityGate
 
     # benign, non-os receivers using names that ARE in BANNED_OS_ATTRS
-    SecurityGate.scan_code("out = text.replace('a', 'b')")          # attr 'replace'
-    SecurityGate.scan_code("rows.remove(item)")                     # attr 'remove'
-    SecurityGate.scan_code("p = Path('x'); p.rename('y')")          # attr 'rename'... but pathlib is strict-banned
+    SecurityGate.scan_code("out = text.replace('a', 'b')")  # attr 'replace'
+    SecurityGate.scan_code("rows.remove(item)")  # attr 'remove'
+    SecurityGate.scan_code(
+        "p = Path('x'); p.rename('y')"
+    )  # attr 'rename'... but pathlib is strict-banned
     SecurityGate.scan_code("s = x.name.replace('_', '-')")
     SecurityGate.scan_code("y = ''.join(parts).replace(' ', '')")
     SecurityGate.scan_code("l = [1, 2]; l.remove(1); l.append(3)")
@@ -1000,8 +1002,12 @@ def test_security_gate_blocks_dunder_reflection_constant():
 
     # benign: non-literal (dynamic) name, or a literal that is not a blocked dunder
     SecurityGate.scan_code("getattr(obj, attr_name)")
-    SecurityGate.scan_code("getattr(obj, 'replace')")   # a benign attr name, not a dunder
-    SecurityGate.scan_code("getattr(self, '__doc__')")  # not in the blocked dunder tuple
+    SecurityGate.scan_code(
+        "getattr(obj, 'replace')"
+    )  # a benign attr name, not a dunder
+    SecurityGate.scan_code(
+        "getattr(self, '__doc__')"
+    )  # not in the blocked dunder tuple
 
 
 @pytest.mark.asyncio

@@ -171,8 +171,12 @@ class BannedNodeVisitor(ast.NodeVisitor):
         # Track rebinding `o = os` (also `o = os.path` / `o = m` where m is a
         # tracked os alias, and tuple unpacking `a, b = (1, os)`): a later
         # `o.system(...)` must be attribute-checked just like the original name.
+        # Also track rebinding `fn = eval` so `fn(...)` is caught.
         def _name_is_os(name: ast.Name) -> bool:
             return name.id in self._os_names
+
+        def _name_is_banned_call(name: ast.Name) -> bool:
+            return name.id in self.banned_calls
 
         def _collect_source_os(node_: ast.AST) -> bool:
             if isinstance(node_, ast.Name):
@@ -182,6 +186,22 @@ class BannedNodeVisitor(ast.NodeVisitor):
             if isinstance(node_, (ast.Tuple, ast.List)):
                 return any(_collect_source_os(elt) for elt in node_.elts)
             return False
+
+        def _collect_source_banned_call(node_: ast.AST) -> bool:
+            if isinstance(node_, ast.Name):
+                return _name_is_banned_call(node_)
+            if isinstance(node_, (ast.Tuple, ast.List)):
+                return any(_collect_source_banned_call(elt) for elt in node_.elts)
+            return False
+
+        if _collect_source_banned_call(node.value):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    self.banned_calls.append(target.id)
+                elif isinstance(target, (ast.Tuple, ast.List)):
+                    for elt in target.elts:
+                        if isinstance(elt, ast.Name):
+                            self.banned_calls.append(elt.id)
 
         if _collect_source_os(node.value):
             for target in node.targets:
@@ -396,7 +416,7 @@ class SecurityGate:
         return True
 
     @classmethod
-    def scan_file(cls, filepath: Path):
+    def scan_file(cls, filepath: Path, strict: bool = False):
         try:
             # BUG FIX: Read bytes directly so ast.parse respects any # coding: cookie.
             # Avoids AST execution gap where UTF-8 parse passes but execution uses CP037.
@@ -406,7 +426,7 @@ class SecurityGate:
             raise SecurityGateViolation(f"Syntax Error in {filepath}: {e}")
 
         visitor = BannedNodeVisitor(
-            cls.BANNED_CALLS, cls.BANNED_MODULES, cls.BANNED_OS_ATTRS
+            cls.BANNED_CALLS, cls.BANNED_MODULES, cls.BANNED_OS_ATTRS, strict=strict
         )
         visitor.visit(tree)
 

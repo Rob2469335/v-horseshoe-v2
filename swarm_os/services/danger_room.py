@@ -74,7 +74,7 @@ class DangerRoom:
         for path in files_to_scan:
             try:
                 if path.exists():
-                    await asyncio.to_thread(SecurityGate.scan_file, path)
+                    await asyncio.to_thread(SecurityGate.scan_file, path, strict=True)
             except SecurityGateViolation as e:
                 logger.error(
                     f"FATAL: Sandbox mutation violated security policies in {path.name}: {e}"
@@ -181,13 +181,27 @@ class DangerRoom:
             f"Merging {len(relative_files)} files back to main workspace from Danger Room..."
         )
         for rel_file in relative_files:
-            if "swarm_os/evals" in rel_file.replace("\\", "/").lower():
+            norm_rel = rel_file.replace("\\", "/").lower()
+            if "swarm_os/evals" in norm_rel:
                 logger.critical(
                     f"SHIELD VIOLATION: Attempted merge into shielded fitness directory: {rel_file}"
                 )
                 await self.teardown()
                 raise SecurityGateViolation(
                     f"Agents are strictly prohibited from modifying evals: {rel_file}"
+                )
+
+            sensitive_starts = (".git/", ".env", "data/", "swarm_config.json")
+            if any(
+                norm_rel.startswith(s) or ("/" + s in norm_rel)
+                for s in sensitive_starts
+            ):
+                logger.critical(
+                    f"SHIELD VIOLATION: Attempted merge into sensitive path: {rel_file}"
+                )
+                await self.teardown()
+                raise SecurityGateViolation(
+                    f"Agents are strictly prohibited from modifying sensitive paths: {rel_file}"
                 )
 
             src = (self.sandbox_dir / rel_file).resolve()

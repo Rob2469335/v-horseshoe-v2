@@ -43,15 +43,21 @@ def _ssrf_check(url: str) -> str | None:
             "metadata",
         ):
             return f"cloud-metadata host '{host}' is not allowed"
-        try:
-            ip = ipaddress.ip_address(host)
-            if (
+
+        def is_blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+            if getattr(ip, "ipv4_mapped", None):
+                ip = ip.ipv4_mapped
+            return bool(
                 ip.is_loopback
                 or ip.is_private
                 or ip.is_link_local
                 or ip.is_reserved
                 or ip.is_multicast
-            ):
+            )
+
+        try:
+            ip = ipaddress.ip_address(host)
+            if is_blocked_ip(ip):
                 return f"private/loopback/link-local address '{host}' is not allowed"
         except ValueError:
             pass  # hostname — resolve below
@@ -66,11 +72,40 @@ def _ssrf_check(url: str) -> str | None:
                 ip = ipaddress.ip_address(sockaddr[0])
             except ValueError:
                 continue
-            if ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_reserved:
+            if is_blocked_ip(ip):
                 return f"host '{host}' resolves to non-public address {sockaddr[0]}"
     except Exception:
         pass
     return None
+
+
+def _strip_memory_blocks(query: str) -> str:
+    """Remove injected memory-context blocks that leak into a search query.
+
+    The agent loop injects `[EPISODIC MEMORY (Hybrid Stack)]`,
+    `[RELEVANT MEMORIES]` and `[PAST-MISTAKE WARNING]` blocks into the
+    system prompt. When the LLM emits a web_search decision it sometimes
+    copies that whole block into the `query` field (observed live: the
+    researcher's query was the goal text plus a full Semantic Memories
+    dump). Sending that to 6+ search providers wastes tokens and pollutes
+    the results. This strips from the first injection marker onward, so the
+    query becomes just the goal text.
+
+    Applied at the web_search chokepoint so EVERY query is cleaned whether
+    it originated from a deterministic injection (which already runs
+    _clean_search_query) or from the LLM decision path (which does not).
+    """
+    for marker in (
+        "[EPISODIC MEMORY",
+        "[RELEVANT MEMORIES]",
+        "[PAST-MISTAKE WARNING]",
+        "Semantic Memories (Temporal Valid)",
+    ):
+        idx = str(query).find(marker)
+        if idx > 0:
+            query = str(query)[:idx]
+            break
+    return str(query).strip()
 
 
 # UPGRADE: pooled client (avoids fresh TLS/connection per provider) + SSL verify
@@ -892,7 +927,7 @@ def _norm_url(url: str) -> str:
 
 
 async def web_search_handler(params: Dict[str, Any], trace_hook=None) -> Dict[str, Any]:
-    query = params.get("query", "")
+    query = _strip_memory_blocks(params.get("query", ""))
     max_results = int(params.get("max_results", 5))
     if not query:
         return {"ok": False, "error": "Search query is required"}

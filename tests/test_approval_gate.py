@@ -442,18 +442,31 @@ def test_pending_registry_capped_at_ceiling():
     )
 
 
-
-
-@pytest.mark.parametrize("result,expect_denial", [
-    ({"ok": False, "authorization": "DENY"}, True),
-    ({"ok": False, "error": "Authorization DENIED: pending approval no longer valid (expired or already used)."}, True),
-    ({"ok": False, "error": "pending approval no longer valid (expired or already used)."}, True),
-    # Real tool-execution errors must NOT be treated as denials (retry path kept):
-    ({"ok": False, "error": "ConnectionError: backend refused"}, False),
-    ({"ok": False, "error": "TimeoutError: read timed out"}, False),
-    ({"ok": True, "result": "ok"}, False),
-    (None, False),
-])
+@pytest.mark.parametrize(
+    "result,expect_denial",
+    [
+        ({"ok": False, "authorization": "DENY"}, True),
+        (
+            {
+                "ok": False,
+                "error": "Authorization DENIED: pending approval no longer valid (expired or already used).",
+            },
+            True,
+        ),
+        (
+            {
+                "ok": False,
+                "error": "pending approval no longer valid (expired or already used).",
+            },
+            True,
+        ),
+        # Real tool-execution errors must NOT be treated as denials (retry path kept):
+        ({"ok": False, "error": "ConnectionError: backend refused"}, False),
+        ({"ok": False, "error": "TimeoutError: read timed out"}, False),
+        ({"ok": True, "result": "ok"}, False),
+        (None, False),
+    ],
+)
 def test_is_authorization_denial_discriminator(result, expect_denial):
     """The load-bearing discriminator for the coordinator-fabrication fix: an
     authorization DENIAL (expired/used/denied approval) must be distinguished
@@ -463,4 +476,5 @@ def test_is_authorization_denial_discriminator(result, expect_denial):
     marker + the expired/used error forms, and (b) does NOT flag generic
     ok:False tool errors, so legitimate retries keep working (no overcorrection)."""
     from runtime_v2.api.agent_service_v2 import _is_authorization_denial
+
     assert _is_authorization_denial(result) is expect_denial

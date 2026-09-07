@@ -109,6 +109,77 @@ async def test_web_search_handler_serper(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_web_search_strips_injected_memory_blocks(monkeypatch):
+    """A web_search query that has a memory-injection block leaked into it must
+    be cleaned back to just the goal text before reaching any provider.
+
+    Regression (2026-09-06): the researcher emitted a web_search whose query
+    was the goal text PLUS a full `[EPISODIC MEMORY (Hybrid Stack)]` dump
+    ("Semantic Memories (Temporal Valid): - [ID: ...] [researcher] task
+    completed..."). That garbage was sent verbatim to 6+ search providers —
+    wasting tokens and polluting results. The strip now runs at the
+    web_search_handler chokepoint so BOTH the deterministic injection path
+    (which already cleansed via _clean_search_query) and the LLM-emitted
+    decision path (which did not) are cleaned.
+
+    Revert-proof: without _strip_memory_blocks, the query hitting the mocked
+    provider contains the "[EPISODIC MEMORY" block and this test FAILS.
+    """
+    for k in (
+        "TAVILY_API_KEY",
+        "BRAVE_API_KEY",
+        "EXA_API_KEY",
+        "SERPAPI_KEY",
+        "TINYFISH_API_KEY",
+        "SCAVIO_API_KEY",
+        "FIRECRAWL_API_KEY",
+    ):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("SERPER_API_KEY", "serper-test-key")
+
+    captured = {}
+
+    async def mock_post(*args, **kwargs):
+        captured["json"] = kwargs.get("json") or args[1]
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "organic": [
+                {
+                    "title": "Result",
+                    "link": "https://example.com",
+                    "snippet": "Snippet",
+                }
+            ]
+        }
+        return mock_response
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+
+    contaminated = (
+        "search internet for improvments and upgrades always read agent md first"
+        " [EPISODIC MEMORY (Hybrid Stack)] Semantic Memories (Temporal Valid): - [ID:"
+        " a76d90a6-2268-42d2-aac0-89ab4ac4c439] [researcher] task completed: search"
+        " internet for improvements and upgrades [EPISODIC MEMORY (Hybrid Stack)] S -> B"
+    )
+    res = await web_search_handler(
+        {"query": contaminated, "max_results": 1},
+    )
+    assert res["ok"] is True
+    # The search sent to the provider must be the clean goal only.
+    sent_query = (captured.get("json") or {}).get("q", "") or (
+        captured.get("json") or {}
+    ).get("query", "")
+    assert "EPISODIC MEMORY" not in sent_query
+    assert "Semantic Memories" not in sent_query
+    assert sent_query.strip() == (
+        "search internet for improvments and upgrades always read agent md first"
+    )
+    # The handler's echoed query field is cleaned too.
+    assert "EPISODIC MEMORY" not in res.get("query", "")
+
+
+@pytest.mark.anyio
 async def test_web_search_handler_fanout_merges_and_dedups(monkeypatch):
     """The parallel fan-out queries EVERY configured provider and merges the
     results (deduped by URL), rather than returning the first that answers."""

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Depends
 
 from swarm_os.lib.opencode_session import opencode_headers
 from pydantic import BaseModel, Field
@@ -1105,6 +1105,13 @@ def execute_approved_request(request: Request, request_id: str):
     return res
 
 
+from swarm_os.api.dependencies import verify_api_key
+import secrets
+import time
+
+_APPROVE_TOKENS = {}
+
+
 @router.get("/mutation-approvals")
 def list_pending_mutations():
     from swarm_os.repositories.mutation_repo import MutationRepository
@@ -1114,9 +1121,48 @@ def list_pending_mutations():
     return {"status": "ok", "mutations": mutations}
 
 
-@router.post("/mutation-approvals/{mutation_id}/approve")
-def approve_mutation(mutation_id: str):
+@router.post(
+    "/mutation-approvals/{mutation_id}/approve", dependencies=[Depends(verify_api_key)]
+)
+async def approve_mutation(mutation_id: str, request: Request):
     from swarm_os.repositories.mutation_repo import MutationRepository
+
+    # Require an approval_token for mutation approval
+    req_data = {}
+    try:
+        # Check if they provided an approval token via body or query
+        if request.method == "POST":
+            if request.headers.get("content-type") == "application/json":
+                body = await request.json()
+                req_data.update(body)
+    except Exception:
+        pass
+
+    # Using query string as a fallback
+    approval_token = req_data.get("approval_token") or request.query_params.get(
+        "approval_token"
+    )
+
+    now = time.time()
+    for k in list(_APPROVE_TOKENS.keys()):
+        if now - _APPROVE_TOKENS[k]["ts"] > 600:
+            del _APPROVE_TOKENS[k]
+
+    if not approval_token:
+        token = secrets.token_urlsafe(16)
+        _APPROVE_TOKENS[token] = {"mutation_id": mutation_id, "ts": now}
+        return {
+            "status": "error",
+            "approval_required": True,
+            "approval_token": token,
+            "error": f"Approving mutation requires a token. Set approval_token='{token}'.",
+        }
+
+    if approval_token not in _APPROVE_TOKENS:
+        return {"status": "error", "error": "invalid or expired approval token"}
+    record = _APPROVE_TOKENS.pop(approval_token)
+    if record["mutation_id"] != mutation_id:
+        return {"status": "error", "error": "token payload mismatch"}
 
     repo = MutationRepository()
     try:
@@ -1127,7 +1173,9 @@ def approve_mutation(mutation_id: str):
         return {"status": "error", "error": f"Failed to approve mutation {mutation_id}"}
 
 
-@router.post("/mutation-approvals/{mutation_id}/reject")
+@router.post(
+    "/mutation-approvals/{mutation_id}/reject", dependencies=[Depends(verify_api_key)]
+)
 def reject_mutation(mutation_id: str):
     from swarm_os.repositories.mutation_repo import MutationRepository
 

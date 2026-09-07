@@ -483,7 +483,52 @@ class Orchestrator:
                                 "note": "Slash command intercepted by orchestrator compatibility shim.",
                             }
                         else:
-                            observation = await self.mcp.call(tool_name, params)
+                            from swarm_os.services.approval_registry import (
+                                agent_tool_policy,
+                                get_registry,
+                                ALLOW,
+                                DENY,
+                            )
+
+                            # Pull out the operation or action name to check policy
+                            act = (
+                                params.get("operation")
+                                or params.get("action")
+                                or params.get("op")
+                            )
+                            policy = agent_tool_policy(tool_name, act)
+
+                            if policy == ALLOW:
+                                observation = await self.mcp.call(tool_name, params)
+                            elif policy == DENY:
+                                observation = {
+                                    "ok": False,
+                                    "error": f"Authorization DENIED: tool '{tool_name}' / action '{act}' is not classified for agent execution (fail-closed).",
+                                    "authorization": "DENY",
+                                }
+                            else:
+                                # CONFIRM or ALWAYS_CONFIRM
+                                pending = get_registry().create(
+                                    agent_id="orchestrator",
+                                    turn=step,
+                                    tool=tool_name,
+                                    action=act,
+                                    payload=params,
+                                )
+                                observation = {
+                                    "ok": False,
+                                    "status": "confirmation_required",
+                                    "authorization": policy,
+                                    "pending_id": pending["pending_id"],
+                                    "tool": tool_name,
+                                    "action": act,
+                                    "result": {
+                                        "error": f"Authorization required for {tool_name} ({act}). Awaiting human approval (pending_id={pending['pending_id'][:8]}...)."
+                                    },
+                                }
+                                # STOP the generator and yield the pending request
+                                final_result = json.dumps(observation)
+                                break
                         log.info(f"[Orchestrator] Tool execution result: {observation}")
 
                         # Mark this tool call as handled
@@ -836,7 +881,49 @@ class Orchestrator:
                                 "note": "Slash command intercepted by orchestrator compatibility shim.",
                             }
                         else:
-                            observation = await self.mcp.call(tool_name, params)
+                            from swarm_os.services.approval_registry import (
+                                agent_tool_policy,
+                                get_registry,
+                                ALLOW,
+                                DENY,
+                            )
+
+                            act = (
+                                params.get("operation")
+                                or params.get("action")
+                                or params.get("op")
+                            )
+                            policy = agent_tool_policy(tool_name, act)
+
+                            if policy == ALLOW:
+                                observation = await self.mcp.call(tool_name, params)
+                            elif policy == DENY:
+                                observation = {
+                                    "ok": False,
+                                    "error": f"Authorization DENIED: tool '{tool_name}' / action '{act}' is not classified for agent execution (fail-closed).",
+                                    "authorization": "DENY",
+                                }
+                            else:
+                                pending = get_registry().create(
+                                    agent_id="orchestrator",
+                                    turn=step,
+                                    tool=tool_name,
+                                    action=act,
+                                    payload=params,
+                                )
+                                observation = {
+                                    "ok": False,
+                                    "status": "confirmation_required",
+                                    "authorization": policy,
+                                    "pending_id": pending["pending_id"],
+                                    "tool": tool_name,
+                                    "action": act,
+                                    "result": {
+                                        "error": f"Authorization required for {tool_name} ({act}). Awaiting human approval (pending_id={pending['pending_id'][:8]}...)."
+                                    },
+                                }
+                                yield json.dumps(observation), chosen_model, trace_id
+                                break
                         log.info(f"[Orchestrator] Tool execution result: {observation}")
 
                         # Mark this tool call as handled
