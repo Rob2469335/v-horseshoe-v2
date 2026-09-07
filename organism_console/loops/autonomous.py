@@ -11,8 +11,43 @@ from organism_console.config import PROJECT_ROOT
 from organism_console.api_client import call_api
 from organism_console.command_registry import run_syntax_checks
 from organism_console.ui.live_stream import stream_prompt
+from organism_console._commands_opencode import (
+    snapshot_worktree,
+    restore_snapshot,
+)
 
 _healing_loop = None
+
+
+def _apply_snapshot_bytes(snap: dict, root: Path = PROJECT_ROOT) -> list[str]:
+    """Re-apply a snapshot_worktree()-shaped dict's BYTE content in place.
+
+    restore_snapshot() removes agent-created untracked files and rewrites
+    tracked bytes — but it does NOT write back untracked file content (its
+    /undo purpose is removal). The goal loop needs the reverse for the
+    baseline-eval: after running tests on the restored baseline, the agent's
+    changes — including any new (untracked) file's content — must be put back
+    EXACTLY. This writes the snapshot's tracked and untracked_content bytes.
+    Returns the relpaths written.
+    """
+    written: list[str] = []
+    for rel, content in (snap.get("tracked") or {}).items():
+        p = root / rel
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(content)
+            written.append(rel)
+        except OSError:
+            pass
+    for rel, content in (snap.get("untracked_content") or {}).items():
+        p = root / rel
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(content)
+            written.append(rel)
+        except OSError:
+            pass
+    return written
 
 
 def _is_placeholder_final(text: str) -> bool:
@@ -522,7 +557,6 @@ def run_autonomous_goal_loop(
     # Start autonomous goals with a clean slate to prevent repeating previous goal outputs
     history = []
     max_attempts = int(os.environ.get("SWARM_MAX_ATTEMPTS", "5"))
-    baseline_passed = True
 
     def _git_status_paths() -> set[str]:
         """Snapshot of current git working-tree paths (modified/untracked)."""
@@ -551,6 +585,7 @@ def run_autonomous_goal_loop(
         # files the agent actually touched THIS attempt — not the pre-existing
         # uncommitted work in the tree (which was derailing the whole loop).
         attempt_baseline = _git_status_paths()
+        attempt_base_snap = snapshot_worktree()
         state.delegation_chain = [entry_agent]
         state.save()
 
@@ -743,25 +778,85 @@ def run_autonomous_goal_loop(
             )
             break
         else:
-            if baseline_passed and not passed:
+            # Evaluate if the failure is a regression by checking the baseline state
+            is_regression = False
+            if changed_this_attempt:
+                console.print(
+                    "[dim]Evaluating baseline to determine if failure is a regression...[/dim]"
+                )
+                # Evaluate the TRUE pre-agent baseline using the project's
+                # snapshot/restore primitives (untracked-safe), NOT `git stash`:
+                # `git stash push -- <untracked>` refuses the whole stash with
+                # rc=1 (pathspec did not match), silently no-ops, and the later
+                # `git clean -f -- <untracked>` deletes the agent's new file —
+                # a data-loss path when the patch was only a new file.
+                agent_snap = snapshot_worktree()
+                restore_snapshot(attempt_base_snap)
+                # restore_snapshot only reverts files captured in the snapshot
+                # (those differing from HEAD at baseline). A tracked file that
+                # was HEAD-clean at baseline then modified by the agent must be
+                # reverted via `git checkout HEAD` so the baseline test runs on
+                # the TRUE pre-agent code.
+                _base_tracked = set((attempt_base_snap.get("tracked") or {}).keys())
+                _clean_modified = [
+                    p
+                    for p in changed_this_attempt
+                    if p not in _base_tracked and (PROJECT_ROOT / p).is_file()
+                ]
+                if _clean_modified:
+                    subprocess.run(
+                        ["git", "checkout", "HEAD", "--"] + _clean_modified,
+                        cwd=PROJECT_ROOT,
+                        capture_output=True,
+                    )
+                try:
+                    # Run the exact same tests on the true baseline
+                    baseline_test_passed, _ = run_test_suite(
+                        goal,
+                        baseline=attempt_baseline,
+                        changed=changed_this_attempt,
+                    )
+                finally:
+                    # Put the agent's work back BEFORE deciding/reverting —
+                    # tracked bytes AND untracked file content (restore_snapshot
+                    # cannot write untracked content back).
+                    _apply_snapshot_bytes(agent_snap)
+
+                if baseline_test_passed is True:
+                    is_regression = True
+
+            if is_regression:
                 console.print(
                     Panel(
-                        "[bold red]✗ <RATCHET_GUARDRAIL_TRIGGERED> Agent patch regressed passing baseline tests! Automatically reverting via `git stash`...[/bold red]",
+                        "[bold red]✗ <RATCHET_GUARDRAIL_TRIGGERED> Agent patch regressed passing baseline tests! Automatically reverting...[/bold red]",
                         border_style="red",
                     )
                 )
-                res = subprocess.run(
-                    ["git", "stash"],
-                    cwd=PROJECT_ROOT,
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                )
-                if res.returncode == 0:
-                    console.print(
-                        "[green]✓ Diverging patch automatically reverted.[/green]"
+                # Diff-scoped revert to the pre-agent baseline: writes back the
+                # tracked baseline bytes and removes ONLY agent-created untracked
+                # files in scope. Never `git clean -f` (would delete the agent's
+                # new files); never touches pre-existing untracked work.
+                restore_snapshot(attempt_base_snap, scope=list(changed_this_attempt))
+                # The snapshot only captures files that DIFFERED from HEAD at
+                # baseline. A tracked file that was HEAD-clean at baseline then
+                # modified by the agent is NOT in the snapshot — restore it via
+                # `git checkout HEAD` (safe: a tracked file, no untracked data).
+                base_tracked = set((attempt_base_snap.get("tracked") or {}).keys())
+                clean_modified = [
+                    p
+                    for p in changed_this_attempt
+                    if p not in base_tracked and Path(p).is_file()
+                ]
+                if clean_modified:
+                    subprocess.run(
+                        ["git", "checkout", "HEAD", "--"] + clean_modified,
+                        cwd=PROJECT_ROOT,
+                        capture_output=True,
                     )
+                console.print(
+                    "[green]✓ Diverging patch automatically reverted.[/green]"
+                )
+
             failures = []
             for line in logs.splitlines():
                 if (

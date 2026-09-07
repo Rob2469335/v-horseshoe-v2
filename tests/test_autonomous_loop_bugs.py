@@ -688,7 +688,9 @@ class TestLoopDetectorResearchFalsePositive:
         from runtime_v2.api import agent_service_v2 as ag
 
         src = Path(ag.__file__).read_text(encoding="utf-8")
-        m = __import__("re").search(r"_essential_keys\s*=\s*\((.*?)\)", src, __import__("re").S)
+        m = __import__("re").search(
+            r"_essential_keys\s*=\s*\((.*?)\)", src, __import__("re").S
+        )
         assert m, "_essential_keys not found in source"
         keys = m.group(1)
         assert '"url"' in keys, "'url' missing from _essential_keys"
@@ -709,7 +711,9 @@ class TestReadAgentsMdCanonicalization:
     {"ok": False, "error": "File not found: agent.md"}; this test asserts ok.
     """
 
-    @pytest.mark.parametrize("spelling", ["agent.md", "agents.md", "AGENT.md", "AGENTS.MD"])
+    @pytest.mark.parametrize(
+        "spelling", ["agent.md", "agents.md", "AGENT.md", "AGENTS.MD"]
+    )
     def test_variant_reads_real_agents_md(self, tmp_path: Path, monkeypatch, spelling):
         from swarm_os.lib.mcp import filesystem as _fs
 
@@ -723,11 +727,112 @@ class TestReadAgentsMdCanonicalization:
         from swarm_os.lib.mcp import filesystem as _fs
 
         (tmp_path / "notes.txt").write_text("hello", encoding="utf-8")
-        r = _fs.filesystem_handler(
-            {"operation": "read", "path": "notes.txt"}, tmp_path
-        )
+        r = _fs.filesystem_handler({"operation": "read", "path": "notes.txt"}, tmp_path)
         assert r.get("ok") is True
         assert "hello" in str(r.get("content", ""))
         # an unrelated missing file must still fail (no overcorrection)
-        r2 = _fs.filesystem_handler({"operation": "read", "path": "notdocs.md"}, tmp_path)
+        r2 = _fs.filesystem_handler(
+            {"operation": "read", "path": "notdocs.md"}, tmp_path
+        )
         assert r2.get("ok") is False
+
+
+# ---------------------------------------------------------------------------
+# Baseline-behavior regression (2026-09): the goal loop's "is it a regression?"
+# baseline-eval used `git stash push -- <paths>` then `git clean -f -- <paths>`.
+# git stash REFUSES the whole stash (rc=1) when any listed path is untracked, so
+# the baseline test ran on the wrong state and a false regression led to
+# `git clean -f` DELETING the agent's new file. The snapshot/restore primitives
+# (snapshot_worktree/restore_snapshot) handle untracked files correctly; pin
+# that invariant so this never regresses back to git-stash.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def global_subprocess_mock():
+    """Override tests/conftest.py's autouse subprocess.Popen mock.
+
+    These tests run REAL `git` in a temp repo (snapshot/restore round-trips),
+    so subprocess must NOT be mocked here. Module-scope fixtures take precedence
+    over the conftest autouse one (same pattern as tests/test_cli_opencode.py).
+    """
+    yield None
+
+
+@pytest.fixture
+def git_repo(tmp_path):
+    import subprocess
+
+    for c in (
+        ["init", "-q"],
+        ["config", "user.email", "t@t"],
+        ["config", "user.name", "t"],
+    ):
+        subprocess.run(["git", *c], cwd=tmp_path, capture_output=True)
+    (tmp_path / "tracked.py").write_text("A=1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, capture_output=True)
+    subprocess.run(["git", "commit", "-qm", "init"], cwd=tmp_path, capture_output=True)
+    return tmp_path
+
+
+def test_untracked_agent_file_survives_baseline_roundtrip(git_repo):
+    """The baseline-eval must run on the pre-agent state, THEN restore the
+    agent's changes - including a newly created (untracked) file. git stash
+    cannot do this (pathspec does not match untracked); snapshot/restore must."""
+    import organism_console._commands_opencode as oc
+
+    # pre-agent baseline: tracked.py=HEAD, no untracked files
+    base_snap = oc.snapshot_worktree(git_repo)
+    # agent creates a NEW file and modifies tracked.py
+    (git_repo / "agent_new.py").write_text("Y=1\n", encoding="utf-8")
+    (git_repo / "tracked.py").write_text("A=2\n", encoding="utf-8")
+    agent_snap = oc.snapshot_worktree(git_repo)
+    # baseline eval round-trip (mirrors autonomous.py): restore baseline via
+    # snapshot + git-checkout the HEAD-clean-then-modified file, then restore
+    # the agent's work via the post-agent snapshot.
+    oc.restore_snapshot(base_snap, root=git_repo)
+    import subprocess
+
+    subprocess.run(
+        ["git", "checkout", "HEAD", "--", "tracked.py"], cwd=git_repo, capture_output=True
+    )
+    assert (git_repo / "tracked.py").read_text(encoding="utf-8") == "A=1\n"
+    assert not (git_repo / "agent_new.py").exists()
+    # restore agent's work: tracked bytes + untracked content (mirrors
+    # autonomous._apply_snapshot_bytes)
+    import organism_console.loops.autonomous as auton
+
+    auton._apply_snapshot_bytes(agent_snap, root=git_repo)
+    assert (git_repo / "tracked.py").read_text(encoding="utf-8") == "A=2\n"
+    assert (git_repo / "agent_new.py").read_text(encoding="utf-8") == "Y=1\n"
+
+
+def test_regression_revert_preserves_pre_existing_untracked_file(git_repo):
+    """A diff-scoped regression revert must remove only the agent's new file,
+    NOT a pre-existing untracked file that was there before the agent ran."""
+    import organism_console._commands_opencode as oc
+
+    (git_repo / "user_note.md").write_text("keep me\n", encoding="utf-8")
+    base_snap = oc.snapshot_worktree(git_repo)
+    (git_repo / "agent_new.py").write_text("Y=1\n", encoding="utf-8")
+    changed_this_attempt = {"agent_new.py"}
+    oc.restore_snapshot(base_snap, root=git_repo, scope=list(changed_this_attempt))
+    assert not (git_repo / "agent_new.py").exists()
+    assert (git_repo / "user_note.md").read_text(encoding="utf-8") == "keep me\n"
+
+
+def test_autonomous_no_git_stash_in_baseline_eval_source():
+    """The goal loop's baseline-eval must not invoke `git stash` / `git clean -f`
+    (both are untracked-hostile and data-loss-capable). Pin the source so the
+    snapshot/restore rewrite can't silently regress back to git-stash. Only the
+    safe `git checkout HEAD` complement (restore of baseline-clean tracked
+    files) and the snapshot/restore primitives are allowed."""
+    import organism_console.loops.autonomous as mod
+
+    src = Path(mod.__file__).read_text(encoding="utf-8")
+    nonzero_lines = [l for l in src.splitlines() if "git stash" in l or "git clean" in l]
+    # explanatory comments may mention the anti-pattern; actual invocations must not
+    for line in nonzero_lines:
+        assert "subprocess.run" not in line, f"invocation present: {line.strip()}"
+    assert "snapshot_worktree" in src
+    assert 'restore_snapshot(attempt_base_snap' in src
