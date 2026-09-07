@@ -54,6 +54,26 @@ def _is_fix_intent(text: str) -> bool:
     return bool(_FIX_INTENT_RE.search(low))
 
 
+def _is_authorization_denial(result: dict | None) -> bool:
+    """True when a tool result is an authorization DENIAL (expired/used/denied
+    pending approval) rather than a normal tool-execution error.
+
+    This is the load-bearing discriminator for the 2026-09-06 coordinator
+    fabrication fix: a denied call means the tool did NOT execute, so the agent
+    must not be allowed to retry-and-continue into a fabricated 'successful'
+    final. It must ONLY match denial-type results — generic `ok: False` (real
+    tool errors) keep the normal retry path.
+    """
+    if not result:
+        return False
+    if result.get("authorization") == "DENY":
+        return True
+    err = str(result.get("error", ""))
+    return (
+        "pending approval no longer valid" in err
+        or "Authorization DENIED" in err
+    )
+
 # L1 (2026 structural verifier): template / placeholder finals. These are the
 # "the agent short-circuited instead of doing the work" responses — a bare
 # completion sentence with no substantive content. The goal-loop also checks
@@ -64,8 +84,6 @@ _PLACEHOLDER_RE = re.compile(
     r"success|goal\s+achieved|ok|okay|no\s+(changes|issues|errors|improvements))\s*[.!]?\s*$",
     re.IGNORECASE,
 )
-
-
 def _is_placeholder_final(text: str) -> bool:
     """True when a final response is a bare completion/template placeholder with
     no substantive content (e.g. 'Task completed.' / 'Done.' / 'No changes.'),
@@ -2072,6 +2090,40 @@ class AgentServiceV2:
                 log.warning("authorization audit event failed: %s", _e)
             return consecutive_errors, _fetched_content
 
+        # PRE-ACTION AUTHORIZATION DENIED (expired/used/denied pending_id):
+        # the tool did NOT execute either. This is NOT a normal tool-execution
+        # failure — it must not be retried-and-continued (a model can then
+        # "succeed" by fabricating findings from memory). Mirror the
+        # confirmation_required handling: record the authorization audit event
+        # and return so the caller treats it as pending-authorization, not as a
+        # recoverable tool error that lets the agent finalize with invented
+        # content. Discriminator: the explicit DENY marker OR the
+        # expired/used error string — NOT all ok:False (real tool errors keep
+        # the normal retry path).
+        # Discriminator: does this result represent an authorization DENIAL
+        # (expired/used/denied approval) rather than a normal tool error?
+        if _is_authorization_denial(result):
+            state.tool_success = False
+            state.tool_result = result
+            state._tool_attempts += 1
+            try:
+                self._record_event(
+                    "authorization",
+                    agent_id,
+                    {
+                        "verdict": "DENY",
+                        "tool": action,
+                        "action": result.get("action") or action,
+                        "pending_id": result.get("pending_id", ""),
+                        "agent_id": agent_id,
+                        "turn": turn,
+                        "error": str(result.get("error", ""))[:200],
+                    },
+                )
+            except Exception as _e:
+                log.warning("authorization audit event failed: %s", _e)
+            return consecutive_errors, _fetched_content
+
         state.tool_success = result.get("ok", False)
         state.tool_result = result
         state._tool_attempts += 1
@@ -3207,10 +3259,11 @@ class AgentServiceV2:
             # the tool did NOT execute. Yield an approval_request event carrying
             # the pending_id so the CLI can render an approve/deny prompt; pause
             # the turn (the CLI re-calls with the Observation answer).
+            _denied_after_tool = _is_authorization_denial(state.tool_result)
             if (
                 state.tool_result
                 and state.tool_result.get("status") == "confirmation_required"
-            ):
+            ) or _denied_after_tool:
                 cur_ckpt_id = checkpoint_id(agent_id, prompt)
                 ckpt = {
                     "checkpoint_id": cur_ckpt_id,
@@ -3256,14 +3309,15 @@ class AgentServiceV2:
                 yield {
                     "agent_id": agent_id,
                     "content": (
-                        f"Approval required for {action} "
+                        f"Tool {action} did not execute: "
+                        f"{'denied or expired approval' if _denied_after_tool else 'approval required'}. "
                         f"({state.tool_result.get('action')}). "
-                        f"Waiting for human approval (pending_id="
-                        f"{str(state.tool_result.get('pending_id'))[:8]}...)."
+                        f"Result: {str(state.tool_result.get('error'))[:160] or state.tool_result.get('status')}."
                     ),
                     "model": model,
                 }
-                self._record_success(model, start_time)
+                if not _denied_after_tool:
+                    self._record_success(model, start_time)
                 return
 
             adjusted_weights = self.learning_critic.score(
