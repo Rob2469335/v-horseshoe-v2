@@ -85,6 +85,12 @@ def test_memory_timestamp_except_handlers_are_parenthesized():
         "swarm_os/api/routes.py",
         "swarm_os/services/deep_research.py",
         "swarm_os/services/approval_registry.py",
+        "swarm_os/api/api_features.py",
+        "swarm_os/capabilities/sandbox_repl.py",
+        "swarm_os/healing/recovery_primitives.py",
+        "swarm_os/lib/symbol_context.py",
+        "swarm_os/services/evolution_daemon.py",
+        "swarm_os/services/outcome_fitness.py",
     ]
     comma_forms = []
     for fname in scanned_files:

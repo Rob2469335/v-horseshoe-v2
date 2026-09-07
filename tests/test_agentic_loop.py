@@ -1,7 +1,22 @@
 from __future__ import annotations
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+
+from unittest.mock import patch, AsyncMock, MagicMock
 from swarm_os.services.orchestrator import Orchestrator
+
+
+@pytest.fixture
+def _allow_tool_policy_for_execution():
+    # The gate's positive behavior (CONFIRM -> pending_id, DENY -> fail-closed)
+    # is covered by test_approval_gate.py. These LOOP tests exercise the
+    # generate-loop's ALLOW path (tool executes end-to-end and the file lands);
+    # so allow ALL tool policies ONLY within them, instead of an autouse mock
+    # that silently disables the gate across the whole module.
+    with patch(
+        "swarm_os.services.approval_registry.agent_tool_policy",
+        return_value="ALLOW",
+    ):
+        yield
 
 
 @pytest.mark.asyncio
@@ -36,7 +51,7 @@ async def test_get_memory_context():
 
 
 @pytest.mark.asyncio
-async def test_generate_react_loop(tmp_path):
+async def test_generate_react_loop(tmp_path, _allow_tool_policy_for_execution):
     orchestrator = Orchestrator()
     old_root = orchestrator.mcp.root
     orchestrator.mcp.root = tmp_path  # Redirect filesystem operations to sandbox
@@ -70,7 +85,9 @@ async def test_generate_react_loop(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_generate_react_loop_alternative_format(tmp_path):
+async def test_generate_react_loop_alternative_format(
+    tmp_path, _allow_tool_policy_for_execution
+):
     orchestrator = Orchestrator()
     old_root = orchestrator.mcp.root
     orchestrator.mcp.root = tmp_path
@@ -99,7 +116,7 @@ async def test_generate_react_loop_alternative_format(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_stream_generate_react_loop(tmp_path):
+async def test_stream_generate_react_loop(tmp_path, _allow_tool_policy_for_execution):
     orchestrator = Orchestrator()
     old_root = orchestrator.mcp.root
     orchestrator.mcp.root = tmp_path
