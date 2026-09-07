@@ -5,10 +5,11 @@ import logging
 import re
 import subprocess
 from pathlib import Path
-from fastapi import APIRouter, Request, BackgroundTasks, HTTPException
+from fastapi import APIRouter, Request, BackgroundTasks, HTTPException, Depends
+from swarm_os.api.dependencies import verify_api_key
 from swarm_os.app.runtime_access import get_runtime_service
 
-router = APIRouter(prefix="/admin", tags=["admin"])
+router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(verify_api_key)])
 
 
 # lazy import RuntimeGraph removed (fix circular import)

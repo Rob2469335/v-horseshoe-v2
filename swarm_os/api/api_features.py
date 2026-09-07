@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from fastapi import APIRouter, HTTPException, Request, Depends
+from swarm_os.api.dependencies import verify_api_key
 
 from swarm_os.lib.opencode_session import opencode_headers
 from pydantic import BaseModel, Field
@@ -468,7 +469,7 @@ async def intel_remove_competitor(competitor_id: str):
     return remove_competitor(competitor_id)
 
 
-@router.post("/intel/run")
+@router.post("/intel/run", dependencies=[Depends(verify_api_key)])
 async def intel_run(req: IntelRunRequest):
     """Run a full monitor cycle: scan all competitors, generate a digest, deliver it."""
     from ..services.competitive_intel import run_intel
@@ -500,7 +501,7 @@ async def intel_digest(cap: int = 15):
     return await generate_digest(cap=cap)
 
 
-@router.post("/intel/deliver")
+@router.post("/intel/deliver", dependencies=[Depends(verify_api_key)])
 async def intel_deliver(req: IntelDeliverRequest):
     """Deliver an existing digest to configured channels."""
     from ..services.competitive_intel import get_digest, deliver_digest
@@ -1008,13 +1009,13 @@ def create_approval_request(request: Request, payload: CreateApprovalRequest):
     return {"status": "ok", "request": req}
 
 
-@router.get("/healing-approvals")
+@router.get("/healing-approvals", dependencies=[Depends(verify_api_key)])
 def list_approval_requests(request: Request):
     appr = get_approvals_service(request)
     return {"status": "ok", "requests": appr.list_requests()}
 
 
-@router.post("/healing-approvals/{request_id}/approve")
+@router.post("/healing-approvals/{request_id}/approve", dependencies=[Depends(verify_api_key)])
 def approve_request(
     request: Request, request_id: str, body: ApprovalDecisionRequest = None
 ):
@@ -1024,7 +1025,7 @@ def approve_request(
     return {"status": "ok", "request": req}
 
 
-@router.post("/healing-approvals/{request_id}/reject")
+@router.post("/healing-approvals/{request_id}/reject", dependencies=[Depends(verify_api_key)])
 def reject_request(
     request: Request, request_id: str, body: ApprovalDecisionRequest = None
 ):
@@ -1034,7 +1035,7 @@ def reject_request(
     return {"status": "ok", "request": req}
 
 
-@router.post("/healing-approvals/{request_id}/execute")
+@router.post("/healing-approvals/{request_id}/execute", dependencies=[Depends(verify_api_key)])
 def execute_approved_request(request: Request, request_id: str):
     exec_service = get_approval_execution_service(request)
     res = exec_service.execute_approved(request_id)
@@ -1105,7 +1106,6 @@ def execute_approved_request(request: Request, request_id: str):
     return res
 
 
-from swarm_os.api.dependencies import verify_api_key
 import secrets
 import time
 

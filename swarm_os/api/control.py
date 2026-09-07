@@ -28,7 +28,7 @@ from swarm_os.api.dependencies import verify_api_key
 
 log = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/control", tags=["control"])
+router = APIRouter(prefix="/control", tags=["control"], dependencies=[Depends(verify_api_key)])
 
 _WRITE_TOKENS = {}
 

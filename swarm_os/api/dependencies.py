@@ -6,14 +6,39 @@ import asyncio
 logger = logging.getLogger(__name__)
 
 import os
+import secrets
 from fastapi import Header
 
-SWARM_API_KEY = os.getenv("SWARM_API_KEY")
+# Read the key at call time (not import time): .env is loaded by the app
+# lifespan / dotenv bootstrap, so a key set there must not be missed because
+# dependencies.py was imported first. Reading per-request is cheap (env lookup).
+def _api_key() -> str | None:
+    k = os.getenv("SWARM_API_KEY") or os.getenv("SWARM_API_TOKEN") or ""
+    return k.strip() or None
 
 
-async def verify_api_key(x_api_key: str | None = Header(default=None)):
-    if SWARM_API_KEY and x_api_key != SWARM_API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key")
+async def verify_api_key(
+    x_api_key: str | None = Header(default=None),
+    authorization: str | None = Header(default=None),
+):
+    """Gates sensitive routes. Accepts either `X-API-Key: <k>` or
+    `Authorization: Bearer <k>` (the CLI already sends Bearer). Fail-open by
+    default: with NO key set, all requests pass (single-user loopback dev,
+    matching the main.py SWARM_API_TOKEN middleware posture). With a key set,
+    any request missing it gets 401. Constant-time compare."""
+
+    key = _api_key()
+    if key is None:
+        return  # no key configured -> fail open (documented local-dev posture)
+
+    supplied = None
+    if x_api_key:
+        supplied = x_api_key.strip()
+    elif authorization and authorization.startswith("Bearer "):
+        supplied = authorization[7:].strip()
+
+    if not supplied or not secrets.compare_digest(supplied, key):
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 
 def runtime_dep(request: Request) -> Any:

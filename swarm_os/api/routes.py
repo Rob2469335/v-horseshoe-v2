@@ -46,7 +46,7 @@ router.include_router(legal_router)
 router.include_router(books_router)
 router.include_router(chess_trainer_router)
 
-from swarm_os.api.dependencies import runtime_dep, get_orchestrator, _safe_events
+from swarm_os.api.dependencies import runtime_dep, get_orchestrator, _safe_events, verify_api_key
 from swarm_os.services.system_service import SystemService
 from swarm_os.services.chat_service import ChatService
 
@@ -382,7 +382,7 @@ async def cache_status(request: Request, runtime=Depends(runtime_dep)):
     return CacheStatusResponse(cache_size=total_qdrant_points, cached_keys=cached_keys)
 
 
-@router.post("/tools/execute", response_model=ToolExecuteResponse)
+@router.post("/tools/execute", response_model=ToolExecuteResponse, dependencies=[Depends(verify_api_key)])
 async def execute_tool(payload: ToolExecuteRequest, runtime=Depends(runtime_dep)):
     if hasattr(runtime, "agent_runtime") and runtime.agent_runtime is not None:
         try:
@@ -427,7 +427,7 @@ async def execute_tool(payload: ToolExecuteRequest, runtime=Depends(runtime_dep)
     )
 
 
-@router.post("/generate", response_model=GenerateResponse)
+@router.post("/generate", response_model=GenerateResponse, dependencies=[Depends(verify_api_key)])
 async def generate(payload: GenerateRequest, orch=Depends(get_orchestrator)):
     # Fixes/corrections (T2 deep repair, mutation loop, self-repair) call
     # /generate without a model — default to DeepSeek V4 Flash (funded, cheap,
