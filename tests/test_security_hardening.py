@@ -1174,6 +1174,9 @@ def test_clean_sandbox_env_strips_aws_credentials():
     os.environ["AWS_SECRET_ACCESS_KEY"] = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
     os.environ["AWS_REGION"] = "us-east-1"
     os.environ["API_KEY"] = "test-key"
+    os.environ["DATABASE_URL"] = "postgres://u:p@host/db"
+    os.environ["PRIVATE_KEY"] = "-----BEGIN PRIVATE KEY-----"
+    os.environ["GITHUB_PAT"] = "ghp_1234567890"
     os.environ["NORMAL_VAR"] = "should-remain"
 
     from swarm_os.services.security_gate import clean_sandbox_env
@@ -1185,6 +1188,11 @@ def test_clean_sandbox_env_strips_aws_credentials():
     assert "AWS_SECRET_ACCESS_KEY" not in env, "AWS_SECRET_ACCESS_KEY leaked to sandbox"
     # Normal API_KEY stripped (pre-existing)
     assert "API_KEY" not in env
+    # Additional credential vectors (2026-09 audit): these flowed through the
+    # old strip list, defeating the credential barrier.
+    assert "DATABASE_URL" not in env, "DATABASE_URL leaked to sandbox"
+    assert "PRIVATE_KEY" not in env, "PRIVATE_KEY leaked to sandbox"
+    assert "GITHUB_PAT" not in env, "GITHUB_PAT leaked to sandbox"
     # Benign vars must remain
     assert env["AWS_REGION"] == "us-east-1"
     assert env["NORMAL_VAR"] == "should-remain"

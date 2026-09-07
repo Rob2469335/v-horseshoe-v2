@@ -453,11 +453,23 @@ def clean_sandbox_env(extra: dict | None = None) -> dict:
             s in k.upper()
             for s in (
                 "API_KEY",
+                "API_TOKEN",
                 "TOKEN",
                 "SECRET",
                 "PASSWORD",
+                "PASSWD",
+                "PRIVATE_KEY",
+                "AUTH",
                 "AWS_ACCESS",
                 "AWS_SECRET",
+                "GITHUB_PAT",
+                "DATABASE_URL",
+                "DB_URL",
+                "CONNECTION_STRING",
+                "DSN",
+                "CREDENTIAL",
+                "PEM",
+                "DEFAULT_PASSWORD",
             )
         )
         and not k.startswith("SWARM_")
