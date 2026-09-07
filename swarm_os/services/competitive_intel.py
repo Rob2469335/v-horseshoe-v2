@@ -1002,6 +1002,12 @@ async def _deliver_slack(body: str, webhook_url: str | None) -> bool:
     url = webhook_url or os.getenv("INTEL_SLACK_WEBHOOK")
     if not url:
         return False
+    from swarm_os.lib.mcp.web_search import _ssrf_check
+
+    blocked = _ssrf_check(url)
+    if blocked:
+        log.warning("[intel.slack] Refusing delivery to non-public webhook: %s", blocked)
+        return False
     client = _get_slack_client()
     r = await client.post(url, json={"text": body[:3900]})
     return r.status_code == 200

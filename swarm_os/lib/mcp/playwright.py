@@ -222,6 +222,24 @@ async def playwright_handler(params: Dict[str, Any], trace_hook=None) -> Dict[st
     return _redact(result)
 
 
+async def _ssrf_route_handler(route):
+    """Enforce SSRF at REQUEST time (closes the pre-flight DNS-rebinding TOCTOU).
+
+    _ssrf_check(url) before page.goto resolves the host once; a rebinding
+    attacker can serve a public IP to that check then a loopback/private IP to
+    the browser's own resolution. Intercepting each request and re-checking the
+    FINAL url (redirects included) at execution time means a rebound request is
+    aborted before bytes flow."""
+    from swarm_os.lib.mcp.web_search import _ssrf_check
+
+    blocked = _ssrf_check(route.request.url)
+    if blocked:
+        logger.warning("[playwright.ssrf] Aborted request: %s", blocked)
+        await route.abort()
+        return
+    await route.continue_()
+
+
 async def _playwright_impl(params: Dict[str, Any], trace_hook=None) -> Dict[str, Any]:
     operation = params.get("operation", "navigate")
     url = params.get("url", "")
@@ -252,6 +270,16 @@ async def _playwright_impl(params: Dict[str, Any], trace_hook=None) -> Dict[str,
         # If no page exists yet, create one.
         pages = _context.pages
         page = pages[-1] if pages else await _context.new_page()
+
+        # Install the runtime SSRF interceptor (closes the pre-flight DNS-rebind
+        # TOCTOU: every request the page makes — redirects and subresources
+        # included — is re-checked against the FINAL resolved URL at execution
+        # time). Best-effort: a failed route install must not break navigation.
+        if operation in ("navigate", "screenshot", "extract_text") and url:
+            try:
+                await page.route("**/*", _ssrf_route_handler)
+            except Exception as exc:
+                logger.debug("[playwright] SSRF route install failed: %s", exc)
 
         if operation == "navigate":
             if not url:

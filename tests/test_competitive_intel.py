@@ -1005,3 +1005,32 @@ def _fake_fetch(url, text):
         return True, text, ""
 
     return _inner()
+
+
+def test_slack_delivery_refuses_loopback_webhook(monkeypatch):
+    """SSRF guard: a caller-supplied webhook_url pointing at loopback/private
+    targets must be refused BEFORE any request is made (previously it was
+    passed straight to httpx.post — an SSRF primitive for /intel/run+deliver)."""
+    import swarm_os.services.competitive_intel as ci
+
+    posted = {}
+
+    class FakeResp:
+        status_code = 200
+
+    async def fake_post(self, url, json=None, **kw):
+        posted["url"] = url
+        return FakeResp()
+
+    monkeypatch.setattr(ci, "_get_slack_client", lambda: type("C", (), {"post": fake_post})())
+    monkeypatch.delenv("INTEL_SLACK_WEBHOOK", raising=False)
+
+    import asyncio
+
+    loopback_result = asyncio.run(ci._deliver_slack("body", "http://127.0.0.1:8080/x"))
+    assert loopback_result is False, "loopback webhook must be refused"
+    assert posted == {}, "no request should be sent for a blocked webhook"
+
+    # public target still delivers
+    ok = asyncio.run(ci._deliver_slack("body", "https://hooks.slack.com/services/x/y"))
+    assert ok is True and posted.get("url", "").startswith("https://"), "public webhook should deliver"
