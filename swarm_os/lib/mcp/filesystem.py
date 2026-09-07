@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict
 
@@ -74,6 +75,21 @@ def filesystem_handler(
     # Resolve and force to be absolute paths
     root = root.resolve()
 
+    def _canonical_docs_path(requested_path_str: str) -> str:
+        # LLMs routinely ask for "agent.md" / "agents.md" / "AGENT.md" when the
+        # literal file is "AGENTS.md" — the user's standing rule is "always read
+        # AGENTS.md first", and a case/letter-mismatched guess fails the read
+        # ("File not found: agent.md"), which derails research agents before any
+        # work. Canonicalize any basename that is a case/plural variant of the
+        # docs file to the real root file when the literal path does not exist.
+        base = requested_path_str.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+        if re.match(r"^agent(s)?\.md$", base, re.IGNORECASE):
+            canonical = root / "AGENTS.md"
+            literal = resolve_in_sandbox(requested_path_str)
+            if not literal.exists() and canonical.exists():
+                return str(canonical)
+        return requested_path_str
+
     def resolve_in_sandbox(requested_path_str: str) -> Path:
         # LLMs often assume they are in a linux root directory and pass "/foo.py"
         # meaning "foo.py" relative to the sandbox root. But a REAL absolute path
@@ -107,6 +123,21 @@ def filesystem_handler(
             raise ValueError(f"Path is outside sandbox: {requested_path_str}") from e
 
     try:
+        # Canonicalize a case/letter-variant docs-file spelling
+        # ("agent.md"/"agents.md"/"AGENT.md") onto the real AGENTS.md before the
+        # first resolution — the standing "read AGENTS.md first" instruction
+        # fails silently when the model guesses the filename, and the LLM
+        # guessing "agent.md" (with or without an 's', any case) is a known
+        # failure mode. Applied here (not only inside _read_path_entry) so the
+        # single-path branch's `target_path.exists()` check sees the real file.
+        if isinstance(requested, list):
+            requested = [
+                _canonical_docs_path(str(p)) if isinstance(p, str) else p
+                for p in requested
+            ]
+        else:
+            requested = _canonical_docs_path(str(requested))
+
         target_path = resolve_in_sandbox(
             requested[0] if isinstance(requested, list) else requested
         )
@@ -130,6 +161,9 @@ def filesystem_handler(
                 p_str: str, max_chars: int = 50000
             ) -> tuple[list[str], list[str]]:
                 try:
+                    # Note: `requested` (and each list element) is already
+                    # canonicalized at the top of the handler, so agent.md/
+                    # agents.md spellings arrive here as AGENTS.md.
                     t_path = resolve_in_sandbox(p_str)
                     if t_path.exists() and t_path.is_file():
                         return (

@@ -630,3 +630,104 @@ class TestGoalLoopSecurityGate:
         assert "_scan_changed_for_security" in src
         # The scan must be invoked on the files-changed path (before run_test_suite).
         assert "Running security gate on changed files" in src
+
+
+class TestLoopDetectorResearchFalsePositive:
+    """The loop detector must NOT trip on legitimate multi-page research.
+
+    Regression (2026-09-06): a researcher doing web_search then web_fetch of
+    SEVERAL distinct URLs was tripped by `_check_loop` as a "loop" because
+    `_essential_keys` omitted `url`, so `web_fetch(urlA)` / `web_fetch(urlB)` /
+    `web_fetch(urlC)` all collapsed to the same `_dup_sig` `{"action":
+    "web_fetch"}` and `decision_counts` hit 3 → circuit breaker → the research
+    phase derailed ("Agent researcher caught in a loop") before any final, and
+    the goal loop ended ok:false with no fixes applied. The fix adds `url` to
+    `_essential_keys` so distinct fetches are distinct signatures while a
+    genuine same-URL repeat loop still trips (no overcorrection).
+
+    Revert-proof: removing `"url"` from `_essential_keys` makes the distinct-URL
+    flow below trip on the 3rd web_fetch (verified empirically), so this test
+    FAILS on the pre-fix code.
+    """
+
+    def _statuses(self, decisions):
+        from runtime_v2.api.agent_service_v2 import AgentServiceV2
+
+        svc = AgentServiceV2(orchestrator=None)
+        dc, ha = {}, []
+        return [svc._check_loop(d, dc, ha) for d in decisions]
+
+    def test_distinct_url_research_not_a_loop(self):
+        """web_search then web_fetch of three DIFFERENT URLs + final must never
+        trip the loop detector."""
+        statuses = self._statuses(
+            [
+                {"action": "web_search", "query": "q1"},
+                {"action": "web_fetch", "url": "https://a.example"},
+                {"action": "web_fetch", "url": "https://b.example"},
+                {"action": "web_fetch", "url": "https://c.example"},
+                {"action": "final", "response": "done"},
+            ]
+        )
+        assert statuses == [None, None, None, None, None], statuses
+
+    def test_same_url_repeat_still_trips(self):
+        """The genuine loop shape — web_fetch of the SAME url repeated — must
+        still trip the circuit breaker (no overcorrection from the url fix)."""
+        statuses = self._statuses(
+            [{"action": "web_fetch", "url": "https://x.example"}] * 4
+        )
+        # 3rd identical occurrence trips (first None, second WARN, third loop)
+        assert statuses[0] is None
+        assert statuses[1] == "WARN"
+        assert isinstance(statuses[2], str) and statuses[2] != "WARN"
+
+    def test_essential_keys_contains_url(self):
+        """The url key must be part of the loop-signature computation (guards
+        the root-cause list from silently dropping the discriminator)."""
+        from runtime_v2.api import agent_service_v2 as ag
+
+        src = Path(ag.__file__).read_text(encoding="utf-8")
+        m = __import__("re").search(r"_essential_keys\s*=\s*\((.*?)\)", src, __import__("re").S)
+        assert m, "_essential_keys not found in source"
+        keys = m.group(1)
+        assert '"url"' in keys, "'url' missing from _essential_keys"
+
+
+class TestReadAgentsMdCanonicalization:
+    """A filesystem read of any case/letter variant of the docs file
+    ("agent.md" / "agents.md" / "AGENT.md") must resolve to the real AGENTS.md.
+
+    Regression (2026-09-06): during the live /goal research run the researcher
+    interpreted "always read agent md first" as `filesystem read agent.md`
+    (no trailing 's') and got "File not found: agent.md" — the standing
+    "read AGENTS.md first" rule silently failed, and the agent stalled before
+    doing any work. Filesystem reads now canonicalize the variant onto the real
+    root AGENTS.md (there is exactly ONE canonical docs file).
+
+    Revert-proof: on the pre-fix code a read of "agent.md" returns
+    {"ok": False, "error": "File not found: agent.md"}; this test asserts ok.
+    """
+
+    @pytest.mark.parametrize("spelling", ["agent.md", "agents.md", "AGENT.md", "AGENTS.MD"])
+    def test_variant_reads_real_agents_md(self, tmp_path: Path, monkeypatch, spelling):
+        from swarm_os.lib.mcp import filesystem as _fs
+
+        (tmp_path / "AGENTS.md").write_text("THE-CANONICAL-DOCS", encoding="utf-8")
+        r = _fs.filesystem_handler({"operation": "read", "path": spelling}, tmp_path)
+        assert r.get("ok") is True, (spelling, r)
+        assert "THE-CANONICAL-DOCS" in str(r.get("content", "")), (spelling, r)
+        assert str(r.get("path", "")).replace("\\", "/").endswith("/AGENTS.md"), r
+
+    def test_other_read_unchanged(self, tmp_path: Path):
+        from swarm_os.lib.mcp import filesystem as _fs
+
+        (tmp_path / "notes.txt").write_text("hello", encoding="utf-8")
+        r = _fs.filesystem_handler(
+            {"operation": "read", "path": "notes.txt"}, tmp_path
+        )
+        assert r.get("ok") is True
+        assert "hello" in str(r.get("content", ""))
+        # an unrelated missing file must still fail (no overcorrection)
+        r2 = _fs.filesystem_handler({"operation": "read", "path": "notdocs.md"}, tmp_path)
+        assert r2.get("ok") is False
