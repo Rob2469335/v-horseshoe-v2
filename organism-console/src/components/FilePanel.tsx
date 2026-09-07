@@ -18,6 +18,7 @@ export default function FilePanel({ backendUrl }: Props) {
   const [editContent, setEditContent] = useState("")
   const [editStatus, setEditStatus] = useState("")
   const [pendingWrite, setPendingWrite] = useState(false)
+  const [stagedToken, setStagedToken] = useState("")
   const [busy, setBusy] = useState(false)
 
   const search = async () => {
@@ -36,6 +37,7 @@ export default function FilePanel({ backendUrl }: Props) {
 
   const readFile = async (path: string) => {
     setCurrentPath(path); setEditMode(false); setEditStatus("")
+    setPendingWrite(false); setStagedToken("")
     try {
       const r = await (await fetch(`${backendUrl}/control/file/read?path=${encodeURIComponent(path)}`)).json()
       setFileContent(r.content ?? r.error ?? "")
@@ -63,19 +65,40 @@ export default function FilePanel({ backendUrl }: Props) {
 
   const stageWrite = async () => {
     if (!currentPath) return
-    setEditStatus("Write staged — click 'Confirm write' to apply (approval required).")
-    setPendingWrite(true)
+    setEditStatus("Staging write to collect approval token…")
+    try {
+      // Phase 1: POST without an approval token — the backend mints a
+      // single-use token bound to this exact path+content, enabling the
+      // two-step confirm. (Security: a write can ONLY complete with the
+      // server-issued token, not on `approved: true` alone.)
+      const r = await (await fetch(`${backendUrl}/control/file/write`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: currentPath, content: editContent }),
+      })).json()
+      if (r.approval_token) {
+        setStagedToken(r.approval_token)
+        setEditStatus("Write staged — click 'Confirm write' to apply (approval required).")
+        setPendingWrite(true)
+      } else {
+        setEditStatus(`✗ ${r.error ?? "could not stage write"}`)
+        setStagedToken("")
+      }
+    } catch (e: any) {
+      setEditStatus(`✗ ${e.message}`)
+    }
   }
 
   const confirmWrite = async () => {
     if (!currentPath) return
     try {
+      // Phase 2: present the server-issued token so the backend executes the
+      // exact staged path+content (token bound to both at mint time).
       const r = await (await fetch(`${backendUrl}/control/file/write`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: currentPath, content: editContent, approved: true }),
+        body: JSON.stringify({ path: currentPath, content: editContent, approved: true, approval_token: stagedToken }),
       })).json()
       setEditStatus(r.ok ? "✓ saved" : `✗ ${r.error ?? "write failed"}`)
-      if (r.ok) { setFileContent(editContent); setEditMode(false); setPendingWrite(false) }
+      if (r.ok) { setFileContent(editContent); setEditMode(false); setPendingWrite(false); setStagedToken("") }
     } catch (e: any) {
       setEditStatus(`✗ ${e.message}`)
     }
