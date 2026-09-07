@@ -2284,6 +2284,8 @@ Converted `except:` → `except Exception:` (or specific types) in `swarm_os/cor
 
 ## Self-Healing & Self-Learning Fixes
 
+- **Rule (researcher)**: Failure: The agent attempted to read the file 'agent.md' but the file does not exist in the filesystem, resulting in a "File not found" error. | Ro...
+
 
 
 
