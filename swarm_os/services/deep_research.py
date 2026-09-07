@@ -28,8 +28,6 @@ import os
 import re
 from typing import Any
 
-from swarm_os.lib.opencode_session import opencode_headers
-
 log = logging.getLogger(__name__)
 
 # Bounded fan-out: cap the number of concurrent sub-research units so a 30-sub
@@ -43,38 +41,76 @@ _FETCH_CHARS = 4000
 # ---------------------------------------------------------------------------
 # LLM helpers (mirror the analysis-cloud pattern in api_features.web_research)
 # ---------------------------------------------------------------------------
+# Resilient research-synthesis lane chain, ordered so the cheapest / most-funded
+# free lane leads and the paid lanes backstop (Rob's spec 2026-09-06):
+#   1. OpenRouter deepseek-v4-flash :free
+#   2. NVIDIA NIM deepseek-v4-flash (free)
+#   3. OpenCode Zen/Go (openai-compat base; may be mimo/nemetron — free middle)
+#   4. OpenRouter deepseek-v4-flash (paid; topped up $5)
+#   5. DeepSeek direct deepseek-v4-flash (paid; topped up $5 — last-resort never
+#      goes down)
+# Root-cause note: the old _complete forced EVERY lane through
+# custom_llm_provider="openai" + one api_base, so native OpenRouter / NIM /
+# DeepSeek lanes could never work even when keyed — any provider failure made
+# the whole synthesis degrade. Each lane below invokes litellm correctly for
+# its provider (native providers need no api_base/api_key override).
+_RES_LANES = (
+    ("openrouter/deepseek/deepseek-v4-flash:free", None, None, None),
+    ("nvidia_nim/deepseek-ai/deepseek-v4-flash", None, None, None),
+    ("zen", None, None, None),  # OpenCode Zen/Go free (openai-compat)
+    ("openrouter/deepseek/deepseek-v4-flash", None, None, None),
+    ("deepseek/deepseek-v4-flash", None, None, None),
+)
+
+
 async def _complete(prompt: str, max_tokens: int = 800, timeout: float = 120.0) -> str:
     import litellm
 
     from ..core.settings import get_settings
 
+    lanes = list(_RES_LANES)
+    # 1) allow override to a single model (e.g. dev/test)
     s = get_settings()
-    model = getattr(s, "analysis_cloud_model", None) or "openai/deepseek-v4-flash"
-    base = os.getenv("OPENAI_API_BASE", "https://opencode.ai/zen/go/v1")
-    key = os.getenv("OPENAI_API_KEY", "")
-    resp = await litellm.acompletion(
-        model=model,
-        messages=[{"role": "user", "content": prompt}],
-        api_base=base,
-        api_key=key,
-        custom_llm_provider="openai",
-        max_tokens=max_tokens,
-        timeout=timeout,
-        extra_headers=opencode_headers(),
-    )
-    content = resp.choices[0].message.content or ""
-    # A synthesis that hit the token cap is silently truncated mid-sentence — a
-    # caller would present it as a complete report. Make the cut explicit so the
-    # truncation is never mistaken for a finished answer.
-    finish = getattr(resp.choices[0], "finish_reason", None)
-    if finish == "length":
-        log.warning(
-            "deep_research completion hit max_tokens=%s (finish_reason=length); "
-            "marking the truncated response",
-            max_tokens,
-        )
-        content = content.rstrip() + "\n\n[… report truncated at token cap]"
-    return content
+    override = getattr(s, "analysis_cloud_model", None)
+    if override:
+        lanes = [(override, None, None, None)]
+    last_err = None
+    for i, (model, base, key, provider) in enumerate(lanes):
+        try:
+            is_zen = (model == "zen")
+            if is_zen:
+                from swarm_os.lib.opencode_session import opencode_headers
+
+                model = os.getenv("ZEN_MODEL", "openai/zen/mimo-1-1.5b")
+                base = os.getenv("OPENAI_API_BASE", "https://opencode.ai/zen/v1")
+                key = os.getenv("OPENAI_API_KEY", "")
+                provider = "openai"
+            if base is None and key is None and provider is None:
+                base = key = provider = None
+            kw = {"model": model, "messages": [{"role": "user", "content": prompt}],
+                  "max_tokens": max_tokens, "timeout": timeout}
+            if is_zen:
+                kw["extra_headers"] = opencode_headers()
+            if base:
+                kw["api_base"] = base
+            if key:
+                kw["api_key"] = key
+            if provider:
+                kw["custom_llm_provider"] = provider
+            resp = await litellm.acompletion(**kw)
+            content = resp.choices[0].message.content or ""
+            finish = getattr(resp.choices[0], "finish_reason", None)
+            if finish == "length":
+                log.warning(
+                    "deep_research completion (lane %s) hit max_tokens=%s; "
+                    "marking truncated response", i, max_tokens,
+                )
+                content = content.rstrip() + "\n\n[… report truncated at token cap]"
+            return content
+        except Exception as exc:
+            last_err = exc
+            log.warning("deep_research lane %s failed (%s): %s", i, model, exc)
+    raise RuntimeError(f"deep_research synthesis: all {len(lanes)} lanes failed. Last: {last_err}")
 
 
 def _extract_json_array(text: str) -> list | None:
@@ -169,9 +205,14 @@ async def _search_and_fetch(query: str, max_results: int) -> list[dict]:
     except Exception as exc:
         log.warning("sub-search failed for %r: %s", query, exc)
         results = []
+    seen_urls: set[str] = set()
     for i, r in enumerate(results[:max_results]):
         url = r.get("url", "")
-        text = r.get("snippet", "")
+        snippet = r.get("snippet", "")
+        if not url or url in seen_urls:
+            continue
+        seen_urls.add(url)
+        text = snippet
         if url:
             try:
                 async with asyncio.timeout(30.0):
@@ -182,16 +223,58 @@ async def _search_and_fetch(query: str, max_results: int) -> list[dict]:
                     text = fetched.get("text") or fetched.get("content") or text
             except Exception as exc:
                 log.warning("sub-fetch failed for %s: %s", url, exc)
+        # Quality guard: drop sources that are effectively empty or boilerplate,
+        # so a cookie-consent wall / nav-only / JS-empty page never becomes cited
+        # evidence (this is what made an earlier run cite a cookie-consent page).
+        if not _is_substantive_source(text, snippet):
+            continue
         if url:
             sources.append(
                 {
-                    "n": i + 1,
+                    "n": len(sources) + 1,
                     "title": r.get("title", ""),
                     "url": url,
                     "text": (text or "")[:_FETCH_CHARS],
                 }
             )
     return sources
+
+
+_BOILERPLATE_MARKS = (
+    "cookie consent",
+    "accept cookies",
+    "manage consent",
+    "we use cookies",
+    "privacy policy",
+    "terms of service",
+    "skip to main content",
+    "enable javascript",
+    "javascript is disabled",
+    "captcha",
+    "sign in to continue",
+    "this page could not be found",
+    "404",
+)
+
+
+def _is_substantive_source(fetched_text: str, snippet: str) -> bool:
+    """True when the fetched text is real, meaningful content — not a consent
+    wall, nav-only shell, or near-empty fetch. Requires the fetch to have added
+    real content beyond the search snippet (a JS-rendered page that returns only
+    the snippet is not a deep-read)."""
+    clean = re.sub(r"\s+", " ", fetched_text or "").strip()
+    if len(clean) < 180:  # too thin to be a substantive page
+        return False
+    # Boilerplate-dominated: if most of the short body is cookie/nav/utility text
+    low = clean.lower()
+    hits = sum(1 for m in _BOILERPLATE_MARKS if m in low)
+    if hits >= 2 and len(clean) < 600:
+        return False
+    # The fetch must have surfaced something beyond the search snippet (else the
+    # page didn't render / is a shell around the snippet the search already had)
+    if not snippet or len(clean) <= len(re.sub(r"\s+", " ", snippet or "").strip()):
+        return False
+    return True
 
 
 async def _run_sub_unit(question: str, max_results: int, max_tokens: int) -> dict:
