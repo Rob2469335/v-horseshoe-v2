@@ -1344,6 +1344,7 @@ class AgentServiceV2:
             "target_agent",
             "path",
             "query",
+            "url",
             "language",
             "code",
             "server_name",
