@@ -37,6 +37,7 @@ TOOL_DECISION_JSON_SCHEMA = {
                 "lsp",
                 "mcp",
                 "mcp_register",
+                "mcp_batch",
                 "git",
                 "system",
                 "screen",

@@ -39,6 +39,7 @@ TOOL_CALL_SCHEMA = {
                 "lsp",
                 "mcp",
                 "mcp_register",
+                "mcp_batch",
                 "git",
                 "system",
                 "screen",
