@@ -42,6 +42,7 @@ from rich.markup import escape
 from rich.panel import Panel
 
 from organism_console.config import SESSION_FILE, LOG_DIR, VERSION
+from organism_console.renderer import INPUT_LOCK
 from organism_console.state_store import SessionState
 from organism_console.command_registry import registry, CommandContext
 
@@ -447,7 +448,11 @@ def main():
             branch_str = f"[bold green]{branch}[/bold green] " if branch else ""
             auto_ind = " [dim]auto[/dim]" if _perm_auto() else ""
             prompt_str = f"{mode_badge(ctx.active_agent)}{auto_ind} {branch_str}[bold bright_black]{cwd}[/bold bright_black] >>> "
-            cmd_line = ctx.console.input(prompt_str).strip()
+            # Serialize REPL stdin against the background healing-watchman /
+            # approval prompts (they acquire INPUT_LOCK); without this two
+            # input() readers race on the same console -> one swallows the other.
+            with INPUT_LOCK:
+                cmd_line = ctx.console.input(prompt_str).strip()
 
             if not cmd_line:
                 continue
