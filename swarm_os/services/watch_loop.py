@@ -114,6 +114,7 @@ class WatchLoop:
         self._repairs_in_window = 0
         self._policy = None
         self._canary_tasks: set = set()
+        self._bg_tasks: set = set()
         self._watch_task = None
         self._kg = None
         self._kg_lock = threading.Lock()
@@ -839,13 +840,15 @@ class WatchLoop:
 
                 def _spawn():
                     task = self._main_loop.create_task(_record())
-                    task.add_done_callback(_consume)
+                    self._bg_tasks.add(task)
+                    task.add_done_callback(lambda t: self._bg_tasks.discard(t) or _consume(t))
 
                 self._main_loop.call_soon_threadsafe(_spawn)
             else:
                 try:
                     _record_task = asyncio.get_running_loop().create_task(_record())
-                    _record_task.add_done_callback(_consume)
+                    self._bg_tasks.add(_record_task)
+                    _record_task.add_done_callback(lambda t: self._bg_tasks.discard(t) or _consume(t))
                 except RuntimeError:
                     pass
         except Exception as exc:

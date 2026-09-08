@@ -214,6 +214,7 @@ class TelegramCommandCenter:
         self._client: TelegramClient | None = None
         self._offset = 0
         self._task: asyncio.Task | None = None
+        self._bg_tasks: set[asyncio.Task] = set()
 
     # -- lifecycle ---------------------------------------------------------
     def start(self) -> None:
@@ -486,7 +487,9 @@ class TelegramCommandCenter:
                 chat_id, f"<b>Today's digest</b>\n\n{html.escape(text)}"
             )
 
-        asyncio.create_task(_run())
+        t = asyncio.create_task(_run())
+        self._bg_tasks.add(t)
+        t.add_done_callback(self._bg_tasks.discard)
 
     async def _send_research(self, chat_id: Any, goal: str) -> None:
         if not goal:
@@ -514,7 +517,9 @@ class TelegramCommandCenter:
                 log.warning("telegram research failed: %s", exc)
                 await self._client.send_message(chat_id, "Research failed.")
 
-        asyncio.create_task(_run())
+        t = asyncio.create_task(_run())
+        self._bg_tasks.add(t)
+        t.add_done_callback(self._bg_tasks.discard)
 
     async def _send_inbox(self, chat_id: Any) -> None:
         from .email_service import email_list
@@ -552,7 +557,9 @@ class TelegramCommandCenter:
             except Exception as exc:
                 log.warning("telegram goal dispatch failed: %s", exc)
 
-        asyncio.create_task(_run())
+        t = asyncio.create_task(_run())
+        self._bg_tasks.add(t)
+        t.add_done_callback(self._bg_tasks.discard)
 
     # -- approval bridge ------------------------------------------------------
     async def _handle_callback(self, cb: dict) -> None:
@@ -640,7 +647,9 @@ class TelegramCommandCenter:
             except Exception as exc:
                 log.warning("telegram-approved action execution failed: %s", exc)
 
-        asyncio.create_task(_run())
+        t = asyncio.create_task(_run())
+        self._bg_tasks.add(t)
+        t.add_done_callback(self._bg_tasks.discard)
 
 
 # ---------------------------------------------------------------------------
