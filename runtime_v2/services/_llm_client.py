@@ -2,7 +2,6 @@
 
 import os
 import re
-import ssl
 import logging
 import threading
 from typing import AsyncGenerator
@@ -75,11 +74,12 @@ def _cloud_response_format(litellm_model: str) -> dict:
 
 
 def bootstrap_ssl():
-    try:
-        ssl._create_default_https_context = ssl._create_unverified_context
-        ssl.create_default_context = ssl._create_unverified_context
-    except AttributeError:
-        pass
+    """Point outbound HTTPS at proper CA roots via certifi, WITHOUT disabling
+    certificate verification. (Historically this monkeypatched
+    ssl._create_default_https_context to the unverified context — a global
+    MITM downgrade for every outbound connection. No config depends on a
+    self-signed host, so verification is restored. The test harness keeps its
+    own conftest-level unverified context for the TestClient.)"""
     try:
         import certifi
 

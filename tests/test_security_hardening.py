@@ -1235,3 +1235,19 @@ def test_security_gate_allows_benign_subscripts():
     SecurityGate.scan_code("a=[1,2]; a[0]", strict=True)
     SecurityGate.scan_code("d={'k':1}; d['k']", strict=True)
     SecurityGate.scan_code("x = getattr(obj, 'replace')", strict=True)
+
+
+def test_bootstrap_ssl_preserves_tls_verification():
+    """The production LLM client must NOT globally disable TLS certificate
+    verification (was: bootstrap_ssl() monkeypatched the ssl default context to
+    unverified on every import — an MITM downgrade for all outbound HTTPS).
+    certifi CA-bundle env hints are fine; the monkeypatch is not."""
+    import runtime_v2.services._llm_client as mod
+    from pathlib import Path
+
+    src = Path(mod.__file__).read_text(encoding="utf-8")
+    assert "bootstrap_ssl" in src
+    # The verification-killing monkeypatch must be gone. Test-harness
+    # conftest still disables verification for TestClient sessions (its own
+    # separate, intentional exemption); production code must not.
+    assert "_create_unverified_context" not in src, "bootstrap_ssl must not disable TLS verification"
