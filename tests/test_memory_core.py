@@ -1,7 +1,6 @@
 """Tests for runtime_v2.services.memory_core — failure digest + prune fixes."""
 
 from unittest.mock import patch, MagicMock
-from types import SimpleNamespace
 
 
 class TestGetFailureDigest:
@@ -33,3 +32,55 @@ class TestGetFailureDigest:
         )
         for shard, count in digest["shards"].items():
             assert count == 0, f"shard '{shard}' should be 0 on 404, got {count}"
+
+
+class TestKgCap:
+    def test_evicts_oldest_nodes_past_ceiling(self):
+        import runtime_v2.services.memory_core as mc
+        import networkx as nx
+
+        g = nx.DiGraph()
+        for i in range(10):
+            g.add_node(f"n{i}", timestamp=i)
+        old_max = mc._MAX_KG_NODES
+        mc._MAX_KG_NODES = 5
+        try:
+            mc._kg = g
+            mc._cap_kg()
+        finally:
+            mc._MAX_KG_NODES = old_max
+        assert sorted(g.nodes()) == ["n5", "n6", "n7", "n8", "n9"]
+
+    def test_no_eviction_below_ceiling(self):
+        import runtime_v2.services.memory_core as mc
+        import networkx as nx
+
+        g = nx.DiGraph()
+        for i in range(3):
+            g.add_node(f"c{i}", timestamp=i)
+        mc._kg = g
+        mc._cap_kg()
+        assert g.number_of_nodes() == 3
+
+
+    def test_save_kg_caps_over_ceiling(self, tmp_path):
+        """REVERT-PROOF: _save_kg must enforce the node ceiling (the integration
+        point the cap is wired into). Removing the _cap_kg() call in _save_kg
+        must fail this test."""
+        import runtime_v2.services.memory_core as mc
+        import networkx as nx
+
+        g = nx.DiGraph()
+        for i in range(12):
+            g.add_node(f"k{i}", timestamp=i)
+        old_file = mc._kg_file
+        old_max = mc._MAX_KG_NODES
+        mc._kg = g
+        mc._kg_file = str(tmp_path / "kg.json")
+        mc._MAX_KG_NODES = 6
+        try:
+            mc._save_kg()
+        finally:
+            mc._kg_file = old_file
+            mc._MAX_KG_NODES = old_max
+        assert g.number_of_nodes() <= 6, "save path must cap the graph size"

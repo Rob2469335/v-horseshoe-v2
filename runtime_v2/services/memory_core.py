@@ -216,6 +216,7 @@ def _get_kg():
 def _save_kg():
     with _kg_lock:
         if _kg is not None:
+            _cap_kg()
             os.makedirs(os.path.dirname(_kg_file), exist_ok=True)
             try:
                 import json
@@ -225,6 +226,40 @@ def _save_kg():
                     json.dump(data, f)
             except Exception as e:
                 _log.warning("Error saving Knowledge Graph: %s", e)
+
+
+# Ceiling on persisted Knowledge-Graph nodes: _extract_relations + keyword
+# nodes grow the graph unboundedly on every successful memory, and it is
+# serialized whole to disk on each save. Past this ceiling the OLDEST nodes
+# (earliest timestamp attr, ties broken by lowest degree) are evicted so the
+# graph and its JSON stay bounded over a long-lived agent.
+_MAX_KG_NODES = 5000
+
+
+def _cap_kg():
+    """Evict oldest nodes past _MAX_KG_NODES so the KG stays bounded.
+
+    Runs under _kg_lock. Eviction prefers nodes with the earliest timestamp
+    attr; among ties, the lowest in-degree (least connected / most disposable).
+    """
+    global _kg
+    if _kg is None:
+        return
+    excess = _kg.number_of_nodes() - _MAX_KG_NODES
+    if excess <= 0:
+        return
+    candidates = []
+    for node, data in _kg.nodes(data=True):
+        ts = data.get("timestamp") if isinstance(data, dict) else None
+        try:
+            ts = float(ts)
+        except (TypeError, ValueError):
+            ts = float("inf")
+        candidates.append((ts, _kg.in_degree(node), node))
+    candidates.sort(key=lambda x: (x[0], x[1]))
+    for ts, deg, node in candidates[:excess]:
+        _kg.remove_node(node)
+    _log.info("Knowledge Graph capped: evicted %d oldest nodes", excess)
 
 
 def _extract_relations(fact: str):
