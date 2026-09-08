@@ -3,11 +3,17 @@ from typing import Any
 import psutil
 import httpx
 
-_http_client = httpx.AsyncClient(
-    limits=httpx.Limits(max_keepalive_connections=50, max_connections=100),
-    trust_env=False,
-    proxy=None,
-)
+_http_client = None
+
+def get_http_client() -> httpx.AsyncClient:
+    global _http_client
+    if _http_client is None or _http_client.is_closed:
+        _http_client = httpx.AsyncClient(
+            limits=httpx.Limits(max_keepalive_connections=50, max_connections=100),
+            trust_env=False,
+            proxy=None,
+        )
+    return _http_client
 
 log = logging.getLogger(__name__)
 
@@ -23,7 +29,7 @@ class SystemService:
             # Check dependencies
             llm_ok = False
             try:
-                r = await _http_client.get(
+                r = await get_http_client().get(
                     "http://127.0.0.1:8080/v1/models",
                     headers={"Authorization": "Bearer llama"},
                     timeout=1.0,
@@ -34,7 +40,7 @@ class SystemService:
 
             qdrant_ok = False
             try:
-                r = await _http_client.get("http://127.0.0.1:6333/", timeout=1.0)
+                r = await get_http_client().get("http://127.0.0.1:6333/", timeout=1.0)
                 qdrant_ok = r.status_code == 200
             except Exception as e:
                 log.debug("Qdrant health check failed: %s", e)
@@ -75,7 +81,7 @@ class SystemService:
     @staticmethod
     async def check_llm_reachable() -> bool:
         try:
-            r = await _http_client.get(
+            r = await get_http_client().get(
                 "http://127.0.0.1:8080/v1/models",
                 headers={"Authorization": "Bearer llama"},
                 timeout=15.0,

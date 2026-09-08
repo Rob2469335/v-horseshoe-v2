@@ -27,16 +27,24 @@ from swarm_os.lib.mcp.registry import registry as mcp_registry
 
 log = logging.getLogger(__name__)
 
-global_httpx_client = httpx.AsyncClient(
-    timeout=120.0,
-    limits=httpx.Limits(max_keepalive_connections=50, max_connections=100),
-    verify=swarm_settings.ssl_verify,
-)
+_global_httpx_client = None
+
+def get_global_httpx_client() -> httpx.AsyncClient:
+    global _global_httpx_client
+    if _global_httpx_client is None or _global_httpx_client.is_closed:
+        _global_httpx_client = httpx.AsyncClient(
+            timeout=120.0,
+            limits=httpx.Limits(max_keepalive_connections=50, max_connections=100),
+            verify=swarm_settings.ssl_verify,
+        )
+    return _global_httpx_client
 
 
 async def close_global_client() -> None:
     """Close the module-level shared httpx client on shutdown."""
-    await global_httpx_client.aclose()
+    global _global_httpx_client
+    if _global_httpx_client is not None and not _global_httpx_client.is_closed:
+        await _global_httpx_client.aclose()
 
 
 _cached_models: list[str] = []
@@ -240,7 +248,7 @@ class Orchestrator:
             if _cached_models and time.time() - _models_cache_time < 60.0:
                 return _cached_models
             try:
-                response = await global_httpx_client.get(
+                response = await get_global_httpx_client().get(
                     "http://127.0.0.1:8080/v1/models",
                     headers={"Authorization": "Bearer llama"},
                     timeout=5.0,

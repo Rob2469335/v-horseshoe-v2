@@ -89,7 +89,7 @@ _embed_client = httpx.AsyncClient(
 
 async def _embed(text: str) -> list[float]:
     try:
-        resp = await _embed_client.post("/embeddings", json={"input": text})
+        resp = await get_embed_client().post("/embeddings", json={"input": text})
         resp.raise_for_status()
         return resp.json()["data"][0]["embedding"]
     except Exception as exc:

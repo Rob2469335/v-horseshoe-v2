@@ -11,7 +11,7 @@ global_httpx_client = httpx.AsyncClient(timeout=120.0)
 
 async def close_global_client() -> None:
     """Close the module-level shared httpx client on shutdown."""
-    await global_httpx_client.aclose()
+    await get_global_httpx_client().aclose()
 
 
 class CloudLLMClient:
@@ -121,14 +121,14 @@ class CloudLLMClient:
         if stream:
             return CloudLLMClient.stream_generate(url, payload, headers)
 
-        response = await global_httpx_client.post(url, json=payload, headers=headers)
+        response = await get_global_httpx_client().post(url, json=payload, headers=headers)
         response.raise_for_status()
         data = response.json()
         return data["choices"][0]["message"]["content"]
 
     @staticmethod
     async def stream_generate(url: str, payload: dict, headers: dict):
-        async with global_httpx_client.stream(
+        async with get_global_httpx_client().stream(
             "POST", url, json=payload, headers=headers
         ) as response:
             response.raise_for_status()
