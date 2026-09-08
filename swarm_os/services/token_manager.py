@@ -38,3 +38,18 @@ class TokenManager:
         """Returns True if budget is exceeded."""
         async with self._lock:
             return self._total_used >= self._budget
+
+    async def reset_usage(self) -> int:
+        """Reset the cumulative token count to 0 (e.g. a new day / process start).
+
+        Without a reset, once the 500k budget is hit the check_budget() ValueError
+        locks the backend permanently until a restart. Returns the prior usage."""
+        async with self._lock:
+            prev = self._total_used
+            self._total_used = 0
+            return prev
+
+    async def set_budget(self, budget: int) -> None:
+        """Adjust the ceiling (>=0). Lets an operator raise/clear a hard cap."""
+        async with self._lock:
+            self._budget = max(0, int(budget))
