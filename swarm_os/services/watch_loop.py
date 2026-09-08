@@ -499,11 +499,12 @@ class WatchLoop:
                 start = max(0, size - window)
                 f.seek(start)
                 chunk = f.read()
-                # Drop the first (possibly partial) line: only lines fully in
-                # the window are safe to parse.
-                first_nl = chunk.find("\n")
-                if first_nl != -1:
-                    chunk = chunk[first_nl + 1 :]
+                # Only when we truncated MID-FILE (start > 0) is the first line
+                # partial — drop it. From the file head there is no partial line.
+                if start > 0:
+                    first_nl = chunk.find("\n")
+                    if first_nl != -1:
+                        chunk = chunk[first_nl + 1 :]
                 tail_lines = chunk.splitlines()[-limit:]
             lines = []
             for line in tail_lines:
