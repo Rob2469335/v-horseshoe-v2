@@ -254,7 +254,7 @@ class Orchestrator:
                 return _cached_models
             except Exception as e:
                 log.warning("Failed to fetch installed models: %s", e)
-                return _cached_models or ["qwen3.5-4b"]
+                return _cached_models or ["robs4b"]
 
     def _parse_tool_call(self, text: str) -> tuple[str, str] | None:
         """Delegated to decoupled ToolParser."""
@@ -352,7 +352,7 @@ class Orchestrator:
                 allow_fallback=True,
             )
 
-            chosen_model = route_decision.model or "qwen3.5-4b"
+            chosen_model = route_decision.model or "robs4b"
 
             self.trace.add(
                 trace_id=trace_id,
@@ -392,7 +392,7 @@ class Orchestrator:
                 log.info(
                     f"[Orchestrator] No API key for {provider}, falling back to local model"
                 )
-                chosen_model = "qwen3.5-4b"
+                chosen_model = "robs4b"
                 provider = "llama"
 
             max_steps = 5
@@ -757,7 +757,7 @@ class Orchestrator:
             allow_fallback=True,
         )
 
-        chosen_model = route_decision.model or "qwen3.5-4b"
+        chosen_model = route_decision.model or "robs4b"
 
         log.info(
             "[Orchestrator] Routing decision: %s. Starting LLM stream...", chosen_model
@@ -780,7 +780,7 @@ class Orchestrator:
             log.info(
                 f"[Orchestrator] No API key for {provider}, falling back to local model"
             )
-            chosen_model = "qwen3.5-4b"
+            chosen_model = "robs4b"
             provider = "llama"
 
         max_steps = 5

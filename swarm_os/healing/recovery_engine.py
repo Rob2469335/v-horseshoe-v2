@@ -327,7 +327,7 @@ Respond strictly with a JSON object in a ```json markdown block:
 # Maps a downstream symptom to its upstream root cause
 CAUSAL_GRAPH = {
     "swarm_api": "backend",
-    "qwen3.5-4b": "llamacpp",
+    "robs4b": "llamacpp",
     "gte-modernbert-base": "llamacpp",
     "frontend": "swarm_api",
     "qdrant_client": "qdrant",

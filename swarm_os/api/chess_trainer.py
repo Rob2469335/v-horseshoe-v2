@@ -252,7 +252,7 @@ Return strictly JSON format: {{"hint_level_1": "...", "hint_level_2": "..."}}"""
             res = await acompletion(
                 model="deepseek/deepseek-v4-flash"
                 if os.environ.get("OPENROUTER_API_KEY")
-                else "qwen3.5-4b",
+                else "robs4b",
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=300,
                 timeout=15.0,

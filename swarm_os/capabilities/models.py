@@ -23,7 +23,7 @@ class ModelsHandler:
                 "reranker",
             ],
             "primary_vision_models": ["Qwen3VL-2B-Instruct", "Qwen3-VL-2B"],
-            "default_fast_model": "qwen3.5-4b",
+            "default_fast_model": "robs4b",
         }
 
 
