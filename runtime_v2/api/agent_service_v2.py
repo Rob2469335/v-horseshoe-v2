@@ -2038,9 +2038,15 @@ class AgentServiceV2:
                 ),
                 run_id=getattr(state, "run_id", ""),
             )
+        except (TypeError, AttributeError, NameError, ImportError, SyntaxError):
+            # Hard programming errors should crash the task, not become a retryable tool result
+            raise
+        except TimeoutError as exc:
+            log.warning("[%s] Tool %s timed out: %s", agent_id, action, exc)
+            result = {"ok": False, "error": f"Timeout: {exc}"}
         except Exception as exc:
-            log.exception(
-                "[%s] Tool %s execution raised unhandled exception: %s",
+            log.warning(
+                "[%s] Tool %s execution failed: %s",
                 agent_id,
                 action,
                 exc,

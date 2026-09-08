@@ -867,8 +867,13 @@ async def _get_opinion_text(client: httpx.AsyncClient, cite: str) -> dict[str, A
         timeout=30.0,
     )
     if resp.status_code == 429:
-        retry_after = int(resp.headers.get("Retry-After") or 0)
-        if 0 < retry_after <= _MAX_RETRY_AFTER:
+        try:
+            retry_after = int(resp.headers.get("Retry-After") or 0)
+        except (ValueError, TypeError):
+            retry_after = 0
+        if retry_after <= 0:
+            retry_after = 5  # no header or zero → short courtesy sleep
+        if retry_after <= _MAX_RETRY_AFTER:
             log.warning("429 lookup for %s — Retry-After %ss", cite, retry_after)
             await asyncio.sleep(retry_after)
             resp = await client.post(
@@ -910,8 +915,13 @@ async def _get_opinion_text(client: httpx.AsyncClient, cite: str) -> dict[str, A
         timeout=30.0,
     )
     if opin.status_code == 429:
-        retry_after = int(opin.headers.get("Retry-After") or 0)
-        if 0 < retry_after <= _MAX_RETRY_AFTER:
+        try:
+            retry_after = int(opin.headers.get("Retry-After") or 0)
+        except (ValueError, TypeError):
+            retry_after = 0
+        if retry_after <= 0:
+            retry_after = 5  # no header or zero → short courtesy sleep
+        if retry_after <= _MAX_RETRY_AFTER:
             log.warning("429 opinion for %s — Retry-After %ss", cite, retry_after)
             await asyncio.sleep(retry_after)
             opin = await client.get(

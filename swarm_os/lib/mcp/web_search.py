@@ -1030,14 +1030,34 @@ def _has_key(name: str, min_len: int = 1) -> bool:
 
 async def _ddg_fallback(query: str, max_results: int) -> Dict[str, Any]:
     try:
-        try:
-            from ddgs import DDGS
-        except ImportError:
-            from duckduckgo_search import DDGS
-
         def run_ddg():
-            with DDGS() as ddgs:
-                return list(ddgs.text(query, max_results=max_results))
+            import sys
+            import json
+            import subprocess
+            worker = (
+                "import json,sys;"
+                "try: from ddgs import DDGS\n"
+                "except ImportError: from duckduckgo_search import DDGS\n"
+                "d=json.loads(sys.argv[1]);"
+                "q=d['q'];m=d['m'];"
+                "print(json.dumps(list(DDGS().text(q, max_results=m))));"
+                "sys.stdout.flush()"
+            )
+            payload = json.dumps({"q": query, "m": max_results})
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
+            try:
+                proc = subprocess.run(
+                    [sys.executable, "-c", worker, payload],
+                    capture_output=True,
+                    text=True,
+                    timeout=15.0,
+                    creationflags=flags,
+                )
+                if proc.returncode == 0:
+                    return json.loads(proc.stdout.strip())
+            except Exception:
+                pass
+            return []
 
         results = await asyncio.to_thread(run_ddg)
         if results:

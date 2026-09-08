@@ -338,9 +338,19 @@ def check_fidelity(
         lead = lead.split(":")[0].strip()
         if lead and len(lead) > 3 and _re.search(r"[a-z]", lead):
             name_to_source[lead.lower()] = content
-            # Also register the plain surname for single-name references.
+            # Also register the plain surname for single-name references, but
+            # only if the word is specific enough: skip very common English words
+            # that appear in case names (United, States, People, City, County,
+            # Board, etc.) which would generate false-positive fidelity failures
+            # on any legal sentence that mentions them in a different context.
+            _COMMON_LEGAL_WORDS = {
+                "united", "states", "people", "city", "county", "state",
+                "board", "department", "commission", "government", "national",
+                "federal", "court", "case", "party", "plaintiff", "defendant",
+                "appellant", "appellee", "petitioner", "respondent",
+            }
             for word in lead.split():
-                if word and word[0].isupper() and len(word) > 2:
+                if word and word[0].isupper() and len(word) > 2 and word.lower() not in _COMMON_LEGAL_WORDS:
                     name_to_source.setdefault(word.lower(), content)
 
     def _tokens(s: str) -> set[str]:

@@ -64,7 +64,9 @@ def _expected_sections() -> dict[str, int]:
     for jur in ("ny", "nj", "ga", "nc", "federal"):
         f = Path(f"data/legal/us_{jur}_statutes.parquet")
         if not f.exists():
-            EXPECTED_SECTIONS[jur] = 0
+            # Do NOT cache 0 for missing Parquets — the file may arrive later
+            # in the same process lifetime, and a cached 0 would prevent
+            # _requires_min_coverage from ever passing until a restart.
             continue
         try:
             import pyarrow.parquet as pq
@@ -79,7 +81,8 @@ def _expected_sections() -> dict[str, int]:
             )
         except Exception as exc:
             log.warning("failed to count expected sections for %s: %s", jur, exc)
-            EXPECTED_SECTIONS[jur] = 0
+            # Also don't cache failures — a corrupt Parquet that gets re-downloaded
+            # should be recounted on next call, not permanently frozen at 0.
     return EXPECTED_SECTIONS
 
 

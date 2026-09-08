@@ -135,9 +135,9 @@ def extract_triggers(docket_entries: list[dict[str, Any]]) -> list[DocketTrigger
             triggers.append(DocketTrigger("docketed", date))
         elif "record" in low and "filed" in low and date:
             triggers.append(DocketTrigger("record_filed", date))
-        elif "appellant" in low and "brief" in low and "filed" in low and date:
+        elif "appellant" in low and "brief" in low and "filed" in low and "motion" not in low and date:
             triggers.append(DocketTrigger("appellant_brief_filed", date))
-        elif "appellee" in low and "brief" in low and "filed" in low and date:
+        elif "appellee" in low and "brief" in low and "filed" in low and "motion" not in low and date:
             triggers.append(DocketTrigger("appellee_brief_filed", date))
     return triggers
 
@@ -229,12 +229,12 @@ def compute_deadlines(
             "FRAP 31(a)(1)",
             "appellant_brief_filed",
         )
-    # FRAP 31(a)(1): reply = 21 days after service of the appellee's brief.
+    # FRAP 28.1 / 2d Cir. L.R. 31.2: reply = 14 days after service of the appellee's brief.
     if appee_brief:
         _add(
             "Reply brief due",
-            appee_brief + dt.timedelta(days=21),
-            "FRAP 31(a)(1)",
+            appee_brief + dt.timedelta(days=14),
+            "FRAP 28.1 / 2d Cir. L.R. 31.2",
             "appellee_brief_filed",
         )
     return deadlines

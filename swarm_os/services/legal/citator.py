@@ -161,12 +161,34 @@ async def _forward_citing(client: httpx.AsyncClient, opinion_id: int) -> list[di
         return []
     return [
         {
-            "citing_opinion": int(r.get("citing_opinion") or 0),
+            "citing_opinion": int(_extract_id(r.get("citing_opinion") or 0)),
             "depth": int(r.get("depth") or 1),
         }
         for r in results
         if r.get("citing_opinion")
     ]
+
+
+def _extract_id(val: object) -> int:
+    """Safely extract a numeric CourtListener ID from either an int or a URL path.
+
+    CourtListener can return foreign keys as either bare integers or as resource
+    URL strings like ``https://www.courtlistener.com/api/rest/v4/opinions/12345/``.
+    ``int()`` on a URL string raises ValueError and crashes the list comprehension
+    outside any try/except — this helper handles both forms safely.
+    """
+    if isinstance(val, int):
+        return val
+    s = str(val).rstrip("/")
+    # Fast path: it's already a stringified integer.
+    if s.isdigit():
+        return int(s)
+    # Slow path: strip the trailing path segment from a URL.
+    last = s.rsplit("/", 1)[-1]
+    try:
+        return int(last)
+    except (ValueError, TypeError):
+        return 0
 
 
 async def _citing_opinion_text(
@@ -294,7 +316,9 @@ async def poll_authority(
                 state[cite] = {**info, "opinion_id": opinion_id}
 
             citing = await _forward_citing(client, int(opinion_id))
-            treatments: dict[str, str] = {}
+            # Seed from prior run so historical treatments outside page_size=50
+            # are not silently dropped on each refresh.
+            treatments: dict[str, str] = dict(info.get("treatments", {}))
             cited_key = case_citation_key(cite)
             for c in citing:
                 citing_id = c["citing_opinion"]

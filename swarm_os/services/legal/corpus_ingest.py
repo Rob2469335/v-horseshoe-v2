@@ -414,6 +414,15 @@ async def ingest_one_file(
                 raise RuntimeError(
                     f"qdrant upsert failed after retries: {last_exc}"
                 ) from last_exc
+            total += 0  # only incremented inside break above
+        else:
+            # _embed returned None or size mismatch — raise so the caller
+            # (and the CLI) knows this batch was NOT indexed.  The delete
+            # has already run, so staying silent would silently truncate
+            # the corpus.
+            raise RuntimeError(
+                f"embed failed for batch of {len(batch_ids)} — corpus may be incomplete"
+            )
         batch_ids.clear()
         batch_texts.clear()
         batch_payloads.clear()
@@ -547,11 +556,20 @@ def download_parquet(
             continue
         url = parquet_url(jur)
         log.info("downloading %s <- %s", jur, url)
-        with requests.get(url, stream=True, timeout=300.0) as resp:
-            resp.raise_for_status()
-            with open(dest, "wb") as f:
-                for chunk in resp.iter_content(chunk_size=1 << 20):
-                    f.write(chunk)
+        tmp = dest.with_suffix(dest.suffix + ".tmp")
+        try:
+            with requests.get(url, stream=True, timeout=300.0) as resp:
+                resp.raise_for_status()
+                with open(tmp, "wb") as f:
+                    for chunk in resp.iter_content(chunk_size=1 << 20):
+                        f.write(chunk)
+            os.replace(tmp, dest)
+        except Exception:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
         result[jur] = dest
     return result
 

@@ -118,7 +118,7 @@ def test_memory_timestamp_except_handlers_are_parenthesized():
     assert offenders == [], f"comma-form except handlers present: {offenders}"
 
 
-def test_memory_search_extracts_from_payload_level():
+def test_memory_search_extracts_from_payload_level_v1():
     """REVERT-PROOF: VectorStore.search returns {id, score, payload}, so
     /memory/search must read text/sender/timestamp from hit['payload'] — the
     old hit.get('text'/'sender'/'timestamp') returned empties for every hit.
