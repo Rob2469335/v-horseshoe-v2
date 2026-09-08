@@ -587,29 +587,19 @@ async def refresh_fallbacks_if_needed(mode: str = "auto"):
             results = await asyncio.gather(
                 _fetch_llama_models(), return_exceptions=True
             )
-            results = [[], [], [], [], results[0]]
+            results = [[], [], results[0]]
         else:
             results = await asyncio.gather(
                 _fetch_openrouter_models(),
-                _fetch_groq_models(),
                 _fetch_nvidia_models(),
-                _fetch_gemini_models(),
                 _fetch_llama_models(),
                 return_exceptions=True,
             )
 
         openrouter_models = results[0] if isinstance(results[0], list) else []
-        groq_models = results[1] if isinstance(results[1], list) else []
-        nvidia_models = results[2] if isinstance(results[2], list) else []
-        gemini_models = results[3] if isinstance(results[3], list) else []
-        llama_models = results[4] if isinstance(results[4], list) else []
+        nvidia_models = results[1] if isinstance(results[1], list) else []
+        llama_models = results[2] if isinstance(results[2], list) else []
 
-        groq_models.sort(
-            key=lambda x: (
-                "70b" in x["model"].lower(),
-                "versatile" in x["model"].lower(),
-            )
-        )
         # NVIDIA free tier hosts deepseek-v4-flash — prioritize it (and any deepseek
         # model) so the cheapest-and-fast analysis model leads the NVIDIA batch.
         nvidia_models.sort(
@@ -619,7 +609,6 @@ async def refresh_fallbacks_if_needed(mode: str = "auto"):
                 "70b" in x["model"].lower(),
             )
         )
-        gemini_models.sort(key=lambda x: ("pro" in x["model"].lower(),))
         # Prefer DeepSeek models in the fetched OpenRouter batch (they are the cheap
         # sanctioned analysis models); remaining free/cheap models follow.
         openrouter_models.sort(
@@ -646,37 +635,34 @@ async def refresh_fallbacks_if_needed(mode: str = "auto"):
         )
 
         all_fallbacks = []
-        # Cloud chain order: FREE providers burn first (NVIDIA NIM, Groq, Gemini,
-        # Ling, OpenRouter free credits), then the paid DeepSeek direct API, then
-        # the OpenCode account pair (Zen FREE first, Go PAID last), and local
-        # llama.cpp as the final fallback.
+        # Cloud chain order (2026-09 user decision: Groq/Gemini/Ling removed):
+        #   1) NVIDIA free NIM deepseek-v4-flash ($0 free tier)
+        #   2) OpenCode Zen FREE deepseek-v4-flash ($0)
+        #   3) OpenRouter guaranteed DeepSeek + live free batch
+        #   4) OpenCode Go PAID deepseek-v4-flash (funded account)
+        #   5) DeepSeek DIRECT (paid api.deepseek.com)
+        #   6) local llama.cpp (final fallback)
         #
         if mode != "local_only":
+            _opencode_models = _get_opencode_fallback()
+            _opencode_zen = _opencode_models[:1]  # [0] = Zen FREE
+            _opencode_go = _opencode_models[1:2]  # [1] = Go PAID
+
             # 1) NVIDIA free NIM v4-flash — $0 free tier.
             all_fallbacks.extend(nvidia_models[:1])
-            # 2) Groq / Gemini free tiers (non-DeepSeek backup clouds).
-            all_fallbacks.extend(groq_models[:2])
-            all_fallbacks.extend(gemini_models[:1])
-            # 3) Ling ultra-cheap worker tier ($0.01/$0.03, plus free ling-3.0 lead-in)
-            #    for high-volume routing/classification fan-out.
-            _ling = _get_ling_flash_fallback()
-            if _ling:
-                all_fallbacks.extend(_ling)
-            # 4) OpenRouter — free-credit last resort (OpenRouter-hosted DeepSeek first,
-            #    then other cheap/free models).
+            # 2) OpenCode Zen FREE deepseek-v4-flash — $0.
+            all_fallbacks.extend(_opencode_zen)
+            # 3) OpenRouter — hosted DeepSeek first, then cheap/free batch.
             _deepseek_or = _get_deepseek_openrouter_fallback()
             if _deepseek_or:
                 all_fallbacks.extend(_deepseek_or)
             all_fallbacks.extend(openrouter_models[:3])
-            # 5) DeepSeek DIRECT (paid api.deepseek.com) — first PAID provider.
+            # 4) OpenCode Go PAID deepseek-v4-flash — the funded workhorse.
+            all_fallbacks.extend(_opencode_go)
+            # 5) DeepSeek DIRECT (paid api.deepseek.com).
             _deepseek_direct = _get_deepseek_direct_fallback()
             if _deepseek_direct:
                 all_fallbacks.extend(_deepseek_direct)
-            # 6) OpenCode account pair — Zen FREE deepseek-v4-flash ($0) first, then
-            #    Go PAID deepseek-v4-flash (funded account) last of the cloud chain.
-            _opencode_models = _get_opencode_fallback()
-            if _opencode_models:
-                all_fallbacks.extend(_opencode_models)
         all_fallbacks.extend(valid_llama[:2])
 
         # Dedup by model id (the guaranteed OpenRouter DeepSeek entries can also
@@ -692,10 +678,10 @@ async def refresh_fallbacks_if_needed(mode: str = "auto"):
         all_fallbacks = deduped
         _cached_fallbacks = all_fallbacks
         _cached_stats = {
-            "deepseek_direct": len(_deepseek_direct),
+            "deepseek_direct": len(_deepseek_direct or []),
             "openrouter": len(openrouter_models),
-            "groq": len(groq_models),
-            "gemini": len(gemini_models),
+            "opencode_zen": len(_opencode_zen),
+            "opencode_go": len(_opencode_go),
             "nvidia": len(nvidia_models),
             "llama.cpp": len(valid_llama),
             "total": len(all_fallbacks),

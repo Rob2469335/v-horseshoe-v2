@@ -89,7 +89,6 @@ def test_chain_free_then_paid_direct_then_opencode_go_last(monkeypatch):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-ds")
 
     fm._fetch_openrouter_models = AsyncMock(return_value=[])
-    fm._fetch_groq_models = AsyncMock(return_value=[])
     fm._fetch_nvidia_models = AsyncMock(
         return_value=[
             {
@@ -100,7 +99,6 @@ def test_chain_free_then_paid_direct_then_opencode_go_last(monkeypatch):
             },
         ]
     )
-    fm._fetch_gemini_models = AsyncMock(return_value=[])
     fm._fetch_llama_models = AsyncMock(return_value=[])
 
     async def _run():
@@ -108,19 +106,22 @@ def test_chain_free_then_paid_direct_then_opencode_go_last(monkeypatch):
         return [f["model"] for f in fm._cached_fallbacks]
 
     models = asyncio.run(_run())
-    # Free providers lead (NVIDIA NIM first); paid DeepSeek direct then the
-    # OpenCode pair (Zen FREE, Go PAID last of the cloud chain).
+    # Free providers lead: NVIDIA NIM free first, OpenCode Zen FREE second, then
+    # OpenRouter, then OpenCode Go PAID (funded), then paid DeepSeek direct last,
+    # local llama.cpp final.
     assert models[0] == "nvidia_nim/deepseek-ai/deepseek-v4-flash"
     assert "deepseek/deepseek-v4-flash" in models
     assert "openai/zen/deepseek-v4-flash" in models
     assert "openai/deepseek-v4-flash" in models
-    # Paid Go sits AFTER paid DeepSeek direct (paid-last, not leading).
-    assert models.index("openai/deepseek-v4-flash") > models.index(
-        "deepseek/deepseek-v4-flash"
-    )
     # Zen free stays before Go paid within the pair.
     assert models.index("openai/zen/deepseek-v4-flash") < models.index(
         "openai/deepseek-v4-flash"
+    )
+    # (2026-09 user chain) OpenCode Go PAID (funded) now sits BEFORE paid
+    # DeepSeek direct — the funded OpenCode account is preferred over the
+    # charge-per-token DeepSeek direct API.
+    assert models.index("openai/deepseek-v4-flash") < models.index(
+        "deepseek/deepseek-v4-flash"
     )
 
 
