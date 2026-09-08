@@ -482,16 +482,31 @@ class WatchLoop:
             return kg
 
     def _recent_tool_result_failures(self, limit: int = 200) -> list:
-        """Recent tool_result failure error strings from the event log tail
-        (bounded read — the log grows unbounded, so only the last `limit` lines
-        are scanned). Returns [] on any error (signal 2 fails open)."""
+        """Recent tool_result failure error strings from the event log tail.
+        TRULY bounded: seeks to near EOF and reads only a last-N-byes window
+        (the old `f.readlines()[-limit:]` loaded the ENTIRE unbounded
+        events.jsonl into memory on every call). Returns [] on any error
+        (signal 2 fails open)."""
         if not _EVENTS_FILE.exists():
             return []
         try:
-            lines = []
+            tail_lines = []
             with _EVENTS_FILE.open("r", encoding="utf-8", errors="replace") as f:
-                tail = f.readlines()[-limit:]
-            for line in tail:
+                size = f.seek(0, 2)  # EOF
+                # Read a window of ~limit*1KB (events avg well under that);
+                # scans backwards to a line boundary so no event is truncated.
+                window = 1024 * max(limit, 32)
+                start = max(0, size - window)
+                f.seek(start)
+                chunk = f.read()
+                # Drop the first (possibly partial) line: only lines fully in
+                # the window are safe to parse.
+                first_nl = chunk.find("\n")
+                if first_nl != -1:
+                    chunk = chunk[first_nl + 1 :]
+                tail_lines = chunk.splitlines()[-limit:]
+            lines = []
+            for line in tail_lines:
                 try:
                     data = json.loads(line)
                 except Exception:
