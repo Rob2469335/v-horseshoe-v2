@@ -301,6 +301,11 @@ def index_codebase(root_dir: str, clear: bool = True) -> tuple[int, int]:
             part.startswith(".sandbox")
             or part.startswith(".gemini")
             or part in [".venv", "node_modules", "__pycache__", ".git", "build", "dist"]
+            or part in [".data", "_data", "logs", "run-logs", "topics", "snapshots",
+                        "scratch", "ops", "output", "root", "mock_sandbox_dir",
+                        "negative_samples", "positive_samples", "benchmark",
+                        "pretrained_models", "bin_vulkan_stable", ".backup_pr6_20260804202501",
+                        "Swarm-Certification", "v_horseshoe_v2.egg-info"]
             for part in py_file.parts
         ):
             continue
