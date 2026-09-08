@@ -803,7 +803,9 @@ async def test_filesystem_listing_still_capped_at_tool_budget(monkeypatch):
 
     service = AgentServiceV2()
 
-    async def fake_run_tool(tool_name, payload, *, auth=None, trace_hook=None):
+    async def fake_run_tool(
+        tool_name, payload, *, auth=None, trace_hook=None, run_id=""
+    ):
         return {"ok": True, "result": "\n".join(f"file_{i}.py" for i in range(5000))}
 
     monkeypatch.setattr("runtime_v2.services.tool_executor.run", fake_run_tool)
@@ -817,6 +819,15 @@ async def test_filesystem_listing_still_capped_at_tool_budget(monkeypatch):
         3,
         0,
         state,
+    )
+    # The tool MUST have succeeded: _handle_tool swallows tool-execution
+    # exceptions into {ok: False} and returns (consecutive_errors, ...), so a
+    # stray kwargs mismatch (e.g. the mock missing run_id, which became a
+    # distilled garbage reflexion rule) would otherwise pass silently. The
+    # observable success signal is tool_result_str holding the listing, not an
+    # error string.
+    assert "file_0.py" in state.tool_result_str, (
+        f"tool call must succeed (mock got run_id), got: {state.tool_result_str[:200]!r}"
     )
     assert len(state.tool_result_str) <= MAX_RESULT_CHARS + 100, (
         "filesystem listings must stay capped at MAX_RESULT_CHARS"
