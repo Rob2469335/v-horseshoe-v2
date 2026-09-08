@@ -122,7 +122,7 @@ _ROLE_RULES: dict[str, str] = {
         "  STEP 1 — Read the PROJECT MAP below to learn the real module layout.\n"
         "  STEP 2 — Discover paths with filesystem operation=glob (pattern like **/*.py) instead of guessing paths. Never assume a file exists.\n"
         "  STEP 3 — Read 4-6 key files found in Step 2 (e.g. agent_service_v2.py, stream_runner.py, system_prompts.py)\n"
-        "  STEP 4 — If the goal mentions searching the internet (improvements/upgrades/best practices/new libraries):\n"
+        "  STEP 4 - If the goal explicitly mentions searching the internet or web research:\n"
         "           web research may ALREADY have been done by the `researcher` agent — check your context for a\n"
         "           'TOOL RESULT (delegate)\nresearcher responded: ...' block. If it is present, USE those findings:\n"
         "           your final MUST synthesize the researcher's web results (cite the URLs/technologies they found)\n"
