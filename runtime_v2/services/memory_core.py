@@ -395,19 +395,25 @@ def get_relevant_memories(query: str) -> str:
     kg = _get_kg()
     if kg:
         query_words = [w.lower() for w in query.split() if len(w) > 3]
-        found_nodes = [
-            n
-            for n in kg.nodes()
-            if isinstance(n, str) and any(w in n.lower() for w in query_words)
-        ]
+        # Hold _kg_lock for the whole read: the write path (remember_fact)
+        # calls kg.add_node/_save_kg under the same lock, and iterating
+        # kg.nodes()/successors() WITHOUT it raised
+        # 'RuntimeError: dictionary changed size during iteration' when a
+        # concurrent write mutated the graph mid-iteration.
+        with _kg_lock:
+            found_nodes = [
+                n
+                for n in kg.nodes()
+                if isinstance(n, str) and any(w in n.lower() for w in query_words)
+            ]
 
-        for node in found_nodes[:3]:
-            # Get 1-hop neighborhood
-            for neighbor in kg.successors(node):
-                edge_data = kg.get_edge_data(node, neighbor)
-                kg_context.append(
-                    f"{node} --[{edge_data.get('relation', 'related_to')}]--> {neighbor}"
-                )
+            for node in found_nodes[:3]:
+                # Get 1-hop neighborhood
+                for neighbor in kg.successors(node):
+                    edge_data = kg.get_edge_data(node, neighbor)
+                    kg_context.append(
+                        f"{node} --[{edge_data.get('relation', 'related_to')}]--> {neighbor}"
+                    )
 
     if not all_results and not kg_context:
         return ""
