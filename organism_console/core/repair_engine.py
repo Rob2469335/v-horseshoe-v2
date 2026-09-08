@@ -261,11 +261,18 @@ def _record_repair_result(success: bool):
 
 
 def _find_related_tests(file_path: Path) -> List[Path]:
-    """Locate tests that exercise the repaired module (quality gate).
+    """Locate tests that genuinely EXERCISE the repaired module (quality gate).
 
-    Matches by filename AND by content (module path or basename imported), so a
-    test named test_foo.py that imports runtime_v2/services/fallback_manager is
-    found for fallback_manager.py even though the names differ."""
+    A test is a related test if it matches by NAME (a test_routes*.py) or by a
+    real IMPORT of the module's dotted path. It is NOT a related test merely for
+    mentioning the module's basename or file path as a string literal — that
+    style of loose content-matching pulled in whole-app boot/smoke tests
+    (TestClient(app)) and unrelated tests that reference 'swarm_os/api/routes.py'
+    only as a sample string. Those broad tests fail when any environment
+    dependency (Qdrant/embedding/backend) is down, so the canary then raised
+    recurring false 'test regression NOT attributable to <file>' flags on modules
+    (routes.py flagged 6x) that were never actually broken.
+    """
     tests_dir = _REPO_ROOT / "tests"
     if not tests_dir.exists():
         return []
@@ -274,26 +281,26 @@ def _find_related_tests(file_path: Path) -> List[Path]:
     except Exception:
         return []
     module_base = rel.stem
-    module_path = str(rel).replace("\\", "/").replace(".py", "")
-    related = []
+    # dotted import path, e.g. swarm_os.api.routes or runtime_v2.services.fallback_manager
+    dotted = ".".join(rel.parts[:-1] + (rel.stem,)) if rel.parts else rel.stem
+
+    related: list[tuple[int, Path]] = []
     for t in sorted(tests_dir.glob("test_*.py")):
+        # Name match is strongest (test_routes.py / test_fallback_manager.py
+        # may both exist even when the module basename is common).
+        if module_base in t.name or t.name.replace("test_", "").replace(".py", "") in module_base:
+            related.append((2, t))
+            continue
+        head = t.read_text(encoding="utf-8", errors="ignore")[:4000]
+        # A REAL import of the module (dotted path), not a bare path string.
         if (
-            module_base in t.name
-            or t.name.replace("test_", "").replace(".py", "") in module_base
+            f"from {dotted}" in head
+            or f"import {dotted}" in head
+            or f"from {dotted.rsplit('.', 1)[0]} import {rel.stem}" in head
         ):
-            related.append(t)
-            if len(related) >= 5:
-                break
-        else:
-            try:
-                head = t.read_text(encoding="utf-8", errors="ignore")[:4000]
-            except Exception:
-                continue
-            if module_path in head or module_base in head:
-                related.append(t)
-                if len(related) >= 5:
-                    break
-    return related
+            related.append((1, t))
+    related.sort(key=lambda x: (-x[0], x[1].name))
+    return [t for _, t in related[:5]]
 
 
 def _run_related_tests(file_path: Path) -> Optional[Dict[str, Any]]:
