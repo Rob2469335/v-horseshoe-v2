@@ -52,9 +52,15 @@ class BannedNodeVisitor(ast.NodeVisitor):
         # attribute-checked. `import os.path` binds `os` even though the alias
         # name is "os.path" — track the top-level segment too.
         self._os_names: set[str] = set()
-        # Names bound to dangerous os attributes via `from os import system`
-        # (with or without `as`), so a later `system(...)` call is caught.
+        # Names bound to dangerous os attributes via `from os import system` (with or without `as`), so a later `system(...)` call is caught.
         self._os_func_aliases: set[str] = set()
+        # Names bound to the reflection dicts `globals()`/`locals()`/`vars()`:
+        # `g = globals(); g['__builtins__']['eval'](...)` lifts banned calls by
+        # string subscript, bypassing Name/Attribute scans. Track the bound
+        # names so a later `g[...]` (or transitive `x = g` then `x[...]`) is
+        # flagged. The dicts themselves are never a legit sandbox target.
+        self._reflection_names: set[str] = {"globals", "locals", "vars", "__builtins__"}
+        self._reflection_alias: set[str] = set()
 
     def visit_Name(self, node):
         if node.id == "__builtins__":
@@ -211,6 +217,25 @@ class BannedNodeVisitor(ast.NodeVisitor):
                     for elt in target.elts:
                         if isinstance(elt, ast.Name):
                             self._os_names.add(elt.id)
+
+        # Track `g = globals()`, `l = locals()`, `v = vars()` (and transitive
+        # `x = g`) so a later `g['__builtins__']['eval'](...)` subscript is
+        # caught even when the reflection dict name is gone.
+        def _src_is_reflection(node_: ast.AST) -> bool:
+            if isinstance(node_, ast.Call) and isinstance(node_.func, ast.Name):
+                return node_.func.id in self._reflection_names
+            if isinstance(node_, ast.Name):
+                return node_.id in self._reflection_names or node_.id in self._reflection_alias
+            return False
+
+        if _src_is_reflection(node.value):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    self._reflection_alias.add(target.id)
+                elif isinstance(target, (ast.Tuple, ast.List)):
+                    for elt in target.elts:
+                        if isinstance(elt, ast.Name):
+                            self._reflection_alias.add(elt.id)
         self.generic_visit(node)
 
     def visit_AnnAssign(self, node):
@@ -262,7 +287,21 @@ class BannedNodeVisitor(ast.NodeVisitor):
             self.violations.append(
                 f"Banned builtins access found: '__builtins__' at line {node.lineno}"
             )
-        # `sys.modules['os'].system('rm -rf /')` — sys.modules yields a live os
+        elif isinstance(node.value, ast.Call) and isinstance(
+            node.value.func, ast.Name
+        ) and node.value.func.id in self._reflection_names:
+            # globals()['exec'] / locals()['...'] / vars()['os'] — subscripting a
+            # reflection dict lifts arbitrary names by STRING key, bypassing all
+            # Name/Attribute scans.
+            self.violations.append(
+                f"Banned reflection-dict subscript at line {node.lineno}"
+            )
+        elif isinstance(node.value, ast.Name) and node.value.id in self._reflection_alias:
+            # g = globals(); g['__builtins__']['eval'](...) — the alias was
+            # tracked in visit_Assign.
+            self.violations.append(
+                f"Banned reflection-dict subscript (alias) at line {node.lineno}"
+            )
         # module whose .system attr scan never fires (value is a Subscript, not
         # a Name tracked in _os_names).
         elif (

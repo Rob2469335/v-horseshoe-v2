@@ -1196,3 +1196,42 @@ def test_clean_sandbox_env_strips_aws_credentials():
     # Benign vars must remain
     assert env["AWS_REGION"] == "us-east-1"
     assert env["NORMAL_VAR"] == "should-remain"
+
+
+def test_security_gate_blocks_globals_subscript():
+    """REVERT-PROOF: globals()['exec']('x') previously bypassed every scan
+    (the banned call rides as a STRING subscript key, never a Name/Attribute).
+    Verified-bypass pre-fix; must now raise."""
+    from swarm_os.services.security_gate import SecurityGate, SecurityGateViolation
+
+    with pytest.raises(SecurityGateViolation):
+        SecurityGate.scan_code("globals()['exec']('x')", strict=True)
+
+
+def test_security_gate_blocks_builtins_via_globals_alias():
+    """g = globals(); g['__builtins__']['eval']('1+1') — alias-subscript to the
+    builtins dict. Verified-bypass pre-fix."""
+    from swarm_os.services.security_gate import SecurityGate, SecurityGateViolation
+
+    with pytest.raises(SecurityGateViolation):
+        SecurityGate.scan_code(
+            "g=globals(); b=g['__builtins__']; b['eval']('1+1')", strict=True
+        )
+
+
+def test_security_gate_blocks_locals_and_vars_subscript():
+    from swarm_os.services.security_gate import SecurityGate, SecurityGateViolation
+
+    with pytest.raises(SecurityGateViolation):
+        SecurityGate.scan_code("l=locals(); l['exec']('x')", strict=True)
+    with pytest.raises(SecurityGateViolation):
+        SecurityGate.scan_code("vars()['os']", strict=True)
+
+
+def test_security_gate_allows_benign_subscripts():
+    """Dict/list subscript and benign getattr must still pass (no overblock)."""
+    from swarm_os.services.security_gate import SecurityGate
+
+    SecurityGate.scan_code("a=[1,2]; a[0]", strict=True)
+    SecurityGate.scan_code("d={'k':1}; d['k']", strict=True)
+    SecurityGate.scan_code("x = getattr(obj, 'replace')", strict=True)
