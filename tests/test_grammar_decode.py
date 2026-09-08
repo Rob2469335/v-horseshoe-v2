@@ -148,7 +148,7 @@ def test_schema_remains_synced():
     assert gs["required"] == ["action"]
 
     assert gs["properties"]["action"]["enum"] == ps["properties"]["action"]["enum"]
-    assert len(gs["properties"]["action"]["enum"]) == 14
+    assert len(gs["properties"]["action"]["enum"]) == 22
 
     assert set(gs["properties"].keys()) == set(ps["properties"].keys())
     for key in gs["properties"]:
@@ -157,3 +157,18 @@ def test_schema_remains_synced():
         assert gs["properties"][key] == ps["properties"][key], (
             f"schema drift in property '{key}'"
         )
+
+
+def test_schema_enum_covers_tool_definitions():
+    """Every first-class action in _TOOL_DEFINITIONS must be expressible in the
+    strict json_schema enum (web_fetch/git/system/screen/email/playwright/todo
+    were missing -> cloud models using json_schema could not pick them and some
+    providers 400 the out-of-enum action)."""
+    from runtime_v2.services._grammar_schema import TOOL_DECISION_JSON_SCHEMA as gs
+    from runtime_v2.prompts.system_prompts import _TOOL_DEFINITIONS
+
+    enum = set(gs["properties"]["action"]["enum"])
+    # tool names in _TOOL_DEFINITIONS that are top-level actions (str keys)
+    defined = set(_TOOL_DEFINITIONS.keys())
+    missing = [t for t in defined if t not in enum]
+    assert not missing, f"schema action enum omits defined tools: {missing}"
