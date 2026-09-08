@@ -11,6 +11,16 @@ logger = logging.getLogger(__name__)
 
 
 class HealingService:
+    # Heal outcome counters are PROCESS-WIDE facts, not per-instance state:
+    # the daemon's service (main.py) performs the heals while the /control/heal
+    # route builds a fresh HealingService to report them. Keeping these on the
+    # INSTANCE made every fresh construction report 0 heals (misleading
+    # /control/heal numbers). Module-level counters are shared across all
+    # instances so the API sees the daemon's real totals.
+    _heals_total = 0
+    _heals_success = 0
+    _last_heal_success = None
+
     def __init__(
         self, detector=None, tracker=None, engine=None, rollback=None, governor=None
     ):
@@ -21,10 +31,6 @@ class HealingService:
         self.governor = governor or Governor()
         # BUG FIX: Lock to prevent concurrent run_once() and heal() racing on the same component
         self._recovery_lock = asyncio.Lock()
-        # BUG FIX: Track real heal outcomes instead of fabricating metrics
-        self._heals_total = 0
-        self._heals_success = 0
-        self._last_heal_success = None
 
     async def status(self):
         report = await self.detector.check()
@@ -50,10 +56,13 @@ class HealingService:
         }
 
     def _record_heal(self, success: bool):
-        self._heals_total += 1
+        # Mutate the CLASS-level counters (shared across instances) rather than
+        # creating per-instance attrs; otherwise the daemon's counts don't reach
+        # the /control/heal instance's status().
+        HealingService._heals_total += 1
         if success:
-            self._heals_success += 1
-        self._last_heal_success = success
+            HealingService._heals_success += 1
+        HealingService._last_heal_success = success
 
     async def run_once(self):
         logger.info("Running routine healing check.")
