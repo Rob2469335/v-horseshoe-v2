@@ -34,7 +34,7 @@ def test_analysis_agent_routes_to_cloud_when_key_present():
         ),
     ):
         for agent in ("code_analyzer", "researcher", "reviewer"):
-            assert get_litellm_model(agent, "qwen3.5-4b") == "gemini/gemini-2.5-flash"
+            assert get_litellm_model(agent, "qwen3.5-4b") == "nvidia_nim/deepseek-ai/deepseek-v4-flash-0731"
 
 
 def test_edit_agents_route_to_cloud_when_key_present():
@@ -49,7 +49,7 @@ def test_edit_agents_route_to_cloud_when_key_present():
         ),
     ):
         for agent in ("coder", "debugger"):
-            assert get_litellm_model(agent, "qwen3.5-4b") == "gemini/gemini-2.5-flash"
+            assert get_litellm_model(agent, "qwen3.5-4b") == "nvidia_nim/deepseek-ai/deepseek-v4-flash-0731"
 
 
 def test_executor_routes_to_cloud_when_key_present():
@@ -63,7 +63,7 @@ def test_executor_routes_to_cloud_when_key_present():
             SWARM_ROUTING_MODE="auto",
         ),
     ):
-        assert get_litellm_model("executor", "qwen3.5-4b") == "gemini/gemini-2.5-flash"
+        assert get_litellm_model("executor", "qwen3.5-4b") == "nvidia_nim/deepseek-ai/deepseek-v4-flash-0731"
 
 
 def test_analysis_agent_stays_local_without_cloud_key():

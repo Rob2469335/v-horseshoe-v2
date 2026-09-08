@@ -656,19 +656,39 @@ async def _distill(distiller_content: str, fix_class: str | None = None) -> str:
     )
 
     attempts = []
-    # 1. Gemini 2.5 Flash first — verified live HTTP 200 free provider (user-chosen
-    # lead for the distiller; Google AI Studio free tier, no quota flakes observed).
-    if os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"):
+    # 1. NVIDIA NIM DeepSeek-v4-Flash-0731 first — matches the live fallback
+    # chain lead (NVIDIA free NIM, then OpenCode Zen, then OpenRouter).
+    # Gemini / Groq / Ling were removed from this fleet per the 2026-09 chain
+    # decision.
+    if os.environ.get("NVIDIA_API_KEY") or os.environ.get("NVIDIA_NIM_API_KEY"):
+        os.environ.setdefault(
+            "NVIDIA_NIM_API_KEY", os.environ.get("NVIDIA_API_KEY", "")
+        )
         attempts.append(
             {
-                "model": "gemini/gemini-2.5-flash",
+                "model": "nvidia_nim/deepseek-ai/deepseek-v4-flash-0731",
                 "messages": [{"role": "user", "content": distiller_content}],
                 "max_tokens": DISTILLER_MAX_TOKENS_CLOUD,
-                "timeout": 90.0,
+                "timeout": 180.0,
             }
         )
-    # 2. OpenRouter DeepSeek V4 Flash — verified live HTTP 200 free/cheap DeepSeek
-    # (user-chosen second). Non-corporate: routes across ~22 upstream providers.
+    # 2. OpenCode DeepSeek v4-flash (OpenCode Zen free / Go paid account pair).
+    if os.environ.get("OPENAI_API_KEY"):
+        api_base = os.getenv("OPENAI_API_BASE", "https://opencode.ai/zen/go/v1")
+        api_key = os.environ["OPENAI_API_KEY"]
+        attempts.append(
+            {
+                "model": "deepseek-v4-flash",
+                "messages": [{"role": "user", "content": distiller_content}],
+                "api_base": api_base,
+                "api_key": api_key,
+                "custom_llm_provider": "openai",
+                "max_tokens": DISTILLER_MAX_TOKENS_CLOUD,
+                "timeout": 90.0,
+                "extra_headers": opencode_headers(),
+            }
+        )
+    # 3. OpenRouter DeepSeek V4 Flash (free/cheap, routes across ~22 upstreams).
     if os.environ.get("OPENROUTER_API_KEY"):
         attempts.append(
             {
@@ -686,57 +706,7 @@ async def _distill(distiller_content: str, fix_class: str | None = None) -> str:
                 "timeout": 120.0,
             }
         )
-    # 3. NVIDIA NIM DeepSeek-v4-Flash-0731 — kept (was the lead), but moved down:
-    # its inference endpoint has been flaky/timing out on the free tier today.
-    if os.environ.get("NVIDIA_API_KEY") or os.environ.get("NVIDIA_NIM_API_KEY"):
-        os.environ.setdefault(
-            "NVIDIA_NIM_API_KEY", os.environ.get("NVIDIA_API_KEY", "")
-        )
-        attempts.append(
-            {
-                "model": "nvidia_nim/deepseek-ai/deepseek-v4-flash-0731",
-                "messages": [{"role": "user", "content": distiller_content}],
-                "max_tokens": DISTILLER_MAX_TOKENS_CLOUD,
-                "timeout": 180.0,
-            }
-        )
-    # 4. Groq — key currently returns 403 (blocked), so kept but low; cooldown
-    # tracker will skip it after the first rejection rather than burning 90s.
-    if os.environ.get("GROQ_API_KEY"):
-        attempts.append(
-            {
-                "model": "groq/llama-3.3-70b-versatile",
-                "messages": [{"role": "user", "content": distiller_content}],
-                "max_tokens": DISTILLER_MAX_TOKENS_CLOUD,
-                "timeout": 90.0,
-            }
-        )
-    # 5. OpenRouter generic agentic fallback
-    if os.environ.get("OPENROUTER_API_KEY"):
-        attempts.append(
-            {
-                "model": "openrouter/stealth/ox-alpha",
-                "messages": [{"role": "user", "content": distiller_content}],
-                "max_tokens": 2000,
-                "timeout": 120.0,
-            }
-        )
-    # 5. OpenCode / DeepSeek paid fallbacks
-    if os.environ.get("OPENAI_API_KEY"):
-        api_base = os.getenv("OPENAI_API_BASE", "https://api.opencode.go/v1")
-        api_key = os.environ["OPENAI_API_KEY"]
-        attempts.append(
-            {
-                "model": "deepseek-v4-flash",
-                "messages": [{"role": "user", "content": distiller_content}],
-                "api_base": api_base,
-                "api_key": api_key,
-                "custom_llm_provider": "openai",
-                "max_tokens": DISTILLER_MAX_TOKENS_CLOUD,
-                "timeout": 90.0,
-                "extra_headers": opencode_headers(),
-            }
-        )
+    # 4. DeepSeek direct (paid api.deepseek.com) last of the cloud fleet.
     if os.environ.get("DEEPSEEK_API_KEY"):
         attempts.append(
             {
@@ -746,7 +716,7 @@ async def _distill(distiller_content: str, fix_class: str | None = None) -> str:
                 "timeout": 90.0,
             }
         )
-    # 6. Fast local summarizer
+    # 5. Fast local summarizer (last resort).
     attempts.append(
         {
             "model": "qwen3.5-0.8b",
