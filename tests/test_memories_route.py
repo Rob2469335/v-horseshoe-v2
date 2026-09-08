@@ -116,3 +116,105 @@ def test_memory_timestamp_except_handlers_are_parenthesized():
         if ", " in line and not line.startswith("except (")
     ]
     assert offenders == [], f"comma-form except handlers present: {offenders}"
+
+
+def test_memory_search_extracts_from_payload_level():
+    """REVERT-PROOF: VectorStore.search returns {id, score, payload}, so
+    /memory/search must read text/sender/timestamp from hit['payload'] — the
+    old hit.get('text'/'sender'/'timestamp') returned empties for every hit.
+    (routes.memory_search is exercised via the real extraction path by
+    monkeypatching VectorStore.search.)"""
+    import swarm_os.api.routes as r
+
+    captured = {}
+
+    class FakeVS:
+        def __init__(self, collection_name=None):
+            captured["shard"] = collection_name
+
+        async def search(self, query_vector=None, limit=8):
+            return [
+                {
+                    "id": "p1",
+                    "score": 0.9,
+                    "payload": {
+                        "text": "the actual memory text",
+                        "sender": "researcher",
+                        "timestamp": 1712300000,
+                    },
+                }
+            ]
+
+    def fake_get_embedding(q):
+        return [0.1] * 8
+
+    def fake_route(q):
+        return ["general"]
+
+    def fake_shard(name):
+        return "agent_memory_general_v2"
+
+    from unittest.mock import patch
+
+    import runtime_v2.services.memory_core as mc
+    import swarm_os.services.vector_store as vsmod
+
+    with patch.object(mc, "get_embedding", fake_get_embedding), patch.object(
+        mc, "_moe_route_shards", fake_route
+    ), patch.object(mc, "_get_shard_name", fake_shard), patch.object(
+        vsmod, "VectorStore", FakeVS
+    ):
+        import asyncio
+
+        res = asyncio.run(r.memory_search("hello"))
+    assert res["results"][0]["text"] == "the actual memory text", "text must come from payload"
+    assert res["results"][0]["sender"] == "researcher", "sender must come from payload"
+    assert res["results"][0]["timestamp"] == 1712300000, "timestamp must come from payload"
+
+
+def test_memory_search_extracts_from_payload_level():
+    """REVERT-PROOF: VectorStore.search returns {id, score, payload}; /memory/search
+    must read text/sender/timestamp from hit['payload'] — the old hit.get('text')
+    returned empties for every result (fields lived one level deeper)."""
+    import asyncio
+    from unittest.mock import patch
+
+    import swarm_os.api.routes as r
+    import runtime_v2.services.memory_core as mc
+    import swarm_os.services.vector_store as vsmod
+
+    def fake_get_embedding(q):
+        return [0.1] * 8
+
+    def fake_route(q):
+        return ["general"]
+
+    def fake_shard(name):
+        return "agent_memory_general_v2"
+
+    class FakeVS:
+        def __init__(self, collection_name=None):
+            pass
+
+        async def search(self, query_vector=None, limit=8):
+            return [
+                {
+                    "id": "p1",
+                    "score": 0.9,
+                    "payload": {
+                        "text": "the actual memory text",
+                        "sender": "researcher",
+                        "timestamp": 1712300000,
+                    },
+                }
+            ]
+
+    with patch.object(mc, "get_embedding", fake_get_embedding), patch.object(
+        mc, "_moe_route_shards", fake_route
+    ), patch.object(mc, "_get_shard_name", fake_shard), patch.object(
+        vsmod, "VectorStore", FakeVS
+    ):
+        res = asyncio.run(r.memory_search("hello", 8))
+    assert res["results"][0]["text"] == "the actual memory text", "text must come from payload"
+    assert res["results"][0]["sender"] == "researcher", "sender must come from payload"
+    assert res["results"][0]["timestamp"] == 1712300000, "timestamp must come from payload"

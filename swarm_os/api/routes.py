@@ -656,7 +656,12 @@ async def timeline(
                 )
                 if not raw_ts:
                     continue
-                ts = datetime.fromisoformat(str(raw_ts).replace("Z", "+00:00"))
+                # Accept ISO-8601 strings AND epoch floats (both appear in
+                # events from different writers); ether is fine.
+                if isinstance(raw_ts, (int, float)):
+                    ts = datetime.fromtimestamp(raw_ts, tz=timezone.utc)
+                else:
+                    ts = datetime.fromisoformat(str(raw_ts).replace("Z", "+00:00"))
                 if ts < cutoff:
                     continue
                 bucket = ts.replace(second=0, microsecond=0).isoformat(
@@ -671,7 +676,7 @@ async def timeline(
                 elif outcome == "fail":
                     buckets[bucket]["fail_count"] += 1
             except Exception as e:
-                log.warning("Failed to fetch ollama models: %s", e)
+                log.warning("Failed to parse timeline event: %s", e)
                 continue
 
     all_ev = await _safe_events(runtime)
@@ -732,13 +737,17 @@ async def memory_search(q: str, limit: int = Query(8, le=100)):
                 vs = VectorStore(collection_name=collection)
                 hits = await vs.search(query_vector=vector, limit=limit)
                 for hit in hits:
+                    # VectorStore.search returns {id, score, payload}; the
+                    # text/timestamp/sender live INSIDE hit["payload"] — reading
+                    # them from the hit dict returned empty for every result.
+                    pl = hit.get("payload") or {}
                     results.append(
                         {
                             "id": hit.get("id", ""),
                             "score": hit.get("score", 0.0),
-                            "text": hit.get("text", ""),
-                            "sender": hit.get("sender", "system"),
-                            "timestamp": hit.get("timestamp", ""),
+                            "text": pl.get("text") or pl.get("fact") or pl.get("content", ""),
+                            "sender": pl.get("sender") or pl.get("agent_id", "system"),
+                            "timestamp": pl.get("timestamp", ""),
                         }
                     )
             except Exception as e:
