@@ -97,7 +97,7 @@ class FailureDetector:
             tracker_path = os.path.join("logs", "token_tracker_state.json")
             if not os.path.exists(tracker_path):
                 return {"ok": True, "detail": "no tracker data"}
-            with open(tracker_path) as f:
+            with open(tracker_path, encoding="utf-8") as f:
                 data = json.load(f)
             # context_percent is recorded as e.g. 0.54; flag > 0.85
             recent = [v for k, v in data.items() if k.startswith("ctx")] or []

@@ -205,7 +205,7 @@ def _get_kg():
                 try:
                     import json
 
-                    with open(_kg_file, "r") as f:
+                    with open(_kg_file, "r", encoding="utf-8") as f:
                         data = json.load(f)
                         _kg = nx.node_link_graph(data)
                 except Exception as e:
@@ -222,7 +222,7 @@ def _save_kg():
                 import json
 
                 data = nx.node_link_data(_kg)
-                with open(_kg_file, "w") as f:
+                with open(_kg_file, "w", encoding="utf-8") as f:
                     json.dump(data, f)
             except Exception as e:
                 _log.warning("Error saving Knowledge Graph: %s", e)
