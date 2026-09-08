@@ -836,3 +836,35 @@ def test_autonomous_no_git_stash_in_baseline_eval_source():
         assert "subprocess.run" not in line, f"invocation present: {line.strip()}"
     assert "snapshot_worktree" in src
     assert 'restore_snapshot(attempt_base_snap' in src
+
+
+# ---------------------------------------------------------------------------
+# Handoff bug: "analyze ... and apply the fixes" was misclassified READ-ONLY
+# because "apply" was not a WRITE keyword and plural "fixes" does not match
+# the word-boundary `\bfix\b`. The fix pipeline was skipped entirely.
+# ---------------------------------------------------------------------------
+
+def test_apply_the_fixes_goal_is_write_not_readonly():
+    import re
+
+    from pathlib import Path
+
+    mod = _reload_autonomous()
+    src = Path(mod.__file__).read_text(encoding="utf-8")
+    ro_match = re.search(r"READ_ONLY_KEYWORDS\s*=\s*\[(.*?)\]", src, re.DOTALL)
+    wr_match = re.search(r"WRITE_KEYWORDS\s*=\s*\[(.*?)\]", src, re.DOTALL)
+    assert ro_match and wr_match
+    ro_kw = [w.strip().strip('"').strip("'") for w in ro_match.group(1).split(",") if w.strip()]
+    wr_kw = [w.strip().strip('"').strip("'") for w in wr_match.group(1).split(",") if w.strip()]
+    # "apply" + plural "fixes" must be recognized as write intent
+    assert "apply" in wr_kw, "WRITE_KEYWORDS must include 'apply'"
+    assert "fixes" in wr_kw, "WRITE_KEYWORDS must include plural 'fixes'"
+    goal = (
+        "analyze my codebase for bugs and search internet for improvements and "
+        "upgrades always read agent md first and apply the fixes"
+    ).lower()
+    has_ro = any(re.search(r"\b" + re.escape(kw) + r"\b", goal) for kw in ro_kw)
+    has_wr = any(re.search(r"\b" + re.escape(kw) + r"\b", goal) for kw in wr_kw)
+    assert has_ro and has_wr, "goal must be write-intent (has_ro=%s has_wr=%s)" % (has_ro, has_wr)
+    # and NOT read-only
+    assert not (has_ro and not has_wr), "goal must not classify as read-only"

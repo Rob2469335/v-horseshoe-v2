@@ -456,6 +456,8 @@ def run_autonomous_goal_loop(
         "make",
         "alter",
         "adjust",
+        "apply",
+        "fixes",
     ]
 
     goal_lower = goal.lower()
