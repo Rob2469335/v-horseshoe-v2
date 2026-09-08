@@ -19,7 +19,7 @@ class ErrorBoundary extends Component<{children: ReactNode, fallback: ReactNode}
 
 const SystemHealthSchema = z.object({
   module: z.string(),
-  status: z.enum(['healthy', 'degraded', 'error']).optional(),
+  status: z.enum(['healthy', 'degraded', 'error', 'offline']).optional(),
   latency: z.string().optional()
 });
 

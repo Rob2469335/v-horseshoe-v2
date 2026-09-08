@@ -8,7 +8,7 @@ export type GenerateRequest = {
 
 async function fetchJson<T>(baseUrl: string, path: string): Promise<T> {
   const controller = new AbortController()
-  const timeoutId = window.setTimeout(() => controller.abort(), appConfig.requestTimeoutMs)
+  const timeoutId = globalThis.setTimeout(() => controller.abort(), appConfig.requestTimeoutMs)
 
   try {
     const response = await fetch(`${baseUrl}${path}`, {
@@ -23,13 +23,13 @@ async function fetchJson<T>(baseUrl: string, path: string): Promise<T> {
 
     return (await response.json()) as T
   } finally {
-    window.clearTimeout(timeoutId)
+    globalThis.clearTimeout(timeoutId)
   }
 }
 
 async function postJson<TRequest, TResponse>(baseUrl: string, path: string, body: TRequest): Promise<TResponse> {
   const controller = new AbortController()
-  const timeoutId = window.setTimeout(() => controller.abort(), appConfig.requestTimeoutMs)
+  const timeoutId = globalThis.setTimeout(() => controller.abort(), appConfig.requestTimeoutMs)
 
   try {
     const response = await fetch(`${baseUrl}${path}`, {
@@ -48,7 +48,7 @@ async function postJson<TRequest, TResponse>(baseUrl: string, path: string, body
 
     return (await response.json()) as TResponse
   } finally {
-    window.clearTimeout(timeoutId)
+    globalThis.clearTimeout(timeoutId)
   }
 }
 

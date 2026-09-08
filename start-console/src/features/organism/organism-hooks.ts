@@ -79,7 +79,7 @@ export function useOrganismData() {
     const timelinePoints = timelineQuery.data?.points ?? []
     const toolCount = toolsQuery.data?.count ?? 0
     const systemReady = statusQuery.data?.ready ?? false
-    const ollamaReady = statusQuery.data?.ollama_reachable ?? false
+    const ollamaReady = statusQuery.data?.llamacpp_reachable ?? false
 
     const totalTimelineEvents = timelinePoints.reduce((sum, point) => sum + point.event_count, 0)
     const totalTimelineSuccess = timelinePoints.reduce((sum, point) => sum + point.success_count, 0)

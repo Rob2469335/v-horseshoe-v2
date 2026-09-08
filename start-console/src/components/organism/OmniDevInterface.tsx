@@ -19,7 +19,7 @@ export const OmniDevInterface: React.FC<OmniDevInterfaceProps> = ({ organismId, 
     setResult("");
 
     try {
-      const response = await fetch(`${app.apiUrl}/omnidev/run`, {
+      const response = await fetch(`${app.apiUrl}/features/omnidev/run`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ task, organismId })

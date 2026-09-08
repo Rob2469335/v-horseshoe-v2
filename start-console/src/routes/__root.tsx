@@ -1,10 +1,9 @@
-import { HeadContent, Scripts, createRootRoute } from '@tanstack/react-router'
+import { Outlet, HeadContent, Scripts, createRootRoute } from '@tanstack/react-router'
 import { TanStackRouterDevtoolsPanel } from '@tanstack/react-router-devtools'
 import { TanStackDevtools } from '@tanstack/react-devtools'
 import Sidebar from '../shell/Sidebar'
 import Topbar from '../shell/Topbar'
 import { SwarmTopology3D } from '../components/SwarmTopology3D'
-import type { ReactNode } from 'react'
 
 import appCss from '../styles.css?url'
 
@@ -58,7 +57,7 @@ export const Route = createRootRoute({
   shellComponent: RootDocument,
 })
 
-function RootDocument({ children }: { children?: ReactNode }) {
+function RootDocument() {
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
@@ -71,7 +70,7 @@ function RootDocument({ children }: { children?: ReactNode }) {
         <div className="flex flex-col flex-1 min-w-0 z-10 relative">
           <Topbar />
           <main className="flex-1 min-w-0 overflow-y-auto p-4 md:p-8 bg-transparent">
-            {children}
+            <Outlet />
           </main>
         </div>
         <TanStackDevtools

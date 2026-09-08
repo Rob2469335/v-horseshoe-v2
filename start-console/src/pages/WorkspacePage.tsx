@@ -4,8 +4,8 @@ import type { ReadyResponse, StatusResponse, ToolsResponse } from "../lib/types"
 import { useUiStore } from "../state/ui-store"
 
 type ToolsCacheResponse = {
-  cacheSize?: number
-  cachedKeys?: string[]
+  cache_size?: number
+  cached_keys?: string[]
 }
 
 function formatBoolean(value: boolean | undefined) {
@@ -145,14 +145,14 @@ export default function WorkspacePage() {
           <h2>Tool Cache</h2>
           <div style={{ fontSize: 14, color: "var(--text-soft)", marginBottom: 16 }}>
             Currently holding strong{" "}
-            <strong style={{ color: "var(--page-accent)" }}>{toolsCacheQuery.data?.cacheSize ?? 0}</strong> active traces in local memory.
+            <strong style={{ color: "var(--page-accent)" }}>{toolsCacheQuery.data?.cache_size ?? 0}</strong> active traces in local memory.
           </div>
           <pre className="agent-response" style={{ height: 200, padding: 16, background: "rgba(0,0,0,0.3)" }}>
             {toolsLoading
               ? "Reading cache..."
               : toolsCacheQuery.isError
                 ? getErrorMessage(toolsCacheQuery.error)
-                : JSON.stringify(toolsCacheQuery.data?.cachedKeys ?? [], null, 2)}
+                : JSON.stringify(toolsCacheQuery.data?.cached_keys ?? [], null, 2)}
           </pre>
         </article>
       </div>
