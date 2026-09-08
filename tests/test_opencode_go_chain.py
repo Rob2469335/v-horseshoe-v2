@@ -283,13 +283,15 @@ def test_groq_fetch_filters_non_chat_models(monkeypatch):
     assert ids == ["groq/openai/gpt-oss-20b", "groq/qwen/qwen3.6-27b"]
 
 
-def test_bare_local_aliases_are_local():
-    """Bare local model aliases (no openai/ prefix) must be classified local,
-    not cloud — a misclassification sends them to providers where they crash."""
+def test_prefixed_local_aliases_are_local():
+    """Local aliases reach _is_local_model as openai/<name> (the chain and
+    get_litellm_model prefix them). A BARE name is NOT classified local — it must
+    remain a cloud-candidate in get_litellm_model's analysis-cloud branch."""
     import runtime_v2.services.fallback_manager as fm
 
-    assert fm._is_local_model("robs4b") is True
-    assert fm._is_local_model("qwen3.5-4b") is True
-    assert fm._is_local_model("qwen3.5-0.8b") is True
+    assert fm._is_local_model("openai/qwen3.5-4b") is True
+    assert fm._is_local_model("openai/robs4b") is True
+    # bare alias is NOT local (it is a cloud-candidate / not-yet-resolved)
+    assert fm._is_local_model("qwen3.5-4b") is False
     # cloud stays cloud
     assert fm._is_local_model("openai/deepseek-v4-flash") is False
