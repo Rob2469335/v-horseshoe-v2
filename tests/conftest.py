@@ -17,6 +17,11 @@ from fastapi.testclient import TestClient
 import pytest
 
 from swarm_os.app.main import app
+import os
+
+@pytest.fixture(scope="session", autouse=True)
+def _mock_telegram_token():
+    os.environ["TELEGRAM_BOT_TOKEN"] = ""
 
 
 @pytest.fixture
