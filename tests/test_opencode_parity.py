@@ -2327,3 +2327,18 @@ def test_approval_deny_does_not_reenter():
         "denied approval must NOT re-enter the deny branch on second pass "
         "(approval replay infinite loop)"
     )
+
+
+def test_short_task_goals_not_intercepted_as_greeting():
+    """REVERT-PROOF: `"fix this bug"` / `"analyze this codebase"` (3 words)
+    contain "hi" inside "this" — the old greeting substring-check answered
+    "Hello!" instead of routing the task. Word-boundary matching must let real
+    short goals through, while a true greeting still greets."""
+    for goal in ("fix this bug", "analyze this codebase", "scan this file"):
+        decision = fast_route_coordinator(goal)
+        assert decision is None or decision.get("response", "") != (
+            "Hello! What can I help you with today?"
+        ), f"goal {goal!r} was masked as a greeting"
+    # genuine greetings still greet
+    assert fast_route_coordinator("hi")["response"] == "Hello! What can I help you with today?"
+    assert fast_route_coordinator("hello")["response"] == "Hello! What can I help you with today?"

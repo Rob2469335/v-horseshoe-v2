@@ -264,7 +264,16 @@ def fast_route_coordinator(user_prompt: str) -> dict | None:
     msg = user_prompt.lower().strip()
     words = msg.split()
 
-    if msg in _GREETINGS or (len(words) <= 3 and any(g in msg for g in _GREETINGS)):
+    # Greetings must match as WHOLE WORDS (\bhi\b), never as substrings: the
+    # old `g in msg` made "fix this bug" / "analyze this codebase" (3 words,
+    # each contains "hi" inside "this") silently answer "Hello!" instead of
+    # doing the task — a severe false-positive that routed real goals to the
+    # greeting branch.
+    import re as _re
+
+    if msg in _GREETINGS or (
+        len(words) <= 3 and any(_re.search(rf"\b{_re.escape(g)}\b", msg) for g in _GREETINGS)
+    ):
         return {"action": "final", "response": "Hello! What can I help you with today?"}
 
     # COMPOUND-GOAL PRECEDENCE: a goal that needs BOTH internet research AND code
