@@ -405,7 +405,14 @@ _GO_PAID_BASE = "https://opencode.ai/zen/go/v1"  # OpenCode Go PAID tier
 
 
 def _is_local_model(model_id: str) -> bool:
-    """True only for local llama.cpp models served via openai/{local_name}."""
+    """True only for local llama.cpp models served via openai/{local_name}, or
+    a BARE known-local name (robs4b, qwen3.5-4b, qwen3.5-0.8b, ...) — callers
+    sometimes pass the alias without the openai/ prefix; a bare local name must
+    not be classified as cloud (which would send it to providers and crash)."""
+    _LOCAL_NAMES = ("robs4b", "qwen3.5-4b", "qwen3.5-0.8b", "qwen3.5-4b-mtp")
+    bare = (model_id or "").strip().lower()
+    if bare in _LOCAL_NAMES:
+        return True
     if model_id.startswith("openai/"):
         name = model_id.replace("openai/", "").lower()
         if (

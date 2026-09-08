@@ -280,3 +280,15 @@ def test_groq_fetch_filters_non_chat_models(monkeypatch):
     models = asyncio.run(fm._fetch_groq_models())
     ids = [m["model"] for m in models]
     assert ids == ["groq/openai/gpt-oss-20b", "groq/qwen/qwen3.6-27b"]
+
+
+def test_bare_local_aliases_are_local():
+    """Bare local model aliases (no openai/ prefix) must be classified local,
+    not cloud — a misclassification sends them to providers where they crash."""
+    import runtime_v2.services.fallback_manager as fm
+
+    assert fm._is_local_model("robs4b") is True
+    assert fm._is_local_model("qwen3.5-4b") is True
+    assert fm._is_local_model("qwen3.5-0.8b") is True
+    # cloud stays cloud
+    assert fm._is_local_model("openai/deepseek-v4-flash") is False
