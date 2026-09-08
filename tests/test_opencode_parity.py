@@ -750,12 +750,16 @@ def test_researcher_task_is_web_research_only():
 
 
 @pytest.mark.asyncio
-async def test_web_fetch_result_not_truncated_to_tool_cap(monkeypatch):
+async def test_web_fetch_result_not_truncated_to_tool_cap(monkeypatch, tmp_path):
     """A web_fetch deep-read must NOT be truncated to MAX_RESULT_CHARS (1200).
     The fetcher returns up to 20KB of page markdown; capping it at 1200 threw
     away the fetched body, so the analysis agent produced "Internet search: Not
     performed" even after web_fetch succeeded — it had nothing to summarize.
-    Web results get the 20000 budget; filesystem listings stay at 1200."""
+    Web results get the 20000 budget; filesystem listings stay at 1200.
+    DIARY_PATH isolated so a swallowed failure cannot pollute the distiller."""
+    from swarm_os.services import reflection_loop as RL
+
+    monkeypatch.setattr(RL, "DIARY_PATH", tmp_path / "diary.jsonl")
     from runtime_v2.api.agent_service_v2 import AgentServiceV2, _CallState
     from runtime_v2.api._agent_config import MAX_RESULT_CHARS
 
@@ -795,9 +799,14 @@ async def test_web_fetch_result_not_truncated_to_tool_cap(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_filesystem_listing_still_capped_at_tool_budget(monkeypatch):
+async def test_filesystem_listing_still_capped_at_tool_budget(monkeypatch, tmp_path):
     """Non-web tool results keep the small MAX_RESULT_CHARS cap — the larger
-    budget is reserved for web_fetch/web_search deep-reads."""
+    budget is reserved for web_fetch/web_search deep-reads. DIARY_PATH is
+    isolated so a swallowed tool-failure cannot write real diary pollution
+    (the distiller then re-distills it as a code_analyzer garbage rule)."""
+    from swarm_os.services import reflection_loop as RL
+
+    monkeypatch.setattr(RL, "DIARY_PATH", tmp_path / "diary.jsonl")
     from runtime_v2.api.agent_service_v2 import AgentServiceV2, _CallState
     from runtime_v2.api._agent_config import MAX_RESULT_CHARS
 
