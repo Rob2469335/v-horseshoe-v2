@@ -20,7 +20,7 @@ log = logging.getLogger(__name__)
 # agents, so the warmup's filesystem reads never starve the web portion).
 _INTERNET_GOAL_RE = re.compile(
     r"search (the )?(internet|web)|on the internet|via web|web ?research|"
-    r"improvements?|upgrades?|latest|sota|best practices|current state of|"
+    r"latest|sota|best practices|current state of|"
     r"how(-| )to|what.s the (newest|latest)",
     re.IGNORECASE,
 )

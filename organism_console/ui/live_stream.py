@@ -602,7 +602,7 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                         )
 
                         auto_resolved = False
-                        if _perms_auto_mode():
+                        if _perms_auto_mode() and auth_tier != "ALWAYS_CONFIRM":
                             # opencode parity: auto mode auto-approves everything
                             # except an explicit `deny` (deny always wins).
                             auto_resolved = True
