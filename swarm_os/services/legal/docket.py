@@ -13,7 +13,7 @@ Deadlines computed (FRAP + 2d Cir. L.R.):
   - FRAP 31(a)(1): appellant's brief due 30 days after the docketing date (or
     the date the record is deemed filed, whichever is later).
   - FRAP 31(a)(1) appellee's brief: 30 days after appellant's brief is served.
-  - FRAP 28.1 / 2d Cir. L.R. 31.2: reply brief 14 days after appellee's brief.
+  - FRAP 31(a)(1): reply brief 21 days after appellee's brief (regular appeals).
   - FRAP 32(a)(7): type-volume limit (14,000 words for an appellant's brief).
   - Weekday rule (FRAP 26(a)): a deadline falling on a weekend/holiday moves to
     the next day that isn't.
@@ -229,12 +229,13 @@ def compute_deadlines(
             "FRAP 31(a)(1)",
             "appellant_brief_filed",
         )
-    # FRAP 28.1 / 2d Cir. L.R. 31.2: reply = 14 days after service of the appellee's brief.
+    # FRAP 31(a)(1): reply = 21 days after service of the appellee's brief.
+    # (FRAP 28.1's 14-day rule applies only to cross-appeals, not regular appeals.)
     if appee_brief:
         _add(
             "Reply brief due",
-            appee_brief + dt.timedelta(days=14),
-            "FRAP 28.1 / 2d Cir. L.R. 31.2",
+            appee_brief + dt.timedelta(days=21),
+            "FRAP 31(a)(1)",
             "appellee_brief_filed",
         )
     return deadlines

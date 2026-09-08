@@ -166,7 +166,7 @@ def test_memory_search_extracts_from_payload_level_v1():
     ):
         import asyncio
 
-        res = asyncio.run(r.memory_search("hello"))
+        res = asyncio.run(r.memory_search("hello", 8))
     assert res["results"][0]["text"] == "the actual memory text", "text must come from payload"
     assert res["results"][0]["sender"] == "researcher", "sender must come from payload"
     assert res["results"][0]["timestamp"] == 1712300000, "timestamp must come from payload"
