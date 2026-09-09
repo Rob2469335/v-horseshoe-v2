@@ -144,7 +144,7 @@ class SessionState:
                 }
             return json.dumps(snap, indent=2)
 
-        def _do_save():
+        def _do_save(seq: int = 0):
             try:
                 payload = _snapshot_and_serialize()
                 self.session_file.parent.mkdir(parents=True, exist_ok=True)
@@ -156,7 +156,14 @@ class SessionState:
                 with open(tmp, "w", encoding="utf-8") as fh:
                     fh.write(payload)
                 with self._lock:
-                    os.replace(tmp, self.session_file)
+                    if not hasattr(self, '_save_written_seq'):
+                        self._save_written_seq = -1
+                    if seq > self._save_written_seq:
+                        os.replace(tmp, self.session_file)
+                        self._save_written_seq = seq
+                    else:
+                        try: os.unlink(tmp)
+                        except OSError: pass
             except Exception as e:
                 import logging
 
@@ -164,10 +171,16 @@ class SessionState:
                     f"Failed to save session state: {e}"
                 )
 
+        with self._lock:
+            if not hasattr(self, '_save_seq'):
+                self._save_seq = 0
+            self._save_seq += 1
+            seq = self._save_seq
+
         if sync:
-            _do_save()
+            _do_save(seq)
         else:
-            t = threading.Thread(target=_do_save, daemon=True)
+            t = threading.Thread(target=_do_save, args=(seq,), daemon=True)
             t.start()
 
     def create_checkpoint(self, name: str) -> bool:
