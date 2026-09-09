@@ -13,6 +13,20 @@ from mcp.client.stdio import stdio_client
 logger = logging.getLogger(__name__)
 
 
+def _merge_env(base: dict, cfg_env: Optional[dict]) -> dict:
+    """Merge a server's config `env` map over a base env, dropping empty values.
+
+    An empty-string entry in swarm_config.json (e.g. `"GITHUB_PERSONAL_ACCESS_TOKEN": ""`)
+    must NOT clobber a real process/<.env> credential: the startup script exports
+    GITHUB_TOKEN→GITHUB_PERSONAL_ACCESS_TOKEN, so a literal `""` in the config would
+    otherwise leave the github MCP server unauthenticated. A NON-empty config value
+    deliberately overrides the base env.
+    """
+    if not cfg_env:
+        return dict(base)
+    return {**base, **{k: v for k, v in cfg_env.items() if v}}
+
+
 class ExternalMCPClientManager:
     """
     Manages active connections to external Model Context Protocol (MCP) servers.
@@ -66,8 +80,13 @@ class ExternalMCPClientManager:
                 logger.info(
                     f"Starting external MCP server '{name}': {command} {' '.join(args)}"
                 )
+                # _merge_env drops empty-string config entries so a real
+                # os.environ value (loaded from .env by start-dev.ps1) wins; a
+                # NON-empty config value deliberately overrides it.
                 server_params = StdioServerParameters(
-                    command=command, args=args, env={**os.environ, **(env or {})}
+                    command=command,
+                    args=args,
+                    env=_merge_env(os.environ, env),
                 )
 
                 # Use a per-server inner stack so that if initialize() fails,

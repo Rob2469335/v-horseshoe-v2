@@ -39,7 +39,7 @@ if (-not $env:ZENITH_WEATHER_CITY)  { $env:ZENITH_WEATHER_CITY  = "New York" }
 
 # Warn when a cloud API key is missing so degraded startup is visible, not silent.
 $missingKeys = @()
-foreach ($k in @("OPENROUTER_API_KEY","NVIDIA_API_KEY","GEMINI_API_KEY","GROQ_API_KEY","OPENAI_API_KEY","API_KEY","ALIBABA_API_KEY","ALIBABA_CODING_API_KEY","TAVILY_API_KEY","SERPER_API_KEY","BRAVE_API_KEY","EXA_API_KEY","SERPAPI_KEY","TINYFISH_API_KEY")) {
+foreach ($k in @("OPENROUTER_API_KEY","NVIDIA_API_KEY","GEMINI_API_KEY","GROQ_API_KEY","OPENAI_API_KEY","API_KEY","ALIBABA_API_KEY","ALIBABA_CODING_API_KEY","TAVILY_API_KEY","SERPER_API_KEY","BRAVE_API_KEY","EXA_API_KEY","SERPAPI_KEY","TINYFISH_API_KEY","GITHUB_TOKEN")) {
     if (-not [Environment]::GetEnvironmentVariable($k)) { $missingKeys += $k }
 }
 if ($missingKeys.Count -gt 0) {
@@ -67,6 +67,12 @@ Write-Host "SerpApi key present:      $([bool]$env:SERPAPI_KEY)" -ForegroundColo
 Write-Host "TinyFish key present:     $([bool]$env:TINYFISH_API_KEY)" -ForegroundColor Gray
 Write-Host "Firecrawl key present:    $([bool]$env:FIRECRAWL_API_KEY)" -ForegroundColor Gray
 Write-Host "Scavio key present:       $([bool]$env:SCAVIO_API_KEY)" -ForegroundColor Gray
+
+# Normalize the GitHub token so both the MCP github server and any gh-based
+# tool read the same credential. GITHUB_TOKEN is the canonical .env name; the
+# github-mcp-server.exe reads GITHUB_PERSONAL_ACCESS_TOKEN.
+if (-not $env:GITHUB_PERSONAL_ACCESS_TOKEN -and $env:GITHUB_TOKEN) { $env:GITHUB_PERSONAL_ACCESS_TOKEN = $env:GITHUB_TOKEN }
+Write-Host "GitHub key present:       $([bool]$env:GITHUB_TOKEN)" -ForegroundColor Gray
 Write-Host "OpenAI/OpenCode key:      $([bool]$env:OPENAI_API_KEY)" -ForegroundColor Gray
 Write-Host "Alibaba/DashScope key:    $([bool]$env:ALIBABA_API_KEY)" -ForegroundColor Gray
 Write-Host "Alibaba Coding Plan key:  $([bool]$env:ALIBABA_CODING_API_KEY)" -ForegroundColor Gray
