@@ -500,14 +500,14 @@ Package split from the deleted 1,275-line `rv_finder.py`. Exposed as `find_best_
 | `system_intel.py` | 592 | Read-only system intelligence tools |
 | `vision_router.py` | 84 | Llama.cpp Vision model router policy |
 | `memory_core.py` | 596 | `remember_fat()`, `get_relevant_memories()` — Qdrant-backed memory |
-| `_llm_parser.py` | 316 | `extract_json()`, `normalize_decision()`, `normalize_model_json()`, `TOOL_CALL_SCHEMA`, `fire_and_forget()` |
+| `_llm_parser.py` | 325 | `extract_json()`, `normalize_decision()`, `normalize_model_json()`, `TOOL_CALL_SCHEMA`, `fire_and_forget()` |
 | `stream_runner.py` | 597 | `get_tool_decision()` — orchestration: MCP schema, memory injection, retry loop, LLM call |
-| `tool_executor.py` | 1377 | `run(tool_name, payload)` — dispatches tool calls |
+| `tool_executor.py` | 1410 | `run(tool_name, payload)` — dispatches tool calls |
 | `fallback_manager.py` | 715 | `get_live_fallbacks()` — cloud model fallbacks, cooldowns, DeepSeek/Ling/OpenCode chain |
 | `_llm_client.py` | 611 | `complete_for_tool_decision()`, `stream_content()`, `build_router()` (litellm Router, per-deployment endpoint/key), `build_kwargs()`, `_cloud_response_format()` (strict json_schema), `SSL setup`, `get_litellm_model()` |
 | `model_registry.py` | 107 | `get_model(agent_id)` — agent → model mapping (every role maps to robs4b) |
 | `_llm_prompts.py` | 95 | `build_tool_decision_system()`, `JSON_REPAIR_PROMPT` (includes `/no_think` for Qwen3) |
-| `_grammar_schema.py` | 64 | GBNF grammar for local tool-decision constrained decoding (`SWARM_GRAMMAR_DECODE=1`) |
+| `_grammar_schema.py` | 73 | GBNF grammar for local tool-decision constrained decoding (`SWARM_GRAMMAR_DECODE=1`) |
 | `usage_log.py` | 310 | Durable per-model cost telemetry to `data/usage/usage.jsonl` |
 | `indexer.py` | 327 | Codebase indexer (`codebase` collection, chunking via :8081 embeddings, token-budget splitter) |
 | `semantic_search.py` | 47 | Code-chunk retrieval for agent prompts (graceful when index not ready) |
