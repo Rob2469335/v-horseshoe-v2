@@ -28,6 +28,62 @@ _MAX_TOOL_OUTPUT_BYTES = int(
 _GITHUB_RESEARCH_CAP = int(os.environ.get("SWARM_GITHUB_RESEARCH_CAP", "5"))
 _github_call_counts: dict[str, int] = {}
 
+
+async def _run_gh(args: list[str], timeout: float = 60.0) -> dict:
+    """Run the GitHub CLI (`gh`) as a subprocess and return a JSON-parseable dict.
+
+    Native async + the authenticated `gh` CLI (no PowerShell scripts, no external
+    script dir — the previous github_research impl booted `pwsh -File` against
+    qwen_train/scripts/*.ps1 which never existed in git, so the tool always
+    failed). Uses the same cancel-safe kill pattern as sandbox_repl/system_intel.
+
+    Returns {"ok": True, "out": <str-or-(dict/list)-if-JSON>, "rc": 0} on success
+    (gh prints JSON to stdout for --json / gh api), or
+    {"ok": False, "error": ...} on non-zero rc / timeout / gh-missing.
+    """
+    import json as _json
+    import shutil
+
+    gh_bin = shutil.which("gh")
+    if not gh_bin:
+        return {"ok": False, "error": "GitHub CLI (gh) not found on PATH"}
+    proc = await asyncio.create_subprocess_exec(
+        gh_bin,
+        *args,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        try:
+            async with asyncio.timeout(timeout):
+                stdout, stderr = await proc.communicate()
+        finally:
+            # CancelledError is a BaseException; the except TimeoutError alone
+            # wouldn't fire on a cancelled/abandoned stream → orphaned gh.
+            if proc.returncode is None:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                await proc.wait()
+        out_text = stdout.decode("utf-8", errors="replace").strip()
+        if proc.returncode != 0:
+            err_text = stderr.decode("utf-8", errors="replace").strip()[:500]
+            return {
+                "ok": False,
+                "rc": proc.returncode,
+                "error": err_text or "gh failed",
+            }
+        try:
+            parsed = _json.loads(out_text)
+            return {"ok": True, "rc": 0, "out": parsed}
+        except (_json.JSONDecodeError, ValueError):
+            return {"ok": True, "rc": 0, "out": out_text}
+    except asyncio.TimeoutError:
+        return {"ok": False, "error": f"gh timed out ({timeout}s)"}
+    except Exception as exc:  # pragma: no cover - defensive
+        return {"ok": False, "error": f"gh error: {str(exc)[:300]}"}
+
 _ROOT = Path(
     os.getenv("ZENITH_PROJECT_ROOT", Path(__file__).resolve().parent.parent.parent)
 )
@@ -785,19 +841,10 @@ async def _dispatch(
                 result = {"ok": False, "error": f"email operation failed: {exc}"}
 
         elif tool_name == "github_research":
-            import json as _json
-            import tempfile
-
-            _GITHUB_SCRIPTS = {
-                "discover": _ROOT / "qwen_train" / "scripts" / "discover.ps1",
-                "verify": _ROOT / "qwen_train" / "scripts" / "verify.ps1",
-                "build_gallery": _ROOT / "qwen_train" / "scripts" / "build_gallery.ps1",
-                "install": _ROOT / "qwen_train" / "scripts" / "install.ps1",
-            }
-            _GITHUB_MODES_ALLOWED = set(_GITHUB_SCRIPTS.keys())
+            _GITHUB_MODES_ALLOWED = ("discover", "verify", "install")
 
             # Per-run cap: keyed by run_id so concurrent runs don't share
-            # budget. Resets when any non-github tool fires (line ~383).
+            # budget. Resets when any non-github tool fires (line ~420).
             _github_call_counts[run_id] = _github_call_counts.get(run_id, 0) + 1
             if _github_call_counts[run_id] > _GITHUB_RESEARCH_CAP:
                 result = {
@@ -812,106 +859,92 @@ async def _dispatch(
                 mode = str(payload.get("mode") or "discover").strip().lower()
                 query = str(payload.get("query") or "").strip()
                 target_repo = str(payload.get("target_repo") or "").strip()
+                limit = int(payload.get("limit") or 8)
 
                 if mode not in _GITHUB_MODES_ALLOWED:
                     result = {
                         "ok": False,
                         "error": (
                             f"Unknown mode '{mode}'. "
-                            f"Allowed: {sorted(_GITHUB_MODES_ALLOWED)}"
+                            f"Allowed: {list(_GITHUB_MODES_ALLOWED)}"
                         ),
                     }
-                elif not query and mode in ("discover", "build_gallery"):
+                elif mode == "discover" and not query:
                     result = {
                         "ok": False,
-                        "error": "query is required for discover/build_gallery modes",
+                        "error": "query is required for discover mode",
                     }
-                elif mode == "verify" and not target_repo:
+                elif mode in ("verify", "install") and not target_repo:
                     result = {
                         "ok": False,
-                        "error": "target_repo (owner/name) is required for verify mode",
-                    }
-                elif mode == "install" and not target_repo:
-                    result = {
-                        "ok": False,
-                        "error": "target_repo (owner/name) is required for install mode",
+                        "error": (
+                            f"target_repo (owner/name) is required for {mode} mode"
+                        ),
                     }
                 else:
-                    script = _GITHUB_SCRIPTS.get(mode)
-                    cmd = ["pwsh", "-NoProfile", "-File", str(script)]
-                    if mode == "discover":
-                        cmd += ["-Query", query]
-                    elif mode == "verify":
-                        cmd += ["-Repo", target_repo]
-                    elif mode == "install":
-                        ecosystem = str(payload.get("ecosystem") or "Python").strip()
-                        cmd += ["-Repo", target_repo, "-Ecosystem", ecosystem]
-                    elif mode == "build_gallery":
-                        # write the candidates JSON to a temp file
-                        candidates_json = _json.dumps(
-                            payload.get("candidates", []), ensure_ascii=False
-                        )
-                        tmp = tempfile.NamedTemporaryFile(
-                            mode="w", suffix=".json", delete=False, encoding="utf-8"
-                        )
-                        tmp.write(candidates_json)
-                        tmp.close()
-                        cmd += ["-Query", query, "-CandidatesJsonPath", tmp.name]
                     try:
-                        proc = await asyncio.create_subprocess_exec(
-                            *cmd,
-                            stdout=asyncio.subprocess.PIPE,
-                            stderr=asyncio.subprocess.PIPE,
-                        )
-                        try:
-                            async with asyncio.timeout(180.0):
-                                stdout, stderr = await proc.communicate()
-                        finally:
-                            # asyncio.CancelledError inherits BaseException — the
-                            # except TimeoutError below never fires on a cancelled/
-                            # abandoned stream, so without this an orphaned pwsh
-                            # keeps running (mirrors sandbox_repl's cancel-safe kill).
-                            if proc.returncode is None:
-                                try:
-                                    proc.kill()
-                                except Exception:
-                                    pass
-                                await proc.wait()
-                        out_text = stdout.decode("utf-8", errors="replace").strip()
-                        if proc.returncode != 0:
-                            err_text = stderr.decode("utf-8", errors="replace").strip()[
-                                :500
-                            ]
-                            result = {
-                                "ok": False,
-                                "error": f"github_research failed (rc={proc.returncode}): {err_text}",
-                            }
-                        else:
-                            # Parse JSON output if present, else return raw text.
-                            # README text in results is automatically sanitized
-                            # by _sanitize_tool_output at the end of _dispatch.
-                            try:
-                                parsed = _json.loads(out_text)
-                                result = {"ok": True, "result": parsed}
-                            except (_json.JSONDecodeError, ValueError):
-                                result = {"ok": True, "result": out_text[:4000]}
-                    except asyncio.TimeoutError:
+                        if mode == "discover":
+                            r = await _run_gh(
+                                [
+                                    "search",
+                                    "repos",
+                                    query,
+                                    "--limit",
+                                    str(limit),
+                                    "--json",
+                                    "fullName,description,stargazersCount,url,language,updatedAt",
+                                    "--sort",
+                                    "stars",
+                                ]
+                            )
+                        elif mode == "verify":
+                            r = await _run_gh(
+                                [
+                                    "api",
+                                    f"repos/{target_repo}",
+                                    "--jq",
+                                    (
+                                        "{full_name, description, language, "
+                                        "stargazers_count, fork, archived, "
+                                        "open_issues_count, pushed_at, "
+                                        "license: (.license.spdx_id // null), "
+                                        "default_branch, homepage}"
+                                    ),
+                                ]
+                            )
+                        else:  # install
+                            r = await _run_gh(
+                                ["repo", "clone", target_repo, "--", "--depth", "1"],
+                                timeout=120.0,
+                            )
+                            if r.get("ok"):
+                                dest = Path.cwd() / target_repo.split("/")[-1]
+                                r = {
+                                    "ok": True,
+                                    "rc": 0,
+                                    "out": {
+                                        "cloned": target_repo,
+                                        "path": str(dest),
+                                        "note": (
+                                            "shallow clone (--depth 1); run "
+                                            "`gh repo clone <owner>/<name>` "
+                                            "for full history"
+                                        ),
+                                    },
+                                }
+                        # _run_gh already returns {"ok": True, "out": ...} or
+                        # {"ok": False, "error": ...}; surface that directly.
                         result = {
-                            "ok": False,
-                            "error": "github_research timed out (180s)",
+                            "ok": bool(r.get("ok")),
+                            "result": r.get("out")
+                            if r.get("ok")
+                            else r.get("error", "gh failed"),
                         }
-                    except Exception as exc:
+                    except Exception as exc:  # pragma: no cover - defensive
                         result = {
                             "ok": False,
                             "error": f"github_research error: {str(exc)[:300]}",
                         }
-                    finally:
-                        # The build_gallery candidate temp file must not leak.
-                        if mode == "build_gallery":
-                            try:
-                                Path(tmp.name).unlink(missing_ok=True)
-                            except Exception:
-                                pass
 
         elif tool_name == "mcp_register":
             import json

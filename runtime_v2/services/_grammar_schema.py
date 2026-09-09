@@ -46,6 +46,7 @@ TOOL_DECISION_JSON_SCHEMA = {
                 "todo",
                 "self_heal",
                 "final",
+                "github_research",
             ],
         },
         "target_agent": {"type": "string"},
