@@ -129,3 +129,53 @@ def test_merge_env_none_cfg_returns_base_copy():
     assert merged == {"A": "1"}
     merged["A"] = "2"  # must not mutate the caller's dict
     assert base == {"A": "1"}
+
+
+def test_readonly_github_modes_are_allow_not_confirm():
+    """Read-only github_research (discover/verify) must classify as ALLOW so a
+    research chain runs without a human approval; install stays gated.
+
+    Regression for the 2026-09-08 audit (C1): run() only extracted
+    operation/action/op, but github_research uses the 'mode' key — so the
+    policy's github_research branch (which ALLOWs discover/verify) never fired
+    and every read-only call was over-gated to CONFIRM.
+    """
+    from runtime_v2.services.tool_executor import run
+    from swarm_os.services.approval_registry import ALLOW, agent_tool_policy
+
+    assert agent_tool_policy("github_research", "discover") == ALLOW
+    assert agent_tool_policy("github_research", "verify") == ALLOW
+    assert agent_tool_policy("github_research", "install") != ALLOW
+
+    # End-to-end: discover (read-only) must NOT request confirmation.
+    first = asyncio.run(run("github_research", {"mode": "discover", "query": "ollama"}, auth=None))
+    assert first.get("status") != "confirmation_required", first
+    assert first.get("ok") is True
+
+
+@pytest.mark.asyncio
+async def test_github_malformed_and_huge_limit_do_not_raise(monkeypatch):
+    """A non-numeric or oversized 'limit' must degrade to a sane value (default 8
+    or clamped [1,50]), not raise a raw ValueError out of the dispatch try-block.
+
+    Regression for the 2026-09-08 audit (C3): `limit = int(payload["limit"])`
+    sat OUTSIDE the try, so a malformed limit escaped as ValueError.
+    """
+    class _P:
+        def __init__(self, out, rc=0): self._o=out; self.returncode=rc
+        async def communicate(self): return self._o, b""
+        def kill(self): self.returncode=-9
+        async def wait(self): return None
+
+    async def _fake_spawn(*_a, **_k):
+        return _P(json.dumps([{"fullName": "a/b", "stargazersCount": 1}]).encode())
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_spawn)
+    from runtime_v2.services import tool_executor as te
+    te.reset_exploration_state()
+
+    # read-only discover -> ALLOW -> executes; malformed/huge limit must not raise
+    r = await te.run("github_research", {"mode": "discover", "query": "ollama", "limit": "eight"}, auth=None)
+    assert r.get("ok") is True, r
+    r2 = await te.run("github_research", {"mode": "discover", "query": "ollama", "limit": 50000}, auth=None)
+    assert r2.get("ok") is True, r2
