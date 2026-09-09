@@ -228,6 +228,15 @@ async def _analyze_one(username: str, game: dict) -> dict[str, Any]:
             records = await asyncio.to_thread(
                 _analyze_game, board, 100000, game_obj, stop_flag
             )
+    except asyncio.CancelledError:
+        # On shutdown-cancel the caller cancels our task. Stop the Stockfish
+        # worker thread we spawned (stop_flag is the only signal _analyze_game
+        # polls) BEFORE letting the CancelledError propagate — the generic
+        # `except Exception` below does NOT catch CancelledError (it's a
+        # BaseException), so without this the thread + engine run to completion
+        # past shutdown. Re-raise so the caller's cancel path still runs.
+        stop_flag[0] = True
+        raise
     except Exception as exc:
         stop_flag[0] = True
         return {"records": [], "mistakes": 0, "error": f"analysis: {exc}"}
