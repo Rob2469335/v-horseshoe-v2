@@ -641,6 +641,14 @@ async def refresh_fallbacks_if_needed(mode: str = "auto"):
         #   5) DeepSeek DIRECT (paid api.deepseek.com)
         #   6) local llama.cpp (final fallback)
         #
+        # Initialize to [] so the stats block below is always defined — a
+        # local_only refresh never assigns these (the mode branch is skipped),
+        # and referencing them uninitialized raised UnboundLocalError on every
+        # /local decision (the local_only head of get_tool_decision).
+        _opencode_zen: list = []
+        _opencode_go: list = []
+        _deepseek_or: list = []
+        _deepseek_direct: list = []
         if mode != "local_only":
             _opencode_models = _get_opencode_fallback()
             _opencode_zen = _opencode_models[:1]  # [0] = Zen FREE
