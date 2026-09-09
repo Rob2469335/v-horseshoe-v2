@@ -1,7 +1,7 @@
 from organism_console.skills.skill_repository import Skill
 import numpy as np
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 try:
     from fastembed import TextEmbedding
@@ -39,7 +39,7 @@ class SkillMemoryEngine:
             existing.confidence = self.bayesian_confidence(
                 existing.success_count, existing.failure_count
             )
-            existing.updated_at = datetime.utcnow().isoformat()
+            existing.updated_at = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
             repo.upsert(existing, self.embed(existing.pattern))
             print(
                 f"[memory] Reinforced skill {existing.id}: confidence {existing.confidence}"
@@ -74,7 +74,7 @@ class SkillMemoryEngine:
             skill.confidence = self.bayesian_confidence(
                 skill.success_count, skill.failure_count
             )
-            skill.updated_at = datetime.utcnow().isoformat()
+            skill.updated_at = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
             repo.upsert(skill, self.embed(skill.pattern))
             print(
                 f"[memory] Reinforced skill {skill_id}: success={success} confidence={skill.confidence}"

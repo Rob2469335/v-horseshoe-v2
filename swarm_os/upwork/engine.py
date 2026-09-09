@@ -1,6 +1,6 @@
 import json
 import httpx
-from datetime import datetime
+from datetime import datetime, timezone
 
 LLAMA_URL = "http://127.0.0.1:8080/v1/chat/completions"
 MODEL = "qwen3.5-4b"
@@ -75,7 +75,7 @@ async def run_upwork_task(task_type: str, user_input: str):
                 "type": "proposal",
                 "content": content,
                 "memory_used": memory_count,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
             }
 
         elif task_type == "rate":
@@ -108,7 +108,7 @@ async def run_upwork_task(task_type: str, user_input: str):
                 "hours": response_json.get("hours", "10-20"),
                 "bid": response_json.get("bid", "$500"),
                 "analysis": response_json.get("analysis", "No analysis provided."),
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
             }
 
         elif task_type == "scope":

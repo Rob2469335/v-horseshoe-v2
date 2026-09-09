@@ -220,7 +220,7 @@ async def cache_tool_decision(messages: list, agent_id: str, decision: dict):
             f"agent:{agent_id} decision: {last_msg[:400]}".rstrip()
         )
         from qdrant_client.models import PointStruct
-        from datetime import datetime as _dt
+        from datetime import datetime as _dt, timezone as _tz
 
         await _client.upsert(
             collection_name=_collection,
@@ -231,7 +231,7 @@ async def cache_tool_decision(messages: list, agent_id: str, decision: dict):
                     payload={
                         "agent_id": agent_id,
                         "decision": decision,
-                        "ts": _dt.utcnow().isoformat(),
+                        "ts": _dt.now(_tz.utc).replace(tzinfo=None).isoformat(),
                     },
                 )
             ],

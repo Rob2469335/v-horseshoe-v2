@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 import numpy as np
 import uuid
 from qdrant_client import QdrantClient
@@ -13,8 +13,16 @@ class Skill:
     confidence: float = 1.0
     success_count: int = 0
     failure_count: int = 0
-    created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
-    updated_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    created_at: str = field(
+        default_factory=lambda: datetime.now(timezone.utc)
+        .replace(tzinfo=None)
+        .isoformat()
+    )
+    updated_at: str = field(
+        default_factory=lambda: datetime.now(timezone.utc)
+        .replace(tzinfo=None)
+        .isoformat()
+    )
 
 
 class SkillRepository:

@@ -1,6 +1,6 @@
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as rest
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
 
 COLLECTION = "upwork_learning"
@@ -31,7 +31,7 @@ def store_proposal(job_vector, proposal_vector, payload: dict):
                 payload={
                     **payload,
                     "proposal_vector": proposal_vector,
-                    "created_at": datetime.utcnow().isoformat(),
+                    "created_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
                 },
             )
         ],
