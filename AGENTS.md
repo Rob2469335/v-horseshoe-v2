@@ -991,6 +991,33 @@ relaunch via start-dev.ps1 when ready.
 
 ## Recent Changes (do NOT re-apply)
 
+### FEAT: GitHub researcher restored — native `gh` CLI + MCP github-server auth (2026-09-08)
+
+`github_research` was removed in `817528d` as dead: its executor booted
+`pwsh -File qwen_train/scripts/*.ps1`, scripts that never existed in git, so any
+agent that picked the tool got a guaranteed failure. Restored as a working,
+native async Python `gh` CLI tool (execute `_run_gh` in `tool_executor.py`):
+- `discover` → `gh search repos <q> --limit N --json ... --sort stars`
+- `verify` → `gh api repos/<owner>/<name> --jq '{license, archived, pushed_at, open_issues_count, ...}'`
+- `install` → `gh repo clone <owner>/<name> -- --depth 1` (shallow, reports path)
+- No PowerShell scripts, no external script dir; `gh` binary via `shutil.which`,
+  cancel-safe kill on timeout/cancel (mirrors `sandbox_repl`).
+- Re-added to `_TOOL_DEFINITIONS`, `_AGENT_TOOLS` (researcher+coder), and both
+  action enums (`_llm_parser.py` + `_grammar_schema.py`, sync-test 22→23).
+- Gated as `CONFIRM` (approval required to run), like other state-changing tools.
+
+**MCP github server auth**: `swarm_os/lib/mcp/mcp_client.py` gained a pure
+`_merge_env(base, cfg_env)` helper — empty-string config env entries (e.g.
+`"GITHUB_PERSONAL_ACCESS_TOKEN": ""` in swarm_config.json) no longer clobber a
+real `os.environ` value, so the github-mcp-server.exe authenticates. `start-dev.ps1`
+loads `GITHUB_TOKEN` from `.env` (added to the missing-key list + presence
+banner) and normalizes it to `GITHUB_PERSONAL_ACCESS_TOKEN`. Patch has
+`repo` scope, stored only in gitignored `.env`.
+
+Regression tests: `tests/test_github_research.py` (6 — `_run_gh` discover
+parse / non-zero fallback / timeout-kill + `_merge_env` empty-drop / nonempty-win
+/ None). Live-verified: `verify ollama/ollama` → real data; approved path runs.
+
 ### FIX: Production-audit confirmed bugs + deep-research hardening round (2026-09-08, one logical change per commit)
 
 A full production-grade audit (adversarial tracing, cross-file contract checks,
