@@ -125,7 +125,7 @@ def _analysis_cloud_enabled() -> bool:
     flag = os.getenv("SWARM_ANALYSIS_CLOUD", "auto").strip().lower()
     if flag in ("off", "0", "false", "local"):
         return False
-    # Free providers only: a no-cost key (NVIDIA/Groq/Gemini/OpenRouter) enables
+    # Free providers only: a no-cost key (NVIDIA/OpenRouter) enables
     # the analysis-cloud hop. Paid-only accounts (OPENAI_API_KEY = OpenCode Go,
     # DEEPSEEK_API_KEY = DeepSeek direct) must NOT satisfy it — free credit burns
     # first; the paid accounts stay last-resort fallbacks, not the default.
@@ -133,8 +133,6 @@ def _analysis_cloud_enabled() -> bool:
         os.getenv(k)
         for k in (
             "NVIDIA_API_KEY",
-            "GROQ_API_KEY",
-            "GEMINI_API_KEY",
             "OPENROUTER_API_KEY",
         )
     )
