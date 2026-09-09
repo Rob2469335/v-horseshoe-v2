@@ -5,13 +5,26 @@ import httpx
 
 log = logging.getLogger(__name__)
 
-# Reusing the orchestrator's global client pattern
-global_httpx_client = httpx.AsyncClient(timeout=120.0)
+# Reusing the orchestrator's global client pattern — but with a LOCAL lazy
+# getter: importing orchestrator's would be circular (orchestrator imports
+# CloudLLMClient from this module).
+_global_httpx_client: httpx.AsyncClient | None = None
+
+
+def get_global_httpx_client() -> httpx.AsyncClient:
+    """Lazy shared httpx client — avoids binding the connection pool to a dead
+    event loop (recreated across pytest-asyncio tests / Uvicorn reloads)."""
+    global _global_httpx_client
+    if _global_httpx_client is None or _global_httpx_client.is_closed:
+        _global_httpx_client = httpx.AsyncClient(timeout=120.0)
+    return _global_httpx_client
 
 
 async def close_global_client() -> None:
     """Close the module-level shared httpx client on shutdown."""
-    await get_global_httpx_client().aclose()
+    global _global_httpx_client
+    if _global_httpx_client is not None and not _global_httpx_client.is_closed:
+        await _global_httpx_client.aclose()
 
 
 class CloudLLMClient:
