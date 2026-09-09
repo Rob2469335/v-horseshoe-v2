@@ -587,7 +587,7 @@ Dependency pairing: React 19 ↔ `@react-three/fiber` ^9.5 / `@react-three/drei`
 
 ## Qwen3.5 Local Model
 
-- **Model**: local generation is served under the `robs4b` alias (the trained persona+code LoRA merged to GGUF, `qwen_train\robs4b_q4km.gguf`) on :8080/8079. **CAUTION**: per the CURRENT note, that GGUF was merged from the WRONG adapter and does NOT carry the working persona — it must be re-merged from `robs4b_final_adapter` before the persona is usable. The base MTP `Qwen3.5-4B-UD-Q4_K_XL.gguf` is NOT on disk (only the gte/vision/0.8B GGUFs live in `models\`; 4B-family GGUFs live under `qwen_train\`). Heavy reasoning routes to cloud, so only the local 4B is served.
+- **Model**: local generation is served under the `robs4b` alias (the trained persona+code LoRA merged to GGUF, `qwen_train\robs4b_q4km.gguf`) on :8080/8079. **CAUTION (verified 2026-09-08)**: the persona does NOT reproduce at generation — even the correctly-merged `robs4b_final_adapter` (most plausibly what this GGUF carries; see the CURRENT note CORRECTION) hedges like the un-adapted base, because Qwen3.5-4B's RLHF financial-advice prior overrides the LoRA at decode time. Re-merge is NOT a fix for the persona. What the GGUF reliably carries is the **code-repair capability** (the 10/10 repair gate), which is unaffected and intact. The base MTP `Qwen3.5-4B-UD-Q4_K_XL.gguf` is NOT on disk (only the gte/vision/0.8B GGUFs live in `models\`; 4B-family GGUFs live under `qwen_train\`). Heavy reasoning routes to cloud, so only the local 4B is served.
 - **Model name in API**: `robs4b` (all of `config/agent_models.json` + `runtime_v2/services/model_registry.py` map every agent to `("robs4b","llama")`; default also robs4b). `launch_llama.bat` defaults `GEN_MODEL` to `qwen_train\robs4b_q4km.gguf` alias `robs4b`. NOTE: `control_plane/shared_model_registry.py` still says `qwen3.5-4b` — an unreconciled code inconsistency vs the robs4b default.
 - **Thinking mode**: Disabled via `/no_think` prepended to all system prompts in `_llm_prompts.py`
 - **Server**: launch `launch_llama.bat` (launches `bin\llama.exe serve -m "C:\Users\rober\Projects\v-horseshoe-v2\qwen_train\robs4b_q4km.gguf" --alias "robs4b" -c 16384 -fa on -ctk q8_0 -ctv q8_0 -t 2 -tb 4 -b 2048 -ub 512 -np 1 -ngl 99 --timeout 300 --port <8079>`); agent/API traffic reaches it :8080 via the proxy.
@@ -602,28 +602,36 @@ Dependency pairing: React 19 ↔ `@react-three/fiber` ^9.5 / `@react-three/drei`
 > cross-check `qwen_train/results/` + running processes. If primary is stuck/
 > idle here, pick the thread up.
 
-**CURRENT (2026-09-06, persona CORRECTED after tonight):** The 2026-09-05 "fully
-trained, gated 10/10, GGUF'd" persona claim below was FALSIFIED. Verified: (1)
-`robs4b_q4km.gguf` was merged from the WRONG adapter — it does NOT carry the
-persona (exact-match over GF-merged base returns generic/inverted answers: the
-$5000-FB-ads "no" inverted to "yes but"); (2) the persona, even on the
-CORRECTLY-merged `robs4b_final_adapter` (r16, the real persona adapter), does
+**CURRENT (2026-09-08, persona-hedge finding stands; WRONG-artifact claim CORRECTED):** The 2026-09-05 "fully
+trained, gated 10/10, GGUF'd" persona claim below was FALSIFIED. Verified: (1) the
+persona, even on the CORRECTLY-merged `robs4b_final_adapter` (r16, the real persona adapter), does
 NOT reproduce at generation — it hedges ("no one-size-fits-all / I must provide
 balanced guidance") identically to the un-adapted base, because Qwen3.5-4B's
-RLHF financial-advice safety prior overrides the LoRA at decode time; (3) an
+RLHF financial-advice safety prior overrides the LoRA at decode time; (2) an
 r=64/a=128 retrain (3 epochs, /workspace + local robs4b_r64_adapter) deepened
 imprint (persona loss 1.912->1.001, code 0.76->0.37, per loss_diag) but STILL
 hedges like base at generation — clean NULL for the rank-capacity lever (n=2,
-rank-only axis). Remaining (all UNPROVEN): train-with-deployment-framing / DPO
-vs hedge / heavy repetition. Code-repair capability (the 10/10 repair gate) is
-UNAFFECTED and intact on the clone-trained adapters.
+rank-only axis). **CORRECTION (2026-09-08, artifact-verified): the earlier claim
+that `robs4b_q4km.gguf` "was merged from the WRONG adapter" is NOT supported by
+the artifact trail — both merge scripts (`merge_v6.py`, `merge_verify_pod.py`)
+target `robs4b_final_adapter`, and the GGUF (2026-09-05 13:25) predates the only
+other candidate (`robs4b_r64_adapter`, 2026-09-06 03:03), so the served GGUF most
+plausibly DOES carry `robs4b_final_adapter`. GGUF verified loadable via the repo
+`bin\llama-tokenize.exe`. What the earlier note actually proved remains true and
+is the operative fact: the persona hedges at generation even on the correctly-
+merged adapter, so "re-merge the correct adapter" would NOT restore the persona.
+Remaining (all UNPROVEN): train-with-deployment-framing / DPO vs hedge / heavy
+repetition. Code-repair capability (the 10/10 repair gate) is UNAFFECTED and
+intact on the clone-trained adapters.
 Persona teaching infrastructure added: `qwen_train/eval_persona.py`
 (structural persona-row filter =63, exact-match + holdout, --compare-base-port
 base control), `qwen_train_data/persona_eval_holdout.json` (16 holdout Qs),
 `qwen_train/log_run.py` + `training_runs.jsonl` (r16+r64 logged).
 297-row dataset (234 repair + 63 persona). Model routing renamed `robs4b`; the
-`robs4b_q4km.gguf` being served is the WRONG artifact and must be re-merged from
-`robs4b_final_adapter` (or a working persona attempt) before use.
+`robs4b_q4km.gguf` being served most plausibly already carries `robs4b_final_adapter`
+(see CORRECTION above — the "WRONG artifact" claim was artifact-unsupported). A
+persona attempt that actually overrides the RLHF hedge at decode time would be a
+new training run; none exists yet.
 Audit commits (7/11) and remaining items as below (unchanged). All pods
 terminated ($0, ~$1.5 spent across tonight's two 3090 sessions).
 
