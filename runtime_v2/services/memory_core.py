@@ -619,7 +619,13 @@ def prune_old_memories(
 
     collection = _get_shard_name(shard)
     cutoff_ts = _time.time() - (days * 86400)
-    cutoff_iso = __import__("datetime").datetime.utcfromtimestamp(cutoff_ts).isoformat()
+    cutoff_iso = (
+        __import__("datetime").datetime.fromtimestamp(
+            cutoff_ts, __import__("datetime").timezone.utc
+        )
+        .replace(tzinfo=None)
+        .isoformat()
+    )
     try:
         if dry_run:
             count_resp = requests.post(
