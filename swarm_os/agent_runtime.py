@@ -51,11 +51,32 @@ class AgentRuntime:
         if not isinstance(payload, dict):
             return False
         if tool_name == "filesystem":
+            # Normalize operation aliases the SAME way filesystem_handler does
+            # (write_file/create_file/save/put -> write; patch_file/edit/... ->
+            # patch). Before this, the legacy /tools/execute path could smuggle a
+            # file WRITE past the approval gate by sending operation="write_file"
+            # (is_state_changing only recognized "write"/"patch"/"delete").
             op = payload.get("operation", "").lower().strip()
-            return op in ("write", "patch", "delete")
+            if op in ("write", "write_file", "create", "create_file", "save", "put"):
+                return True
+            if op in (
+                "patch",
+                "patch_file",
+                "edit",
+                "edit_file",
+                "update",
+                "modify",
+                "replace",
+                "replace_file_content",
+            ):
+                return True
+            return op in ("delete", "remove", "rm")
         if tool_name == "sandbox_repl":
+            # pytest EXECUTES arbitrary test code in a subprocess — the same
+            # class of primitive as the python/powershell branches, so it must
+            # not be dispatchable without approval via the legacy path.
             lang = payload.get("language", "").lower().strip()
-            return lang in ("python", "powershell")
+            return lang in ("python", "powershell", "pytest")
         if tool_name == "playwright":
             # Browser INPUT operations drive the persistent, logged-in browser
             # (clicks, typed text, form fills, key presses) — the same set the
@@ -74,6 +95,14 @@ class AgentRuntime:
                 "select",
                 "scroll",
             )
+        if tool_name == "mcp":
+            # External MCP tools (sqlite/db writes, memory, context etc.) can
+            # be state-changing on arbitrary stores — keep them behind the gate.
+            return True
+        if tool_name == "github_research":
+            # The install mode runs an installer script; treat the whole tool as
+            # state-changing so the legacy path cannot invoke it unapproved.
+            return True
         return False
 
     async def call_tool(
