@@ -337,10 +337,10 @@ claim matters and isn't trivially re-derivable, verify it with the actual tool
 | `orchestrator.py` | 4 | Orchestrator stub |
 | `simulation_service.py` | 86 | Simulation service logic |
 | `tool_registry.py` | 404 | `SemanticToolRegistry` — Qdrant-backed semantic tool discovery with async client |
-| `llm_client.py` | 332 | `CloudLLMClient` — detects provider (OpenRouter/NVIDIA/llama.cpp) via litellm |
+| `llm_client.py` | 345 | `CloudLLMClient` — detects provider (OpenRouter/NVIDIA/llama.cpp) via litellm; local `get_global_httpx_client()` lazy getter |
 | `genetic_mutation_loop.py` | 565 | Code mutation loop for self-improvement (DangerRoom+SecurityGate+compile+pytest validated, staged for approval; daemonized hourly via `SWARM_GENETIC_MUTATION=1`) |
 | `vector_store.py` | 260 | Qdrant vector store wrapper (AsyncQdrantClient) |
-| `reflection_loop.py` | 959 | `ReflectionService` — ASPO rule distiller: failures → correction rules → Qdrant (diary + agent tool_failure entries, component-preferring `get_latest_failure`) |
+| `reflection_loop.py` | 934 | `ReflectionService` — ASPO rule distiller: failures → correction rules → Qdrant (diary + agent tool_failure entries, component-preferring `get_latest_failure`) |
 | `chat_service.py` | 180 | Context compaction, model auto-assignment, reachability checks |
 | `knowledge_graph.py` | 124 | AST import dependency graph (networkx) |
 | `system_service.py` | 88 | Multi-layer health (system, LLM, Qdrant) |
@@ -351,7 +351,7 @@ claim matters and isn't trivially re-derivable, verify it with the actual tool
 | `embedding_service.py` | 72 | Dedicated embedding client (port 8081, nomic-embed) |
 | `outcome_fitness.py` | 269 | Real task-outcome fitness feed (research-grounded composite, completion-gated); persisted to `data/evolution/fitness.jsonl`, gated by `SWARM_EVOLUTION=1` |
 | `evolution_daemon.py` | 491 | Outcome-driven evolution daemon: score population by best recorded outcome, elite-selection + crossover + mutate, persist next generation; `_best_genome_tool_weights()` exposes the evolved tool policy |
-| `watch_loop.py` | 833 | Server-side autonomous watch-loop daemon (`SWARM_AUTONOMY=1` default): tails events.jsonl, repairs `tool_result` failures, heartbeat/stale detection, rolling 24h budget, signal-gated canary rollback |
+| `watch_loop.py` | 870 | Server-side autonomous watch-loop daemon (`SWARM_AUTONOMY=1` default): tails events.jsonl, repairs `tool_result` failures, heartbeat/stale detection, rolling 24h budget, signal-gated canary rollback |
 | `approval_registry.py` | 451 | Pre-dispatch authorization for the agent tool boundary: `agent_tool_policy()` ALLOW/CONFIRM/ALWAYS_CONFIRM/DENY + one-time pending-action registry (opaque `pending_id`, SHA-256 arg digest, 5-min TTL) |
 | `permission_tiers.py` | 314 | Risk-classified permission model (tier × channel axes, unknown → human channel fail-closed), per-target grants, `is_scheduler_allowed` hook |
 | `task_scheduler.py` | 512 | Recurring agent-task scheduler (registry in `data/tasks.json`, ceiling-checked dispatch, notify-when-done) |
@@ -362,10 +362,10 @@ claim matters and isn't trivially re-derivable, verify it with the actual tool
 | `competitive_intel.py` | 1112 | Competitive Intelligence Monitor — the paid CI service: deterministic change detection (snapshots + noise-filtered diffing, no LLM in the detector), rule-based classification/significance/dedup with a 10–15-item curation cap, `IntelligenceSynthesizer` (remote→local→deterministic "so what" — the only LLM seam), delivery (email/Telegram/Slack + records), weekly `SWARM_INTEL=1` daemon |
 | `books_service.py` | 595 | Book library service (157-book manifest, genre/tier filters, search, LLM synthesis) |
 | `chess_trainer.py` | 1907 | Chess trainer service — python-chess legality, Stockfish 18 eval/classification, WDL win% bar, `engine_reply` human-like levels, coach hints, `_socratic_coach_turn` dialogue + `_proposal_eval` move-proposal evaluation, safety/hanging checks, `_eval_cache` |
-| `chess_book_memory.py` | 272 | Qdrant-backed 100-book chess library (768-dim embeddings, keyword fallback) |
+| `chess_book_memory.py` | 287 | Qdrant-backed 100-book chess library (768-dim embeddings, keyword fallback) |
 | `chess_mistakes.py` | 615 | Persists every Mistake/Blunder as a review position (Leitner spaced-repetition ladder 1d→3d→7d→14d) |
 | `chess_import.py` | 716 | Chess.com PGN archive import (ECO/Opening names, `%clk` time-pressure tags) |
-| `chess_analysis_job.py` | 516 | Resumable background engine analysis job over the game archive (ETA from completion slope, per-mistake `lead_in_moves` extraction) |
+| `chess_analysis_job.py` | 533 | Resumable background engine analysis job over the game archive (ETA from completion slope, per-mistake `lead_in_moves` extraction) |
 | `chess_games.py` | 486 | Recorded game storage/analytics (training rating, per-skill bars) |
 | `chess_training.py` | 716 | Concept-level spaced repetition + transfer engine (Repair/Reinforce/Transfer ladders, curated-motif interleaving) |
 | `chess_tactics_library.py` | 113 | Hand-curated prototypical tactical motifs (Pins/Forks/Back-Rank/Opposition/Scholar's), injected into the training queue as `source="motif"` items |
@@ -502,9 +502,9 @@ Package split from the deleted 1,275-line `rv_finder.py`. Exposed as `find_best_
 | `memory_core.py` | 596 | `remember_fat()`, `get_relevant_memories()` — Qdrant-backed memory |
 | `_llm_parser.py` | 316 | `extract_json()`, `normalize_decision()`, `normalize_model_json()`, `TOOL_CALL_SCHEMA`, `fire_and_forget()` |
 | `stream_runner.py` | 597 | `get_tool_decision()` — orchestration: MCP schema, memory injection, retry loop, LLM call |
-| `tool_executor.py` | 1343 | `run(tool_name, payload)` — dispatches tool calls |
+| `tool_executor.py` | 1377 | `run(tool_name, payload)` — dispatches tool calls |
 | `fallback_manager.py` | 715 | `get_live_fallbacks()` — cloud model fallbacks, cooldowns, DeepSeek/Ling/OpenCode chain |
-| `_llm_client.py` | 613 | `complete_for_tool_decision()`, `stream_content()`, `build_router()` (litellm Router, per-deployment endpoint/key), `build_kwargs()`, `_cloud_response_format()` (strict json_schema), `SSL setup`, `get_litellm_model()` |
+| `_llm_client.py` | 611 | `complete_for_tool_decision()`, `stream_content()`, `build_router()` (litellm Router, per-deployment endpoint/key), `build_kwargs()`, `_cloud_response_format()` (strict json_schema), `SSL setup`, `get_litellm_model()` |
 | `model_registry.py` | 107 | `get_model(agent_id)` — agent → model mapping (every role maps to robs4b) |
 | `_llm_prompts.py` | 95 | `build_tool_decision_system()`, `JSON_REPAIR_PROMPT` (includes `/no_think` for Qwen3) |
 | `_grammar_schema.py` | 64 | GBNF grammar for local tool-decision constrained decoding (`SWARM_GRAMMAR_DECODE=1`) |
@@ -592,7 +592,7 @@ Dependency pairing: React 19 ↔ `@react-three/fiber` ^9.5 / `@react-three/drei`
 - **Thinking mode**: Disabled via `/no_think` prepended to all system prompts in `_llm_prompts.py`
 - **Server**: launch `launch_llama.bat` (launches `bin\llama.exe serve -m "C:\Users\rober\Projects\v-horseshoe-v2\qwen_train\robs4b_q4km.gguf" --alias "robs4b" -c 16384 -fa on -ctk q8_0 -ctv q8_0 -t 2 -tb 4 -b 2048 -ub 512 -np 1 -ngl 99 --timeout 300 --port <8079>`); agent/API traffic reaches it :8080 via the proxy.
 - **Fallback**: NO reviewer→OpenRouter special-case exists; `reviewer` uses the same `("robs4b","llama")` route as all agents (the old `deepseek/deepseek-r1:free` claim is stale).
-- **Analysis + edit agents "cloud" hop**: `code_analyzer`,`researcher`,`reviewer`,`coder`,`debugger`,`executor` (see `runtime_v2/services/_llm_client.py` `_ANALYSIS_CLOUD_AGENTS`) route tool-decisions+content to an analysis-cloud model when `_analysis_cloud_enabled()` is true. **Current (verified 2026-09-06): default `ANALYSIS_CLOUD_MODEL` = `gemini/gemini-2.5-flash`; enablement requires a FREE-provider key (`NVIDIA_API_KEY`/`GROQ_API_KEY`/`GEMINI_API_KEY`/`OPENROUTER_API_KEY`) — the comment explicitly excludes paid-only `OPENAI_API_KEY` (OpenCode Go) and `DEEPSEEK_API_KEY` so free credit burns first.** Previously this section claimed DeepSeek-v4-flash-on-OpenAI-key; that gate was the opposite and is corrected. Override via `ANALYSIS_CLOUD_MODEL`; force local via `SWARM_ANALYSIS_CLOUD=off` or `/local` (routing `local_only`).
+- **Analysis + edit agents "cloud" hop**: `code_analyzer`,`researcher`,`reviewer`,`coder`,`debugger`,`executor` (see `runtime_v2/services/_llm_client.py` `_ANALYSIS_CLOUD_AGENTS`) route tool-decisions+content to an analysis-cloud model when `_analysis_cloud_enabled()` is true. **Current (verified 2026-09-08): default `ANALYSIS_CLOUD_MODEL` = `nvidia_nim/deepseek-ai/deepseek-v4-flash-0731` (the same free NVIDIA NIM alias that heads the live fallback chain; Gemini/Groq/Ling removed from the 2026-09 fleet); enablement requires a FREE-provider key (`NVIDIA_API_KEY`/`OPENROUTER_API_KEY`) — paid-only `OPENAI_API_KEY` (OpenCode Go) and `DEEPSEEK_API_KEY` do NOT satisfy the gate, so free credit burns first (2026-09 working-tree change, aligns the code with the chain that already dropped Groq/Gemini).** Override via `ANALYSIS_CLOUD_MODEL`; force local via `SWARM_ANALYSIS_CLOUD=off` or `/local` (routing `local_only`).
 
 ---
 
@@ -982,6 +982,27 @@ relaunch via start-dev.ps1 when ready.
 ---
 
 ## Recent Changes (do NOT re-apply)
+
+### FIX: Production-audit confirmed bugs + deep-research hardening round (2026-09-08, one logical change per commit)
+
+A full production-grade audit (adversarial tracing, cross-file contract checks,
+live reproductions) confirmed 6 bugs in the working tree (a mix of defects
+introduced by earlier audit-fix commits and legacy paths) plus several
+high-confidence issues. Fixes landed one-per-commit, each with a revert-proof
+regression test where feasible:
+
+- **C1 (security, P1) — `/tools/execute` approval bypass via operation aliases**: `agent_runtime.is_state_changing` only matched `"write"/"patch"/"delete"`, but `filesystem_handler` normalizes `write_file`/`create_file`/`save`/`put`→write and `patch_file`/`edit`/…→patch — so a loopback `POST /tools/execute {capability:filesystem, operation:write_file}` wrote a file with NO approval. Now `is_state_changing` normalizes the same alias set; `sandbox_repl language=pytest`, `mcp`, and `github_research` are treated as state-changing too. Regression test `test_legacy_runtime_blocks_filesystem_write_aliases_and_exec`.
+- **C2 (P2) — `get_live_fallbacks(mode="local_only")` raised `UnboundLocalError`** (`fallback_manager.py`): `_cached_stats` referenced `_deepseek_direct`/`_opencode_zen`/`_opencode_go`/`_deepseek_or` but the `local_only` branch never assigned them. `/local` mode (`SWARM_ROUTING_MODE=local_only`) broke every agent tool decision. The four locals are now initialized to `[]` before the mode branch. Regression test `test_local_only_refresh_builds_llama_only_chain` (the prior test only pre-seeded the cache, masking the bug).
+- **C3/C4 (P2) — `github_research` dead tool**: `qwen_train/scripts/*.ps1` never existed in git, so the agent tool always failed while being advertised (`discover|verify|full`, though the executor only allows `discover|verify|build_gallery|install`). Removed the tool from `_TOOL_DEFINITIONS`, `_AGENT_TOOLS` (researcher/coder), and both action enums (`_llm_parser.py`/`_grammar_schema.py`; sync-test length 23→22). The executor dispatch stays for direct callers, hardened: subprocess killed+awaited on timeout AND cancellation (`finally`-bound), `build_gallery` temp file unlinked.
+- **C5 (P2) — MCP manager never stopped at shutdown**: `main.py` shutdown imported `get_mcp_manager` from `swarm_os.lib.mcp.mcp_client`, which has no such function (ImportError → npx subprocesses leaked). Now uses non-spawning `get_loaded_mcp_manager()` from `runtime_v2.services.tool_executor` (shutdown must NOT spawn a manager just to stop it).
+- **C6 (P2) — watch-loop `_watch_task` orphaned on shutdown**: `WatchLoop.stop()` now cancels + awaits its internal task; `main.py` stores the loop on `app.state` and calls `stop()` at shutdown (previously only the wrapper task was cancelled; the tail/repair loop kept running mid-shutdown).
+- **H2 (P2) — chess-analysis resumed jobs not cancelled at shutdown**: new `chess_analysis_job.shutdown_cancel_jobs()` cancels live `_live_task`s; wired into main.py shutdown.
+- **H3 — reflection `_get_point_lock` eviction race**: the just-created (not-yet-acquired) lock for the current `point_id` is no longer evicted (two callers could previously get different lock instances for one deterministic point).
+- **Deep-research round (P1/P3/P4/P5)**: lazy `_embed_client`/`_qdrant_client` getters in `chess_book_memory`/`qdrant_store`/`corpus_ingest`/`case_corpus` are now thread-lock-guarded against concurrent double-create; `genetic_mutation_loop` py_compile kill now covers `CancelledError`; `/generate` local-fallback builds a clean kwargs dict instead of copying the cloud-opencode kwargs; `MemoryBridge.consolidate_memories` is serialized under `_consolidate_lock` to prevent duplicate consolidated points from interleaving consolidators.
+- **Test-fixture fix**: `test_failure_lessons._fake_run` updated for the `auth`/`trace_hook`/`run_id` kwargs (same contract shape as the documented run_id mock fix).
+- **AGENTS.md made source-of-truth**: module-map line counts corrected to the live working tree; the analysis-cloud doc drift corrected (default `nvidia_nim/deepseek-ai/deepseek-v4-flash-0731`, enablement keyed on NVIDIA/OpenRouter only — Groq/Gemini no longer gate).
+
+Explicitly NOT changed (evidence-backed, documented): `_record_event` stays synchronous (the event-journal ordering/durability contract that RepairWatchman/watch-loop tail by byte-offset requires); the pytest "unclosed transport" ValueError is a pre-existing CPython-3.14 proactor `__repr__`-on-closed-pipe shutdown artifact, not a shipped-behavior defect.
 
 ### Metadata-only skill registry: on-disk SKILL.md awareness for the agent loop (2026-09-06, audited design)
 
@@ -2283,6 +2304,8 @@ Converted `except:` → `except Exception:` (or specific types) in `swarm_os/cor
 ---
 
 ## Self-Healing & Self-Learning Fixes
+
+- **[CANARY-FLAGGED: human review] (2026-09-08T02:05:28.802900+00:00)**: swarm_os/api/routes.py — test regression NOT attributable to swarm_os/api/routes.py; HUMAN REVIEW
 
 - **Rule (researcher)**: Failure: The agent attempted to read the file 'agent.md' but the file does not exist in the filesystem, resulting in a "File not found" error. | Ro...
 
