@@ -1095,12 +1095,30 @@ async def get_memories():
             if name in ["codebase", "codebase_index"]:
                 continue
 
-            # Fetch points with payload
-            response = await vs.client.scroll(
-                collection_name=name, limit=10000, with_payload=True, with_vectors=False
-            )
+            # Fetch ALL points with payload, paging to completion. A single
+            # scroll(limit=N) silently truncates when a collection holds more
+            # than N memories — the dashboard would silently drop old memories
+            # from the dump. Paginate via next_page_offset (qdrant scroll
+            # returns (points, next_offset)); bound it with a generous safety
+            # cap so a pathological collection can't produce an unbounded dump.
+            _MAX_DUMP_POINTS = 250_000
+            points: list = []
+            offset: object | None = None
+            while len(points) < _MAX_DUMP_POINTS:
+                page = await vs.client.scroll(
+                    collection_name=name,
+                    limit=1000,
+                    offset=offset,
+                    with_payload=True,
+                    with_vectors=False,
+                )
+                page_points = page[0] if isinstance(page, tuple) else page
+                points.extend(page_points)
+                next_offset = page[1] if isinstance(page, tuple) else None
+                if not next_offset:
+                    break
+                offset = next_offset
 
-            points = response[0] if isinstance(response, tuple) else []
             if points:
                 payloads = [p.payload for p in points if p.payload]
                 # Sort descending by timestamp (newest first).

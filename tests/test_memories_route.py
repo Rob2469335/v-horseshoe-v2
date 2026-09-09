@@ -218,3 +218,41 @@ def test_memory_search_extracts_from_payload_level():
     assert res["results"][0]["text"] == "the actual memory text", "text must come from payload"
     assert res["results"][0]["sender"] == "researcher", "sender must come from payload"
     assert res["results"][0]["timestamp"] == 1712300000, "timestamp must come from payload"
+def test_memories_paginates_all_points_not_truncated():
+    """The /memories dump must page scroll() to completion instead of doing a
+    single scroll(limit) — the old single-scroll silently dropped any memory
+    beyond the limit when a collection exceeded it."""
+    import asyncio
+
+    pages = {
+        "agent_memory": [
+            ([_FakePoint({"fact": f"mem-{i}", "timestamp": i}) for i in range(0, 2)], "offset-1"),
+            ([_FakePoint({"fact": f"mem-{i}", "timestamp": i}) for i in range(2, 4)], "offset-2"),
+            ([_FakePoint({"fact": f"mem-{i}", "timestamp": i}) for i in range(4, 6)], None),
+        ]
+    }
+
+    vs = MagicMock()
+    client = AsyncMock()
+    client.get_collections = AsyncMock(
+        return_value=SimpleNamespace(collections=[SimpleNamespace(name="agent_memory")])
+    )
+
+    async def scroll(collection_name=None, **kwargs):
+        calls = getattr(scroll, "_calls", 0)
+        idx = min(calls, len(pages[collection_name]) - 1)
+        scroll._calls = calls + 1
+        return pages[collection_name][idx]
+
+    client.scroll = scroll
+    vs.client = client
+
+    with patch("swarm_os.services.vector_store.VectorStore", return_value=vs):
+        result = asyncio.run(get_memories())
+
+    assert result["status"] == "success"
+    facts = [p["fact"] for p in result["data"]["agent_memory"]]
+    assert set(facts) == {f"mem-{i}" for i in range(6)}, f"got {facts}"
+    assert len(facts) == 6, f"pagination truncated: {facts}"
+    # descending timestamp order: mem-5 first, mem-0 last
+    assert facts[0] == "mem-5" and facts[-1] == "mem-0"
