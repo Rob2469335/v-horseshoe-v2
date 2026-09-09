@@ -93,6 +93,18 @@ def get_loaded_mcp_tools() -> list[dict]:
     return []
 
 
+def get_loaded_mcp_manager() -> object | None:
+    """Non-spawning accessor for the live MCP manager instance (shutdown path).
+
+    Returns the manager ONLY if it was already initialized (by the background
+    startup task or an in-process tool call); returns None otherwise. Unlike
+    `get_mcp_manager()` it NEVER spawns npx/uvx subprocesses — safe to call
+    during shutdown, where starting a fresh manager just to stop it would leak
+    the very subprocesses we are trying to clean up."""
+    global _mcp_manager
+    return _mcp_manager
+
+
 _filesystem_read_cache_var: contextvars.ContextVar = contextvars.ContextVar(
     "_filesystem_read_cache", default=None
 )
@@ -851,8 +863,20 @@ async def _dispatch(
                             stdout=asyncio.subprocess.PIPE,
                             stderr=asyncio.subprocess.PIPE,
                         )
-                        async with asyncio.timeout(180.0):
-                            stdout, stderr = await proc.communicate()
+                        try:
+                            async with asyncio.timeout(180.0):
+                                stdout, stderr = await proc.communicate()
+                        finally:
+                            # asyncio.CancelledError inherits BaseException — the
+                            # except TimeoutError below never fires on a cancelled/
+                            # abandoned stream, so without this an orphaned pwsh
+                            # keeps running (mirrors sandbox_repl's cancel-safe kill).
+                            if proc.returncode is None:
+                                try:
+                                    proc.kill()
+                                except Exception:
+                                    pass
+                                await proc.wait()
                         out_text = stdout.decode("utf-8", errors="replace").strip()
                         if proc.returncode != 0:
                             err_text = stderr.decode("utf-8", errors="replace").strip()[
@@ -881,6 +905,13 @@ async def _dispatch(
                             "ok": False,
                             "error": f"github_research error: {str(exc)[:300]}",
                         }
+                    finally:
+                        # The build_gallery candidate temp file must not leak.
+                        if mode == "build_gallery":
+                            try:
+                                Path(tmp.name).unlink(missing_ok=True)
+                            except Exception:
+                                pass
 
         elif tool_name == "mcp_register":
             import json

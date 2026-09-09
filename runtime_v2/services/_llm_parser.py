@@ -48,7 +48,6 @@ TOOL_CALL_SCHEMA = {
                 "todo",
                 "self_heal",
                 "final",
-                "github_research",
             ],
         },
         "target_agent": {"type": "string"},
