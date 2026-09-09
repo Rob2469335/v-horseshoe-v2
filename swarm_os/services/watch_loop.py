@@ -151,7 +151,22 @@ class WatchLoop:
         self._watch_task = asyncio.create_task(self._watch())
 
     async def stop(self) -> None:
+        """Stop the tail/repair loop and cancel its background task.
+
+        `_running=False` alone leaves `_watch_task` looping (it only exits on
+        `_running`), so an abandoned task keeps tailing events — and even
+        dispatching repairs — through shutdown until the loop closes abruptly.
+        Cancel + await the worker task so shutdown is clean and deterministically
+        ordered.
+        """
         self._running = False
+        if self._watch_task and not self._watch_task.done():
+            self._watch_task.cancel()
+            try:
+                await self._watch_task
+            except (asyncio.CancelledError, Exception):
+                pass
+        self._watch_task = None
 
     def _check_stale_heartbeat(self) -> None:
         """Fail-closed-but-VISIBLE: a heartbeat older than 3x the interval means a

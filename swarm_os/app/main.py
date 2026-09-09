@@ -382,6 +382,11 @@ async def lifespan(app: FastAPI):
                 if first_delay > 0:
                     await asyncio.sleep(first_delay)
                 loop = WatchLoop(SelfRepairEngine(), interval_seconds=30.0)
+                # Store the instance so shutdown can stop its internal
+                # _watch_task (cancelling only this wrapper leaves the tail-loop
+                # task running — and possible mid-shutdown repairs — until the
+                # loop closes abruptly).
+                app.state.watch_loop = loop
                 loop.start(start_at_end=True)
                 log.info(
                     "Started autonomous watch-loop (server-side, SWARM_AUTONOMY=1)"
@@ -460,11 +465,31 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         log.warning(f"Error stopping task scheduler: {exc}")
 
+    # Stop the autonomous watch-loop's internal _watch_task (not just the
+    # bg_tasks wrapper) so it cannot keep tailing/repairing during shutdown.
+    try:
+        wl = getattr(app.state, "watch_loop", None)
+        if wl is not None:
+            await wl.stop()
+    except Exception as exc:
+        log.warning(f"Error stopping watch-loop: {exc}")
+
+    # Cancel resumed/background chess-analysis jobs (their live asyncio tasks
+    # and Stockfish worker threads otherwise outlive the loop at shutdown).
+    try:
+        from swarm_os.services.chess_analysis_job import shutdown_cancel_jobs
+
+        await shutdown_cancel_jobs()
+    except Exception as exc:
+        log.warning(f"Error cancelling chess analysis jobs: {exc}")
+
     # Stop external MCP manager and node/npx subprocesses
     try:
-        from swarm_os.lib.mcp.mcp_client import get_mcp_manager
+        from runtime_v2.services.tool_executor import get_loaded_mcp_manager
 
-        mgr = get_mcp_manager()
+        # Non-spawning: shutdown must NOT start a fresh npx manager just to stop
+        # it (get_mcp_manager() would spawn the very subprocesses we'd leak).
+        mgr = get_loaded_mcp_manager()
         if mgr is not None:
             await mgr.stop()
     except Exception as exc:

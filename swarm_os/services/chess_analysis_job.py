@@ -514,3 +514,20 @@ async def resume_incomplete() -> None:
                 log.info(
                     "resumed chess analysis job %s (%s)", j["job_id"], j["username"]
                 )
+
+
+async def shutdown_cancel_jobs() -> None:
+    """Cancel all live analysis-job background tasks (resumed at boot or
+    started via the API). Without this, a resumed job's asyncio task — and its
+    synchronous Stockfish worker thread — outlives the server loop at shutdown
+    (an orphaned task + a stuck thread scanning the whole archive)."""
+    live = [
+        j.get("_live_task")
+        for j in _jobs.values()
+        if isinstance(j, dict) and j.get("_live_task")
+    ]
+    for t in live:
+        if t and not t.done():
+            t.cancel()
+    if live:
+        await asyncio.gather(*live, return_exceptions=True)
