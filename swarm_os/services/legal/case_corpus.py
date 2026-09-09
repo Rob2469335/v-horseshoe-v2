@@ -25,6 +25,7 @@ import html
 import logging
 import os
 import re
+import threading
 import uuid
 from pathlib import Path
 from typing import Any
@@ -968,12 +969,15 @@ async def _get_opinion_text(client: httpx.AsyncClient, cite: str) -> dict[str, A
 # EMBED + UPSERT (token-budget batched, mirrors corpus_ingest)
 # ---------------------------------------------------------------------------
 _embed_client: httpx.AsyncClient | None = None
+_embed_client_lock = threading.Lock()
 
 
 def _get_embed_client() -> httpx.AsyncClient:
     global _embed_client
     if _embed_client is None or _embed_client.is_closed:
-        _embed_client = httpx.AsyncClient(base_url=EMBED_URL, timeout=60.0)
+        with _embed_client_lock:
+            if _embed_client is None or _embed_client.is_closed:
+                _embed_client = httpx.AsyncClient(base_url=EMBED_URL, timeout=60.0)
     return _embed_client
 
 

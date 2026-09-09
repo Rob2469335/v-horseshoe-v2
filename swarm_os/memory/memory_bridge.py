@@ -74,6 +74,12 @@ class MemoryBridge:
 
         self.lock_embed = asyncio.Lock()
         self.lock_vector = asyncio.Lock()
+        # Serializes the WHOLE consolidate_memories pass (scroll -> LLM -> embed
+        # -> store -> delete). Without this, two consolidators (daemon tick + a
+        # manual CLI/API trigger) could interleave after the shared scroll:
+        # both would store a consolidated summary for the SAME raw points before
+        # either deleted them -> duplicate consolidated points in the store.
+        self._consolidate_lock = asyncio.Lock()
 
         self.recent_hashes: deque[str] = deque(maxlen=DEDUP_WINDOW)
         # UPGRADE: track background graph tasks so they aren't GC'd mid-flight and
@@ -676,6 +682,30 @@ class MemoryBridge:
         Periodically retrieve all memory nodes, summarize groups of related entries,
         and upsert a unified consolidated summary while deleting the old individual entries.
         """
+        try:
+            async with self._consolidate_lock:
+                return await self._consolidate_pass()
+        except (httpx.ReadError, httpx.ReadTimeout) as exc:
+            # Qdrant transport error (starting up / briefly unavailable) is
+            # expected during the startup window and on a busy machine — log at
+            # warning WITHOUT a full traceback and retry on the next daemon tick.
+            logger.warning("Memory consolidation skipped (Qdrant transport): %r", exc)
+            return False
+        except Exception as exc:
+            if (
+                "ResponseHandlingException" in type(exc).__name__
+                or "UnexpectedResponse" in type(exc).__name__
+            ):
+                logger.warning(
+                    "Memory consolidation skipped (Qdrant transport): %r", exc
+                )
+                return False
+            logger.warning("Memory consolidation failed: %s", exc, exc_info=True)
+            return False
+
+    async def _consolidate_pass(self) -> None:
+        """The actual consolidation body — runs under _consolidate_lock so two
+        consolidators cannot interleave (see consolidate_memories docstring)."""
         try:
             from qdrant_client.models import Filter, FieldCondition, MatchValue
 

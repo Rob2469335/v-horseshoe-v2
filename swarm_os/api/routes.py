@@ -515,15 +515,23 @@ async def generate(payload: GenerateRequest, orch=Depends(get_orchestrator)):
                 "Generation failed on cloud model %s — falling back to local", _model
             )
             try:
-                local_kwargs = dict(kwargs)
-                local_kwargs["model"] = "openai/robs4b"
-                local_kwargs["api_base"] = (
-                    os.getenv("LLAMACPP_URL", "http://127.0.0.1:8080") + "/v1"
-                )
-                local_kwargs["api_key"] = "llama"
-                resp = await litellm.acompletion(
-                    **local_kwargs, extra_headers=opencode_headers()
-                )
+                # Build a CLEAN local kwargs dict instead of copying the cloud
+                # one: the cloud path may carry extra_headers (OpenCode session
+                # header), a cloud response_format, or cloud-only kwargs that
+                # must not reach the local llama.cpp endpoint. Local llama only
+                # needs model/api_base/api_key + the shared completion basics.
+                local_kwargs = {
+                    "model": "openai/robs4b",
+                    "messages": _messages,
+                    "temperature": kwargs.get("temperature", 0.7),
+                    "timeout": kwargs.get("timeout", 120.0),
+                    "num_ctx": kwargs.get("num_ctx", 16384),
+                    "api_base": (
+                        os.getenv("LLAMACPP_URL", "http://127.0.0.1:8080") + "/v1"
+                    ),
+                    "api_key": "llama",
+                }
+                resp = await litellm.acompletion(**local_kwargs)
                 content = resp.choices[0].message.content or ""
                 _model = "robs4b"
                 try:

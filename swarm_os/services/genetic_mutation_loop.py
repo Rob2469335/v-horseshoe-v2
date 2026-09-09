@@ -313,11 +313,18 @@ async def run_genetic_mutation(
                 try:
                     async with asyncio.timeout(30):
                         _, compile_err = await compile_check.communicate()
-                except TimeoutError:
-                    compile_check.kill()
-                    raise Exception(
-                        "Mutation compile check timed out after 30 seconds."
-                    )
+                except Exception:
+                    # Kill the py_compile subprocess on TimeoutError AND on
+                    # CancelledError (asyncio.CancelledError is a BaseException,
+                    # so `except TimeoutError` alone would orphan the child on
+                    # shutdown/abort). Re-raise so the caller still sees the
+                    # original condition (mirrors sandbox_repl's cancel-safe kill).
+                    try:
+                        compile_check.kill()
+                    except Exception:
+                        pass
+                    await compile_check.wait()
+                    raise
                 if compile_check.returncode != 0:
                     raise Exception(
                         f"Mutation failed to compile: {compile_err.decode()}"

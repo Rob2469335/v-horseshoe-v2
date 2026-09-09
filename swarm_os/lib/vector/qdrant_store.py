@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 import time
 import logging
+import threading
 from typing import Any
 
 import httpx
@@ -28,15 +29,18 @@ _QUERY_CACHE: dict = {}
 _CACHE_TTL = 300  # 5 minutes
 
 _embed_client: httpx.AsyncClient | None = None
+_embed_client_lock = threading.Lock()
 
 
 def _get_embed_client() -> httpx.AsyncClient:
     global _embed_client
     if _embed_client is None or _embed_client.is_closed:
-        _embed_client = httpx.AsyncClient(
-            timeout=httpx.Timeout(60.0, connect=10.0),
-            limits=httpx.Limits(max_keepalive_connections=5, max_connections=20),
-        )
+        with _embed_client_lock:
+            if _embed_client is None or _embed_client.is_closed:
+                _embed_client = httpx.AsyncClient(
+                    timeout=httpx.Timeout(60.0, connect=10.0),
+                    limits=httpx.Limits(max_keepalive_connections=5, max_connections=20),
+                )
     return _embed_client
 
 
