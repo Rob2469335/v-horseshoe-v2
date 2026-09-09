@@ -34,13 +34,18 @@ def _get_point_lock(point_id: str) -> asyncio.Lock:
     # key per (component, failure_reason) combination).
     lock = _point_locks.setdefault(point_id, asyncio.Lock())
     if len(_point_locks) > _POINT_LOCK_MAX:
-        # Evict old locks only if they are not actively held. If all 256 happen
-        # to be held at once (burst updates), we safely skip eviction and allow
-        # the dictionary to temporarily grow past 256 rather than risk a race.
+        # Evict old locks only if they are not actively held AND are not the
+        # lock just handed to the caller. Evicting the freshly-created (but
+        # not-yet-acquired) lock would let a SECOND caller create a different
+        # instance for the same point_id — two writers to one Qdrant point
+        # (the acquire happens after this function returns, so `.locked()` is
+        # False until then). If all 256 happen to be held at once (burst
+        # updates), we safely skip eviction and allow the dictionary to
+        # temporarily grow past 256 rather than risk a race.
         for k in list(_point_locks):
             if len(_point_locks) <= _POINT_LOCK_MAX:
                 break
-            if not _point_locks[k].locked():
+            if k != point_id and not _point_locks[k].locked():
                 _point_locks.pop(k, None)
     return lock
 
