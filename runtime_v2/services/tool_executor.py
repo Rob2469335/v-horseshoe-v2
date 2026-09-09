@@ -356,9 +356,18 @@ async def run(
     behavior.
     """
     try:
+        # Resolve the policy sub-action key. Tools differ in their payload key:
+        # filesystem/playwright/email use "operation"/"action"/"op", but
+        # github_research uses "mode" (discover/verify/install). Without also
+        # checking "mode", the policy's github_research branch (which ALLOWs
+        # read-only discover/verify) never fires because the key resolves to
+        # None → every read-only call is over-gated to CONFIRM.
         policy = agent_tool_policy(
             tool_name,
-            payload.get("operation") or payload.get("action") or payload.get("op"),
+            payload.get("mode")
+            or payload.get("operation")
+            or payload.get("action")
+            or payload.get("op"),
         )
         if policy == ALLOW:
             return await _dispatch(
@@ -859,7 +868,14 @@ async def _dispatch(
                 mode = str(payload.get("mode") or "discover").strip().lower()
                 query = str(payload.get("query") or "").strip()
                 target_repo = str(payload.get("target_repo") or "").strip()
-                limit = int(payload.get("limit") or 8)
+                # A confused model may send a non-numeric limit ("eight"); bound it
+                # so malformed input degrades to the default instead of raising a
+                # raw ValueError (this line is OUTSIDE the try below).
+                try:
+                    limit = int(payload.get("limit"))
+                    limit = max(1, min(limit, 50))
+                except (TypeError, ValueError):
+                    limit = 8
 
                 if mode not in _GITHUB_MODES_ALLOWED:
                     result = {
@@ -1071,7 +1087,13 @@ async def _dispatch(
                         # Hold the lock so concurrent get_mcp_manager() callers
                         # don't race through the transient _mcp_manager=None state
                         # and start a second manager alongside ours.
-                        global _mcp_manager
+                        global _mcp_manager, _mcp_manager_lock
+                        # _mcp_manager_lock may still be None here if this is the
+                        # FIRST MCP-touching call and the background _mcp_init task
+                        # hasn't set it yet (get_mcp_manager initializes it lazily).
+                        # Guard it so async with None doesn't AttributeError.
+                        if _mcp_manager_lock is None:
+                            _mcp_manager_lock = asyncio.Lock()
                         async with _mcp_manager_lock:
                             old_manager = _mcp_manager
                             _mcp_manager = None
