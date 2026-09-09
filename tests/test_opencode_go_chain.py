@@ -185,12 +185,43 @@ def test_cache_is_keyed_by_routing_mode(monkeypatch):
         "cache must now hold the cloud chain, not llama-only"
     )
 
-    # A second `auto` refresh within TTL with the SAME mode reuses the cache.
+# A second `auto` refresh within TTL with the SAME mode reuses the cache.
     async def _run2():
         await fm.refresh_fallbacks_if_needed(mode="auto")
 
     asyncio.run(_run2())
     assert fetch_calls["auto"] == 1, "same-mode refresh within TTL must reuse the cache"
+
+
+def test_local_only_refresh_builds_llama_only_chain(monkeypatch):
+    """A REAL local_only refresh must build a llama-only chain WITHOUT raising.
+
+    Regression for the 2026-09-08 audit (C2): refresh_fallbacks_if_needed only
+    assigned _opencode_zen/_opencode_go/_deepseek_or/_deepseek_direct inside
+    `if mode != "local_only"`, then referenced them UNCONDITIONALLY in the
+    stats build -> UnboundLocalError on every /local tool decision. The existing
+    test_cache_is_keyed_by_routing_mode pre-seeded _cached_fallbacks, so the
+    local_only REFRESH path (the actual broken one) was never exercised."""
+    monkeypatch.setenv("SWARM_ROUTING_MODE", "local_only")
+
+    async def _llama_only(*_a, **_k):
+        return [{"model": "openai/robs4b", "context_length": 16384}]
+
+    monkeypatch.setattr(fm, "_fetch_llama_models", _llama_only)
+
+    fm._cached_mode = ""
+    fm._last_fetch_time = 0.0
+
+    async def _run():
+        # Cache must be stale AND the mode must differ so a real refresh runs.
+        fm._cached_fallbacks = []
+        return await fm.get_live_fallbacks(mode="local_only")
+
+    models = asyncio.run(_run())
+    assert [m["model"] for m in models].count("openai/robs4b") == 1
+    assert all("deepseek" not in m["model"] for m in models)
+    # Stats built without UnboundLocalError and the llama bucket is populated.
+    assert fm._cached_stats["llama.cpp"] >= 1
 
 
 def test_fallbacks_scoped_to_own_endpoint_no_cross_provider_leak():

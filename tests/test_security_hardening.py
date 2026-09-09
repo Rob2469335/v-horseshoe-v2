@@ -255,6 +255,55 @@ def test_legacy_runtime_classifies_playwright_writes_as_state_changing():
     assert asyncio.run(_expect_approval()) is True
 
 
+def test_legacy_runtime_blocks_filesystem_write_aliases_and_exec():
+    """/tools/execute dispatches through agent_runtime.call_tool whose ONLY
+    pre-approval gate is is_state_changing. The filesystem handler normalizes
+    write_file/create_file/save/put -> write (lib/mcp/filesystem.py:34), so the
+    legacy path could smuggle an unapproved file WRITE by sending operation=
+    write_file — is_state_changing only matched "write"/"patch"/"delete".
+    Regression for the 2026-09-08 audit (C1). Also covers sandbox pytest + mcp
+    + github_research install (execution primitives must stay behind the gate).
+    """
+    from swarm_os.agent_runtime import AgentRuntime
+
+    rt = AgentRuntime.__new__(AgentRuntime)
+    rt.approved_actions = []
+
+    for op in (
+        "write",
+        "write_file",
+        "create",
+        "create_file",
+        "save",
+        "put",
+        "patch",
+        "patch_file",
+        "edit",
+        "edit_file",
+        "update",
+        "modify",
+        "replace",
+        "replace_file_content",
+        "delete",
+        "remove",
+    ):
+        assert (
+            rt.is_state_changing("filesystem", {"operation": op, "path": "x.py"})
+            is True
+        ), f"filesystem op {op!r} must be state-changing"
+    for op in ("read", "read_file", "list", "glob", "grep", "scan_dir"):
+        assert (
+            rt.is_state_changing("filesystem", {"operation": op, "path": "."}) is False
+        ), f"filesystem op {op!r} must be read-only"
+
+    assert rt.is_state_changing("sandbox_repl", {"language": "pytest"}) is True
+    assert rt.is_state_changing("sandbox_repl", {"language": "python"}) is True
+    assert (
+        rt.is_state_changing("mcp", {"server": "sqlite", "tool": "execute"}) is True
+    )
+    assert rt.is_state_changing("github_research", {"mode": "true_verify"}) is True
+
+
 @pytest.mark.asyncio
 async def test_sandbox_repl_kills_proc_on_cancel(monkeypatch):
     """asyncio.CancelledError inherits BaseException — the except TimeoutError

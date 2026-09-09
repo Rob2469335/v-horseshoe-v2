@@ -200,7 +200,7 @@ async def test_tool_failure_records_event_store_event(tmp_path):
     service._remember = AsyncMock()
     service._remember_failure = AsyncMock()
 
-    async def _fake_run(action, payload):
+    async def _fake_run(action, payload, *, auth=None, trace_hook=None, run_id=""):
         return {
             "ok": False,
             "error": "File not found: runtime_v2/services/agent_service.py",
