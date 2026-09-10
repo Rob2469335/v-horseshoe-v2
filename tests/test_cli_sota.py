@@ -296,3 +296,59 @@ class TestInlineDiff:
         lines = format_inline_diff("", "[bold]injected[/bold]\n")
         # the literal brackets must be escaped so Rich does not parse them
         assert "\\[bold]injected\\[/bold]" in lines[0]
+
+
+class TestStripControlObservations:
+    """CLAUDE_GOAL_HANDOFF Layer 1: control-plane Observations (approval
+    decisions, ask_user answers) are one-shot in-process keys and must never be
+    persisted into returned/persisted history — a fresh process replaying them
+    against an empty registry hard-derails the goal on turn 0."""
+
+    def _obs(self, m):
+        from organism_console.ui.live_stream import _strip_control_observations
+
+        return _strip_control_observations(m)
+
+    def test_approval_observation_stripped(self):
+        out = self._obs(
+            [
+                {"role": "user", "content": "do the task"},
+                {
+                    "role": "user",
+                    "content": 'Observation: {"approval": {"pending_id": "abc", "approved": true}}',
+                },
+                {"role": "assistant", "content": "done"},
+            ]
+        )
+        assert len(out) == 2
+        assert all("Observation:" not in str(m.get("content", "")) for m in out)
+
+    def test_answer_observation_stripped(self):
+        out = self._obs(
+            [
+                {"role": "user", "content": "goal"},
+                {
+                    "role": "user",
+                    "content": 'Observation: {"answer": "yes, both")',
+                },
+            ]
+        )
+        assert all("Observation:" not in str(m.get("content", "")) for m in out)
+
+    def test_conversation_messages_kept(self):
+        msgs = [
+            {"role": "user", "content": "goal"},
+            {"role": "assistant", "content": "analysis"},
+            {"role": "user", "content": "Observation: applying the fix now"},
+        ]
+        out = self._obs(msgs)
+        # A user message that MENTIONS "Observation:" but is not a control-plane
+        # approval/answer key is ordinary conversation — kept.
+        assert len(out) == 3
+
+    def test_empty_and_non_dict_tolerant(self):
+        from organism_console.ui.live_stream import _strip_control_observations
+
+        assert _strip_control_observations([]) == []
+        assert _strip_control_observations(None) == []
+        assert _strip_control_observations(["plain-string"]) == ["plain-string"]

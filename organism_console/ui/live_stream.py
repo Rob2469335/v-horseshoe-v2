@@ -20,6 +20,34 @@ _AGENT_PERF: dict = {}
 _AGENT_PERF_MAX = 256
 
 
+def _strip_control_observations(history):
+    """Drop control-plane Observation messages (approval decisions and ask_user
+    answers) from a history list before it is RETURNED or PERSISTED.
+
+    These are one-shot, in-process control keys the resolution loop uses within
+    a single stream (the CLI re-POSTs with the Observation appended so the
+    backend's deterministic resolve block consumes the pending). They must never
+    survive into the returned history, .session.json, or the goal loop's
+    attempt-to-attempt carry-over: a fresh process (or next attempt) has an
+    empty in-memory registry, so replaying an old approval Observation derails
+    the run on turn 0 with "pending approval no longer valid" (CLAUDE_GOAL_
+    HANDOFF Layer 1). The backend applies its own tolerance, but the CLI must
+    not re-persist the control keys in the first place.
+    """
+    return [
+        m
+        for m in (history or [])
+        if not (
+            isinstance(m, dict)
+            and str(m.get("content", "")).strip().startswith("Observation:")
+            and (
+                '"approval"' in str(m.get("content", ""))
+                or '"answer"' in str(m.get("content", ""))
+            )
+        )
+    ]
+
+
 def update_token_metrics(ctx, prompt, history, output_content, model):
     input_tokens = estimate_tokens(prompt + json.dumps(history))
     output_tokens = estimate_tokens(output_content)
@@ -435,6 +463,13 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                                 "content": final_content or full_content,
                             }
                         )
+                        # Control-plane Observations (approval decisions, ask_user
+                        # answers) are in-process keys — strip them before the
+                        # history is persisted to .session.json or returned to the
+                        # caller (next goal attempt), so they can never be
+                        # replayed against a fresh process's empty registry
+                        # (CLAUDE_GOAL_HANDOFF Layer 1).
+                        new_history = _strip_control_observations(new_history)
                         ctx.history = new_history
                         ctx.history_pointer = len(ctx.history) - 1
 
