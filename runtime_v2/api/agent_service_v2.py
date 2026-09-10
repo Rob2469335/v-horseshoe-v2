@@ -288,6 +288,20 @@ def _approval_from_history(messages: list) -> dict | None:
     return None
 
 
+def _is_control_observation(message) -> bool:
+    """True for control-plane user messages the CLI emits to resolve an approval
+    or an ask_user answer in-run ('Observation: {"approval": ...}' /
+    'Observation: {"answer": ...}'). These are one-shot, in-process control keys
+    — not conversation content — and must never be treated as a real decision
+    when replayed from durable history (CLAUDE_GOAL_HANDOFF Layer 1)."""
+    if not isinstance(message, dict):
+        return False
+    content = str(message.get("content", ""))
+    if not content.strip().startswith("Observation:"):
+        return False
+    return '"approval"' in content or '"answer"' in content
+
+
 def _original_goal(messages: list) -> str:
     """The first real (non-Observation) user message — the goal the coordinator
     asked about before the ask_user continuation."""
@@ -2677,9 +2691,41 @@ class AgentServiceV2:
             approval = _approval_from_history(trimmed_messages)
             resolve_now = approval is not None
             if resolve_now:
+                from runtime_v2.services.tool_executor import peek_pending
+
                 pending_id = approval["pending_id"]
                 already = pending_id in state._resolved_approvals
-                if approval["approved"] and not already:
+                # STALE-REPLAY GUARD: a real approval flow mints its pending in
+                # THIS process's registry during THIS run, so the pending is
+                # present when the approval Observation returns (the CLI re-POSTs
+                # within the same process). A pending id that peek_pending cannot
+                # find is a control-plane Observation replayed from durable
+                # history (CLI .session.json / goal-loop attempt carry-over) into
+                # a process that never created it — NOT a real human decision for
+                # this run. Hard-denying it derails the goal on turn 0 (the
+                # "pending approval no longer valid" error the user hit every
+                # run). Instead: strip the stale Observation from context and
+                # continue to the normal decision. Fail-closed maintained — a
+                # tool whose pending is unknown/expired never dispatches.
+                if not already and peek_pending(pending_id) is None:
+                    log.info(
+                        "[%s] ignoring stale approval Observation (pending %s... "
+                        "not in this process's registry) — continuing",
+                        agent_id,
+                        pending_id[:8],
+                    )
+                    messages = [
+                        m
+                        for m in messages
+                        if not _is_control_observation(m)
+                    ]
+                    trimmed_messages = [
+                        m
+                        for m in trimmed_messages
+                        if not _is_control_observation(m)
+                    ]
+                    resolve_now = False
+                elif approval["approved"] and not already:
                     from runtime_v2.services.tool_executor import (
                         execute_approved,
                     )

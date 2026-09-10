@@ -410,6 +410,159 @@ async def test_approved_pending_resolves_exactly_once_across_turns(monkeypatch):
     assert calls["count"] >= 1, "follow-up _get_decision never ran after approval"
 
 
+@pytest.mark.asyncio
+async def test_stale_approval_observation_does_not_derail_fresh_run(monkeypatch):
+    """A persisted approval Observation whose pending id is unknown to THIS
+    process's fresh registry must be tolerated, not hard-denied.
+
+    CLAUDE_GOAL_HANDOFF Layer 1: the CLI persists history (approval Observations
+    included) to .session.json. A new process loads that history and feeds it to
+    step_agent_stream with an EMPTY in-memory registry — the pending id from a
+    previous session was never minted here. execute_approved returns
+    "pending approval no longer valid", which used to be fed back as a tool
+    denial and derailed the whole goal on turn 0 every run. The fix strips the
+    stale Observation from context and continues to the normal decision (the
+    tool is never dispatched — fail-closed preserved)."""
+    import json
+
+    import runtime_v2.services.tool_executor as _te
+    from runtime_v2.api import agent_service_v2 as _asv2
+    from runtime_v2.api.agent_service_v2 import AgentServiceV2
+
+    monkeypatch.setattr(_asv2, "ANALYSIS_AGENTS", ())
+
+    # A pending id that was NEVER created in this process's registry — the
+    # replayed-key shape.
+    stale_pending_id = "stale-pending-forghostrun000000000"
+    assert peek_pending(stale_pending_id) is None
+
+    message_history = [
+        {
+            "role": "user",
+            "content": (
+                "Observation: "
+                + json.dumps(
+                    {"approval": {"pending_id": stale_pending_id, "approved": True}}
+                )
+            ),
+        }
+    ]
+
+    dispatched: list[tuple[str, dict]] = []
+
+    async def counting_dispatch(tool_name, payload, *, trace_hook=None):
+        dispatched.append((tool_name, payload))
+        return {"ok": True, "result": "fetched"}
+
+    calls = {"count": 0, "context": None}
+
+    async def decide(
+        agent_id,
+        model,
+        messages,
+        allowed_tools,
+        prompt,
+        turn,
+        state,
+        research_discharged,
+    ):
+        calls["count"] += 1
+        calls["context"] = messages
+        # A normal capable decision (NOT a delegation to bypass the guard — the
+        # point is that the decision loop RUNS instead of denailing early).
+        return {"action": "final", "response": "Goal resolved."}
+
+    monkeypatch.setattr(_te, "_dispatch", counting_dispatch)
+
+    svc = AgentServiceV2(orchestrator=None)
+    svc._get_decision = decide
+
+    chunks = []
+    async for chunk in svc.step_agent_stream("coordinator", "", history=message_history):
+        chunks.append(chunk)
+
+    # No approval_result chunk at all (stale key ignored, not resolved).
+    approvals = [c for c in chunks if c.get("type") == "approval_result"]
+    assert approvals == [], [c.get("type") for c in chunks]
+
+    # No denial surfaced anywhere.
+    assert not any(
+        "no longer valid" in str(c) or "expired or already used" in str(c)
+        for c in chunks
+        if isinstance(c, dict)
+    ), chunks
+
+    # Nothing dispatched (fail-closed — the stale key never executes a tool).
+    assert dispatched == [], dispatched
+
+    # The decision loop RAN and saw the stale Observation already stripped from
+    # context (so the model never reads a phantom approval as a real one).
+    assert calls["count"] >= 1, "decision never ran after stale-approval strip"
+    if calls["context"] is not None:
+        assert not any(
+            "approval" in str(m.get("content", ""))
+            for m in calls["context"]
+            if isinstance(m, dict)
+        ), calls["context"]
+
+
+@pytest.mark.asyncio
+async def test_deny_observation_unknown_pending_does_not_derail(monkeypatch):
+    """The DENY-shaped stale replay (Observation approved:false for an unknown
+    pending) is equally tolerated — the goal must not burn a run on a ghost
+    deny from a previous session either."""
+    import json
+
+    from runtime_v2.api import agent_service_v2 as _asv2
+    from runtime_v2.api.agent_service_v2 import AgentServiceV2
+
+    monkeypatch.setattr(_asv2, "ANALYSIS_AGENTS", ())
+
+    stale_pending_id = "stale-deny-forghostrun000000000"
+    assert peek_pending(stale_pending_id) is None
+
+    message_history = [
+        {
+            "role": "user",
+            "content": (
+                "Observation: "
+                + json.dumps(
+                    {"approval": {"pending_id": stale_pending_id, "approved": False}}
+                )
+            ),
+        }
+    ]
+
+    calls = {"count": 0}
+
+    async def decide(
+        agent_id,
+        model,
+        messages,
+        allowed_tools,
+        prompt,
+        turn,
+        state,
+        research_discharged,
+    ):
+        calls["count"] += 1
+        return {"action": "final", "response": "Goal resolved."}
+
+    svc = AgentServiceV2(orchestrator=None)
+    svc._get_decision = decide
+
+    chunks = []
+    async for chunk in svc.step_agent_stream("coordinator", "", history=message_history):
+        chunks.append(chunk)
+
+    approvals = [c for c in chunks if c.get("type") == "approval_result"]
+    assert approvals == [], [c.get("type") for c in chunks]
+    assert calls["count"] >= 1, "decision never ran after stale-deny strip"
+    assert not any(
+        "no longer valid" in str(c) for c in chunks if isinstance(c, dict)
+    ), chunks
+
+
 # ── registry ceiling ──────────────────────────────────────────────────────────
 def test_pending_registry_capped_at_ceiling():
     """A hot buggy agent loop minting CONFIRM actions must not grow the pending
