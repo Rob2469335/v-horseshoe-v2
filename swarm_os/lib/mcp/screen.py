@@ -23,6 +23,8 @@ import os
 import time
 from typing import Any, Dict
 
+from swarm_os.lib.paths import project_root
+
 log = logging.getLogger(__name__)
 
 import ctypes
@@ -99,14 +101,16 @@ _SCREEN_AUTO_APPROVE_RISKY = os.getenv(
 ).lower() in ("1", "true", "yes", "on")
 
 # Append-only audit log of every input action + authorization decision.
-_AUDIT_LOG_PATH = os.path.join(os.getcwd(), "logs", "screen_audit.jsonl")
+# Project-root-anchored (was os.getcwd() — relocated under a chdir'd process).
+_AUDIT_LOG_PATH = os.path.join(str(project_root()), "logs", "screen_audit.jsonl")
 # Time-based runaway guard: a single uninterrupted input session longer than
 # this (no reset) is a likely loop — block further input until the count resets.
 _RUNAWAY_WINDOW_S = int(os.getenv("SWARM_SCREEN_RUNAWAY_WINDOW_S", "180"))
 _first_input_ts = 0.0
 
 _SCREENSHOT_DIR = os.getenv(
-    "SWARM_SCREENSHOT_DIR", os.path.join(os.getcwd(), "logs", "screenshots")
+    "SWARM_SCREENSHOT_DIR",
+    os.path.join(str(project_root()), "logs", "screenshots"),
 )
 
 

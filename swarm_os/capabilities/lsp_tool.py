@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from swarm_os.lib.paths import project_root
+
 log = logging.getLogger(__name__)
 
 # Extension -> language server command + correct languageId per LSP spec.
@@ -267,7 +269,7 @@ async def _acquire_client(ext: str) -> BasicLSPClient:
         if client is None:
             cfg = LANGUAGE_SERVERS[ext]
             client = BasicLSPClient(
-                cfg["cmd"], str(Path.cwd().resolve()), cfg["languageId"]
+                cfg["cmd"], str(project_root()), cfg["languageId"]
             )
             await client.start()
             _pool[ext] = client

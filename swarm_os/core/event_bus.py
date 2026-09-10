@@ -5,9 +5,14 @@ import os
 import logging
 from typing import Any, Dict, List
 
+from swarm_os.lib.paths import project_root
+
 log = logging.getLogger(__name__)
 
-LOG_PATH = os.path.join(os.getcwd(), ".swarm", "patch_log.jsonl")
+# Deterministic project-root-anchored patch log. Previously os.getcwd()/.swarm
+# bound this (and the dir created eagerly at import) to whatever the process cwd
+# was at import — relocated under a chdir'd test/embed.
+LOG_PATH = str((project_root() / ".swarm" / "patch_log.jsonl").resolve())
 
 
 class EventBus:

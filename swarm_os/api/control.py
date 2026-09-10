@@ -25,6 +25,7 @@ from pydantic import BaseModel
 import secrets
 import time
 from swarm_os.api.dependencies import verify_api_key
+from swarm_os.lib.paths import project_root
 
 log = logging.getLogger(__name__)
 
@@ -526,7 +527,7 @@ async def control_screen_image(name: str) -> FileResponse:
     if not safe.lower().endswith(".png"):
         raise HTTPException(status_code=404, detail="only .png screenshots are served")
     root = os.getenv(
-        "SWARM_SCREENSHOT_DIR", os.path.join(os.getcwd(), "logs", "screenshots")
+        "SWARM_SCREENSHOT_DIR", os.path.join(str(project_root()), "logs", "screenshots")
     )
     path = os.path.join(root, safe)
     if not os.path.exists(path):
@@ -747,7 +748,7 @@ async def control_browser_image(name: str) -> FileResponse:
     safe = os.path.basename(str(name))
     if not safe.lower().endswith(".png"):
         raise HTTPException(status_code=404, detail="only .png screenshots are served")
-    shots_dir = os.path.join(os.getcwd(), "logs", "screenshots")
+    shots_dir = os.path.join(str(project_root()), "logs", "screenshots")
     path = os.path.join(shots_dir, safe)
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail=f"browser image '{safe}' not found")
@@ -761,7 +762,11 @@ async def control_browser_image(name: str) -> FileResponse:
 
 def _resolve_project_file(raw: str) -> str:
     """Resolve a relative path inside the project root; refuse traversal."""
-    root = os.getcwd()
+    # Deterministic project root (not os.getcwd) so containment is stable even
+    # if the process cwd differs from the project root — a cwd-based root would
+    # scope file reads to whatever dir the server was launched from (and, if
+    # launched from a parent, could expose sibling directories).
+    root = str(project_root())
     joined = os.path.abspath(os.path.join(root, raw))
     # os.path.commonpath refuses path components that don't share a common root
     # (e.g. a sibling dir whose name merely starts with the project dir).
