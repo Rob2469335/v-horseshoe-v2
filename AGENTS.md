@@ -602,6 +602,25 @@ Dependency pairing: React 19 ↔ `@react-three/fiber` ^9.5 / `@react-three/drei`
 > cross-check `qwen_train/results/` + running processes. If primary is stuck/
 > idle here, pick the thread up.
 
+**CURRENT (2026-09-09, `/goal` stale-approval-replay fixed; cwd-path batch + /goal Layer-1 commits pushed):**
+The `CLAUDE_GOAL_HANDOFF.md` `/goal` bug ("analyze codebase + search internet +
+apply fixes" failed 100% with turn-0 "Authorization DENIED: pending approval no
+longer valid") was root-caused as THREE layers. Investigation against live code
+found Layers 2 (routing — the backend coordinator's turn-0
+`fast_route_coordinator` already sends compound internet+fix goals to `executor`)
+and 3 (write-intent classification — already fixed by `e4f8a3d`: "apply"/"fixes"
+are `WRITE_KEYWORDS`) were already handled. The live defect was **Layer 1**:
+the CLI persisted control-plane `Observation: {"approval": ...}` keys to
+`organism_console/.session.json`, and a fresh process/attempt replayed them
+against an empty in-process registry → hard denial on turn 0. Two surgical
+fixes landed and pushed (`4df0292` backend `peek_pending` stale-guard +
+`cb0e797` CLI strip-of-control-observations on returned/persisted history), each
+with revert-proof regression tests; 241 related tests pass, ruff E9/F clean.
+AGENTS.md Recent Changes updated. Full stack currently up via start-dev.ps1
+(backend :8000, proxy :8080, robs4b on :8079, all MCP servers registered).
+Open thread: run the acceptance goal end-to-end against the live stack if you
+want a live proof beyond the unit-level revert-proof tests.
+
 **CURRENT (2026-09-08, persona-hedge finding stands; WRONG-artifact claim CORRECTED):** The 2026-09-05 "fully
 trained, gated 10/10, GGUF'd" persona claim below was FALSIFIED. Verified: (1) the
 persona, even on the CORRECTLY-merged `robs4b_final_adapter` (r16, the real persona adapter), does
@@ -990,6 +1009,49 @@ relaunch via start-dev.ps1 when ready.
 ---
 
 ## Recent Changes (do NOT re-apply)
+
+### FIX: `/goal` analysis+search+apply loop — Layer 1 (stale approval replay) root-caused and fixed (2026-09-09, committed `4df0292` + `cb0e797`)
+
+The handoff bug `CLAUDE_GOAL_HANDOFF.md` (analyze codebase + search internet +
+apply fixes failed 100% of the time, "Authorization DENIED: pending approval no
+longer valid" on turn 0) was investigated against live code. **Only Layer 1 was
+a defect — Layers 2 and 3 were already handled**: Layer 3 (write-intent
+classification) was fixed by commit `e4f8a3d` ("apply"/"fixes"/"patch" now in
+`WRITE_KEYWORDS`; verified the exact goal phrase classifies write-intent), and
+Layer 2 (routing) is served by the backend coordinator's turn-0
+`fast_route_coordinator` → `executor` for compound internet+fix goals
+(verified live via `_agent_routing`).
+
+**Layer 1 mechanism (verified in real `.session.json`):** the CLI persists full
+history — including `Observation: {"approval": ...}` control-plane messages — to
+`organism_console/.session.json`. A fresh process (or the goal loop's next
+attempt) loads that history and feeds it to `step_agent_stream`, whose resolve
+block calls `execute_approved(pending_id)` against a **fresh in-process
+registry that never minted that pending** → `"pending approval no longer valid"`
+was fed back as a tool denial, derailing the whole goal on turn 0 every run
+(a stale DENY replay caused the same).
+
+**Two surgical fixes:**
+- `4df0292` (backend, `runtime_v2/api/agent_service_v2.py`): the resolve block
+  now checks `peek_pending(pending_id)` BEFORE resolving — a pending id unknown
+  to this process's registry is a replayed control key, not a real human
+  decision for this run. It is stripped from context (`_is_control_observation`)
+  and the loop continues to the normal decision. Fail-closed preserved: a ghost
+  approval never dispatches, never emits `approval_result`, never burns the run.
+- `cb0e797` (CLI, `organism_console/ui/live_stream.py`): `_strip_control_observations`
+  strips approval/answer Observations from the FINAL returned/persisted history
+  (the continuation POSTs during resolution keep them so the deterministic
+  resolve block can consume the pending) — control-plane keys no longer
+  repollute `.session.json` or carry into the next attempt.
+
+Regression tests (revert-proof, verified failing on pre-fix source): 2 in
+`tests/test_approval_gate.py` (stale APPROVE + stale DENY Observations for
+never-minted pends flow through the real `step_agent_stream` — no
+`approval_result`, no "no longer valid" surfacing, no dispatch, decision loop
+runs with the Observation already stripped) + 4 in `tests/test_cli_sota.py`
+(approval/answer Observations stripped from persisted history; conversation
+messages incl. a user message containing 'Observation:' kept; empty/None/
+non-dict tolerant). Related suites 241 passed; ruff E9/F clean.
 
 ### FEAT: GitHub researcher restored — native `gh` CLI + MCP github-server auth (2026-09-08)
 
