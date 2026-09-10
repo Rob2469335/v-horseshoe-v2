@@ -929,12 +929,30 @@ async def _dispatch(
                                 ]
                             )
                         else:  # install
+                            # Clone into a DETERMINISTIC, gitignored dir rather
+                            # than the process cwd (an unpredictable long-lived
+                            # path that would clutter the project root). repo_name
+                            # is derived from the owner/name arg, never user cwd.
+                            repo_name = target_repo.split("/")[-1] or target_repo
+                            install_dir = _ROOT / "data" / "github_repos"
+                            try:
+                                install_dir.mkdir(parents=True, exist_ok=True)
+                            except Exception as _mkdir_exc:  # pragma: no cover
+                                pass
+                            dest = install_dir / repo_name
                             r = await _run_gh(
-                                ["repo", "clone", target_repo, "--", "--depth", "1"],
+                                [
+                                    "repo",
+                                    "clone",
+                                    target_repo,
+                                    str(dest),
+                                    "--",
+                                    "--depth",
+                                    "1",
+                                ],
                                 timeout=120.0,
                             )
                             if r.get("ok"):
-                                dest = Path.cwd() / target_repo.split("/")[-1]
                                 r = {
                                     "ok": True,
                                     "rc": 0,

@@ -179,3 +179,36 @@ async def test_github_malformed_and_huge_limit_do_not_raise(monkeypatch):
     assert r.get("ok") is True, r
     r2 = await te.run("github_research", {"mode": "discover", "query": "ollama", "limit": 50000}, auth=None)
     assert r2.get("ok") is True, r2
+
+def test_github_install_clones_to_deterministic_dir(monkeypatch, tmp_path):
+    """install mode must clone into the gitignored data/github_repos/ dir (not
+    the process cwd) and report the real destination path."""
+    import asyncio
+    from pathlib import Path
+
+    from runtime_v2.services import tool_executor as te
+
+    # Pin _ROOT to tmp so we don't write to the real repo.
+    monkeypatch.setattr(te, "_ROOT", tmp_path)
+
+    clone_result = {"ok": True, "rc": 0, "out": {"cloned": "ollama/ollama", "path": "ignored"}}
+
+    async def _fake_run_gh(args, timeout=60.0):
+        # Assert gh is told to clone into the deterministic dir.
+        assert args[0] == "repo" and args[1] == "clone"
+        dest_arg = args[3]
+        assert Path(dest_arg) == tmp_path / "data" / "github_repos" / "ollama", dest_arg
+        return clone_result
+
+    monkeypatch.setattr(te, "_run_gh", _fake_run_gh)
+    te.reset_exploration_state()
+
+    first = asyncio.run(te.run("github_research", {"mode": "install", "target_repo": "ollama/ollama"}, auth=None))
+    # install is CONFIRM-gated (writes to disk) — require approval, then execute
+    # the STORED payload (the real approval flow).
+    assert first.get("status") == "confirmation_required", first
+    pending_id = first["pending_id"]
+    r = asyncio.run(te.execute_approved(pending_id))
+    assert r.get("ok") is True, r
+    out = r.get("result") if isinstance(r.get("result"), dict) else {}
+    assert out.get("path") == str(tmp_path / "data" / "github_repos" / "ollama"), out
