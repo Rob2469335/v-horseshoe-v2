@@ -293,10 +293,12 @@ def agent_tool_policy(tool: str, action: str | None = None) -> str:
     if t == "todo":
         return ALLOW
 
-    # github_research: read-only sub-commands (discover/verify/merge/build_gallery)
-    # are ALLOW; install mutates the local filesystem → CONFIRM.
+    # github_research: read-only sub-commands (discover/verify) are ALLOW;
+    # install mutates the local filesystem → CONFIRM. (merge/build_gallery were
+    # removed when the tool was rebuilt as a native `gh` CLI — only discover/
+    # verify/install exist now.)
     if t == "github_research":
-        if a in ("discover", "verify", "merge", "build_gallery"):
+        if a in ("discover", "verify"):
             return ALLOW
         return CONFIRM
 
