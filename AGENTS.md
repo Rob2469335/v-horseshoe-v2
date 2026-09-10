@@ -1010,6 +1010,43 @@ relaunch via start-dev.ps1 when ready.
 
 ## Recent Changes (do NOT re-apply)
 
+### FIX: `/goal` "apply the fixes" now actually applies — splitter root cause + write-intent verification gate + `--json` result contract (2026-09-09, committed `2966733` + `2c82a39`)
+
+After the Layer-1 stale-approval fix, the handoff acceptance run exposed THREE
+remaining defects in the goal loop, all investigated against live code and fixed
+one-per-logical-change:
+
+- **Root cause (backend compound splitter) — fixes never applied**: the handoff
+  goal is a SINGLE run-on sentence. `_split_compound_goal` classifies by
+  sentence and `_IMPLEMENT_SENT_RE` had no "apply" / plural "fixes" keywords
+  (`\bfix\b` does not match "fixes"), so the whole goal classified
+  research-only → implementation part EMPTY → executor never delegated coder →
+  research-only retry loop for all 5 attempts. Now: `_IMPLEMENT_SENT_RE` accepts
+  `apply` + `fix(es|ed|ing)`; new `_carve_implementation_clause` splits a
+  bi-intent run-on sentence in place (web half → researcher, edit half "apply
+  the fixes" → coder), safe-carrying when the prefix still shows edit intent.
+  Verified at the seam: after research returns, executor `_get_decision` →
+  `{'action':'delegate','target_agent':'coder','task':'apply the fixes'}`; coder
+  is fix-intent on that task so its no-edit final is rejected.
+- **Write-intent goals with zero edits fail closed**: a no-file-change attempt
+  on a `has_write` goal no longer falls through to `_verify_goal_with_reviewer`
+  (which reports on the final response, not the deliverable — it had approved a
+  research report for an edit goal). It fails immediately with a corrective
+  message to actually edit files; reviewer verification remains for research
+  goals and for edit goals whose changes lack test coverage.
+- **`--json` result contract**: `cmd_goal` returned `None` → single-command
+  `--json` printed `ok:false content:""` even when the goal loop visually
+  succeeded. The loop now records `state.last_goal_result = {content,
+  files_changed, passed}` on every exit path; `cmd_goal` returns the content;
+  single-command `--json` reads the record (REPL unaffected — a recorded goal
+  result skips `run_agentic` so the loop's output is never re-run as a prompt).
+
+Regression tests (revert-proof, verified FAILING on pre-fix source): run-on
+carve yields non-empty impl / web-only researcher task / unsafe-prefix and
+leading-edit-intent no-carve; write-intent guard + handoff write classification
++ `last_goal_result` recording; `cmd_goal` returns loop content / empty-args
+None. Related suites 246 passed + 1 xfailed; ruff E9/F clean.
+
 ### FIX: `/goal` analysis+search+apply loop — Layer 1 (stale approval replay) root-caused and fixed (2026-09-09, committed `4df0292` + `cb0e797`)
 
 The handoff bug `CLAUDE_GOAL_HANDOFF.md` (analyze codebase + search internet +
