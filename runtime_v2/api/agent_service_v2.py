@@ -133,11 +133,62 @@ _RESEARCH_SENT_RE = re.compile(
     re.IGNORECASE,
 )
 _IMPLEMENT_SENT_RE = re.compile(
-    r"\b(implement|fix|patch|write|create|modify|change|update|refactor|"
-    r"edit|solve|repair|correct)\b|use filesystem|analyze the codebase|"
-    r"rewrite broken code",
+    r"\b(implement|fix(?:es|ed|ing)?|patch|write|create|modify|change|"
+    r"update|refactor|edit|solve|repair|correct|apply)\b|"
+    r"use filesystem|analyze the codebase|rewrite broken code",
     re.IGNORECASE,
 )
+
+
+def _carve_implementation_clause(sentence: str):
+    """Split a SINGLE run-on sentence that carries BOTH web-research and
+    implementation intent into (research_part, implementation_part).
+
+    Sentence-splitting alone cannot separate "analyze my codebase for bugs and
+    search internet for improvements and upgrades always read agent md first
+    (and apply the fixes)" — it is one sentence with no terminal punctuation, so
+    the old code classified the whole thing as implementation (research and
+    implementation both = the full goal, and "apply the fixes" flooded back into
+    the web-only researcher task).
+
+    Approach: find the RIGHTMOST implementation keyword and split there — the
+    trailing edit clause becomes implementation, the prefix stays research. This
+    is only safe when the prefix does NOT itself contain an edit keyword (a goal
+    like "fix the bug and search the web for the best approach" has "fix" in its
+    research prefix — splitting at the rightmost keyword "approach"/"apply" would
+    misclassify the fix as research). When the prefix still shows edit intent,
+    return None so the caller keeps the WHOLE sentence as implementation (nothing
+    dropped, and the edit keyword is never lost).
+    """
+    impl_m = _IMPLEMENT_SENT_RE.search(sentence)
+    if not impl_m:
+        return None
+    # Splitting at the FIRST implementation keyword gives (research_prefix,
+    # edit_suffix): "analyze my codebase for bugs and search internet for
+    # improvements... (and apply the fixes)" -> prefix = all the research, suffix
+    # = "apply the fixes". Splitting at the LAST keyword instead is wrong: the
+    # prefix would then contain the earlier "apply" of the same edit clause and
+    # the safety guard would reject the carve (or mis-bucket a multi-word edit
+    # phrase like "apply the fixes").
+    split_at = impl_m.start()
+    if split_at <= 0:
+        # Edit intent leads the sentence ("fix the bug and search the web") —
+        # the prefix is empty so there is no research clause to carve; keep the
+        # whole sentence as implementation.
+        return None
+    prefix = sentence[:split_at].strip(" ,;:(()[]")
+    suffix = sentence[split_at:].strip(" ,;:()[]")
+    # Drop a trailing conjunction / parenthetical connector left over from the
+    # carve ("... first (and apply the fixes)" -> prefix ends with "(and").
+    prefix = re.sub(r"[\s(]*\b(?:and|then|also|to)\b[\s(]*$", "", prefix).strip(" ,;:()")
+    # The prefix must be a genuine research clause — if it still contains an
+    # implementation keyword we cannot carve safely; keep the whole sentence as
+    # implementation instead.
+    if _IMPLEMENT_SENT_RE.search(prefix):
+        return None
+    if not suffix:
+        return None
+    return (prefix, suffix)
 
 
 def _split_compound_goal(goal: str):
@@ -161,7 +212,25 @@ def _split_compound_goal(goal: str):
     for s in sentences:
         has_research = bool(_RESEARCH_SENT_RE.search(s))
         has_implement = bool(_IMPLEMENT_SENT_RE.search(s))
-        if has_implement:
+        if has_implement and has_research:
+            carved = _carve_implementation_clause(s)
+            if carved is not None:
+                # A single run-on sentence with BOTH web-research AND edit intent
+                # ("analyze my codebase for bugs and search internet for
+                # improvements and upgrades always read agent md first (and apply
+                # the fixes)") — split it in place so the researcher gets only the
+                # web half and coder gets the edit half, instead of the whole
+                # sentence collapsing into implementation (research=implementation=
+                # the full goal) and the edit keyword being flooded back into the
+                # web-only researcher task.
+                research_part_s, impl_part_s = carved
+                if impl_part_s:
+                    implement_parts.append(impl_part_s)
+                if research_part_s:
+                    research_parts.append(research_part_s)
+                continue
+            implement_parts.append(s)
+        elif has_implement:
             # Implementation wins on ambiguity (compound "analyze the codebase
             # AND use filesystem to implement upgrades" is an EDIT directive).
             implement_parts.append(s)

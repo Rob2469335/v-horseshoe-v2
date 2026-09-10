@@ -953,6 +953,67 @@ async def test_split_compound_goal_phases():
 
 
 @pytest.mark.asyncio
+async def test_split_compound_goal_runon_apply_fixes_carves_impl():
+    """The handoff goal is a SINGLE run-on sentence carrying both web-research and
+    edit intent. It must be carved in place: the web half feeds researcher, the
+    edit half ('apply the fixes') feeds coder — the executor must NOT see an
+    empty implementation phase (that silently dropped the edits and failed the
+    whole goal with 'No file changes detected' after research-only retries)."""
+    from runtime_v2.api.agent_service_v2 import _split_compound_goal, _research_only_task
+
+    goal = (
+        "analyze my codebase for bugs and search internet for improvements and "
+        "upgrades always read agent md first (and apply the fixes)"
+    )
+    r, i = _split_compound_goal(goal)
+    assert i, f"run-on edit goal must yield an implementation phase, got impl={i!r}"
+    assert "apply the fixes" in i
+    assert "search internet" in i.lower() or "apply the fixes" in i
+    # The research half must be web-research only (no edit keywords), and the
+    # web-only researcher task must NOT contain 'apply the fixes'.
+    research_task = _research_only_task(r or goal)
+    assert "apply the fixes" not in research_task.lower(), research_task
+    assert "search internet" in research_task.lower(), research_task
+
+
+@pytest.mark.asyncio
+async def test_split_compound_goal_does_not_carve_edit_leading_sentence():
+    """A sentence whose EDIT intent leads ('fix the bug and search the web for
+    the best approach') cannot be carved safely — the 'fix' is in the prefix, so
+    the whole sentence stays implementation. Nothing is dropped into a phantom
+    research phase."""
+    from runtime_v2.api.agent_service_v2 import _split_compound_goal
+
+    r, i = _split_compound_goal("fix the bug and search the web for the best approach")
+    assert "fix" in i
+    # Either whole-sentence-as-implement (r falls back to the goal) — never a
+    # quiet drop of the edit intent into an empty impl.
+    assert i
+
+
+@pytest.mark.asyncio
+async def test_carve_implementation_clause_basic():
+    """Direct unit coverage of the carve helper: rightmost-stage guard, leading
+    edit intent rejection, and trailing-conjunction cleanup."""
+    from runtime_v2.api.agent_service_v2 import _carve_implementation_clause
+
+    # Leading edit intent -> None (whole sentence stays implementation).
+    assert _carve_implementation_clause("fix the bug and search the web") is None
+    # Prefix still contains an edit keyword -> None (unsafe to carve).
+    assert _carve_implementation_clause("apply changes and then search the web") is None
+    # Clean carve.
+    c = _carve_implementation_clause(
+        "analyze the code first (and apply the fixes we find)"
+    )
+    assert c is not None
+    research, impl = c
+    assert "analyze the code first" in research
+    assert "apply the fixes" in impl
+    # No implement keyword at all -> None.
+    assert _carve_implementation_clause("just search the web please") is None
+
+
+@pytest.mark.asyncio
 async def test_coordinator_routes_after_ask_user_answer_no_requery():
     """POST-ASK_USER GUARD: once the user has answered an ask_user (the CLI feeds
     it back as an `Observation:` history turn), the stateless coordinator must
