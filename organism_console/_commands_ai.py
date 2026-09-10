@@ -10,7 +10,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from rich.panel import Panel
 from rich.table import Table
@@ -446,16 +446,20 @@ def cmd_upgrade(ctx: CommandContext, args: List[str]) -> None:
 @registry.register(
     "goal", "Run autonomous self-correcting loop. Usage: /goal <objective>"
 )
-def cmd_goal(ctx: CommandContext, args: List[str]) -> None:
+def cmd_goal(ctx: CommandContext, args: List[str]) -> Optional[str]:
     if not args:
         ctx.console.print(
             "[yellow]Usage: /goal <objective>. Example: /goal fix failing tests[/yellow]"
         )
-        return
+        return None
     if ctx.run_goal_loop:
-        ctx.run_goal_loop(" ".join(args))
-    else:
-        ctx.console.print("[red]Goal loop not configured.[/red]")
+        # Return the goal-loop content so single-command `--json` mode reports a
+        # real result (ok:true + content) instead of the empty dict it previously
+        # got — run_agentic never ran because the goal loop executed in
+        # handle_line and its return was discarded.
+        return ctx.run_goal_loop(" ".join(args))
+    ctx.console.print("[red]Goal loop not configured.[/red]")
+    return None
 
 
 @registry.register(

@@ -485,9 +485,18 @@ def run_autonomous_goal_loop(
             "[dim]Detected read-only goal — running as a single tool call, skipping verification loop.[/dim]"
         )
         history = stream_prompt(cmd_ctx.state, entry_agent, goal, list(state.history))
+        content = ""
         if history and isinstance(history[-1], dict):
-            return str(history[-1].get("content", ""))
-        return ""
+            content = str(history[-1].get("content", ""))
+        try:
+            state.last_goal_result = {
+                "content": content,
+                "files_changed": [],
+                "passed": bool(content),
+            }
+        except Exception:
+            pass
+        return content
     console.print()
 
     plan_first = len(goal) > 200 and Confirm.ask(
@@ -734,10 +743,36 @@ def run_autonomous_goal_loop(
             elif not placeholder and syntax_passed:
                 # Check if any files were actually modified during this attempt
                 if not changed_this_attempt:
-                    console.print(
-                        "[dim]No file changes detected. Verifying goal...[/dim]"
-                    )
-                    passed, logs = _verify_goal_with_reviewer(goal, final_msg)
+                    if has_write:
+                        # A write-intent goal (fix/implement/patch/write/apply...)
+                        # that produced ZERO file changes did not do its job. The
+                        # reviewer reports on the FINAL RESPONSE, not on the
+                        # deliverable — it approved a research report for an
+                        # edit goal ("No file changes detected. Verifying goal...
+                        # SUCCESS"). Fail closed and tell the agent to actually
+                        # make the edit, rather than rubber-stamping a report.
+                        console.print(
+                            "[dim]Write-intent goal produced no file changes —"
+                            " not passing on reviewer alone.[/dim]"
+                        )
+                        passed = False
+                        logs = (
+                            "The goal requires EDITING code (write/fix/implement/"
+                            "patch/apply), but this attempt changed no files. Final "
+                            "response was a report, not the deliverable. Re-run with "
+                            "the ORIGINAL goal and use action=filesystem "
+                            "(operation=write or operation=patch) to actually apply "
+                            "the fix before calling final.\n"
+                            f"Final: {final_msg[:200]}"
+                        )
+                        console.print(
+                            "[bold red]✗ Write-intent goal with no file changes.[/bold red]"
+                        )
+                    else:
+                        console.print(
+                            "[dim]No file changes detected. Verifying goal...[/dim]"
+                        )
+                        passed, logs = _verify_goal_with_reviewer(goal, final_msg)
                 else:
                     console.print(
                         "[dim]Running security gate on changed files...[/dim]"
@@ -957,5 +992,19 @@ def run_autonomous_goal_loop(
     # Return the final assistant message content (all exit paths: success, max
     # attempts, failure). Callers that only need the loop's side effects ignore it.
     if history and isinstance(history[-1], dict):
-        return str(history[-1].get("content", ""))
+        content = str(history[-1].get("content", ""))
+        # Record the machine-readable goal outcome so single-command `--json`
+        # mode can report `ok:true` with real content + files instead of the
+        # empty result it used to print for /goal (cmd_goal returned None and
+        # handle_line fed nothing into run_agentic). `changed_this_attempt` is
+        # the LAST attempt's baseline delta; `passed` holds this run's verdict.
+        try:
+            state.last_goal_result = {
+                "content": content,
+                "files_changed": sorted(changed_this_attempt or ()),
+                "passed": bool(passed),
+            }
+        except Exception:
+            pass
+        return content
     return ""

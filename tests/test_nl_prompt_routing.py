@@ -87,3 +87,30 @@ def test_handle_line_upgrade_command():
     assert "analyze my codebase for bugs" in seen["goal"]
     assert seen.get("force_readonly") is True
     mock_goal_loop.assert_not_called()  # declined -> no apply phase
+
+
+def test_cmd_goal_returns_goal_loop_content():
+    """`/goal` must RETURN the goal-loop's final content so single-command
+    `--json` mode can report it — cmd_goal returning None made the accepted
+    handoff goal print `ok:false content:""` even when the loop visually
+    succeeded (the return was discarded and nothing flowed into run_agentic)."""
+    from organism_console._commands_ai import cmd_goal
+
+    ctx = build_command_context()
+    mock_goal_loop = MagicMock(return_value="THE-GOAL-ANSWER")
+    ctx.run_goal_loop = mock_goal_loop
+
+    out = cmd_goal(ctx, ["fix the failing tests and apply the fixes"])
+    assert out == "THE-GOAL-ANSWER"
+    mock_goal_loop.assert_called_once_with(
+        "fix the failing tests and apply the fixes"
+    )
+
+
+def test_cmd_goal_empty_args_returns_none():
+    from organism_console._commands_ai import cmd_goal
+
+    ctx = build_command_context()
+    ctx.run_goal_loop = MagicMock()
+    assert cmd_goal(ctx, []) is None
+    ctx.run_goal_loop.assert_not_called()

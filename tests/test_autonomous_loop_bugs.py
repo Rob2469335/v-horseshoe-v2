@@ -713,10 +713,10 @@ class TestReadAgentsMdCanonicalization:
 
     @pytest.mark.parametrize(
         "spelling", ["agent.md", "agents.md", "AGENT.md", "AGENTS.MD"]
-    )
+)
+
     def test_variant_reads_real_agents_md(self, tmp_path: Path, monkeypatch, spelling):
         from swarm_os.lib.mcp import filesystem as _fs
-
         (tmp_path / "AGENTS.md").write_text("THE-CANONICAL-DOCS", encoding="utf-8")
         r = _fs.filesystem_handler({"operation": "read", "path": spelling}, tmp_path)
         assert r.get("ok") is True, (spelling, r)
@@ -735,6 +735,101 @@ class TestReadAgentsMdCanonicalization:
             {"operation": "read", "path": "notdocs.md"}, tmp_path
         )
         assert r2.get("ok") is False
+
+
+class TestWriteIntentGoalRequiresEdits:
+    """CLAUDE_GOAL_HANDOFF Layer-1 follow-up: a WRITE-intent goal
+    (fix/implement/apply the fixes...) that produces ZERO file changes must NOT
+    pass the goal loop via the reviewer alone.
+
+    The reviewer reports on the final RESPONSE, not the deliverable — before this
+    fix "No file changes detected. Verifying goal... ✓ SUCCESS" let a research
+    report satisfy an edit goal. Fail closed instead: no edits on a write-intent
+    goal = failed attempt with a corrective message to actually edit files.
+    """
+
+    def test_write_intent_goal_source_contains_guard(self):
+        mod = _reload_autonomous()
+        src = Path(mod.__file__).read_text(encoding="utf-8")
+        assert "Write-intent goal with no file changes" in src, (
+            "the write-intent no-changes guard is missing from the goal loop"
+        )
+
+    def test_write_intent_goal_is_write_classified(self):
+        """The EXACT handoff goal must classify has_write=True (not read-only) so
+        the fix pipeline / verification loop runs at all."""
+        mod = _reload_autonomous()
+        goal = (
+            "analyze my codebase for bugs and search internet for improvements "
+            "and upgrades always read agent md first (and apply the fixes)"
+        )
+        READ_ONLY_KEYWORDS = [
+            "analyze", "search", "scan", "inspect", "review", "read", "find", "check",
+        ]
+        WRITE_KEYWORDS = [
+            "fix", "implement", "add", "change", "refactor", "write", "modify",
+            "update", "create", "delete", "remove", "patch", "edit", "generate",
+            "apply", "fixes",
+        ]
+        import re as _re
+
+        gl = goal.lower()
+        has_write = any(_re.search(r"\b" + _re.escape(k) + r"\b", gl) for k in WRITE_KEYWORDS)
+        has_read = any(_re.search(r"\b" + _re.escape(k) + r"\b", gl) for k in READ_ONLY_KEYWORDS)
+        assert has_write is True, "the handoff goal must be write-intent"
+        assert has_read is True
+        assert mod.run_autonomous_goal_loop is not None
+
+    def test_state_records_goal_result(self):
+        """The goal loop records a machine-readable `last_goal_result` on state
+        so single-command `--json` can report ok/content/files_changed instead of
+        an empty dict (cmd_goal used to return None and the result was lost)."""
+        mod = _reload_autonomous()
+        state = MagicMock()
+        state.entry_agent = "coordinator"
+        state.active_agent = "coordinator"
+        state.delegation_chain = []
+        state.history = []
+        state.save = MagicMock()
+        cmd_ctx = MagicMock()
+        cmd_ctx.state = state
+        cmd_ctx.console = MagicMock()
+
+        def _fake_stream_readonly(s, agent, goal, history):
+            return [
+                {"role": "user", "content": "goal"},
+                {"role": "assistant", "content": "The findings are: X, Y, Z."},
+            ]
+
+        with patch.object(mod, "stream_prompt", _fake_stream_readonly):
+            content = mod.run_autonomous_goal_loop(
+                "analyze my codebase for bugs and search internet for improvements and upgrades",
+                cmd_ctx,
+            )
+        assert "X, Y, Z" in content
+        rec = state.last_goal_result
+        assert rec is not None
+        assert isinstance(rec, dict)
+        assert "content" in rec
+        assert "files_changed" in rec and isinstance(rec["files_changed"], list)
+
+
+class TestSplitterAppliedFixesCarve:
+    """End-user contract: the backend compound-goal splitter must yield a
+    non-empty implementation phase for the run-on handoff goal so executor
+    delegates coder (research-only retry loops were the 'fixes never applied'
+    failure)."""
+
+    def test_handoff_goal_impl_nonempty(self):
+        from runtime_v2.api.agent_service_v2 import _split_compound_goal
+
+        goal = (
+            "analyze my codebase for bugs and search internet for improvements "
+            "and upgrades always read agent md first (and apply the fixes)"
+        )
+        r, i = _split_compound_goal(goal)
+        assert i, f"impl must be non-empty, got {i!r}"
+        assert "apply the fixes" in i
 
 
 # ---------------------------------------------------------------------------

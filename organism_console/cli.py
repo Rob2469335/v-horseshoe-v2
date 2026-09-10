@@ -340,17 +340,34 @@ def main():
         cmd_ctx = build_command_context()
         execute_prompt = registry.handle_line(cmd_line, cmd_ctx)
         try:
-            result = (
-                run_agentic(ctx, execute_prompt, json_flag) if execute_prompt else {}
-            )
+            goal_result = getattr(ctx, "last_goal_result", None)
+            if goal_result is not None:
+                # /goal ran inside handle_line: the returned `execute_prompt` is
+                # the goal-loop's FINAL CONTENT, not a follow-up prompt to stream
+                # through run_agentic (feeding it back would re-run the loop's
+                # output as a new prompt). Report the recorded outcome directly.
+                result = {
+                    "content": goal_result.get("content", execute_prompt or ""),
+                    "files_changed": [
+                        {"path": p, "added": 0, "removed": 0}
+                        for p in goal_result.get("files_changed", [])
+                    ],
+                }
+            else:
+                result = (
+                    run_agentic(ctx, execute_prompt, json_flag) if execute_prompt else {}
+                )
             if json_flag:
                 print(
                     json.dumps(
                         {
-                            "ok": bool(result.get("content")),
+                            "ok": bool(
+                                result.get("content")
+                                or goal_result.get("passed")
+                            ),
                             "agent": ctx.active_agent,
                             "model": ctx.active_model,
-                            "prompt": execute_prompt or cmd_line,
+                            "prompt": cmd_line,
                             "content": result.get("content", ""),
                             "files_changed": [
                                 r["path"] for r in result.get("files_changed", [])
@@ -460,7 +477,7 @@ def main():
             cmd_ctx = build_command_context()
 
             execute_prompt = registry.handle_line(cmd_line, cmd_ctx)
-            if execute_prompt:
+            if execute_prompt and getattr(ctx, "last_goal_result", None) is None:
                 current_context_tokens = estimate_tokens(
                     execute_prompt + json.dumps(ctx.history)
                 )
