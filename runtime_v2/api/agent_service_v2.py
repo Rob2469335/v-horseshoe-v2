@@ -84,7 +84,7 @@ _PLACEHOLDER_RE = re.compile(
 )
 
 
-def _is_placeholder_final(text: str) -> bool:
+def _is_placeholder_final(text: str, goal: str = "") -> bool:
     """True when a final response is a bare completion/template placeholder with
     no substantive content (e.g. 'Task completed.' / 'Done.' / 'No changes.'),
     even when it is a complete sentence — the structural-verifier signal that
@@ -92,6 +92,23 @@ def _is_placeholder_final(text: str) -> bool:
     t = re.sub(r"\s+", " ", str(text or "")).strip()
     if not t:
         return True
+
+    if goal:
+        g = re.sub(r"^(Goal|Task|Task Goal|ORIGINAL GOAL)\s*[:：]\s*", "", goal.strip(), flags=re.IGNORECASE)
+        for marker in ("*** CRITICAL INSTRUCTION ***", "CRITICAL INSTRUCTION", "\n\nYou are the", "<EPHEMERAL_MESSAGE>"):
+            idx = g.find(marker)
+            if idx > 0:
+                g = g[:idx].strip()
+        
+        t_words = set(re.findall(r"\b\w+\b", t.lower()))
+        g_words = set(re.findall(r"\b\w+\b", g.lower()))
+        if g_words:
+            overlap = len(g_words.intersection(t_words))
+            # If the response is basically just echoing the goal words,
+            # and it's suspiciously short (not a real findings report)
+            if overlap / len(g_words) >= 0.6 and len(t) < max(200, len(g) * 2):
+                return True
+
     if len(t) > 120:
         return False  # long responses are substantive enough to not be a template
     return bool(_PLACEHOLDER_RE.match(t))
@@ -1746,7 +1763,7 @@ class AgentServiceV2:
         # agents (coder's fix-intent invariant already forces a code edit).
         contract_error = None
         if agent_id in ANALYSIS_AGENTS:
-            if _is_placeholder_final(response_text):
+            if _is_placeholder_final(response_text, prompt):
                 contract_error = (
                     "SYSTEM (L1 contract): you called action=final with only a placeholder response "
                     f"({response_text!r}). This is a short-circuit, not a completed task. Re-run the goal "
