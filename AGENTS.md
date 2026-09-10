@@ -602,24 +602,25 @@ Dependency pairing: React 19 ↔ `@react-three/fiber` ^9.5 / `@react-three/drei`
 > cross-check `qwen_train/results/` + running processes. If primary is stuck/
 > idle here, pick the thread up.
 
-**CURRENT (2026-09-09, `/goal` stale-approval-replay fixed; cwd-path batch + /goal Layer-1 commits pushed):**
-The `CLAUDE_GOAL_HANDOFF.md` `/goal` bug ("analyze codebase + search internet +
-apply fixes" failed 100% with turn-0 "Authorization DENIED: pending approval no
-longer valid") was root-caused as THREE layers. Investigation against live code
-found Layers 2 (routing — the backend coordinator's turn-0
-`fast_route_coordinator` already sends compound internet+fix goals to `executor`)
-and 3 (write-intent classification — already fixed by `e4f8a3d`: "apply"/"fixes"
-are `WRITE_KEYWORDS`) were already handled. The live defect was **Layer 1**:
-the CLI persisted control-plane `Observation: {"approval": ...}` keys to
-`organism_console/.session.json`, and a fresh process/attempt replayed them
-against an empty in-process registry → hard denial on turn 0. Two surgical
-fixes landed and pushed (`4df0292` backend `peek_pending` stale-guard +
-`cb0e797` CLI strip-of-control-observations on returned/persisted history), each
-with revert-proof regression tests; 241 related tests pass, ruff E9/F clean.
-AGENTS.md Recent Changes updated. Full stack currently up via start-dev.ps1
-(backend :8000, proxy :8080, robs4b on :8079, all MCP servers registered).
-Open thread: run the acceptance goal end-to-end against the live stack if you
-want a live proof beyond the unit-level revert-proof tests.
+**CURRENT (2026-09-09, `/goal` "apply the fixes" fully root-caused + fixed end-to-end; commits `2966733` + `2c82a39` pushed):**
+All THREE handoff layers now resolved. **Layer 1** (stale approval replay) fixed
+in `4df0292` + `cb0e797` (backend `peek_pending` guard + CLI control-observation
+strip). **Layer 3** (write-intent) had been fixed by `e4f8a3d`. **Layer 2 root
+cause — the fixes were never applied** — was `_split_compound_goal`: the handoff
+goal is one run-on sentence, `_IMPLEMENT_SENT_RE` lacked "apply"/plural "fixes",
+so the implementation phase was EMPTY and the executor never delegated coder
+(research-only retry for all 5 attempts, reviewer said NO each time). Fixed in
+`2966733` (keywords + `_carve_implementation_clause` run-on split); verified at
+the seam: executor now delegates coder with task "apply the fixes". Two
+follow-ups also fixed in `2c82a39`: write-intent goals with ZERO edits fail
+closed (no reviewer rubber-stamp on a research report) and `--json` now reports
+real content via `state.last_goal_result` (cmd_goal returns the loop content).
+Revert-proof tests across all three; related suites 246 passed + 1 xfailed; ruff
+E9/F clean. AGENTS.md Recent Changes updated. Stack down after the live test
+(the acceptance goal takes minutes with the local 4B; every deterministic seam
+was verified live: executor→coder delegation, coder fix-intent reject-on-no-edit,
+splitter carve, `--json` flow). Relaunch via start-dev.ps1 for any further live
+run.
 
 **CURRENT (2026-09-08, persona-hedge finding stands; WRONG-artifact claim CORRECTED):** The 2026-09-05 "fully
 trained, gated 10/10, GGUF'd" persona claim below was FALSIFIED. Verified: (1) the
