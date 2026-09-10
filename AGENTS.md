@@ -1011,6 +1011,14 @@ relaunch via start-dev.ps1 when ready.
 
 ## Recent Changes (do NOT re-apply)
 
+### FIX: Parser Validation, UI Auto-Approve, and Model Routing (2026-09-10)
+
+Addressed three critical issues found in the recent agent runs:
+- **Parser bypass**: `_llm_parser.py` now explicitly rejects malformed stacked JSON tags (preventing the LLM from smuggling a second tool call) and enforces required `operation` and `path` arguments for `filesystem`/`sandbox_repl`.
+- **UI Approval Hang**: `live_stream.py` now correctly short-circuits and auto-denies actions that return a `tier: DENY` authorization, rather than letting them fall through to the auto-approve block.
+- **Model Routing**: `routes.py` `generate()` conditionally applies the `OPENAI_API_BASE` (OpenCode Go) override only to `openai/` alias prefixes, fixing a bug where NVIDIA NIM (`deepseek-v4-flash`) was incorrectly routed and returned 401 Unsupported Model.
+- **Placeholder Final False-Positive**: Fixed a regression in `_is_placeholder_final` that incorrectly flagged short substantive responses to short prompts as "echoed placeholders".
+- **Regression test fixes**: Patched `project_root` in `test_command_center.py` regression tests so they correctly execute without relying on the real project root directory.
 ### FIX: `/goal` "apply the fixes" now actually applies — splitter root cause + write-intent verification gate + `--json` result contract (2026-09-09, committed `2966733` + `2c82a39`)
 
 After the Layer-1 stale-approval fix, the handoff acceptance run exposed THREE
@@ -2439,6 +2447,8 @@ Converted `except:` → `except Exception:` (or specific types) in `swarm_os/cor
 ---
 
 ## Self-Healing & Self-Learning Fixes
+
+- **Rule (researcher)**: Failure: The researcher agent attempted to read 'agent.md' directly and failed because the file was not found in the filesystem. | Root cause: The ...
 
 - **[CANARY-FLAGGED: human review] (2026-09-08T02:05:28.802900+00:00)**: swarm_os/api/routes.py — test regression NOT attributable to swarm_os/api/routes.py; HUMAN REVIEW
 
