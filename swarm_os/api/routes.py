@@ -488,12 +488,13 @@ async def generate(payload: GenerateRequest, orch=Depends(get_orchestrator)):
         # Cloud fix/correction path: give the model its own endpoint/key so the
         # request genuinely reaches the cloud provider (DeepSeek via OpenCode Go,
         # or whatever OPENAI_API_BASE is set to) — not the local llama.cpp slot.
-        base = os.getenv("OPENAI_API_BASE", "")
-        key = os.getenv("OPENAI_API_KEY", "")
-        if base:
-            kwargs["api_base"] = base
-        if key:
-            kwargs["api_key"] = key
+        if litellm_model.startswith("openai/"):
+            base = os.getenv("OPENAI_API_BASE", "")
+            key = os.getenv("OPENAI_API_KEY", "")
+            if base:
+                kwargs["api_base"] = base
+            if key:
+                kwargs["api_key"] = key
 
     try:
         import litellm

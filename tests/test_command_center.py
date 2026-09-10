@@ -72,6 +72,7 @@ def test_file_read_resolution(tmp_path, monkeypatch):
     from swarm_os.api import control as ctl
 
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(ctl, "project_root", lambda: tmp_path)
     (tmp_path / "ok.txt").write_text("hello", encoding="utf-8")
     assert ctl._resolve_project_file("ok.txt") == str(tmp_path / "ok.txt")
     # os.path.join builds a platform-correct traversal: backslash separators are
@@ -94,6 +95,7 @@ def test_file_read_resolution_rejects_sibling_prefix_collision(tmp_path, monkeyp
     sibling.mkdir(exist_ok=True)
     (sibling / "payload.py").write_text("pwned", encoding="utf-8")
     monkeypatch.chdir(project)
+    monkeypatch.setattr(ctl, "project_root", lambda: project)
     with pytest.raises(Exception):
         ctl._resolve_project_file(str(sibling / "payload.py"))
 
@@ -107,6 +109,10 @@ def test_browser_image_endpoint_cannot_disclose_root_files(tmp_path, monkeypatch
     from swarm_os.api import control as ctl
 
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(ctl, "project_root", lambda: tmp_path)
+    shots = tmp_path / "logs" / "screenshots"
+    shots.mkdir(parents=True)
+    monkeypatch.setenv("SWARM_SCREENSHOT_DIR", str(shots))
     (tmp_path / ".env").write_text("SECRET_TOKEN=abc", encoding="utf-8")
     (tmp_path / "swarm_config.json").write_text("{}", encoding="utf-8")
 
@@ -117,7 +123,7 @@ def test_browser_image_endpoint_cannot_disclose_root_files(tmp_path, monkeypatch
         asyncio.run(ctl.control_browser_image("swarm_config.json"))
     # Non-png suffix in the shots dir -> refused.
     shots = tmp_path / "logs" / "screenshots"
-    shots.mkdir(parents=True)
+    shots.mkdir(parents=True, exist_ok=True)
     (shots / "notes.txt").write_text("x", encoding="utf-8")
     with pytest.raises(HTTPException):
         asyncio.run(ctl.control_browser_image("notes.txt"))
@@ -175,8 +181,10 @@ def test_screen_image_endpoint_serves_only_png(tmp_path, monkeypatch):
     from swarm_os.api import control as ctl
 
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(ctl, "project_root", lambda: tmp_path)
     shots = tmp_path / "logs" / "screenshots"
     shots.mkdir(parents=True)
+    monkeypatch.setenv("SWARM_SCREENSHOT_DIR", str(shots))
     (shots / "notes.txt").write_text("x", encoding="utf-8")
 
     with pytest.raises(HTTPException):

@@ -100,14 +100,19 @@ def _is_placeholder_final(text: str, goal: str = "") -> bool:
             if idx > 0:
                 g = g[:idx].strip()
         
-        t_words = set(re.findall(r"\b\w+\b", t.lower()))
-        g_words = set(re.findall(r"\b\w+\b", g.lower()))
-        if g_words:
+        stopwords = {"the", "a", "an", "this", "that", "it", "is", "are", "was", "were", "to", "for", "of", "in", "and", "or", "on", "with", "as", "by", "be", "at"}
+        t_words = set(w for w in re.findall(r"\b\w+\b", t.lower()) if w not in stopwords)
+        g_words = set(w for w in re.findall(r"\b\w+\b", g.lower()) if w not in stopwords)
+        if len(g_words) >= 3:
             overlap = len(g_words.intersection(t_words))
             # If the response is basically just echoing the goal words,
             # and it's suspiciously short (not a real findings report)
-            if overlap / len(g_words) >= 0.6 and len(t) < max(200, len(g) * 2):
+            if overlap / len(g_words) >= 0.75 and len(t) < max(200, len(g) * 2):
                 return True
+        elif len(g_words) > 0 and len(g_words) < 3:
+            # For very short prompts, don't use the overlap heuristic because 
+            # common structural words (like "review", "patch") can easily trigger it.
+            pass
 
     if len(t) > 120:
         return False  # long responses are substantive enough to not be a template

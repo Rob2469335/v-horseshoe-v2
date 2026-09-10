@@ -154,6 +154,17 @@ def normalize_decision(obj: dict) -> dict:
     if not obj["action"]:
         raise ValueError("Missing action after normalization")
 
+    if obj["action"] == "filesystem":
+        if not obj.get("operation"):
+            raise ValueError("Filesystem tool requires 'operation' argument")
+        # 'list' doesn't always need a path, but 'read' / 'write' / 'patch' definitely do
+        if obj.get("operation") != "list" and not obj.get("path"):
+            raise ValueError(f"Filesystem operation '{obj.get('operation')}' requires 'path' argument")
+
+    if obj["action"] == "sandbox_repl":
+        if not obj.get("code") and not obj.get("command"):
+            raise ValueError("Sandbox_repl tool requires 'code' or 'command' argument")
+
     return obj
 
 
@@ -200,6 +211,8 @@ def extract_json(text: str) -> dict:
         start = text.find("{", start + 1)
 
     if valid_jsons:
+        if len(valid_jsons) > 1:
+            raise ValueError(f"Malformed stacked tags: found {len(valid_jsons)} distinct JSON objects in the output. Only provide ONE tool call per response.")
         return valid_jsons[0]
 
     try:
