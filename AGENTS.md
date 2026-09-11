@@ -503,7 +503,7 @@ Package split from the deleted 1,275-line `rv_finder.py`. Exposed as `find_best_
 | `vision_router.py` | 84 | Llama.cpp Vision model router policy |
 | `memory_core.py` | 596 | `remember_fat()`, `get_relevant_memories()` — Qdrant-backed memory |
 | `_llm_parser.py` | 325 | `extract_json()`, `normalize_decision()`, `normalize_model_json()`, `TOOL_CALL_SCHEMA`, `fire_and_forget()` |
-| `stream_runner.py` | 597 | `get_tool_decision()` — orchestration: MCP schema, memory injection, retry loop, LLM call |
+| `stream_runner.py` | 719 | `get_tool_decision()` — orchestration: MCP schema (+ adaptive routing to Serena / specialized research sources), memory injection, retry loop, LLM call |
 | `tool_executor.py` | 1410 | `run(tool_name, payload)` — dispatches tool calls |
 | `fallback_manager.py` | 715 | `get_live_fallbacks()` — cloud model fallbacks, cooldowns, DeepSeek/Ling/OpenCode chain |
 | `_llm_client.py` | 611 | `complete_for_tool_decision()`, `stream_content()`, `build_router()` (litellm Router, per-deployment endpoint/key), `build_kwargs()`, `_cloud_response_format()` (strict json_schema), `SSL setup`, `get_litellm_model()` |
@@ -1012,6 +1012,76 @@ relaunch via start-dev.ps1 when ready.
 ---
 
 ## Recent Changes (do NOT re-apply)
+
+### SERVICE/FIX: agent-loop completion, MCP expansion + adaptive routing, research infra (2026-09-10/11)
+
+The session that closed the "analyze my codebase for bugs and upgrades" loop and
+built out the agent's capability surface. One logical change per commit; full
+suite green throughout.
+
+**Agent-loop completion (the original defect).** The prompt never completed: the
+tool-decision parser raised on any multi-object response (DeepSeek "thinks in
+JSON"), so every decision was discarded and the agent re-read files to max-turns.
+Fixed across commits `768ddd3`..`0e4b6c6` — see the dedicated entry below.
+Additional commits: `5c9c92d` (L1 3-strike final contract), `8b568ab`
+(forced-final ALLOWLIST + never-abort analysis agents + gate forced-synthesis),
+`154c648` (self-purging stale file-reference memory GC), `9985376` (deterministic
+grounded-report assembler), `0275e11` (two-call structured findings extraction,
+`json_object` mode), `337fa3b` (grounded report on the L1-abort path).
+
+**CLI trustworthiness (`1f7b143` + `e29ebff` + `b18fe6f`).** Five defect classes
+against the published CLI-agent taxonomy — see the dedicated entry below.
+
+**Playwright + event_log_storm + web_search loop fix (`d16f0cb` + `0035f10` +
+`d90ca21`).** See the dedicated entry below.
+
+**MCP expansion + adaptive routing (`ce203d0` + `a9de3cc` + `9bf0c1f` + `14ce23c`).**
+- **6 MCP servers added** (`swarm_config.json`, all free/open-source; verified
+  live via `ExternalMCPClientManager`): `playwright_mcp` (24 browser tools),
+  `firecrawl` (27 crawl/extract/monitor), `serena` (22 LSP symbol tools,
+  `--context ide` drops file/shell dupes), `arxiv` (19 papers), `huggingface`
+  (6 via `mcp-remote` bridge + the HF token from the CLI cache), `google_calendar`
+  (13; user OAuth blocked by Google Advanced Protection — see below). 13 servers
+  load at boot (~200 tools); the app's lazy MCP injection (5 most-relevant
+  schemas) keeps prompt cost flat.
+- **Adaptive tool routing** (`runtime_v2/services/stream_runner.py`; test
+  `tests/test_adaptive_routing.py`, 29). Research-backed (arXiv:2608.13568;
+  arXiv:2506.18096; kapa.ai): the agent's tool choice is task-shaped. REFERENCE/
+  refactor goals (`is_reference_task`) surface Serena's symbol tools first;
+  AI-RESEARCH goals (`is_research_task` + `research_source`) steer to the
+  specialized, up-to-date sources (huggingface/arxiv/github/firecrawl) over the
+  general web sweep. Localization/greps stay on the cheaper filesystem path
+  (forcing semantic there costs tokens, +6..118%).
+- **`/schedule` fixed** (`14ce23c`): it appended to a write-only
+  `SessionState.scheduled_tasks` queue nothing consumed; now drives the real
+  backend scheduler `/control/tasks` (also added a missing `DELETE` branch to
+  `api_client.call_api`, which had only GET/POST). Tests
+  `tests/test_cli_schedule.py`.
+- **DangerRoom mutation gate fixed** (`9bf0c1f`): `scan_sandbox` scanned repo
+  files with `strict=True`, which bans `pathlib` — flagging the project's own
+  `agent_service_v2.py` as a violation and halting every mutation. Now
+  `strict=False` for repo files (strict stays the LLM-snippet mode). Tests
+  `tests/test_danger_room_gate.py`.
+
+**KNOWN BLOCKER (do not re-attempt the plan): Google Calendar is APP-blocked.**
+The primary Google account is enrolled in Advanced Protection, which blocks the
+app's own OAuth client (`400 policy_enforced`). The "unenroll → auth → re-enroll"
+plan does NOT work — APP enforces a continuous allowlist and revokes/blocks
+non-verified-app tokens on re-enroll, and an unverified External/Testing client's
+refresh token expires in 7 days anyway. APP-safe options: (A) a GCP **service
+account** + share the calendar with its email (no user OAuth; needs a native
+tool or SA-capable MCP — `@cocal/google-calendar-mcp` is user-OAuth only), or
+(B) browser-driven. User deferred; recorded in assistant memory. The OAuth keys
+file (`config/gcp-oauth.keys.json`) + `GOOGLE_OAUTH_CREDENTIALS` are retained
+(useless against the APP account; gitignored via new `.gitignore` rules
+`config/gcp-oauth.keys.json` + `**/*.keys.json`).
+
+**V7 symbol-grounded trace generator** (`qwen_train/gen_symbol_traces_v7.py`,
+new): mines FIX/HEAL commits, grounds each in the file's symbol map, and emits
+ChatML where the assistant reasons in symbol terms ("SYMBOL: <name> at
+<file>:<lines>") then applies the real diff — teaching the *adaptive* policy
+(locate by symbol, edit by symbol) into robs4b rather than bolting on the tool.
+51 traces from 200 commits (only symbol-intersecting fixes kept).
 
 ### FIX: Playwright browsers + event_log_storm recovery + web_search loop-bound client (2026-09-11)
 
