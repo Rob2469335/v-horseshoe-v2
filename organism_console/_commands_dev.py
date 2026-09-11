@@ -671,50 +671,117 @@ def cmd_compress(ctx: CommandContext, args: List[str]) -> None:
         ctx.console.print(f"[red]Error during compression: {e}[/red]")
 
 
+def _resolve_schedule(token: str):
+    """Map a CLI schedule token to the backend task-scheduler grammar.
+
+    Numeric seconds -> a RECURRING cron (`*/M * * * *`, M minutes). The scheduler
+    daemon ticks every 60s, so <60s is rejected. Non-numeric tokens pass through
+    to the scheduler's native grammar ('hourly' | 'daily HH:MM' | 5-part cron).
+    Returns (schedule, human_note) or (None, error_message).
+    """
+    t = (token or "").strip()
+    if t.isdigit():
+        secs = int(t)
+        if secs < 60:
+            return None, (
+                "Interval must be at least 60 seconds (the scheduler ticks every "
+                "60s). Use e.g. 300, hourly, or 'daily 08:00'."
+            )
+        mins = max(1, round(secs / 60))
+        return f"*/{mins} * * * *", f"recurring every {mins} minute(s)"
+    if not t:
+        return None, (
+            "A schedule is required: seconds, 'hourly', 'daily HH:MM', or a 5-part cron."
+        )
+    return t, f"recurring on schedule '{t}'"
+
+
 @registry.register(
     "schedule",
-    "Run a command on a recurring schedule. Usage: /schedule <interval> <prompt> | /schedule list | /schedule clear",
+    "Run a goal on a recurring schedule via the backend task scheduler. "
+    "Usage: /schedule <seconds|hourly|'daily HH:MM'|cron> <goal> | /schedule list | /schedule clear",
 )
 def cmd_schedule(ctx: CommandContext, args: List[str]) -> None:
     if not args:
         ctx.console.print(
-            "[yellow]Usage: /schedule <seconds> <command> | /schedule list | /schedule clear[/yellow]"
+            "[yellow]Usage: /schedule <seconds|hourly|'daily HH:MM'|cron> <goal>[/yellow]\n"
+            "[dim]  /schedule 300 summarize my inbox   (recurring every 5 min)[/dim]\n"
+            "[dim]  /schedule hourly check the news[/dim]\n"
+            "[dim]  /schedule \"daily 08:00\" send the morning digest[/dim]\n"
+            "[dim]  /schedule list | /schedule clear[/dim]"
         )
         return
     subcmd = args[0].lower()
     if subcmd == "list":
-        if not getattr(ctx.state, "scheduled_tasks", None):
-            ctx.console.print("[dim]No scheduled tasks configured.[/dim]")
+        resp = ctx.call_api("/control/tasks", "GET")
+        if not resp or resp.status_code != 200:
+            ctx.console.print(
+                "[red]Could not reach the task scheduler (is the backend up?).[/red]"
+            )
             return
-        table = Table(title="Scheduled Tasks", border_style="cyan")
+        tasks = (resp.json() or {}).get("tasks", [])
+        if not tasks:
+            ctx.console.print("[dim]No scheduled tasks.[/dim]")
+            return
+        table = Table(title="Scheduled Tasks (backend)", border_style="cyan")
         table.add_column("ID", style="bold")
-        table.add_column("Interval", style="yellow")
-        table.add_column("Command / Prompt", style="green")
-        for idx, task in enumerate(ctx.state.scheduled_tasks, 1):
+        table.add_column("Schedule", style="yellow")
+        table.add_column("On", style="magenta")
+        table.add_column("Goal", style="green")
+        table.add_column("Last run", style="dim")
+        for t in tasks:
             table.add_row(
-                str(idx), str(task.get("interval", "")), str(task.get("command", ""))
+                str(t.get("id", "")),
+                str(t.get("schedule", "")),
+                "yes" if t.get("enabled") else "no",
+                str(t.get("goal", ""))[:60],
+                str(t.get("last_run") or "-")[:19],
             )
         ctx.console.print(table)
         return
     if subcmd == "clear":
-        ctx.state.scheduled_tasks = []
-        ctx.state.save()
-        ctx.console.print("[green]✓ All scheduled tasks cleared.[/green]")
+        resp = ctx.call_api("/control/tasks", "GET")
+        tasks = (
+            (resp.json() or {}).get("tasks", [])
+            if (resp and resp.status_code == 200)
+            else []
+        )
+        if not tasks:
+            ctx.console.print("[dim]No scheduled tasks to clear.[/dim]")
+            return
+        removed = 0
+        for t in tasks:
+            tid = t.get("id")
+            if tid and ctx.call_api(f"/control/tasks/{tid}", "DELETE"):
+                removed += 1
+        ctx.console.print(f"[green]✓ Cleared {removed} scheduled task(s).[/green]")
         return
     if len(args) < 2:
-        ctx.console.print("[yellow]Usage: /schedule <seconds> <command>[/yellow]")
+        ctx.console.print(
+            "[yellow]Usage: /schedule <seconds|schedule> <goal>[/yellow]"
+        )
         return
-    if not getattr(ctx.state, "scheduled_tasks", None):
-        ctx.state.scheduled_tasks = []
-    ctx.state.scheduled_tasks.append(
-        {
-            "interval": args[0],
-            "command": " ".join(args[1:]),
-            "created_at": __import__("time").time(),
-        }
+    schedule, note = _resolve_schedule(args[0])
+    if schedule is None:
+        ctx.console.print(f"[red]{note}[/red]")
+        return
+    goal = " ".join(args[1:])
+    resp = ctx.call_api(
+        "/control/tasks", "POST", {"goal": goal, "schedule": schedule, "enabled": True}
     )
-    ctx.state.save()
-    ctx.console.print("[bold green]✓ Scheduled task registered[/bold green]")
+    if not resp or resp.status_code not in (200, 201):
+        ctx.console.print(
+            "[red]Failed to register the task with the scheduler.[/red]"
+        )
+        return
+    body = resp.json() or {}
+    if body.get("ok") is False:
+        reason = body.get("reason") or body.get("error") or body
+        ctx.console.print(f"[yellow]Scheduler refused the goal:[/yellow] {reason}")
+        return
+    # Explicitly echo the RECURRING nature — a numeric interval is NOT a one-shot
+    # ("run once in N seconds"); it fires every N minutes, indefinitely.
+    ctx.console.print(f"[bold green]✓ Scheduled[/bold green] — {note}. Goal: {goal}")
 
 
 @registry.register(

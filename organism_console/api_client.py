@@ -39,6 +39,17 @@ def call_api(
                 headers=headers,
             )
 
+        if method == "DELETE":
+            # was missing: any non-GET method fell through to requests.post, so a
+            # DELETE (e.g. /control/tasks/{id}) was sent as POST -> 405, silently
+            # failing. Additive branch; GET/POST paths unchanged.
+            return requests.delete(
+                url,
+                timeout=(timeout, read_timeout),
+                verify=settings.ssl_verify,
+                headers=headers,
+            )
+
         if stream:
             return requests.post(
                 url,
