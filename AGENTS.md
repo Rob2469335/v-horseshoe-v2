@@ -1011,6 +1011,73 @@ relaunch via start-dev.ps1 when ready.
 
 ## Recent Changes (do NOT re-apply)
 
+### FIX: agent-loop non-termination on "analyze my codebase for bugs and upgrades" — root-caused + fixed (2026-09-10, commits `768ddd3`→`0e4b6c6`)
+
+The exact `/goal` prompt never completed: `code_analyzer` read 11 files across
+12 turns and ended `turn_budget_exhausted` with **zero `final` calls** (later
+rendered `[System: max turns reached]`). Investigated against live code + the
+real event log, then deep-researched (8-provider fan-out + GitHub API inspection
+of SWE-agent/Aider/browser-use/AutoGPT).
+
+**ROOT CAUSE (the actual loop engine) — the tool-decision parser discarded valid
+decisions.** Commit `da894ab`-era "Parser bypass" hardening made `extract_json`
+raise `ValueError` when a response contained >1 JSON object. A reasoning model
+(deepseek-v4-flash) "thinks in JSON": it emits its scratch `thought`/`observation`
+objects followed by the real tool call. The parser raised, the caller retried the
+LLM, got another multi-object response, and the agent fell back to the
+deterministic warmup/repeated-reads path every turn until MAX_TURNS — **the loop
+was a parsing rejection, not a model that wouldn't stop.** Live log line:
+`[code_analyzer] JSON parse failed: Malformed stacked tags: found 5 distinct JSON
+objects in the output.` Fixed `768ddd3`: `extract_json` now selects the **last
+actionable** object instead of raising; exactly one action is still dispatched, so
+the anti-smuggling intent is preserved. Revert-proof test
+`tests/test_llm_parser_multiobject.py`.
+
+**Defense-in-depth (does NOT rely on the model self-terminating).** Published
+evidence (IAL-SCAN arXiv:2607.01641 — 38.2% of real agent-loop failures are
+model-controlled termination; browser-use `_force_done_after_last_step`) says the
+stopping rule must live in the harness. Commits `1c7c7dc` + `1873096`:
+- `_CallState._filesystem_reads` counts every successful `read`/`read_all`
+  (previously gated behind `_fetched_content`, so it under-counted);
+- at the per-run read budget (`SWARM_MAX_FS_READS`, default 6) the decision
+  surface is **hard-restricted to `final`** (`filesystem`/`semantic_search`
+  removed) with an explicit "reading is over" message — a soft nudge was
+  verified IGNORED;
+- at `MAX_TURNS` with no final, one **forced synthesis** call (tools=`final`
+  only) produces the deliverable instead of a placeholder (SWE-agent
+  autosubmit-after-error), falling back to a deterministic summary;
+- `MAX_TURNS` 8→12 (the 4-turn deterministic warmup + one L1-rejected final left
+  no room to produce an accepted report). Loop detection still caps real loops.
+Revert-proof test `tests/test_agent_read_budget.py`.
+
+**Supporting fixes (same investigation):** `abcaab1` filesystem `tree` op
+(recursive listing) was fail-closed DENIED as unclassified; `cb261c8` `/generate`
+bare local alias (`robs4b`) had no `openai/` prefix → litellm "LLM Provider NOT
+provided" (normalized); `e13de9b` native DeepSeek rejects strict `json_schema`
+(400) despite litellm's table claiming support → use `json_object`; `dbd8120`
+`code_analyzer` loses web tools on non-internet goals (it had fabricated
+`github.com/runtime-bridge/runtime-v2` via web_fetch); `5723d18` CLI prints the
+real deny reason; `0e4b6c6` run-trajectory status is now truthful
+(`max_turns`/`completed`/`aborted`).
+
+**VERIFIED END-TO-END (live):** the exact prompt now returns a real `final` after
+10 tool calls — no max-turns, no circuit-breaker handoff, no fabricated web_fetch.
+**SELF-CORRECTION:** the 2026-09-10 "Parser Validation" entry below is what
+introduced the loop — its "reject stacked JSON tags" rule is now reversed to
+"select the last actionable object" (kept: the `operation`/`path` required-arg
+checks).
+
+**REMAINING DEFECT (reported, NOT fixed — separate from the loop):** the final's
+*content* can be stale/polluted. Live-verified sources: (1) a stale untracked root
+scratch file `code_analysis_report.txt` (hallucinated findings about nonexistent
+`models.py`/`utils.py`/Django) was read as evidence — deleted, along with 8
+abandoned gitignored `.sandbox_*` Danger-Room repo copies that also carried it;
+(2) even after deletion the agent repeats those findings from **episodic memory**
+of prior runs. Memory grounding has no freshness/validation step, so old
+fabrications re-enter the report. Fixing that (memory result validation, or
+excluding `code_analysis_report.txt`-style artifacts from grounding) is a
+separate change; not folded in here.
+
 ### FIX: Parser Validation, UI Auto-Approve, and Model Routing (2026-09-10)
 
 Addressed three critical issues found in the recent agent runs:
@@ -2447,6 +2514,12 @@ Converted `except:` → `except Exception:` (or specific types) in `swarm_os/cor
 ---
 
 ## Self-Healing & Self-Learning Fixes
+
+- **[AUTO-REPAIR] (2026-09-10T23:55:19.936671+00:00)**: None (tier 2, fixed=False) — error: File not found: runtime_v2/services/approval_registry.py
+
+- **Rule (code_analyzer)**: Do NOT repeat the same tool call with identical arguments. If a tool failed, read the error, change the approach (different file/path/query/operati...
+
+- **Rule (researcher)**: Failure: The researcher agent attempted to read the file 'agent.md' without first verifying that the path exists in the codebase filesystem. The re...
 
 - **Rule (researcher)**: Failure: The researcher agent attempted to read 'agent.md' directly and failed because the file was not found in the filesystem. | Root cause: The ...
 
