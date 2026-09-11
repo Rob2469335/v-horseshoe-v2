@@ -48,7 +48,9 @@ def test_record_outcome_persists(tmp_path, monkeypatch):
     from swarm_os.services import outcome_fitness as of
 
     monkeypatch.setattr(of, "FITNESS_PATH", tmp_path / "fitness.jsonl")
-    fitness = of.record_outcome("g1", completion=1.0, tool_success=0.8, test_pass=1.0)
+    fitness = of.record_outcome(
+        "g1", completion=1.0, tool_success=0.8, test_pass=1.0, task="real task"
+    )
     assert fitness["composite"] > 0.5
     assert of.best_fitness("g1") == fitness["composite"]
     assert of.best_fitness("missing") is None
@@ -63,10 +65,20 @@ def test_evolution_selects_elite_on_real_fitness(tmp_path, monkeypatch):
 
     ed.evolve_one_generation()  # seed population
     of.record_outcome(
-        "genome_0", completion=1.0, tool_success=1.0, test_pass=1.0, efficiency=0.9
+        "genome_0",
+        completion=1.0,
+        tool_success=1.0,
+        test_pass=1.0,
+        efficiency=0.9,
+        task="real task a",
     )
     of.record_outcome(
-        "genome_1", completion=0.0, tool_success=0.2, test_pass=0.0, efficiency=0.0
+        "genome_1",
+        completion=0.0,
+        tool_success=0.2,
+        test_pass=0.0,
+        efficiency=0.0,
+        task="real task b",
     )
 
     summary = ed.evolve_one_generation()
@@ -102,7 +114,12 @@ def test_score_genome_falls_back_to_aggregate_fitness(tmp_path, monkeypatch):
 
     # Only agent-keyed outcomes exist (the live shape).
     of.record_outcome(
-        "agent:coder", completion=1.0, tool_success=1.0, test_pass=1.0, efficiency=1.0
+        "agent:coder",
+        completion=1.0,
+        tool_success=1.0,
+        test_pass=1.0,
+        efficiency=1.0,
+        task="real task c",
     )
 
     score = ed._score_genome({"id": "genome_12345_99"})
@@ -120,11 +137,21 @@ def test_score_genome_exact_match_takes_precedence(tmp_path, monkeypatch):
     monkeypatch.setattr(of, "FITNESS_PATH", tmp_path / "fitness.jsonl")
 
     of.record_outcome(
-        "genome_7", completion=1.0, tool_success=1.0, test_pass=1.0, efficiency=1.0
+        "genome_7",
+        completion=1.0,
+        tool_success=1.0,
+        test_pass=1.0,
+        efficiency=1.0,
+        task="real task d",
     )
     # Weak aggregate signal present too.
     of.record_outcome(
-        "agent:other", completion=0.0, tool_success=0.2, test_pass=0.0, efficiency=0.0
+        "agent:other",
+        completion=0.0,
+        tool_success=0.2,
+        test_pass=0.0,
+        efficiency=0.0,
+        task="real task e",
     )
 
     assert ed._score_genome({"id": "genome_7"}) > 0.5
@@ -146,7 +173,12 @@ def test_score_genome_aggregate_tie_not_decayed_for_survivors(tmp_path, monkeypa
     # Only agent-keyed outcomes exist (the live shape -> every genome ties on
     # the same aggregate).
     of.record_outcome(
-        "agent:coder", completion=1.0, tool_success=1.0, test_pass=1.0, efficiency=1.0
+        "agent:coder",
+        completion=1.0,
+        tool_success=1.0,
+        test_pass=1.0,
+        efficiency=1.0,
+        task="real task c",
     )
 
     survivor = {"id": "genome_survivor", "decay_generations": 5}
@@ -738,3 +770,29 @@ def test_malformed_or_missing_ts_records_are_included(tmp_path, monkeypatch):
 
     assert of.best_fitness("g1") == 0.7
     assert of.best_aggregate_fitness() == 0.7
+
+
+def test_is_non_observable():
+    from swarm_os.services.outcome_fitness import _is_non_observable
+
+    assert _is_non_observable("task") is True
+    assert _is_non_observable("") is True
+    assert _is_non_observable("  Task  ") is True
+    assert _is_non_observable("do a compound task") is True
+    assert _is_non_observable("analyze my codebase for bugs and upgrades") is False
+
+
+def test_record_outcome_skips_non_observable_task(tmp_path, monkeypatch):
+    # Fixture/aborted-run sentinels are NOT persisted (they were ~18% of
+    # fitness.jsonl as zero-composite rows, flattening the evolutionary gradient).
+    from swarm_os.services import outcome_fitness as of
+
+    monkeypatch.setattr(of, "FITNESS_PATH", tmp_path / "fitness.jsonl")
+    for t in ("task", "", "do a compound task"):
+        of.record_outcome("agent:x", completion=0.0, task=t)
+    f = tmp_path / "fitness.jsonl"
+    assert (not f.exists()) or f.read_text(encoding="utf-8").strip() == ""
+    # a real task persists exactly one row
+    of.record_outcome("agent:x", completion=1.0, task="analyze my codebase for bugs")
+    lines = [ln for ln in f.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    assert len(lines) == 1

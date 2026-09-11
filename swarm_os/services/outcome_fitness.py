@@ -84,6 +84,27 @@ def compute_fitness(
     }
 
 
+_NON_OBSERVABLE_TASKS = {
+    "",
+    "task",
+    "test",
+    "do a task",
+    "do a compound task",
+    "do a compound goal",
+}
+
+
+def _is_non_observable(task: str) -> bool:
+    """True for fixture/aborted-run sentinels that carry NO real task signal.
+
+    The agent loop feeds outcomes for every run; test fixtures and aborted
+    runs hand it trivial placeholder tasks (\"task\", \"do a compound task\") that
+    persist as ~18% zero-composite rows in fitness.jsonl, flattening the
+    evolutionary gradient (the documented plateau). Real runs carry the user's
+    actual prompt, so this gate drops only the sentinels."""
+    return str(task or "").strip().lower() in _NON_OBSERVABLE_TASKS
+
+
 def record_outcome(
     genome_id: str,
     *,
@@ -104,6 +125,10 @@ def record_outcome(
         fitness = compute_fitness(
             completion, test_pass, tool_success, efficiency, human
         )
+        # Gate: do not persist fixture/aborted-run sentinels (no task signal).
+        if _is_non_observable(task):
+            log.debug("outcome fitness: skipped non-observable task %r", task)
+            return fitness
         record = {
             "ts": _now(),
             "genome_id": genome_id,
