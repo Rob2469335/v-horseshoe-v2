@@ -104,20 +104,25 @@ async def test_forced_final_strips_filesystem_at_read_budget(monkeypatch):
         "code_analyzer",
         "robs4b",
         [{"role": "user", "content": "analyze my codebase for bugs and upgrades"}],
-        ["filesystem", "semantic_search", "final", "remember"],
+        ["filesystem", "semantic_search", "final", "remember", "git", "system", "mcp"],
         "analyze my codebase for bugs and upgrades",
         turn=5,
         state=state,
     )
 
     assert decision["action"] == "final"
+    # ALLOWLIST: every acting tool is gone (not just filesystem) — otherwise the
+    # model keeps "acting" via git/system/mcp and never finalizes.
     assert "filesystem" not in captured["tools"]
     assert "semantic_search" not in captured["tools"]
+    assert "git" not in captured["tools"]
+    assert "system" not in captured["tools"]
+    assert "mcp" not in captured["tools"]
     assert "final" in captured["tools"]
     assert state._forced_final is True
     # the model is told reading is over and final is mandatory
     assert any(
-        "filesystem tool has been disabled" in str(m.get("content", ""))
+        "codebase-reading phase is OVER" in str(m.get("content", ""))
         for m in captured["messages"]
     )
 

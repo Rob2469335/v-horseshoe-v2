@@ -962,8 +962,12 @@ class AgentServiceV2:
         )
         if _enter_forced_final:
             state._forced_final = True
+            # ALLOWLIST, not denylist: leaving git/system/screen/mcp/email/
+            # playwright let the model keep "acting" via a DIFFERENT tool and
+            # never finalize (live: it switched tools and tripped the loop guard).
+            # In forced-final the only actions are final + non-acting bookkeeping.
             allowed_tools = [
-                t for t in allowed_tools if t not in ("filesystem", "semantic_search")
+                t for t in allowed_tools if t in ("final", "remember", "ask_user")
             ]
             if "final" not in allowed_tools:
                 allowed_tools = ["final", *allowed_tools]
@@ -2662,47 +2666,59 @@ class AgentServiceV2:
                 continue
             if loop_status:
                 # 2026-09-10: an analysis agent that trips the loop guard has been
-                # cycling filesystem exploration (observed: a 5-file read cycle).
-                # Aborting to the debugger wastes the run; instead force the
-                # synthesis path ONCE (strip the reading tools, demand final).
-                # This is the harness-enforced termination the read-budget guard
-                # also uses, now also triggered by an actual detected loop.
-                if agent_id in ANALYSIS_AGENTS and not state._forced_final:
-                    state._forced_final = True
-                    state._filesystem_read_capped = True
-                    messages.append(
-                        {
-                            "role": "user",
-                            "content": (
-                                "SYSTEM: You are repeating the same filesystem "
-                                "exploration. Reading is now DISABLED for this run. "
-                                "You MUST call action=final NOW with a concrete "
-                                "findings report naming the specific files you read "
-                                "and the actual bugs/upgrades you can evidence."
-                            ),
-                        }
-                    )
-                    # Record the lesson, then loop again — the next decision has
-                    # filesystem removed by the forced-final branch in _get_decision.
-                    try:
-                        from swarm_os.services.reflection_loop import (
-                            get_reflection_service,
+                # cycling exploration. NEVER abort it to the debugger — that ends
+                # the run as "Healing failed. Loop aborted." with no deliverable.
+                # Instead force the synthesis path (allowlist tools to final-only
+                # in _get_decision) and continue. Even if it keeps looping, the
+                # MAX_TURNS forced-synthesis pass produces a real final.
+                if agent_id in ANALYSIS_AGENTS:
+                    if not state._forced_final:
+                        state._forced_final = True
+                        state._filesystem_read_capped = True
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": (
+                                    "SYSTEM: You are repeating the same exploration. "
+                                    "All other tools are now DISABLED for this run. "
+                                    "You MUST call action=final NOW with a concrete "
+                                    "findings report naming the specific files you read "
+                                    "and the actual bugs/upgrades you can evidence."
+                                ),
+                            }
                         )
+                        # Record the lesson once.
+                        try:
+                            from swarm_os.services.reflection_loop import (
+                                get_reflection_service,
+                            )
 
-                        await get_reflection_service().store_reflexion(
-                            task=f"agent:{agent_id} looping on repeated filesystem reads goal {str(prompt)[:120]}",
-                            action="loop_detected",
-                            failure_reason="agent repeated a filesystem read cycle; forced to synthesize.",
-                            correction="Do not re-read files you have already seen. Synthesize a findings report from the content already gathered.",
-                            do_not_repeat=f"agent:{agent_id} must not re-read the same file in a cycle.",
-                            component=agent_id,
-                            confidence=0.8,
-                        )
-                    except Exception as loop_refl_err:
-                        log.debug(
-                            "[%s] forced-final loop reflexion skipped: %s",
-                            agent_id,
-                            loop_refl_err,
+                            await get_reflection_service().store_reflexion(
+                                task=f"agent:{agent_id} looping on repeated exploration goal {str(prompt)[:120]}",
+                                action="loop_detected",
+                                failure_reason="agent repeated an exploration cycle; forced to synthesize.",
+                                correction="Do not re-read files you have already seen. Synthesize a findings report from the content already gathered.",
+                                do_not_repeat=f"agent:{agent_id} must not re-read the same file in a cycle.",
+                                component=agent_id,
+                                confidence=0.8,
+                            )
+                        except Exception as loop_refl_err:
+                            log.debug(
+                                "[%s] forced-final loop reflexion skipped: %s",
+                                agent_id,
+                                loop_refl_err,
+                            )
+                    else:
+                        # Already forced and STILL looping: a hard, repeated demand.
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": (
+                                    "SYSTEM: You are still looping. There are no other "
+                                    "tools. Call action=final immediately with your "
+                                    "findings from the files already read."
+                                ),
+                            }
                         )
                     continue
                 yield {
@@ -3264,6 +3280,7 @@ class AgentServiceV2:
         # still produces the deliverable.
         final_content = "[System: max turns reached]"
         if agent_id in ANALYSIS_AGENTS:
+            read_list = ", ".join(sorted(state.read_paths)) or "(none)"
             try:
                 forced_messages = [
                     *_trim_context_messages(
@@ -3272,11 +3289,13 @@ class AgentServiceV2:
                     {
                         "role": "user",
                         "content": (
-                            "SYSTEM: The turn budget is exhausted and the filesystem "
-                            "tool is disabled. Call action=final NOW. Using the files "
-                            "you already read, give a concrete report naming the "
-                            "specific files and the actual bugs/upgrades you can "
-                            "evidence. Do not mention that you ran out of turns."
+                            "SYSTEM: The turn budget is exhausted and all tools but "
+                            "final are disabled. Call action=final NOW. Report ONLY on "
+                            "the files you actually read this run: "
+                            f"{read_list}. Do NOT cite any other file, and do NOT "
+                            "repeat findings from prior memory — if you did not read a "
+                            "file's content this run, you may not claim anything about "
+                            "it. If you have no evidenced finding, say so plainly."
                         ),
                     },
                 ]
@@ -3288,12 +3307,43 @@ class AgentServiceV2:
                     and forced.get("action") == "final"
                     and str(forced.get("response", "")).strip()
                 ):
-                    final_content = str(forced.get("response")).strip()
-                    log.info(
-                        "[%s] forced synthesis produced %d chars after max turns",
-                        agent_id,
-                        len(final_content),
+                    candidate = str(forced.get("response")).strip()
+                    # 2026-09-10: gate the forced-synthesis output through the SAME
+                    # grounding check the normal final path uses. Otherwise the
+                    # max-turns path bypassed L1 and shipped a final citing files
+                    # that were never read (stale-memory pollution: models.py /
+                    # code_analysis_report.txt). Fail closed to the deterministic
+                    # summary if it cites unread files.
+                    refs = set(
+                        re.findall(
+                            r"[\w./\\-]+\.(?:py|txt|md|json|yml|yaml|sh|ps1|html|css|js|ts|ini|toml)\b",
+                            candidate,
+                        )
                     )
+                    read_paths = {
+                        r.replace("\\", "/").lstrip("./") for r in state.read_paths
+                    }
+                    read_basenames = {p.rsplit("/", 1)[-1] for p in read_paths}
+                    unread = {
+                        p
+                        for p in refs
+                        if p.replace("\\", "/").lstrip("./") not in read_paths
+                        and p.replace("\\", "/").rsplit("/", 1)[-1] not in read_basenames
+                    }
+                    if unread:
+                        log.warning(
+                            "[%s] forced synthesis cited unread files %s — using "
+                            "deterministic summary",
+                            agent_id,
+                            sorted(unread)[:5],
+                        )
+                    else:
+                        final_content = candidate
+                        log.info(
+                            "[%s] forced synthesis produced %d chars after max turns",
+                            agent_id,
+                            len(final_content),
+                        )
             except Exception as force_err:
                 log.warning(
                     "[%s] forced synthesis failed (%s); emitting deterministic summary",
@@ -3303,10 +3353,9 @@ class AgentServiceV2:
             if final_content == "[System: max turns reached]" and state.read_paths:
                 files = ", ".join(sorted(state.read_paths)[:8])
                 final_content = (
-                    "Codebase analysis (turn budget reached before a self-authored "
-                    f"final). Files examined: {files}. The agent did not converge on "
-                    "a synthesis within its tool budget — rerun with a narrower goal "
-                    "or after the review-budget fix."
+                    "Codebase analysis (turn budget reached before a grounded "
+                    f"final). Files actually examined: {files}. The agent did not "
+                    "converge on a grounded synthesis within its tool budget."
                 )
 
         yield {
