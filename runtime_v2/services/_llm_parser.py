@@ -212,8 +212,26 @@ def extract_json(text: str) -> dict:
 
     if valid_jsons:
         if len(valid_jsons) > 1:
-            raise ValueError(f"Malformed stacked tags: found {len(valid_jsons)} distinct JSON objects in the output. Only provide ONE tool call per response.")
-        return valid_jsons[0]
+            # 2026-09-10: MODELS THINK IN JSON. A reasoning model (observed:
+            # deepseek-v4-flash on the code_analyzer tool-decision call) emits
+            # several JSON objects — its internal "thought"/"observation" objects
+            # followed by the real tool call. The earlier fix raised here to stop
+            # a second tool call being smuggled in, but raising DISCARDS a valid
+            # decision and the caller retries the LLM, which emits another
+            # multi-object response → the decision is never accepted and the
+            # agent falls back to repeated filesystem reads until max turns (the
+            # live "analyze my codebase for bugs and upgrades" loop). The safe
+            # failure direction is to SELECT one decision, not to discard them
+            # all: take the LAST valid decision object (the model's final
+            # conclusion after its scratch reasoning). Exactly one action is
+            # still dispatched, so no second call executes — the smuggling
+            # concern is preserved.
+            log.debug(
+                "multi-object decision (%d JSON objects) — selecting the last "
+                "actionable object as the decision",
+                len(valid_jsons),
+            )
+        return valid_jsons[-1]
 
     try:
         py_obj = ast.literal_eval(text.strip())
