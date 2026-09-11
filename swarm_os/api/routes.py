@@ -466,6 +466,14 @@ async def generate(payload: GenerateRequest, orch=Depends(get_orchestrator)):
     # misclassified them as local and sent them to the wrong endpoint.
     from runtime_v2.services.fallback_manager import _is_local_model
 
+    # A bare known-local alias (e.g. "robs4b") is deliberately NOT classified as
+    # local by _is_local_model (the fallback-chain splitter needs the openai/
+    # prefix), so without this normalization litellm receives "model=robs4b" with
+    # no provider prefix and no api_base -> "LLM Provider NOT provided" every call.
+    # Normalize to the prefixed form so the local llama.cpp endpoint is attached.
+    if _model and _model.lower() in ("robs4b", "qwen3.5-4b", "qwen3.5-4b-mtp"):
+        _model = f"openai/{_model}"
+
     is_local = _is_local_model(_model)
     litellm_model = (
         f"openai/{_model}" if is_local and not _model.startswith("openai/") else _model
