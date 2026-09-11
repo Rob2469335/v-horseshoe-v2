@@ -111,6 +111,12 @@ def _strip_memory_blocks(query: str) -> str:
 # UPGRADE: pooled client (avoids fresh TLS/connection per provider) + SSL verify
 # enabled (was verify=False on every call — a security issue).
 _client: httpx.AsyncClient | None = None
+# The event loop that owns `_client`. An httpx.AsyncClient's connection pool is
+# bound to the loop that first used it; reusing it from a DIFFERENT (or closed)
+# loop serves corpses and raises "Event loop is closed" (observed live on the
+# tavily provider). Track the owning loop and rebuild on a loop change — the
+# same fix applied to the probe client (84d6a52).
+_client_loop = None
 
 
 async def _ssrf_redirect_hook(response: httpx.Response):
@@ -128,12 +134,26 @@ async def _ssrf_redirect_hook(response: httpx.Response):
 
 
 def _get_client() -> httpx.AsyncClient:
-    global _client
-    if _client is None or _client.is_closed:
+    """Return the pooled AsyncClient, REBUILDING it when the event loop changed
+    (or the previous one is closed). Prevents the loop-bound-client bug where a
+    client created on one loop is reused from another and raises 'Event loop is
+    closed'."""
+    global _client, _client_loop
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if (
+        _client is None
+        or _client.is_closed
+        or _client_loop is not loop
+        or (loop is not None and loop.is_closed())
+    ):
         _client = httpx.AsyncClient(
             timeout=httpx.Timeout(connect=5.0, read=20.0, write=20.0, pool=10.0),
             event_hooks={"response": [_ssrf_redirect_hook]},
         )
+        _client_loop = loop
     return _client
 
 
