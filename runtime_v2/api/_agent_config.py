@@ -2,7 +2,11 @@
 
 from typing import Dict, Tuple
 
-MAX_TURNS = 8
+# 2026-09-10: 8 was too tight for warmup-heavy analysis agents — the 4-turn
+# deterministic grounding + one L1-rejected shallow final + real exploration
+# left no room to produce an accepted report ("max turns reached" on every
+# /goal codebase-analysis run). Loop detection still caps runaway loops.
+MAX_TURNS = 12
 MAX_DEPTH = 15
 
 # Agents that must fetch content before finalizing
