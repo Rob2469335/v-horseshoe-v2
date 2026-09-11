@@ -222,3 +222,6 @@ snapshots/
 /test_bug.py
 /test_syn.py
 /test_syntax.py
+
+# Serena LSP MCP project state (local, not source)
+.serena/
