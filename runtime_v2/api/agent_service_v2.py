@@ -1395,12 +1395,26 @@ class AgentServiceV2:
                 )
                 err_txt = f"Task FAILED: {agent_id} could not produce a substantive, grounded final."
                 yield {"agent_id": agent_id, "type": "error", "content": err_txt}
+                # Salvage grounded findings from the (rejected) final via the
+                # structured-extraction pass, then emit the deterministic grounded
+                # report. Keep the "Task FAILED" marker (the goal loop's
+                # system-failure classifier keys on it) so this still counts as a
+                # failed run, but the deliverable is the real, fabricated-proof
+                # report instead of a bare error string.
+                try:
+                    abort_findings = await _extract_grounded_findings(
+                        model, agent_id, response_text, state.read_paths
+                    )
+                except Exception:  # noqa: BLE001
+                    abort_findings = {}
                 yield {
                     "agent_id": agent_id,
                     "type": "final",
                     "model": model,
                     "provider": provider,
-                    "content": err_txt,
+                    "content": err_txt
+                    + "\n\n"
+                    + _build_grounded_report(state.read_paths, findings=abort_findings),
                 }
                 tsr = (
                     (state._tool_successes / state._tool_attempts)
