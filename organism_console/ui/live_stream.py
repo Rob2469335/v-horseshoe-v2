@@ -641,8 +641,12 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                             auto_resolved = True
                             approved = False
                             live.stop()
+                            deny_reason = chunk.get("error") or (
+                                f"tool '{tool}' / action '{action}' "
+                                "is not classified for agent execution (fail-closed)"
+                            )
                             ctx.console.print(
-                                f"[dim]auto-deny: {tool} ({action}) (server policy)[/dim]"
+                                f"[dim]auto-denied: {tool} ({action}) — {deny_reason}[/dim]"
                             )
                         elif _perms_auto_mode() and auth_tier != "ALWAYS_CONFIRM":
                             # opencode parity: auto mode auto-approves everything
