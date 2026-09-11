@@ -666,11 +666,19 @@ class AgentServiceV2:
             if last_chunk:
                 action = last_chunk.get("action", "")
                 handler_status = last_chunk.get("handler_status", "")
+                last_content = str(last_chunk.get("content", ""))[:5000]
                 if handler_status:
                     status = handler_status.lower()
+                elif last_content.strip() == "[System: max turns reached]":
+                    status = "max_turns"
                 elif action == "final":
                     status = "completed"
-                last_content = str(last_chunk.get("content", ""))[:5000]
+                elif last_content.strip():
+                    status = "completed"
+                else:
+                    status = "aborted"
+            if status == "unknown" and not last_content.strip():
+                status = "aborted"
             record = {
                 "run_id": run_id,
                 "agent_id": agent_id,
