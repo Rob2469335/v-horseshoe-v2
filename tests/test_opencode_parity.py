@@ -2423,3 +2423,17 @@ def test_short_task_goals_not_intercepted_as_greeting():
     # genuine greetings still greet
     assert fast_route_coordinator("hi")["response"] == "Hello! What can I help you with today?"
     assert fast_route_coordinator("hello")["response"] == "Hello! What can I help you with today?"
+
+def test_code_analyzer_non_internet_goal_loses_web_tools():
+    from runtime_v2.api.agent_service_v2 import _strip_web_tools_for_local_analysis
+
+    base = ["filesystem", "web_search", "web_fetch", "semantic_search", "final"]
+    assert _strip_web_tools_for_local_analysis(
+        "code_analyzer", base, "analyze my codebase for bugs and upgrades"
+    ) == ["filesystem", "semantic_search", "final"]
+    # internet-flagged goal keeps its full surface
+    assert _strip_web_tools_for_local_analysis(
+        "code_analyzer", base, "search the internet for best practices and apply them"
+    ) == base
+    # other agents unmodified
+    assert _strip_web_tools_for_local_analysis("researcher", base, "analyze my codebase") == base

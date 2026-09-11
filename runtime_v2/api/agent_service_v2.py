@@ -46,6 +46,27 @@ def _append_diary_line(diary_path, record: dict) -> None:
         f.write(_json.dumps(record, ensure_ascii=False) + "\n")
 
 
+def _strip_web_tools_for_local_analysis(
+    agent_id: str, allowed: list, goal: str
+) -> list:
+    """2026-09-10: for a code_analyzer run on a NON-internet goal, drop
+    web_search/web_fetch from the decision tool surface. Otherwise the (trained)
+    model invents a research step — observed live: fabricating
+    github.com/runtime-bridge/runtime-v2 (a nonexistent repo) on the read-only
+    goal 'analyze my codebase for bugs and upgrades' instead of producing the
+    codebase report. Matches the system's own internet classification: goals the
+    goal-loop considers local must not be able to drift online. Internet-flagged
+    goals and other agents keep their full tool surface."""
+    if (
+        agent_id == "code_analyzer"
+        and allowed
+        and (goal or "").strip()
+        and not _INTERNET_GOAL_RE.search(goal)
+    ):
+        return [t for t in allowed if t not in ("web_search", "web_fetch")]
+    return allowed
+
+
 def _is_fix_intent(text: str) -> bool:
     """True when the goal directs the agent to EDIT code (not just research a
     'how to fix' question)."""
@@ -1160,6 +1181,9 @@ class AgentServiceV2:
     ) -> Optional[dict]:
         if state is None:
             state = _CallState()
+        allowed_tools = _strip_web_tools_for_local_analysis(
+            agent_id, allowed_tools, prompt
+        )
         if agent_id == "coordinator" and turn == 0:
             fast = fast_route_coordinator(prompt)
             if fast is not None:
