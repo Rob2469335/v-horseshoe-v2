@@ -1013,6 +1013,39 @@ relaunch via start-dev.ps1 when ready.
 
 ## Recent Changes (do NOT re-apply)
 
+### FIX: Playwright browsers + event_log_storm recovery + web_search loop-bound client (2026-09-11)
+
+Three defects surfaced by a live agent run, fixed one-per-commit:
+
+- **Playwright was broken for the user-site interpreter** — the backend/CLI's
+  `playwright` resolves to the Python-3.14 user-site (1.62.0), which needs
+  `chromium_headless_shell-1234`, but only build 1228 was installed (venv's
+  playwright 1.61). Fixed by `py -3.14 -m playwright install chromium` (build
+  1234). Both interpreters now launch: venv 1.61→1228, user-site 1.62→1234.
+  Verified live: `_playwright_impl({'operation':'navigate','url':'https://example.com'})`
+  → `ok=True` with a real a11y tree. (Not a code change — an env fix.)
+- **`event_log_storm` recovery failure** (`system_recovery.py`). The probe is
+  report-only ("human judgement, not an auto-kill"), but had no
+  `SYSTEM_RECOVERY_ACTIONS` entry, so `RecoveryEngine.recover()` fell through to
+  `llm_guided_recovery` → generated a script → tripped the sandbox Security Gate
+  → logged as a failed auto-repair. Added `flag_for_human_review` and mapped
+  `event_log_storm` to it (fail-closed to human review). Tests
+  `tests/test_event_log_storm_recovery.py`.
+- **`web_search` pooled client reused across event loops — "Event loop is
+  closed"** (`web_search.py`). The module-level `httpx.AsyncClient` was bound to
+  the loop that first used it; the guard only checked `is_closed`, so a call from
+  a different/closed loop (CLI `asyncio.run` in a thread, watch-loop) served the
+  dead pool. `_get_client()` now tracks the owning loop (`_client_loop`) and
+  rebuilds on a loop change — the same fix as the probe client (`84d6a52`).
+  Tests `tests/test_web_search_client.py`.
+
+Verified: `ruff check . --select E9,F` clean; full suite **1637 passed / 2
+skipped / 1 xfailed / 0 failed**.
+
+Noted-but-not-chased: the web-search provider pile-up (scavio quota,
+serpapi/openalex 429s, gdelt failing) is external rate-limiting; `tavily`'s
+"Event loop is closed" was the one code-side bug in that set and is now fixed.
+
 ### FIX: CLI trustworthiness — failure taxonomy, observability, bounds, session durability (2026-09-11, commits `1f7b143` + `b18fe6f` + `e29ebff`)
 
 A research-backed pass on `organism_console/` (the `rob` shell) against the
