@@ -1,4 +1,5 @@
 import os
+import re
 import uuid
 import requests
 import threading
@@ -186,7 +187,6 @@ def rerank_memories(query: str, memories: List[Dict[str, Any]]) -> List[Dict[str
 
 import time
 import networkx as nx
-import re
 
 _kg_file = ".data/knowledge_graph.json"
 _kg = None
@@ -665,3 +665,122 @@ def prune_old_memories(
         }
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
+
+
+# --- Stale file-reference GC (2026-09-10) -----------------------------------
+# A memory that records an explicit "File not found: <path>" failure keeps
+# re-entering the agent's context after the file has been deleted, and the
+# model recites it as if it were current evidence (observed live: a stale
+# "code_analysis_report.txt" reflection fed fabricated findings -- models.py /
+# utils.py / Django -- into every codebase-analysis final). TTL pruning does NOT
+# catch this: the memory is recent, only its subject is gone. This GC drops a
+# "File not found" memory when the named path no longer exists on disk.
+#
+# Scope is deliberately the EXPLICIT failure shape only (not bare path tokens),
+# so a generic lesson that merely mentions a filename is never purged. A
+# memory is stale only when it names >=1 such path and EVERY named path is
+# missing -- a memory that also cites a real file is kept (conservative).
+_NOT_FOUND_RE = re.compile(
+    r"(?:File not found|No such file or directory|not found)\s*[:\-]\s*"
+    r"([^\s,;'\"()\[\]]+)",
+    re.IGNORECASE,
+)
+
+
+def _project_root() -> str:
+    return os.getenv(
+        "ZENITH_PROJECT_ROOT",
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    )
+
+
+def _referenced_paths_missing(fact: str, root: str) -> bool:
+    """True when `fact` names >=1 path via the explicit not-found shape AND all
+    such paths are absent from disk."""
+    token_re = re.compile(
+        r"[\w./\\-]+\.(?:py|pyi|md|txt|json|ya?ml|toml|ini|cfg|sh|ps1|js|ts|tsx|"
+        r"jsx|html|css|sql|env)\b",
+        re.IGNORECASE,
+    )
+    found = []
+    for m in _NOT_FOUND_RE.finditer(fact or ""):
+        raw = m.group(1).strip().strip(".,;:")
+        if not raw:
+            continue
+        # The captured token may carry a leading "path" word; keep only if it
+        # actually looks like a file path.
+        if token_re.fullmatch(raw) or "/" in raw or "\\" in raw:
+            found.append(raw)
+    if not found:
+        return False
+    for p in found:
+        candidate = p if os.path.isabs(p) else os.path.join(root, p)
+        if os.path.exists(candidate):
+            return False  # at least one real file -> keep the memory
+    return True
+
+
+def prune_stale_file_memories(
+    shard: str = "self_reflection", dry_run: bool = False, scan_limit: int = 1000
+) -> dict:
+    """Delete memories whose explicit "File not found: <path>" target no longer
+    exists (the stale-reference class). Deterministic, Qdrant-only, never raises.
+
+    Returns {ok, shard, scanned, stale, deleted, sample, dry_run?}.
+    """
+    collection = _get_shard_name(shard)
+    root = _project_root()
+    try:
+        resp = requests.post(
+            f"{QDRANT_URL}/collections/{collection}/points/scroll",
+            json={"limit": scan_limit, "with_payload": True, "with_vector": False},
+            timeout=15.0,
+        )
+        if resp.status_code != 200:
+            return {"ok": False, "status": resp.status_code, "shard": shard}
+        points = (resp.json().get("result") or {}).get("points") or []
+    except Exception as exc:
+        _log.warning("prune_stale_file_memories scroll failed: %s", exc)
+        return {"ok": False, "error": str(exc), "shard": shard}
+
+    stale: list = []
+    for pt in points:
+        fact = str((pt.get("payload") or {}).get("fact", ""))
+        if fact and _referenced_paths_missing(fact, root):
+            stale.append(pt.get("id"))
+
+    result: dict = {
+        "ok": True,
+        "shard": shard,
+        "scanned": len(points),
+        "stale": len(stale),
+        "deleted": 0,
+        "sample": [
+            str((pt.get("payload") or {}).get("fact", ""))[:120]
+            for pt in points
+            if pt.get("id") in set(stale)
+        ][:3],
+    }
+    if dry_run or not stale:
+        result["dry_run"] = bool(dry_run)
+        return result
+    try:
+        del_resp = requests.post(
+            f"{QDRANT_URL}/collections/{collection}/points/delete?wait=true",
+            json={"points": stale},
+            timeout=30.0,
+        )
+        if del_resp.status_code == 200:
+            result["deleted"] = len(stale)
+            _log.info(
+                "prune_stale_file_memories: deleted %d stale file-ref memories from %s",
+                len(stale),
+                collection,
+            )
+        else:
+            result["ok"] = False
+            result["status"] = del_resp.status_code
+    except Exception as exc:
+        result["ok"] = False
+        result["error"] = str(exc)
+    return result

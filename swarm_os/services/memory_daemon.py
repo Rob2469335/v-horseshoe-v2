@@ -30,6 +30,27 @@ class MemoryDaemon:
 
                     # Update graph clusters
                     await self.memory_bridge.cluster_graph_rag()
+
+                    # Self-purge stale file-reference memories (2026-09-10): a
+                    # "File not found: <path>" reflection whose file has since
+                    # been deleted keeps re-entering agent context as if current
+                    # (fed fabricated findings into codebase-analysis finals).
+                    # TTL pruning misses it (recent memory); this drops it.
+                    try:
+                        from runtime_v2.services.memory_core import (
+                            prune_stale_file_memories,
+                        )
+
+                        pruned = await asyncio.to_thread(
+                            prune_stale_file_memories
+                        )
+                        if pruned.get("deleted"):
+                            logger.info(
+                                "Memory GC: purged %s stale file-reference memories",
+                                pruned["deleted"],
+                            )
+                    except Exception as gc_exc:
+                        logger.debug("memory stale-ref GC skipped: %s", gc_exc)
                 except Exception as exc:
                     logger.warning("manager daemon error: %s", exc)
                 await asyncio.sleep(self.interval_seconds)
