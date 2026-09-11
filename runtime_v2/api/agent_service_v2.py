@@ -1,6 +1,7 @@
 from __future__ import annotations
 import json, logging
 import asyncio
+import os
 import time
 import re
 from dataclasses import dataclass, field
@@ -454,6 +455,9 @@ class _CallState:
     _start_time: float = 0.0
     _tool_attempts: int = 0
     _tool_successes: int = 0
+    _filesystem_reads: int = 0  # Per-run cap for code_analyzer's read budget (2026-09-10 fix)
+    _filesystem_read_capped: bool = False  # One-time stop-reading nudge already sent
+    _forced_final: bool = False  # Tools restricted to final once the read budget is hit
     _turn: int = 0
     # Todo tracking (multi-step task state, like a human agent's checklist)
     todos: list = field(default_factory=list)
@@ -1402,6 +1406,49 @@ class AgentServiceV2:
             )
             return {"action": "web_fetch", "url": url}
 
+        # FORCED-FINAL PHASE (2026-09-10): a small analysis agent left unbounded
+        # keeps calling filesystem read/list until it exhausts MAX_TURNS and never
+        # emits `final` (observed live on "analyze my codebase for bugs and
+        # upgrades": 11 distinct reads, turn_budget_exhausted, zero finals). The
+        # soft "stop reading" nudge at the read budget was IGNORED — consistent
+        # with the published finding that model-controlled termination fails and
+        # the loop control must live in the harness (IAL-SCAN arXiv:2607.01641;
+        # browser-use `_force_done_after_last_step`). So once the read budget is
+        # crossed, REMOVE the reading tools from the decision surface entirely and
+        # tell the model its only remaining action is final. This is deterministic
+        # — not a prompt hint the model can decline.
+        if (
+            agent_id in ANALYSIS_AGENTS
+            and not state._forced_final
+            and state._filesystem_reads >= int(os.getenv("SWARM_MAX_FS_READS", "6"))
+        ):
+            state._forced_final = True
+            allowed_tools = [
+                t for t in allowed_tools if t not in ("filesystem", "semantic_search")
+            ]
+            if "final" not in allowed_tools:
+                allowed_tools = ["final", *allowed_tools]
+            log.info(
+                "[%s] read budget reached (%d) — forced-final phase: tools restricted to %s",
+                agent_id,
+                state._filesystem_reads,
+                allowed_tools,
+            )
+            trimmed_messages = [
+                *trimmed_messages,
+                {
+                    "role": "user",
+                    "content": (
+                        "SYSTEM: The codebase-reading phase is OVER. The filesystem "
+                        "tool has been disabled for this run. You MUST now call "
+                        "action=final with a concrete findings report: name the "
+                        "specific files you read and the actual bugs/upgrades you can "
+                        "evidence from them. Do not request more files — they are no "
+                        "longer available. final is your only action."
+                    ),
+                },
+            ]
+
         return await self._call_llm(model, trimmed_messages, agent_id, allowed_tools)
 
     async def _call_llm(
@@ -2261,19 +2308,49 @@ class AgentServiceV2:
             # oscillation still reaches the breaker. Previously a success zeroed the
             # counter, letting intermittent failures evade healing forever.
             consecutive_errors = max(0, consecutive_errors - 1)
-            if not _fetched_content:
-                if action == "filesystem" and tool_payload.get("operation") in (
-                    "read",
-                    "read_all",
-                ):
-                    _fetched_content = True
-                    p = str(tool_payload.get("path", "")).replace("\\", "/")
-                    if p:
-                        state.read_paths.add(p)
-                if action in ("semantic_search", "web_search", "web_fetch", "lsp"):
-                    _fetched_content = True
-                if action in ("system", "screen"):
-                    _fetched_content = True
+            # Count EACH successful read (not just the first) so the read budget
+            # reflects real read volume — a repeated-read loop must trip the cap.
+            if action == "filesystem" and tool_payload.get("operation") in (
+                "read",
+                "read_all",
+            ):
+                state._filesystem_reads += 1
+                _fetched_content = True
+                p = str(tool_payload.get("path", "")).replace("\\", "/")
+                if p:
+                    state.read_paths.add(p)
+            if action in ("semantic_search", "web_search", "web_fetch", "lsp"):
+                _fetched_content = True
+            if action in ("system", "screen"):
+                _fetched_content = True
+
+            # Read-budget cap (2026-09-10): a code_analyzer left unbounded keeps
+            # reading until it exhausts MAX_TURNS and never emits a final (the
+            # observed "max turns reached" on the read-only codebase-analysis
+            # goal). Once the per-run read budget is crossed, send a ONE-TIME
+            # nudge telling it to stop reading and synthesize — do not repeat it
+            # every turn. Budget env-overridable; default 6 covers the goal's
+            # real grounding need without starving the turn budget.
+            _read_budget = int(os.getenv("SWARM_MAX_FS_READS", "6"))
+            if (
+                not state._filesystem_read_capped
+                and state._filesystem_reads >= _read_budget
+            ):
+                state._filesystem_read_capped = True
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            f"SYSTEM: You have read {state._filesystem_reads} files, "
+                            "which is the budget for this analysis. STOP reading more "
+                            "files. Using what you have already read, call "
+                            'action=final NOW with a concrete findings report: name '
+                            "the specific files and the actual bugs/upgrades you can "
+                            "evidence. Do not read again before finalizing."
+                        ),
+                    }
+                )
+
 
             # L1 grounding: a successful semantic_search returns real code-chunk
             # hits whose formatted text carries `File: <path>` lines. Those are
@@ -3436,6 +3513,9 @@ class AgentServiceV2:
                     "pending_id": state.tool_result.get("pending_id"),
                     "preview": state.tool_result.get("preview"),
                     "authorization": state.tool_result.get("authorization"),
+                    "error": str(
+                        state.tool_result.get("error", "")
+                    )[:300] or None,
                 }
                 yield {
                     "agent_id": agent_id,
@@ -3556,12 +3636,67 @@ class AgentServiceV2:
                     messages[:initial_messages_len] + new_messages[first_to_keep:]
                 )
 
+        # FORCED SYNTHESIS (2026-09-10, last resort): the turn loop ran out with
+        # no `final` — the observed code_analyzer failure. Rather than emit a bare
+        # "[System: max turns reached]" placeholder (which L1 rejects and which
+        # carries zero findings), make ONE final LLM call with the tool surface
+        # stripped to `final` so the model MUST synthesize from the files it read.
+        # This is the SWE-agent "autosubmit after error" / browser-use
+        # "_force_done_after_last_step" pattern: harness-enforced termination that
+        # still produces the deliverable.
+        final_content = "[System: max turns reached]"
+        if agent_id in ANALYSIS_AGENTS:
+            try:
+                forced_messages = [
+                    *_trim_context_messages(
+                        messages, initial_messages_len, MAX_HISTORY_TURNS * 2
+                    ),
+                    {
+                        "role": "user",
+                        "content": (
+                            "SYSTEM: The turn budget is exhausted and the filesystem "
+                            "tool is disabled. Call action=final NOW. Using the files "
+                            "you already read, give a concrete report naming the "
+                            "specific files and the actual bugs/upgrades you can "
+                            "evidence. Do not mention that you ran out of turns."
+                        ),
+                    },
+                ]
+                forced = await self._call_llm(
+                    model, forced_messages, agent_id, ["final"]
+                )
+                if (
+                    isinstance(forced, dict)
+                    and forced.get("action") == "final"
+                    and str(forced.get("response", "")).strip()
+                ):
+                    final_content = str(forced.get("response")).strip()
+                    log.info(
+                        "[%s] forced synthesis produced %d chars after max turns",
+                        agent_id,
+                        len(final_content),
+                    )
+            except Exception as force_err:
+                log.warning(
+                    "[%s] forced synthesis failed (%s); emitting deterministic summary",
+                    agent_id,
+                    force_err,
+                )
+            if final_content == "[System: max turns reached]" and state.read_paths:
+                files = ", ".join(sorted(state.read_paths)[:8])
+                final_content = (
+                    "Codebase analysis (turn budget reached before a self-authored "
+                    f"final). Files examined: {files}. The agent did not converge on "
+                    "a synthesis within its tool budget — rerun with a narrower goal "
+                    "or after the review-budget fix."
+                )
+
         yield {
             "agent_id": agent_id,
             "type": "final",
             "model": model,
             "provider": provider,
-            "content": "[System: max turns reached]",
+            "content": final_content,
         }
         # Feed the FAILED outcome (completion=0) to the fitness store so the
         # kernel learns turn-exhaustion is a bad strategy — completion-gated at 0.4.
