@@ -51,6 +51,7 @@ from runtime_v2.api._agent_helpers import (  # noqa: F401
     _is_control_observation as _is_control_observation,
     _original_goal as _original_goal,
     _trim_context_messages as _trim_context_messages,
+    _build_grounded_report as _build_grounded_report,
 )
 
 # Bounded dedup cache for reflexion lessons (agent, action, error) -> last store
@@ -3350,13 +3351,12 @@ class AgentServiceV2:
                     agent_id,
                     force_err,
                 )
-            if final_content == "[System: max turns reached]" and state.read_paths:
-                files = ", ".join(sorted(state.read_paths)[:8])
-                final_content = (
-                    "Codebase analysis (turn budget reached before a grounded "
-                    f"final). Files actually examined: {files}. The agent did not "
-                    "converge on a grounded synthesis within its tool budget."
-                )
+            if final_content == "[System: max turns reached]":
+                # Deterministic grounded report (2026-09-10): instead of a thin
+                # "Files actually examined: ..." line, assemble a real report
+                # from the read ledger (path + line count + top-level symbols).
+                # No LLM text -> cannot name an unread file or invent a finding.
+                final_content = _build_grounded_report(state.read_paths)
 
         yield {
             "agent_id": agent_id,

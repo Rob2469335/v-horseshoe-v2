@@ -16,6 +16,7 @@ silently turning the patch into a no-op (a false pass).
 from __future__ import annotations
 
 import logging
+import os
 import re
 
 log = logging.getLogger(__name__)
@@ -454,3 +455,68 @@ def _trim_context_messages(
     if len(new_non_sys) > budget:
         new_non_sys = new_non_sys[-budget:]
     return sys_msgs + initial_non_sys + new_non_sys
+
+
+def _build_grounded_report(
+    read_paths, root: str | None = None, max_files: int = 20
+) -> str:
+    """Assemble a GROUNDED report from the files the agent actually read.
+
+    2026-09-10 (deep-research-backed): the fix for a hallucinating analysis
+    agent is NOT "ask the model to cite" — it is to assemble the deliverable
+    deterministically from the read ledger so a fabricated path/finding is
+    impossible by construction (arXiv:2512.12117 "citation grounding through
+    architectural constraints"; the "model selects, code materializes" pattern
+    in RepoPilot / medical-record-evidence-extractor / codewalker).
+
+    For each file in `read_paths` this emits the REAL path plus deterministic
+    facts derived by reading the file now: line count and (for .py) the
+    top-level def/class names via the stdlib AST. No LLM text is used, so the
+    output cannot contain an unread path or invented finding. Used as the
+    fail-closed replacement for the thin "Files actually examined: ..." line.
+    """
+    import ast
+
+    root = root or os.getcwd()
+    paths = sorted({str(p).replace("\\", "/") for p in read_paths})
+    out = [
+        "Codebase analysis — grounded report.",
+        "Derived deterministically from files the agent actually read this run; "
+        "no claim names a file outside that set.",
+        "",
+    ]
+    if not paths:
+        out.append(
+            "No files were read this run, so no grounded report could be produced."
+        )
+        return "\n".join(out)
+
+    out.append(f"Examined {len(paths)} file(s):")
+    for p in paths[: max(0, max_files)]:
+        full = p if os.path.isabs(p) else os.path.join(root, p)
+        try:
+            with open(full, encoding="utf-8", errors="ignore") as f:
+                src = f.read()
+        except OSError:
+            out.append(f"- {p}: (could not be re-read; skipped)")
+            continue
+        n_lines = src.count("\n") + 1
+        detail = ""
+        if p.endswith(".py"):
+            try:
+                tree = ast.parse(src)
+                syms = [
+                    node.name
+                    for node in tree.body
+                    if isinstance(
+                        node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+                    )
+                ]
+                if syms:
+                    detail = "; top-level: " + ", ".join(syms[:8])
+            except SyntaxError:
+                detail = "; (parse error)"
+        out.append(f"- {p} ({n_lines} lines){detail}")
+    if len(paths) > max_files:
+        out.append(f"- … and {len(paths) - max_files} more file(s)")
+    return "\n".join(out)
