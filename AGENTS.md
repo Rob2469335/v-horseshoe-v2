@@ -1013,6 +1013,42 @@ relaunch via start-dev.ps1 when ready.
 
 ## Recent Changes (do NOT re-apply)
 
+### FIX: CLI trustworthiness — failure taxonomy, observability, bounds, session durability (2026-09-11, commits `1f7b143` + `b18fe6f` + `e29ebff`)
+
+A research-backed pass on `organism_console/` (the `rob` shell) against the
+published CLI-agent failure taxonomy. Five defect classes, tests + full suite
+green per commit:
+
+- **Class 5 — state-tracking / final verification** (`1f7b143`; Terminal Agents
+  survey: state-tracking error 73.1%, final-window verification 0.0%). The CLI
+  rendered EVERY final in a green success Panel and set
+  `last_stream_status='completed'` — including `Task FAILED`, `[System: max turns
+  reached]`, `Healing failed. Loop aborted.`. Added `live_stream.final_panel()`
+  (RED/"Task Failed" for a system termination) + `_final_is_system_failure()`
+  (lazy import of the goal loop's classifier — autonomous.py imports live_stream,
+  so a module-level import would be circular), and record `status='failed'`.
+  Also: **`SYSTEM_FAILURE_MARKERS` was missing `"Task FAILED"`** — the agent
+  loop's L1 3-strike abort final — so BOTH the goal loop and the CLI treated that
+  failed run as success; added it. Tests `tests/test_cli_stream_status.py`.
+- **Classes 1–3 — stream handling** (`e29ebff`). (2) **Stream-outcome taxonomy**
+  (hermes-agent#102766): `aiter_lines()` ending silently treated a truncation as
+  success, and every exception collapsed to one generic message — added pure
+  `classify_stream_end() -> ok|truncated|timeout|network|error` +
+  `stream_end_message()`, `_saw_final`/`_saw_done` tracking. (1) **Observability**
+  (arXiv:2607.09510): `except json.JSONDecodeError: continue` silently dropped
+  malformed chunks — now a one-time visible warning. (3) **Bounds**
+  (arXiv:2607.01641): the outer ask_user/approval continuation loop was unbounded —
+  hard-capped at 20 turns. Tests `tests/test_cli_stream_taxonomy.py`.
+- **Class 4 — session durability** (`b18fe6f`; opencode SQLite / Claude JSONL):
+  `SessionState` never persisted `resume_checkpoint_id`, so a terminal close +
+  `rob --continue` replayed from turn 0. Now saved/loaded (cleared on success).
+  Tests `tests/test_cli_session_resume.py`.
+
+Verified: `ruff check . --select E9,F` clean on `organism_console/`; full suite
+**1632 passed / 2 skipped / 1 xfailed / 0 failed**. Note: classes 1–3 share one
+commit (same stream function, verified together) — the one-class-per-commit
+cadence was compressed there.
+
 ### ARCH: split the agent_service_v2 god-module — pure helpers + state extracted (2026-09-10, commits `6e27af2` + `21f5b52`)
 
 `runtime_v2/api/agent_service_v2.py` was a 3,871-line god-module (one
