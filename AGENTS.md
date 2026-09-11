@@ -483,7 +483,9 @@ Package split from the deleted 1,275-line `rv_finder.py`. Exposed as `find_best_
 > `swarm_os/kernel/`; `swarm_os/swarm_kernel.py` is a thin re-export of it.
 
 ### runtime_v2/api/ (Agent Execution)
-| `agent_service_v2.py` | 3437 | `AgentServiceV2` class — `step_agent_stream()` main agent loop. Orchestrates decisions, actions, healing. Persists tool_result failure events + diary writes + turn-budget reflexions. |
+| `agent_service_v2.py` | 3214 | `AgentServiceV2` class — `step_agent_stream()` main agent loop. Orchestrates decisions, actions, healing. Persists tool_result failure events + diary writes + turn-budget reflexions. |
+| `_agent_helpers.py` | 399 | Pure helpers/constants for the agent loop (goal-splitting/routing, placeholder & authorization checks, context trim, observation parsing). Extracted verbatim from `agent_service_v2.py` 2026-09-10 (step 1/2); re-exported there (`X as X`). |
+| `_agent_state.py` | 110 | `_CallState` dataclass — per-invocation agent state (counters, tool result, read budget, checkpoint fields). Extracted verbatim from `agent_service_v2.py` 2026-09-10 (step 2/2); re-exported there. |
 | `_agent_config.py` | 45 | Constants: `MAX_TURNS`, `MAX_DEPTH`, `_DEFAULTS`, `ANALYSIS_AGENTS`, `INTERNET_GOAL_AGENTS` |
 | `_agent_routing.py` | 477 | `fast_route_coordinator()`, `fast_start_for_agent()`, `matches_task_keywords()`, `best_route_target()`, `is_compound_goal()`, `lookup_model()` — keyword routing + warmup (code_analyzer + coder) + researcher web-first turn |
 
@@ -1010,6 +1012,38 @@ relaunch via start-dev.ps1 when ready.
 ---
 
 ## Recent Changes (do NOT re-apply)
+
+### ARCH: split the agent_service_v2 god-module — pure helpers + state extracted (2026-09-10, commits `6e27af2` + `21f5b52`)
+
+`runtime_v2/api/agent_service_v2.py` was a 3,871-line god-module (one
+`AgentServiceV2` class + ~15 module-level functions, ~13 responsibilities).
+Extracted **move-only** (Fowler: a commit is structural OR behavioural, never
+both), one module per commit, full suite green between each:
+- `6e27af2` (step 1/2): ~15 pure stateless helpers/constants (goal-splitting /
+  routing, placeholder & authorization checks, context trim, observation
+  parsing) → `runtime_v2/api/_agent_helpers.py` (399 lines).
+- `21f5b52` (step 2/2): `_CallState` dataclass → `runtime_v2/api/_agent_state.py`
+  (110 lines); dropped the now-dead `dataclasses` import from the original.
+`agent_service_v2.py` is now **3,214 lines**; both moved symbols are re-exported
+with the redundant `X as X` alias so every existing
+`from runtime_v2.api.agent_service_v2 import X` keeps working.
+
+**Step 3 (mixin) deliberately NOT done** — audited against 2025-2026 practice
+(GitHub: Aider `base_coder.py` 2,486 one class / browser-use `service.py` 4,163
+one class; Real Python: "many mixins = a God object"; adamj.eu: mixin typing
+hazards). The remaining 3,214 lines are the cohesive loop
+(`_step_agent_stream_inner`, `_handle_final`, `_handle_tool`, `_get_decision`) —
+below browser-use's shipped class size. Extracting the clutter, leaving the loop.
+
+**Monkeypatch hazard verified safe (the load-bearing check).** Moving a
+module-level mutable that a test patches by old path silently no-ops the patch
+(the consumer reads the object from the new module) → false pass. So
+`_failure_lessons_seen` + its lock (patched by `test_failure_lessons.py`) and
+`time.time()` deliberately STAY in `agent_service_v2.py`, where
+`_remember_failure` reads them — confirmed effective, not a no-op.
+
+Verified: `ruff check . --select E9,F` clean; full suite **1589 passed / 2
+skipped / 1 xfailed / 0 failed** before each of the two commits.
 
 ### FIX: agent-loop non-termination on "analyze my codebase for bugs and upgrades" — root-caused + fixed (2026-09-10, commits `768ddd3`→`0e4b6c6`)
 
