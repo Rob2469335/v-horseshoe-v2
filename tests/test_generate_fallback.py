@@ -28,6 +28,12 @@ def _orch(monkeypatch):
 def _cloud_down_local_up(monkeypatch):
     """litellm.acompletion raises for the cloud model, succeeds for local."""
     calls = []
+    # Hermetic: this test assumes the NVIDIA cloud default. A live .env override
+    # (e.g. ANALYSIS_CLOUD_MODEL=openai/robs4b for local-model testing) would make
+    # the "cloud default" local and collapse the 2-call fallback into 1.
+    monkeypatch.setenv(
+        "ANALYSIS_CLOUD_MODEL", "nvidia_nim/deepseek-ai/deepseek-v4-flash-0731"
+    )
 
     async def fake_acompletion(**kwargs):
         calls.append(kwargs.get("model"))

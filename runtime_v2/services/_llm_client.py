@@ -55,7 +55,14 @@ def _cloud_response_format(litellm_model: str) -> dict:
     what litellm's support table says."""
     try:
         base, _, _ = _endpoint_for(litellm_model)
-        if base and "opencode.ai" in base:
+        # LIVE-VERIFIED 2026-09-10: the same 400 hits native DeepSeek
+        # (api.deepseek.com) — it rejects strict json_schema even though
+        # litellm.supports_response_schema("deepseek/deepseek-v4-flash") returns
+        # True (litellm trusts its provider table, DeepSeek's API does not:
+        # `400 This response_format type is unavailable now`). Every analysis
+        # tool-decision 400'd and fell to the dead NVIDIA fallback. json_object
+        # is verified 200 on the same endpoint.
+        if (base and "opencode.ai" in base) or litellm_model.startswith("deepseek/"):
             return {"type": "json_object"}
         from litellm import supports_response_schema
 
