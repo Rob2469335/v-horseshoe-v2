@@ -251,7 +251,7 @@ async def get_tool_decision(
                     if mem_budget > 50:
                         injected_mem = memories_str[:mem_budget]
                         system_prompt = (
-                            system_prompt + f"\n\n[RELEVANT MEMORIES]\n{injected_mem}"
+                            system_prompt + f"\n\n[RELEVANT MEMORIES (WARNING: Past episodic memory may be stale. NEVER state memory as fact without verifying it via live tools this run. If a referenced file is deleted or changed, ignore the memory.)]\n{injected_mem}"
                         )
                         log.debug(
                             "[%s] Injected %d chars of memory (%d token headroom)",

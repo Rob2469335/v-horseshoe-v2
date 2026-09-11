@@ -1851,40 +1851,70 @@ async def test_reviewer_verdict_finals_bypass_tag_gate_reach_done(verdict_respon
 
 
 @pytest.mark.asyncio
-async def test_l1_two_placeholder_finals_abort():
-    """2026 L1: after two placeholder/contract rejections the run aborts as failed
-    (not looped forever), and outcome is fed as NOT completed."""
+async def test_l1_placeholder_finals_abort_after_three():
+    """2026 L1: after THREE placeholder/contract rejections the run aborts as failed
+    (not looped forever), and outcome is fed as NOT completed.
+
+    2026-09-10: the cap was raised 2->3 and the 2nd rejection now injects a
+    forced-synthesis instruction (see _handle_final) so a final grounded in stale
+    memory gets one clean synthesis attempt from the files actually read, instead
+    of aborting on the second try."""
     service = AgentServiceV2()
     state = _CallState()
     messages = [{"role": "user", "content": "hi"}]
-    gen = service._handle_final(
-        {"action": "final", "response": "Task completed."},
-        "code_analyzer",
-        "m",
-        "p",
-        messages,
-        0.0,
-        "analyze the codebase",
-        True,
-        state,
+
+    async def _emit(gen):
+        return [e async for e in gen]
+
+    # rejection 1 -> CONTINUE, generic corrective
+    await _emit(
+        service._handle_final(
+            {"action": "final", "response": "Task completed."},
+            "code_analyzer",
+            "m",
+            "p",
+            messages,
+            0.0,
+            "analyze the codebase",
+            True,
+            state,
+        )
     )
-    async for _ in gen:
-        pass
     assert state.handler_status == "CONTINUE"
-    gen2 = service._handle_final(
-        {"action": "final", "response": "Task completed."},
-        "code_analyzer",
-        "m",
-        "p",
-        messages,
-        0.0,
-        "analyze the codebase",
-        True,
-        state,
+
+    # rejection 2 -> CONTINUE, forced-synthesis instruction
+    await _emit(
+        service._handle_final(
+            {"action": "final", "response": "Task completed."},
+            "code_analyzer",
+            "m",
+            "p",
+            messages,
+            0.0,
+            "analyze the codebase",
+            True,
+            state,
+        )
     )
-    events2 = [e async for e in gen2]
+    assert state.handler_status == "CONTINUE"
+    assert state._forced_final is True
+
+    # rejection 3 -> ABORT
+    events3 = await _emit(
+        service._handle_final(
+            {"action": "final", "response": "Task completed."},
+            "code_analyzer",
+            "m",
+            "p",
+            messages,
+            0.0,
+            "analyze the codebase",
+            True,
+            state,
+        )
+    )
     assert state.handler_status == "ABORT"
-    assert any(e.get("type") == "final" for e in events2)
+    assert any(e.get("type") == "final" for e in events3)
 
 
 @pytest.mark.asyncio

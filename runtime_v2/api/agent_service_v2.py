@@ -1449,11 +1449,14 @@ class AgentServiceV2:
         # crossed, REMOVE the reading tools from the decision surface entirely and
         # tell the model its only remaining action is final. This is deterministic
         # — not a prompt hint the model can decline.
-        if (
-            agent_id in ANALYSIS_AGENTS
-            and not state._forced_final
-            and state._filesystem_reads >= int(os.getenv("SWARM_MAX_FS_READS", "6"))
-        ):
+        _read_budget_hit = state._filesystem_reads >= int(
+            os.getenv("SWARM_MAX_FS_READS", "6")
+        )
+        _enter_forced_final = agent_id in ANALYSIS_AGENTS and (
+            (not state._forced_final and _read_budget_hit)
+            or (state._forced_final and "filesystem" in allowed_tools)
+        )
+        if _enter_forced_final:
             state._forced_final = True
             allowed_tools = [
                 t for t in allowed_tools if t not in ("filesystem", "semantic_search")
@@ -1855,7 +1858,7 @@ class AgentServiceV2:
                     "with a bare completion sentence."
                 )
             else:
-                refs = set(re.findall(r"[\w./\\-]+\.py", response_text))
+                refs = set(re.findall(r"[\w./\\-]+\.(?:py|txt|md|json|yml|yaml|sh|ps1|html|css|js|ts|ini|toml)\b", response_text))
                 read_paths = {
                     r.replace("\\", "/").lstrip("./") for r in state.read_paths
                 }
@@ -1875,9 +1878,9 @@ class AgentServiceV2:
                     )
         if contract_error:
             state._contract_finals += 1
-            if state._contract_finals >= 2:
+            if state._contract_finals >= 3:
                 log.error(
-                    "[%s] Aborting: final rejected twice for contract violations.",
+                    "[%s] Aborting: final rejected 3x for contract violations.",
                     agent_id,
                 )
                 err_txt = f"Task FAILED: {agent_id} could not produce a substantive, grounded final."
@@ -1909,7 +1912,29 @@ class AgentServiceV2:
             log.warning(
                 "[%s] L1 contract violation: %s", agent_id, contract_error[:160]
             )
-            messages.append({"role": "user", "content": contract_error})
+            if state._contract_finals >= 2 and agent_id in ANALYSIS_AGENTS:
+                # 2026-09-10: a final grounded in STALE MEMORY (files that exist in
+                # episodic memory but were not read this run) is rejected twice and
+                # the run aborts — even though the model DID read real files. Force
+                # one last synthesis from the content actually gathered: stop all
+                # further exploration and require every cited file to be one of the
+                # paths read this run (or cite nothing).
+                state._forced_final = True
+                read_list = ", ".join(sorted(state.read_paths)[:20]) or "(none)"
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "SYSTEM (L1 contract, final attempt): call action=final "
+                            "NOW. You must cite ONLY files you actually read this run: "
+                            f"{read_list}. Do NOT mention any other file, and do NOT "
+                            "repeat findings from memory. If you have no evidenced "
+                            "finding, say so plainly. Reading is disabled."
+                        ),
+                    }
+                )
+            else:
+                messages.append({"role": "user", "content": contract_error})
             return
 
         if agent_id == "reviewer" and (
@@ -2345,12 +2370,25 @@ class AgentServiceV2:
             if action == "filesystem" and tool_payload.get("operation") in (
                 "read",
                 "read_all",
+                "list",
+                "tree",
+                "glob",
+                "grep",
+                "search",
             ):
+                # 2026-09-10: count ALL successful exploration ops, not just
+                # reads. Live evidence: the agent loops AGENTS.md →
+                # agent_service_v2.py → stream_runner.py → tool_executor.py →
+                # README.md → repeat — only 5 READS, so a reads-only budget of 6
+                # never fired and the read-cycle persisted to MAX_TURNS. Counting
+                # lists/globs too makes the budget reflect real exploration
+                # volume and trip before the cycle repeats.
                 state._filesystem_reads += 1
-                _fetched_content = True
-                p = str(tool_payload.get("path", "")).replace("\\", "/")
-                if p:
-                    state.read_paths.add(p)
+                if tool_payload.get("operation") in ("read", "read_all"):
+                    _fetched_content = True
+                    p = str(tool_payload.get("path", "")).replace("\\", "/")
+                    if p and state.tool_success:
+                        state.read_paths.add(p)
             if action in ("semantic_search", "web_search", "web_fetch", "lsp"):
                 _fetched_content = True
             if action in ("system", "screen"):
@@ -3119,6 +3157,50 @@ class AgentServiceV2:
                 )
                 continue
             if loop_status:
+                # 2026-09-10: an analysis agent that trips the loop guard has been
+                # cycling filesystem exploration (observed: a 5-file read cycle).
+                # Aborting to the debugger wastes the run; instead force the
+                # synthesis path ONCE (strip the reading tools, demand final).
+                # This is the harness-enforced termination the read-budget guard
+                # also uses, now also triggered by an actual detected loop.
+                if agent_id in ANALYSIS_AGENTS and not state._forced_final:
+                    state._forced_final = True
+                    state._filesystem_read_capped = True
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "SYSTEM: You are repeating the same filesystem "
+                                "exploration. Reading is now DISABLED for this run. "
+                                "You MUST call action=final NOW with a concrete "
+                                "findings report naming the specific files you read "
+                                "and the actual bugs/upgrades you can evidence."
+                            ),
+                        }
+                    )
+                    # Record the lesson, then loop again — the next decision has
+                    # filesystem removed by the forced-final branch in _get_decision.
+                    try:
+                        from swarm_os.services.reflection_loop import (
+                            get_reflection_service,
+                        )
+
+                        await get_reflection_service().store_reflexion(
+                            task=f"agent:{agent_id} looping on repeated filesystem reads goal {str(prompt)[:120]}",
+                            action="loop_detected",
+                            failure_reason="agent repeated a filesystem read cycle; forced to synthesize.",
+                            correction="Do not re-read files you have already seen. Synthesize a findings report from the content already gathered.",
+                            do_not_repeat=f"agent:{agent_id} must not re-read the same file in a cycle.",
+                            component=agent_id,
+                            confidence=0.8,
+                        )
+                    except Exception as loop_refl_err:
+                        log.debug(
+                            "[%s] forced-final loop reflexion skipped: %s",
+                            agent_id,
+                            loop_refl_err,
+                        )
+                    continue
                 yield {
                     "agent_id": agent_id,
                     "type": "error",

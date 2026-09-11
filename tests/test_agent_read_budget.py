@@ -179,3 +179,69 @@ async def test_forced_final_only_once(monkeypatch):
 
     assert state._forced_final is True
     assert calls["n"] == 2
+
+
+@pytest.mark.asyncio
+async def test_forced_final_reapplies_tools_when_loop_set_flag(monkeypatch):
+    # 2026-09-10: the loop guard sets state._forced_final=True and continues; the
+    # NEXT _get_decision must strip filesystem even though the read count may be
+    # below the budget (the observed 5-file read cycle). Revert-proof: without the
+    # "state._forced_final and filesystem in allowed" clause, tools pass through.
+    monkeypatch.setenv("SWARM_MAX_FS_READS", "99")  # budget never hit
+
+    svc = _svc()
+    state = _svc_state()
+    state._filesystem_reads = 1
+    state._forced_final = True  # set by the loop guard
+    captured: dict = {}
+
+    async def _fake_call_llm(model, messages, agent_id, allowed_tools):
+        captured["tools"] = list(allowed_tools)
+        return {"action": "final", "response": "findings"}
+
+    monkeypatch.setattr(svc, "_call_llm", _fake_call_llm)
+
+    await svc._get_decision(
+        "code_analyzer",
+        "robs4b",
+        [{"role": "user", "content": "analyze my codebase for bugs and upgrades"}],
+        ["filesystem", "semantic_search", "final"],
+        "analyze my codebase for bugs and upgrades",
+        turn=6,
+        state=state,
+    )
+
+    assert "filesystem" not in captured["tools"]
+    assert "semantic_search" not in captured["tools"]
+    assert "final" in captured["tools"]
+
+
+@pytest.mark.asyncio
+async def test_non_analysis_agent_never_forced_final(monkeypatch):
+    # A non-analysis agent (e.g. coder) must keep its full tool surface even at
+    # high exploration counts — the forced-final is an analysis-agent safety only.
+    monkeypatch.setenv("SWARM_MAX_FS_READS", "1")
+
+    svc = _svc()
+    state = _svc_state()
+    state._filesystem_reads = 50
+    captured: dict = {}
+
+    async def _fake_call_llm(model, messages, agent_id, allowed_tools):
+        captured["tools"] = list(allowed_tools)
+        return {"action": "filesystem", "operation": "read", "path": "x.py"}
+
+    monkeypatch.setattr(svc, "_call_llm", _fake_call_llm)
+
+    await svc._get_decision(
+        "coder",
+        "robs4b",
+        [{"role": "user", "content": "fix the bug"}],
+        ["filesystem", "final"],
+        "fix the bug",
+        turn=3,
+        state=state,
+    )
+
+    assert "filesystem" in captured["tools"]
+    assert state._forced_final is False
