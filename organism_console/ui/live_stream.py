@@ -49,6 +49,53 @@ def final_panel(content) -> Panel:
     )
 
 
+def classify_stream_end(saw_final: bool, saw_done: bool, exc=None) -> str:
+    """Classify how a stream ended — one of:
+
+        'ok'         clean EOF with a final chunk or `[DONE]`
+        'truncated'  the loop ended with NEITHER (server stopped mid-response)
+        'timeout'    the request timed out
+        'network'    the connection dropped mid-stream
+        'error'      any other failure
+
+    hermes-agent#102766: these outcomes must NOT be conflated — a clean EOF, a
+    truncation, a drop and a timeout each need their own message. Previously the
+    loop simply ended (truncation was silently treated as success) and every
+    exception was collapsed into one generic 'Stream failed' line.
+    """
+    if exc is not None:
+        name = type(exc).__name__.lower()
+        mod = (type(exc).__module__ or "").lower()
+        if "timeout" in name:
+            return "timeout"
+        if "requesterror" in name or "httpcore" in mod or "httpx" in mod:
+            return "network"
+        return "error"
+    if saw_final or saw_done:
+        return "ok"
+    return "truncated"
+
+
+def stream_end_message(end: str, exc=None) -> str:
+    """A specific, user-visible message for a classified stream end."""
+    if end == "truncated":
+        return (
+            "[yellow]Stream ended before completion[/yellow] — the server "
+            "stopped sending before a final chunk (response truncated)."
+        )
+    if end == "timeout":
+        return (
+            "[bold red]Stream timed out[/bold red] — the server/tool did not "
+            "finish in time (a timeout, not a dropped connection)."
+        )
+    if end == "network":
+        return (
+            "[bold red]Network drop[/bold red] — the connection was lost "
+            "mid-stream."
+        )
+    return f"[bold red]Stream failed:[/bold red] {exc}"
+
+
 def _strip_control_observations(history):
     """Drop control-plane Observation messages (approval decisions and ask_user
     answers) from a history list before it is RETURNED or PERSISTED.
@@ -164,7 +211,22 @@ from organism_console.api_client import call_api_async_stream
 
 
 async def _stream_prompt_async(ctx, agent_id, prompt, history):
+    # BOUNDS (class 3; arXiv:2607.01641): the outer loop re-POSTs after each
+    # ask_user / approval interaction. A backend that keeps returning an
+    # interaction (or a client that keeps auto-resolving one) would otherwise
+    # loop forever. Hard-cap the consecutive interaction turns and exit.
+    _MAX_CONTINUATIONS = 20
+    _continuations = 0
     while True:
+        _continuations += 1
+        if _continuations > _MAX_CONTINUATIONS:
+            ctx.console.print(
+                "[bold red]Aborting:[/bold red] too many consecutive "
+                "human-interaction turns without a completion."
+            )
+            ctx.last_stream_status = "failed"
+            ctx.save()
+            return history
         stats = get_system_stats()
         if stats["ram_pct"] > 90:
             ctx.console.print(
@@ -208,6 +270,10 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
         _stream_errored = False
         _ask_user_triggered = False
         _approval_triggered = False
+        _saw_final = False
+        _saw_done = False
+        _stream_exc = None
+        _bad_chunk_warned = False
 
         with Live(console=ctx.console, refresh_per_second=15) as live:
 
@@ -225,12 +291,23 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                     if line.startswith("data: "):
                         line = line[6:]
                     if line == "[DONE]":
+                        _saw_done = True
                         continue
 
                     try:
                         chunk = json.loads(line)
                         record_chunk(chunk)
                     except json.JSONDecodeError:
+                        # OBSERVABILITY (class 1): a malformed/truncated chunk must
+                        # not be silently dropped. Surface it ONCE, at the step it
+                        # occurs, so a broken stream is visible immediately instead
+                        # of surfacing as a mysterious later failure.
+                        if not _bad_chunk_warned:
+                            _bad_chunk_warned = True
+                            safe_print(
+                                "[yellow]Warning:[/yellow] received a malformed "
+                                "stream chunk (skipping it)."
+                            )
                         continue
                     chunk_type = chunk.get("type")
 
@@ -462,6 +539,7 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
 
                     if chunk_type == "final":
                         live.stop()
+                        _saw_final = True
                         final_content = chunk.get("content", "")
                         ctx.last_provider = chunk.get("provider", "llama.cpp")
                         _failed_final = _final_is_system_failure(final_content)
@@ -739,7 +817,8 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
 
             except Exception as e:
                 log.exception("Streaming exception")
-                safe_print(f"[bold red]Stream failed:[/bold red] {e}")
+                _stream_exc = e
+                safe_print(stream_end_message(classify_stream_end(_saw_final, _saw_done, e), e))
                 if not _tokens_counted:
                     update_token_metrics(ctx, prompt, history, full_content, model)
                     ctx.save()
@@ -753,16 +832,19 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
         if _ask_user_triggered or _approval_triggered:
             continue
 
+        # STREAM-OUTCOME TAXONOMY (class 2): a loop that ended with no exception
+        # but also no `final`/`[DONE]` is a TRUNCATION — the server stopped
+        # mid-response. Surface it as a failure instead of falling through to the
+        # success panel (previously truncation was silently rendered as success).
+        if classify_stream_end(_saw_final, _saw_done, _stream_exc) == "truncated":
+            ctx.console.print(stream_end_message("truncated"))
+            ctx.last_stream_status = "failed"
+            ctx.save()
+            return history
+
         if full_content and full_content.strip():
             ctx.console.print()
-            ctx.console.print(
-                Panel(
-                    Markdown(str(full_content)),
-                    title="",
-                    border_style="green",
-                    padding=(1, 2),
-                )
-            )
+            ctx.console.print(final_panel(full_content))
 
         if not _tokens_counted:
             update_token_metrics(ctx, prompt, history, full_content, model)
