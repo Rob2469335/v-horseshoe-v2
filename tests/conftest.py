@@ -160,6 +160,21 @@ def global_subprocess_mock():
         yield mock_popen
 
 
+@pytest.fixture(autouse=True)
+def isolate_outcome_fitness(monkeypatch):
+    """Never let a test feed the REAL outcome-fitness store.
+
+    `_feed_outcome` fires whenever SWARM_EVOLUTION=1, and .env sets that
+    globally — so any test that drives step_agent_stream end-to-end (e.g.
+    test_opencode_parity's "do a compound task") appended sentinel-task rows
+    to the repo's real data/evolution/fitness.jsonl, polluting the very store
+    the live evolution daemon scores on. Disable by default; tests that
+    exercise the fitness path set SWARM_EVOLUTION=1 AND patch FITNESS_PATH
+    themselves (monkeypatch re-orders, so their setenv still wins).
+    """
+    monkeypatch.setenv("SWARM_EVOLUTION", "0")
+
+
 async def run_approved(tool_executor_run, tool_name: str, payload: dict) -> dict:
     """Drive a tool through the pre-action authorization gate to its real
     implementation: call run() (creates a pending action), then execute the
