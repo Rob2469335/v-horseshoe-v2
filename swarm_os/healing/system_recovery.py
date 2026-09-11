@@ -264,12 +264,33 @@ def tail_event_log(
 
 # component/issue -> recovery action. Safe actions auto-run under governor;
 # destructive ones (kill/clean/restart) wait for approval.
+def flag_for_human_review(anomaly: Dict[str, Any]) -> Dict[str, Any]:
+    """Report-only system issue — NO safe automated remedy exists; the probe's
+    own contract is 'human judgement, not an auto-kill'.
+
+    2026-09-11: `event_log_storm` (>=N Error-level Windows events in a window) is
+    a report-only probe with no recovery primitive. Without an explicit mapping
+    here, RecoveryEngine fell back to `llm_guided_recovery`, which generated a
+    script, tripped the sandbox Security Gate, and was logged as a failed
+    auto-repair (errors:20 storm -> recovery could not execute). Fail closed to
+    human review instead of attempting an unsafe/redundant auto-action.
+    """
+    log.warning("Report-only issue requires human review: %s", anomaly)
+    return {
+        "ok": False,
+        "action": "human_review_required",
+        "reason": "report-only issue; no safe automated recovery",
+    }
+
+
 SYSTEM_RECOVERY_ACTIONS: Dict[str, Any] = {
     "memory_pressure": free_memory,
     "disk_space": clean_temp_files,
     "runaway_process": kill_runaway_process,
     "stopped_service": restart_stopped_service,
     "temp_growth": clean_temp_files,
+    # Report-only: surface for human judgement, never auto-recover.
+    "event_log_storm": flag_for_human_review,
 }
 
 # Which system issues are safe enough to auto-run when the governor says so.
