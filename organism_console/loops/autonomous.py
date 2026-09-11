@@ -316,6 +316,11 @@ SYSTEM_FAILURE_MARKERS = (
     "Healing failed.",
     "Task aborted after",
     "Loop aborted",
+    # The agent loop's L1 3-strike abort final ("Task FAILED: <agent> could not
+    # produce a substantive, grounded final."). It was missing here, so BOTH the
+    # goal loop and the CLI treated that failed run as a SUCCESS (the CLI even
+    # rendered it in a green success panel).
+    "Task FAILED",
 )
 
 

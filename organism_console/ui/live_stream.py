@@ -20,6 +20,35 @@ _AGENT_PERF: dict = {}
 _AGENT_PERF_MAX = 256
 
 
+def _final_is_system_failure(text) -> bool:
+    """True when an agent final is a system-level termination (max turns
+    reached / loop aborted / healing failed / LLM abort) rather than a real
+    completion. Such a final must NOT render as a green success panel nor set
+    the stream status to 'completed'.
+
+    Reuses the goal loop's classifier via a LAZY import: autonomous.py imports
+    this module, so a module-level import would be circular. On any import
+    failure, falls back to False (status quo) — never raises into the stream."""
+    try:
+        from organism_console.loops.autonomous import _is_system_failure_final
+
+        return bool(_is_system_failure_final(text))
+    except Exception:  # pragma: no cover - defensive
+        return False
+
+
+def final_panel(content) -> Panel:
+    """Render an agent final: RED / 'Task Failed' for a system termination,
+    green otherwise. Pure (no console/state) so it is directly unit-testable."""
+    failed = _final_is_system_failure(content)
+    return Panel(
+        Markdown(str(content)),
+        title="[bold red]Task Failed[/bold red]" if failed else "",
+        border_style="red" if failed else "green",
+        padding=(1, 2),
+    )
+
+
 def _strip_control_observations(history):
     """Drop control-plane Observation messages (approval decisions and ask_user
     answers) from a history list before it is RETURNED or PERSISTED.
@@ -435,6 +464,7 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                         live.stop()
                         final_content = chunk.get("content", "")
                         ctx.last_provider = chunk.get("provider", "llama.cpp")
+                        _failed_final = _final_is_system_failure(final_content)
 
                         if isinstance(final_content, dict):
                             ctx.console.print(
@@ -445,14 +475,10 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                                 )
                             )
                         elif final_content:
-                            ctx.console.print(
-                                Panel(
-                                    Markdown(str(final_content)),
-                                    title="",
-                                    border_style="green",
-                                    padding=(1, 2),
-                                )
-                            )
+                            # A system-termination final (max turns / loop
+                            # aborted / healing failed) must be visibly a FAILURE,
+                            # not a green success panel.
+                            ctx.console.print(final_panel(final_content))
 
                         new_history = list(history)
                         if prompt:
@@ -487,7 +513,11 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                         perf["count"] += 1
                         perf["last"] = elapsed_total
 
-                        ctx.last_stream_status = "completed"
+                        # A system-termination final is NOT a completed run —
+                        # record it as failed so callers/goal-loop see the truth.
+                        ctx.last_stream_status = (
+                            "failed" if _failed_final else "completed"
+                        )
                         ctx.resume_checkpoint_id = None
                         ctx.save()
                         _tokens_counted = True
