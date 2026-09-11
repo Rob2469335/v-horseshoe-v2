@@ -15,6 +15,7 @@ silently turning the patch into a no-op (a false pass).
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -458,7 +459,7 @@ def _trim_context_messages(
 
 
 def _build_grounded_report(
-    read_paths, root: str | None = None, max_files: int = 20
+    read_paths, root: str | None = None, max_files: int = 20, findings=None
 ) -> str:
     """Assemble a GROUNDED report from the files the agent actually read.
 
@@ -471,14 +472,19 @@ def _build_grounded_report(
 
     For each file in `read_paths` this emits the REAL path plus deterministic
     facts derived by reading the file now: line count and (for .py) the
-    top-level def/class names via the stdlib AST. No LLM text is used, so the
-    output cannot contain an unread path or invented finding. Used as the
-    fail-closed replacement for the thin "Files actually examined: ..." line.
+    top-level def/class names via the stdlib AST. `findings` (optional) is a
+    {path: finding_text} map whose keys MUST already be a subset of
+    `read_paths` (the caller validates them); a finding is only ever rendered
+    under its own ledger file, so the report cannot attribute a claim to an
+    unread file. No LLM prose is used as a path.
     """
     import ast
 
     root = root or os.getcwd()
-    paths = sorted({str(p).replace("\\", "/") for p in read_paths})
+    findings = findings or {}
+    norm = lambda s: str(s).replace("\\", "/").lstrip("./")  # noqa: E731
+    findings_norm = {norm(k): str(v).strip() for k, v in findings.items()}
+    paths = sorted({norm(p) for p in read_paths})
     out = [
         "Codebase analysis — grounded report.",
         "Derived deterministically from files the agent actually read this run; "
@@ -517,6 +523,85 @@ def _build_grounded_report(
             except SyntaxError:
                 detail = "; (parse error)"
         out.append(f"- {p} ({n_lines} lines){detail}")
+        finding = findings_norm.get(p)
+        if finding:
+            out.append(f"    finding: {finding}")
     if len(paths) > max_files:
         out.append(f"- … and {len(paths) - max_files} more file(s)")
     return "\n".join(out)
+
+
+async def _extract_grounded_findings(
+    model: str, agent_id: str, reasoning_text: str, read_paths
+) -> dict:
+    """Second-pass STRUCTURED EXTRACTION of per-file findings.
+
+    Deep-research-backed two-call pattern: a reasoning model asked for JSON in
+    the same call that produced its reasoning returns prose, which then fails
+    parsing. So this is a SEPARATE call in `json_object` mode (syntax cannot
+    fail), given the first call's reasoning output + the read ledger, and told
+    to EXTRACT only (no new information). Every returned `file` is then
+    validated against the ledger (basename-tolerant); a claim about an unread
+    file is dropped. Returns {ledger_path: finding}; {} on ANY failure so the
+    caller falls back to the deterministic inventory (fail-safe, never raises).
+    """
+    if not reasoning_text or not read_paths:
+        return {}
+    read_norm = {str(p).replace("\\", "/").lstrip("./") for p in read_paths}
+    if not read_norm:
+        return {}
+    read_basenames = {p.rsplit("/", 1)[-1] for p in read_norm}
+    prompt = (
+        "You are an extraction function, not a generator. Below is an analysis "
+        "output and the exact list of files that were read. Extract ONLY findings "
+        "that are explicitly present in the analysis below, one entry per file "
+        "that has a finding. Do NOT add any new information, and do NOT mention "
+        "any file that is not in the list. If the analysis contains no finding, "
+        'return {"findings": []}.\n\n'
+        "FILES READ:\n" + "\n".join(f"- {p}" for p in sorted(read_norm)) + "\n\n"
+        "ANALYSIS:\n" + reasoning_text[:6000] + "\n\n"
+        'Return JSON exactly as {"findings": [{"file": "<path from the list>", '
+        '"finding": "<text>"}]}.'
+    )
+    try:
+        from runtime_v2.services._llm_client import complete_json_extraction
+
+        raw = await complete_json_extraction(
+            model, [{"role": "user", "content": prompt}], agent_id=agent_id
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.debug("[%s] findings extraction call failed: %s", agent_id, exc)
+        return {}
+    if not raw or not raw.strip():
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        m = re.search(r"\{.*\}", raw, re.DOTALL)
+        if not m:
+            return {}
+        try:
+            parsed = json.loads(m.group(0))
+        except Exception:
+            return {}
+    items = parsed.get("findings") if isinstance(parsed, dict) else None
+    if not isinstance(items, list):
+        return {}
+    out: dict = {}
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        f = str(it.get("file", "")).replace("\\", "/").lstrip("./")
+        txt = str(it.get("finding", "")).strip()
+        if not txt:
+            continue
+        if f in read_norm:
+            out[f] = txt
+        elif f.rsplit("/", 1)[-1] in read_basenames:
+            for rp in read_norm:
+                if rp.rsplit("/", 1)[-1] == f.rsplit("/", 1)[-1]:
+                    out[rp] = txt
+                    break
+        else:
+            log.warning("[%s] dropped finding for unread file %r", agent_id, f)
+    return out

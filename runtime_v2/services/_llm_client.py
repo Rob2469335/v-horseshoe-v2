@@ -535,6 +535,40 @@ async def complete_for_tool_decision(
         raise
 
 
+async def complete_json_extraction(
+    litellm_model: str, messages: list, agent_id: str = None
+) -> str:
+    """Raw JSON-mode completion for structured EXTRACTION (not tool decisions).
+
+    `response_format={"type": "json_object"}` is the only structured-output mode
+    the providers here accept (native DeepSeek rejects strict `json_schema` with
+    `400 This response_format type is unavailable now`). This is the second pass
+    of the two-call pattern: the reasoning model produced free text, and this
+    call is forced to emit parseable JSON. Returns the content string; raises on
+    LLM error so the caller can fall back to the deterministic path.
+    """
+    extra = {
+        "messages": messages,
+        "temperature": 0.0,
+        "response_format": {"type": "json_object"},
+        "max_tokens": 1500,
+    }
+    kwargs = build_kwargs(litellm_model, extra, [])
+    kwargs["max_retries"] = 0
+    kwargs["timeout"] = 120.0
+    resp = await litellm.acompletion(**kwargs)
+    try:
+        from runtime_v2.services.usage_log import record_response
+
+        record_response(resp, litellm_model, source="findings_extraction")
+    except Exception as usage_err:  # noqa: BLE001
+        log.debug("usage log skipped: %s", usage_err)
+    try:
+        return resp.choices[0].message.content or ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 async def stream_content(
     model: str, messages: list, agent_id: str
 ) -> AsyncGenerator[tuple[str, str], None]:

@@ -52,6 +52,7 @@ from runtime_v2.api._agent_helpers import (  # noqa: F401
     _original_goal as _original_goal,
     _trim_context_messages as _trim_context_messages,
     _build_grounded_report as _build_grounded_report,
+    _extract_grounded_findings as _extract_grounded_findings,
 )
 
 # Bounded dedup cache for reflexion lessons (agent, action, error) -> last store
@@ -3282,6 +3283,11 @@ class AgentServiceV2:
         final_content = "[System: max turns reached]"
         if agent_id in ANALYSIS_AGENTS:
             read_list = ", ".join(sorted(state.read_paths)) or "(none)"
+            reasoning_text = ""
+            # Call 1 — free reasoning (the model's own words). Kept SEPARATE from
+            # the structured extraction below: a reasoning model asked for JSON in
+            # the same call that produces its reasoning returns prose, which then
+            # fails parsing.
             try:
                 forced_messages = [
                     *_trim_context_messages(
@@ -3291,72 +3297,46 @@ class AgentServiceV2:
                         "role": "user",
                         "content": (
                             "SYSTEM: The turn budget is exhausted and all tools but "
-                            "final are disabled. Call action=final NOW. Report ONLY on "
-                            "the files you actually read this run: "
-                            f"{read_list}. Do NOT cite any other file, and do NOT "
-                            "repeat findings from prior memory — if you did not read a "
-                            "file's content this run, you may not claim anything about "
-                            "it. If you have no evidenced finding, say so plainly."
+                            "final are disabled. Call action=final NOW. In 'response', "
+                            "give a concise analysis of the files you actually read "
+                            f"this run: {read_list}. Name concrete bugs or upgrades "
+                            "you can evidence from the content. Do NOT cite any file "
+                            "you did not read."
                         ),
                     },
                 ]
                 forced = await self._call_llm(
                     model, forced_messages, agent_id, ["final"]
                 )
-                if (
-                    isinstance(forced, dict)
-                    and forced.get("action") == "final"
-                    and str(forced.get("response", "")).strip()
-                ):
-                    candidate = str(forced.get("response")).strip()
-                    # 2026-09-10: gate the forced-synthesis output through the SAME
-                    # grounding check the normal final path uses. Otherwise the
-                    # max-turns path bypassed L1 and shipped a final citing files
-                    # that were never read (stale-memory pollution: models.py /
-                    # code_analysis_report.txt). Fail closed to the deterministic
-                    # summary if it cites unread files.
-                    refs = set(
-                        re.findall(
-                            r"[\w./\\-]+\.(?:py|txt|md|json|yml|yaml|sh|ps1|html|css|js|ts|ini|toml)\b",
-                            candidate,
-                        )
-                    )
-                    read_paths = {
-                        r.replace("\\", "/").lstrip("./") for r in state.read_paths
-                    }
-                    read_basenames = {p.rsplit("/", 1)[-1] for p in read_paths}
-                    unread = {
-                        p
-                        for p in refs
-                        if p.replace("\\", "/").lstrip("./") not in read_paths
-                        and p.replace("\\", "/").rsplit("/", 1)[-1] not in read_basenames
-                    }
-                    if unread:
-                        log.warning(
-                            "[%s] forced synthesis cited unread files %s — using "
-                            "deterministic summary",
-                            agent_id,
-                            sorted(unread)[:5],
-                        )
-                    else:
-                        final_content = candidate
-                        log.info(
-                            "[%s] forced synthesis produced %d chars after max turns",
-                            agent_id,
-                            len(final_content),
-                        )
+                if isinstance(forced, dict) and forced.get("action") == "final":
+                    reasoning_text = str(forced.get("response", "")).strip()
             except Exception as force_err:
                 log.warning(
-                    "[%s] forced synthesis failed (%s); emitting deterministic summary",
+                    "[%s] forced reasoning failed (%s); extracting from history",
                     agent_id,
                     force_err,
                 )
-            if final_content == "[System: max turns reached]":
-                # Deterministic grounded report (2026-09-10): instead of a thin
-                # "Files actually examined: ..." line, assemble a real report
-                # from the read ledger (path + line count + top-level symbols).
-                # No LLM text -> cannot name an unread file or invent a finding.
-                final_content = _build_grounded_report(state.read_paths)
+            # Call 2 — structured EXTRACTION (json_object mode) over call 1's
+            # reasoning + the read ledger. Fail-safe: any LLM/parse/validation
+            # failure returns {} and the deterministic inventory below fires.
+            findings_by_file = await _extract_grounded_findings(
+                model, agent_id, reasoning_text, state.read_paths
+            )
+            if findings_by_file:
+                log.info(
+                    "[%s] grounded synthesis: %d validated finding(s) across %d file(s)",
+                    agent_id,
+                    len(findings_by_file),
+                    len(state.read_paths),
+                )
+            # Deterministic grounded report (2026-09-10): assembled from the read
+            # ledger (real path + line count + top-level symbols) plus any
+            # VALIDATED per-file findings. No LLM text is used as a path, so the
+            # report cannot name an unread file or invent a citation. This is the
+            # fail-safe base that the structured call only ADDS to.
+            final_content = _build_grounded_report(
+                state.read_paths, findings=findings_by_file
+            )
 
         yield {
             "agent_id": agent_id,
