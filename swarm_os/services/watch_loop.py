@@ -718,6 +718,17 @@ class WatchLoop:
         err = str(res.get("error", "") or "").strip()
         if not err or len(err) >= 500:
             return
+        # Non-repairable event class: a filesystem "File not found: <path>" is the
+        # agent reading a path that does not exist — NOT a code bug that tier-2
+        # repair can fix. Dispatching a repair wastes a budget slot and logs a
+        # permanent `fixed:false` noise row (the recent auto_repairs.jsonl was
+        # dominated by these). Skip; the real failure signal is logged upstream.
+        if err.lower().startswith("file not found"):
+            log.debug(
+                "WatchLoop: non-repairable 'File not found' event skipped: %r",
+                err[:120],
+            )
+            return
         import re
 
         payload = data.get("payload") or {}

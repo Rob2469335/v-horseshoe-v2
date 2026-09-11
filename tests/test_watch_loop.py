@@ -276,3 +276,38 @@ async def test_schedule_due_canaries_tracks_task_no_duplicate_spawn(monkeypatch)
     # Next tick: same due canary must NOT spawn a duplicate evaluation.
     loop._schedule_due_canaries()
     assert len(ran) == 1
+
+
+# ── non-repairable events are not dispatched ─────────────────────────────────
+def test_non_repairable_file_not_found_skips_repair(monkeypatch, tmp_path):
+    _stub_policy(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    calls = {"n": 0}
+
+    def _repair(*a, **k):
+        calls["n"] += 1
+        return {"fixed": False, "tier_used": 2}
+
+    loop = wl.WatchLoop(SimpleNamespace(diagnose_and_repair=_repair), interval_seconds=30.0)
+    # a filesystem "File not found" is the agent reading a nonexistent path —
+    # NOT a code bug tier-2 repair can fix. No dispatch.
+    loop._handle_tool_result(
+        {
+            "payload": {
+                "result": {"ok": False, "error": "File not found: code_analysis_report.txt"}
+            }
+        }
+    )
+    assert calls["n"] == 0
+    # a real code error still dispatches.
+    loop._handle_tool_result(
+        {
+            "payload": {
+                "result": {
+                    "ok": False,
+                    "error": "TypeError: cannot unpack non-iterable NoneType object",
+                }
+            }
+        }
+    )
+    assert calls["n"] == 1
