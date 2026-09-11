@@ -32,6 +32,42 @@
     "code_review": {
       "command": "npx",
       "args": ["-y", "@opencodereview/mcp-server"]
+    },
+    "playwright_mcp": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest"]
+    },
+    "firecrawl": {
+      "command": "npx",
+      "args": ["-y", "firecrawl-mcp"]
+    },
+    "serena": {
+      "command": "uvx",
+      "args": [
+        "-p", "3.13",
+        "--from", "serena-agent",
+        "serena", "start-mcp-server",
+        "--context", "ide",
+        "--project", "C:\\Users\\rober\\Projects\\v-horseshoe-v2"
+      ]
+    },
+    "google_calendar": {
+      "command": "npx",
+      "args": ["-y", "@cocal/google-calendar-mcp"]
+    },
+    "arxiv": {
+      "command": "uvx",
+      "args": ["arxiv-mcp-server"]
+    },
+    "huggingface": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote",
+        "https://huggingface.co/mcp",
+        "--header",
+        "Authorization:Bearer ${HF_TOKEN}"
+      ]
     }
   }
 }

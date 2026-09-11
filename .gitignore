@@ -6,6 +6,8 @@
 config/email_config.json
 **/email_config.json
 config/.email_tokens/
+config/gcp-oauth.keys.json
+**/*.keys.json
 **/.email_tokens/
 
 # Python
