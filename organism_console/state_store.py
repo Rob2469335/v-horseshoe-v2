@@ -42,6 +42,13 @@ class SessionState:
         self.last_provider: str = "llama.cpp"
         self.scheduled_tasks: List[Dict[str, Any]] = []
         self.checkpoints: Dict[str, Dict[str, Any]] = {}
+        # Backend run-checkpoint id for the in-flight run. Set on an approval/
+        # resume turn and sent as `resume` in the /step/stream payload so an
+        # interrupted run continues from its last consistent turn boundary.
+        # PERSISTED (session durability, class 4): without this, a terminal
+        # close + `rob --continue` loses the pointer and the backend replays
+        # from turn 0 instead of resuming.
+        self.resume_checkpoint_id: Optional[str] = None
         # opencode-parity runtime state (not persisted across restarts):
         # working-tree snapshots for /undo, and the last prompt for /redo.
         self.undo_stack: List[Dict[str, Any]] = []
@@ -98,6 +105,9 @@ class SessionState:
             self.scheduled_tasks = data.get("scheduled_tasks", self.scheduled_tasks)
             self.checkpoints = data.get("checkpoints", self.checkpoints)
             self.toasts_enabled = data.get("toasts_enabled", self.toasts_enabled)
+            self.resume_checkpoint_id = data.get(
+                "resume_checkpoint_id", self.resume_checkpoint_id
+            )
         except Exception as e:
             import logging
 
@@ -140,6 +150,7 @@ class SessionState:
                         "scheduled_tasks": self.scheduled_tasks,
                         "checkpoints": self.checkpoints,
                         "toasts_enabled": self.toasts_enabled,
+                        "resume_checkpoint_id": self.resume_checkpoint_id,
                     }.items()
                 }
             return json.dumps(snap, indent=2)
