@@ -67,6 +67,29 @@ def test_read_only_ops_are_allow():
     assert ar.agent_tool_policy("filesystem", "list") == ar.ALLOW
     assert ar.agent_tool_policy("filesystem", "grep") == ar.ALLOW
     assert ar.agent_tool_policy("filesystem", "glob") == ar.ALLOW
+    # 2026-09-10: deepseek-based agents call recursive listing as operation
+    # "tree"/"directory_tree"/"tree_view". These must be read-only ALLOW, not
+    # fail-closed DENY (that derailed the /goal codebase-analysis run at turn 6).
+    assert ar.agent_tool_policy("filesystem", "tree") == ar.ALLOW
+    assert ar.agent_tool_policy("filesystem", "directory_tree") == ar.ALLOW
+    assert ar.agent_tool_policy("filesystem", "tree_view") == ar.ALLOW
+
+
+def test_filesystem_tree_is_recursive_read_only_listing(tmp_path):
+    """operation="tree" (the deepseek-agent spelling of a recursive listing)
+    must normalize to the recursive list branch. Regression: pre-fix the handler
+    returned 'Unknown operation: tree' and the gate DENYed it, derailing the
+    /goal codebase-analysis run. Revert-proof: fails on pre-fix source."""
+    from swarm_os.lib.mcp.filesystem import filesystem_handler
+
+    (tmp_path / "sub" / "deep").mkdir(parents=True)
+    (tmp_path / "sub" / "deep" / "nested.py").write_text("x = 1")
+    (tmp_path / "top.py").write_text("y = 2")
+    res = filesystem_handler({"operation": "tree", "path": str(tmp_path)}, tmp_path)
+    assert res["ok"] is True
+    names = set(res.get("entries", []))
+    assert any(n.endswith("top.py") for n in names)
+    assert any(n.endswith("sub/deep/nested.py") for n in names)
     assert ar.agent_tool_policy("web_search") == ar.ALLOW
     assert ar.agent_tool_policy("semantic_search") == ar.ALLOW
     assert ar.agent_tool_policy("screen", "cursor_position") == ar.ALLOW

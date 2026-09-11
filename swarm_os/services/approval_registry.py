@@ -71,6 +71,9 @@ _READ_ONLY_FS_OPS = frozenset(
         "scandir",
         "list_dir",
         "walk",
+        "tree",
+        "directory_tree",
+        "tree_view",
         "cat",
     }
 )

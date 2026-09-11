@@ -54,6 +54,11 @@ def filesystem_handler(
         "scandir",
         "scan_dir",
         "walk",
+        # Recursive tree views (the operation many agent toolkits expose for
+        # "show me the structure"; the list branch honors `recursive`).
+        "tree",
+        "directory_tree",
+        "tree_view",
     ):
         operation = "list"
     elif op_raw in ("search", "grep", "find", "grep_search", "search_files"):
@@ -340,7 +345,9 @@ def filesystem_handler(
                     "path": str(target_path),
                 }
 
-            recursive = bool(params.get("recursive", False))
+            recursive = bool(
+                params.get("recursive", op_raw in ("tree", "directory_tree", "tree_view"))
+            )
             entries = []
             try:
                 iter_path = (
