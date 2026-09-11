@@ -48,6 +48,120 @@ litellm.suppress_debug_info = True
 
 log = logging.getLogger(__name__)
 
+# ADAPTIVE ROUTING (arXiv:2608.13568 "Does a Language Server Save Tokens for
+# Coding Agents?"): the agent's tool choice is task-shaped. On LOCALIZATION
+# ("where is X named") lexical grep/file-read is cheaper and forcing semantic
+# retrieval costs tokens (+6% Opus, +118% Sonnet). On REFERENCE/refactor tasks
+# (who calls X, change-a-signature, rename) an LSP is precise where grep is
+# noisy (1.00 vs 0.76 reference precision). So we surface + steer toward
+# Serena's symbol tools ONLY for reference-class tasks — an adaptive router,
+# not "LSP-always".
+_REFERENCE_TASK_RE = re.compile(
+    r"\b(references?|call ?sites?|callers?|who calls|usages?|used by|"
+    r"refactor(?:ing)?|rename|change (?:the )?signature|impact|dependents?|"
+    r"importers?|find all|everywhere|across the codebase)\b",
+    re.IGNORECASE,
+)
+_SERENA_REFERENCE_TOOLS = (
+    "find_referencing_symbols",
+    "find_symbol",
+    "get_symbols_overview",
+    "find_declaration",
+    "find_implementations",
+)
+
+
+def is_reference_task(text: str) -> bool:
+    """True for cross-file reference / refactor goals where semantic symbol
+    retrieval (Serena/LSP) pays off. Localization goals are NOT matched (grep
+    is cheaper there)."""
+    return bool(_REFERENCE_TASK_RE.search(text or ""))
+
+
+# AI-RESEARCH routing: specialized MCP sources are fresher/more authoritative
+# than a general web sweep for models/papers/repos (arXiv:2506.18096 Deep
+# Research Agents; kapa.ai: wire sources as tools with routing-obvious
+# descriptions). Route "latest models / papers / benchmarks / what's new" to the
+# specialized MCPs, keeping web_search for the broad sweep.
+_RESEARCH_TASK_RE = re.compile(
+    r"\b(latest|newest|new (?:model|models|release|releases|paper|papers)|"
+    r"papers?|arxiv|research|sota|state of the art|benchmarks?|"
+    r"hugging ?face|model card|what'?s new|advances?|updates?)\b",
+    re.IGNORECASE,
+)
+# Tool-name substrings identifying the specialized research servers (the MCP
+# client exposes BARE tool names, not server-prefixed).
+_RESEARCH_TOOL_HINTS = (
+    "firecrawl_",
+    "search_papers",
+    "read_paper",
+    "get_paper_",
+    "citation_graph",
+    "export_citations",
+    "hf_",
+    "hub_repo_",
+    "model_search",
+    "dataset_search",
+    "space_search",
+    "paper_search",
+    "hf_doc_search",
+    "get_file_contents",
+    "list_releases",
+    "search_repositories",
+)
+
+
+def is_research_task(text: str) -> bool:
+    """True for AI-research goals (latest models/papers/benchmarks) where the
+    specialized sources (huggingface, arxiv, github, firecrawl) beat a general
+    web sweep."""
+    return bool(_RESEARCH_TASK_RE.search(text or ""))
+
+
+# RESEARCH SOURCE ROUTING (kapa.ai "two tools, obvious routing"; Firecrawl
+# docs; arXiv:2602.14878 on MCP tool descriptions): a research task should
+# prefer the SPECIALIZED source over the general web fan-out when the sub-task
+# is knowable — new models → HuggingFace, papers/architecture → arXiv,
+# repo/library → GitHub, whole-site/crawl → Firecrawl, library API → context7.
+_RESEARCH_INTENT_RE = re.compile(
+    r"\b(research|find|look ?up|latest|newest|what'?s new|compare|survey|"
+    r"state of the art|sota|recent|up[- ]to[- ]date|how does .* work|"
+    r"crawl|scrape|extract)\b",
+    re.IGNORECASE,
+)
+_RESEARCH_SOURCE_RULES = (
+    (
+        "arxiv",
+        r"\b(papers?|preprints?|arxiv|architectures?|methods?|research|"
+        r"benchmark|evaluation|state of the art|sota)\b",
+    ),
+    (
+        "huggingface",
+        r"\b(hugging ?face|hf\b|models?|weights|checkpoints?|datasets?|"
+        r"new model|model release|trending)\b",
+    ),
+    (
+        "github",
+        r"\b(repos?|repositories|github|open[- ]?source|library|libraries|"
+        r"packages?|pull request|issue)\b",
+    ),
+    (
+        "firecrawl",
+        r"\b(crawl|scrape|extract|whole site|entire site|documentation site)\b",
+    ),
+)
+
+
+def research_source(text: str) -> str | None:
+    """Preferred MCP source for a research sub-task, or None for the general
+    web_search fan-out. Only fires when the goal shows research intent."""
+    if not _RESEARCH_INTENT_RE.search(text or ""):
+        return None
+    for server, pat in _RESEARCH_SOURCE_RULES:
+        if re.search(pat, text or "", re.IGNORECASE):
+            return server
+    return None
+
 
 async def _store_decision_reflexion(
     agent_id: str,
@@ -166,15 +280,86 @@ async def get_tool_decision(
                     return any(kw in haystack for kw in _keywords)
 
                 relevant = [t for t in tools if _tool_relevant(t)][:5]
+                # ADAPTIVE ROUTING (arXiv:2608.13568): for reference/refactor
+                # tasks, surface Serena's symbol tools first and steer the model
+                # to them; leave localization on the cheaper grep/filesystem path.
+                _ref_task = is_reference_task(_last_user_msg)
+                _research_task = is_research_task(_last_user_msg)
+                if _ref_task:
+                    _serena = [
+                        t
+                        for t in tools
+                        if t.get("name", "") in _SERENA_REFERENCE_TOOLS
+                    ]
+                    _merged, _seen = [], set()
+                    for _t in _serena + relevant:
+                        _n = _t.get("name")
+                        if _n not in _seen:
+                            _seen.add(_n)
+                            _merged.append(_t)
+                    relevant = _merged[:6]
+                # AI-RESEARCH routing: specialized sources (huggingface, arxiv,
+                # github, firecrawl) are fresher/more authoritative than a general
+                # web sweep for models/papers/benchmarks (arXiv:2506.18096;
+                # kapa.ai: wire sources as tools with routing-obvious descriptions).
+                if _research_task:
+                    _research = [
+                        t
+                        for t in tools
+                        if any(
+                            h in t.get("name", "").lower()
+                            for h in _RESEARCH_TOOL_HINTS
+                        )
+                    ]
+                    _merged, _seen = [], set()
+                    for _t in _research + relevant:
+                        _n = _t.get("name")
+                        if _n not in _seen:
+                            _seen.add(_n)
+                            _merged.append(_t)
+                    relevant = _merged[:6]
                 if relevant:
                     mcp_schema = (
                         "RELEVANT MCP TOOLS:\n"
                         + json.dumps(relevant, separators=(",", ":"))
                         + "\n\n"
                     )
+                    if _ref_task:
+                        mcp_schema = (
+                            "REFERENCE/REFACTOR TASK — prefer the serena MCP tools "
+                            "for symbol/reference lookups (server='serena': "
+                            "find_referencing_symbols, get_symbols_overview, "
+                            "find_symbol); grep/filesystem is weaker here.\n\n"
+                            + mcp_schema
+                        )
+                    if _research_task:
+                        mcp_schema = (
+                            "AI-RESEARCH TASK — prefer the specialized MCP sources "
+                            "over the general web sweep: huggingface (model_search, "
+                            "hub_repo_search, paper_search, hf_doc_search), arxiv "
+                            "(search_papers, read_paper, get_paper_outline, "
+                            "citation_graph), github (search_repositories, "
+                            "get_file_contents, list_releases), firecrawl "
+                            "(firecrawl_search/firecrawl_scrape for full-page "
+                            "content). Use web_search only for broad news.\n\n"
+                            + mcp_schema
+                        )
                 else:
                     tool_names = ", ".join(t["name"] for t in tools[:10])
                     mcp_schema = f"AVAILABLE MCP TOOLS (use action=mcp or action=mcp_batch): {tool_names}\n\n"
+
+                # RESEARCH SOURCE ROUTING: steer a research task to the
+                # specialized, up-to-date MCP source (kapa.ai "two tools, obvious
+                # routing"; arXiv:2602.14878 tool-description lever) rather than
+                # the general web fan-out. web_search stays the broad-sweep fallback.
+                _pref_source = research_source(_last_user_msg)
+                if _pref_source:
+                    mcp_schema = (
+                        f"RESEARCH TASK — prefer the '{_pref_source}' MCP server "
+                        f"(up-to-date, authoritative for this): call action=mcp "
+                        f"with server='{_pref_source}'. Use web_search only for a "
+                        f"broad sweep.\n\n" + mcp_schema
+                    )
         except Exception as e:
             log.error(f"Failed to fetch MCP schemas: {e}")
 
