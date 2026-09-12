@@ -1,6 +1,7 @@
 import json
 import subprocess
 import asyncio
+from contextlib import asynccontextmanager
 import anyio
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -9,11 +10,24 @@ import uvicorn
 import os
 import psutil
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global client, mode_switch_lock
+    client = httpx.AsyncClient(timeout=300.0)
+    mode_switch_lock = asyncio.Lock()
+    # Start the default models immediately on startup
+    await start_daily_models()
+    yield
+    await kill_active_processes()
+    if client:
+        await client.aclose()
+
+
+app = FastAPI(lifespan=lifespan)
 # Base URL for the underlying llama.cpp server
 BACKEND_URL = "http://127.0.0.1:8079"
 
-# Initialize globals to None, to be set in startup_event
+# Initialize globals to None, to be set in the lifespan handler
 client = None
 mode_switch_lock = None
 
@@ -221,22 +235,6 @@ async def switch_mode_if_needed(model_id: str):
                 current_mode = "daily"
             except Exception as e:
                 print(f"Failed to start daily models: {e}")
-
-
-@app.on_event("startup")
-async def startup_event():
-    global client, mode_switch_lock
-    client = httpx.AsyncClient(timeout=300.0)
-    mode_switch_lock = asyncio.Lock()
-    # Start the default models immediately on startup
-    await start_daily_models()
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    await kill_active_processes()
-    if client:
-        await client.aclose()
 
 
 @app.post("/v1/chat/completions")
