@@ -867,15 +867,27 @@ class WatchLoop:
                 def _spawn():
                     task = self._main_loop.create_task(_record())
                     self._bg_tasks.add(task)
-                    task.add_done_callback(lambda t: self._bg_tasks.discard(t) or _consume(t))
+                    task.add_done_callback(
+                        lambda t: self._bg_tasks.discard(t) or _consume(t)
+                    )
 
                 self._main_loop.call_soon_threadsafe(_spawn)
             else:
                 try:
                     _record_task = asyncio.get_running_loop().create_task(_record())
                     self._bg_tasks.add(_record_task)
-                    _record_task.add_done_callback(lambda t: self._bg_tasks.discard(t) or _consume(t))
-                except RuntimeError:
-                    pass
+                    _record_task.add_done_callback(
+                        lambda t: self._bg_tasks.discard(t) or _consume(t)
+                    )
+                except RuntimeError as exc:
+                    # No running loop to schedule the reflexion task on — do not
+                    # silently drop the record; surface it (same class as
+                    # genetic_mutation_loop be7d33f).
+                    log.warning(
+                        "WatchLoop: no running event loop; turn-budget "
+                        "reflexion record for agent %s dropped (%s).",
+                        agent_id,
+                        exc,
+                    )
         except Exception as exc:
             log.warning("WatchLoop: turn-budget reflexion failed (%s).", exc)
