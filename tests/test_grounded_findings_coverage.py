@@ -19,6 +19,7 @@ import pytest
 from runtime_v2.api._agent_helpers import (
     _build_grounded_report,
     _collect_read_material,
+    _evidence_verified,
     _extract_grounded_findings,
 )
 
@@ -138,7 +139,16 @@ async def test_report_has_populated_findings_not_just_manifest(monkeypatch, tmp_
     async def fake_extract(model, messages, agent_id=None, **kwargs):
         files = re.findall(r"^### (.*)$", messages[-1]["content"], re.MULTILINE)
         return json.dumps(
-            {"findings": [{"file": f, "finding": "unguarded os.system"} for f in files]}
+            {
+                "findings": [
+                    {
+                        "file": f,
+                        "finding": "unguarded os.system",
+                        "evidence": "os.system('x')",
+                    }
+                    for f in files
+                ]
+            }
         )
 
     import runtime_v2.services._llm_client as llc
@@ -159,3 +169,137 @@ async def test_report_has_populated_findings_not_just_manifest(monkeypatch, tmp_
     assert "unguarded os.system" in report
     # ...while the accurate file list is preserved.
     assert f"Examined {len(paths)} file(s):" in report
+
+
+def test_evidence_verified_matches_verbatim_with_whitespace_and_elisions():
+    content = 'def handler():\n    return os.system("x")\n'
+    assert _evidence_verified('os.system("x")', content) is True
+    # whitespace normalization across a newline
+    assert _evidence_verified("return  os.system", content) is True
+    # an inserted elision: each side must match
+    assert _evidence_verified('def handler ... os.system("x")', content) is True
+    # a fabricated anchor is rejected
+    assert _evidence_verified("subprocess.run", content) is False
+    assert _evidence_verified("", content) is False
+    assert _evidence_verified("ab", content) is False
+
+
+@pytest.mark.asyncio
+async def test_unverified_finding_is_marked_not_presented_as_grounded(
+    monkeypatch, tmp_path
+):
+    f = tmp_path / "svc.py"
+    f.write_text("def handler():\n    return 1\n", encoding="utf-8")
+    lines = [
+        {
+            "role": "assistant",
+            "content": json.dumps(
+                {"action": "filesystem", "operation": "read", "path": str(f)}
+            ),
+        },
+        {"role": "user", "content": "TOOL RESULT (filesystem):\ncode\n\nContinue."},
+    ]
+
+    async def fake_extract(model, messages, agent_id=None, **kwargs):
+        return json.dumps(
+            {
+                "findings": [
+                    {
+                        "file": str(f),
+                        "finding": "hallucinated bug",
+                        "evidence": "subprocess.run not in this file",
+                    }
+                ]
+            }
+        )
+
+    import runtime_v2.services._llm_client as llc
+
+    monkeypatch.setattr(llc, "complete_json_extraction", fake_extract)
+    monkeypatch.setattr(llc, "get_litellm_model", lambda agent_id, model: "resolved/x")
+
+    findings = await _extract_grounded_findings(
+        "m",
+        "code_analyzer",
+        "x",
+        {str(f)},
+        read_material=_collect_read_material(lines, {str(f)}),
+    )
+    text = findings[_norm(str(f))]
+    assert text.startswith("[UNVERIFIED")
+    report = _build_grounded_report({str(f)}, findings=findings)
+    assert "[UNVERIFIED" in report
+
+
+@pytest.mark.asyncio
+async def test_verified_finding_renders_without_unverified_marker(
+    monkeypatch, tmp_path
+):
+    f = tmp_path / "svc.py"
+    f.write_text("def handler():\n    return 1\n", encoding="utf-8")
+    lines = [
+        {
+            "role": "assistant",
+            "content": json.dumps(
+                {"action": "filesystem", "operation": "read", "path": str(f)}
+            ),
+        },
+        {"role": "user", "content": "TOOL RESULT (filesystem):\ncode\n\nContinue."},
+    ]
+
+    async def fake_extract(model, messages, agent_id=None, **kwargs):
+        return json.dumps(
+            {
+                "findings": [
+                    {
+                        "file": str(f),
+                        "finding": "handler returns 1",
+                        "evidence": "def handler():",
+                    }
+                ]
+            }
+        )
+
+    import runtime_v2.services._llm_client as llc
+
+    monkeypatch.setattr(llc, "complete_json_extraction", fake_extract)
+    monkeypatch.setattr(llc, "get_litellm_model", lambda agent_id, model: "resolved/x")
+
+    findings = await _extract_grounded_findings(
+        "m",
+        "code_analyzer",
+        "x",
+        {str(f)},
+        read_material=_collect_read_material(lines, {str(f)}),
+    )
+    assert not findings[_norm(str(f))].startswith("[UNVERIFIED")
+
+
+@pytest.mark.asyncio
+async def test_material_covers_every_file_at_deep_budget(monkeypatch, tmp_path):
+    # The 8-14 file deep budget must not starve later files from the material.
+    paths = []
+    for i in range(1, 15):
+        f = tmp_path / f"mod{i:02d}.py"
+        f.write_text("".join(f"line {j}\n" for j in range(200)), encoding="utf-8")
+        paths.append(str(f))
+    captured = {}
+
+    async def fake_extract(model, messages, agent_id=None, **kwargs):
+        captured["prompt"] = messages[-1]["content"]
+        return json.dumps({"findings": []})
+
+    import runtime_v2.services._llm_client as llc
+
+    monkeypatch.setattr(llc, "complete_json_extraction", fake_extract)
+    monkeypatch.setattr(llc, "get_litellm_model", lambda agent_id, model: "resolved/x")
+
+    await _extract_grounded_findings(
+        "m",
+        "code_analyzer",
+        "x",
+        set(paths),
+        read_material=_collect_read_material(_read_messages(paths), set(paths)),
+    )
+    for p in paths:
+        assert f"### {_norm(p)}" in captured["prompt"], p

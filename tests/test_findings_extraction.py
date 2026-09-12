@@ -42,7 +42,8 @@ async def test_complete_json_extraction_requests_json_object_mode():
 async def test_extraction_keeps_only_ledger_files():
     payload = (
         '{"findings": ['
-        '{"file": "runtime_v2/api/_agent_state.py", "finding": "read budget not reset"},'
+        '{"file": "runtime_v2/api/_agent_state.py", "finding": "read budget not reset", '
+        '"evidence": "_CallState"},'
         '{"file": "models.py", "finding": "unused var line 56"}'
         "]}"
     )
@@ -58,7 +59,10 @@ async def test_extraction_keeps_only_ledger_files():
 
 @pytest.mark.asyncio
 async def test_extraction_resolves_basename_to_ledger_path():
-    payload = '{"findings": [{"file": "agent_service_v2.py", "finding": "big"}]}'
+    payload = (
+        '{"findings": [{"file": "agent_service_v2.py", "finding": "big", '
+        '"evidence": "AgentServiceV2"}]}'
+    )
     with patch.object(
         llm, "complete_json_extraction", new=AsyncMock(return_value=payload)
     ):

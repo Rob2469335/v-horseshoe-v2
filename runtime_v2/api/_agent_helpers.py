@@ -587,6 +587,31 @@ def _collect_read_material(messages: list, read_paths) -> dict:
     return out
 
 
+def _evidence_verified(evidence, content: str) -> bool:
+    """Deterministic grounding check: is the finding's evidence anchor a
+    verbatim span of the file?
+
+    Deep-research consensus is that an LLM claim is only trustworthy when a
+    machine-checkable anchor ties it to the real source: arXiv:2601.19106
+    (deterministic AST verification of hallucinated claims), arXiv:2605.06635
+    (reproducible parser for source attribution), RefLens (verbatim spans),
+    autobot's "zero fabricated findings — the verifier rejects any uncited or
+    unverifiable finding", and the dev.to guidance "deterministic set-membership
+    checks — reserve model-as-judge for the genuinely fuzzy case". This is that
+    check: whitespace-normalized substring match, treating an inserted `...` as
+    an elision whose parts must each match. A missing/too-short anchor returns
+    False so the caller cannot present an unanchored claim as grounded.
+    """
+    ev = " ".join(str(evidence or "").split())
+    if len(ev) < 4:
+        return False
+    hay = " ".join(str(content or "").split())
+    if ev in hay:
+        return True
+    parts = [p.strip() for p in ev.split("...") if len(p.strip()) >= 4]
+    return bool(parts) and all(p in hay for p in parts)
+
+
 async def _extract_grounded_findings(
     model: str, agent_id: str, reasoning_text: str, read_paths, read_material=None
 ) -> dict:
@@ -619,17 +644,21 @@ async def _extract_grounded_findings(
             kk = str(k).replace("\\", "/").lstrip("./")
             if kk in read_norm:
                 ref[kk] = str(v)
+    # Allocate the budget ACROSS every read file so no later file is starved —
+    # the old "break once 10000 chars are used" silently dropped the
+    # alphabetically-later files from the material (no content → no finding),
+    # reintroducing the tail-only failure at the 8–14-file deep budget.
+    # Map-reduce code-review practice and the chunked-context finding
+    # (arXiv:2512.12117: bounded per-file chunks) both require every unit be seen.
+    sorted_paths = sorted(ref)
+    total_budget = 12000
+    per_file = max(600, min(2200, total_budget // max(1, len(sorted_paths))))
     material_lines: list = []
-    used = 0
-    for p in sorted(ref):
+    for p in sorted_paths:
         body = ref[p]
-        if len(body) > 1800:
-            body = body[:1800] + "\n… [truncated for extraction]"
-        entry = f"### {p}\n{body}\n"
-        if used + len(entry) > 10000:
-            break
-        material_lines.append(entry)
-        used += len(entry)
+        if len(body) > per_file:
+            body = body[:per_file] + "\n… [truncated for extraction]"
+        material_lines.append(f"### {p}\n{body}\n")
     material_block = ""
     if material_lines:
         material_block = (
@@ -659,16 +688,20 @@ async def _extract_grounded_findings(
             "and verbatim excerpts of their content, plus the agent's own final "
             "answer. Identify CONCRETE, EVIDENCED bugs, risks, and upgrade "
             "opportunities — one entry per affected file (combine a file's "
-            "issues into its entry). Every claim MUST cite specific names, "
-            "patterns, or short quotes that appear below. Do NOT invent files "
-            "or issues that are not evidenced; do NOT mention any file not in "
-            'the list. If nothing is evidenced, return {"findings": []}.\n\n'
+            "issues into its entry). Do NOT invent files or issues that are not "
+            "evidenced; do NOT mention any file not in the list. For EVERY "
+            "finding you MUST include an `evidence` field containing a short "
+            "span copied VERBATIM from that file's excerpt (an identifier, "
+            "signature, or line) — a finding whose evidence cannot be found in "
+            "the file is treated as ungrounded and marked unverified. If "
+            'nothing is evidenced, return {"findings": []}.\n\n'
             + files_block
             + material_block
             + analysis_block
             + "\n\n"
             'Return JSON exactly as {"findings": [{"file": "<path from the '
-            'list>", "finding": "<specific issue + why it matters>"}]}.'
+            'list>", "finding": "<specific issue + why it matters>", '
+            '"evidence": "<verbatim span from that file>"}]}.'
         )
     else:
         prompt = (
@@ -676,12 +709,14 @@ async def _extract_grounded_findings(
             "exact list of files that were read and the agent's own final "
             "answer. Extract ONLY findings that are explicitly evidenced in the "
             "answer, one entry per file, and do NOT mention any file not in the "
-            'list. If none, return {"findings": []}.\n\n'
+            "list. Include an `evidence` field with the verbatim span from the "
+            'answer that supports each finding. If none, return {"findings": []}'
+            ".\n\n"
             + files_block
             + analysis_block
             + "\n\n"
             'Return JSON exactly as {"findings": [{"file": "<path from the '
-            'list>", "finding": "<text>"}]}.'
+            'list>", "finding": "<text>", "evidence": "<verbatim span>"}]}.'
         )
     try:
         from runtime_v2.services._llm_client import (
@@ -722,6 +757,8 @@ async def _extract_grounded_findings(
     if not isinstance(items, list):
         return {}
     out: dict = {}
+    content_cache: dict = {}
+    unverified = 0
     for it in items:
         if not isinstance(it, dict):
             continue
@@ -729,13 +766,42 @@ async def _extract_grounded_findings(
         txt = str(it.get("finding", "")).strip()
         if not txt:
             continue
-        if f in read_norm:
-            out[f] = txt
-        elif f.rsplit("/", 1)[-1] in read_basenames:
+        # Resolve to a ledger path (exact, then basename-tolerant).
+        key = f if f in read_norm else None
+        if key is None and f.rsplit("/", 1)[-1] in read_basenames:
             for rp in read_norm:
                 if rp.rsplit("/", 1)[-1] == f.rsplit("/", 1)[-1]:
-                    out[rp] = txt
+                    key = rp
                     break
-        else:
+        if key is None:
             log.warning("[%s] dropped finding for unread file %r", agent_id, f)
+            continue
+        # Deterministic grounding: a finding must carry a verbatim anchor that
+        # exists in the file. Missing anchor → fall back to a backticked span in
+        # the finding text; if still unanchored it is MARKED, never presented as
+        # grounded (arXiv:2601.19106 / RefLens / "zero fabricated findings").
+        evidence = it.get("evidence") or it.get("quote") or ""
+        if not str(evidence).strip():
+            bq = re.search(r"`([^`]{4,})`", txt)
+            evidence = bq.group(1) if bq else ""
+        content = content_cache.get(key)
+        if content is None:
+            full = key if os.path.isabs(key) else os.path.join(os.getcwd(), key)
+            try:
+                with open(full, encoding="utf-8", errors="ignore") as fh:
+                    content = fh.read()
+            except OSError:
+                content = ""
+            content_cache[key] = content
+        if _evidence_verified(evidence, content):
+            out[key] = txt
+        else:
+            unverified += 1
+            out[key] = "[UNVERIFIED — no anchoring evidence found in file] " + txt
+    if unverified:
+        log.info(
+            "[%s] %d finding(s) marked unverified (no verbatim anchor in file)",
+            agent_id,
+            unverified,
+        )
     return out
