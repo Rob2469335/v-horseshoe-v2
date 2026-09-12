@@ -171,17 +171,29 @@ async def test_report_has_populated_findings_not_just_manifest(monkeypatch, tmp_
     assert f"Examined {len(paths)} file(s):" in report
 
 
-def test_anchor_exists_matches_verbatim_with_whitespace_and_elisions():
+def test_anchor_exists_matches_verbatim_whitespace_normalized():
     content = 'def handler():\n    return os.system("x")\n'
     assert _anchor_exists('os.system("x")', content) is True
     # whitespace normalization across a newline
     assert _anchor_exists("return  os.system", content) is True
-    # an inserted elision: each side must match
-    assert _anchor_exists('def handler ... os.system("x")', content) is True
     # a fabricated anchor is rejected
     assert _anchor_exists("subprocess.run", content) is False
     assert _anchor_exists("", content) is False
     assert _anchor_exists("ab", content) is False
+
+
+def test_short_common_word_anchor_is_not_evidence():
+    content = 'def handler():\n    return os.system("x")\nimport os\n'
+    # "return"/"import"/"value" are present but prove nothing about any claim.
+    assert _anchor_exists("return", content) is False
+    assert _anchor_exists("import", content) is False
+    assert _anchor_exists("value", content) is False
+
+
+def test_elided_two_span_anchor_is_rejected():
+    content = 'def handler():\n    return os.system("x")\n'
+    # Two real but non-contiguous spans joined by an ellipsis must NOT pass.
+    assert _anchor_exists('def handler ... os.system("x")', content) is False
 
 
 @pytest.mark.asyncio
@@ -324,3 +336,47 @@ def test_report_reports_zero_unanchored(tmp_path):
     f.write_text("def handler():\n    pass\n", encoding="utf-8")
     report = _build_grounded_report({str(f)}, findings={str(f): "ok"})
     assert "Findings: 1, 0 unanchored." in report
+
+
+@pytest.mark.asyncio
+async def test_fabricated_claim_with_trivial_anchor_is_marked(monkeypatch, tmp_path):
+    # Audit exploit: a fabricated claim whose evidence is a real but trivial
+    # token ("return") must NOT pass as grounded.
+    f = tmp_path / "svc.py"
+    f.write_text("def handler():\n    return 1\n", encoding="utf-8")
+    lines = [
+        {
+            "role": "assistant",
+            "content": json.dumps(
+                {"action": "filesystem", "operation": "read", "path": str(f)}
+            ),
+        },
+        {"role": "user", "content": "TOOL RESULT (filesystem):\ncode\n\nContinue."},
+    ]
+
+    async def fake_extract(model, messages, agent_id=None, **kwargs):
+        return json.dumps(
+            {
+                "findings": [
+                    {
+                        "file": str(f),
+                        "finding": "CRITICAL RCE: runs os.system on import.",
+                        "evidence": "return",
+                    }
+                ]
+            }
+        )
+
+    import runtime_v2.services._llm_client as llc
+
+    monkeypatch.setattr(llc, "complete_json_extraction", fake_extract)
+    monkeypatch.setattr(llc, "get_litellm_model", lambda agent_id, model: "resolved/x")
+
+    findings = await _extract_grounded_findings(
+        "m",
+        "code_analyzer",
+        "x",
+        {str(f)},
+        read_material=_collect_read_material(lines, {str(f)}),
+    )
+    assert findings[_norm(str(f))].startswith("[UNANCHORED")

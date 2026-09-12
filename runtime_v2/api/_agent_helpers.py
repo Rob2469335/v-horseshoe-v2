@@ -596,6 +596,79 @@ def _collect_read_material(messages: list, read_paths) -> dict:
     return out
 
 
+# A bare keyword/generic token ("return", "import", "value") appearing in a file
+# says nothing about a finding, so it is not evidence. Anchors must clear a
+# specificity floor.
+_ANCHOR_STOPWORDS = frozenset(
+    {
+        "and",
+        "as",
+        "assert",
+        "async",
+        "await",
+        "break",
+        "class",
+        "continue",
+        "def",
+        "del",
+        "dict",
+        "elif",
+        "else",
+        "except",
+        "false",
+        "finally",
+        "for",
+        "from",
+        "global",
+        "if",
+        "import",
+        "in",
+        "is",
+        "lambda",
+        "list",
+        "none",
+        "nonlocal",
+        "not",
+        "object",
+        "or",
+        "pass",
+        "print",
+        "raise",
+        "return",
+        "self",
+        "string",
+        "true",
+        "try",
+        "value",
+        "values",
+        "while",
+        "with",
+        "yield",
+        "data",
+        "code",
+        "file",
+        "files",
+        "path",
+        "paths",
+        "result",
+        "results",
+        "name",
+        "type",
+        "size",
+        "text",
+        "line",
+        "lines",
+        "item",
+        "items",
+        "args",
+        "kwargs",
+        "error",
+        "errors",
+    }
+)
+_ANCHOR_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
 def _anchor_exists(evidence, content: str) -> bool:
     """Anchor-EXISTENCE check: does the finding's quoted evidence appear in the
     file?
@@ -607,18 +680,28 @@ def _anchor_exists(evidence, content: str) -> bool:
     arXiv:2605.06635 (source-attribution parser), RefLens (verbatim spans),
     autobot's "zero fabricated findings", and the dev.to guidance "deterministic
     set-membership checks — reserve model-as-judge for the genuinely fuzzy case".
-    Implemented as a whitespace-normalized substring match, treating an inserted
-    `...` as an elision whose parts must each match. A missing anchor returns
-    False so the caller marks the finding unanchored rather than grounded.
+
+    Specificity floor (adversarial hardening): a bare keyword/stopword is not
+    evidence, and a short anchor must contain an identifier-like token, so
+    "return"/"import" alone cannot vouch for any claim. The whole anchor must be
+    a contiguous whitespace-normalized substring — the earlier `...` elision
+    branch is removed because two unrelated real spans joined by an ellipsis
+    both matched and so vouched for a claim never contiguous in the file. A
+    missing/too-generic anchor returns False so the caller marks the finding
+    unanchored rather than grounded.
     """
     ev = " ".join(str(evidence or "").split())
-    if len(ev) < 4:
+    if not ev or ev.lower() in _ANCHOR_STOPWORDS:
         return False
-    hay = " ".join(str(content or "").split())
-    if ev in hay:
-        return True
-    parts = [p.strip() for p in ev.split("...") if len(p.strip()) >= 4]
-    return bool(parts) and all(p in hay for p in parts)
+    if len(ev) < 12:
+        tokens = [
+            t
+            for t in _ANCHOR_IDENT_RE.findall(ev)
+            if len(t) >= 6 and t.lower() not in _ANCHOR_STOPWORDS
+        ]
+        if not tokens:
+            return False
+    return ev in " ".join(str(content or "").split())
 
 
 async def _extract_grounded_findings(
