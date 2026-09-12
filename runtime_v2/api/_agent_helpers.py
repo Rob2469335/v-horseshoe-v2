@@ -682,10 +682,16 @@ def _anchor_exists(evidence, content: str) -> bool:
     This confirms the quoted text EXISTS in the source; it does NOT confirm that
     the claim built on that anchor is accurate — a real-but-generic anchor, or a
     quote that misreads the code, can still pass. It is a floor, not a proof.
-    Deep-research grounding for a deterministic textual check: arXiv:2601.19106,
-    arXiv:2605.06635 (source-attribution parser), RefLens (verbatim spans),
-    autobot's "zero fabricated findings", and the dev.to guidance "deterministic
-    set-membership checks — reserve model-as-judge for the genuinely fuzzy case".
+    This is deliberately only a TEXT-membership check — not the AST +
+    knowledge-base validation (library introspection, measured precision/recall)
+    a full deterministic checker would perform; do not attribute that method
+    here. Grounding for the (weaker) textual check:
+    gsd-core#3352 ("reviewer evidence is never verified... an ungrounded
+    REVIEWS.md is indistinguishable from a grounded one"; its suggested fix #2
+    is exactly "confirm the quote is present at or near the line, with tolerance
+    for drift"), arXiv:2605.06635 (source-attribution parser), RefLens (verbatim
+    spans), and the dev.to guidance "deterministic set-membership checks —
+    reserve model-as-judge for the genuinely fuzzy case".
 
     Specificity floor (adversarial hardening): a bare keyword/stopword is not
     evidence, and a short anchor must contain an identifier-like token, so
@@ -875,7 +881,8 @@ async def _extract_grounded_findings(
         # Anchor existence: a finding must carry text that actually appears in
         # the file. Missing anchor → fall back to a backticked span in the
         # finding text; if still unanchored it is MARKED, never presented as
-        # grounded (arXiv:2601.19106 / RefLens / "zero fabricated findings").
+        # grounded (RefLens verbatim spans / gsd-core#3352 / "zero fabricated
+        # findings").
         evidence = it.get("evidence") or it.get("quote") or ""
         if not str(evidence).strip():
             bq = re.search(r"`([^`]{4,})`", txt)
