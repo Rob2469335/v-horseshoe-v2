@@ -587,20 +587,20 @@ def _collect_read_material(messages: list, read_paths) -> dict:
     return out
 
 
-def _evidence_verified(evidence, content: str) -> bool:
-    """Deterministic grounding check: is the finding's evidence anchor a
-    verbatim span of the file?
+def _anchor_exists(evidence, content: str) -> bool:
+    """Anchor-EXISTENCE check: does the finding's quoted evidence appear in the
+    file?
 
-    Deep-research consensus is that an LLM claim is only trustworthy when a
-    machine-checkable anchor ties it to the real source: arXiv:2601.19106
-    (deterministic AST verification of hallucinated claims), arXiv:2605.06635
-    (reproducible parser for source attribution), RefLens (verbatim spans),
-    autobot's "zero fabricated findings — the verifier rejects any uncited or
-    unverifiable finding", and the dev.to guidance "deterministic set-membership
-    checks — reserve model-as-judge for the genuinely fuzzy case". This is that
-    check: whitespace-normalized substring match, treating an inserted `...` as
-    an elision whose parts must each match. A missing/too-short anchor returns
-    False so the caller cannot present an unanchored claim as grounded.
+    This confirms the quoted text EXISTS in the source; it does NOT confirm that
+    the claim built on that anchor is accurate — a real-but-generic anchor, or a
+    quote that misreads the code, can still pass. It is a floor, not a proof.
+    Deep-research grounding for a deterministic textual check: arXiv:2601.19106,
+    arXiv:2605.06635 (source-attribution parser), RefLens (verbatim spans),
+    autobot's "zero fabricated findings", and the dev.to guidance "deterministic
+    set-membership checks — reserve model-as-judge for the genuinely fuzzy case".
+    Implemented as a whitespace-normalized substring match, treating an inserted
+    `...` as an elision whose parts must each match. A missing anchor returns
+    False so the caller marks the finding unanchored rather than grounded.
     """
     ev = " ".join(str(evidence or "").split())
     if len(ev) < 4:
@@ -693,7 +693,7 @@ async def _extract_grounded_findings(
             "finding you MUST include an `evidence` field containing a short "
             "span copied VERBATIM from that file's excerpt (an identifier, "
             "signature, or line) — a finding whose evidence cannot be found in "
-            "the file is treated as ungrounded and marked unverified. If "
+            "the file is treated as ungrounded and marked unanchored. If "
             'nothing is evidenced, return {"findings": []}.\n\n'
             + files_block
             + material_block
@@ -711,10 +711,7 @@ async def _extract_grounded_findings(
             "answer, one entry per file, and do NOT mention any file not in the "
             "list. Include an `evidence` field with the verbatim span from the "
             'answer that supports each finding. If none, return {"findings": []}'
-            ".\n\n"
-            + files_block
-            + analysis_block
-            + "\n\n"
+            ".\n\n" + files_block + analysis_block + "\n\n"
             'Return JSON exactly as {"findings": [{"file": "<path from the '
             'list>", "finding": "<text>", "evidence": "<verbatim span>"}]}.'
         )
@@ -758,7 +755,7 @@ async def _extract_grounded_findings(
         return {}
     out: dict = {}
     content_cache: dict = {}
-    unverified = 0
+    unanchored = 0
     for it in items:
         if not isinstance(it, dict):
             continue
@@ -776,9 +773,9 @@ async def _extract_grounded_findings(
         if key is None:
             log.warning("[%s] dropped finding for unread file %r", agent_id, f)
             continue
-        # Deterministic grounding: a finding must carry a verbatim anchor that
-        # exists in the file. Missing anchor → fall back to a backticked span in
-        # the finding text; if still unanchored it is MARKED, never presented as
+        # Anchor existence: a finding must carry text that actually appears in
+        # the file. Missing anchor → fall back to a backticked span in the
+        # finding text; if still unanchored it is MARKED, never presented as
         # grounded (arXiv:2601.19106 / RefLens / "zero fabricated findings").
         evidence = it.get("evidence") or it.get("quote") or ""
         if not str(evidence).strip():
@@ -793,15 +790,15 @@ async def _extract_grounded_findings(
             except OSError:
                 content = ""
             content_cache[key] = content
-        if _evidence_verified(evidence, content):
+        if _anchor_exists(evidence, content):
             out[key] = txt
         else:
-            unverified += 1
-            out[key] = "[UNVERIFIED — no anchoring evidence found in file] " + txt
-    if unverified:
+            unanchored += 1
+            out[key] = "[UNANCHORED — no matching text found in file] " + txt
+    if unanchored:
         log.info(
-            "[%s] %d finding(s) marked unverified (no verbatim anchor in file)",
+            "[%s] %d finding(s) marked unanchored (no matching text in file)",
             agent_id,
-            unverified,
+            unanchored,
         )
     return out

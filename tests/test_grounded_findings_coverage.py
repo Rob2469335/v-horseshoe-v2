@@ -19,7 +19,7 @@ import pytest
 from runtime_v2.api._agent_helpers import (
     _build_grounded_report,
     _collect_read_material,
-    _evidence_verified,
+    _anchor_exists,
     _extract_grounded_findings,
 )
 
@@ -171,21 +171,21 @@ async def test_report_has_populated_findings_not_just_manifest(monkeypatch, tmp_
     assert f"Examined {len(paths)} file(s):" in report
 
 
-def test_evidence_verified_matches_verbatim_with_whitespace_and_elisions():
+def test_anchor_exists_matches_verbatim_with_whitespace_and_elisions():
     content = 'def handler():\n    return os.system("x")\n'
-    assert _evidence_verified('os.system("x")', content) is True
+    assert _anchor_exists('os.system("x")', content) is True
     # whitespace normalization across a newline
-    assert _evidence_verified("return  os.system", content) is True
+    assert _anchor_exists("return  os.system", content) is True
     # an inserted elision: each side must match
-    assert _evidence_verified('def handler ... os.system("x")', content) is True
+    assert _anchor_exists('def handler ... os.system("x")', content) is True
     # a fabricated anchor is rejected
-    assert _evidence_verified("subprocess.run", content) is False
-    assert _evidence_verified("", content) is False
-    assert _evidence_verified("ab", content) is False
+    assert _anchor_exists("subprocess.run", content) is False
+    assert _anchor_exists("", content) is False
+    assert _anchor_exists("ab", content) is False
 
 
 @pytest.mark.asyncio
-async def test_unverified_finding_is_marked_not_presented_as_grounded(
+async def test_unanchored_finding_is_marked_not_presented_as_grounded(
     monkeypatch, tmp_path
 ):
     f = tmp_path / "svc.py"
@@ -226,13 +226,13 @@ async def test_unverified_finding_is_marked_not_presented_as_grounded(
         read_material=_collect_read_material(lines, {str(f)}),
     )
     text = findings[_norm(str(f))]
-    assert text.startswith("[UNVERIFIED")
+    assert text.startswith("[UNANCHORED")
     report = _build_grounded_report({str(f)}, findings=findings)
-    assert "[UNVERIFIED" in report
+    assert "[UNANCHORED" in report
 
 
 @pytest.mark.asyncio
-async def test_verified_finding_renders_without_unverified_marker(
+async def test_anchored_finding_renders_without_unanchored_marker(
     monkeypatch, tmp_path
 ):
     f = tmp_path / "svc.py"
@@ -272,7 +272,7 @@ async def test_verified_finding_renders_without_unverified_marker(
         {str(f)},
         read_material=_collect_read_material(lines, {str(f)}),
     )
-    assert not findings[_norm(str(f))].startswith("[UNVERIFIED")
+    assert not findings[_norm(str(f))].startswith("[UNANCHORED")
 
 
 @pytest.mark.asyncio
