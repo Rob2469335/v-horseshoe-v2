@@ -67,7 +67,6 @@ _failure_lessons_seen_lock: asyncio.Lock | None = None  # lazy-init
 from runtime_v2.api._agent_state import _CallState as _CallState  # noqa: F401
 
 
-
 from runtime_v2.api._agent_config import (
     MAX_TURNS,
     MAX_DEPTH,
@@ -1447,7 +1446,12 @@ class AgentServiceV2:
                     "with a bare completion sentence."
                 )
             else:
-                refs = set(re.findall(r"[\w./\\-]+\.(?:py|txt|md|json|yml|yaml|sh|ps1|html|css|js|ts|ini|toml)\b", response_text))
+                refs = set(
+                    re.findall(
+                        r"[\w./\\-]+\.(?:py|txt|md|json|yml|yaml|sh|ps1|html|css|js|ts|ini|toml)\b",
+                        response_text,
+                    )
+                )
                 read_paths = {
                     r.replace("\\", "/").lstrip("./") for r in state.read_paths
                 }
@@ -1584,6 +1588,18 @@ class AgentServiceV2:
                 )
                 state.handler_status = "ABORT"
                 return
+
+        if agent_id in ANALYSIS_AGENTS:
+            try:
+                findings_by_file = await _extract_grounded_findings(
+                    model, agent_id, response_text, state.read_paths
+                )
+            except Exception as e:
+                log.warning("[%s] grounded extraction failed: %s", agent_id, e)
+                findings_by_file = {}
+            response_text = _build_grounded_report(
+                state.read_paths, findings=findings_by_file
+            )
 
         yield {"agent_id": agent_id, "content": response_text, "model": model}
         yield {
@@ -2036,13 +2052,12 @@ class AgentServiceV2:
                             f"SYSTEM: You have read {state._filesystem_reads} files, "
                             "which is the budget for this analysis. STOP reading more "
                             "files. Using what you have already read, call "
-                            'action=final NOW with a concrete findings report: name '
+                            "action=final NOW with a concrete findings report: name "
                             "the specific files and the actual bugs/upgrades you can "
                             "evidence. Do not read again before finalizing."
                         ),
                     }
                 )
-
 
             # L1 grounding: a successful semantic_search returns real code-chunk
             # hits whose formatted text carries `File: <path>` lines. Those are
@@ -2529,8 +2544,11 @@ class AgentServiceV2:
             # kept the last 8 messages, so a 4-step tool warmup pushed the
             # inherited researcher findings out of context → the model
             # hallucinated "Internet search: Not performed".
+            # In deep analysis, we want the agent to remember ALL files it read so it
+            # doesn't claim "no other files were read". Use a larger budget for analysis.
+            budget = 1000 if agent_id in ANALYSIS_AGENTS else MAX_HISTORY_TURNS * 2
             trimmed_messages = _trim_context_messages(
-                messages, initial_messages_len, MAX_HISTORY_TURNS * 2
+                messages, initial_messages_len, budget=budget
             )
 
             # Inject the working todo list every turn so the agent's checklist is
@@ -2577,15 +2595,9 @@ class AgentServiceV2:
                         agent_id,
                         pending_id[:8],
                     )
-                    messages = [
-                        m
-                        for m in messages
-                        if not _is_control_observation(m)
-                    ]
+                    messages = [m for m in messages if not _is_control_observation(m)]
                     trimmed_messages = [
-                        m
-                        for m in trimmed_messages
-                        if not _is_control_observation(m)
+                        m for m in trimmed_messages if not _is_control_observation(m)
                     ]
                     resolve_now = False
                 elif approval["approved"] and not already:
@@ -3264,9 +3276,7 @@ class AgentServiceV2:
                     "pending_id": state.tool_result.get("pending_id"),
                     "preview": state.tool_result.get("preview"),
                     "authorization": state.tool_result.get("authorization"),
-                    "error": str(
-                        state.tool_result.get("error", "")
-                    )[:300] or None,
+                    "error": str(state.tool_result.get("error", ""))[:300] or None,
                 }
                 yield {
                     "agent_id": agent_id,
@@ -3370,23 +3380,6 @@ class AgentServiceV2:
                 )
                 return
 
-            # --- Message compaction: keep only last 2 tool turns ---
-            new_messages = messages[initial_messages_len:]
-            new_tool_turns = [
-                i
-                for i, m in enumerate(new_messages)
-                if m["role"] == "assistant"
-                and (
-                    "action" in str(m["content"])
-                    or str(m["content"]).startswith("I called")
-                )
-            ]
-            if len(new_tool_turns) > 2:
-                first_to_keep = new_tool_turns[-2]
-                messages = (
-                    messages[:initial_messages_len] + new_messages[first_to_keep:]
-                )
-
         # FORCED SYNTHESIS (2026-09-10, last resort): the turn loop ran out with
         # no `final` — the observed code_analyzer failure. Rather than emit a bare
         # "[System: max turns reached]" placeholder (which L1 rejects and which
@@ -3397,17 +3390,27 @@ class AgentServiceV2:
         # still produces the deliverable.
         final_content = "[System: max turns reached]"
         if agent_id in ANALYSIS_AGENTS:
-            read_list = ", ".join(sorted(state.read_paths)) or "(none)"
+            # During final synthesis, we want to draw from ALL files read during the run,
+            # not just the tail. Provide a large budget to preserve the full history.
+            trimmed = _trim_context_messages(
+                messages, initial_messages_len, budget=1000
+            )
+            trimmed_text = json.dumps(trimmed)
+            actual_read_paths = [
+                p
+                for p in state.read_paths
+                if p.replace("\\", "/").rsplit("/", 1)[-1] in trimmed_text
+                or p in trimmed_text
+            ]
+            read_list = ", ".join(sorted(actual_read_paths)) or "(none)"
             reasoning_text = ""
-            # Call 1 — free reasoning (the model's own words). Kept SEPARATE from
+            # Call 1 - free reasoning (the model's own words). Kept SEPARATE from
             # the structured extraction below: a reasoning model asked for JSON in
             # the same call that produces its reasoning returns prose, which then
             # fails parsing.
             try:
                 forced_messages = [
-                    *_trim_context_messages(
-                        messages, initial_messages_len, MAX_HISTORY_TURNS * 2
-                    ),
+                    *trimmed,
                     {
                         "role": "user",
                         "content": (
