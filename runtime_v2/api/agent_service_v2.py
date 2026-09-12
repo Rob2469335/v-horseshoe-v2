@@ -808,7 +808,11 @@ class AgentServiceV2:
                 return {"action": "delegate", "target_agent": target, "task": prompt}
             return decision
 
-        fast = fast_start_for_agent(agent_id, turn)
+        fast = fast_start_for_agent(
+            agent_id,
+            turn,
+            deep=bool(_CODEEBASE_ANALYSIS_RE.search(prompt or "")),
+        )
 
         # INTERNET-GOAL FIX: if an analysis agent was handed an internet goal
         # (codebase + web, or pure web), inject web_search BEFORE the
@@ -1017,11 +1021,23 @@ class AgentServiceV2:
         # crossed, REMOVE the reading tools from the decision surface entirely and
         # tell the model its only remaining action is final. This is deterministic
         # — not a prompt hint the model can decline.
-        _read_budget_hit = state._filesystem_reads >= _analysis_budget(
-            _original_goal(trimmed_messages) or prompt
-        )[1]
+        _deep_funnel_goal = _original_goal(trimmed_messages) or prompt
+        _deep_min_reads, _deep_cap_reads, _ = _analysis_budget(_deep_funnel_goal)
+        _read_budget_hit = state._filesystem_reads >= _deep_cap_reads
+        # Deep funnel "synthesize-now": the deterministic warmup has already read
+        # across the architecture layers (repo->subsystem funnel) once it reaches
+        # the deep minimum. At that point STOP exploring and force the model to
+        # write the grounded final from the files it actually read — otherwise the
+        # decision model keeps reading (live: read main/pyproject/README after the
+        # warmup and burned all 24 turns without finalizing). Harness owns
+        # exploration; the model only synthesizes.
+        _deep_synth_now = (
+            bool(_CODEEBASE_ANALYSIS_RE.search(_deep_funnel_goal))
+            and fast is None  # deterministic warmup exhausted
+            and state._filesystem_reads >= _deep_min_reads
+        )
         _enter_forced_final = agent_id in ANALYSIS_AGENTS and (
-            (not state._forced_final and _read_budget_hit)
+            (not state._forced_final and (_read_budget_hit or _deep_synth_now))
             or (state._forced_final and "filesystem" in allowed_tools)
         )
         if _enter_forced_final:
@@ -1036,8 +1052,9 @@ class AgentServiceV2:
             if "final" not in allowed_tools:
                 allowed_tools = ["final", *allowed_tools]
             log.info(
-                "[%s] read budget reached (%d) — forced-final phase: tools restricted to %s",
+                "[%s] forced-final (%s) at %d reads — tools restricted to %s",
                 agent_id,
+                "deep-funnel-complete" if _deep_synth_now else "read-budget",
                 state._filesystem_reads,
                 allowed_tools,
             )

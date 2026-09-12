@@ -108,7 +108,7 @@ async def test_forced_final_strips_filesystem_at_read_budget(monkeypatch):
         [{"role": "user", "content": "analyze my codebase for bugs and upgrades"}],
         ["filesystem", "semantic_search", "final", "remember", "git", "system", "mcp"],
         "analyze my codebase for bugs and upgrades",
-        turn=5,
+        turn=10,
         state=state,
     )
 
@@ -150,7 +150,7 @@ async def test_forced_final_not_triggered_below_budget(monkeypatch):
         [{"role": "user", "content": "analyze my codebase for bugs and upgrades"}],
         ["filesystem", "semantic_search", "final"],
         "analyze my codebase for bugs and upgrades",
-        turn=5,
+        turn=10,
         state=state,
     )
 
@@ -214,7 +214,7 @@ async def test_forced_final_reapplies_tools_when_loop_set_flag(monkeypatch):
         [{"role": "user", "content": "analyze my codebase for bugs and upgrades"}],
         ["filesystem", "semantic_search", "final"],
         "analyze my codebase for bugs and upgrades",
-        turn=6,
+        turn=11,
         state=state,
     )
 
@@ -272,35 +272,47 @@ def test_analysis_budget_scales_with_goal_depth(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_deep_analysis_goal_gets_larger_read_budget(monkeypatch):
-    # A DEEP goal must NOT be forced-final at the routine 6-read budget; it gets
-    # the deep cap (default 14). Revert-proof: pre-fix the flat 6 cap fired here.
+async def test_deep_goal_synthesizes_after_min_coverage(monkeypatch):
+    # Deep goals: once the deterministic funnel has read >= min (default 8) and
+    # the warmup is exhausted, the harness STOPS exploration and forces the final
+    # (harness owns exploration; the model only synthesizes). Below min it keeps
+    # exploring even though it is past the routine 6-read cap. Revert-proof:
+    # pre-fix the deep goal was not forced-final until the 14-read cap.
     monkeypatch.setenv("SWARM_MAX_FS_READS", "6")
     monkeypatch.delenv("SWARM_DEEP_FS_READS", raising=False)
+    monkeypatch.delenv("SWARM_DEEP_MIN_FS_READS", raising=False)
 
     svc = _svc()
-    state = _svc_state()
-    state._filesystem_reads = 8  # above routine 6, below deep 14
-    captured: dict = {}
 
-    async def _fake_call_llm(model, messages, agent_id, allowed_tools):
-        captured["tools"] = list(allowed_tools)
-        return {"action": "filesystem", "operation": "read", "path": "x.py"}
+    async def run(reads):
+        st = _svc_state()
+        st._filesystem_reads = reads
+        cap: dict = {}
 
-    monkeypatch.setattr(svc, "_call_llm", _fake_call_llm)
+        async def _fake(model, messages, agent_id, allowed_tools):
+            cap["tools"] = list(allowed_tools)
+            return {"action": "final", "response": "ok"}
 
-    await svc._get_decision(
-        "code_analyzer",
-        "robs4b",
-        [{"role": "user", "content": "analyze my codebase for bugs and upgrades"}],
-        ["filesystem", "semantic_search", "final"],
-        "analyze my codebase for bugs and upgrades",
-        turn=9,
-        state=state,
-    )
+        monkeypatch.setattr(svc, "_call_llm", _fake)
+        await svc._get_decision(
+            "code_analyzer",
+            "robs4b",
+            [{"role": "user", "content": "analyze my codebase for bugs and upgrades"}],
+            ["filesystem", "semantic_search", "final"],
+            "analyze my codebase for bugs and upgrades",
+            turn=9,  # past the deterministic warmup
+            state=st,
+        )
+        return cap, st
 
-    assert "filesystem" in captured["tools"]  # still exploring, not forced-final
-    assert state._forced_final is False
+    # below the deep min (7 < 8): still exploring, not forced-final
+    cap7, st7 = await run(7)
+    assert "filesystem" in cap7["tools"]
+    assert st7._forced_final is False
+    # at the deep min (8): forced-final — synthesize from what was read
+    cap8, st8 = await run(8)
+    assert "filesystem" not in cap8["tools"]
+    assert st8._forced_final is True
 
 
 @pytest.mark.asyncio

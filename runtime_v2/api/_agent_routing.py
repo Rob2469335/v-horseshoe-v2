@@ -467,6 +467,34 @@ _AGENT_WARMUP: dict[str, list[dict]] = {
     ],
 }
 
+# Deep codebase-analysis goals ("analyze my codebase for bugs/upgrades") need
+# REPO-WIDE coverage, not a single thread. The small decision model otherwise
+# deep-dives one subsystem (live: it read only the semantic-search/indexer
+# path) and the final never sees the rest of the codebase. Coverage must be
+# harness-owned: after the base grounding, keep deterministically reading one
+# representative file per architecture layer, so the L1-grounded final can
+# actually report on breadth (repo-funnel pattern; cf. Prometheus repo-graph +
+# working memory, arXiv 2501.18160 RepoAudit multi-agent).
+_DEEP_CODE_ANALYZER_WARMUP: list[dict] = _AGENT_WARMUP["code_analyzer"] + [
+    {
+        "action": "filesystem",
+        "operation": "read",
+        "path": "runtime_v2/services/tool_executor.py",
+    },
+    {"action": "filesystem", "operation": "read", "path": "swarm_os/api/routes.py"},
+    {
+        "action": "filesystem",
+        "operation": "read",
+        "path": "swarm_os/core/orchestrator.py",
+    },
+    {
+        "action": "filesystem",
+        "operation": "read",
+        "path": "swarm_os/services/watch_loop.py",
+    },
+    {"action": "filesystem", "operation": "read", "path": "organism_console/cli.py"},
+]
+
 # Research-only goals must hit web_search BEFORE anything else — a codebase/LLM
 # bias otherwise makes the researcher read files/memory first and never search,
 # or burn the turn budget on filesystem before web_search. The first turn is
@@ -475,10 +503,13 @@ _AGENT_WARMUP: dict[str, list[dict]] = {
 _RESEARCHER_FIRST_TURNS = 1
 
 
-def fast_start_for_agent(agent_id: str, turn: int) -> dict | None:
+def fast_start_for_agent(agent_id: str, turn: int, deep: bool = False) -> dict | None:
     """Returns a hardcoded action for a given agent and turn index.
     Returns None when turn >= script length (LLM takes over)."""
     sequence = _AGENT_WARMUP.get(agent_id, [])
+    if deep and agent_id == "code_analyzer":
+        # Deep goals: keep the funnel deterministic across architecture layers.
+        sequence = _DEEP_CODE_ANALYZER_WARMUP
     if turn < len(sequence):
         action = sequence[turn]
         log.info(
