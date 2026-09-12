@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import time
+import asyncio
 import logging
 import threading
 from typing import Any
@@ -29,18 +30,43 @@ _QUERY_CACHE: dict = {}
 _CACHE_TTL = 300  # 5 minutes
 
 _embed_client: httpx.AsyncClient | None = None
+# The client is bound to the loop that created it; cache the owner loop and
+# rebuild when it is closed or differs — mirroring routes.py's
+# _PROBE_CLIENT_LOOP. Without this, a caller on another loop got a client bound
+# to the first and failed with "Event loop is closed".
+_embed_client_loop: asyncio.AbstractEventLoop | None = None
 _embed_client_lock = threading.Lock()
 
 
 def _get_embed_client() -> httpx.AsyncClient:
-    global _embed_client
-    if _embed_client is None or _embed_client.is_closed:
+    global _embed_client, _embed_client_loop
+    try:
+        loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    def _needs_rebuild() -> bool:
+        return (
+            _embed_client is None
+            or _embed_client.is_closed
+            or (_embed_client_loop is not None and _embed_client_loop.is_closed())
+            or (
+                _embed_client_loop is not None
+                and loop is not None
+                and _embed_client_loop is not loop
+            )
+        )
+
+    if _needs_rebuild():
         with _embed_client_lock:
-            if _embed_client is None or _embed_client.is_closed:
+            if _needs_rebuild():
                 _embed_client = httpx.AsyncClient(
                     timeout=httpx.Timeout(60.0, connect=10.0),
-                    limits=httpx.Limits(max_keepalive_connections=5, max_connections=20),
+                    limits=httpx.Limits(
+                        max_keepalive_connections=5, max_connections=20
+                    ),
                 )
+                _embed_client_loop = loop
     return _embed_client
 
 
