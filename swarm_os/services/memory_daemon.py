@@ -49,8 +49,37 @@ class MemoryDaemon:
                                 "Memory GC: purged %s stale file-reference memories",
                                 pruned["deleted"],
                             )
+                        elif not pruned.get("ok", True):
+                            logger.warning(
+                                "Memory GC FAILED (stale refs will persist): %s",
+                                pruned.get("error") or pruned,
+                            )
                     except Exception as gc_exc:
                         logger.debug("memory stale-ref GC skipped: %s", gc_exc)
+
+                    # Decision-cache GC: a cached decision that references a
+                    # deleted file replays into the agent loop and sends it
+                    # chasing a nonexistent path. The memory GC above misses it —
+                    # the decision cache is a separate Qdrant collection.
+                    try:
+                        from runtime_v2.services._semantic_decision_cache import (
+                            prune_stale_decisions,
+                        )
+
+                        dpruned = await prune_stale_decisions()
+                        if dpruned.get("deleted"):
+                            logger.info(
+                                "Decision-cache GC: purged %s stale decisions",
+                                dpruned["deleted"],
+                            )
+                        elif not dpruned.get("ok", True):
+                            logger.warning(
+                                "Decision-cache GC FAILED (stale decisions will "
+                                "persist): %s",
+                                dpruned.get("error") or dpruned,
+                            )
+                    except Exception as dgc_exc:
+                        logger.debug("decision-cache GC skipped: %s", dgc_exc)
                 except Exception as exc:
                     logger.warning("manager daemon error: %s", exc)
                 await asyncio.sleep(self.interval_seconds)

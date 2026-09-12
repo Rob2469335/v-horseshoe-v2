@@ -151,6 +151,11 @@ async def get_semantic_cached_decision(messages: list, agent_id: str) -> Optiona
     cache_key = get_cache_key(messages, agent_id)
     cached = _get_exact(cache_key)
     if cached is not None:
+        # Never serve a cached terminal `final`: it is context-sensitive and,
+        # once rejected by the L1 gate, replaying it spins the turn loop to the
+        # budget (observed: 9 forced-final turns in <1s on one cached final).
+        if str(cached.get("action") or "").lower() == "final":
+            return None
         _stats["hits"] += 1
         return cached
 
@@ -186,7 +191,11 @@ async def get_semantic_cached_decision(messages: list, agent_id: str) -> Optiona
             _stats["misses"] += 1
             return None
         decision = top.payload.get("decision")
-        if isinstance(decision, dict) and decision.get("action"):
+        if (
+            isinstance(decision, dict)
+            and decision.get("action")
+            and str(decision.get("action")).lower() != "final"
+        ):
             _stats["semantic_hits"] += 1
             _put_exact(cache_key, decision)
             return decision
@@ -197,9 +206,64 @@ async def get_semantic_cached_decision(messages: list, agent_id: str) -> Optiona
     return None
 
 
+async def prune_stale_decisions(dry_run: bool = False) -> dict:
+    """Delete cached decisions that reference a path which no longer exists.
+
+    A cached "filesystem read <deleted file>" decision replays straight into the
+    agent loop and sends it chasing a nonexistent path (observed: a cached read
+    of the deleted code_analysis_report.txt re-poisoned every analysis run after
+    the memory GC had already cleaned the memory shards). Deterministic,
+    Qdrant-only, never raises. Wired into MemoryDaemon so it self-heals.
+    """
+    if not _enabled():
+        return {"ok": True, "skipped": "disabled"}
+    try:
+        await _ensure_components()
+        resp = await _client.scroll(
+            collection_name=_collection,
+            limit=5000,
+            with_payload=True,
+            with_vectors=False,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.debug("prune_stale_decisions scroll failed: %s", exc)
+        return {"ok": False, "error": str(exc)}
+
+    points = resp[0] if isinstance(resp, tuple) else getattr(resp, "points", resp)
+    root = os.getcwd()
+    stale: list = []
+    for pt in points or []:
+        decision = (getattr(pt, "payload", None) or {}).get("decision") or {}
+        if not isinstance(decision, dict):
+            continue
+        for key in ("path", "file_path", "filepath"):
+            p = decision.get(key)
+            if isinstance(p, str) and p.strip():
+                cand = p if os.path.isabs(p) else os.path.join(root, p)
+                if not os.path.exists(cand):
+                    stale.append(pt.id)
+                break
+
+    if stale and not dry_run:
+        try:
+            await _client.delete(collection_name=_collection, points_selector=stale)
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": str(exc), "stale": len(stale)}
+    return {
+        "ok": True,
+        "scanned": len(points or []),
+        "stale": len(stale),
+        "deleted": 0 if dry_run else len(stale),
+    }
+
+
 async def cache_tool_decision(messages: list, agent_id: str, decision: dict):
     """Record a decision so repeated requests short-circuit. Failures non-fatal."""
     if not _enabled():
+        return
+    # Never cache the terminal `final` action (see get_semantic_cached_decision):
+    # a rejected final replayed from cache would spin the loop to the turn budget.
+    if str(decision.get("action") or "").lower() == "final":
         return
     try:
         last_msg = _last_user_text(messages)
