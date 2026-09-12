@@ -15,7 +15,7 @@ def test_mutation_loop_finds_related_tests_not_hardcoded():
     )
 
     agent_tests = _find_related_test_files("runtime_v2/api/agent_service_v2.py")
-    assert any("test_checkpointing.py" in t for t in agent_tests), (
+    assert any("test_agent_trajectory.py" in t for t in agent_tests), (
         "agent_service_v2 mutation should run the agent-loop tests"
     )
     assert not any("test_agentic_loop.py" in t for t in agent_tests), (
