@@ -24,7 +24,10 @@ async def test_semantic_cache_smoke():
             "content": f"Random prompt to avoid semantic collision: {uid1} {uid2} {uid3}",
         }
     ]
-    mock_decision = {"action": "final", "response": "Paris"}
+    # A NON-terminal decision — the cache deliberately never stores/serves the
+    # terminal `final` action (a rejected final replayed from cache spins the
+    # turn loop; see test_semantic_cache.py::test_final_decision_is_never_*).
+    mock_decision = {"action": "filesystem", "operation": "glob", "path": "runtime_v2"}
 
     # 3. Assert initial cache miss
     cached = await _semantic_decision_cache.get_semantic_cached_decision(
@@ -43,7 +46,7 @@ async def test_semantic_cache_smoke():
         messages, agent_id
     )
     assert cached is not None, "Expected cache hit on second run"
-    assert cached["response"] == "Paris", "Cache hit should return the stored decision"
+    assert cached["action"] == "filesystem", "Cache hit returns the stored decision"
 
     # 6. Check that a different agent/message misses
     messages2 = [
@@ -59,7 +62,7 @@ async def test_semantic_cache_smoke():
 
     # 7. Check sanitization
     messages_secret = [{"role": "user", "content": "My secret is Bearer xyz123"}]
-    decision_secret = {"action": "final", "response": "I saved the secret."}
+    decision_secret = {"action": "filesystem", "operation": "read", "path": "x.py"}
     await _semantic_decision_cache.cache_tool_decision(
         messages_secret, "test_agent", decision_secret
     )
