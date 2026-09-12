@@ -87,6 +87,8 @@ async def test_forced_final_strips_filesystem_at_read_budget(monkeypatch):
     # browser-use `_force_done_after_last_step` pattern. Revert-proof: pre-fix
     # the captured allowed_tools still contain "filesystem".
     monkeypatch.setenv("SWARM_MAX_FS_READS", "6")
+    # Deep goal -> pin the deep cap to 6 so this stays an "at the budget" test.
+    monkeypatch.setenv("SWARM_DEEP_FS_READS", "6")
 
     svc = _svc()
     state = _svc_state()
@@ -250,3 +252,83 @@ async def test_non_analysis_agent_never_forced_final(monkeypatch):
 
     assert "filesystem" in captured["tools"]
     assert state._forced_final is False
+
+
+def test_analysis_budget_scales_with_goal_depth(monkeypatch):
+    # 2026-09-12: deep codebase-analysis goals get a larger funnel than routine
+    # analysis goals (flat 6-read cap truncated a whole-repo audit to ~3 files).
+    from runtime_v2.api.agent_service_v2 import _analysis_budget
+
+    monkeypatch.delenv("SWARM_DEEP_MIN_FS_READS", raising=False)
+    monkeypatch.delenv("SWARM_DEEP_FS_READS", raising=False)
+    monkeypatch.delenv("SWARM_DEEP_MAX_TURNS", raising=False)
+
+    min_r, max_r, max_t = _analysis_budget("analyze my codebase for bugs and upgrades")
+    assert (min_r, max_r, max_t) == (8, 14, 24)
+
+    r_min, r_max, r_t = _analysis_budget("summarize the log file")
+    assert (r_min, r_max) == (3, 6)
+    assert r_t == 12
+
+
+@pytest.mark.asyncio
+async def test_deep_analysis_goal_gets_larger_read_budget(monkeypatch):
+    # A DEEP goal must NOT be forced-final at the routine 6-read budget; it gets
+    # the deep cap (default 14). Revert-proof: pre-fix the flat 6 cap fired here.
+    monkeypatch.setenv("SWARM_MAX_FS_READS", "6")
+    monkeypatch.delenv("SWARM_DEEP_FS_READS", raising=False)
+
+    svc = _svc()
+    state = _svc_state()
+    state._filesystem_reads = 8  # above routine 6, below deep 14
+    captured: dict = {}
+
+    async def _fake_call_llm(model, messages, agent_id, allowed_tools):
+        captured["tools"] = list(allowed_tools)
+        return {"action": "filesystem", "operation": "read", "path": "x.py"}
+
+    monkeypatch.setattr(svc, "_call_llm", _fake_call_llm)
+
+    await svc._get_decision(
+        "code_analyzer",
+        "robs4b",
+        [{"role": "user", "content": "analyze my codebase for bugs and upgrades"}],
+        ["filesystem", "semantic_search", "final"],
+        "analyze my codebase for bugs and upgrades",
+        turn=9,
+        state=state,
+    )
+
+    assert "filesystem" in captured["tools"]  # still exploring, not forced-final
+    assert state._forced_final is False
+
+
+@pytest.mark.asyncio
+async def test_routine_goal_keeps_routine_read_budget(monkeypatch):
+    # A non-deep analysis goal keeps the conservative 6-read cap.
+    monkeypatch.setenv("SWARM_MAX_FS_READS", "6")
+    monkeypatch.delenv("SWARM_DEEP_FS_READS", raising=False)
+
+    svc = _svc()
+    state = _svc_state()
+    state._filesystem_reads = 6
+    captured: dict = {}
+
+    async def _fake_call_llm(model, messages, agent_id, allowed_tools):
+        captured["tools"] = list(allowed_tools)
+        return {"action": "final", "response": "ok"}
+
+    monkeypatch.setattr(svc, "_call_llm", _fake_call_llm)
+
+    await svc._get_decision(
+        "code_analyzer",
+        "robs4b",
+        [{"role": "user", "content": "summarize the log file"}],
+        ["filesystem", "final"],
+        "summarize the log file",
+        turn=6,
+        state=state,
+    )
+
+    assert "filesystem" not in captured["tools"]
+    assert state._forced_final is True

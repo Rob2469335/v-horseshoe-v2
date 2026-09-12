@@ -88,6 +88,30 @@ from runtime_v2.api._agent_routing import (
 )
 
 
+def _analysis_budget(goal: str) -> tuple[int, int, int]:
+    """Return ``(min_reads, max_reads, max_turns)`` scaled by goal depth.
+
+    Deep codebase-analysis goals ("analyze my codebase for bugs/upgrades") need a
+    multi-file funnel — repository-level auditing reads many files and localizes
+    repo -> file -> symbol before reporting (RepoAudit arXiv:2501.18160;
+    hierarchical localization per tiptreesystems). The routine 6-read / 12-turn
+    budget truncates that into a 3-file shallow report. Routine goals keep the
+    conservative defaults so the loop cannot run away: model-controlled
+    termination fails, so the harness owns the bound (IAL-SCAN arXiv:2607.01641).
+    """
+    if _CODEEBASE_ANALYSIS_RE.search(goal or ""):
+        return (
+            int(os.getenv("SWARM_DEEP_MIN_FS_READS", "8")),
+            int(os.getenv("SWARM_DEEP_FS_READS", "14")),
+            int(os.getenv("SWARM_DEEP_MAX_TURNS", "24")),
+        )
+    return (
+        int(os.getenv("SWARM_MIN_FS_READS", "3")),
+        int(os.getenv("SWARM_MAX_FS_READS", "6")),
+        MAX_TURNS,
+    )
+
+
 class AgentServiceV2:
     def __init__(
         self,
@@ -944,6 +968,44 @@ class AgentServiceV2:
             )
             return {"action": "web_fetch", "url": url}
 
+        # MINIMUM EXPLORATION BUDGET (2026-09-11): Prevent shallow "project-map"
+        # summaries on deep analysis goals ("analyze my codebase for bugs").
+        # If it's a codebase analysis goal, force it to read at least N files
+        # before allowing it to call 'final'.
+        if agent_id in ANALYSIS_AGENTS and "final" in allowed_tools:
+            _goal = _original_goal(trimmed_messages) or prompt
+            if bool(_CODEEBASE_ANALYSIS_RE.search(_goal)):
+                _min_reads, _max_reads, _ = _analysis_budget(_goal)
+                if state._filesystem_reads < _min_reads:
+                    allowed_tools.remove("final")
+                    log.info(
+                        "[%s] shallow-analysis guard: %d reads < min %d (deep cap %d). Stripped 'final'.",
+                        agent_id,
+                        state._filesystem_reads,
+                        _min_reads,
+                        _max_reads,
+                    )
+                if state._turn <= 1:
+                    # Hierarchical funnel (repo -> subsystem -> file -> symbol):
+                    # give the deep goal a direction so the larger budget is used
+                    # on coverage, not on re-reading the same few files.
+                    trimmed_messages = [
+                        *trimmed_messages,
+                        {
+                            "role": "system",
+                            "content": (
+                                "DEEP CODEBASE ANALYSIS — use a hierarchical funnel "
+                                "(repo -> subsystem -> file -> symbol): enumerate the "
+                                "subsystems from the [PROJECT MAP], then READ at least "
+                                f"one representative file per subsystem (aim for "
+                                f"{_min_reads}+ distinct reads; {_max_reads} allowed) "
+                                "before writing the final. Your final may only cite "
+                                "files you actually read this run. Report findings per "
+                                "subsystem; do not stop at the first few files."
+                            ),
+                        },
+                    ]
+
         # FORCED-FINAL PHASE (2026-09-10): a small analysis agent left unbounded
         # keeps calling filesystem read/list until it exhausts MAX_TURNS and never
         # emits `final` (observed live on "analyze my codebase for bugs and
@@ -955,9 +1017,9 @@ class AgentServiceV2:
         # crossed, REMOVE the reading tools from the decision surface entirely and
         # tell the model its only remaining action is final. This is deterministic
         # — not a prompt hint the model can decline.
-        _read_budget_hit = state._filesystem_reads >= int(
-            os.getenv("SWARM_MAX_FS_READS", "6")
-        )
+        _read_budget_hit = state._filesystem_reads >= _analysis_budget(
+            _original_goal(trimmed_messages) or prompt
+        )[1]
         _enter_forced_final = agent_id in ANALYSIS_AGENTS and (
             (not state._forced_final and _read_budget_hit)
             or (state._forced_final and "filesystem" in allowed_tools)
@@ -1925,7 +1987,10 @@ class AgentServiceV2:
             # nudge telling it to stop reading and synthesize — do not repeat it
             # every turn. Budget env-overridable; default 6 covers the goal's
             # real grounding need without starving the turn budget.
-            _read_budget = int(os.getenv("SWARM_MAX_FS_READS", "6"))
+            # Read-budget cap (2026-09-10; goal-scaled 2026-09-12): deep
+            # codebase-analysis goals get a larger budget (see _analysis_budget)
+            # so a whole-repo audit is not told to "STOP reading" at 6 files.
+            _read_budget = _analysis_budget(_original_goal(messages) or "")[1]
             if (
                 not state._filesystem_read_capped
                 and state._filesystem_reads >= _read_budget
@@ -2379,7 +2444,10 @@ class AgentServiceV2:
                     "[%s] resume failed (%s); starting fresh", agent_id, ckpt_err
                 )
 
-        for turn in range(start_turn, MAX_TURNS):
+        # Goal-scaled turn budget: deep codebase-analysis goals get more turns so
+        # the read funnel is not truncated by the routine MAX_TURNS.
+        _, _, _eff_max_turns = _analysis_budget(prompt)
+        for turn in range(start_turn, _eff_max_turns):
             state._turn = turn + 1
             # --- Durable checkpoint (2026 autonomy move 3) ---
             # Persist at the TOP of each turn, BEFORE the decision is fetched, so a
