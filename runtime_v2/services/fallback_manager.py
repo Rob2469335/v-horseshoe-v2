@@ -36,24 +36,40 @@ _refresh_lock = None  # lazy-init inside running event loop
 
 # UPGRADE: pooled httpx client reused across all provider probes instead of a
 # fresh AsyncClient per call (fresh clients defeat keep-alive + TLS reuse).
+# The client is bound to the loop that created it, so cache the owner loop and
+# rebuild when it is closed or differs — mirroring routes.py's
+# _PROBE_CLIENT_LOOP. Without this, a caller on a different loop got a client
+# bound to the first and failed with "Event loop is closed".
 _http_client: httpx.AsyncClient | None = None
+_http_client_loop: asyncio.AbstractEventLoop | None = None
 
 
 _client_lock = None  # lazy-init inside running event loop
+_client_lock_loop: asyncio.AbstractEventLoop | None = None
 
 
 async def get_http_client() -> httpx.AsyncClient:
-    global _http_client
-    global _client_lock
-    if _client_lock is None:
+    global _http_client, _http_client_loop
+    global _client_lock, _client_lock_loop
+    loop = asyncio.get_running_loop()
+    # The lock itself is loop-bound; recreate it when the loop changes so a
+    # second loop does not reuse a lock bound to the first.
+    if _client_lock is None or _client_lock_loop is not loop:
         _client_lock = asyncio.Lock()
+        _client_lock_loop = loop
     async with _client_lock:
-        if _http_client is None or _http_client.is_closed:
+        if (
+            _http_client is None
+            or _http_client.is_closed
+            or (_http_client_loop is not None and _http_client_loop.is_closed())
+            or (_http_client_loop is not None and _http_client_loop is not loop)
+        ):
             _http_client = httpx.AsyncClient(
                 timeout=httpx.Timeout(connect=5.0, read=30.0, write=30.0, pool=10.0),
                 limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
                 verify=settings.ssl_verify,
             )
+            _http_client_loop = loop
     return _http_client
 
 
