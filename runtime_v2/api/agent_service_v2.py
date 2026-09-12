@@ -1452,11 +1452,27 @@ class AgentServiceV2:
                     r.replace("\\", "/").lstrip("./") for r in state.read_paths
                 }
                 read_basenames = {p.rsplit("/", 1)[-1] for p in read_paths}
+                # Grounding by "seen in read material": a file the final names is
+                # legitimate if its name appears in the CONTENT of a file the agent
+                # actually read this run — the agent saw it, it did not invent it
+                # (e.g. watch_loop.py's docstring names autonomy_policy.json /
+                # autonomy_policy.py / main.py). Without this, legitimate
+                # cross-references are rejected as fabricated and the final churns
+                # to the turn budget. Truly invented files never appear in read
+                # content, so the anti-fabrication guarantee is preserved.
+                read_material = " ".join(
+                    str(m.get("content", ""))
+                    for m in messages
+                    if isinstance(m, dict)
+                    and "TOOL RESULT (filesystem)" in str(m.get("content", ""))
+                )
                 unread = {
                     p
                     for p in refs
                     if p.replace("\\", "/").lstrip("./") not in read_paths
                     and p.replace("\\", "/").rsplit("/", 1)[-1] not in read_basenames
+                    and p not in read_material
+                    and p.rsplit("/", 1)[-1] not in read_material
                 }
                 if unread:
                     contract_error = (

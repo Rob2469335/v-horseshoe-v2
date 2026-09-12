@@ -1818,6 +1818,51 @@ async def test_l1_legitimate_final_with_read_files_passes():
 
 
 @pytest.mark.asyncio
+async def test_l1_final_citing_file_seen_in_read_material_passes():
+    """2026-09: a final naming a file the agent did NOT read, but whose name
+    appeared in the CONTENT of a file it DID read, must pass — the agent saw the
+    name, it did not invent it. Live: watch_loop.py's docstring names
+    autonomy_policy.json / autonomy_policy.py / main.py; the gate rejected those
+    as "never read" and churned the run to the turn budget. Revert-proof: pre-fix
+    this final is rejected (handler_status == CONTINUE)."""
+    service = AgentServiceV2()
+    state = _CallState()
+    state.read_paths.add("swarm_os/services/watch_loop.py")
+    messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "user",
+            "content": (
+                "TOOL RESULT (filesystem):\n"
+                '{"ok": true, "content": "Loads its budgets from '
+                'autonomy_policy.json via autonomy_policy.py; started in '
+                'main.py"}\n\nContinue.'
+            ),
+        },
+    ]
+    gen = service._handle_final(
+        {
+            "action": "final",
+            "response": (
+                "[FACT] watch_loop.py loads policy from autonomy_policy.json / "
+                "autonomy_policy.py, started from main.py."
+            ),
+        },
+        "code_analyzer",
+        "m",
+        "p",
+        messages,
+        0.0,
+        "analyze the codebase for bugs",
+        True,
+        state,
+    )
+    events = [e async for e in gen]
+    assert state.handler_status != "CONTINUE"  # accepted, not rejected
+    assert any(e.get("type") == "final" for e in events)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("verdict_response", ["YES", "NO: the tests did not pass"])
 async def test_reviewer_verdict_finals_bypass_tag_gate_reach_done(verdict_response):
     """Revert-proof seam pin: the L1 epistemic-tag contract applies to REPORT
