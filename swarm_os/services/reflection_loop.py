@@ -807,6 +807,31 @@ async def _distill(distiller_content: str, fix_class: str | None = None) -> str:
     return ""
 
 
+_MISSING_FILE_RE = re.compile(r"file not found[:\s]+([^\s,;'\"]+)", re.IGNORECASE)
+
+
+def _is_stale_missing_file_failure(error_msg: str) -> bool:
+    """True for a non-actionable "File not found: <path>" failure whose target
+    does not exist on disk.
+
+    Such a failure cannot be corrected (there is nothing to read), and the diary
+    keeps handing the same entry back to get_latest_failure() every tick — so
+    distilling it manufactures a rule that re-poisons the agent (it re-attempts
+    the missing read), which then re-fails and re-mints the rule: a
+    self-perpetuating loop (observed live with code_analysis_report.txt). Skip.
+    """
+    if not error_msg:
+        return False
+    m = _MISSING_FILE_RE.search(str(error_msg))
+    if not m:
+        return False
+    raw = m.group(1).strip().strip(".,;:'\"`")
+    if not raw:
+        return False
+    cand = Path(raw) if Path(raw).is_absolute() else (ROOT_DIR / raw)
+    return not cand.exists()
+
+
 async def run_reflection():
     try:
         latest_failure = await asyncio.to_thread(get_latest_failure, DIARY_PATH)
@@ -821,6 +846,13 @@ async def run_reflection():
     task_desc = latest_failure.get("task", "Unknown Task")
     content = latest_failure.get("content_preview", "")
     error_msg = latest_failure.get("error")
+    if _is_stale_missing_file_failure(error_msg):
+        logger.info(
+            "Skipping distillation of a stale missing-file failure "
+            "(non-actionable; would re-poison the agent): %s",
+            error_msg,
+        )
+        return
     component = str(
         latest_failure.get("component") or latest_failure.get("agent") or "unknown"
     )

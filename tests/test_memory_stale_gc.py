@@ -130,3 +130,16 @@ def test_referenced_paths_missing_semantics():
     assert mc._referenced_paths_missing("File not found: AGENTS.md", root) is False
     # no not-found shape -> False (never purge a plain mention)
     assert mc._referenced_paths_missing("models.py line 56 has a bug", root) is False
+
+
+def test_stale_missing_file_failure_gate_skips_distillation():
+    # The reflection distiller must NOT re-mint a rule from a non-actionable
+    # "File not found: <missing>" failure: the read can never succeed, and the
+    # diary keeps handing the same entry back, so it re-mints a rule every tick
+    # that re-poisons the agent (observed live with code_analysis_report.txt).
+    from swarm_os.services.reflection_loop import _is_stale_missing_file_failure
+
+    assert _is_stale_missing_file_failure("File not found: code_analysis_report.txt") is True
+    assert _is_stale_missing_file_failure("File not found: AGENTS.md") is False
+    assert _is_stale_missing_file_failure("some unrelated error") is False
+    assert _is_stale_missing_file_failure("") is False
