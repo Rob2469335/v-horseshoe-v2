@@ -92,7 +92,7 @@ def _modified_code_files(commit):
 def _imports_of(content):
     try:
         tree = ast.parse(content)
-    except SyntaxError, ValueError:
+    except (SyntaxError, ValueError):
         return []
     mods = []
     for node in ast.walk(tree):
