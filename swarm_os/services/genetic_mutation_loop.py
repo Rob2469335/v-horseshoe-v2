@@ -421,8 +421,8 @@ async def run_genetic_mutation(
                     }
                 )
                 await memory_bridge._flush()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("GeneticMutationLoop: failed to persist SecurityGateViolation telemetry (%s).", exc)
             prompt = (
                 prompt
                 + f"\n\nERROR ON LAST ATTEMPT:\nYour previous mutation failed the security gate with the following violation:\n{e}\nPlease fix the code so it passes the security scan."
