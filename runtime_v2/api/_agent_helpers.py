@@ -531,43 +531,177 @@ def _build_grounded_report(
     return "\n".join(out)
 
 
+def _collect_read_material(messages: list, read_paths) -> dict:
+    """Map each file read this run to the tool-result content the agent saw.
+
+    Findings synthesis must draw from the CONTENT of every file read, not from
+    the model's final prose alone. The final answer is written under recency
+    bias — a run that read 8 files typically discusses only the last few — so
+    extracting findings from that prose produced a "deep" report whose findings
+    covered the tail only (live: 8 reads, findings for 2, plus a false "no other
+    files were read"). The tool-result turns in `messages` carry the exact
+    content the agent saw for each read; pair each filesystem read action with
+    its following TOOL RESULT so synthesis can cover all of them. Returns
+    {ledger_path: content}; {} when nothing pairs (caller falls back to prose).
+    """
+    norm = lambda s: str(s).replace("\\", "/").lstrip("./")  # noqa: E731
+    ledger = {norm(p) for p in (read_paths or [])}
+    ledger_base = {p.rsplit("/", 1)[-1] for p in ledger}
+    out: dict = {}
+    pending = None
+    for m in messages:
+        if not isinstance(m, dict):
+            continue
+        role = m.get("role")
+        content = str(m.get("content", ""))
+        if role == "assistant":
+            pending = None
+            try:
+                obj = json.loads(content)
+            except Exception:
+                continue
+            if (
+                isinstance(obj, dict)
+                and obj.get("action") == "filesystem"
+                and str(obj.get("operation", "")).lower() in ("read", "read_all")
+            ):
+                p = norm(obj.get("path", ""))
+                if p:
+                    pending = p
+        elif (
+            role == "user"
+            and pending
+            and content.startswith("TOOL RESULT (filesystem)")
+        ):
+            body = content.split("\n", 1)[1] if "\n" in content else ""
+            body = body.rsplit("\n\nContinue.", 1)[0]
+            key = pending if pending in ledger else None
+            if key is None and pending.rsplit("/", 1)[-1] in ledger_base:
+                for lp in ledger:
+                    if lp.rsplit("/", 1)[-1] == pending.rsplit("/", 1)[-1]:
+                        key = lp
+                        break
+            if key:
+                out.setdefault(key, body)
+            pending = None
+    return out
+
+
 async def _extract_grounded_findings(
-    model: str, agent_id: str, reasoning_text: str, read_paths
+    model: str, agent_id: str, reasoning_text: str, read_paths, read_material=None
 ) -> dict:
-    """Second-pass STRUCTURED EXTRACTION of per-file findings.
+    """Second-pass STRUCTURED EXTRACTION / SYNTHESIS of per-file findings.
 
     Deep-research-backed two-call pattern: a reasoning model asked for JSON in
     the same call that produced its reasoning returns prose, which then fails
     parsing. So this is a SEPARATE call in `json_object` mode (syntax cannot
-    fail), given the first call's reasoning output + the read ledger, and told
-    to EXTRACT only (no new information). Every returned `file` is then
-    validated against the ledger (basename-tolerant); a claim about an unread
-    file is dropped. Returns {ledger_path: finding}; {} on ANY failure so the
-    caller falls back to the deterministic inventory (fail-safe, never raises).
+    fail). When `read_material` is supplied it runs a grounded SYNTHESIS (a
+    focused review of the real excerpts) so findings cover EVERY file read
+    instead of the recency-biased tail the prose happens to mention — the live
+    regression where an extraction-only prompt returned `[]` and shipped a bare
+    file manifest. Without material it falls back to extracting findings from
+    the final prose. Every returned `file` is validated against the ledger
+    (basename-tolerant); a claim about an unread file is dropped. Returns
+    {ledger_path: finding}; {} on ANY failure so the caller falls back to the
+    deterministic inventory (fail-safe, never raises).
     """
-    if not reasoning_text or not read_paths:
+    if not read_paths:
         return {}
     read_norm = {str(p).replace("\\", "/").lstrip("./") for p in read_paths}
     if not read_norm:
         return {}
     read_basenames = {p.rsplit("/", 1)[-1] for p in read_norm}
-    prompt = (
-        "You are an extraction function, not a generator. Below is an analysis "
-        "output and the exact list of files that were read. Extract ONLY findings "
-        "that are explicitly present in the analysis below, one entry per file "
-        "that has a finding. Do NOT add any new information, and do NOT mention "
-        "any file that is not in the list. If the analysis contains no finding, "
-        'return {"findings": []}.\n\n'
-        "FILES READ:\n" + "\n".join(f"- {p}" for p in sorted(read_norm)) + "\n\n"
-        "ANALYSIS:\n" + reasoning_text[:6000] + "\n\n"
-        'Return JSON exactly as {"findings": [{"file": "<path from the list>", '
-        '"finding": "<text>"}]}.'
-    )
-    try:
-        from runtime_v2.services._llm_client import complete_json_extraction
 
+    # Verbatim per-file read content (bounded) so synthesis draws from ALL reads.
+    ref: dict = {}
+    if isinstance(read_material, dict):
+        for k, v in read_material.items():
+            kk = str(k).replace("\\", "/").lstrip("./")
+            if kk in read_norm:
+                ref[kk] = str(v)
+    material_lines: list = []
+    used = 0
+    for p in sorted(ref):
+        body = ref[p]
+        if len(body) > 1800:
+            body = body[:1800] + "\n… [truncated for extraction]"
+        entry = f"### {p}\n{body}\n"
+        if used + len(entry) > 10000:
+            break
+        material_lines.append(entry)
+        used += len(entry)
+    material_block = ""
+    if material_lines:
+        material_block = (
+            "\n\nREAD CONTENT (verbatim excerpts the agent actually read):\n"
+            + "\n".join(material_lines)
+        )
+
+    analysis_block = (
+        "\n\nANALYSIS (the agent's own final answer):\n" + reasoning_text[:4000]
+        if reasoning_text and reasoning_text.strip()
+        else ""
+    )
+    if not material_block and not analysis_block:
+        return {}
+
+    files_block = "FILES READ:\n" + "\n".join(f"- {p}" for p in sorted(read_norm))
+    if material_block:
+        # SYNTHESIS (not extraction): the read material IS the evidence. A pure
+        # "extract, do not generate" instruction returns [] against raw code
+        # (nothing in the text states the finding), which shipped a
+        # findings-less manifest — the observed regression. A focused review
+        # over the real excerpts produces grounded per-file findings, while the
+        # ledger validation below keeps every finding on a file actually read.
+        prompt = (
+            "You are a senior software engineer performing a focused code "
+            "review. Below is the exact list of files that were read this run "
+            "and verbatim excerpts of their content, plus the agent's own final "
+            "answer. Identify CONCRETE, EVIDENCED bugs, risks, and upgrade "
+            "opportunities — one entry per affected file (combine a file's "
+            "issues into its entry). Every claim MUST cite specific names, "
+            "patterns, or short quotes that appear below. Do NOT invent files "
+            "or issues that are not evidenced; do NOT mention any file not in "
+            'the list. If nothing is evidenced, return {"findings": []}.\n\n'
+            + files_block
+            + material_block
+            + analysis_block
+            + "\n\n"
+            'Return JSON exactly as {"findings": [{"file": "<path from the '
+            'list>", "finding": "<specific issue + why it matters>"}]}.'
+        )
+    else:
+        prompt = (
+            "You are an extraction function, not a generator. Below is the "
+            "exact list of files that were read and the agent's own final "
+            "answer. Extract ONLY findings that are explicitly evidenced in the "
+            "answer, one entry per file, and do NOT mention any file not in the "
+            'list. If none, return {"findings": []}.\n\n'
+            + files_block
+            + analysis_block
+            + "\n\n"
+            'Return JSON exactly as {"findings": [{"file": "<path from the '
+            'list>", "finding": "<text>"}]}.'
+        )
+    try:
+        from runtime_v2.services._llm_client import (
+            complete_json_extraction,
+            get_litellm_model,
+        )
+
+        # The agent's model may be a bare local alias (`robs4b`). litellm needs a
+        # provider-qualified name, and analysis agents hop to the cloud model via
+        # get_litellm_model — resolving here (as every other LLM call does) is
+        # what stops `LLM Provider NOT provided. You passed model=robs4b` from
+        # silently collapsing the whole findings pass into an empty manifest.
+        litellm_model = get_litellm_model(agent_id, model)
         raw = await complete_json_extraction(
-            model, [{"role": "user", "content": prompt}], agent_id=agent_id
+            litellm_model,
+            [{"role": "user", "content": prompt}],
+            agent_id=agent_id,
+            # Reasoning models spend this cap on reasoning_content first; the
+            # multi-file synthesis needs headroom or it returns empty content.
+            max_tokens=8000 if material_block else 2048,
         )
     except Exception as exc:  # noqa: BLE001
         log.debug("[%s] findings extraction call failed: %s", agent_id, exc)

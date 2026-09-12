@@ -536,9 +536,12 @@ async def complete_for_tool_decision(
 
 
 async def complete_json_extraction(
-    litellm_model: str, messages: list, agent_id: str = None
+    litellm_model: str,
+    messages: list,
+    agent_id: str = None,
+    max_tokens: int = 1500,
 ) -> str:
-    """Raw JSON-mode completion for structured EXTRACTION (not tool decisions).
+    """Raw JSON-mode completion for structured EXTRACTION / SYNTHESIS.
 
     `response_format={"type": "json_object"}` is the only structured-output mode
     the providers here accept (native DeepSeek rejects strict `json_schema` with
@@ -546,12 +549,20 @@ async def complete_json_extraction(
     of the two-call pattern: the reasoning model produced free text, and this
     call is forced to emit parseable JSON. Returns the content string; raises on
     LLM error so the caller can fall back to the deterministic path.
+
+    `max_tokens` is a real cap, and reasoning models spend it on
+    `reasoning_content` FIRST: a task that triggers heavy reasoning (e.g. a
+    multi-file code review) can exhaust 1500 tokens in reasoning and return
+    `content=""` with `finish_reason="length"` — the exact live failure that
+    turned the deep-analysis report into a bare file manifest. Callers doing
+    synthesis pass a larger cap; and if content is STILL empty (reasoning ate
+    the whole budget) the JSON object is salvaged from `reasoning_content`.
     """
     extra = {
         "messages": messages,
         "temperature": 0.0,
         "response_format": {"type": "json_object"},
-        "max_tokens": 1500,
+        "max_tokens": max_tokens,
     }
     kwargs = build_kwargs(litellm_model, extra, [])
     kwargs["max_retries"] = 0
@@ -564,9 +575,19 @@ async def complete_json_extraction(
     except Exception as usage_err:  # noqa: BLE001
         log.debug("usage log skipped: %s", usage_err)
     try:
-        return resp.choices[0].message.content or ""
+        message = resp.choices[0].message
+        content = message.content or ""
     except Exception:  # noqa: BLE001
         return ""
+    if not content.strip():
+        # Reasoning model burned the whole cap before emitting content — salvage
+        # the JSON object it reasoned out (last resort; content is authoritative).
+        reasoning = getattr(message, "reasoning_content", "") or ""
+        match = re.search(r"\{.*\}", reasoning, re.DOTALL)
+        if match:
+            log.debug("json extraction salvaged from reasoning_content")
+            return match.group(0)
+    return content
 
 
 async def stream_content(

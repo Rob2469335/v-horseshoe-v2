@@ -53,6 +53,7 @@ from runtime_v2.api._agent_helpers import (  # noqa: F401
     _trim_context_messages as _trim_context_messages,
     _build_grounded_report as _build_grounded_report,
     _extract_grounded_findings as _extract_grounded_findings,
+    _collect_read_material as _collect_read_material,
 )
 
 # Bounded dedup cache for reflexion lessons (agent, action, error) -> last store
@@ -1502,7 +1503,13 @@ class AgentServiceV2:
                 # report instead of a bare error string.
                 try:
                     abort_findings = await _extract_grounded_findings(
-                        model, agent_id, response_text, state.read_paths
+                        model,
+                        agent_id,
+                        response_text,
+                        state.read_paths,
+                        read_material=_collect_read_material(
+                            messages, state.read_paths
+                        ),
                     )
                 except Exception:  # noqa: BLE001
                     abort_findings = {}
@@ -1592,7 +1599,11 @@ class AgentServiceV2:
         if agent_id in ANALYSIS_AGENTS:
             try:
                 findings_by_file = await _extract_grounded_findings(
-                    model, agent_id, response_text, state.read_paths
+                    model,
+                    agent_id,
+                    response_text,
+                    state.read_paths,
+                    read_material=_collect_read_material(messages, state.read_paths),
                 )
             except Exception as e:
                 log.warning("[%s] grounded extraction failed: %s", agent_id, e)
@@ -1882,7 +1893,7 @@ class AgentServiceV2:
                 ),
                 run_id=getattr(state, "run_id", ""),
             )
-        except (NameError, ImportError, SyntaxError):
+        except NameError, ImportError, SyntaxError:
             # Hard code bugs in the tool implementation — not retryable.
             raise
         except TimeoutError as exc:
@@ -3438,7 +3449,11 @@ class AgentServiceV2:
             # reasoning + the read ledger. Fail-safe: any LLM/parse/validation
             # failure returns {} and the deterministic inventory below fires.
             findings_by_file = await _extract_grounded_findings(
-                model, agent_id, reasoning_text, state.read_paths
+                model,
+                agent_id,
+                reasoning_text,
+                state.read_paths,
+                read_material=_collect_read_material(messages, state.read_paths),
             )
             if findings_by_file:
                 log.info(
