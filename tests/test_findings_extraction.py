@@ -53,7 +53,7 @@ async def test_extraction_keeps_only_ledger_files():
         out = await _extract_grounded_findings(
             "m", "code_analyzer", "some reasoning", {"runtime_v2/api/_agent_state.py"}
         )
-    assert out == {"runtime_v2/api/_agent_state.py": "read budget not reset"}
+    assert out == {"runtime_v2/api/_agent_state.py": ["read budget not reset"]}
     assert "models.py" not in out
 
 
@@ -69,7 +69,7 @@ async def test_extraction_resolves_basename_to_ledger_path():
         out = await _extract_grounded_findings(
             "m", "code_analyzer", "r", {"runtime_v2/api/agent_service_v2.py"}
         )
-    assert out == {"runtime_v2/api/agent_service_v2.py": "big"}
+    assert out == {"runtime_v2/api/agent_service_v2.py": ["big"]}
 
 
 # ── fail-safe: any failure -> {} so the deterministic report fires ───────────

@@ -483,7 +483,14 @@ def _build_grounded_report(
     root = root or os.getcwd()
     findings = findings or {}
     norm = lambda s: str(s).replace("\\", "/").lstrip("./")  # noqa: E731
-    findings_norm = {norm(k): str(v).strip() for k, v in findings.items()}
+
+    def _findings_list(v) -> list:
+        # Accept a single string (legacy callers) or a list (extraction output),
+        # so multiple findings on one file are all rendered.
+        raw = v if isinstance(v, (list, tuple)) else [v]
+        return [str(x).strip() for x in raw if str(x).strip()]
+
+    findings_norm = {norm(k): _findings_list(v) for k, v in findings.items()}
     paths = sorted({norm(p) for p in read_paths})
     out = [
         "Codebase analysis — grounded report.",
@@ -500,7 +507,7 @@ def _build_grounded_report(
     # Surface the grounding bookkeeping in the artifact the user actually reads:
     # a report that silently mixes anchored and unanchored findings reads as if
     # all of it were grounded (gsd-core#3352).
-    rendered = [findings_norm[p] for p in paths if findings_norm.get(p)]
+    rendered = [f for p in paths for f in findings_norm.get(p, [])]
     if rendered:
         unanchored = sum(1 for v in rendered if v.startswith("[UNANCHORED"))
         out.append(f"Findings: {len(rendered)}, {unanchored} unanchored.")
@@ -532,8 +539,7 @@ def _build_grounded_report(
             except SyntaxError:
                 detail = "; (parse error)"
         out.append(f"- {p} ({n_lines} lines){detail}")
-        finding = findings_norm.get(p)
-        if finding:
+        for finding in findings_norm.get(p, []):
             out.append(f"    finding: {finding}")
     if len(paths) > max_files:
         out.append(f"- … and {len(paths) - max_files} more file(s)")
@@ -719,8 +725,9 @@ async def _extract_grounded_findings(
     file manifest. Without material it falls back to extracting findings from
     the final prose. Every returned `file` is validated against the ledger
     (basename-tolerant); a claim about an unread file is dropped. Returns
-    {ledger_path: finding}; {} on ANY failure so the caller falls back to the
-    deterministic inventory (fail-safe, never raises).
+    {ledger_path: [finding, ...]} (a LIST so multiple findings on one file are
+    all kept, never last-write-wins); {} on ANY failure so the caller falls back
+    to the deterministic inventory (fail-safe, never raises).
     """
     if not read_paths:
         return {}
@@ -883,10 +890,12 @@ async def _extract_grounded_findings(
                 content = ""
             content_cache[key] = content
         if _anchor_exists(evidence, content):
-            out[key] = txt
+            out.setdefault(key, []).append(txt)
         else:
             unanchored += 1
-            out[key] = "[UNANCHORED — no matching text found in file] " + txt
+            out.setdefault(key, []).append(
+                "[UNANCHORED — no matching text found in file] " + txt
+            )
     if unanchored:
         log.info(
             "[%s] %d finding(s) marked unanchored (no matching text in file)",

@@ -237,7 +237,7 @@ async def test_unanchored_finding_is_marked_not_presented_as_grounded(
         {str(f)},
         read_material=_collect_read_material(lines, {str(f)}),
     )
-    text = findings[_norm(str(f))]
+    text = findings[_norm(str(f))][0]
     assert text.startswith("[UNANCHORED")
     report = _build_grounded_report({str(f)}, findings=findings)
     assert "[UNANCHORED" in report
@@ -284,7 +284,7 @@ async def test_anchored_finding_renders_without_unanchored_marker(
         {str(f)},
         read_material=_collect_read_material(lines, {str(f)}),
     )
-    assert not findings[_norm(str(f))].startswith("[UNANCHORED")
+    assert not findings[_norm(str(f))][0].startswith("[UNANCHORED")
 
 
 @pytest.mark.asyncio
@@ -379,4 +379,55 @@ async def test_fabricated_claim_with_trivial_anchor_is_marked(monkeypatch, tmp_p
         {str(f)},
         read_material=_collect_read_material(lines, {str(f)}),
     )
-    assert findings[_norm(str(f))].startswith("[UNANCHORED")
+    assert findings[_norm(str(f))][0].startswith("[UNANCHORED")
+
+
+@pytest.mark.asyncio
+async def test_multiple_findings_same_file_all_survive(monkeypatch, tmp_path):
+    f = tmp_path / "svc.py"
+    f.write_text('def handler():\n    return os.system("x")\n', encoding="utf-8")
+    lines = [
+        {
+            "role": "assistant",
+            "content": json.dumps(
+                {"action": "filesystem", "operation": "read", "path": str(f)}
+            ),
+        },
+        {"role": "user", "content": "TOOL RESULT (filesystem):\ncode\n\nContinue."},
+    ]
+
+    async def fake_extract(model, messages, agent_id=None, **kwargs):
+        return json.dumps(
+            {
+                "findings": [
+                    {
+                        "file": str(f),
+                        "finding": "first: unguarded os.system",
+                        "evidence": 'os.system("x")',
+                    },
+                    {
+                        "file": str(f),
+                        "finding": "second: handler returns shell output",
+                        "evidence": "def handler():",
+                    },
+                ]
+            }
+        )
+
+    import runtime_v2.services._llm_client as llc
+
+    monkeypatch.setattr(llc, "complete_json_extraction", fake_extract)
+    monkeypatch.setattr(llc, "get_litellm_model", lambda agent_id, model: "resolved/x")
+
+    findings = await _extract_grounded_findings(
+        "m",
+        "code_analyzer",
+        "x",
+        {str(f)},
+        read_material=_collect_read_material(lines, {str(f)}),
+    )
+    got = findings[_norm(str(f))]
+    assert len(got) == 2, "both findings on the same file must survive"
+    report = _build_grounded_report({str(f)}, findings=findings)
+    assert report.count("finding:") == 2
+    assert "unguarded os.system" in report and "shell output" in report
