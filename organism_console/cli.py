@@ -280,6 +280,19 @@ def setup_readline():
         return False
 
 
+def _reset_goal_result(ctx) -> None:
+    """Clear the previous turn's machine-readable goal result.
+
+    `/goal` stamps ``ctx.last_goal_result`` and the prompt-dispatch guard
+    (``getattr(ctx, "last_goal_result", None) is None``) skips ``run_agentic``
+    while it is set. Without clearing it at the top of every REPL turn, the
+    guard stays False forever and every later typed prompt is silently dropped
+    (REPL lockout). No-op when the attribute is absent.
+    """
+    if hasattr(ctx, "last_goal_result"):
+        delattr(ctx, "last_goal_result")
+
+
 def main():
     # Preserve the persisted cloud_enabled from .session.json (state store loads
     # it; do NOT clobber to False here or the banner ignores `/cloud on`).
@@ -443,6 +456,8 @@ def main():
 
     while True:
         try:
+            _reset_goal_result(ctx)
+
             from organism_console._commands_opencode import mode_badge
             from organism_console.permissions import auto_mode as _perm_auto
 
