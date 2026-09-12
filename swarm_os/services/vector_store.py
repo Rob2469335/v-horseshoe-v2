@@ -16,6 +16,7 @@ from qdrant_client import models
 logger = logging.getLogger(__name__)
 
 _shared_client: AsyncQdrantClient | None = None
+_shared_client_loop: asyncio.AbstractEventLoop | None = None
 
 
 class VectorStore:
@@ -32,15 +33,29 @@ class VectorStore:
             self.client = AsyncQdrantClient(":memory:")
             logger.info("Initialized in-memory AsyncQdrantClient")
         else:
-            global _shared_client
+            global _shared_client, _shared_client_loop
             settings = get_settings()
-            if _shared_client is None:
+            try:
+                loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+
+            if (
+                _shared_client is None
+                or (_shared_client_loop is not None and _shared_client_loop.is_closed())
+                or (
+                    _shared_client_loop is not None
+                    and loop is not None
+                    and _shared_client_loop is not loop
+                )
+            ):
                 # BUG FIX: Missing timeout caused HTTP 408 errors on startup when Qdrant
                 # wasn't fully ready, producing 'Error ensuring collection: Unexpected
                 # Response: 408 (Request Timeout)' in every startup log.
                 _shared_client = AsyncQdrantClient(
                     url=settings.qdrant_url, timeout=10.0
                 )
+                _shared_client_loop = loop
                 logger.info("Connected to local Qdrant instance (shared client)")
             self.client = _shared_client
 
