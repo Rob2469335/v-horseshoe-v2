@@ -1,6 +1,7 @@
 import requests
 import logging
 import urllib3
+import asyncio
 from typing import Any
 from typing import Optional
 from organism_console.config import BACKEND_URL
@@ -74,18 +75,38 @@ def call_api(
 import httpx
 
 _async_client: httpx.AsyncClient | None = None
+# The client is bound to the event loop that created it. The CLI streams from
+# more than one loop (asyncio.run in a worker thread), so cache the owning loop
+# too and rebuild when the caller runs on a different (or closed) loop —
+# mirroring routes.py's _PROBE_CLIENT_LOOP. Without this, a second loop received
+# a client bound to the first and failed with "Event loop is closed".
+_async_client_loop: asyncio.AbstractEventLoop | None = None
 _async_client_lock = __import__("threading").Lock()
 
 
 def _get_async_client() -> httpx.AsyncClient:
-    global _async_client
+    global _async_client, _async_client_loop
     with _async_client_lock:
-        if _async_client is None or _async_client.is_closed:
+        try:
+            loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if (
+            _async_client is None
+            or _async_client.is_closed
+            or (_async_client_loop is not None and _async_client_loop.is_closed())
+            or (
+                _async_client_loop is not None
+                and loop is not None
+                and _async_client_loop is not loop
+            )
+        ):
             _async_client = httpx.AsyncClient(
                 timeout=httpx.Timeout(600.0, connect=15.0),
                 verify=settings.ssl_verify,
                 limits=httpx.Limits(max_keepalive_connections=5, max_connections=20),
             )
+            _async_client_loop = loop
         return _async_client
 
 
