@@ -497,6 +497,15 @@ def _build_grounded_report(
         )
         return "\n".join(out)
 
+    # Surface the grounding bookkeeping in the artifact the user actually reads:
+    # a report that silently mixes anchored and unanchored findings reads as if
+    # all of it were grounded (gsd-core#3352).
+    rendered = [findings_norm[p] for p in paths if findings_norm.get(p)]
+    if rendered:
+        unanchored = sum(1 for v in rendered if v.startswith("[UNANCHORED"))
+        out.append(f"Findings: {len(rendered)}, {unanchored} unanchored.")
+        out.append("")
+
     out.append(f"Examined {len(paths)} file(s):")
     for p in paths[: max(0, max_files)]:
         full = p if os.path.isabs(p) else os.path.join(root, p)

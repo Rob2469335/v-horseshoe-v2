@@ -303,3 +303,24 @@ async def test_material_covers_every_file_at_deep_budget(monkeypatch, tmp_path):
     )
     for p in paths:
         assert f"### {_norm(p)}" in captured["prompt"], p
+
+
+def test_report_surfaces_unanchored_count(tmp_path):
+    paths = []
+    for i in range(1, 3):
+        f = tmp_path / f"svc{i}.py"
+        f.write_text("def handler():\n    return 1\n", encoding="utf-8")
+        paths.append(str(f))
+    findings = {
+        paths[0]: "[UNANCHORED — no matching text found in file] ghost bug",
+        paths[1]: "real anchored finding",
+    }
+    report = _build_grounded_report(set(paths), findings=findings)
+    assert "Findings: 2, 1 unanchored." in report
+
+
+def test_report_reports_zero_unanchored(tmp_path):
+    f = tmp_path / "svc.py"
+    f.write_text("def handler():\n    pass\n", encoding="utf-8")
+    report = _build_grounded_report({str(f)}, findings={str(f): "ok"})
+    assert "Findings: 1, 0 unanchored." in report
