@@ -80,6 +80,29 @@ class MemoryDaemon:
                             )
                     except Exception as dgc_exc:
                         logger.debug("decision-cache GC skipped: %s", dgc_exc)
+
+                    # ReflexionMemory is a standalone collection (not an
+                    # agent_memory_* shard), so the memory GC above misses it —
+                    # yet a stale rule there re-poisons the agent. Clean it too.
+                    try:
+                        from runtime_v2.services.memory_core import (
+                            prune_stale_file_memories,
+                        )
+
+                        rpruned = await asyncio.to_thread(
+                            prune_stale_file_memories,
+                            "self_reflection",
+                            False,
+                            1000,
+                            "ReflexionMemory",
+                        )
+                        if rpruned.get("deleted"):
+                            logger.info(
+                                "ReflexionMemory GC: purged %s stale rules",
+                                rpruned["deleted"],
+                            )
+                    except Exception as r_exc:
+                        logger.debug("reflexion GC skipped: %s", r_exc)
                 except Exception as exc:
                     logger.warning("manager daemon error: %s", exc)
                 await asyncio.sleep(self.interval_seconds)

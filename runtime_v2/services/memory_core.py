@@ -721,14 +721,20 @@ def _referenced_paths_missing(fact: str, root: str) -> bool:
 
 
 def prune_stale_file_memories(
-    shard: str = "self_reflection", dry_run: bool = False, scan_limit: int = 1000
+    shard: str = "self_reflection",
+    dry_run: bool = False,
+    scan_limit: int = 1000,
+    collection: str | None = None,
 ) -> dict:
     """Delete memories whose explicit "File not found: <path>" target no longer
     exists (the stale-reference class). Deterministic, Qdrant-only, never raises.
 
+    `collection` overrides the shard mapping so callers can also clean the
+    standalone ReflexionMemory collection (not an agent_memory_* shard).
+
     Returns {ok, shard, scanned, stale, deleted, sample, dry_run?}.
     """
-    collection = _get_shard_name(shard)
+    collection = collection or _get_shard_name(shard)
     root = _project_root()
     try:
         resp = requests.post(
