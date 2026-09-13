@@ -45,6 +45,13 @@ RESULTS = _HERE / "results" / "curriculum_runs.jsonl"
 _TARGET_RUNS = 500
 _TOOL_RE = re.compile(r"[⚡✓▶]\s+([a-z_][a-z0-9_]*)")
 
+# Tools that need NO human approval (approval_registry ALLOW tier), so a batch
+# run can use them unattended without prompts. sandbox_repl/git/system/mcp are
+# CONFIRM/ALWAYS_CONFIRM and would hang a non-interactive run (or pop up
+# "approval required"). Only filesystem reads / web_search / semantic_search
+# are safe here.
+_APPROVAL_FREE = {"filesystem", "web_search", "semantic_search"}
+
 
 def load_items() -> list[dict]:
     items: list[dict] = []
@@ -115,7 +122,7 @@ def _tool_match(item: dict, used: list[str]) -> tuple[bool, bool]:
     return bool(targets & got), bool(targets and targets <= got)
 
 
-def run_item(item: dict, timeout: int = 600) -> dict:
+def run_item(item: dict, timeout: int = 600, allow_approval: bool = False) -> dict:
     """Run one item through the one-shot CLI and verify its answer + tool use."""
     prompt = item["prompt"]
     t0 = datetime.now(timezone.utc)
@@ -126,6 +133,9 @@ def run_item(item: dict, timeout: int = 600) -> dict:
             text=True,
             timeout=timeout,
             cwd=str(_HERE.parent),
+            # ALWAYS_CONFIRM tools (sandbox_repl, …) prompt the CLI; a pipe of
+            # "y" answers them so an opted-in unattended run can proceed.
+            input=("y\n" * 50) if allow_approval else "",
         )
         out = (proc.stdout or "") + "\n" + (proc.stderr or "")
     except subprocess.TimeoutExpired:
@@ -726,11 +736,18 @@ def _completed() -> dict[str, str]:
     return seen
 
 
-def next_item(split: str = "all") -> dict | None:
-    """The next item not yet run (a DIFFERENT one each time), wrapping when done."""
+def next_item(split: str = "all", approval_free: bool = True) -> dict | None:
+    """The next item not yet run (a DIFFERENT one each time), wrapping when done.
+
+    With ``approval_free`` (the default) only items whose tools are all in the
+    ALLOW tier are candidates — so an unattended run never triggers an approval
+    prompt. Pass False (with ``--allow-approval``) to include the rest.
+    """
     items = load_items()
     if split != "all":
         items = [i for i in items if i.get("split") == split]
+    if approval_free:
+        items = [i for i in items if set(i.get("target_tools") or []) <= _APPROVAL_FREE]
     if not items:
         return None
     done = _completed()
@@ -793,6 +810,12 @@ def main() -> int:
         "--mine", type=int, metavar="N", help="mine N DIVERSE verified items"
     )
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument(
+        "--allow-approval",
+        action="store_true",
+        help="include approval-requiring tools (sandbox_repl/…) by answering "
+        "the CLI prompts (opt-in; bypasses the ALWAYS_CONFIRM tier for this run)",
+    )
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--progress", action="store_true")
     ap.add_argument("--diversity", action="store_true")
@@ -831,12 +854,14 @@ def main() -> int:
 
         consec_fail = 0
         for i in range(args.run):
-            item = next_item(args.split)
+            item = next_item(args.split, approval_free=not args.allow_approval)
             if item is None:
                 print("curriculum exhausted")
                 break
             print(f"[{i + 1}/{args.run}] [{item['id']}] {item['prompt'][:80]}")
-            res = run_item(item, timeout=args.timeout)
+            res = run_item(
+                item, timeout=args.timeout, allow_approval=args.allow_approval
+            )
             record(res)
             mark = {True: "PASS", False: "FAIL", None: "MANUAL"}[res["verified"]]
             print(
@@ -868,7 +893,7 @@ def main() -> int:
         return 1
 
     print(f"[{item['id']}] {item['prompt']}")
-    result = run_item(item, timeout=args.timeout)
+    result = run_item(item, timeout=args.timeout, allow_approval=args.allow_approval)
     record(result)
     mark = {True: "PASS", False: "FAIL", None: "MANUAL"}[result["verified"]]
     print(

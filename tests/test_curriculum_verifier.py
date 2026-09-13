@@ -161,6 +161,28 @@ def test_generated_lookup_variants_match_the_file(tmp_path, monkeypatch):
     assert checked > 0  # the pool actually contains lookup variants
 
 
+def test_next_item_filters_approval_requiring_items(monkeypatch):
+    """Unattended runs must never select an ALWAYS_CONFIRM tool (sandbox_repl),
+    which would prompt and hang. `--allow-approval` lifts the filter."""
+    free = {
+        "id": "z1",
+        "prompt": "Read a file.",
+        "target_tools": ["filesystem"],
+        "verify": {"type": "contains", "mode": "all", "value": ["x"]},
+    }
+    needs = {
+        "id": "z2",
+        "prompt": "compute 2 + 2",
+        "target_tools": ["sandbox_repl"],
+        "verify": {"type": "contains", "mode": "all", "value": ["4"]},
+    }
+    monkeypatch.setattr(rc, "load_items", lambda: [needs, free])
+    monkeypatch.setattr(rc, "_completed", lambda: {})
+    assert rc.next_item(approval_free=True)["id"] == "z1"
+    assert rc.next_item(approval_free=False)["id"] in ("z1", "z2")
+    assert "sandbox_repl" not in rc._APPROVAL_FREE
+
+
 def test_load_items_merges_generated(tmp_path, monkeypatch):
     monkeypatch.setattr(rc, "GENERATED", tmp_path / "generated.jsonl")
     seed = len(rc.load_items())
