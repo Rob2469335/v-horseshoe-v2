@@ -122,7 +122,9 @@ def _analysis_cloud_model() -> str:
     # fallback chain (2026-09 fleet decision: NVIDIA -> OpenCode Zen/Go ->
     # OpenRouter; Gemini/Groq/Ling removed). Overridable via ANALYSIS_CLOUD_MODEL
     # (your .env currently sets it to the NVIDIA NIM alias).
-    return os.getenv("ANALYSIS_CLOUD_MODEL", "nvidia_nim/deepseek-ai/deepseek-v4-flash-0731")
+    return os.getenv(
+        "ANALYSIS_CLOUD_MODEL", "nvidia_nim/deepseek-ai/deepseek-v4-flash-0731"
+    )
 
 
 def _analysis_cloud_enabled() -> bool:

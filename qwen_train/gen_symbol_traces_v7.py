@@ -30,7 +30,9 @@ import sys
 from pathlib import Path
 
 REPO = r"C:\Users\rober\Projects\v-horseshoe-v2"
-OUT = Path(r"C:\Users\rober\Projects\v-horseshoe-v2\qwen_train\results\symbol_traces_v7.jsonl")
+OUT = Path(
+    r"C:\Users\rober\Projects\v-horseshoe-v2\qwen_train\results\symbol_traces_v7.jsonl"
+)
 FIX_RE = re.compile(r"^(FIX|HEAL|SERVICE|FEAT):", re.IGNORECASE)
 
 
@@ -67,9 +69,7 @@ def symbols_of(src: str) -> list[dict]:
         return []
     syms = []
     for node in tree.body:
-        if isinstance(
-            node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
-        ):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             syms.append(
                 {
                     "name": node.name,

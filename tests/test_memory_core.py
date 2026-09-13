@@ -62,7 +62,6 @@ class TestKgCap:
         mc._cap_kg()
         assert g.number_of_nodes() == 3
 
-
     def test_save_kg_caps_over_ceiling(self, tmp_path):
         """REVERT-PROOF: _save_kg must enforce the node ceiling (the integration
         point the cap is wired into). Removing the _cap_kg() call in _save_kg

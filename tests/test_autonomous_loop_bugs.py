@@ -713,10 +713,10 @@ class TestReadAgentsMdCanonicalization:
 
     @pytest.mark.parametrize(
         "spelling", ["agent.md", "agents.md", "AGENT.md", "AGENTS.MD"]
-)
-
+    )
     def test_variant_reads_real_agents_md(self, tmp_path: Path, monkeypatch, spelling):
         from swarm_os.lib.mcp import filesystem as _fs
+
         (tmp_path / "AGENTS.md").write_text("THE-CANONICAL-DOCS", encoding="utf-8")
         r = _fs.filesystem_handler({"operation": "read", "path": spelling}, tmp_path)
         assert r.get("ok") is True, (spelling, r)
@@ -764,18 +764,42 @@ class TestWriteIntentGoalRequiresEdits:
             "and upgrades always read agent md first (and apply the fixes)"
         )
         READ_ONLY_KEYWORDS = [
-            "analyze", "search", "scan", "inspect", "review", "read", "find", "check",
+            "analyze",
+            "search",
+            "scan",
+            "inspect",
+            "review",
+            "read",
+            "find",
+            "check",
         ]
         WRITE_KEYWORDS = [
-            "fix", "implement", "add", "change", "refactor", "write", "modify",
-            "update", "create", "delete", "remove", "patch", "edit", "generate",
-            "apply", "fixes",
+            "fix",
+            "implement",
+            "add",
+            "change",
+            "refactor",
+            "write",
+            "modify",
+            "update",
+            "create",
+            "delete",
+            "remove",
+            "patch",
+            "edit",
+            "generate",
+            "apply",
+            "fixes",
         ]
         import re as _re
 
         gl = goal.lower()
-        has_write = any(_re.search(r"\b" + _re.escape(k) + r"\b", gl) for k in WRITE_KEYWORDS)
-        has_read = any(_re.search(r"\b" + _re.escape(k) + r"\b", gl) for k in READ_ONLY_KEYWORDS)
+        has_write = any(
+            _re.search(r"\b" + _re.escape(k) + r"\b", gl) for k in WRITE_KEYWORDS
+        )
+        has_read = any(
+            _re.search(r"\b" + _re.escape(k) + r"\b", gl) for k in READ_ONLY_KEYWORDS
+        )
         assert has_write is True, "the handoff goal must be write-intent"
         assert has_read is True
         assert mod.run_autonomous_goal_loop is not None
@@ -889,7 +913,9 @@ def test_untracked_agent_file_survives_baseline_roundtrip(git_repo):
     import subprocess
 
     subprocess.run(
-        ["git", "checkout", "HEAD", "--", "tracked.py"], cwd=git_repo, capture_output=True
+        ["git", "checkout", "HEAD", "--", "tracked.py"],
+        cwd=git_repo,
+        capture_output=True,
     )
     assert (git_repo / "tracked.py").read_text(encoding="utf-8") == "A=1\n"
     assert not (git_repo / "agent_new.py").exists()
@@ -925,12 +951,14 @@ def test_autonomous_no_git_stash_in_baseline_eval_source():
     import organism_console.loops.autonomous as mod
 
     src = Path(mod.__file__).read_text(encoding="utf-8")
-    nonzero_lines = [l for l in src.splitlines() if "git stash" in l or "git clean" in l]
+    nonzero_lines = [
+        l for l in src.splitlines() if "git stash" in l or "git clean" in l
+    ]
     # explanatory comments may mention the anti-pattern; actual invocations must not
     for line in nonzero_lines:
         assert "subprocess.run" not in line, f"invocation present: {line.strip()}"
     assert "snapshot_worktree" in src
-    assert 'restore_snapshot(attempt_base_snap' in src
+    assert "restore_snapshot(attempt_base_snap" in src
 
 
 # ---------------------------------------------------------------------------
@@ -938,6 +966,7 @@ def test_autonomous_no_git_stash_in_baseline_eval_source():
 # because "apply" was not a WRITE keyword and plural "fixes" does not match
 # the word-boundary `\bfix\b`. The fix pipeline was skipped entirely.
 # ---------------------------------------------------------------------------
+
 
 def test_apply_the_fixes_goal_is_write_not_readonly():
     import re
@@ -949,8 +978,16 @@ def test_apply_the_fixes_goal_is_write_not_readonly():
     ro_match = re.search(r"READ_ONLY_KEYWORDS\s*=\s*\[(.*?)\]", src, re.DOTALL)
     wr_match = re.search(r"WRITE_KEYWORDS\s*=\s*\[(.*?)\]", src, re.DOTALL)
     assert ro_match and wr_match
-    ro_kw = [w.strip().strip('"').strip("'") for w in ro_match.group(1).split(",") if w.strip()]
-    wr_kw = [w.strip().strip('"').strip("'") for w in wr_match.group(1).split(",") if w.strip()]
+    ro_kw = [
+        w.strip().strip('"').strip("'")
+        for w in ro_match.group(1).split(",")
+        if w.strip()
+    ]
+    wr_kw = [
+        w.strip().strip('"').strip("'")
+        for w in wr_match.group(1).split(",")
+        if w.strip()
+    ]
     # "apply" + plural "fixes" must be recognized as write intent
     assert "apply" in wr_kw, "WRITE_KEYWORDS must include 'apply'"
     assert "fixes" in wr_kw, "WRITE_KEYWORDS must include plural 'fixes'"
@@ -960,6 +997,9 @@ def test_apply_the_fixes_goal_is_write_not_readonly():
     ).lower()
     has_ro = any(re.search(r"\b" + re.escape(kw) + r"\b", goal) for kw in ro_kw)
     has_wr = any(re.search(r"\b" + re.escape(kw) + r"\b", goal) for kw in wr_kw)
-    assert has_ro and has_wr, "goal must be write-intent (has_ro=%s has_wr=%s)" % (has_ro, has_wr)
+    assert has_ro and has_wr, "goal must be write-intent (has_ro=%s has_wr=%s)" % (
+        has_ro,
+        has_wr,
+    )
     # and NOT read-only
     assert not (has_ro and not has_wr), "goal must not classify as read-only"

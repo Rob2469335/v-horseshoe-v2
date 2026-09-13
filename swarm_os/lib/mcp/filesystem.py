@@ -346,7 +346,9 @@ def filesystem_handler(
                 }
 
             recursive = bool(
-                params.get("recursive", op_raw in ("tree", "directory_tree", "tree_view"))
+                params.get(
+                    "recursive", op_raw in ("tree", "directory_tree", "tree_view")
+                )
             )
             entries = []
             try:

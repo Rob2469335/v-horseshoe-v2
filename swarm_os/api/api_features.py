@@ -54,14 +54,14 @@ def _extract_json_object(text: str) -> dict | None:
                 candidate = stripped[start : i + 1]
                 try:
                     parsed = _json.loads(candidate)
-                except (ValueError, RecursionError):
+                except ValueError, RecursionError:
                     # Try stripping a trailing comma before the closing brace.
                     try:
                         candidate2 = candidate[: candidate.rfind("}")].rstrip()
                         if candidate2.endswith(","):
                             candidate2 = candidate2[:-1] + "}"
                         parsed = _json.loads(candidate2)
-                    except (ValueError, RecursionError):
+                    except ValueError, RecursionError:
                         return None
                 return parsed if isinstance(parsed, dict) else None
     return None
@@ -1015,7 +1015,9 @@ def list_approval_requests(request: Request):
     return {"status": "ok", "requests": appr.list_requests()}
 
 
-@router.post("/healing-approvals/{request_id}/approve", dependencies=[Depends(verify_api_key)])
+@router.post(
+    "/healing-approvals/{request_id}/approve", dependencies=[Depends(verify_api_key)]
+)
 def approve_request(
     request: Request, request_id: str, body: ApprovalDecisionRequest = None
 ):
@@ -1025,7 +1027,9 @@ def approve_request(
     return {"status": "ok", "request": req}
 
 
-@router.post("/healing-approvals/{request_id}/reject", dependencies=[Depends(verify_api_key)])
+@router.post(
+    "/healing-approvals/{request_id}/reject", dependencies=[Depends(verify_api_key)]
+)
 def reject_request(
     request: Request, request_id: str, body: ApprovalDecisionRequest = None
 ):
@@ -1035,7 +1039,9 @@ def reject_request(
     return {"status": "ok", "request": req}
 
 
-@router.post("/healing-approvals/{request_id}/execute", dependencies=[Depends(verify_api_key)])
+@router.post(
+    "/healing-approvals/{request_id}/execute", dependencies=[Depends(verify_api_key)]
+)
 def execute_approved_request(request: Request, request_id: str):
     exec_service = get_approval_execution_service(request)
     res = exec_service.execute_approved(request_id)

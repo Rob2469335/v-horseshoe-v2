@@ -187,7 +187,7 @@ def _extract_id(val: object) -> int:
     last = s.rsplit("/", 1)[-1]
     try:
         return int(last)
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return 0
 
 

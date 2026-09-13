@@ -272,7 +272,8 @@ def fast_route_coordinator(user_prompt: str) -> dict | None:
     import re as _re
 
     if msg in _GREETINGS or (
-        len(words) <= 3 and any(_re.search(rf"\b{_re.escape(g)}\b", msg) for g in _GREETINGS)
+        len(words) <= 3
+        and any(_re.search(rf"\b{_re.escape(g)}\b", msg) for g in _GREETINGS)
     ):
         return {"action": "final", "response": "Hello! What can I help you with today?"}
 

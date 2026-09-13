@@ -159,7 +159,9 @@ def normalize_decision(obj: dict) -> dict:
             raise ValueError("Filesystem tool requires 'operation' argument")
         # 'list' doesn't always need a path, but 'read' / 'write' / 'patch' definitely do
         if obj.get("operation") != "list" and not obj.get("path"):
-            raise ValueError(f"Filesystem operation '{obj.get('operation')}' requires 'path' argument")
+            raise ValueError(
+                f"Filesystem operation '{obj.get('operation')}' requires 'path' argument"
+            )
 
     if obj["action"] == "sandbox_repl":
         if not obj.get("code") and not obj.get("command"):

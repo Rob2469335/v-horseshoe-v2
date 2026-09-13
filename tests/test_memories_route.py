@@ -159,17 +159,22 @@ def test_memory_search_extracts_from_payload_level_v1():
     import runtime_v2.services.memory_core as mc
     import swarm_os.services.vector_store as vsmod
 
-    with patch.object(mc, "get_embedding", fake_get_embedding), patch.object(
-        mc, "_moe_route_shards", fake_route
-    ), patch.object(mc, "_get_shard_name", fake_shard), patch.object(
-        vsmod, "VectorStore", FakeVS
+    with (
+        patch.object(mc, "get_embedding", fake_get_embedding),
+        patch.object(mc, "_moe_route_shards", fake_route),
+        patch.object(mc, "_get_shard_name", fake_shard),
+        patch.object(vsmod, "VectorStore", FakeVS),
     ):
         import asyncio
 
         res = asyncio.run(r.memory_search("hello", 8))
-    assert res["results"][0]["text"] == "the actual memory text", "text must come from payload"
+    assert res["results"][0]["text"] == "the actual memory text", (
+        "text must come from payload"
+    )
     assert res["results"][0]["sender"] == "researcher", "sender must come from payload"
-    assert res["results"][0]["timestamp"] == 1712300000, "timestamp must come from payload"
+    assert res["results"][0]["timestamp"] == 1712300000, (
+        "timestamp must come from payload"
+    )
 
 
 def test_memory_search_extracts_from_payload_level():
@@ -209,15 +214,22 @@ def test_memory_search_extracts_from_payload_level():
                 }
             ]
 
-    with patch.object(mc, "get_embedding", fake_get_embedding), patch.object(
-        mc, "_moe_route_shards", fake_route
-    ), patch.object(mc, "_get_shard_name", fake_shard), patch.object(
-        vsmod, "VectorStore", FakeVS
+    with (
+        patch.object(mc, "get_embedding", fake_get_embedding),
+        patch.object(mc, "_moe_route_shards", fake_route),
+        patch.object(mc, "_get_shard_name", fake_shard),
+        patch.object(vsmod, "VectorStore", FakeVS),
     ):
         res = asyncio.run(r.memory_search("hello", 8))
-    assert res["results"][0]["text"] == "the actual memory text", "text must come from payload"
+    assert res["results"][0]["text"] == "the actual memory text", (
+        "text must come from payload"
+    )
     assert res["results"][0]["sender"] == "researcher", "sender must come from payload"
-    assert res["results"][0]["timestamp"] == 1712300000, "timestamp must come from payload"
+    assert res["results"][0]["timestamp"] == 1712300000, (
+        "timestamp must come from payload"
+    )
+
+
 def test_memories_paginates_all_points_not_truncated():
     """The /memories dump must page scroll() to completion instead of doing a
     single scroll(limit) — the old single-scroll silently dropped any memory
@@ -226,9 +238,18 @@ def test_memories_paginates_all_points_not_truncated():
 
     pages = {
         "agent_memory": [
-            ([_FakePoint({"fact": f"mem-{i}", "timestamp": i}) for i in range(0, 2)], "offset-1"),
-            ([_FakePoint({"fact": f"mem-{i}", "timestamp": i}) for i in range(2, 4)], "offset-2"),
-            ([_FakePoint({"fact": f"mem-{i}", "timestamp": i}) for i in range(4, 6)], None),
+            (
+                [_FakePoint({"fact": f"mem-{i}", "timestamp": i}) for i in range(0, 2)],
+                "offset-1",
+            ),
+            (
+                [_FakePoint({"fact": f"mem-{i}", "timestamp": i}) for i in range(2, 4)],
+                "offset-2",
+            ),
+            (
+                [_FakePoint({"fact": f"mem-{i}", "timestamp": i}) for i in range(4, 6)],
+                None,
+            ),
         ]
     }
 

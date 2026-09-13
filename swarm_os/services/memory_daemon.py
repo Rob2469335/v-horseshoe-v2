@@ -41,9 +41,7 @@ class MemoryDaemon:
                             prune_stale_file_memories,
                         )
 
-                        pruned = await asyncio.to_thread(
-                            prune_stale_file_memories
-                        )
+                        pruned = await asyncio.to_thread(prune_stale_file_memories)
                         if pruned.get("deleted"):
                             logger.info(
                                 "Memory GC: purged %s stale file-reference memories",

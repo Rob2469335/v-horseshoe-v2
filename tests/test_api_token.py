@@ -114,16 +114,12 @@ def test_open_route_not_gated_when_set(gated_app, method, path):
 
 
 def test_sensitive_route_accepts_x_api_key(gated_app):
-    r = gated_app.get(
-        "/admin/replay", headers={"X-API-Key": "sekrit-123"}
-    )
+    r = gated_app.get("/admin/replay", headers={"X-API-Key": "sekrit-123"})
     assert r.status_code != 401, "correct X-API-Key should pass"
 
 
 def test_sensitive_route_accepts_bearer_cli_scheme(gated_app):
-    r = gated_app.get(
-        "/admin/replay", headers={"Authorization": "Bearer sekrit-123"}
-    )
+    r = gated_app.get("/admin/replay", headers={"Authorization": "Bearer sekrit-123"})
     assert r.status_code != 401, "CLI Bearer scheme should pass"
 
 

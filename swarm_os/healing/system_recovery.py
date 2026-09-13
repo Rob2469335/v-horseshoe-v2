@@ -68,7 +68,7 @@ def free_memory(anomaly: Dict[str, Any] | None = None) -> Dict[str, Any]:
                 emptied.append({"pid": pid, "name": proc.info["name"]})
             finally:
                 ctypes.windll.kernel32.CloseHandle(handle)
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
+        except psutil.NoSuchProcess, psutil.AccessDenied:
             continue
     log.info(
         "Freed working sets of %d non-critical processes (skipped %d)",

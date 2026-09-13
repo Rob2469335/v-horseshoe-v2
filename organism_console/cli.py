@@ -405,15 +405,16 @@ def main():
                 }
             else:
                 result = (
-                    run_agentic(ctx, execute_prompt, json_flag) if execute_prompt else {}
+                    run_agentic(ctx, execute_prompt, json_flag)
+                    if execute_prompt
+                    else {}
                 )
             if json_flag:
                 print(
                     json.dumps(
                         {
                             "ok": bool(
-                                result.get("content")
-                                or goal_result.get("passed")
+                                result.get("content") or goal_result.get("passed")
                             ),
                             "agent": ctx.active_agent,
                             "model": ctx.active_model,

@@ -122,15 +122,52 @@ def _is_placeholder_final(text: str, goal: str = "") -> bool:
         return True
 
     if goal:
-        g = re.sub(r"^(Goal|Task|Task Goal|ORIGINAL GOAL)\s*[:：]\s*", "", goal.strip(), flags=re.IGNORECASE)
-        for marker in ("*** CRITICAL INSTRUCTION ***", "CRITICAL INSTRUCTION", "\n\nYou are the", "<EPHEMERAL_MESSAGE>"):
+        g = re.sub(
+            r"^(Goal|Task|Task Goal|ORIGINAL GOAL)\s*[:：]\s*",
+            "",
+            goal.strip(),
+            flags=re.IGNORECASE,
+        )
+        for marker in (
+            "*** CRITICAL INSTRUCTION ***",
+            "CRITICAL INSTRUCTION",
+            "\n\nYou are the",
+            "<EPHEMERAL_MESSAGE>",
+        ):
             idx = g.find(marker)
             if idx > 0:
                 g = g[:idx].strip()
-        
-        stopwords = {"the", "a", "an", "this", "that", "it", "is", "are", "was", "were", "to", "for", "of", "in", "and", "or", "on", "with", "as", "by", "be", "at"}
-        t_words = set(w for w in re.findall(r"\b\w+\b", t.lower()) if w not in stopwords)
-        g_words = set(w for w in re.findall(r"\b\w+\b", g.lower()) if w not in stopwords)
+
+        stopwords = {
+            "the",
+            "a",
+            "an",
+            "this",
+            "that",
+            "it",
+            "is",
+            "are",
+            "was",
+            "were",
+            "to",
+            "for",
+            "of",
+            "in",
+            "and",
+            "or",
+            "on",
+            "with",
+            "as",
+            "by",
+            "be",
+            "at",
+        }
+        t_words = set(
+            w for w in re.findall(r"\b\w+\b", t.lower()) if w not in stopwords
+        )
+        g_words = set(
+            w for w in re.findall(r"\b\w+\b", g.lower()) if w not in stopwords
+        )
         if len(g_words) >= 3:
             overlap = len(g_words.intersection(t_words))
             # If the response is basically just echoing the goal words,
@@ -138,7 +175,7 @@ def _is_placeholder_final(text: str, goal: str = "") -> bool:
             if overlap / len(g_words) >= 0.75 and len(t) < max(200, len(g) * 2):
                 return True
         elif len(g_words) > 0 and len(g_words) < 3:
-            # For very short prompts, don't use the overlap heuristic because 
+            # For very short prompts, don't use the overlap heuristic because
             # common structural words (like "review", "patch") can easily trigger it.
             pass
 
@@ -230,7 +267,9 @@ def _carve_implementation_clause(sentence: str):
     suffix = sentence[split_at:].strip(" ,;:()[]")
     # Drop a trailing conjunction / parenthetical connector left over from the
     # carve ("... first (and apply the fixes)" -> prefix ends with "(and").
-    prefix = re.sub(r"[\s(]*\b(?:and|then|also|to)\b[\s(]*$", "", prefix).strip(" ,;:()")
+    prefix = re.sub(r"[\s(]*\b(?:and|then|also|to)\b[\s(]*$", "", prefix).strip(
+        " ,;:()"
+    )
     # The prefix must be a genuine research clause — if it still contains an
     # implementation keyword we cannot carve safely; keep the whole sentence as
     # implementation instead.

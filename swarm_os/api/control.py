@@ -29,7 +29,9 @@ from swarm_os.lib.paths import project_root
 
 log = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/control", tags=["control"], dependencies=[Depends(verify_api_key)])
+router = APIRouter(
+    prefix="/control", tags=["control"], dependencies=[Depends(verify_api_key)]
+)
 
 _WRITE_TOKENS = {}
 

@@ -501,7 +501,9 @@ async def test_stale_approval_observation_does_not_derail_fresh_run(monkeypatch)
     svc._get_decision = decide
 
     chunks = []
-    async for chunk in svc.step_agent_stream("coordinator", "", history=message_history):
+    async for chunk in svc.step_agent_stream(
+        "coordinator", "", history=message_history
+    ):
         chunks.append(chunk)
 
     # No approval_result chunk at all (stale key ignored, not resolved).
@@ -575,7 +577,9 @@ async def test_deny_observation_unknown_pending_does_not_derail(monkeypatch):
     svc._get_decision = decide
 
     chunks = []
-    async for chunk in svc.step_agent_stream("coordinator", "", history=message_history):
+    async for chunk in svc.step_agent_stream(
+        "coordinator", "", history=message_history
+    ):
         chunks.append(chunk)
 
     approvals = [c for c in chunks if c.get("type") == "approval_result"]

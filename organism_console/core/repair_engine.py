@@ -288,7 +288,10 @@ def _find_related_tests(file_path: Path) -> List[Path]:
     for t in sorted(tests_dir.glob("test_*.py")):
         # Name match is strongest (test_routes.py / test_fallback_manager.py
         # may both exist even when the module basename is common).
-        if module_base in t.name or t.name.replace("test_", "").replace(".py", "") in module_base:
+        if (
+            module_base in t.name
+            or t.name.replace("test_", "").replace(".py", "") in module_base
+        ):
             related.append((2, t))
             continue
         head = t.read_text(encoding="utf-8", errors="ignore")[:4000]
@@ -1202,7 +1205,7 @@ class TieredRepairOrchestrator:
                             result["generated_test"] = diag.get(
                                 "test_patch"
                             ) or diag.get("test_code")
-                        except (json.JSONDecodeError, ValueError):
+                        except json.JSONDecodeError, ValueError:
                             result["repair_action"] = response_text[:500]
                     self.total_tokens += len(response_text) // 4 if response_text else 0
                 except Exception as e:

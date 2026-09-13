@@ -72,4 +72,3 @@ def test_finding_for_non_ledger_file_never_renders():
     )
     assert "models.py" not in report
     assert "unused variable" not in report
-

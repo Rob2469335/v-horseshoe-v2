@@ -69,7 +69,10 @@ def test_memory_referencing_existing_file_is_kept(fake_qdrant):
     points["current"] = [
         {
             "id": "p2",
-            "payload": {"fact": "File not found: AGENTS.md", "category": "self_reflection"},
+            "payload": {
+                "fact": "File not found: AGENTS.md",
+                "category": "self_reflection",
+            },
         }
     ]
     res = mc.prune_stale_file_memories()
@@ -102,7 +105,10 @@ def test_dry_run_counts_but_deletes_nothing(fake_qdrant):
     points["current"] = [
         {
             "id": "p4",
-            "payload": {"fact": "File not found: gone_forever.txt", "category": "self_reflection"},
+            "payload": {
+                "fact": "File not found: gone_forever.txt",
+                "category": "self_reflection",
+            },
         }
     ]
     res = mc.prune_stale_file_memories(dry_run=True)
@@ -125,7 +131,10 @@ def test_never_raises_on_qdrant_error(monkeypatch):
 def test_referenced_paths_missing_semantics():
     root = mc._project_root()
     # missing target -> True (stale)
-    assert mc._referenced_paths_missing("File not found: code_analysis_report.txt", root) is True
+    assert (
+        mc._referenced_paths_missing("File not found: code_analysis_report.txt", root)
+        is True
+    )
     # real target -> False (keep)
     assert mc._referenced_paths_missing("File not found: AGENTS.md", root) is False
     # no not-found shape -> False (never purge a plain mention)
@@ -139,7 +148,10 @@ def test_stale_missing_file_failure_gate_skips_distillation():
     # that re-poisons the agent (observed live with code_analysis_report.txt).
     from swarm_os.services.reflection_loop import _is_stale_missing_file_failure
 
-    assert _is_stale_missing_file_failure("File not found: code_analysis_report.txt") is True
+    assert (
+        _is_stale_missing_file_failure("File not found: code_analysis_report.txt")
+        is True
+    )
     assert _is_stale_missing_file_failure("File not found: AGENTS.md") is False
     assert _is_stale_missing_file_failure("some unrelated error") is False
     assert _is_stale_missing_file_failure("") is False

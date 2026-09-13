@@ -1,12 +1,17 @@
 import pytest
 
+
 def _svc():
     from runtime_v2.api import agent_service_v2 as agent
+
     return agent.AgentServiceV2.__new__(agent.AgentServiceV2)
+
 
 def _svc_state():
     from runtime_v2.api._agent_state import _CallState
+
     return _CallState()
+
 
 @pytest.mark.asyncio
 async def test_min_read_budget_strips_final(monkeypatch):
@@ -24,14 +29,24 @@ async def test_min_read_budget_strips_final(monkeypatch):
 
     # It's an analysis agent, goal matches bug hunt, reads < 3
     tools = ["filesystem", "final", "remember"]
-    res = await svc._get_decision("code_analyzer", "dummy", [], tools, "analyze my codebase for bugs", 10, state=state)
+    res = await svc._get_decision(
+        "code_analyzer",
+        "dummy",
+        [],
+        tools,
+        "analyze my codebase for bugs",
+        10,
+        state=state,
+    )
     assert res is not None and "allowed" in res, f"res is {res}"
     assert "final" not in res["allowed"]
 
-# Now if we hit the min reads
+    # Now if we hit the min reads
     state._filesystem_reads = 3
     tools = ["filesystem", "final", "remember"]
-    res = await svc._get_decision("code_analyzer", "dummy", [], tools, "", 10, state=state)
+    res = await svc._get_decision(
+        "code_analyzer", "dummy", [], tools, "", 10, state=state
+    )
     assert "final" in res["allowed"]
 
 

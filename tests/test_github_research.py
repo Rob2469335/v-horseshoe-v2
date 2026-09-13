@@ -148,7 +148,9 @@ def test_readonly_github_modes_are_allow_not_confirm():
     assert agent_tool_policy("github_research", "install") != ALLOW
 
     # End-to-end: discover (read-only) must NOT request confirmation.
-    first = asyncio.run(run("github_research", {"mode": "discover", "query": "ollama"}, auth=None))
+    first = asyncio.run(
+        run("github_research", {"mode": "discover", "query": "ollama"}, auth=None)
+    )
     assert first.get("status") != "confirmation_required", first
     assert first.get("ok") is True
 
@@ -161,24 +163,43 @@ async def test_github_malformed_and_huge_limit_do_not_raise(monkeypatch):
     Regression for the 2026-09-08 audit (C3): `limit = int(payload["limit"])`
     sat OUTSIDE the try, so a malformed limit escaped as ValueError.
     """
+
     class _P:
-        def __init__(self, out, rc=0): self._o=out; self.returncode=rc
-        async def communicate(self): return self._o, b""
-        def kill(self): self.returncode=-9
-        async def wait(self): return None
+        def __init__(self, out, rc=0):
+            self._o = out
+            self.returncode = rc
+
+        async def communicate(self):
+            return self._o, b""
+
+        def kill(self):
+            self.returncode = -9
+
+        async def wait(self):
+            return None
 
     async def _fake_spawn(*_a, **_k):
         return _P(json.dumps([{"fullName": "a/b", "stargazersCount": 1}]).encode())
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_spawn)
     from runtime_v2.services import tool_executor as te
+
     te.reset_exploration_state()
 
     # read-only discover -> ALLOW -> executes; malformed/huge limit must not raise
-    r = await te.run("github_research", {"mode": "discover", "query": "ollama", "limit": "eight"}, auth=None)
+    r = await te.run(
+        "github_research",
+        {"mode": "discover", "query": "ollama", "limit": "eight"},
+        auth=None,
+    )
     assert r.get("ok") is True, r
-    r2 = await te.run("github_research", {"mode": "discover", "query": "ollama", "limit": 50000}, auth=None)
+    r2 = await te.run(
+        "github_research",
+        {"mode": "discover", "query": "ollama", "limit": 50000},
+        auth=None,
+    )
     assert r2.get("ok") is True, r2
+
 
 def test_github_install_clones_to_deterministic_dir(monkeypatch, tmp_path):
     """install mode must clone into the gitignored data/github_repos/ dir (not
@@ -191,7 +212,11 @@ def test_github_install_clones_to_deterministic_dir(monkeypatch, tmp_path):
     # Pin _ROOT to tmp so we don't write to the real repo.
     monkeypatch.setattr(te, "_ROOT", tmp_path)
 
-    clone_result = {"ok": True, "rc": 0, "out": {"cloned": "ollama/ollama", "path": "ignored"}}
+    clone_result = {
+        "ok": True,
+        "rc": 0,
+        "out": {"cloned": "ollama/ollama", "path": "ignored"},
+    }
 
     async def _fake_run_gh(args, timeout=60.0):
         # Assert gh is told to clone into the deterministic dir.
@@ -203,7 +228,13 @@ def test_github_install_clones_to_deterministic_dir(monkeypatch, tmp_path):
     monkeypatch.setattr(te, "_run_gh", _fake_run_gh)
     te.reset_exploration_state()
 
-    first = asyncio.run(te.run("github_research", {"mode": "install", "target_repo": "ollama/ollama"}, auth=None))
+    first = asyncio.run(
+        te.run(
+            "github_research",
+            {"mode": "install", "target_repo": "ollama/ollama"},
+            auth=None,
+        )
+    )
     # install is CONFIRM-gated (writes to disk) — require approval, then execute
     # the STORED payload (the real approval flow).
     assert first.get("status") == "confirmation_required", first

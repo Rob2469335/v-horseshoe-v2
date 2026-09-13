@@ -224,14 +224,16 @@ class SessionState:
                 with open(tmp, "w", encoding="utf-8") as fh:
                     fh.write(payload)
                 with self._lock:
-                    if not hasattr(self, '_save_written_seq'):
+                    if not hasattr(self, "_save_written_seq"):
                         self._save_written_seq = -1
                     if seq > self._save_written_seq:
                         os.replace(tmp, self.session_file)
                         self._save_written_seq = seq
                     else:
-                        try: os.unlink(tmp)
-                        except OSError: pass
+                        try:
+                            os.unlink(tmp)
+                        except OSError:
+                            pass
             except Exception as e:
                 import logging
 
@@ -240,7 +242,7 @@ class SessionState:
                 )
 
         with self._lock:
-            if not hasattr(self, '_save_seq'):
+            if not hasattr(self, "_save_seq"):
                 self._save_seq = 0
             self._save_seq += 1
             seq = self._save_seq

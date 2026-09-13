@@ -124,11 +124,7 @@ def test_list_renders_backend_tasks():
 
 def test_clear_deletes_each_task():
     ctx = _Ctx(
-        {
-            ("GET", "/control/tasks"): _Resp(
-                {"tasks": [{"id": "a1"}, {"id": "a2"}]}
-            )
-        }
+        {("GET", "/control/tasks"): _Resp({"tasks": [{"id": "a1"}, {"id": "a2"}]})}
     )
     cmd_schedule(ctx, ["clear"])
     deletes = [c for c in ctx.calls if c[1] == "DELETE"]
@@ -151,4 +147,3 @@ def test_call_api_supports_delete(monkeypatch):
     monkeypatch.setattr(api_client, "_auth_headers", lambda: {})
     api_client.call_api("/control/tasks/abc", "DELETE")
     assert seen["url"].endswith("/control/tasks/abc")
-

@@ -164,7 +164,7 @@ class WatchLoop:
             self._watch_task.cancel()
             try:
                 await self._watch_task
-            except (asyncio.CancelledError, Exception):
+            except asyncio.CancelledError, Exception:
                 pass
         self._watch_task = None
 

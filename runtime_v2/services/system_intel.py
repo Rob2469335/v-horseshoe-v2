@@ -169,7 +169,7 @@ def _process_entry(proc: psutil.Process) -> Dict[str, Any]:
             if proc.create_time()
             else None,
         }
-    except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+    except psutil.NoSuchProcess, psutil.AccessDenied, OSError:
         return None
 
 
@@ -241,7 +241,7 @@ def net_connections() -> Dict[str, Any]:
             if c.pid:
                 try:
                     proc = psutil.Process(c.pid).name()
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                except psutil.NoSuchProcess, psutil.AccessDenied:
                     proc = f"pid:{c.pid}"
             conns.append(
                 {

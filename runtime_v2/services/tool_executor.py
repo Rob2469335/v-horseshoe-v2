@@ -92,12 +92,13 @@ async def _run_gh(args: list[str], timeout: float = 60.0) -> dict:
         try:
             parsed = _json.loads(out_text)
             return {"ok": True, "rc": 0, "out": parsed}
-        except (_json.JSONDecodeError, ValueError):
+        except _json.JSONDecodeError, ValueError:
             return {"ok": True, "rc": 0, "out": out_text}
     except asyncio.TimeoutError:
         return {"ok": False, "error": f"gh timed out ({timeout}s)"}
     except Exception as exc:  # pragma: no cover - defensive
         return {"ok": False, "error": f"gh error: {str(exc)[:300]}"}
+
 
 _ROOT = Path(
     os.getenv("ZENITH_PROJECT_ROOT", Path(__file__).resolve().parent.parent.parent)
@@ -889,7 +890,7 @@ async def _dispatch(
                 try:
                     limit = int(payload.get("limit"))
                     limit = max(1, min(limit, 50))
-                except (TypeError, ValueError):
+                except TypeError, ValueError:
                     limit = 8
 
                 if mode not in _GITHUB_MODES_ALLOWED:

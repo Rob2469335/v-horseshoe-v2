@@ -8,6 +8,7 @@ workspace root). Resolve the root deterministically from this module's own path
 instead, honoring ``ZENITH_PROJECT_ROOT`` as an explicit override — the same
 convention ``tool_executor._ROOT`` and ``playwright`` already use.
 """
+
 from __future__ import annotations
 
 import os

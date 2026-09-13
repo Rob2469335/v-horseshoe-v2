@@ -253,7 +253,7 @@ def _cap_kg():
         ts = data.get("timestamp") if isinstance(data, dict) else None
         try:
             ts = float(ts)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             ts = float("inf")
         candidates.append((ts, _kg.in_degree(node), node))
     candidates.sort(key=lambda x: (x[0], x[1]))
@@ -620,9 +620,8 @@ def prune_old_memories(
     collection = _get_shard_name(shard)
     cutoff_ts = _time.time() - (days * 86400)
     cutoff_iso = (
-        __import__("datetime").datetime.fromtimestamp(
-            cutoff_ts, __import__("datetime").timezone.utc
-        )
+        __import__("datetime")
+        .datetime.fromtimestamp(cutoff_ts, __import__("datetime").timezone.utc)
         .replace(tzinfo=None)
         .isoformat()
     )

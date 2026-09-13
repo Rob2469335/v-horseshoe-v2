@@ -9,6 +9,7 @@ import os
 import secrets
 from fastapi import Header
 
+
 # Read the key at call time (not import time): .env is loaded by the app
 # lifespan / dotenv bootstrap, so a key set there must not be missed because
 # dependencies.py was imported first. Reading per-request is cheap (env lookup).

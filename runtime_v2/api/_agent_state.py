@@ -30,7 +30,9 @@ class _CallState:
     _start_time: float = 0.0
     _tool_attempts: int = 0
     _tool_successes: int = 0
-    _filesystem_reads: int = 0  # Per-run cap for code_analyzer's read budget (2026-09-10 fix)
+    _filesystem_reads: int = (
+        0  # Per-run cap for code_analyzer's read budget (2026-09-10 fix)
+    )
     _filesystem_read_capped: bool = False  # One-time stop-reading nudge already sent
     _forced_final: bool = False  # Tools restricted to final once the read budget is hit
     _turn: int = 0

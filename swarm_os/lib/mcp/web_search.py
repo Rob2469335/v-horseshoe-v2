@@ -1050,10 +1050,12 @@ def _has_key(name: str, min_len: int = 1) -> bool:
 
 async def _ddg_fallback(query: str, max_results: int) -> Dict[str, Any]:
     try:
+
         def run_ddg():
             import sys
             import json
             import subprocess
+
             worker = (
                 "import json,sys;"
                 "try: from ddgs import DDGS\n"
@@ -1064,7 +1066,11 @@ async def _ddg_fallback(query: str, max_results: int) -> Dict[str, Any]:
                 "sys.stdout.flush()"
             )
             payload = json.dumps({"q": query, "m": max_results})
-            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
+            flags = (
+                getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                if sys.platform == "win32"
+                else 0
+            )
             try:
                 proc = subprocess.run(
                     [sys.executable, "-c", worker, payload],

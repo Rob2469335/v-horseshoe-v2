@@ -135,9 +135,21 @@ def extract_triggers(docket_entries: list[dict[str, Any]]) -> list[DocketTrigger
             triggers.append(DocketTrigger("docketed", date))
         elif "record" in low and "filed" in low and date:
             triggers.append(DocketTrigger("record_filed", date))
-        elif "appellant" in low and "brief" in low and "filed" in low and "motion" not in low and date:
+        elif (
+            "appellant" in low
+            and "brief" in low
+            and "filed" in low
+            and "motion" not in low
+            and date
+        ):
             triggers.append(DocketTrigger("appellant_brief_filed", date))
-        elif "appellee" in low and "brief" in low and "filed" in low and "motion" not in low and date:
+        elif (
+            "appellee" in low
+            and "brief" in low
+            and "filed" in low
+            and "motion" not in low
+            and date
+        ):
             triggers.append(DocketTrigger("appellee_brief_filed", date))
     return triggers
 

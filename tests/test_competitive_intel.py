@@ -1022,7 +1022,9 @@ def test_slack_delivery_refuses_loopback_webhook(monkeypatch):
         posted["url"] = url
         return FakeResp()
 
-    monkeypatch.setattr(ci, "_get_slack_client", lambda: type("C", (), {"post": fake_post})())
+    monkeypatch.setattr(
+        ci, "_get_slack_client", lambda: type("C", (), {"post": fake_post})()
+    )
     monkeypatch.delenv("INTEL_SLACK_WEBHOOK", raising=False)
 
     import asyncio
@@ -1033,4 +1035,6 @@ def test_slack_delivery_refuses_loopback_webhook(monkeypatch):
 
     # public target still delivers
     ok = asyncio.run(ci._deliver_slack("body", "https://hooks.slack.com/services/x/y"))
-    assert ok is True and posted.get("url", "").startswith("https://"), "public webhook should deliver"
+    assert ok is True and posted.get("url", "").startswith("https://"), (
+        "public webhook should deliver"
+    )

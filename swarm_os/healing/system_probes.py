@@ -147,7 +147,7 @@ def check_runaway_processes(
                 continue
             proc.cpu_percent(None)  # baseline (returns 0.0)
             procs.append(proc)
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
+        except psutil.NoSuchProcess, psutil.AccessDenied:
             continue
 
     time.sleep(0.2)  # single global window — do not sleep per process
@@ -173,7 +173,7 @@ def check_runaway_processes(
                     "cmdline": " ".join(info["cmdline"] or [])[:200],
                 }
             )
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
+        except psutil.NoSuchProcess, psutil.AccessDenied:
             continue
     runaway.sort(key=lambda p: (p["cpu_percent"], p["memory_mb"]), reverse=True)
     if runaway:

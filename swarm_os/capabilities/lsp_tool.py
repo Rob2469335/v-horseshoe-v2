@@ -268,9 +268,7 @@ async def _acquire_client(ext: str) -> BasicLSPClient:
                     pass
         if client is None:
             cfg = LANGUAGE_SERVERS[ext]
-            client = BasicLSPClient(
-                cfg["cmd"], str(project_root()), cfg["languageId"]
-            )
+            client = BasicLSPClient(cfg["cmd"], str(project_root()), cfg["languageId"])
             await client.start()
             _pool[ext] = client
         client.last_used = now

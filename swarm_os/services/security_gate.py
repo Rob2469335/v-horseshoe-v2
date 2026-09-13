@@ -225,7 +225,10 @@ class BannedNodeVisitor(ast.NodeVisitor):
             if isinstance(node_, ast.Call) and isinstance(node_.func, ast.Name):
                 return node_.func.id in self._reflection_names
             if isinstance(node_, ast.Name):
-                return node_.id in self._reflection_names or node_.id in self._reflection_alias
+                return (
+                    node_.id in self._reflection_names
+                    or node_.id in self._reflection_alias
+                )
             return False
 
         if _src_is_reflection(node.value):
@@ -287,16 +290,20 @@ class BannedNodeVisitor(ast.NodeVisitor):
             self.violations.append(
                 f"Banned builtins access found: '__builtins__' at line {node.lineno}"
             )
-        elif isinstance(node.value, ast.Call) and isinstance(
-            node.value.func, ast.Name
-        ) and node.value.func.id in self._reflection_names:
+        elif (
+            isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Name)
+            and node.value.func.id in self._reflection_names
+        ):
             # globals()['exec'] / locals()['...'] / vars()['os'] — subscripting a
             # reflection dict lifts arbitrary names by STRING key, bypassing all
             # Name/Attribute scans.
             self.violations.append(
                 f"Banned reflection-dict subscript at line {node.lineno}"
             )
-        elif isinstance(node.value, ast.Name) and node.value.id in self._reflection_alias:
+        elif (
+            isinstance(node.value, ast.Name) and node.value.id in self._reflection_alias
+        ):
             # g = globals(); g['__builtins__']['eval'](...) — the alias was
             # tracked in visit_Assign.
             self.violations.append(

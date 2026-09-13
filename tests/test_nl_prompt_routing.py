@@ -102,9 +102,7 @@ def test_cmd_goal_returns_goal_loop_content():
 
     out = cmd_goal(ctx, ["fix the failing tests and apply the fixes"])
     assert out == "THE-GOAL-ANSWER"
-    mock_goal_loop.assert_called_once_with(
-        "fix the failing tests and apply the fixes"
-    )
+    mock_goal_loop.assert_called_once_with("fix the failing tests and apply the fixes")
 
 
 def test_cmd_goal_empty_args_returns_none():

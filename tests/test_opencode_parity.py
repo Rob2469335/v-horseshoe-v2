@@ -959,7 +959,10 @@ async def test_split_compound_goal_runon_apply_fixes_carves_impl():
     edit half ('apply the fixes') feeds coder — the executor must NOT see an
     empty implementation phase (that silently dropped the edits and failed the
     whole goal with 'No file changes detected' after research-only retries)."""
-    from runtime_v2.api.agent_service_v2 import _split_compound_goal, _research_only_task
+    from runtime_v2.api.agent_service_v2 import (
+        _split_compound_goal,
+        _research_only_task,
+    )
 
     goal = (
         "analyze my codebase for bugs and search internet for improvements and "
@@ -1835,7 +1838,7 @@ async def test_l1_final_citing_file_seen_in_read_material_passes():
             "content": (
                 "TOOL RESULT (filesystem):\n"
                 '{"ok": true, "content": "Loads its budgets from '
-                'autonomy_policy.json via autonomy_policy.py; started in '
+                "autonomy_policy.json via autonomy_policy.py; started in "
                 'main.py"}\n\nContinue.'
             ),
         },
@@ -2496,8 +2499,15 @@ def test_short_task_goals_not_intercepted_as_greeting():
             "Hello! What can I help you with today?"
         ), f"goal {goal!r} was masked as a greeting"
     # genuine greetings still greet
-    assert fast_route_coordinator("hi")["response"] == "Hello! What can I help you with today?"
-    assert fast_route_coordinator("hello")["response"] == "Hello! What can I help you with today?"
+    assert (
+        fast_route_coordinator("hi")["response"]
+        == "Hello! What can I help you with today?"
+    )
+    assert (
+        fast_route_coordinator("hello")["response"]
+        == "Hello! What can I help you with today?"
+    )
+
 
 def test_code_analyzer_non_internet_goal_loses_web_tools():
     from runtime_v2.api.agent_service_v2 import _strip_web_tools_for_local_analysis
@@ -2507,8 +2517,16 @@ def test_code_analyzer_non_internet_goal_loses_web_tools():
         "code_analyzer", base, "analyze my codebase for bugs and upgrades"
     ) == ["filesystem", "semantic_search", "final"]
     # internet-flagged goal keeps its full surface
-    assert _strip_web_tools_for_local_analysis(
-        "code_analyzer", base, "search the internet for best practices and apply them"
-    ) == base
+    assert (
+        _strip_web_tools_for_local_analysis(
+            "code_analyzer",
+            base,
+            "search the internet for best practices and apply them",
+        )
+        == base
+    )
     # other agents unmodified
-    assert _strip_web_tools_for_local_analysis("researcher", base, "analyze my codebase") == base
+    assert (
+        _strip_web_tools_for_local_analysis("researcher", base, "analyze my codebase")
+        == base
+    )

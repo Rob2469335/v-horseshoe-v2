@@ -185,7 +185,7 @@ def test_cache_is_keyed_by_routing_mode(monkeypatch):
         "cache must now hold the cloud chain, not llama-only"
     )
 
-# A second `auto` refresh within TTL with the SAME mode reuses the cache.
+    # A second `auto` refresh within TTL with the SAME mode reuses the cache.
     async def _run2():
         await fm.refresh_fallbacks_if_needed(mode="auto")
 

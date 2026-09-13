@@ -46,7 +46,12 @@ router.include_router(legal_router)
 router.include_router(books_router)
 router.include_router(chess_trainer_router)
 
-from swarm_os.api.dependencies import runtime_dep, get_orchestrator, _safe_events, verify_api_key
+from swarm_os.api.dependencies import (
+    runtime_dep,
+    get_orchestrator,
+    _safe_events,
+    verify_api_key,
+)
 from swarm_os.services.system_service import SystemService
 from swarm_os.services.chat_service import ChatService
 
@@ -382,7 +387,11 @@ async def cache_status(request: Request, runtime=Depends(runtime_dep)):
     return CacheStatusResponse(cache_size=total_qdrant_points, cached_keys=cached_keys)
 
 
-@router.post("/tools/execute", response_model=ToolExecuteResponse, dependencies=[Depends(verify_api_key)])
+@router.post(
+    "/tools/execute",
+    response_model=ToolExecuteResponse,
+    dependencies=[Depends(verify_api_key)],
+)
 async def execute_tool(payload: ToolExecuteRequest, runtime=Depends(runtime_dep)):
     if hasattr(runtime, "agent_runtime") and runtime.agent_runtime is not None:
         try:
@@ -427,7 +436,9 @@ async def execute_tool(payload: ToolExecuteRequest, runtime=Depends(runtime_dep)
     )
 
 
-@router.post("/generate", response_model=GenerateResponse, dependencies=[Depends(verify_api_key)])
+@router.post(
+    "/generate", response_model=GenerateResponse, dependencies=[Depends(verify_api_key)]
+)
 async def generate(payload: GenerateRequest, orch=Depends(get_orchestrator)):
     # Fixes/corrections (T2 deep repair, mutation loop, self-repair) call
     # /generate without a model — default to DeepSeek V4 Flash (funded, cheap,
@@ -762,7 +773,9 @@ async def memory_search(q: str, limit: int = Query(8, le=100)):
                         {
                             "id": hit.get("id", ""),
                             "score": hit.get("score", 0.0),
-                            "text": pl.get("text") or pl.get("fact") or pl.get("content", ""),
+                            "text": pl.get("text")
+                            or pl.get("fact")
+                            or pl.get("content", ""),
                             "sender": pl.get("sender") or pl.get("agent_id", "system"),
                             "timestamp": pl.get("timestamp", ""),
                         }
@@ -1078,13 +1091,13 @@ def _memory_timestamp(payload: dict) -> float:
         text = raw.strip()
         try:
             return float(text)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             log.debug("Failed to parse timestamp as float, falling back to isoformat")
         try:
             from datetime import datetime
 
             return datetime.fromisoformat(text).timestamp()
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return 0.0
     return 0.0
 

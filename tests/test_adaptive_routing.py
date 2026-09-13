@@ -9,7 +9,11 @@ from __future__ import annotations
 
 import pytest
 
-from runtime_v2.services.stream_runner import is_reference_task, is_research_task, research_source
+from runtime_v2.services.stream_runner import (
+    is_reference_task,
+    is_research_task,
+    research_source,
+)
 
 
 @pytest.mark.parametrize(

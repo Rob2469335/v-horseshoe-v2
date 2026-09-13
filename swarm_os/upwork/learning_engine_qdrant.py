@@ -31,7 +31,9 @@ def store_proposal(job_vector, proposal_vector, payload: dict):
                 payload={
                     **payload,
                     "proposal_vector": proposal_vector,
-                    "created_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+                    "created_at": datetime.now(timezone.utc)
+                    .replace(tzinfo=None)
+                    .isoformat(),
                 },
             )
         ],

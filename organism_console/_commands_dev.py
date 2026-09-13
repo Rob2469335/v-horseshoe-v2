@@ -707,7 +707,7 @@ def cmd_schedule(ctx: CommandContext, args: List[str]) -> None:
             "[yellow]Usage: /schedule <seconds|hourly|'daily HH:MM'|cron> <goal>[/yellow]\n"
             "[dim]  /schedule 300 summarize my inbox   (recurring every 5 min)[/dim]\n"
             "[dim]  /schedule hourly check the news[/dim]\n"
-            "[dim]  /schedule \"daily 08:00\" send the morning digest[/dim]\n"
+            '[dim]  /schedule "daily 08:00" send the morning digest[/dim]\n'
             "[dim]  /schedule list | /schedule clear[/dim]"
         )
         return
@@ -757,9 +757,7 @@ def cmd_schedule(ctx: CommandContext, args: List[str]) -> None:
         ctx.console.print(f"[green]✓ Cleared {removed} scheduled task(s).[/green]")
         return
     if len(args) < 2:
-        ctx.console.print(
-            "[yellow]Usage: /schedule <seconds|schedule> <goal>[/yellow]"
-        )
+        ctx.console.print("[yellow]Usage: /schedule <seconds|schedule> <goal>[/yellow]")
         return
     schedule, note = _resolve_schedule(args[0])
     if schedule is None:
@@ -770,9 +768,7 @@ def cmd_schedule(ctx: CommandContext, args: List[str]) -> None:
         "/control/tasks", "POST", {"goal": goal, "schedule": schedule, "enabled": True}
     )
     if not resp or resp.status_code not in (200, 201):
-        ctx.console.print(
-            "[red]Failed to register the task with the scheduler.[/red]"
-        )
+        ctx.console.print("[red]Failed to register the task with the scheduler.[/red]")
         return
     body = resp.json() or {}
     if body.get("ok") is False:

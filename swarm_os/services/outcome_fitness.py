@@ -180,7 +180,7 @@ def _rec_within_age(rec: dict, max_age_s: float) -> bool:
         age = (
             datetime.now(timezone.utc) - datetime.fromisoformat(str(ts))
         ).total_seconds()
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return True
     return age <= max_age_s
 

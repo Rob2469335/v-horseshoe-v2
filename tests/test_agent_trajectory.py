@@ -19,7 +19,11 @@ def _write(tmp_path, chunk):
         last_chunk=chunk,
     )
     line = next(
-        ln for ln in (tmp_path / "traj-test.jsonl").read_text(encoding="utf-8").splitlines() if ln.strip()
+        ln
+        for ln in (tmp_path / "traj-test.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if ln.strip()
     )
     return json.loads(line)
 

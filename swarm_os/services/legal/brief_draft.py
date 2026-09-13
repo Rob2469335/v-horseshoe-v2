@@ -344,13 +344,35 @@ def check_fidelity(
             # Board, etc.) which would generate false-positive fidelity failures
             # on any legal sentence that mentions them in a different context.
             _COMMON_LEGAL_WORDS = {
-                "united", "states", "people", "city", "county", "state",
-                "board", "department", "commission", "government", "national",
-                "federal", "court", "case", "party", "plaintiff", "defendant",
-                "appellant", "appellee", "petitioner", "respondent",
+                "united",
+                "states",
+                "people",
+                "city",
+                "county",
+                "state",
+                "board",
+                "department",
+                "commission",
+                "government",
+                "national",
+                "federal",
+                "court",
+                "case",
+                "party",
+                "plaintiff",
+                "defendant",
+                "appellant",
+                "appellee",
+                "petitioner",
+                "respondent",
             }
             for word in lead.split():
-                if word and word[0].isupper() and len(word) > 2 and word.lower() not in _COMMON_LEGAL_WORDS:
+                if (
+                    word
+                    and word[0].isupper()
+                    and len(word) > 2
+                    and word.lower() not in _COMMON_LEGAL_WORDS
+                ):
                     name_to_source.setdefault(word.lower(), content)
 
     def _tokens(s: str) -> set[str]:

@@ -18,14 +18,18 @@ from runtime_v2.api._agent_helpers import _extract_grounded_findings
 
 
 def _resp(content: str):
-    return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content))])
+    return SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
+    )
 
 
 # ── Call 2 must request json_object mode ─────────────────────────────────────
 @pytest.mark.asyncio
 async def test_complete_json_extraction_requests_json_object_mode():
     with patch.object(
-        llm.litellm, "acompletion", new=AsyncMock(return_value=_resp('{"findings": []}'))
+        llm.litellm,
+        "acompletion",
+        new=AsyncMock(return_value=_resp('{"findings": []}')),
     ) as mock_call:
         out = await llm.complete_json_extraction(
             "deepseek/deepseek-v4-flash",

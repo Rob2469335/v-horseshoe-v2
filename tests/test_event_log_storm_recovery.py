@@ -37,9 +37,7 @@ def test_recovery_engine_does_not_llm_recover_event_log_storm(monkeypatch):
         calls["llm"] += 1
         raise AssertionError("llm_guided_recovery must NOT run for a report-only issue")
 
-    monkeypatch.setattr(
-        "swarm_os.healing.recovery_engine.llm_guided_recovery", _boom
-    )
+    monkeypatch.setattr("swarm_os.healing.recovery_engine.llm_guided_recovery", _boom)
     engine = RecoveryEngine()
     result = asyncio.run(engine.recover({"component": "event_log_storm"}))
     assert calls["llm"] == 0
