@@ -225,3 +225,19 @@ snapshots/
 
 # Serena LSP MCP project state (local, not source)
 .serena/
+
+# Local model weights / LoRA adapters (multi-GB binaries; must NEVER be
+# committed — GitHub rejects >100MB and it bloats every clone). Served from
+# qwen_train/ locally, tracked elsewhere (models dir / Runpod), not in git.
+qwen_train/*.gguf
+qwen_train/**/*.safetensors
+qwen_train/robs4b_final_adapter/
+qwen_train/robs4b_r64_adapter/
+qwen_train/robs4b_v2_adapter/
+qwen_train/*_adapter/
+qwen_train/results/
+
+# Local training/scratch outputs (runtime evidence, not source)
+/tmp_*.patch
+/temp_handle_final.txt
+qwen_train_data/
