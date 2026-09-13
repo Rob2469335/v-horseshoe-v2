@@ -57,7 +57,7 @@ _APPROVAL_FREE = {"filesystem", "web_search", "semantic_search"}
 # approval_registry._OFFLINE_GRANTABLE); `lsp` is CONFIRM (tightened by the same
 # scoped trust_ledger grant). Dynamic least-privilege + task-scoped grants
 # (arXiv:2607.22445; 2603.17170) — never blanket auto-approve.
-_GRANTABLE = ("sandbox_repl", "lsp")
+_GRANTABLE = ("sandbox_repl", "lsp", "git")
 
 # A tool the CLI auto-DENIED (non-interactive fail-closed, or explicit policy).
 # A run whose intended tool was denied is INELIGIBLE for the learning signal,
@@ -728,6 +728,43 @@ def _env_items() -> list[dict]:
     ]
 
 
+def _git_items(root: Path, limit: int = 250) -> list[dict]:
+    """Git-history tasks, HASH-ANCHORED so they stay verifiable (a commit's
+    subject never changes). Real tool diversity: the `git` tool (granted for
+    run #2). Answers are checked against the commit subject."""
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(root), "log", "--pretty=format:%H|%s", "-n", str(limit)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        ).stdout
+    except Exception:  # noqa: BLE001
+        return []
+    items: list[dict] = []
+    for line in out.splitlines():
+        if "|" not in line:
+            continue
+        h, subj = line.split("|", 1)
+        subj = subj.strip()
+        if len(subj) < 8:
+            continue
+        items.append(
+            {
+                "id": f"t{len(items):05d}",
+                "split": "train",
+                "difficulty": 2,
+                "target_tools": ["git"],
+                "prompt": (
+                    f"Use the git tool to report the SUBJECT LINE of the commit "
+                    f"with hash {h}. Answer with the subject text only."
+                ),
+                "verify": {"type": "contains", "mode": "all", "value": [subj[:60]]},
+            }
+        )
+    return items
+
+
 def mine_pool(root: Path | None = None) -> list[dict]:
     """Assemble the full diverse verified pool (repo-grounded + procedural)."""
     root = root or _HERE.parent
@@ -738,6 +775,7 @@ def mine_pool(root: Path | None = None) -> list[dict]:
     pool += _symbol_items(root)
     pool += _linecount_items(root)
     pool += _env_items()
+    pool += _git_items(root)
     pool += _math_pool()
     pool += _string_pool()
     return pool

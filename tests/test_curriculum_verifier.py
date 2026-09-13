@@ -80,7 +80,7 @@ def test_parse_tools_denied():
 def test_grantable_set_is_task_scoped():
     # exactly the offline-run tools, never blanket: sandbox_repl (ALWAYS_CONFIRM)
     # + lsp (CONFIRM), granted scoped + revoked after.
-    assert set(rc._GRANTABLE) == {"sandbox_repl", "lsp"}
+    assert set(rc._GRANTABLE) == {"sandbox_repl", "lsp", "git"}
     assert "sandbox_repl" not in rc._APPROVAL_FREE
     assert "lsp" not in rc._APPROVAL_FREE
 
