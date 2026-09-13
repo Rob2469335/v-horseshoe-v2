@@ -3,19 +3,18 @@ import base64
 from pathlib import Path
 from typing import Optional
 
+from swarm_os.lib.loop_bound import LoopBoundAsyncClient
+
 LLAMA_BASE = "http://127.0.0.1:8083"
 API_KEY = "llama"
 MODEL_QWEN = "qwen3-vl-2b"
 MODEL_GLM = "glm-ocr"
 
-_client = None
+_client = LoopBoundAsyncClient(lambda: httpx.AsyncClient(timeout=120.0))
 
 
 def get_client() -> httpx.AsyncClient:
-    global _client
-    if _client is None or _client.is_closed:
-        _client = httpx.AsyncClient(timeout=120.0)
-    return _client
+    return _client.get()
 
 
 class VisionRouter:

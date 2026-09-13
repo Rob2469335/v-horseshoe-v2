@@ -2,22 +2,23 @@ import json
 import httpx
 from datetime import datetime, timezone
 
+from swarm_os.lib.loop_bound import LoopBoundAsyncClient
+
 LLAMA_URL = "http://127.0.0.1:8080/v1/chat/completions"
 MODEL = "qwen3.5-4b"
 
 # UPGRADE: pooled client reused across all 6 request paths (avoids a fresh
 # TLS/DNS handshake + connection per proposal/estimate/scope/invoice request).
-_client: httpx.AsyncClient | None = None
+_client = LoopBoundAsyncClient(
+    lambda: httpx.AsyncClient(
+        timeout=httpx.Timeout(connect=5.0, read=120.0, write=60.0, pool=10.0),
+        headers={"Authorization": "Bearer llama"},
+    )
+)
 
 
 def _get_client() -> httpx.AsyncClient:
-    global _client
-    if _client is None or _client.is_closed:
-        _client = httpx.AsyncClient(
-            timeout=httpx.Timeout(connect=5.0, read=120.0, write=60.0, pool=10.0),
-            headers={"Authorization": "Bearer llama"},
-        )
-    return _client
+    return _client.get()
 
 
 async def run_upwork_task(task_type: str, user_input: str):
@@ -75,7 +76,9 @@ async def run_upwork_task(task_type: str, user_input: str):
                 "type": "proposal",
                 "content": content,
                 "memory_used": memory_count,
-                "timestamp": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+                "timestamp": datetime.now(timezone.utc)
+                .replace(tzinfo=None)
+                .isoformat(),
             }
 
         elif task_type == "rate":
@@ -108,7 +111,9 @@ async def run_upwork_task(task_type: str, user_input: str):
                 "hours": response_json.get("hours", "10-20"),
                 "bid": response_json.get("bid", "$500"),
                 "analysis": response_json.get("analysis", "No analysis provided."),
-                "timestamp": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+                "timestamp": datetime.now(timezone.utc)
+                .replace(tzinfo=None)
+                .isoformat(),
             }
 
         elif task_type == "scope":

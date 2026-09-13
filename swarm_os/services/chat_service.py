@@ -4,21 +4,22 @@ import httpx
 import litellm
 import json
 
+from swarm_os.lib.loop_bound import LoopBoundAsyncClient
+
 log = logging.getLogger(__name__)
 
-_chat_http_client: httpx.AsyncClient | None = None
+_chat_http_client = LoopBoundAsyncClient(
+    lambda: httpx.AsyncClient(
+        timeout=httpx.Timeout(15.0),
+        limits=httpx.Limits(max_keepalive_connections=3, max_connections=10),
+        trust_env=False,
+        proxy=None,
+    )
+)
 
 
 def _get_chat_http_client() -> httpx.AsyncClient:
-    global _chat_http_client
-    if _chat_http_client is None:
-        _chat_http_client = httpx.AsyncClient(
-            timeout=httpx.Timeout(15.0),
-            limits=httpx.Limits(max_keepalive_connections=3, max_connections=10),
-            trust_env=False,
-            proxy=None,
-        )
-    return _chat_http_client
+    return _chat_http_client.get()
 
 
 class ChatService:

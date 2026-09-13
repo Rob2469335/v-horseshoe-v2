@@ -21,7 +21,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import threading
 
 log = logging.getLogger(__name__)
 
@@ -81,25 +80,20 @@ def _concept_from(classification: str, query: str = "") -> str:
 
 import httpx
 
-_embed_client: httpx.AsyncClient | None = None
-_embed_client_lock = threading.Lock()
+from swarm_os.lib.loop_bound import LoopBoundAsyncClient
+
+_embed_client = LoopBoundAsyncClient(
+    lambda: httpx.AsyncClient(
+        timeout=httpx.Timeout(30.0, connect=10.0),
+        base_url=EMBED_URL,
+        headers={"Authorization": "Bearer llama"},
+    )
+)
 
 
 def get_embed_client() -> httpx.AsyncClient:
-    """Lazy embed client — avoids binding the connection pool to a dead event
-    loop (recreated across pytest-asyncio tests / Uvicorn reloads). Lock-guarded
-    so two concurrent first calls cannot each construct a client and leak the
-    loser's connection pool."""
-    global _embed_client
-    if _embed_client is None or _embed_client.is_closed:
-        with _embed_client_lock:
-            if _embed_client is None or _embed_client.is_closed:
-                _embed_client = httpx.AsyncClient(
-                    timeout=httpx.Timeout(30.0, connect=10.0),
-                    base_url=EMBED_URL,
-                    headers={"Authorization": "Bearer llama"},
-                )
-    return _embed_client
+    """Loop-bound embed client — rebuilt when its owning event loop changes."""
+    return _embed_client.get()
 
 
 async def _embed(text: str) -> list[float]:

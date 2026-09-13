@@ -31,9 +31,20 @@ _cache_ttl = 300
 _max_cache_entries = 500
 _collection = "decision_cache"
 
-# Lazy singletons.
+from swarm_os.lib.loop_bound import LoopBoundAsyncClient
+
+
+def _make_qdrant_client():
+    from qdrant_client import AsyncQdrantClient
+
+    return AsyncQdrantClient(url="http://127.0.0.1:6333")
+
+
+# Lazy singletons (Qdrant client is loop-bound: rebuilt across event loops).
 _client = None
 _embedder = None
+_client_bound = LoopBoundAsyncClient(_make_qdrant_client)
+_ensured_client = None
 
 # Metric counters (exposed via decision_cache_stats()).
 _stats = {"hits": 0, "semantic_hits": 0, "misses": 0, "errors": 0, "lookups": 0}
@@ -110,26 +121,30 @@ def _hash_point_id(text: str) -> str:
 
 
 async def _ensure_components():
-    """Lazily wire Qdrant + embedder so enablement needs no extra setup."""
-    global _client, _embedder
-    if _client is not None:
+    """Lazily wire Qdrant + embedder (per event loop) so enablement needs no
+    extra setup. The Qdrant client is loop-bound and rebuilt when the owning
+    loop changes, so this re-ensures the collection once per new client."""
+    global _client, _embedder, _ensured_client
+    client = _client_bound.get()
+    _client = client
+    if client is _ensured_client:
         return
-    from qdrant_client import AsyncQdrantClient
     from qdrant_client.models import VectorParams, Distance
     from swarm_os.services.embedding_service import EmbeddingService
 
-    _embedder = EmbeddingService()
-    _client = AsyncQdrantClient(url="http://127.0.0.1:6333")
+    if _embedder is None:
+        _embedder = EmbeddingService()
     try:
-        collections = (await _client.get_collections()).collections
+        collections = (await client.get_collections()).collections
         if not any(c.name == _collection for c in collections):
-            await _client.create_collection(
+            await client.create_collection(
                 collection_name=_collection,
                 vectors_config=VectorParams(size=768, distance=Distance.COSINE),
             )
             log.info("Created decision cache collection '%s'", _collection)
     except Exception as e:  # noqa: BLE001
         log.warning("decision cache init failed: %s", e)
+    _ensured_client = client
 
 
 def _last_user_text(messages: list) -> str:

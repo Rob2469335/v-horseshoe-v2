@@ -3,17 +3,20 @@ from typing import Any
 import psutil
 import httpx
 
-_http_client = None
+from swarm_os.lib.loop_bound import LoopBoundAsyncClient
+
+_http_client = LoopBoundAsyncClient(
+    lambda: httpx.AsyncClient(
+        limits=httpx.Limits(max_keepalive_connections=50, max_connections=100),
+        trust_env=False,
+        proxy=None,
+    )
+)
+
 
 def get_http_client() -> httpx.AsyncClient:
-    global _http_client
-    if _http_client is None or _http_client.is_closed:
-        _http_client = httpx.AsyncClient(
-            limits=httpx.Limits(max_keepalive_connections=50, max_connections=100),
-            trust_env=False,
-            proxy=None,
-        )
-    return _http_client
+    return _http_client.get()
+
 
 log = logging.getLogger(__name__)
 

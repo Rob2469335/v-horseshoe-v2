@@ -25,7 +25,6 @@ import html
 import logging
 import os
 import re
-import threading
 import uuid
 from pathlib import Path
 from typing import Any
@@ -870,7 +869,7 @@ async def _get_opinion_text(client: httpx.AsyncClient, cite: str) -> dict[str, A
     if resp.status_code == 429:
         try:
             retry_after = int(resp.headers.get("Retry-After") or 0)
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             retry_after = 0
         if retry_after <= 0:
             retry_after = 5  # no header or zero → short courtesy sleep
@@ -918,7 +917,7 @@ async def _get_opinion_text(client: httpx.AsyncClient, cite: str) -> dict[str, A
     if opin.status_code == 429:
         try:
             retry_after = int(opin.headers.get("Retry-After") or 0)
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             retry_after = 0
         if retry_after <= 0:
             retry_after = 5  # no header or zero → short courtesy sleep
@@ -968,17 +967,15 @@ async def _get_opinion_text(client: httpx.AsyncClient, cite: str) -> dict[str, A
 # ---------------------------------------------------------------------------
 # EMBED + UPSERT (token-budget batched, mirrors corpus_ingest)
 # ---------------------------------------------------------------------------
-_embed_client: httpx.AsyncClient | None = None
-_embed_client_lock = threading.Lock()
+from swarm_os.lib.loop_bound import LoopBoundAsyncClient
+
+_embed_client = LoopBoundAsyncClient(
+    lambda: httpx.AsyncClient(base_url=EMBED_URL, timeout=60.0)
+)
 
 
 def _get_embed_client() -> httpx.AsyncClient:
-    global _embed_client
-    if _embed_client is None or _embed_client.is_closed:
-        with _embed_client_lock:
-            if _embed_client is None or _embed_client.is_closed:
-                _embed_client = httpx.AsyncClient(base_url=EMBED_URL, timeout=60.0)
-    return _embed_client
+    return _embed_client.get()
 
 
 async def _embed(texts: list[str]) -> list[list[float]] | None:

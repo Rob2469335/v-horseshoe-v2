@@ -986,16 +986,20 @@ async def _deliver_telegram(body: str) -> bool:
     return tc.notify(f"<b>Competitive Intel</b>\n<pre>{safe_body}</pre>")
 
 
-_SLACK_CLIENT = None
+from swarm_os.lib.loop_bound import LoopBoundAsyncClient
+
+
+def _make_slack_client():
+    import httpx
+
+    return httpx.AsyncClient(timeout=15.0)
+
+
+_SLACK_CLIENT = LoopBoundAsyncClient(_make_slack_client)
 
 
 def _get_slack_client():
-    global _SLACK_CLIENT
-    if _SLACK_CLIENT is None or _SLACK_CLIENT.is_closed:
-        import httpx
-
-        _SLACK_CLIENT = httpx.AsyncClient(timeout=15.0)
-    return _SLACK_CLIENT
+    return _SLACK_CLIENT.get()
 
 
 async def _deliver_slack(body: str, webhook_url: str | None) -> bool:
@@ -1006,7 +1010,9 @@ async def _deliver_slack(body: str, webhook_url: str | None) -> bool:
 
     blocked = _ssrf_check(url)
     if blocked:
-        log.warning("[intel.slack] Refusing delivery to non-public webhook: %s", blocked)
+        log.warning(
+            "[intel.slack] Refusing delivery to non-public webhook: %s", blocked
+        )
         return False
     client = _get_slack_client()
     r = await client.post(url, json={"text": body[:3900]})

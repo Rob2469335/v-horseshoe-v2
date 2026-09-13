@@ -16,6 +16,8 @@ import logging
 
 import httpx
 
+from swarm_os.lib.loop_bound import LoopBoundAsyncClient
+
 logger = logging.getLogger(__name__)
 
 RERANK_URL = "http://127.0.0.1:8082"
@@ -37,17 +39,16 @@ _RERANK_SEM = asyncio.BoundedSemaphore(2)
 # score well — the dense search already found the doc on full text.
 _RERANK_BUDGET_CHARS = 3500
 
-_client: httpx.AsyncClient | None = None
+_client = LoopBoundAsyncClient(
+    lambda: httpx.AsyncClient(
+        timeout=httpx.Timeout(30.0, connect=10.0),
+        limits=httpx.Limits(max_keepalive_connections=5, max_connections=20),
+    )
+)
 
 
 def _get_client() -> httpx.AsyncClient:
-    global _client
-    if _client is None or _client.is_closed:
-        _client = httpx.AsyncClient(
-            timeout=httpx.Timeout(30.0, connect=10.0),
-            limits=httpx.Limits(max_keepalive_connections=5, max_connections=20),
-        )
-    return _client
+    return _client.get()
 
 
 def _fit_rerank_budget(text: str) -> str:

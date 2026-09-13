@@ -4,19 +4,20 @@ import logging
 import json
 from typing import AsyncGenerator
 
+from swarm_os.lib.loop_bound import LoopBoundAsyncClient
+
 log = logging.getLogger(__name__)
 
-_glm_client: httpx.AsyncClient | None = None
+_glm_client = LoopBoundAsyncClient(
+    lambda: httpx.AsyncClient(
+        timeout=httpx.Timeout(180.0),
+        limits=httpx.Limits(max_keepalive_connections=5, max_connections=20),
+    )
+)
 
 
 def _get_glm_client() -> httpx.AsyncClient:
-    global _glm_client
-    if _glm_client is None:
-        _glm_client = httpx.AsyncClient(
-            timeout=httpx.Timeout(180.0),
-            limits=httpx.Limits(max_keepalive_connections=5, max_connections=20),
-        )
-    return _glm_client
+    return _glm_client.get()
 
 
 class LlamaClient:

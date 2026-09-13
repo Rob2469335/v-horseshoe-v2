@@ -14,10 +14,8 @@ import math
 import os
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    import httpx
+from swarm_os.lib.loop_bound import LoopBoundAsyncClient
 
 logger = logging.getLogger(__name__)
 
@@ -28,26 +26,28 @@ _CACHE_PATH = Path(
     os.environ.get("RV_FINDER_GEO_CACHE", "data/rv_finder_geo_cache.jsonl")
 )
 
-_GEO_CLIENT: "httpx.AsyncClient | None" = None
+
+def _make_geo_client():
+    import httpx
+
+    return httpx.AsyncClient(
+        timeout=httpx.Timeout(connect=8.0, read=20.0, write=10.0, pool=12.0),
+        headers={
+            "User-Agent": "v-horseshoe-rv-finder/1.0 (personal daily-deal search)",
+            "Accept": "application/json",
+        },
+        follow_redirects=True,
+    )
+
+
+_GEO_CLIENT = LoopBoundAsyncClient(_make_geo_client)
 _GEO_LOCK = None  # lazy-init
 _last_request_at = 0.0
 _MIN_GEO_INTERVAL = 1.1  # Nominatim politely asks for >=1s between requests
 
 
 def _get_geo_client():
-    global _GEO_CLIENT
-    if _GEO_CLIENT is None or _GEO_CLIENT.is_closed:
-        import httpx
-
-        _GEO_CLIENT = httpx.AsyncClient(
-            timeout=httpx.Timeout(connect=8.0, read=20.0, write=10.0, pool=12.0),
-            headers={
-                "User-Agent": "v-horseshoe-rv-finder/1.0 (personal daily-deal search)",
-                "Accept": "application/json",
-            },
-            follow_redirects=True,
-        )
-    return _GEO_CLIENT
+    return _GEO_CLIENT.get()
 
 
 async def aclose_geo():

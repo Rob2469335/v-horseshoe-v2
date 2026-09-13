@@ -3,28 +3,26 @@ import json
 import logging
 import httpx
 
+from swarm_os.lib.loop_bound import LoopBoundAsyncClient
+
 log = logging.getLogger(__name__)
 
-# Reusing the orchestrator's global client pattern — but with a LOCAL lazy
-# getter: importing orchestrator's would be circular (orchestrator imports
-# CloudLLMClient from this module).
-_global_httpx_client: httpx.AsyncClient | None = None
+# Loop-bound shared client (rebuilds across event loops) — the local getter
+# avoids a circular import with orchestrator, which imports from this module.
+_global_httpx_client = LoopBoundAsyncClient(lambda: httpx.AsyncClient(timeout=120.0))
 
 
 def get_global_httpx_client() -> httpx.AsyncClient:
-    """Lazy shared httpx client — avoids binding the connection pool to a dead
-    event loop (recreated across pytest-asyncio tests / Uvicorn reloads)."""
-    global _global_httpx_client
-    if _global_httpx_client is None or _global_httpx_client.is_closed:
-        _global_httpx_client = httpx.AsyncClient(timeout=120.0)
-    return _global_httpx_client
+    """Lazy shared httpx client, rebuilt when the owning event loop changes."""
+    return _global_httpx_client.get()
 
 
 async def close_global_client() -> None:
     """Close the module-level shared httpx client on shutdown."""
-    global _global_httpx_client
-    if _global_httpx_client is not None and not _global_httpx_client.is_closed:
-        await _global_httpx_client.aclose()
+    client = _global_httpx_client.get()
+    if not client.is_closed:
+        await client.aclose()
+    _global_httpx_client.reset()
 
 
 class CloudLLMClient:
@@ -134,7 +132,9 @@ class CloudLLMClient:
         if stream:
             return CloudLLMClient.stream_generate(url, payload, headers)
 
-        response = await get_global_httpx_client().post(url, json=payload, headers=headers)
+        response = await get_global_httpx_client().post(
+            url, json=payload, headers=headers
+        )
         response.raise_for_status()
         data = response.json()
         return data["choices"][0]["message"]["content"]

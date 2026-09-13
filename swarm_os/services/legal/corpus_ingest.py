@@ -21,7 +21,6 @@ from __future__ import annotations
 import logging
 import os
 import uuid
-import threading
 from pathlib import Path
 from typing import Any
 
@@ -77,27 +76,22 @@ def _fit_budget(text: str) -> str:
     return " ".join(out)
 
 
-_embed_client: httpx.AsyncClient | None = None
-_qdrant_client: httpx.AsyncClient | None = None
-_client_lock = threading.Lock()
+from swarm_os.lib.loop_bound import LoopBoundAsyncClient
+
+_embed_client = LoopBoundAsyncClient(
+    lambda: httpx.AsyncClient(base_url=EMBED_URL, timeout=60.0)
+)
+_qdrant_client = LoopBoundAsyncClient(
+    lambda: httpx.AsyncClient(base_url=QDRANT_URL, timeout=120.0)
+)
 
 
 def _get_qdrant_client() -> httpx.AsyncClient:
-    global _qdrant_client
-    if _qdrant_client is None or _qdrant_client.is_closed:
-        with _client_lock:
-            if _qdrant_client is None or _qdrant_client.is_closed:
-                _qdrant_client = httpx.AsyncClient(base_url=QDRANT_URL, timeout=120.0)
-    return _qdrant_client
+    return _qdrant_client.get()
 
 
 def _get_embed_client() -> httpx.AsyncClient:
-    global _embed_client
-    if _embed_client is None or _embed_client.is_closed:
-        with _client_lock:
-            if _embed_client is None or _embed_client.is_closed:
-                _embed_client = httpx.AsyncClient(base_url=EMBED_URL, timeout=60.0)
-    return _embed_client
+    return _embed_client.get()
 
 
 def parquet_url(state: str) -> str:
