@@ -796,7 +796,7 @@ def main() -> int:
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--progress", action="store_true")
     ap.add_argument("--diversity", action="store_true")
-    ap.add_argument("--timeout", type=int, default=600)
+    ap.add_argument("--timeout", type=int, default=300)
     args = ap.parse_args()
 
     if args.gen:
@@ -829,6 +829,7 @@ def main() -> int:
     if args.run:
         import time as _time
 
+        consec_fail = 0
         for i in range(args.run):
             item = next_item(args.split)
             if item is None:
@@ -842,6 +843,16 @@ def main() -> int:
                 f"  verified={mark}  tool_hit={res['tool_hit']}  "
                 f"tools_used={res['tools_used']}"
             )
+            # Back off when the backend looks unhealthy (a hung/down backend
+            # otherwise burns the full per-item timeout for hours overnight).
+            consec_fail = 0 if res["cli_ok"] else consec_fail + 1
+            if consec_fail >= 3:
+                print(
+                    f"  [warn] {consec_fail} failed runs — backend may be down; "
+                    "sleeping 120s"
+                )
+                _time.sleep(120)
+                consec_fail = 0
             if args.sleep:
                 _time.sleep(args.sleep)
         progress()
