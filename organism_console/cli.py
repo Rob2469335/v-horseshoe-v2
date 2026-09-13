@@ -186,18 +186,24 @@ def run_agentic(
         except Exception:
             snap = None
     _t0 = _time.time()
+    _len_before = len(ctx.history or [])
     result_history = stream_prompt_with_retry(
         ctx, ctx.active_agent, execute_prompt, ctx.history
     )
     ctx.history = result_history
     elapsed = _time.time() - _t0
+    # Only a message ADDED BY THIS RUN is a valid answer. On a failed run the
+    # retry wrapper returns the input history unchanged, so `[-1]` would be the
+    # previous session's answer — a false success with stale content (2026-09-13).
+    new_messages = list(result_history[_len_before:]) if result_history else []
     content = ""
-    if (
-        result_history
-        and isinstance(result_history[-1], dict)
-        and result_history[-1].get("role") == "assistant"
-    ):
-        content = str(result_history[-1].get("content", ""))
+    for _m in reversed(new_messages):
+        if isinstance(_m, dict) and _m.get("role") == "assistant":
+            content = str(_m.get("content", ""))
+            break
+    from organism_console.ui.live_stream import _final_is_system_failure as _sysfail
+
+    ok = bool(content) and not _sysfail(content)
     files_changed = []
     if snap:
         try:
@@ -228,6 +234,7 @@ def run_agentic(
     return {
         "history": result_history,
         "content": content,
+        "ok": ok,
         "files_changed": files_changed,
         "elapsed": elapsed,
     }
@@ -410,12 +417,17 @@ def main():
                     else {}
                 )
             if json_flag:
+                if result.get("ok") is not None:
+                    ok = bool(result.get("ok"))
+                else:
+                    # /goal path: trust an explicit pass flag, else non-empty content.
+                    ok = bool(result.get("content")) or bool(
+                        (goal_result or {}).get("passed")
+                    )
                 print(
                     json.dumps(
                         {
-                            "ok": bool(
-                                result.get("content") or goal_result.get("passed")
-                            ),
+                            "ok": ok,
                             "agent": ctx.active_agent,
                             "model": ctx.active_model,
                             "prompt": cmd_line,

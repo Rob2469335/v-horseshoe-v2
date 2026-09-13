@@ -321,6 +321,10 @@ SYSTEM_FAILURE_MARKERS = (
     # goal loop and the CLI treated that failed run as a SUCCESS (the CLI even
     # rendered it in a green success panel).
     "Task FAILED",
+    # The retry wrapper's terminal message when every LLM tool-decision attempt
+    # failed (stream_prompt_with_retry). Without it the one-shot CLI returned
+    # ok:true with a STALE prior-session answer as content (2026-09-13).
+    "All retry attempts exhausted.",
 )
 
 
