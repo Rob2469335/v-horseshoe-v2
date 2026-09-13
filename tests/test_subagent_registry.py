@@ -112,6 +112,21 @@ def test_path_traversal_name_is_rejected(agents_dir):
     assert reg.get_subagent("../../hooks") is None
 
 
+def test_cache_invalidates_when_a_non_newest_file_is_deleted(agents_dir):
+    """Deleting an OLDER file must invalidate the cache (the max-mtime key
+    used to miss it, so a removed agent kept being served)."""
+    import os
+
+    _write(agents_dir, "old.md", "---\nname: old\ndescription: o\n---\nb\n")
+    _write(agents_dir, "new.md", "---\nname: new\ndescription: n\n---\nb\n")
+    os.utime(agents_dir / "old.md", (1000, 1000))
+    os.utime(agents_dir / "new.md", (2000, 2000))
+    assert {s["name"] for s in reg.list_subagents()} == {"old", "new"}
+    (agents_dir / "old.md").unlink()
+    assert {s["name"] for s in reg.list_subagents()} == {"new"}
+    assert reg.get_subagent("old") is None
+
+
 # --------------------------------------------------------------------------
 # built-ins win
 # --------------------------------------------------------------------------

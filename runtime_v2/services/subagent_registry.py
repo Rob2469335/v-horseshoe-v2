@@ -57,18 +57,26 @@ _CACHE: tuple[float, list[dict]] = (0.0, [])
 _DEFAULT_TOOLS = ["final", "filesystem"]
 
 
-def _root_mtime() -> float:
-    """Newest mtime under the agents dir so edits invalidate the cache."""
-    latest = 0.0
+def _root_sig() -> tuple:
+    """Cache signature for the agents dir: the directory's own mtime (changes
+    on add/remove/rename) PLUS each file's name+mtime. Keying on the MAX file
+    mtime alone missed a deletion of a non-newest file, so a removed agent kept
+    being served from cache (and stayed in the running roster)."""
+    root = Path(_AGENTS_ROOT)
     try:
-        for p in Path(_AGENTS_ROOT).glob("*.md"):
-            try:
-                latest = max(latest, p.stat().st_mtime)
-            except OSError:
-                continue
+        dir_mtime = root.stat().st_mtime
     except OSError:
-        return latest
-    return latest
+        return (0.0, ())
+    items: list[tuple[str, float]] = []
+    try:
+        for p in root.glob("*.md"):
+            try:
+                items.append((p.name, p.stat().st_mtime))
+            except OSError:
+                items.append((p.name, -1.0))
+    except OSError:
+        return (dir_mtime, ())
+    return (dir_mtime, tuple(sorted(items)))
 
 
 def _parse_frontmatter(text: str) -> dict:
@@ -164,9 +172,9 @@ def _scan() -> list[dict]:
 def list_subagents() -> list[dict]:
     """File-based subagents, re-scanning only when the directory changes."""
     global _CACHE
-    cached_mtime, cached = _CACHE
-    current = _root_mtime()
-    if cached_mtime == 0.0 or current != cached_mtime:
+    cached_sig, cached = _CACHE
+    current = _root_sig()
+    if cached_sig == 0.0 or current != cached_sig:
         _CACHE = (current, _scan())
     return _CACHE[1]
 
