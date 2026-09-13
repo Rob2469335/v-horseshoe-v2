@@ -155,11 +155,36 @@ RE_PLAN_MATCH = re.compile(r"<plan>(.*?)</plan>", re.DOTALL)
 RE_THINK_MATCH = re.compile(r"<think>(.*?)(?:</think>|$)", re.DOTALL)
 
 
-def format_inline_diff(old: str, new: str, max_lines: int = 24) -> list:
+def _highlight_changed_spans(old_line: str, new_line: str) -> tuple[str, str]:
+    """Bold the changed substrings of a replaced line pair (delta-style)."""
+    import difflib
+
+    sm = difflib.SequenceMatcher(None, old_line, new_line)
+    o: list = []
+    n: list = []
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        if tag == "equal":
+            o.append(escape(old_line[i1:i2]))
+            n.append(escape(new_line[j1:j2]))
+        elif tag == "delete":
+            o.append(f"[bold]{escape(old_line[i1:i2])}[/bold]")
+        elif tag == "insert":
+            n.append(f"[bold]{escape(new_line[j1:j2])}[/bold]")
+        else:  # replace
+            o.append(f"[bold]{escape(old_line[i1:i2])}[/bold]")
+            n.append(f"[bold]{escape(new_line[j1:j2])}[/bold]")
+    return "".join(o), "".join(n)
+
+
+def format_inline_diff(
+    old: str, new: str, max_lines: int = 24, highlight: bool = False
+) -> list:
     """Render a unified-style inline diff (red removed / green added).
 
     Pure function returning Rich-markup lines. Used by the TUI to show
-    filesystem patch/write changes inline (opencode/aider-style).
+    filesystem patch/write changes inline (opencode/aider-style). With
+    ``highlight=True``, replaced line pairs get their changed spans bolded
+    (delta-style word diff); the default preserves the plain red/green output.
     """
     import difflib
 
@@ -169,6 +194,12 @@ def format_inline_diff(old: str, new: str, max_lines: int = 24) -> list:
     matcher = difflib.SequenceMatcher(None, old_lines, new_lines)
     for tag, i1, i2, j1, j2 in matcher.get_opcodes():
         if tag == "equal":
+            continue
+        if tag == "replace" and highlight and (i2 - i1) == (j2 - j1) and (i2 - i1) > 0:
+            for k in range(i2 - i1):
+                ob, nb = _highlight_changed_spans(old_lines[i1 + k], new_lines[j1 + k])
+                out.append(f"[red]- {ob}[/red]")
+                out.append(f"[green]+ {nb}[/green]")
             continue
         if tag in ("delete", "replace"):
             for ln in old_lines[i1:i2]:
@@ -471,7 +502,9 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                                         "new", pending_fs.get("new_string", "")
                                     )
                                 )
-                                for dl in format_inline_diff(old_s, new_s):
+                                for dl in format_inline_diff(
+                                    old_s, new_s, highlight=True
+                                ):
                                     safe_print(f"    {dl}")
                             pending_fs = None
                         continue
