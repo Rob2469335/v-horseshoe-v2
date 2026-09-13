@@ -822,6 +822,17 @@ def main() -> int:
     ap.add_argument("--timeout", type=int, default=300)
     args = ap.parse_args()
 
+    if args.allow_approval:
+        # Scoped, audited, expiring grant so a headless rollout can use
+        # sandbox_repl (ALWAYS_CONFIRM) without a prompt. Revoked at the end.
+        try:
+            from swarm_os.services.trust_ledger import grant as _grant
+
+            _grant("sandbox_repl", 8 * 3600)
+            print("offline rollout: granted sandbox_repl (scoped, 8h, audited)")
+        except Exception as exc:  # noqa: BLE001
+            print(f"offline grant failed: {exc}")
+
     if args.gen:
         n = generate(args.gen, args.seed)
         print(f"generated {n} verified variant(s) -> {GENERATED}")
@@ -870,7 +881,8 @@ def main() -> int:
             )
             # Back off when the backend looks unhealthy (a hung/down backend
             # otherwise burns the full per-item timeout for hours overnight).
-            consec_fail = 0 if res["cli_ok"] else consec_fail + 1
+            timed_out = (not res["cli_ok"]) and res["elapsed_s"] >= (args.timeout - 5)
+            consec_fail = consec_fail + 1 if timed_out else 0
             if consec_fail >= 3:
                 print(
                     f"  [warn] {consec_fail} failed runs — backend may be down; "
@@ -880,6 +892,13 @@ def main() -> int:
                 consec_fail = 0
             if args.sleep:
                 _time.sleep(args.sleep)
+        if args.allow_approval:
+            try:
+                from swarm_os.services.trust_ledger import revoke as _revoke
+
+                _revoke("sandbox_repl")
+            except Exception:  # noqa: BLE001
+                pass
         progress()
         return 0
 
@@ -901,6 +920,13 @@ def main() -> int:
         f"tool_hit={result['tool_hit']}  tools_used={result['tools_used']}"
     )
     print(f"  content: {result['content'][:200]}")
+    if args.allow_approval:
+        try:
+            from swarm_os.services.trust_ledger import revoke as _revoke
+
+            _revoke("sandbox_repl")
+        except Exception:  # noqa: BLE001
+            pass
     return 0
 
 

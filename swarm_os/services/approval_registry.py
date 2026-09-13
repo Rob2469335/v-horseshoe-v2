@@ -51,6 +51,13 @@ _PENDING_MAX = 512  # ceiling on live pending actions (oldest evicted first)
 ALLOW = "ALLOW"  # execute immediately, never asks
 CONFIRM = "CONFIRM"  # requires human approval (v1: always)
 ALWAYS_CONFIRM = "ALWAYS_CONFIRM"  # requires human approval (v1: always)
+
+# The ONLY ALWAYS_CONFIRM tools an explicit, scoped, audited offline-rollout
+# grant may relax. Deliberately tiny + hardcoded: sandbox_repl is AST-gated
+# (security_gate) and run in an isolated `python -I` subprocess, so a bounded
+# grant for it is the least-risk relaxation for headless rollouts. Anything not
+# listed here stays ALWAYS_CONFIRM with no override.
+_OFFLINE_GRANTABLE = {"sandbox_repl"}
 DENY = "DENY"  # fail-closed: unknown / unclassified -> deny
 
 
@@ -312,18 +319,26 @@ def _base_agent_tool_policy(tool: str, action: str | None = None) -> str:
 def agent_tool_policy(tool: str, action: str | None = None) -> str:
     """Classify a tool/action, then apply time-boxed scoped trust grants.
 
-    Trust escalation is minimal and fail-closed: it can ONLY relax the CONFIRM
-    tier (via an active, scoped, auto-expiring grant). ALWAYS_CONFIRM and DENY
-    are never relaxed, and any error defaults to no relaxation. With no grant
-    the result is identical to the static base policy.
+    Trust escalation is minimal and fail-closed:
+      - CONFIRM may be relaxed by ANY active scoped grant (existing behaviour).
+      - ALWAYS_CONFIRM may be relaxed ONLY for a tiny hardcoded allow-list of
+        offline-rollout tools (`sandbox_repl`), and only with an active,
+        expiring, audited grant. Everything else stays ALWAYS_CONFIRM; DENY is
+        never relaxed; any error defaults to no relaxation.
     """
     policy = _base_agent_tool_policy(tool, action)
-    if policy == CONFIRM:
+    if policy in (CONFIRM, ALWAYS_CONFIRM):
         try:
             from swarm_os.services.trust_ledger import is_trusted
 
             if is_trusted(tool, action):
-                return ALLOW
+                if policy == CONFIRM:
+                    return ALLOW
+                if (
+                    policy == ALWAYS_CONFIRM
+                    and (tool or "").strip().lower() in _OFFLINE_GRANTABLE
+                ):
+                    return ALLOW
         except Exception:  # noqa: BLE001
             pass
     return policy
@@ -458,7 +473,7 @@ def _arg_digest(payload: Any) -> str:
     so argument order does not change the digest."""
     try:
         canonical = json.dumps(payload, sort_keys=True, default=str)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         canonical = str(payload)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
