@@ -60,7 +60,18 @@ def update_model_mapping(new_mapping: dict[str, str]):
 
 
 def get_model(agent_id: str) -> Tuple[str, str]:
-    return AGENT_MODELS.get(agent_id, ("robs4b", "llama"))
+    if agent_id in AGENT_MODELS:
+        return AGENT_MODELS[agent_id]
+    # File-based subagents may declare their own model; built-ins always win.
+    try:
+        from runtime_v2.services.subagent_registry import get_subagent
+
+        sub = get_subagent(agent_id)
+        if sub and sub.get("model"):
+            return (sub["model"], "llama")
+    except Exception:  # noqa: BLE001
+        pass
+    return ("robs4b", "llama")
 
 
 PREDICTIVE_TOPOLOGY: dict[str, str] = {

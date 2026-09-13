@@ -354,8 +354,27 @@ _BASE = (
 
 
 def build(agent_id: str) -> str:
-    rules = _ROLE_RULES.get(agent_id, "Complete the task using available actions.")
-    allowed_tools = _AGENT_TOOLS.get(agent_id, ["final", "filesystem"])
+    rules = _ROLE_RULES.get(agent_id)
+    allowed_tools = _AGENT_TOOLS.get(agent_id)
+    if rules is None or allowed_tools is None:
+        # File-based subagents (`.rob/agents/*.md`) are consulted ONLY when the
+        # name is absent from the built-in tables — a file can never override a
+        # built-in agent's identity. Fail-open: no/bad file -> built-in default.
+        try:
+            from runtime_v2.services.subagent_registry import get_subagent
+
+            sub = get_subagent(agent_id) or {}
+        except Exception as exc:  # noqa: BLE001
+            log.debug("subagent registry unavailable for %s: %s", agent_id, exc)
+            sub = {}
+        if rules is None:
+            rules = sub.get("body") or None
+        if allowed_tools is None:
+            allowed_tools = sub.get("tools")
+    if rules is None:
+        rules = "Complete the task using available actions."
+    if allowed_tools is None:
+        allowed_tools = ["final", "filesystem"]
     tools_str = "\n".join(
         [_TOOL_DEFINITIONS[t] for t in allowed_tools if t in _TOOL_DEFINITIONS]
     )

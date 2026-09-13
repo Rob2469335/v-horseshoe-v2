@@ -132,6 +132,17 @@ class AgentServiceV2:
             k: {"id": k, "role": r, "description": d, "model_role": m, "config": {}}
             for k, (r, d, m) in _DEFAULTS.items()
         }
+        # File-based subagents (`.rob/agents/*.md`): NEW names only — built-ins
+        # always win on collision. Fail-open: a missing/unreadable dir leaves
+        # the built-in roster unchanged.
+        try:
+            from runtime_v2.services.subagent_registry import merge_into_roster
+
+            added = merge_into_roster(self._agents)
+            if added:
+                log.info("subagent_registry: added %d file-based agent(s)", added)
+        except Exception as exc:  # noqa: BLE001
+            log.debug("subagent_registry unavailable: %s", exc)
 
     def _record_event(
         self,
@@ -2179,7 +2190,19 @@ class AgentServiceV2:
     def _get_allowed_tools(self, agent_id: str, genome_weights: dict = None) -> list:
         from runtime_v2.prompts.system_prompts import _AGENT_TOOLS
 
-        allowed = _AGENT_TOOLS.get(agent_id, ["delegate", "final", "filesystem"])
+        allowed = _AGENT_TOOLS.get(agent_id)
+        if allowed is None:
+            # File-based subagents are consulted only when the built-in table
+            # has no entry (built-ins win); fail-open to the safe default.
+            try:
+                from runtime_v2.services.subagent_registry import tools_for
+
+                allowed = tools_for(agent_id)
+            except Exception as exc:  # noqa: BLE001
+                log.debug("subagent registry unavailable for %s: %s", agent_id, exc)
+                allowed = None
+        if allowed is None:
+            allowed = ["final", "filesystem"]
         if genome_weights:
             allowed = sorted(allowed, key=lambda t: -genome_weights.get(t, 0.0))
         return allowed

@@ -575,9 +575,13 @@ def cmd_agents(ctx: CommandContext, args: List[str]) -> None:
         for a in agents:
             agent_id = a.get("id", "?")
             assigned_model, _ = AGENT_MODELS.get(agent_id, ("\u2014", ""))
+            cfg = a.get("config") or {}
+            tag = ""
+            if cfg.get("source") == "file":
+                tag = " [file:mutable]" if cfg.get("mutable") else " [file]"
             active = " ▶" if agent_id == ctx.state.active_agent else ""
             table.add_row(
-                f"{agent_id}{active}",
+                f"{agent_id}{active}{tag}",
                 a.get("role", "?"),
                 assigned_model,
                 a.get("description", "")[:60],
