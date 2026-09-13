@@ -1,5 +1,6 @@
 import re
 import json
+import sys
 import time
 import logging
 from rich.live import Live
@@ -18,6 +19,16 @@ log = logging.getLogger("zenith_cli")
 
 _AGENT_PERF: dict = {}
 _AGENT_PERF_MAX = 256
+
+
+def _stdin_is_interactive() -> bool:
+    """True only when stdin is a real TTY. An unattended run (pipe, redirect,
+    or no stdin) must NEVER block on an approval prompt — it fails closed
+    instead (deny), which also prevents the 'approval required' popup/hang."""
+    try:
+        return sys.stdin is not None and sys.stdin.isatty()
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _final_is_system_failure(text) -> bool:
@@ -816,6 +827,18 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                                 ctx.console.print(
                                     f"[dim]auto-approve: {tool} ({action})[/dim]"
                                 )
+
+                        elif not _stdin_is_interactive():
+                            # Unattended (pipe/redirect): never prompt — a prompt
+                            # here hangs the run and surfaces as an "approval
+                            # required" popup. Fail CLOSED (deny) so an
+                            # ALWAYS_CONFIRM action is never auto-approved.
+                            auto_resolved = True
+                            approved = False
+                            live.stop()
+                            ctx.console.print(
+                                f"[dim]non-interactive: denied {tool} ({action})[/dim]"
+                            )
 
                         if not auto_resolved:
                             from organism_console.renderer import INPUT_LOCK
