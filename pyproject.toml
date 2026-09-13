@@ -19,11 +19,6 @@ where = ["."]
 include = ["organism_console*", "swarm_os*", "runtime_v2*"]
 
 [tool.ruff]
-# Pin the FORMAT target to 3.13 so `ruff format` does NOT apply PEP 758 and
-# strip the parentheses from `except (A, B):` (the 3.14 comma form is
-# non-portable/non-idiomatic; tests/test_memories_route.py pins the parens).
-# The code still RUNS on 3.14; this only constrains the formatter.
-target-version = "py313"
 # .vulture_whitelist.py is a dead-code whitelist for vulture: it intentionally
 # lists bare names (swarm_os, organism_console, Columns, ...) so the static
 # analyzer treats them as used. Ruff's F821 (undefined name) flags these bare
