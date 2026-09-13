@@ -228,6 +228,23 @@ def record_usage(
     except Exception as e:  # noqa: BLE001
         log.debug("usage log write failed: %s", e)
 
+    # Optional OpenTelemetry (GenAI semantic conventions) export — opt-in via
+    # SWARM_OTEL, no required dependency, fail-open. Does not affect the log.
+    try:
+        from runtime_v2.services.otel_telemetry import emit_llm_span
+
+        emit_llm_span(
+            model=row["model"],
+            provider=row["provider"],
+            prompt_tokens=row["prompt_tokens"],
+            completion_tokens=row["completion_tokens"],
+            cost=row["cost"],
+            source=row["source"],
+            agent_id=row["agent_id"],
+        )
+    except Exception as e:  # noqa: BLE001
+        log.debug("otel emit skipped: %s", e)
+
 
 def record_response(
     resp: Any, model: str, source: str = "", agent_id: str = "", ok: bool = True
