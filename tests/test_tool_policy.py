@@ -81,3 +81,20 @@ def test_enabled_flag(monkeypatch):
     assert tp.enabled() is False
     monkeypatch.setenv("SWARM_TOOL_SHORTLIST", "1")
     assert tp.enabled() is True
+
+
+def test_lexical_retrieval_surfaces_the_right_tool(tmp_path, monkeypatch):
+    """P2 retrieval half: with NO learned history, description match ranks the
+    tool the task actually needs above unrelated tools."""
+    monkeypatch.setattr(tp, "OBSERVATIONS", tmp_path / "obs.jsonl")
+    monkeypatch.setattr(tp, "_fitness_genes", lambda: {})
+    tools = ["sandbox_repl", "web_search", "web_fetch", "email", "lsp"]
+    ranked = tp.rank("search the web for the latest python release", tools)
+    assert ranked[0] in ("web_search", "web_fetch")
+    assert ranked.index("web_search") < ranked.index("email")
+
+
+def test_lexical_scores_are_idf_weighted(tmp_path, monkeypatch):
+    monkeypatch.setattr(tp, "_fitness_genes", lambda: {})
+    scores = tp.lexical_scores("read a python file", ["filesystem", "email"])
+    assert scores["filesystem"] >= scores["email"]

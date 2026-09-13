@@ -132,19 +132,112 @@ def _fitness_genes() -> dict:
         return {}
 
 
+def _tool_docs() -> dict[str, str]:
+    """tool name -> retrieval text (its own name + description, lowercased)."""
+    try:
+        from runtime_v2.prompts.system_prompts import _TOOL_DEFINITIONS
+
+        return {
+            t: (t.replace("_", " ") + " " + str(d)).lower()
+            for t, d in _TOOL_DEFINITIONS.items()
+        }
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+_WORD_RE = None
+_STOP = {
+    "the",
+    "for",
+    "and",
+    "with",
+    "use",
+    "using",
+    "via",
+    "a",
+    "an",
+    "to",
+    "of",
+    "in",
+    "on",
+    "is",
+    "it",
+    "its",
+    "from",
+    "into",
+    "please",
+    "your",
+    "you",
+    "me",
+    "my",
+    "then",
+    "than",
+    "that",
+    "this",
+    "and",
+    "exact",
+    "value",
+    "report",
+}
+
+
+def _tokens(text: str) -> list[str]:
+    global _WORD_RE
+    if _WORD_RE is None:
+        import re
+
+        _WORD_RE = re.compile(r"[a-z0-9_]{2,}")
+    return [w for w in _WORD_RE.findall(str(text or "").lower()) if w not in _STOP]
+
+
+def lexical_scores(task: str, tools: list[str]) -> dict[str, float]:
+    """IDF-weighted token overlap between the task and each tool's description.
+
+    This is the retrieval half of P2 (tool retrieval, arXiv:2406.17465 /
+    Online-Optimized RAG arXiv:2509.20415): rank tools by how well their
+    description matches the task, so the right tool surfaces even with no
+    learned history. BM25-lite: sum over task tokens of 1/log(1+df(tool set)).
+    """
+    docs = _tool_docs()
+    task_tokens = set(_tokens(task))
+    if not task_tokens or not docs:
+        return {t: 0.0 for t in tools}
+    corpus = [docs.get(t, "") for t in tools]
+    import math
+
+    scores: dict[str, float] = {}
+    for tool in tools:
+        doc = docs.get(tool, "")
+        if not doc:
+            scores[tool] = 0.0
+            continue
+        score = 0.0
+        for tok in task_tokens:
+            df = sum(1 for c in corpus if tok in c) or 1
+            if tok in doc:
+                score += 1.0 / math.log(2.0 + df)
+        scores[tool] = score
+    return scores
+
+
 def rank(task: str, tools: list[str]) -> list[str]:
-    """Reorder ``tools`` by (learned per-shape success) + (fitness genes)."""
+    """Reorder ``tools`` by retrieval (lexical) + learned per-shape + fitness."""
     try:
         tools = list(tools)
         if len(tools) <= 1:
             return tools
         weights = tool_weights(shape_of(task))
         genes = _fitness_genes()
+        lex = lexical_scores(task, tools)
         order = {t: i for i, t in enumerate(tools)}  # stable tiebreak = input order
         return sorted(
             tools,
             key=lambda t: (
-                -(weights.get(t, 0.0) * 2.0 + float(genes.get(t, 0.0)) * 0.5),
+                -(
+                    lex.get(t, 0.0)
+                    + weights.get(t, 0.0) * 2.0
+                    + float(genes.get(t, 0.0)) * 0.5
+                ),
                 order[t],
             ),
         )
