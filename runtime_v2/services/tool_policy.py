@@ -71,10 +71,23 @@ def shape_of(task: str) -> str:
     return "other"
 
 
-def record_observation(task: str, tools_used: list[str], verified) -> None:
-    """Persist one verified experience: which tools were used + did it pass."""
+def record_observation(
+    task: str, tools_used: list[str], verified, tool_ok: bool | None = None
+) -> None:
+    """Persist one verified experience: which tools were used + did it pass.
+
+    ``tool_ok`` marks whether the TOOL itself executed successfully. When the
+    tool succeeded but the answer still failed verification (``tool_ok is True
+    and verified is False``) the failure is DOWNSTREAM (answer synthesis), NOT a
+    tool failure — recording it would teach the policy a false correlation
+    ("this tool doesn't work"). Such cases are skipped. A genuine tool failure
+    (``tool_ok is False``) IS recorded. ``tool_ok=None`` (unknown) records as
+    before, for backward compatibility.
+    """
     if verified is None or not tools_used:
         return
+    if tool_ok is True and not verified:
+        return  # answer-synthesis failure: do not attribute it to the tool
     try:
         OBSERVATIONS.parent.mkdir(parents=True, exist_ok=True)
         rec = {

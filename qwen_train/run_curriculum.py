@@ -103,6 +103,14 @@ def parse_tools_used(stdout: str) -> list[str]:
     return sorted(set(_TOOL_RE.findall(stdout or "")))
 
 
+_TOOL_OK_RE = re.compile(r"✓\s+([a-z_][a-z0-9_]*)")
+
+
+def parse_tools_succeeded(stdout: str) -> list[str]:
+    """Tool names whose call RETURNED successfully (the ✓ stream marker)."""
+    return sorted(set(_TOOL_OK_RE.findall(stdout or "")))
+
+
 def extract_result(stdout: str) -> dict | None:
     """The CLI prints one JSON object last; return the last parseable one."""
     starts = [i for i, ch in enumerate(stdout) if ch == "{"]
@@ -143,17 +151,18 @@ def run_item(item: dict, timeout: int = 600, allow_approval: bool = False) -> di
     cli = extract_result(out)
     content = (cli or {}).get("content", "")
     used = parse_tools_used(out)
+    succeeded = parse_tools_succeeded(out)
     check = verify(item, content)
     cli_ok = bool((cli or {}).get("ok"))
-    # Feed the harness's contextual tool policy ONLY on a completed run: an
-    # infra failure (backend/model down) has empty content -> verified False,
-    # and must NOT be recorded as a negative tool-choice outcome (it would
-    # poison the learned policy overnight). verified=None stays unrecorded.
+    # Did the INTENDED tool actually succeed? If it ran fine but the answer
+    # failed verification, the failure is downstream (answer synthesis) and
+    # must NOT be recorded as a tool failure (false correlation; see the audit).
+    tool_ok = bool(set(item.get("target_tools") or []) & set(succeeded))
     if cli_ok:
         try:
             from runtime_v2.services.tool_policy import record_observation
 
-            record_observation(prompt, used, check.get("passed"))
+            record_observation(prompt, used, check.get("passed"), tool_ok=tool_ok)
         except Exception:  # noqa: BLE001
             pass
     hit, all_hit = _tool_match(item, used)

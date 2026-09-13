@@ -64,6 +64,11 @@ def test_parse_tools_used_from_stream_markers():
     assert rc.parse_tools_used(out) == ["filesystem", "sandbox_repl"]
 
 
+def test_parse_tools_succeeded_only_counts_success_marker():
+    out = "  \u26a1 sandbox_repl\n  \u2713 sandbox_repl {...}\n  \u26a1 email\n"
+    assert rc.parse_tools_succeeded(out) == ["sandbox_repl"]
+
+
 def test_tool_match_semantics():
     item = {"target_tools": ["sandbox_repl"]}
     assert rc._tool_match(item, ["filesystem", "sandbox_repl"]) == (True, True)

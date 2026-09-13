@@ -24,6 +24,29 @@ def test_record_and_weights(tmp_path, monkeypatch):
     assert tp.tool_weights("math") == {}
 
 
+def test_answer_synthesis_failure_is_not_attributed_to_the_tool(tmp_path, monkeypatch):
+    """A successful tool whose result the final dropped must NOT look like a
+    tool failure (the audit's false-correlation bug)."""
+    monkeypatch.setattr(tp, "OBSERVATIONS", tmp_path / "obs.jsonl")
+    # tool succeeded, answer failed verification -> skipped
+    tp.record_observation("compute 2 + 2", ["sandbox_repl"], False, tool_ok=True)
+    assert tp.tool_weights("math") == {}
+    # a GENUINE tool failure is still recorded
+    tp.record_observation("compute 2 + 2", ["sandbox_repl"], False, tool_ok=False)
+    assert "sandbox_repl" in tp.tool_weights("math")
+    # a real success is recorded
+    tp.record_observation("compute 3 + 3", ["sandbox_repl"], True, tool_ok=True)
+    assert tp.tool_weights("math")["sandbox_repl"] >= 0.5
+
+
+def test_record_observation_without_tool_ok_is_backward_compatible(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(tp, "OBSERVATIONS", tmp_path / "obs.jsonl")
+    tp.record_observation("compute 2 + 2", ["sandbox_repl"], False)  # tool_ok unknown
+    assert "sandbox_repl" in tp.tool_weights("math")
+
+
 def test_rank_prefers_learned_success(tmp_path, monkeypatch):
     monkeypatch.setattr(tp, "OBSERVATIONS", tmp_path / "obs.jsonl")
     monkeypatch.setattr(tp, "_fitness_genes", lambda: {})
