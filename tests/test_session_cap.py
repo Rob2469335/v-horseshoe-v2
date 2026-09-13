@@ -65,3 +65,20 @@ def test_save_persists_a_capped_history(tmp_path):
         f"persisted history not capped: {len(hist)} messages"
     )
     assert any(m.get("role") == "user" for m in hist)
+
+
+def test_single_oversized_message_cannot_bypass_the_char_cap():
+    """A single huge prior final must not defeat the char cap: the first tail
+    append used to be unconditional, so one 200k-char message persisted whole."""
+    hist = [
+        {"role": "user", "content": "task"},
+        {"role": "assistant", "content": "Z" * 200_000},
+    ]
+    capped = _cap_history(hist)
+    total = sum(len(str(m.get("content", ""))) for m in capped)
+    assert total <= _SESSION_MAX_CHARS + 200, f"char cap bypassed: {total}"
+    assert any(m.get("content") == "task" for m in capped)
+    assert any(
+        "[truncated to fit the session size cap]" in str(m.get("content", ""))
+        for m in capped
+    )

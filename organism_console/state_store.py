@@ -19,12 +19,30 @@ _SESSION_MAX_MESSAGES = 60
 _SESSION_MAX_CHARS = 96_000
 
 
+def _truncate_text(text: str, max_chars: int) -> str:
+    """Head+tail truncate text to at most max_chars (with a marker).
+
+    Keeps the beginning and the end (lost-in-the-middle principle), matching the
+    server-side `_truncate_content` used for the tool-decision payload.
+    """
+    if len(text) <= max_chars:
+        return text
+    marker = "\n… [truncated to fit the session size cap] …\n"
+    if max_chars <= len(marker) + 2:
+        return text[:max_chars]
+    head = (max_chars - len(marker)) // 2
+    tail = max_chars - len(marker) - head
+    return text[:head] + marker + text[-tail:]
+
+
 def _cap_history(history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Head+tail cap on the persisted message history (message count + chars).
 
     Returns the input unchanged when already within both caps. Otherwise keeps
     the first user message and the most recent messages that fit, and inserts a
-    user-role elision notice so the result always has a user anchor.
+    user-role elision notice so the result always has a user anchor. Both bounds
+    are hard: a SINGLE oversized message is truncated (head+tail) rather than
+    appended whole (the first tail append used to bypass the char cap).
     """
     if not history:
         return history
@@ -41,12 +59,20 @@ def _cap_history(history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     for m in reversed(history):
         if head is not None and m is head:
             continue
-        c = len(str(m.get("content", ""))) if isinstance(m, dict) else 0
-        if tail and (
-            len(kept) + len(tail) >= _SESSION_MAX_MESSAGES
-            or chars + c > _SESSION_MAX_CHARS
-        ):
+        if len(kept) + len(tail) >= _SESSION_MAX_MESSAGES:
             break
+        c = len(str(m.get("content", ""))) if isinstance(m, dict) else 0
+        if chars + c > _SESSION_MAX_CHARS:
+            if tail or not isinstance(m, dict):
+                break
+            # The most recent message alone exceeds the remaining char budget:
+            # truncate it (head+tail) so the cap still holds, rather than
+            # appending it whole and blowing the bound.
+            room = _SESSION_MAX_CHARS - chars
+            if room < 64:
+                break
+            m = {**m, "content": _truncate_text(str(m.get("content", "")), room)}
+            c = len(str(m.get("content", "")))
         tail.append(m)
         chars += c
     tail.reverse()
