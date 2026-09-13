@@ -431,6 +431,28 @@ async def get_tool_decision(
         "mcp_batch",
     ]
 
+    # Adaptive tool depth (BoR arXiv:2605.24660) + the learned contextual tool
+    # policy (per-shape verified success + fitness genes). Opt-in via
+    # SWARM_TOOL_SHORTLIST=1; fail-open to the unchanged tool set on any error.
+    try:
+        from runtime_v2.services.tool_policy import (
+            enabled as _tp_enabled,
+            shortlist as _tp_shortlist,
+        )
+
+        if _tp_enabled():
+            _task = next(
+                (
+                    str(m.get("content", ""))
+                    for m in reversed(messages)
+                    if m.get("role") == "user"
+                ),
+                "",
+            )
+            allowed = _tp_shortlist(_task, list(allowed))
+    except Exception:  # noqa: BLE001
+        pass
+
     mcp_schema = ""
     if "mcp" in allowed or "mcp_batch" in allowed:
         try:

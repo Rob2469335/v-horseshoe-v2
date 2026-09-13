@@ -122,6 +122,13 @@ def run_item(item: dict, timeout: int = 600) -> dict:
     content = (cli or {}).get("content", "")
     used = parse_tools_used(out)
     check = verify(item, content)
+    # Feed the harness's contextual tool policy (per-shape verified experience).
+    try:
+        from runtime_v2.services.tool_policy import record_observation
+
+        record_observation(prompt, used, check.get("passed"))
+    except Exception:  # noqa: BLE001
+        pass
     hit, all_hit = _tool_match(item, used)
     elapsed = (datetime.now(timezone.utc) - t0).total_seconds()
     return {
