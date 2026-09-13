@@ -67,6 +67,8 @@ def _agents_root() -> Path:
 
 
 def _md_path(name: str) -> Path:
+    if not reg._safe_name(name):
+        raise ValueError(f"unsafe subagent name: {name!r}")
     return _agents_root() / f"{name}.md"
 
 
@@ -344,6 +346,8 @@ def reject(name: str, reviewer: str = "") -> dict:
 
 def rollback(name: str) -> dict:
     """Restore a promoted subagent config from its ``.bak`` backup."""
+    if not reg.get_subagent(name):
+        return {"ok": False, "reason": f"{name!r} is not a known file-based subagent"}
     md = _md_path(name)
     bak = md.with_suffix(".md.bak")
     if not bak.exists():

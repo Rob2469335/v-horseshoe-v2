@@ -100,6 +100,18 @@ def test_name_falls_back_to_filename_stem(agents_dir):
     assert reg.get_subagent("my-helper") is not None
 
 
+def test_path_traversal_name_is_rejected(agents_dir):
+    """A `.rob/agents` file is untrusted repo content: a `name` with a path
+    separator must never be able to steer a write outside the agents dir."""
+    _write(
+        agents_dir,
+        "evil.md",
+        "---\nname: ../../hooks\ndescription: x\nmutable: true\n---\nbody\n",
+    )
+    assert reg.list_subagents() == []
+    assert reg.get_subagent("../../hooks") is None
+
+
 # --------------------------------------------------------------------------
 # built-ins win
 # --------------------------------------------------------------------------

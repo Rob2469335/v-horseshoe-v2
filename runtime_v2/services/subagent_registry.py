@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -39,6 +40,16 @@ log = logging.getLogger(__name__)
 _AGENTS_ROOT = os.getenv("SWARM_AGENTS_ROOT", "").strip() or str(
     Path(__file__).resolve().parents[2] / ".rob" / "agents"
 )
+
+# A subagent name must be a simple identifier: never a path (a `.rob/agents`
+# file is untrusted repo content, so `name: ../../x` must not be able to steer
+# a write outside the agents directory).
+_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def _safe_name(name: str) -> bool:
+    return bool(name) and bool(_NAME_RE.match(name)) and ".." not in name
+
 
 # (tree-mtime, parsed entries) — rescanned only when the directory changes.
 _CACHE: tuple[float, list[dict]] = (0.0, [])
@@ -129,7 +140,10 @@ def _scan() -> list[dict]:
             continue
         fm = _parse_frontmatter(text)
         name = (fm.get("name") or child.stem).strip()
-        if not name:
+        if not _safe_name(name):
+            log.warning(
+                "subagent_scan: unsafe or empty name %r in %s — skipped", name, child
+            )
             continue
         entries.append(
             {
@@ -159,7 +173,7 @@ def list_subagents() -> list[dict]:
 
 def get_subagent(name: str) -> dict | None:
     """Return the file-based subagent named ``name``, or None."""
-    if not name:
+    if not _safe_name(name):
         return None
     for sub in list_subagents():
         if sub.get("name") == name:
