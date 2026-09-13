@@ -99,7 +99,7 @@ def _recompute(prompt: str) -> str:
     m = re.search(r"greatest common divisor of (\d+) and (\d+)", prompt)
     if m:
         return str(math.gcd(int(m.group(1)), int(m.group(2))))
-    raise AssertionError(f"unrecognized generated prompt: {prompt}")
+    return None  # a lookup-family item (file-grounded), not a math item
 
 
 def test_generated_variants_are_correctly_verified(tmp_path, monkeypatch):
@@ -114,11 +114,43 @@ def test_generated_variants_are_correctly_verified(tmp_path, monkeypatch):
         if ln
     ]
     assert len(items) == 25
+    math_items = 0
     for it in items:
         expected = _recompute(it["prompt"])
+        if expected is None:
+            continue  # lookup family, checked separately
+        math_items += 1
         assert it["verify"]["value"] == [expected]  # generated answer is correct
         assert rc.verify(it, f"the answer is {expected}")["passed"] is True
         assert rc.verify(it, "the answer is 999999")["passed"] is False
+    assert math_items > 0  # the pool actually contains math variants
+
+
+def test_generated_lookup_variants_match_the_file(tmp_path, monkeypatch):
+    """Lookup-family answers are the REAL value in the referenced file."""
+    monkeypatch.setattr(rc, "GENERATED", tmp_path / "generated.jsonl")
+    rc.generate(40, seed=11)
+    items = [
+        json.loads(ln)
+        for ln in (tmp_path / "generated.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if ln
+    ]
+    checked = 0
+    for it in items:
+        if "filesystem" not in it["target_tools"]:
+            continue
+        m = re.search(
+            r"(runtime_v2/[\w/\.]+\.py|organism_console/[\w/\.]+\.py|pyproject\.toml)",
+            it["prompt"],
+        )
+        assert m, it["prompt"]
+        val = it["verify"]["value"][0]
+        text = (rc._HERE.parent / m.group(1)).read_text(encoding="utf-8")
+        assert val.replace("_", "") in text.replace("_", ""), (it["prompt"], val)
+        checked += 1
+    assert checked > 0  # the pool actually contains lookup variants
 
 
 def test_load_items_merges_generated(tmp_path, monkeypatch):
@@ -126,3 +158,40 @@ def test_load_items_merges_generated(tmp_path, monkeypatch):
     seed = len(rc.load_items())
     rc.generate(3, seed=1)
     assert len(rc.load_items()) == seed + 3
+
+
+def test_mine_pool_is_large_and_diverse():
+    pool = rc.mine_pool()
+    assert len(pool) > 500
+    tools = {t for i in pool for t in i["target_tools"]}
+    assert len(tools) >= 2  # at least filesystem + sandbox_repl
+    # every pooled item is verifiable (has a verify spec + expected value)
+    for it in pool[:200]:
+        assert it["verify"]["type"] in ("contains", "regex")
+
+
+def test_const_symbol_and_defcount_miners_on_a_tmp_repo(tmp_path):
+    mod = tmp_path / "runtime_v2" / "api"
+    mod.mkdir(parents=True)
+    (mod / "sample.py").write_text(
+        "MAX_WIDGETS = 742\n"
+        "LABEL = 'widget-factory'\n"
+        "\n"
+        "def alpha():\n"
+        "    return 1\n"
+        "\n"
+        "class Beta:\n"
+        "    pass\n"
+        "\n"
+        "def gamma():\n"
+        "    return 2\n",
+        encoding="utf-8",
+    )
+    consts = rc._const_items(tmp_path)
+    vals = {v for it in consts for v in it["verify"]["value"]}
+    assert "742" in vals and "widget-factory" in vals
+    counts = rc._defcount_items(tmp_path)
+    assert [it["verify"]["value"][0] for it in counts] == ["3"]  # alpha, Beta, gamma
+    syms = rc._symbol_items(tmp_path)
+    prompts = " ".join(it["prompt"] for it in syms)
+    assert "alpha" in prompts and "Beta" in prompts

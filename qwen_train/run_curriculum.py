@@ -27,6 +27,7 @@ Results append to qwen_train/results/curriculum_runs.jsonl.
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import math
 import random
@@ -122,13 +123,18 @@ def run_item(item: dict, timeout: int = 600) -> dict:
     content = (cli or {}).get("content", "")
     used = parse_tools_used(out)
     check = verify(item, content)
-    # Feed the harness's contextual tool policy (per-shape verified experience).
-    try:
-        from runtime_v2.services.tool_policy import record_observation
+    cli_ok = bool((cli or {}).get("ok"))
+    # Feed the harness's contextual tool policy ONLY on a completed run: an
+    # infra failure (backend/model down) has empty content -> verified False,
+    # and must NOT be recorded as a negative tool-choice outcome (it would
+    # poison the learned policy overnight). verified=None stays unrecorded.
+    if cli_ok:
+        try:
+            from runtime_v2.services.tool_policy import record_observation
 
-        record_observation(prompt, used, check.get("passed"))
-    except Exception:  # noqa: BLE001
-        pass
+            record_observation(prompt, used, check.get("passed"))
+        except Exception:  # noqa: BLE001
+            pass
     hit, all_hit = _tool_match(item, used)
     elapsed = (datetime.now(timezone.utc) - t0).total_seconds()
     return {
@@ -155,6 +161,39 @@ def run_item(item: dict, timeout: int = 600) -> dict:
 
 _PI_CACHE: dict[int, int] = {}
 
+# Grounded file lookups (filesystem family) — answers verified against the repo.
+_LOOKUPS = [
+    (
+        "Read runtime_v2/api/_agent_config.py and report the integer value of MAX_TURNS.",
+        "12",
+    ),
+    (
+        "Read runtime_v2/api/_agent_config.py and report the integer value of MAX_DEPTH.",
+        "15",
+    ),
+    (
+        "Read runtime_v2/api/_agent_config.py and report the integer value of MAX_RESULT_CHARS.",
+        "1200",
+    ),
+    (
+        "Read runtime_v2/api/_agent_config.py and report the integer value of MAX_HISTORY_TURNS.",
+        "4",
+    ),
+    (
+        "Read runtime_v2/services/stream_runner.py and report the integer value of _NOTICE_RESERVE.",
+        "160",
+    ),
+    (
+        "Read organism_console/state_store.py and report the integer value of _SESSION_MAX_MESSAGES.",
+        "60",
+    ),
+    ("Read pyproject.toml and report the exact value of requires-python.", "3.14"),
+    (
+        "Read runtime_v2/services/model_registry.py and report the model name all built-in agents map to.",
+        "robs4b",
+    ),
+]
+
 
 def _primes_below(n: int) -> int:
     if n in _PI_CACHE:
@@ -175,6 +214,19 @@ def _fib(n: int) -> int:
 
 
 def _make_variant(idx: int, rng: random.Random) -> dict:
+    # 50/50 across two tool families so a large N stays DIVERSE: `filesystem`
+    # (grounded file lookups) and `sandbox_repl` (computed math). Cranking only
+    # one family would skew the learned tool policy toward that one tool.
+    if rng.random() < 0.5:
+        prompt, answer = rng.choice(_LOOKUPS)
+        return {
+            "id": f"g{idx:04d}",
+            "split": "train",
+            "difficulty": 1,
+            "target_tools": ["filesystem"],
+            "prompt": prompt,
+            "verify": {"type": "contains", "mode": "all", "value": [answer]},
+        }
     family = rng.choice(["mul", "sum", "primes", "fib", "gcd"])
     if family == "mul":
         a, b = rng.randint(12, 99), rng.randint(12, 99)
@@ -232,6 +284,417 @@ def generate(n: int, seed: int = 0) -> int:
             made += 1
             written += 1
     return written
+
+
+# --------------------------------------------------------------------------
+# repo-grounded task mining (DIVE arXiv:2603.11076: ground tasks in REAL data)
+# --------------------------------------------------------------------------
+
+_CONST_RE = re.compile(r"^([A-Z][A-Z0-9_]{3,})\s*=\s*(.+?)\s*$")
+_DEF_RE = re.compile(r"^(?:def|class)\s+(\w+)")
+_BORING = {"0", "1", "2", "3", "4", "5", "10", "100", "0.0", "1.0", "True", "False"}
+
+
+def _repo_files(root: Path, limit: int = 220) -> list[Path]:
+    files: set[Path] = set()
+    for pat in ("runtime_v2/**/*.py", "swarm_os/**/*.py", "organism_console/**/*.py"):
+        files.update(p for p in root.glob(pat) if p.is_file())
+    return sorted(files)[:limit]
+
+
+def _literal_expected(expr: str) -> str | None:
+    try:
+        val = ast.literal_eval(expr)
+    except ValueError, SyntaxError:
+        return None
+    if isinstance(val, bool):
+        return None
+    if isinstance(val, (int, float)):
+        s = str(val)
+        return s if len(s) >= 2 and s not in _BORING else None
+    if isinstance(val, str):
+        v = val.strip()
+        return v if 2 <= len(v) <= 40 else None
+    return None
+
+
+def _const_items(root: Path, per_file: int = 3) -> list[dict]:
+    out: list[dict] = []
+    for p in _repo_files(root):
+        try:
+            text = p.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        rel = str(p.relative_to(root)).replace("\\", "/")
+        picked = 0
+        for line in text.splitlines():
+            m = _CONST_RE.match(line)
+            if not m:
+                continue
+            name, expr = m.group(1), m.group(2)
+            exp = _literal_expected(expr)
+            if not exp:
+                continue
+            out.append(
+                {
+                    "id": f"m{len(out):05d}",
+                    "split": "train",
+                    "difficulty": 1,
+                    "target_tools": ["filesystem"],
+                    "prompt": f"Read {rel} and report the exact value of the {name} constant.",
+                    "verify": {"type": "contains", "mode": "all", "value": [exp]},
+                }
+            )
+            picked += 1
+            if picked >= per_file:
+                break
+    return out
+
+
+def _defcount_items(root: Path) -> list[dict]:
+    out: list[dict] = []
+    for p in _repo_files(root):
+        try:
+            text = p.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        n = sum(1 for line in text.splitlines() if _DEF_RE.match(line))
+        if n < 1:
+            continue
+        rel = str(p.relative_to(root)).replace("\\", "/")
+        out.append(
+            {
+                "id": f"n{len(out):05d}",
+                "split": "train",
+                "difficulty": 2,
+                "target_tools": ["filesystem"],
+                "prompt": (
+                    f"Read {rel} and report how many top-level `def` and `class` "
+                    "definitions it contains, as a number."
+                ),
+                "verify": {"type": "contains", "mode": "all", "value": [str(n)]},
+            }
+        )
+    return out
+
+
+def _exists_items(root: Path, limit: int = 60) -> list[dict]:
+    out: list[dict] = []
+    real = [
+        str(p.relative_to(root)).replace("\\", "/") for p in _repo_files(root)[:limit]
+    ]
+    fake = [
+        "runtime_v2/services/nonexistent_module_zz.py",
+        "swarm_os/services/ghost_service_qq.py",
+        "organism_console/_commands_imaginary.py",
+        "docs/does_not_exist_here.md",
+    ]
+    for rel in real:
+        out.append(
+            {
+                "id": f"e{len(out):05d}",
+                "split": "train",
+                "difficulty": 1,
+                "target_tools": ["filesystem"],
+                "prompt": f"Does the file {rel} exist in this repository? Answer yes or no.",
+                "verify": {
+                    "type": "contains",
+                    "mode": "any",
+                    "value": ["yes", "exists"],
+                },
+            }
+        )
+    for rel in fake:
+        out.append(
+            {
+                "id": f"e{len(out):05d}",
+                "split": "train",
+                "difficulty": 1,
+                "target_tools": ["filesystem"],
+                "prompt": f"Does the file {rel} exist in this repository? Answer yes or no.",
+                "verify": {
+                    "type": "contains",
+                    "mode": "any",
+                    "value": ["no", "not exist", "doesn't", "does not"],
+                },
+            }
+        )
+    return out
+
+
+def _math_pool(n: int = 900, seed: int = 0) -> list[dict]:
+    rng = random.Random(seed)
+    out: list[dict] = []
+    for i in range(n):
+        fam = rng.choice(
+            [
+                "mul",
+                "sum",
+                "primes",
+                "fib",
+                "gcd",
+                "divisors",
+                "fact",
+                "pow",
+                "mod",
+                "mean",
+            ]
+        )
+        if fam == "mul":
+            a, b = rng.randint(12, 999), rng.randint(12, 999)
+            prompt, ans = f"compute {a} * {b}", a * b
+        elif fam == "sum":
+            k = rng.randint(20, 500)
+            prompt, ans = (
+                f"report the sum of all integers from 1 to {k}",
+                k * (k + 1) // 2,
+            )
+        elif fam == "primes":
+            k = rng.randint(30, 300)
+            prompt, ans = (
+                f"count how many prime numbers are below {k}",
+                _primes_below(k),
+            )
+        elif fam == "fib":
+            k = rng.randint(8, 22)
+            prompt, ans = (
+                f"compute the {k}th Fibonacci number where F(1)=1 and F(2)=1",
+                _fib(k),
+            )
+        elif fam == "gcd":
+            a, b = rng.randint(100, 99999), rng.randint(100, 99999)
+            prompt, ans = (
+                f"compute the greatest common divisor of {a} and {b}",
+                math.gcd(a, b),
+            )
+        elif fam == "divisors":
+            k = rng.randint(50, 5000)
+            prompt, ans = (
+                f"count how many divisors {k} has",
+                sum(1 for d in range(1, k + 1) if k % d == 0),
+            )
+        elif fam == "fact":
+            k = rng.randint(5, 12)
+            prompt, ans = f"compute {k} factorial", math.factorial(k)
+        elif fam == "pow":
+            a, b = rng.randint(2, 9), rng.randint(3, 12)
+            prompt, ans = f"compute {a} to the power of {b}", a**b
+        elif fam == "mod":
+            a, b = rng.randint(1000, 99999), rng.randint(7, 97)
+            prompt, ans = f"compute the remainder of {a} divided by {b}", a % b
+        else:
+            k = rng.randint(3, 10)
+            nums = [rng.randint(1, 200) for _ in range(k)]
+            prompt, ans = f"compute the integer mean of the list {nums}", sum(nums) // k
+        out.append(
+            {
+                "id": f"x{i:05d}",
+                "split": "train",
+                "difficulty": 1 if fam in ("mul", "sum") else 2,
+                "target_tools": ["sandbox_repl"],
+                "prompt": f"Use sandbox_repl to {prompt} and report the result as a number.",
+                "verify": {"type": "contains", "mode": "all", "value": [str(ans)]},
+            }
+        )
+    return out
+
+
+def _string_pool(n: int = 300, seed: int = 0) -> list[dict]:
+    rng = random.Random(seed)
+    words = [
+        "agent",
+        "swarm",
+        "horseshoe",
+        "python",
+        "context",
+        "reflexion",
+        "harness",
+        "kernel",
+        "memory",
+        "policy",
+        "router",
+        "checkpoint",
+        "sandbox",
+        "curriculum",
+        "fitness",
+        "canary",
+        "genome",
+        "telemetry",
+    ]
+    out: list[dict] = []
+    for i in range(n):
+        w = rng.choice(words) + rng.choice(["s", "", "ing", "ed"])
+        op = rng.choice(["reverse", "length", "uppercase", "vowels"])
+        if op == "reverse":
+            prompt, ans = f"compute the reverse of the string '{w}'", w[::-1]
+        elif op == "length":
+            prompt, ans = f"report the number of characters in the string '{w}'", len(w)
+        elif op == "uppercase":
+            prompt, ans = f"compute the uppercase of the string '{w}'", w.upper()
+        else:
+            prompt, ans = (
+                f"count the vowels in the string '{w}'",
+                sum(c in "aeiou" for c in w),
+            )
+        out.append(
+            {
+                "id": f"s{i:05d}",
+                "split": "train",
+                "difficulty": 1,
+                "target_tools": ["sandbox_repl"],
+                "prompt": f"Use sandbox_repl to {prompt}, and report the result.",
+                "verify": {"type": "contains", "mode": "all", "value": [str(ans)]},
+            }
+        )
+    return out
+
+
+def _symbol_items(root: Path, per_file: int = 2) -> list[dict]:
+    """Symbol-presence (grounded): real defs -> yes, fabricated -> no."""
+    out: list[dict] = []
+    for p in _repo_files(root):
+        try:
+            text = p.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        rel = str(p.relative_to(root)).replace("\\", "/")
+        names = [m.group(1) for line in text.splitlines() if (m := _DEF_RE.match(line))]
+        for name in names[:per_file]:
+            out.append(
+                {
+                    "id": f"y{len(out):05d}",
+                    "split": "train",
+                    "difficulty": 2,
+                    "target_tools": ["filesystem"],
+                    "prompt": (
+                        f"Does {rel} define a function or class named `{name}`? "
+                        "Answer yes or no."
+                    ),
+                    "verify": {"type": "contains", "mode": "any", "value": ["yes"]},
+                }
+            )
+    for i in range(40):
+        out.append(
+            {
+                "id": f"y{len(out):05d}",
+                "split": "train",
+                "difficulty": 2,
+                "target_tools": ["filesystem"],
+                "prompt": (
+                    f"Does runtime_v2/api/_agent_config.py define a function or class "
+                    f"named `totally_missing_symbol_{i}`? Answer yes or no."
+                ),
+                "verify": {"type": "contains", "mode": "any", "value": ["no", "not"]},
+            }
+        )
+    return out
+
+
+def _linecount_items(root: Path, limit: int = 120) -> list[dict]:
+    out: list[dict] = []
+    for p in _repo_files(root)[:limit]:
+        try:
+            n = len(p.read_text(encoding="utf-8").splitlines())
+        except OSError:
+            continue
+        rel = str(p.relative_to(root)).replace("\\", "/")
+        out.append(
+            {
+                "id": f"l{len(out):05d}",
+                "split": "train",
+                "difficulty": 1,
+                "target_tools": ["filesystem"],
+                "prompt": f"Read {rel} and report how many lines it has, as a number.",
+                "verify": {"type": "contains", "mode": "all", "value": [str(n)]},
+            }
+        )
+    return out
+
+
+def _env_items() -> list[dict]:
+    """A few non-filesystem probes for tool breadth (stable answers)."""
+    return [
+        {
+            "id": "v00000",
+            "split": "train",
+            "difficulty": 1,
+            "target_tools": ["git"],
+            "prompt": "Use the git tool to report the current branch name.",
+            "verify": {"type": "contains", "mode": "any", "value": ["master", "main"]},
+        },
+        {
+            "id": "v00001",
+            "split": "train",
+            "difficulty": 2,
+            "target_tools": ["system"],
+            "prompt": "Use the system tool to report the operating system platform of this machine.",
+            "verify": {"type": "contains", "mode": "any", "value": ["win", "windows"]},
+        },
+        {
+            "id": "v00002",
+            "split": "train",
+            "difficulty": 1,
+            "target_tools": ["filesystem"],
+            "prompt": "Read pyproject.toml and report the exact value of requires-python.",
+            "verify": {"type": "contains", "mode": "all", "value": ["3.14"]},
+        },
+    ]
+
+
+def mine_pool(root: Path | None = None) -> list[dict]:
+    """Assemble the full diverse verified pool (repo-grounded + procedural)."""
+    root = root or _HERE.parent
+    pool: list[dict] = []
+    pool += _const_items(root)
+    pool += _defcount_items(root)
+    pool += _exists_items(root)
+    pool += _symbol_items(root)
+    pool += _linecount_items(root)
+    pool += _env_items()
+    pool += _math_pool()
+    pool += _string_pool()
+    return pool
+
+
+def mine(n: int, seed: int = 0) -> int:
+    """Sample N diverse verified items into the generated pool. Returns count."""
+    pool = mine_pool()
+    if not pool:
+        return 0
+    rng = random.Random(seed)
+    rng.shuffle(pool)
+    start = sum(1 for i in load_items() if str(i.get("id", "")).startswith("g"))
+    written = 0
+    GENERATED.parent.mkdir(parents=True, exist_ok=True)
+    with GENERATED.open("a", encoding="utf-8") as fh:
+        for item in pool:
+            if written >= n:
+                break
+            item = {**item, "id": f"g{start + written:05d}"}
+            fh.write(json.dumps(item, ensure_ascii=False) + "\n")
+            written += 1
+    return written
+
+
+def coverage() -> dict:
+    """Diversity snapshot over all curriculum items (the scaling metric)."""
+    items = load_items()
+    by_tool: dict[str, int] = {}
+    by_shape: dict[str, int] = {}
+    for it in items:
+        for t in it.get("target_tools", []) or ["?"]:
+            by_tool[t] = by_tool.get(t, 0) + 1
+        by_shape[shape_of(it["prompt"])] = by_shape.get(shape_of(it["prompt"]), 0) + 1
+    return {"items": len(items), "by_tool": by_tool, "by_shape": by_shape}
+
+
+def shape_of(task: str) -> str:
+    try:
+        from runtime_v2.services.tool_policy import shape_of as _s
+
+        return _s(task)
+    except Exception:  # noqa: BLE001
+        return "other"
 
 
 # --------------------------------------------------------------------------
@@ -315,15 +778,31 @@ def main() -> int:
     ap.add_argument("--id", help="run a specific item id")
     ap.add_argument("--split", default="all", choices=["all", "train", "eval"])
     ap.add_argument("--gen", type=int, metavar="N", help="append N verified variants")
+    ap.add_argument(
+        "--mine", type=int, metavar="N", help="mine N DIVERSE verified items"
+    )
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--progress", action="store_true")
+    ap.add_argument("--diversity", action="store_true")
     ap.add_argument("--timeout", type=int, default=600)
     args = ap.parse_args()
 
     if args.gen:
         n = generate(args.gen, args.seed)
         print(f"generated {n} verified variant(s) -> {GENERATED}")
+        return 0
+    if args.mine:
+        n = mine(args.mine, args.seed)
+        cov = coverage()
+        print(f"mined {n} diverse verified item(s) -> {GENERATED}")
+        print(
+            f"coverage: {cov['items']} items  by_tool={cov['by_tool']}  "
+            f"by_shape={cov['by_shape']}"
+        )
+        return 0
+    if args.diversity:
+        print(json.dumps(coverage(), indent=2))
         return 0
     if args.list:
         for it in load_items():
