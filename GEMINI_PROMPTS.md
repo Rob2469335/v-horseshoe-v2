@@ -411,3 +411,75 @@ significance):**
 - **Report back:** the diff (new files only), the test results, the ruff
   result, and an honest note on anything you could NOT verify. Do NOT update
   AGENTS.md; do NOT commit.
+
+---
+
+## PROMPT 11 - Item 4: loop-bound async client audit (4 commits)
+
+**Read-only cross-audit. This brief OVERRIDES the common preamble: do NOT change
+any code, do NOT edit AGENTS.md, do NOT commit or push. Report findings only.**
+The four commits are LOCAL and unpushed (branch `master` is ahead of
+`origin/master`); audit the working tree at HEAD.
+
+**Target (one shared bug class, four fixes):**
+
+| Commit | File | Revert-proof test |
+|---|---|---|
+| `6b1daeb2` | `organism_console/api_client.py` | `tests/test_api_client_loop.py` |
+| `7ea567be` | `runtime_v2/services/fallback_manager.py` | `tests/test_fallback_manager_client_loop.py` |
+| `b8746afe` | `swarm_os/core/orchestrator.py` | `tests/test_orchestrator_client_loop.py` |
+| `b384ab8`  | `swarm_os/lib/vector/qdrant_store.py` | `tests/test_qdrant_store_client_loop.py` |
+
+**The bug class.** A module-level pooled `httpx.AsyncClient` (and/or the asyncio
+`Lock` guarding it) is bound to the event loop that created it. Reused from a
+second or closed loop it fails with "Event loop is closed" (or "got Future
+attached to a different loop"). The reference fixes are
+`swarm_os/api/routes.py::_get_probe_client` (the `_PROBE_CLIENT_LOOP` pattern)
+and `swarm_os/services/vector_store.py` (commit `d94e177`). Every fixed getter
+must: cache the OWNER LOOP and rebuild when the client is closed, the owner loop
+is closed, or the current loop differs.
+
+**Verify, per commit (falsifiable — do not accept the commit message):**
+1. Read the actual getter. Confirm it captures `asyncio.get_running_loop()`
+   (with `RuntimeError -> None` where the getter can run outside a loop) and
+   that ALL rebuild conditions are present and correct. Quote `file:line`.
+2. **Revert-proof:** `git stash push -- <file>`; run the file's test (must
+   **FAIL**); `git stash pop`; run again (must **PASS**). Paste real output. A
+   test that does not fail on the pre-fix getter is not evidence.
+3. Correctness beyond the test: is the loop captured at CALL time (not import
+   time)? For `fallback_manager`, is the guarding `asyncio.Lock` ALSO per-loop
+   (a lock bound to loop A then used on loop B is the same class of bug)? For
+   `api_client` and `qdrant_store` (`threading.Lock` + double-checked locking),
+   is the re-check inside the lock sound?
+4. Client lifecycle: when a client is replaced on loop change, is the old one
+   leaked/never closed in a way that matters? Is `close_global_client()`'s
+   clearing of the owner correct, and are its callers intact?
+5. Scope: is each commit exactly ONE logical change touching only the listed
+   file (+ its test)? Use `git show --stat <hash>`.
+6. Do NOT re-flag these known, previously-disclosed artifacts as new defects:
+   - `b384ab8` carries a pre-existing 2-line `limits=` formatting reflow in the
+     same function.
+   - `b8746afe` carries a pre-existing 1-line blank line.
+   - `b8746afe` is an AMENDED commit (a staging-tooling error briefly committed
+     an indentation error; the unpushed commit was corrected). History is a
+     single commit per file — do not report it as a bundling/amend violation.
+
+**Commands.**
+- `ruff check <file> <test> --select E9,F` (expect clean).
+- `ruff check . --select E9,F` (10 pre-existing errors, all in `qwen_train/*.py`
+  scratch scripts — NOT part of this audit).
+- `python -m pytest tests/test_api_client_loop.py tests/test_fallback_manager_client_loop.py tests/test_orchestrator_client_loop.py tests/test_qdrant_store_client_loop.py -q`
+- The revert-proof stash/restore in point 2.
+
+**Also hunt for real, still-open gaps this fix did NOT close** (report them):
+- Any OTHER module-level pooled async client with the same missing owner-loop
+  tracking (grep for `AsyncClient(` / `AsyncQdrantClient(` getters that lack a
+  `*_loop` companion).
+- A getter that captures the loop but never rebuilds when `_loop.is_closed()`.
+- A test that passes for the wrong reason (e.g., asserts `id(a) != id(b)` where
+  a fresh allocation cannot collide, rather than exercising a real rebuild).
+
+**Output:** per commit — confirmed / overstated / wrong for each of the six
+verify points, with `file:line`; any NEW defects found; a final
+"safe to push?" verdict for the four commits as a set. Paste real command
+output; no "green"/"passing" claims without it. Do not modify anything.
