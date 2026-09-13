@@ -18,14 +18,29 @@ from swarm_os.services.approval_registry import (
 log = logging.getLogger(__name__)
 import os
 
-# Hard cap on tool output returned to the LLM context window
-_MAX_TOOL_OUTPUT_BYTES = int(
-    os.environ.get("SWARM_MAX_TOOL_OUTPUT_BYTES", str(64 * 1024))
-)  # 64 KB default
+
+def _env_int(name: str, default: int) -> int:
+    """Parse an int env var, falling back to `default` when absent/malformed.
+
+    An unvalidated `int(os.environ[...])` at import turns a bad setting (e.g.
+    "64k") into a ValueError that takes the whole tool executor down.
+    """
+    raw = os.environ.get(name)
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except TypeError, ValueError:
+        log.warning("Invalid %s=%r; using default %d", name, raw, default)
+        return default
+
+
+# Hard cap on tool output returned to the LLM context window (64 KB default)
+_MAX_TOOL_OUTPUT_BYTES = _env_int("SWARM_MAX_TOOL_OUTPUT_BYTES", 64 * 1024)
 
 # Per-run call cap for github_research (prevents a confused 4B model from
 # looping discover→verify→discover→verify). Resets when any OTHER tool fires.
-_GITHUB_RESEARCH_CAP = int(os.environ.get("SWARM_GITHUB_RESEARCH_CAP", "5"))
+_GITHUB_RESEARCH_CAP = _env_int("SWARM_GITHUB_RESEARCH_CAP", 5)
 _github_call_counts: dict[str, int] = {}
 
 
