@@ -444,6 +444,7 @@ class ReflectionService:
         confidence: float = 0.7,
         do_not_repeat: str = "",
         scope: str | None = None,
+        kind: str = "failure",
     ):
         """Persist a reflexion rule. scope defaults to 'agent' and is auto-assigned
         via _auto_scope() when not given (confident + generic failure => 'shared')."""
@@ -456,9 +457,7 @@ class ReflectionService:
             # a repeated failure overwrites the prior rule instead of flooding
             # the collection with near-duplicate points (observed: 60 copies of
             # "File not found: x.py" crowded out specific per-task lessons).
-            point_id = str(
-                uuid.uuid5(uuid.NAMESPACE_DNS, f"{component}|{failure_reason}")
-            )
+            point_id = _reflexion_point_id(component, failure_reason, kind)
             # 2026 L5 (trust-gated consolidation): a repeated failure must
             # REINFORCE the stored rule, not flat-overwrite it. Read the existing
             # point; if present, bump its count and raise confidence (capped) so a
@@ -565,6 +564,7 @@ class ReflectionService:
                                 "confidence": best_conf,
                                 "count": count,
                                 "retrieve_failed": retrieve_failed,
+                                "kind": kind,
                             },
                         )
                     ],
@@ -578,6 +578,45 @@ class ReflectionService:
 
 
 _service = None
+
+
+def _reflexion_point_id(
+    component: str, failure_reason: str, kind: str = "failure"
+) -> str:
+    """Deterministic ReflexionMemory point id, namespaced by ``kind`` so a
+    SUCCESS lesson and a FAILURE rule for the same (component, reason) never
+    collide."""
+    return str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{kind}|{component}|{failure_reason}"))
+
+
+async def store_success_lesson(
+    component: str,
+    symptom: str,
+    root_cause: str,
+    rule: str,
+    confidence: float = 0.85,
+) -> None:
+    """Success pathway: learn from a PROVEN fix, not only from failures.
+
+    Records the diagnostic outcome (symptom → actual root cause → reusable
+    rule) as a positive ReflexionMemory entry under ``kind="success"`` (distinct
+    point-id namespace). Analogue of AgentHER / Hindsight Supervised Learning
+    (arXiv:2603.21357, 2607.04235) applied at the runtime-memory layer. Never
+    raises.
+    """
+    try:
+        svc = get_reflection_service()
+        await svc.store_reflexion(
+            task=symptom,
+            action="success_lesson",
+            failure_reason=root_cause,
+            correction=rule,
+            component=component,
+            confidence=confidence,
+            kind="success",
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.debug("store_success_lesson failed: %s", e)
 
 
 def get_reflection_service() -> ReflectionService:
