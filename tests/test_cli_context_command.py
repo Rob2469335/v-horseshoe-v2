@@ -7,10 +7,9 @@ from types import SimpleNamespace
 
 from rich.console import Console
 
-from organism_console import _commands_system  # noqa: F401  (registers commands)
+from organism_console.command_registry import registry  # noqa: F401  (loads all command modules in order)
 from organism_console._command_context import CommandContext
 from organism_console._commands_system import cmd_context
-from organism_console.command_registry import registry
 
 
 def _make_ctx(history):
