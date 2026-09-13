@@ -224,6 +224,9 @@ async def _store_decision_reflexion(
 _CONTEXT_LIMIT = 16384
 _OUTPUT_RESERVE = 4096
 _CONTEXT_FIT_BUFFER = 300
+# Est-token allowance held back so the user-role elision notice (appended when
+# the middle is dropped) cannot push the fitted payload back over the budget.
+_NOTICE_RESERVE = 160
 
 
 def _estimate_msg_tokens(m) -> int:
@@ -319,12 +322,13 @@ def _fit_tool_decision_messages(
     )
     orig_head = head
     # A single oversized message must not overflow on its own: truncate the head
-    # (first user task) head+tail when it alone exceeds the budget.
-    if head is not None and _estimate_msg_tokens(head) > budget:
+    # (first user task) head+tail when it alone exceeds the budget. Reserve
+    # _NOTICE_RESERVE so a later elision notice cannot push the total over.
+    if head is not None and _estimate_msg_tokens(head) > budget - _NOTICE_RESERVE:
         head = {
             **head,
             "content": _truncate_content(
-                str(head.get("content", "")), max(64, budget - 96)
+                str(head.get("content", "")), max(64, budget - _NOTICE_RESERVE - 96)
             ),
         }
     used = _estimate_msg_tokens(head) if head is not None else 0
@@ -333,7 +337,7 @@ def _fit_tool_decision_messages(
         if orig_head is not None and m is orig_head:
             continue
         t = _estimate_msg_tokens(m)
-        if used + t > budget:
+        if used + t + _NOTICE_RESERVE > budget:
             if tail or not isinstance(m, dict):
                 break
             # The most recent message alone exceeds the remaining budget:
@@ -341,27 +345,27 @@ def _fit_tool_decision_messages(
             m = {
                 **m,
                 "content": _truncate_content(
-                    str(m.get("content", "")), max(64, budget - used - 96)
+                    str(m.get("content", "")),
+                    max(64, budget - used - _NOTICE_RESERVE - 96),
                 ),
             }
             t = _estimate_msg_tokens(m)
-            if used + t > budget:
+            if used + t + _NOTICE_RESERVE > budget:
                 break
         tail.append(m)
         used += t
-        if used >= budget:
+        if used + _NOTICE_RESERVE >= budget:
             break
     tail.reverse()
 
-    kept: list = []
-    if head is not None:
-        kept.append(head)
-    kept_ids = {id(m) for m in kept} | {id(m) for m in tail}
+    head_part: list = [head] if head is not None else []
+    kept_ids = {id(m) for m in head_part} | {id(m) for m in tail}
     if orig_head is not None:
         kept_ids.add(id(orig_head))
     dropped_msgs = [m for m in non_sys if id(m) not in kept_ids]
+    notice_part: list = []
     if dropped_msgs:
-        kept.append(
+        notice_part.append(
             {
                 "role": "user",
                 "content": (
@@ -371,8 +375,16 @@ def _fit_tool_decision_messages(
                 ),
             }
         )
-    kept.extend(tail)
-    return sys_msgs + kept
+
+    # Hard bound: the reserve above holds when the notice is the last thing
+    # added; if an oversized head plus the notice still overflows, drop the
+    # oldest retained recent messages until the payload fits.
+    while (
+        sum(_estimate_msg_tokens(m) for m in (head_part + notice_part + tail)) > budget
+        and tail
+    ):
+        tail.pop(0)
+    return sys_msgs + head_part + notice_part + tail
 
 
 async def get_tool_decision(

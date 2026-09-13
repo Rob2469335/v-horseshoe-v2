@@ -189,3 +189,24 @@ def test_elision_marker_digests_dropped_tools_and_errors():
     assert marker, "expected an elision marker"
     assert "tools:" in marker[0]["content"]
     assert "error result" in marker[0]["content"]
+
+
+def test_fit_notice_stays_under_budget_at_exact_fill():
+    """Boundary: when the retained turns exactly fill the budget and the middle
+    is dropped, the appended elision notice must not push the payload back over
+    the budget (the pre-fix code reserved nothing for it)."""
+    sysp = ""  # budget = 16384 - 4096 - 0 - 300
+    budget = _budget(sysp)
+    # head est == 1; the recent message est == budget - 1 -> they exactly fill,
+    # forcing the middle assistant message to be dropped (and a notice added).
+    recent_len = (budget - 1) * 4 - 3
+    msgs = [
+        {"role": "user", "content": "a"},
+        {"role": "assistant", "content": "M" * 4000},
+        {"role": "user", "content": "z" * recent_len},
+    ]
+    fitted = _fit_tool_decision_messages(msgs, sysp)
+    assert any(str(m.get("content", "")).startswith("[system:") for m in fitted), (
+        "expected an elision notice (the middle must be dropped)"
+    )
+    assert _toks(fitted) <= budget, f"payload {_toks(fitted)} exceeds budget {budget}"
