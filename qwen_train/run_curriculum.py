@@ -308,6 +308,10 @@ def progress() -> None:
 def main() -> int:
     ap = argparse.ArgumentParser(description="Verified tool-use curriculum driver")
     ap.add_argument("--next", action="store_true", help="run the next unused item")
+    ap.add_argument("--run", type=int, metavar="N", help="run N items back-to-back")
+    ap.add_argument(
+        "--sleep", type=float, default=0.0, help="seconds between --run items"
+    )
     ap.add_argument("--id", help="run a specific item id")
     ap.add_argument("--split", default="all", choices=["all", "train", "eval"])
     ap.add_argument("--gen", type=int, metavar="N", help="append N verified variants")
@@ -329,6 +333,27 @@ def main() -> int:
             )
         return 0
     if args.progress:
+        progress()
+        return 0
+
+    if args.run:
+        import time as _time
+
+        for i in range(args.run):
+            item = next_item(args.split)
+            if item is None:
+                print("curriculum exhausted")
+                break
+            print(f"[{i + 1}/{args.run}] [{item['id']}] {item['prompt'][:80]}")
+            res = run_item(item, timeout=args.timeout)
+            record(res)
+            mark = {True: "PASS", False: "FAIL", None: "MANUAL"}[res["verified"]]
+            print(
+                f"  verified={mark}  tool_hit={res['tool_hit']}  "
+                f"tools_used={res['tools_used']}"
+            )
+            if args.sleep:
+                _time.sleep(args.sleep)
         progress()
         return 0
 
