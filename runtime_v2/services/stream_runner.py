@@ -341,7 +341,7 @@ def _fit_tool_decision_messages(
             m = {
                 **m,
                 "content": _truncate_content(
-                    str(m.get("content", "")), max(64, budget - used - 32)
+                    str(m.get("content", "")), max(64, budget - used - 96)
                 ),
             }
             t = _estimate_msg_tokens(m)
@@ -451,9 +451,7 @@ async def get_tool_decision(
                 _research_task = is_research_task(_last_user_msg)
                 if _ref_task:
                     _serena = [
-                        t
-                        for t in tools
-                        if t.get("name", "") in _SERENA_REFERENCE_TOOLS
+                        t for t in tools if t.get("name", "") in _SERENA_REFERENCE_TOOLS
                     ]
                     _merged, _seen = [], set()
                     for _t in _serena + relevant:
@@ -471,8 +469,7 @@ async def get_tool_decision(
                         t
                         for t in tools
                         if any(
-                            h in t.get("name", "").lower()
-                            for h in _RESEARCH_TOOL_HINTS
+                            h in t.get("name", "").lower() for h in _RESEARCH_TOOL_HINTS
                         )
                     ]
                     _merged, _seen = [], set()
@@ -600,7 +597,8 @@ async def get_tool_decision(
                     if mem_budget > 50:
                         injected_mem = memories_str[:mem_budget]
                         system_prompt = (
-                            system_prompt + f"\n\n[RELEVANT MEMORIES (WARNING: Past episodic memory may be stale. NEVER state memory as fact without verifying it via live tools this run. If a referenced file is deleted or changed, ignore the memory.)]\n{injected_mem}"
+                            system_prompt
+                            + f"\n\n[RELEVANT MEMORIES (WARNING: Past episodic memory may be stale. NEVER state memory as fact without verifying it via live tools this run. If a referenced file is deleted or changed, ignore the memory.)]\n{injected_mem}"
                         )
                         log.debug(
                             "[%s] Injected %d chars of memory (%d token headroom)",
