@@ -597,6 +597,107 @@ def cmd_agents(ctx: CommandContext, args: List[str]) -> None:
         ctx.console.print(f"[bold red]Failed to parse agents: {e}[/bold red]")
 
 
+_USAGE_SUBAGENTS = (
+    "Usage: /subagents list|pending|propose|promote|reject|rollback [name]"
+)
+
+
+@registry.register(
+    "subagents",
+    "Inspect file-based subagents (.rob/agents/*.md) and their staged "
+    "config-evolution proposals. Usage: " + _USAGE_SUBAGENTS,
+)
+def cmd_subagents(ctx: CommandContext, args: List[str]) -> None:
+    from runtime_v2.services import subagent_registry as reg
+    from runtime_v2.services import subagent_evolution as se
+
+    action = args[0].lower() if args else "list"
+    name = args[1] if len(args) > 1 else None
+
+    if action in ("list", "ls"):
+        subs = reg.list_subagents()
+        if not subs:
+            ctx.console.print("[dim]No file-based subagents (.rob/agents/*.md).[/dim]")
+            return
+        table = Table(box=SIMPLE, header_style="bold cyan")
+        table.add_column("Name", style="bold green")
+        table.add_column("Mutable", style="yellow")
+        table.add_column("Model", style="cyan")
+        table.add_column("Tools", style="white")
+        for s in subs:
+            table.add_row(
+                s["name"],
+                "yes" if s.get("mutable") else "no",
+                s.get("model") or "robs4b",
+                ", ".join(s.get("tools") or [])[:50],
+            )
+        ctx.console.print(
+            Panel(
+                table,
+                title=f"[bold cyan]File subagents ({len(subs)})[/bold cyan]",
+                border_style="cyan",
+            )
+        )
+        return
+
+    if action == "pending":
+        staged = se.list_staged(name)
+        if not staged:
+            ctx.console.print("[dim]No staged proposals.[/dim]")
+            return
+        for rec in staged:
+            ctx.console.print(
+                f"[green]{rec['agent']}[/green] {rec.get('current_score')} → "
+                f"{rec.get('candidate_score')}  [dim]{rec['candidate']}[/dim]"
+            )
+        return
+
+    if not name:
+        ctx.console.print(f"[yellow]{_USAGE_SUBAGENTS}[/yellow]")
+        return
+
+    if action == "propose":
+        if not se.enabled():
+            ctx.console.print(
+                "[yellow]Subagent evolution is off.[/yellow] Set "
+                "[bold]SWARM_SUBAGENT_EVOLUTION=1[/bold] to propose."
+            )
+            return
+        rec = se.propose(name)
+        if rec is None:
+            ctx.console.print(
+                f"[yellow]No proposal for '{name}'[/yellow] (not mutable, or no "
+                "real outcome signal yet)."
+            )
+            return
+        ctx.console.print(
+            f"[green]Staged proposal for {name}[/green] "
+            f"{rec['current_score']} → {rec['candidate_score']}"
+        )
+    elif action == "promote":
+        res = se.promote(name)
+        if res.get("ok"):
+            ctx.console.print(f"[green]Promoted {name}[/green] {res.get('applied')}")
+        else:
+            ctx.console.print(f"[red]Promote refused:[/red] {res.get('reason')}")
+    elif action == "reject":
+        res = se.reject(name)
+        if res.get("ok"):
+            ctx.console.print(
+                f"[green]Discarded {res.get('removed')} proposal(s) for {name}[/green]"
+            )
+        else:
+            ctx.console.print(f"[red]Reject failed:[/red] {res.get('reason')}")
+    elif action == "rollback":
+        res = se.rollback(name)
+        if res.get("ok"):
+            ctx.console.print(f"[green]Rolled back {name}[/green]")
+        else:
+            ctx.console.print(f"[red]Rollback failed:[/red] {res.get('reason')}")
+    else:
+        ctx.console.print(f"[yellow]{_USAGE_SUBAGENTS}[/yellow]")
+
+
 @registry.register("benchmark", "Test latency/token throughput across local models.")
 def cmd_benchmark(ctx: CommandContext, args: List[str]) -> None:
     import time

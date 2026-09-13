@@ -53,6 +53,11 @@ def _enabled() -> bool:
     return os.environ.get("SWARM_SUBAGENT_EVOLUTION", "").strip() == "1"
 
 
+def enabled() -> bool:
+    """Public opt-in check (the flag defaults OFF)."""
+    return _enabled()
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -148,14 +153,27 @@ def propose(name: str, rng: random.Random | None = None) -> dict | None:
     if not sub or not sub.get("mutable"):
         return None
     current = config_genome(sub)
+    cur_score = score(current)
+    if cur_score <= 0.0:
+        # Anti-fabrication (arXiv:2607.13083 "Phantom Guardrails"): never stage
+        # a mutation with no real outcome signal — self-improving systems
+        # otherwise "fix" failures that never happened.
+        log.debug("subagent_evolution: no outcome signal for %s; not proposing", name)
+        return None
     candidate = mutate(current, rng)
+    cand_score = score(candidate)
+    if cand_score < cur_score:
+        # Regression-risk gate (SAHOO, arXiv:2603.06333): don't stage a config
+        # that measures worse than the incumbent.
+        log.debug("subagent_evolution: candidate for %s scores worse; skipped", name)
+        return None
     record = {
         "ts": _now(),
         "agent": name,
         "current": current,
         "candidate": candidate,
-        "current_score": round(score(current), 4),
-        "candidate_score": round(score(candidate), 4),
+        "current_score": round(cur_score, 4),
+        "candidate_score": round(cand_score, 4),
     }
     try:
         STAGED_DIR.mkdir(parents=True, exist_ok=True)
@@ -207,15 +225,44 @@ def _rewrite_frontmatter(text: str, updates: dict) -> str:
     return "\n".join([lines[0], *fm, *lines[end:]])
 
 
-def promote(name: str) -> dict:
-    """Apply the newest staged config for ``name`` (human-gated, reversible)."""
+def validate_candidate(name: str, candidate: dict) -> tuple[bool, str]:
+    """Machine-checkable acceptance invariants for a config candidate.
+
+    Falsifiable release gates (arXiv:2607.13070): the standing invariants that
+    must hold for ANY promoted config — mutable-and-file-based, a non-empty
+    known tool allowlist, an in-range budget, a non-empty model string.
+    """
+    sub = reg.get_subagent(name)
+    if not sub or not sub.get("mutable"):
+        return False, f"{name!r} is not a mutable subagent"
+    tools = candidate.get("tools") or []
+    if not tools:
+        return False, "candidate has no tools"
+    unknown = [t for t in tools if t not in set(_tool_pool())]
+    if unknown:
+        return False, f"unknown tool(s): {', '.join(map(str, unknown))}"
+    budget = candidate.get("budget")
+    if not isinstance(budget, int) or not (_BUDGET_MIN <= budget <= _BUDGET_MAX):
+        return False, f"budget {budget} out of range [{_BUDGET_MIN}, {_BUDGET_MAX}]"
+    model = candidate.get("model")
+    if not isinstance(model, str) or not model.strip():
+        return False, "model must be a non-empty string"
+    return True, "ok"
+
+
+def promote(name: str, reviewer: str = "") -> dict:
+    """Apply the newest staged config for ``name`` (human-gated, reversible).
+
+    Runs the machine-checkable acceptance invariants before touching anything;
+    a violation refuses the promotion. Records the reviewer in the audit trail.
+    """
     staged = list_staged(name)
     if not staged:
         return {"ok": False, "reason": f"no staged config for {name!r}"}
     rec = staged[0]
-    sub = reg.get_subagent(name)
-    if not sub or not sub.get("mutable"):
-        return {"ok": False, "reason": f"{name!r} is not a mutable subagent"}
+    ok, reason = validate_candidate(name, rec.get("candidate") or {})
+    if not ok:
+        return {"ok": False, "reason": f"acceptance gate failed: {reason}"}
     md = _md_path(name)
     if not md.exists():
         return {"ok": False, "reason": f"{md} not found"}
@@ -238,15 +285,18 @@ def promote(name: str) -> dict:
     try:
         from swarm_os.services.watch_loop import _audit_write
 
+        approved = f" [approved by {reviewer}]" if reviewer else ""
         line = (
             f"- **[SUBAGENT-CONFIG] ({_now()})**: {name} — tools/model/budget "
-            f"evolved (score {rec.get('current_score')}→{rec.get('candidate_score')})\n"
+            f"evolved (score {rec.get('current_score')}→{rec.get('candidate_score')})"
+            f"{approved}\n"
         )
         _audit_write(
             {
                 "ts": _now(),
                 "type": "SUBAGENT-CONFIG",
                 "agent": name,
+                "reviewer": reviewer,
                 "from": rec.get("current"),
                 "to": candidate,
                 "trigger": "subagent_evolution",
@@ -257,6 +307,39 @@ def promote(name: str) -> dict:
         log.warning("subagent_evolution: audit write failed: %s", exc)
 
     return {"ok": True, "agent": name, "applied": updates}
+
+
+def reject(name: str, reviewer: str = "") -> dict:
+    """Discard every staged proposal for ``name`` (deletes staged files)."""
+    staged = list_staged(name)
+    if not staged:
+        return {"ok": False, "reason": f"no staged config for {name!r}"}
+    removed = 0
+    for rec in staged:
+        try:
+            Path(rec["_path"]).unlink()
+            removed += 1
+        except OSError:
+            continue
+    try:
+        from swarm_os.services.watch_loop import _audit_write
+
+        by = f" [by {reviewer}]" if reviewer else ""
+        _audit_write(
+            {
+                "ts": _now(),
+                "type": "SUBAGENT-CONFIG-REJECTED",
+                "agent": name,
+                "reviewer": reviewer,
+                "removed": removed,
+                "trigger": "subagent_evolution",
+            },
+            f"- **[SUBAGENT-CONFIG-REJECTED] ({_now()})**: {name} — "
+            f"{removed} proposal(s) discarded{by}\n",
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("subagent_evolution: audit write failed: %s", exc)
+    return {"ok": True, "agent": name, "removed": removed}
 
 
 def rollback(name: str) -> dict:

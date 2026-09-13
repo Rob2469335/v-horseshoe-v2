@@ -53,6 +53,8 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(
         wl, "_AUDIT_FILE", tmp_path / "data" / "events" / "auto_repairs.jsonl"
     )
+    # Hermetic score: a real outcome signal exists unless a test overrides it.
+    monkeypatch.setattr(se, "score", lambda g: 0.5)
     monkeypatch.delenv("SWARM_SUBAGENT_EVOLUTION", raising=False)
     return root
 
@@ -166,3 +168,72 @@ def test_promote_refuses_immutable_and_unstaged(env):
     assert se.promote("static")["ok"] is False
     _write(env, "tuner.md", _TUNER)
     assert se.promote("tuner")["ok"] is False  # nothing staged
+
+
+# --------------------------------------------------------------------------
+# evidence-backed gates
+# --------------------------------------------------------------------------
+
+
+def test_propose_requires_a_real_outcome_signal(env, monkeypatch):
+    """Anti-fabrication: no mutation without a real signal."""
+    monkeypatch.setenv("SWARM_SUBAGENT_EVOLUTION", "1")
+    monkeypatch.setattr(se, "score", lambda g: 0.0)
+    _write(env, "tuner.md", _TUNER)
+    assert se.propose("tuner") is None
+    assert se.list_staged() == []
+
+
+def test_propose_skips_a_worse_candidate(env, monkeypatch):
+    """Regression-risk gate: a candidate measuring worse is not staged."""
+    monkeypatch.setenv("SWARM_SUBAGENT_EVOLUTION", "1")
+    monkeypatch.setattr(
+        se,
+        "mutate",
+        lambda g, rng=None: {**g, "budget": 5120},
+    )
+    monkeypatch.setattr(se, "score", lambda g: 0.5 if g["budget"] == 4096 else 0.2)
+    _write(env, "tuner.md", _TUNER)
+    assert se.propose("tuner") is None
+    assert se.list_staged() == []
+
+
+def test_promote_enforces_acceptance_invariants(env, monkeypatch, tmp_path):
+    """A staged candidate with an unknown tool is refused at promotion."""
+    monkeypatch.setenv("SWARM_SUBAGENT_EVOLUTION", "1")
+    monkeypatch.setattr(
+        se,
+        "mutate",
+        lambda g, rng=None: {**g, "tools": ["filesystem", "not-a-real-tool"]},
+    )
+    _write(env, "tuner.md", _TUNER)
+    assert se.propose("tuner") is not None  # staged without validating
+    res = se.promote("tuner")
+    assert res["ok"] is False
+    assert "acceptance gate failed" in res["reason"]
+    # the live file was NOT touched
+    assert "not-a-real-tool" not in (env / "tuner.md").read_text(encoding="utf-8")
+
+
+def test_promote_records_reviewer_and_reject_discards(env, monkeypatch, tmp_path):
+    monkeypatch.setenv("SWARM_SUBAGENT_EVOLUTION", "1")
+    _write(env, "tuner.md", _TUNER)
+    se.propose("tuner", random.Random(7))
+    res = se.promote("tuner", reviewer="alice")
+    assert res["ok"] is True
+    audit = tmp_path / "data" / "events" / "auto_repairs.jsonl"
+    assert (
+        json.loads(audit.read_text(encoding="utf-8").splitlines()[-1])["reviewer"]
+        == "alice"
+    )
+
+    # reject on a fresh proposal discards it + audits
+    se.propose("tuner", random.Random(8))
+    assert se.list_staged("tuner")
+    rej = se.reject("tuner", reviewer="bob")
+    assert rej["ok"] is True and rej["removed"] >= 1
+    assert se.list_staged("tuner") == []
+    assert (
+        json.loads(audit.read_text(encoding="utf-8").splitlines()[-1])["type"]
+        == "SUBAGENT-CONFIG-REJECTED"
+    )
