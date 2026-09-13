@@ -539,23 +539,36 @@ def _find_related_test_files(file_path: str) -> list[str]:
     try:
         base = Path(file_path).stem
         mod = str(file_path).replace("\\", "/").replace(".py", "")
+        modtail = mod.split("/")[-1]
         out: list[str] = []
-        for t in sorted(_glob.glob(str(ROOT_DIR / "tests" / "test_*.py"))):
+        seen: set[str] = set()
+        tests = sorted(_glob.glob(str(ROOT_DIR / "tests" / "test_*.py")))
+        # Name matches first...
+        for t in tests:
             tname = Path(t).name
             if base in tname or tname.replace("test_", "").replace(".py", "") in base:
-                out.append(t)
-                if len(out) >= 6:
-                    break
-        if not out:
-            for t in sorted(_glob.glob(str(ROOT_DIR / "tests" / "test_*.py"))):
-                try:
-                    head = Path(t).read_text(encoding="utf-8", errors="ignore")[:4000]
-                except Exception:
-                    continue
-                if base in head or mod.split("/")[-1] in head:
+                if t not in seen:
+                    seen.add(t)
                     out.append(t)
-                    if len(out) >= 6:
-                        break
+                if len(out) >= 8:
+                    return out
+        # ...then content matches, EVEN when name matches already exist: a module
+        # can be exercised by a test whose NAME does not contain it (e.g.
+        # test_opencode_parity.py exercises tool_executor). Previously the
+        # content scan ran only when the name scan found nothing, so adding any
+        # test named after the module silently dropped the content-scan hits.
+        for t in tests:
+            if t in seen:
+                continue
+            try:
+                head = Path(t).read_text(encoding="utf-8", errors="ignore")[:4000]
+            except Exception:
+                continue
+            if base in head or modtail in head:
+                seen.add(t)
+                out.append(t)
+                if len(out) >= 8:
+                    break
         return out
     except Exception as e:
         logger.warning("related-test discovery failed: %s", e)
