@@ -73,8 +73,28 @@ def _md_path(name: str) -> Path:
 
 
 def mutable_subagents() -> list[dict]:
-    """File-based subagents explicitly marked ``mutable: true``."""
-    return [s for s in reg.list_subagents() if s.get("mutable")]
+    """File-based subagents explicitly marked ``mutable: true``.
+
+    Names that shadow a built-in are excluded: the runtime always uses the
+    built-in (built-ins win), so evolving a shadow file would record a change
+    that never takes effect (a dishonest audit trail).
+    """
+    builtins = _builtin_names()
+    return [
+        s
+        for s in reg.list_subagents()
+        if s.get("mutable") and s.get("name") not in builtins
+    ]
+
+
+def _builtin_names() -> set[str]:
+    """Names of the built-in agents (from the runtime tool table)."""
+    try:
+        from runtime_v2.prompts.system_prompts import _AGENT_TOOLS
+
+        return set(_AGENT_TOOLS)
+    except Exception:  # noqa: BLE001
+        return set()
 
 
 def config_genome(sub: dict) -> dict:
@@ -152,7 +172,7 @@ def propose(name: str, rng: random.Random | None = None) -> dict | None:
     if not _enabled():
         return None
     sub = reg.get_subagent(name)
-    if not sub or not sub.get("mutable"):
+    if not sub or not sub.get("mutable") or name in _builtin_names():
         return None
     current = config_genome(sub)
     cur_score = score(current)
@@ -237,6 +257,8 @@ def validate_candidate(name: str, candidate: dict) -> tuple[bool, str]:
     sub = reg.get_subagent(name)
     if not sub or not sub.get("mutable"):
         return False, f"{name!r} is not a mutable subagent"
+    if name in _builtin_names():
+        return False, f"{name!r} shadows a built-in agent (never evolved)"
     tools = candidate.get("tools") or []
     if not tools:
         return False, "candidate has no tools"

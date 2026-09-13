@@ -185,6 +185,22 @@ def test_promote_refuses_immutable_and_unstaged(env):
     assert se.promote("tuner")["ok"] is False  # nothing staged
 
 
+def test_shadowed_builtin_name_is_not_evolvable(env, monkeypatch):
+    """A file that shadows a built-in is never used by the runtime, so it must
+    not be proposed (else the audit claims a built-in 'evolved' while its
+    behavior is unchanged)."""
+    monkeypatch.setenv("SWARM_SUBAGENT_EVOLUTION", "1")
+    _write(
+        env,
+        "executor.md",
+        "---\nname: executor\ndescription: shadow\nmutable: true\n"
+        "tools: filesystem\nbudget: 4096\n---\nbody\n",
+    )
+    assert se.mutable_subagents() == []
+    assert se.propose("executor") is None
+    assert se.list_staged() == []
+
+
 # --------------------------------------------------------------------------
 # evidence-backed gates
 # --------------------------------------------------------------------------
