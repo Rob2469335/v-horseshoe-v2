@@ -29,12 +29,28 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-try:
-    import truststore
 
-    truststore.inject_into_ssl()
-except ImportError:
-    pass
+def _setup_ssl_trust() -> None:
+    """Best-effort OS trust-store SSL injection (corporate/MITM certs).
+
+    Fail-open: a missing package OR a failure INSIDE inject_into_ssl() must not
+    take down CLI import — fall back to the default SSL context.
+    """
+    try:
+        import truststore
+
+        truststore.inject_into_ssl()
+    except ImportError:
+        pass
+    except Exception as exc:  # noqa: BLE001
+        import logging
+
+        logging.getLogger("zenith_cli").warning(
+            "truststore SSL injection failed (%s); using default SSL context", exc
+        )
+
+
+_setup_ssl_trust()
 
 from rich.console import Console
 from rich.logging import RichHandler
