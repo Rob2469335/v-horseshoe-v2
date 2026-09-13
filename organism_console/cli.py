@@ -186,11 +186,16 @@ def run_agentic(
         except Exception:
             snap = None
     _t0 = _time.time()
-    _len_before = len(ctx.history or [])
+    # One-shot machine runs (`--json`) must NOT inherit or persist conversation
+    # history: replaying a prior run's own output into the next run produced a
+    # self-reinforcing loop-diagnosis (2026-09-13). Interactive/REPL runs keep
+    # persistent history.
+    _base_history = [] if json_flag else list(ctx.history or [])
+    _len_before = len(_base_history)
     result_history = stream_prompt_with_retry(
-        ctx, ctx.active_agent, execute_prompt, ctx.history
+        ctx, ctx.active_agent, execute_prompt, _base_history
     )
-    ctx.history = result_history
+    ctx.history = [] if json_flag else result_history
     elapsed = _time.time() - _t0
     # Only a message ADDED BY THIS RUN is a valid answer. On a failed run the
     # retry wrapper returns the input history unchanged, so `[-1]` would be the
