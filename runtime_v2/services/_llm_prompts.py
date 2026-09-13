@@ -90,6 +90,7 @@ def build_tool_decision_system(allowed_tools: list, mcp_schema: str = "") -> str
         "Do not use any other top-level keys unless needed for the selected action.\n"
         'For action=final, use only: {"thought":"...", "action":"final","response":"..."}\n'
         "IMPORTANT for action=final: Describe ONLY completed work and factual findings in 'response'. Do NOT promise future steps or say 'Next, I will...' unless another step is scheduled.\n"
+        "IMPORTANT: if you used sandbox_repl to compute a value, your final 'response' MUST restate that exact value (state the number).\n"
         "DO NOT use XML tags like <tool_call> or <tool_code>. Do NOT wrap your JSON in any tags.\n"
         "DO NOT output anything other than the JSON object."
     )
