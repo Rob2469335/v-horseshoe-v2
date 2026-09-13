@@ -228,6 +228,15 @@ def run_item(item: dict, timeout: int = 600, allow_approval: bool = False) -> di
         "tool_all": all_hit,
         "ineligible": ineligible,
         "denied": denied,
+        # Reasoning-data taxonomy (Awesome-LLM-Reasoning-Data): who checks the
+        # answer, at what granularity, and which objective consumes it.
+        "verifier": (item.get("verify") or {}).get("type", "contains"),
+        "granularity": "trajectory",
+        "consumer": "policy",
+        # RECOVERY = a run that used tools beyond the intended set and STILL
+        # succeeded (recoverable trajectory worth mining; VPR/TRACE step credit).
+        "recovery": bool(check.get("passed"))
+        and bool(set(used) - set(item.get("target_tools") or [])),
         "content": str(content)[:600],
         "elapsed_s": round(elapsed, 1),
     }
@@ -419,7 +428,7 @@ def _const_items(root: Path, per_file: int = 3) -> list[dict]:
                     "split": "train",
                     "difficulty": 1,
                     "target_tools": ["filesystem"],
-                    "prompt": f"Read {rel} and report the exact value of the {name} constant.",
+                    "prompt": f"In {rel}, find and report the exact value of the {name} constant.",
                     "verify": {"type": "contains", "mode": "all", "value": [exp]},
                 }
             )
@@ -861,7 +870,12 @@ def main() -> int:
         "--sleep", type=float, default=0.0, help="seconds between --run items"
     )
     ap.add_argument("--id", help="run a specific item id")
-    ap.add_argument("--split", default="all", choices=["all", "train", "eval"])
+    ap.add_argument(
+        "--split",
+        default="train",
+        choices=["all", "train", "eval"],
+        help="default 'train' keeps the held-out 'eval' split frozen (never run it).",
+    )
     ap.add_argument("--gen", type=int, metavar="N", help="append N verified variants")
     ap.add_argument(
         "--mine", type=int, metavar="N", help="mine N DIVERSE verified items"

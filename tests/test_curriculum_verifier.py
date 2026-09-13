@@ -85,6 +85,21 @@ def test_grantable_set_is_task_scoped():
     assert "lsp" not in rc._APPROVAL_FREE
 
 
+def test_train_split_never_selects_held_out_eval(monkeypatch):
+    """The frozen holdout (`eval` split) must never be selected for a run."""
+    monkeypatch.setattr(rc, "_completed", lambda: {})
+    for _ in range(5):
+        it = rc.next_item("train", approval_free=False)
+        assert it is None or it.get("split") == "train"
+
+
+def test_const_items_are_choice_forcing():
+    """Mined constant items phrase 'find' (a tool CHOICE) — not 'read' (forced)."""
+    items = rc._const_items(rc._HERE.parent)
+    assert items, "expected mined constant items"
+    assert any("find and report" in i["prompt"] for i in items)
+
+
 def test_tool_match_semantics():
     item = {"target_tools": ["sandbox_repl"]}
     assert rc._tool_match(item, ["filesystem", "sandbox_repl"]) == (True, True)
