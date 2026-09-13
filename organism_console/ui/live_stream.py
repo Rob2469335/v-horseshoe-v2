@@ -89,10 +89,7 @@ def stream_end_message(end: str, exc=None) -> str:
             "finish in time (a timeout, not a dropped connection)."
         )
     if end == "network":
-        return (
-            "[bold red]Network drop[/bold red] — the connection was lost "
-            "mid-stream."
-        )
+        return "[bold red]Network drop[/bold red] — the connection was lost mid-stream."
     return f"[bold red]Stream failed:[/bold red] {exc}"
 
 
@@ -582,6 +579,8 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                         continue
 
                     if chunk_type == "final":
+                        # Erase the dim stream panel before printing the green final panel
+                        live.update(Text(""))
                         live.stop()
                         _saw_final = True
                         final_content = chunk.get("content", "")
@@ -858,11 +857,19 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                         agent_id = chunk.get("agent_id", agent_id)
                         _approval_triggered = True
                         break
+                else:
+                    if (
+                        classify_stream_end(_saw_final, _saw_done, None) == "ok"
+                        and not _saw_final
+                    ):
+                        live.update(Text(""))
 
             except Exception as e:
                 log.exception("Streaming exception")
                 _stream_exc = e
-                safe_print(stream_end_message(classify_stream_end(_saw_final, _saw_done, e), e))
+                safe_print(
+                    stream_end_message(classify_stream_end(_saw_final, _saw_done, e), e)
+                )
                 if not _tokens_counted:
                     update_token_metrics(ctx, prompt, history, full_content, model)
                     ctx.save()
