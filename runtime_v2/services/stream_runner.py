@@ -233,6 +233,39 @@ def _estimate_msg_tokens(m) -> int:
     return (len(str(m.get("content", ""))) + 3) // 4
 
 
+def _elision_digest(dropped: list) -> str:
+    """Deterministic digest of elided messages (no LLM): tools used + error
+    results, so decisions/errors survive when the oldest middle is dropped.
+    Mirrors the deterministic eviction principle (CWL arXiv:2606.11213; DMF
+    arXiv:2606.03463)."""
+    import json as _json
+
+    tools: list = []
+    errors = 0
+    for m in dropped:
+        if not isinstance(m, dict):
+            continue
+        content = str(m.get("content", ""))
+        if m.get("role") == "assistant":
+            try:
+                obj = _json.loads(content)
+            except Exception:  # noqa: BLE001
+                continue
+            action = obj.get("action") if isinstance(obj, dict) else None
+            if action and action not in tools:
+                tools.append(str(action))
+        elif m.get("role") == "user":
+            low = content.lower()
+            if "error" in low or "failed" in low or "not found" in low:
+                errors += 1
+    parts = []
+    if tools:
+        parts.append("tools: " + ", ".join(tools[:8]))
+    if errors:
+        parts.append(f"{errors} error result(s)")
+    return (" — " + "; ".join(parts)) if parts else ""
+
+
 def _truncate_content(text: str, max_tokens: int) -> str:
     """Head+tail truncate message text to ~max_tokens (chars/4), with a marker.
 
@@ -284,19 +317,20 @@ def _fit_tool_decision_messages(
     head = next(
         (m for m in non_sys if isinstance(m, dict) and m.get("role") == "user"), None
     )
+    orig_head = head
     # A single oversized message must not overflow on its own: truncate the head
     # (first user task) head+tail when it alone exceeds the budget.
     if head is not None and _estimate_msg_tokens(head) > budget:
         head = {
             **head,
             "content": _truncate_content(
-                str(head.get("content", "")), max(64, budget - 32)
+                str(head.get("content", "")), max(64, budget - 96)
             ),
         }
     used = _estimate_msg_tokens(head) if head is not None else 0
     tail: list = []
     for m in reversed(non_sys):
-        if head is not None and m is head:
+        if orig_head is not None and m is orig_head:
             continue
         t = _estimate_msg_tokens(m)
         if used + t > budget:
@@ -322,14 +356,18 @@ def _fit_tool_decision_messages(
     kept: list = []
     if head is not None:
         kept.append(head)
-    dropped = len(non_sys) - len(kept) - len(tail)
-    if dropped > 0:
+    kept_ids = {id(m) for m in kept} | {id(m) for m in tail}
+    if orig_head is not None:
+        kept_ids.add(id(orig_head))
+    dropped_msgs = [m for m in non_sys if id(m) not in kept_ids]
+    if dropped_msgs:
         kept.append(
             {
                 "role": "user",
                 "content": (
-                    f"[system: {dropped} earlier message(s) elided to keep the "
-                    "task and the most recent turns within the context window]"
+                    f"[system: {len(dropped_msgs)} earlier message(s) elided to "
+                    "keep the task and the most recent turns within the context "
+                    f"window{_elision_digest(dropped_msgs)}]"
                 ),
             }
         )

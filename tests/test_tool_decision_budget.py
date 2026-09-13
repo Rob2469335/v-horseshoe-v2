@@ -164,3 +164,28 @@ def test_oversized_single_recent_message_is_truncated():
         "[truncated to fit the context window]" in str(m.get("content", ""))
         for m in fitted
     )
+
+
+def test_elision_marker_digests_dropped_tools_and_errors():
+    import json as _json
+
+    sysp = "S" * 2000
+    msgs = [
+        {"role": "system", "content": "s"},
+        {"role": "user", "content": "TASK"},
+        {
+            "role": "assistant",
+            "content": _json.dumps({"action": "filesystem", "operation": "read"}),
+        },
+        {"role": "user", "content": "TOOL RESULT (filesystem):\nError: not found"},
+        {"role": "assistant", "content": _json.dumps({"action": "web_search"})},
+    ]
+    for _ in range(60):
+        msgs.append({"role": "assistant", "content": "f" * 2000})
+    msgs.append({"role": "user", "content": "LAST"})
+
+    fitted = _fit_tool_decision_messages(msgs, sysp)
+    marker = [m for m in fitted if str(m.get("content", "")).startswith("[system:")]
+    assert marker, "expected an elision marker"
+    assert "tools:" in marker[0]["content"]
+    assert "error result" in marker[0]["content"]
