@@ -369,6 +369,63 @@ def cmd_context(ctx: CommandContext, args: List[str]) -> None:
         )
 
 
+@registry.register(
+    "trust",
+    "Time-boxed trust grants: /trust [<scope> <minutes> | revoke <scope>]",
+)
+def cmd_trust(ctx: CommandContext, args: List[str]) -> None:
+    """List, grant, or revoke time-boxed trust grants.
+
+    A grant relaxes only the CONFIRM tier and auto-expires; ALWAYS_CONFIRM and
+    DENY are never relaxed (fail-closed).
+    """
+    import time as _time
+
+    from swarm_os.services import trust_ledger
+
+    if args and args[0].lower() == "revoke":
+        scope = args[1] if len(args) > 1 else ""
+        ok = trust_ledger.revoke(scope)
+        ctx.console.print(
+            f"[{'green' if ok else 'yellow'}]"
+            f"{'Revoked' if ok else 'No such grant:'} {scope}[/]"
+        )
+        return
+    if len(args) >= 2:
+        scope = args[0]
+        try:
+            minutes = int(float(args[1]))
+        except ValueError:
+            ctx.console.print("[red]minutes must be a number[/red]")
+            return
+        trust_ledger.grant(scope, max(1, minutes) * 60)
+        ctx.console.print(f"[green]Trust {scope} for {minutes} min[/green]")
+        return
+    grants = trust_ledger.list_grants()
+    if not grants:
+        ctx.console.print(
+            "[dim]No active trust grants. Only CONFIRM-tier actions can be "
+            "relaxed; ALWAYS_CONFIRM/DENY never are.[/dim]"
+        )
+        return
+    table = Table(box=SIMPLE, header_style="bold cyan")
+    table.add_column("Scope", style="bold yellow")
+    table.add_column("Expires in", style="white")
+    now = _time.time()
+    for scope, g in sorted(grants.items()):
+        table.add_row(scope, f"{int(g.get('expires_at', 0) - now)}s")
+    ctx.console.print(
+        Panel(
+            table,
+            title="[bold cyan]Trust Grants[/bold cyan]",
+            border_style="cyan",
+        )
+    )
+    ctx.console.print(
+        "[dim]Only CONFIRM-tier actions are relaxed; ALWAYS_CONFIRM/DENY never.[/dim]"
+    )
+
+
 @registry.register("tracker", "Show live token tracker and provider status")
 def cmd_tracker(ctx: CommandContext, args: List[str]) -> None:
     from organism_console.token_tracker import get_status_segment

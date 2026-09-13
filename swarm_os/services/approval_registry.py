@@ -192,7 +192,7 @@ _SYSTEM_PRIVILEGED_OPS = frozenset(
 )
 
 
-def agent_tool_policy(tool: str, action: str | None = None) -> str:
+def _base_agent_tool_policy(tool: str, action: str | None = None) -> str:
     """Classify an agent tool/action into ALLOW / CONFIRM / ALWAYS_CONFIRM /
     DENY. Explicit and fail-closed: any unknown tool or unclassified action is
     DENY, never ALLOW."""
@@ -307,6 +307,26 @@ def agent_tool_policy(tool: str, action: str | None = None) -> str:
 
     # Unknown tool -> fail-closed DENY.
     return DENY
+
+
+def agent_tool_policy(tool: str, action: str | None = None) -> str:
+    """Classify a tool/action, then apply time-boxed scoped trust grants.
+
+    Trust escalation is minimal and fail-closed: it can ONLY relax the CONFIRM
+    tier (via an active, scoped, auto-expiring grant). ALWAYS_CONFIRM and DENY
+    are never relaxed, and any error defaults to no relaxation. With no grant
+    the result is identical to the static base policy.
+    """
+    policy = _base_agent_tool_policy(tool, action)
+    if policy == CONFIRM:
+        try:
+            from swarm_os.services.trust_ledger import is_trusted
+
+            if is_trusted(tool, action):
+                return ALLOW
+        except Exception:  # noqa: BLE001
+            pass
+    return policy
 
 
 # ---------------------------------------------------------------------------
