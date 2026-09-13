@@ -211,6 +211,97 @@ async def _store_decision_reflexion(
         log.debug("[%s] decision reflexion store skipped: %s", agent_id, exc)
 
 
+# --- Preflight context fit (deep-research-backed) --------------------------
+# The tool-decision payload is the whole replayed history + system + schema. A
+# live run overflowed EVERY model in the fallback chain (~26.6k tokens vs a
+# 16,384 limit) because the CLI replays its full session history and the trim
+# preserved all of it. Fit deterministically before the provider call, keeping
+# the must-haves: head (first user task) + tail (most recent turns), dropping
+# the oldest middle (the huge prior assistant finals). Grounding: "Lost in the
+# Middle" (Liu et al., TACL 2024) — keep head+tail; agents must keep the task +
+# last user anchor (magic-agents STM windowing; nanobot#3459); the budget must
+# reserve the output + tool-schema cost (Langroid context-overflow; deepchat#1551).
+_CONTEXT_LIMIT = 16384
+_OUTPUT_RESERVE = 4096
+_CONTEXT_FIT_BUFFER = 300
+
+
+def _estimate_msg_tokens(m) -> int:
+    """Cheap chars/4 token estimate (matches the headroom calc below)."""
+    if not isinstance(m, dict):
+        return 0
+    return (len(str(m.get("content", ""))) + 3) // 4
+
+
+def _fit_tool_decision_messages(
+    messages: list,
+    system_prompt: str,
+    context_limit: int = _CONTEXT_LIMIT,
+    output_reserve: int = _OUTPUT_RESERVE,
+    buffer: int = _CONTEXT_FIT_BUFFER,
+) -> list:
+    """Fit the tool-decision payload under the context budget (head+tail).
+
+    Windowing order: message-count first, then token budget (oldest dropped
+    first). ALWAYS keeps the system prompt, the FIRST user task message, and
+    the most recent messages; a user-role elision notice is inserted so the
+    retained slice is never assistant-only. Returns a NEW list (the caller's
+    list is never mutated). No-ops when the payload already fits.
+    """
+    if not messages:
+        return messages
+    budget = (
+        context_limit
+        - output_reserve
+        - _estimate_msg_tokens({"content": system_prompt})
+        - buffer
+    )
+    if budget < 256:
+        budget = 256
+    sys_msgs = [
+        m for m in messages if isinstance(m, dict) and m.get("role") == "system"
+    ]
+    non_sys = [
+        m for m in messages if not (isinstance(m, dict) and m.get("role") == "system")
+    ]
+    if sum(_estimate_msg_tokens(m) for m in non_sys) <= budget:
+        return messages
+
+    head = next(
+        (m for m in non_sys if isinstance(m, dict) and m.get("role") == "user"), None
+    )
+    used = _estimate_msg_tokens(head) if head is not None else 0
+    tail: list = []
+    for m in reversed(non_sys):
+        if head is not None and m is head:
+            continue
+        t = _estimate_msg_tokens(m)
+        if tail and used + t > budget:
+            break
+        tail.append(m)
+        used += t
+        if used >= budget:
+            break
+    tail.reverse()
+
+    kept: list = []
+    if head is not None:
+        kept.append(head)
+    dropped = len(non_sys) - len(kept) - len(tail)
+    if dropped > 0:
+        kept.append(
+            {
+                "role": "user",
+                "content": (
+                    f"[system: {dropped} earlier message(s) elided to keep the "
+                    "task and the most recent turns within the context window]"
+                ),
+            }
+        )
+    kept.extend(tail)
+    return sys_msgs + kept
+
+
 async def get_tool_decision(
     model: str, messages: list, agent_id: str, allowed_tools: list = None
 ) -> Optional[dict]:
@@ -453,6 +544,11 @@ async def get_tool_decision(
     except Exception as mem_err:
         log.debug("Memory augmentation skipped: %s", mem_err)
 
+    # PREFLIGHT FIT: bound the payload under the context budget before the
+    # provider call (head+tail, must-have-preserving) so a replayed oversized
+    # history cannot overflow every model. Uses the FINAL system_prompt (after
+    # memory augmentation) so its cost is reserved.
+    messages = _fit_tool_decision_messages(messages, system_prompt)
     base_messages = inject_system_prompt(messages, system_prompt)
 
     MAX_EMPTY_RETRIES = 2
