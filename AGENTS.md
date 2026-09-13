@@ -1070,6 +1070,37 @@ per-shape tool policy. "Training the system," not the weights.
    arXiv:2603.11076); keep flaky families OUT (replay causes negative transfer on fragile tasks,
    arXiv:2601.18255); **boundary-check numeric verification** (anti-reward-hacking).
 
+**LATER SAME DAY — cache root cause + run#2 SOTA data shape (all pushed):**
+- **The learning-run loop root cause was the CLI session history, then the semantic decision cache.**
+  (a) `a048578d` — one-shot `--json` runs no longer replay/persist `.session.json` history (a prior
+  run's own output fed back = self-reinforcing loop-diagnosis). (b) `fd298a17` — the **semantic
+  decision cache is now STATE-scoped**: key = `agent : state_fingerprint : prompt`, so the same
+  prompt in a different execution state is a MISS (it had replayed a stale *tool* decision; finals
+  were already excluded). Isolation proof: cache ON → loop; cache OFF → c04 PASS ×2.
+- **Scoped offline grants + eligibility (`a6e111ab`):** `--allow-approval` grants exactly
+  `{sandbox_repl (ALWAYS_CONFIRM, via _OFFLINE_GRANTABLE), lsp (CONFIRM)}` for the run (8h, audited,
+  revoked after); a run whose intended tool was DENIED records `ineligible: true` and is **excluded
+  from the learning signal** (not a failure) — ACP/arXiv:2604.11839 shape.
+- **Tool attribution (`acd1d47`):** a successful tool whose answer the final dropped is **not**
+  recorded as a tool failure (false-correlation fix). **Success pathway (`6e0ed24a`):**
+  `store_success_lesson` writes `kind="success"` ReflexionMemory lessons (AgentHER 2603.21357 /
+  HSL 2607.04235 analogue; runtime analogue, not the same mechanism). **Nudge revert (`3336e21`):**
+  the blanket "restate sandbox_repl value" prompt caused sandbox over-calls → loops; reverted.
+- **Run#2 SOTA data shape (`92c3309`):** `--split` now defaults to `train` → the 10 **`eval` items
+  are a frozen holdout** (never run); every record tagged **`verifier` / `granularity` /
+  `consumer`** (Awesome-LLM-Reasoning-Data taxonomy); **`recovery`** flag (succeeded using extra
+  tools → mineable recovery trajectory, VPR 2605.10325 / TRACE 2607.13988); constant items rephrased
+  **"find"** (tool CHOICE) instead of **"read"** (forced).
+- **Decision:** keep the **PAID** `deepseek/deepseek-v4-flash` for run#2 (reliability > ~$0.50;
+  measured ~$0.14/300 calls, 69% cache hit) — the free `nvidia_nim/...` alias stays a fallback only.
+- **Roadmap (research-backed, NOT yet built):** per-turn `(tool, observation, outcome)` records →
+  critical-step + recovery miner → **AMD (2608.07169) / CLPD (2605.11260) teacher→hierarchical-
+  memory→student** distillation → LoRA on the curated gold set. Run #1 = clean baseline (cache OFF,
+  approval-free); run #2 = richer/tool-enabled + cache ON + `SWARM_TOOL_SHORTLIST=1`.
+- **T1 specs are execution-ready** in `docs/T1_IMPLEMENTATION_SPECS.md` (hooks / `tool_search` /
+  skills), with the run#2 checklist; T1 must come AFTER run #2 and requires a **re-mine** (its edits
+  drift the mined answers).
+
 ### SERVICE/FIX: agent-loop completion, MCP expansion + adaptive routing, research infra (2026-09-10/11)
 
 The session that closed the "analyze my codebase for bugs and upgrades" loop and
@@ -2745,7 +2776,84 @@ Converted `except:` → `except Exception:` (or specific types) in `swarm_os/cor
 
 ## Self-Healing & Self-Learning Fixes
 
+- **Rule (debugger)**: Ensure the agent's system prompt instructs it to output a valid JSON object; the model may have emitted an immediate EOS token.
+
+- **Rule (coder)**: Ensure the agent's system prompt instructs it to output a valid JSON object; the model may have emitted an immediate EOS token.
+
+- **[AUTO-REPAIR] (2026-09-13T17:54:47.432115+00:00)**: None (tier 2, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned import in sandbox snippet: 'pathlib' at 
+
+- **[AUTO-REPAIR] (2026-09-13T17:54:16.613412+00:00)**: None (tier 2, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **Rule (coder)**: Scope tool-usage instructions to compute-shaped tasks only; never add a blanket if-you-used-sandbox_repl rule; when a loop appears on non-compute t...
+
+- **[AUTO-REPAIR] (2026-09-13T16:43:17.564405+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-13T16:41:15.853005+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-13T16:41:15.125305+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-13T16:41:14.349075+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-13T16:39:12.552757+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-13T16:39:11.347579+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-13T16:35:07.091422+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-13T16:35:06.236831+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-13T16:33:04.385448+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-13T16:33:03.625051+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-13T16:31:01.946382+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-13T16:24:58.524992+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-13T16:24:57.506981+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-13T16:24:56.668616+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-13T16:24:55.816890+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-13T16:18:22.606006+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
 - **[AUTO-REPAIR] (2026-09-13T14:59:28.232932+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
 D
 
 - **[AUTO-REPAIR] (2026-09-13T14:55:24.355739+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
