@@ -9,6 +9,63 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 
+# Bound the persisted session so the replayed history cannot grow unbounded.
+# Live defect (2026-09-12): .session.json reached 70 messages / ~103k chars
+# (~26k tokens), dominated by huge prior assistant finals, and was replayed into
+# every coordinator tool-decision — overflowing every model's 16,384 limit.
+# Head+tail cap: keep the first user task and the most recent turns; drop the
+# oldest middle; never leave an assistant-only slice (nanobot#3459 pattern).
+_SESSION_MAX_MESSAGES = 60
+_SESSION_MAX_CHARS = 96_000
+
+
+def _cap_history(history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Head+tail cap on the persisted message history (message count + chars).
+
+    Returns the input unchanged when already within both caps. Otherwise keeps
+    the first user message and the most recent messages that fit, and inserts a
+    user-role elision notice so the result always has a user anchor.
+    """
+    if not history:
+        return history
+    total = sum(len(str(m.get("content", ""))) for m in history if isinstance(m, dict))
+    if len(history) <= _SESSION_MAX_MESSAGES and total <= _SESSION_MAX_CHARS:
+        return history
+    head = next(
+        (m for m in history if isinstance(m, dict) and m.get("role") == "user"),
+        None,
+    )
+    kept: List[Dict[str, Any]] = [head] if head is not None else []
+    chars = len(str(head.get("content", ""))) if head is not None else 0
+    tail: List[Dict[str, Any]] = []
+    for m in reversed(history):
+        if head is not None and m is head:
+            continue
+        c = len(str(m.get("content", ""))) if isinstance(m, dict) else 0
+        if tail and (
+            len(kept) + len(tail) >= _SESSION_MAX_MESSAGES
+            or chars + c > _SESSION_MAX_CHARS
+        ):
+            break
+        tail.append(m)
+        chars += c
+    tail.reverse()
+    dropped = len(history) - len(kept) - len(tail)
+    out = list(kept)
+    if dropped > 0:
+        out.append(
+            {
+                "role": "user",
+                "content": (
+                    f"[system: {dropped} earlier message(s) dropped from the "
+                    "persisted session to bound its size]"
+                ),
+            }
+        )
+    out.extend(tail)
+    return out
+
+
 class SessionState:
     def __init__(self, session_file: Path | str) -> None:
         self.session_file = Path(session_file)
@@ -128,7 +185,7 @@ class SessionState:
                         "delegation_chain": list(self.delegation_chain),
                         "trace_mode": self.trace_mode,
                         "mode": self.mode,
-                        "history": copy.deepcopy(self.history),
+                        "history": _cap_history(copy.deepcopy(self.history)),
                         "command_history": self.command_history[-1000:]
                         if len(self.command_history) > 1000
                         else list(self.command_history),
