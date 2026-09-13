@@ -158,3 +158,28 @@ verify → commit/push → update AGENTS.md "Recent Changes" only after acceptan
 `runtime_v2/`, `swarm_os/`, `organism_console/`; no backend restarts; don't touch
 `data/evolution/tool_observations.jsonl`, `qwen_train/results/curriculum_runs.jsonl`, or
 ReflexionMemory.
+
+---
+
+## Run #2 checklist (apply ALL in ONE backend restart)
+
+Run #1 = clean baseline (cache OFF, approval-free). Run #2 = richer/tool-enabled + cache ON.
+Do these together so there is a **single** restart (verify exactly one listener first — the
+duplicate-uvicorn zombie is the documented trap):
+
+1. **Cache ON:** `SWARM_SEMANTIC_CACHE=1` — but **live-verify first** (`fd298a17`, state-scoped):
+   restart, then `python qwen_train/run_curriculum.py --id c04` ×2 → expect PASS, no loop.
+2. **Free DeepSeek (same model, $0):** set `ANALYSIS_CLOUD_MODEL=nvidia_nim/deepseek-ai/deepseek-v4-flash-0731`
+   (currently the paid `deepseek/deepseek-v4-flash`; NVIDIA_API_KEY is set → the free alias serves the
+   identical model). The paid direct endpoint stays as the automatic fallback if the free tier 429s.
+3. **Keep `SWARM_TOOL_SHORTLIST=0`** until the T1-④ `tool_search` work lands.
+4. **Launch:** `python qwen_train/run_curriculum.py --run 1500 --allow-approval`
+   — scoped grants `{sandbox_repl, lsp}` (task-scoped, audited, revoked after) + `ineligible`
+   marking for denied intended tools (commit `a6e111ab`).
+5. **Verify:** `--progress` climbs; denied runs record `ineligible: true` and are **excluded** from
+   the learning signal; the paid-vs-free split in `data/usage/usage.jsonl` should flip to
+   `nvidia_nim/...` (free) as primary.
+
+Rationale for #2: the 4B loops/formats poorly → noisy tool-policy signal; DeepSeek V4 Flash
+completes tasks → cleaner signal. But the run is currently paying for `deepseek_direct` when the
+free NVIDIA alias of the same model is available (last-300 usage: 298 paid direct vs 1 free NVIDIA).
