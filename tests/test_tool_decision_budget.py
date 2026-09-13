@@ -132,3 +132,35 @@ async def test_get_tool_decision_payload_fits_budget(monkeypatch):
     assert total <= _budget(sysp), (
         f"tool-decision payload {total} exceeds budget {_budget(sysp)}"
     )
+
+
+def _toks(ms) -> int:
+    return sum(_estimate_msg_tokens(m) for m in ms if m.get("role") != "system")
+
+
+def test_oversized_first_user_task_is_truncated_to_fit():
+    sysp = "S" * 2000
+    msgs = [
+        {"role": "system", "content": "s"},
+        {"role": "user", "content": "T" * 60000},
+    ]
+    assert _toks(msgs) > _budget(sysp)  # one message alone overflows
+    fitted = _fit_tool_decision_messages(msgs, sysp)
+    assert _toks(fitted) <= _budget(sysp)
+    head = next(m for m in fitted if m.get("role") == "user")
+    assert "[truncated to fit the context window]" in head["content"]
+
+
+def test_oversized_single_recent_message_is_truncated():
+    sysp = "S" * 2000
+    msgs = [
+        {"role": "system", "content": "s"},
+        {"role": "user", "content": "TASK"},
+        {"role": "assistant", "content": "x" * 60000},
+    ]
+    fitted = _fit_tool_decision_messages(msgs, sysp)
+    assert _toks(fitted) <= _budget(sysp)
+    assert any(
+        "[truncated to fit the context window]" in str(m.get("content", ""))
+        for m in fitted
+    )

@@ -233,6 +233,20 @@ def _estimate_msg_tokens(m) -> int:
     return (len(str(m.get("content", ""))) + 3) // 4
 
 
+def _truncate_content(text: str, max_tokens: int) -> str:
+    """Head+tail truncate message text to ~max_tokens (chars/4), with a marker.
+
+    Head+tail (not head-only) per the "lost in the middle"/tool-output research:
+    keep the beginning and the end, drop the middle.
+    """
+    max_chars = max(64, int(max_tokens) * 4)
+    if len(text) <= max_chars:
+        return text
+    head = max_chars // 2
+    tail = max_chars - head
+    return text[:head] + "\n… [truncated to fit the context window] …\n" + text[-tail:]
+
+
 def _fit_tool_decision_messages(
     messages: list,
     system_prompt: str,
@@ -270,14 +284,35 @@ def _fit_tool_decision_messages(
     head = next(
         (m for m in non_sys if isinstance(m, dict) and m.get("role") == "user"), None
     )
+    # A single oversized message must not overflow on its own: truncate the head
+    # (first user task) head+tail when it alone exceeds the budget.
+    if head is not None and _estimate_msg_tokens(head) > budget:
+        head = {
+            **head,
+            "content": _truncate_content(
+                str(head.get("content", "")), max(64, budget - 32)
+            ),
+        }
     used = _estimate_msg_tokens(head) if head is not None else 0
     tail: list = []
     for m in reversed(non_sys):
         if head is not None and m is head:
             continue
         t = _estimate_msg_tokens(m)
-        if tail and used + t > budget:
-            break
+        if used + t > budget:
+            if tail or not isinstance(m, dict):
+                break
+            # The most recent message alone exceeds the remaining budget:
+            # truncate it head+tail rather than letting it overflow.
+            m = {
+                **m,
+                "content": _truncate_content(
+                    str(m.get("content", "")), max(64, budget - used - 32)
+                ),
+            }
+            t = _estimate_msg_tokens(m)
+            if used + t > budget:
+                break
         tail.append(m)
         used += t
         if used >= budget:
