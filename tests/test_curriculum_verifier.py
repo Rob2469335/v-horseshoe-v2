@@ -33,6 +33,14 @@ def test_verify_contains_any():
     assert rc.verify(item, "platform: linux")["passed"] is False
 
 
+def test_numeric_verify_is_boundary_checked():
+    """A numeric answer must match standalone, so `12` can't match inside `3912`."""
+    item = {"verify": {"type": "contains", "mode": "all", "value": ["12"]}}
+    assert rc.verify(item, "The value is 12 exactly")["passed"] is True
+    assert rc.verify(item, "The value is 3912")["passed"] is False
+    assert rc.verify(item, "The value is 120")["passed"] is False
+
+
 def test_verify_regex():
     item = {"verify": {"type": "regex", "value": r"3\.1[0-9]"}}
     assert rc.verify(item, "Python 3.14")["passed"] is True

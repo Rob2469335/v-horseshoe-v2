@@ -66,7 +66,18 @@ def verify(item: dict, content: str) -> dict:
     if vtype == "contains":
         vals = [str(v).lower() for v in spec.get("value", [])]
         mode = spec.get("mode", "all")
-        hits = [v for v in vals if v in text]
+
+        def _hit(v: str) -> bool:
+            # Anti-reward-hacking (AlphaVerus/AxDafny 2026): a numeric expected
+            # value must match as a STANDALONE token, so "12" cannot be matched
+            # inside "3912". Non-numeric values stay substring matches.
+            if v.isdigit():
+                import re as _re
+
+                return bool(_re.search(rf"(?<!\d){_re.escape(v)}(?!\d)", text))
+            return v in text
+
+        hits = [v for v in vals if _hit(v)]
         if not vals:
             return {"passed": False, "reason": "no expected values"}
         passed = len(hits) == len(vals) if mode == "all" else len(hits) > 0
