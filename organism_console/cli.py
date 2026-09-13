@@ -246,6 +246,9 @@ def print_help():
     ctx.console.print("\n[bold cyan]Command-Line Flags:[/bold cyan]")
     ctx.console.print("  [green]--agent <name>[/green]   Override initial active agent")
     ctx.console.print("  [green]--model <name>[/green]   Override initial active model")
+    ctx.console.print(
+        "  [green]--no-route[/green]       Send a prompt to the agent loop verbatim (skip slash/NL routing)"
+    )
     ctx.console.print("  [green]--version, -v[/green]    Show version information")
     ctx.console.print(
         "  [green]--help, -h[/green]       Show help message and available slash commands\n"
@@ -309,6 +312,19 @@ def _reset_goal_result(ctx) -> None:
         delattr(ctx, "last_goal_result")
 
 
+def _raw_command_mode(no_route_flag: bool, json_flag: bool, cmd_line: str) -> bool:
+    """Should a single-command prompt bypass slash/NL routing and go to the agent?
+
+    `--no-route` forces it. `--json` implies it for a non-slash prompt (machine
+    use: `rob --json "find all call sites of X"` must reach the agent, not be
+    re-routed to `/search`), while an explicit slash command still routes
+    (`rob --json /status`).
+    """
+    if no_route_flag:
+        return True
+    return bool(json_flag and not cmd_line.startswith("/"))
+
+
 def main():
     # Preserve the persisted cloud_enabled from .session.json (state store loads
     # it; do NOT clobber to False here or the banner ignores `/cloud on`).
@@ -332,6 +348,7 @@ def main():
     # Parse --agent and --model flags (plus --continue / --json passthrough)
     continue_flag = "--continue" in args
     json_flag = "--json" in args
+    no_route_flag = "--no-route" in args
     agent_override = None
     model_override = None
     filtered_args = []
@@ -343,7 +360,7 @@ def main():
         elif args[i] == "--model" and i + 1 < len(args):
             model_override = args[i + 1]
             i += 2
-        elif args[i] in ("--continue", "--json"):
+        elif args[i] in ("--continue", "--json", "--no-route"):
             # already captured above — skip from args so REPL starts
             i += 1
         else:
@@ -367,7 +384,11 @@ def main():
     if args:
         cmd_line = " ".join(args)
         cmd_ctx = build_command_context()
-        execute_prompt = registry.handle_line(cmd_line, cmd_ctx)
+        if _raw_command_mode(no_route_flag, json_flag, cmd_line):
+            # Send the prompt to the agent loop verbatim (bypass slash/NL routing).
+            execute_prompt = cmd_line
+        else:
+            execute_prompt = registry.handle_line(cmd_line, cmd_ctx)
         try:
             goal_result = getattr(ctx, "last_goal_result", None)
             if goal_result is not None:
