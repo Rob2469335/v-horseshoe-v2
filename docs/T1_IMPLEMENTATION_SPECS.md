@@ -169,17 +169,19 @@ duplicate-uvicorn zombie is the documented trap):
 
 1. **Cache ON:** `SWARM_SEMANTIC_CACHE=1` — but **live-verify first** (`fd298a17`, state-scoped):
    restart, then `python qwen_train/run_curriculum.py --id c04` ×2 → expect PASS, no loop.
-2. **Free DeepSeek (same model, $0):** set `ANALYSIS_CLOUD_MODEL=nvidia_nim/deepseek-ai/deepseek-v4-flash-0731`
-   (currently the paid `deepseek/deepseek-v4-flash`; NVIDIA_API_KEY is set → the free alias serves the
-   identical model). The paid direct endpoint stays as the automatic fallback if the free tier 429s.
+2. **KEEP the PAID DeepSeek (reliability > cost):** leave
+   `ANALYSIS_CLOUD_MODEL=deepseek/deepseek-v4-flash` as-is. Paid direct avoids free-tier rate
+   limits (429s) that throttle/waste runs; measured cost is ~$0.14 / 300 calls (≈$0.50 for a full
+   run, 69% cached) — trivial for SOTA reliability. The free `nvidia_nim/...` alias stays as an
+   automatic fallback only.
 3. **Keep `SWARM_TOOL_SHORTLIST=0`** until the T1-④ `tool_search` work lands.
 4. **Launch:** `python qwen_train/run_curriculum.py --run 1500 --allow-approval`
    — scoped grants `{sandbox_repl, lsp}` (task-scoped, audited, revoked after) + `ineligible`
    marking for denied intended tools (commit `a6e111ab`).
 5. **Verify:** `--progress` climbs; denied runs record `ineligible: true` and are **excluded** from
-   the learning signal; the paid-vs-free split in `data/usage/usage.jsonl` should flip to
-   `nvidia_nim/...` (free) as primary.
+   the learning signal; `data/usage/usage.jsonl` should stay `deepseek_direct` (paid, by choice)
+   and show a healthy ~65-70% cache-hit rate.
 
-Rationale for #2: the 4B loops/formats poorly → noisy tool-policy signal; DeepSeek V4 Flash
-completes tasks → cleaner signal. But the run is currently paying for `deepseek_direct` when the
-free NVIDIA alias of the same model is available (last-300 usage: 298 paid direct vs 1 free NVIDIA).
+Rationale: the 4B loops/formats poorly → noisy tool-policy signal; DeepSeek V4 Flash completes
+tasks → cleaner signal. **Decision (2026-09-13): keep the PAID direct endpoint for run #2** —
+reliability (no free-tier 429 throttling) is worth the ~$0.50, which is SOTA-positive.
