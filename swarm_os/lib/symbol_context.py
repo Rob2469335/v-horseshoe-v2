@@ -34,7 +34,7 @@ def extract_symbol_map(source: str, max_symbols: int = 40) -> str:
         return ""
     try:
         tree = ast.parse(source)
-    except SyntaxError, ValueError, MemoryError:
+    except (SyntaxError, ValueError, MemoryError):
         return ""
 
     lines: list[str] = []
@@ -72,7 +72,7 @@ def module_name_for_path(path: Path, root: Path) -> str:
     try:
         rel = Path(path).resolve().relative_to(Path(root).resolve())
         return rel.with_suffix("").as_posix().replace("/", ".")
-    except ValueError, OSError:
+    except (ValueError, OSError):
         return ""
 
 

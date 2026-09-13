@@ -39,7 +39,7 @@ def kill_process_by_port(port: int) -> Dict[str, Any]:
     """Kill any process listening on the specified network port (skips self)."""
     try:
         port = int(port)
-    except ValueError, TypeError:
+    except (ValueError, TypeError):
         return {"ok": False, "error": f"Invalid port: {port}"}
 
     my_pid = psutil.Process().pid
@@ -73,7 +73,7 @@ def kill_process_by_port(port: int) -> Dict[str, Any]:
                 except psutil.TimeoutExpired:
                     proc.kill()
                 killed.append({"pid": conn.pid, "name": proc.name(), "port": port})
-        except psutil.NoSuchProcess, psutil.AccessDenied:
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
 
     if killed:
@@ -117,7 +117,7 @@ def kill_process_by_name(pattern: str) -> Dict[str, Any]:
                 except psutil.TimeoutExpired:
                     p.kill()
                 killed.append({"pid": pid, "name": proc.info["name"]})
-        except psutil.NoSuchProcess, psutil.AccessDenied:
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
 
     if killed:

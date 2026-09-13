@@ -54,14 +54,14 @@ def _extract_json_object(text: str) -> dict | None:
                 candidate = stripped[start : i + 1]
                 try:
                     parsed = _json.loads(candidate)
-                except ValueError, RecursionError:
+                except (ValueError, RecursionError):
                     # Try stripping a trailing comma before the closing brace.
                     try:
                         candidate2 = candidate[: candidate.rfind("}")].rstrip()
                         if candidate2.endswith(","):
                             candidate2 = candidate2[:-1] + "}"
                         parsed = _json.loads(candidate2)
-                    except ValueError, RecursionError:
+                    except (ValueError, RecursionError):
                         return None
                 return parsed if isinstance(parsed, dict) else None
     return None
