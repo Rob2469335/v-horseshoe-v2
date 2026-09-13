@@ -204,3 +204,12 @@ def test_tools_for_file_agent(agents_dir):
     _write(agents_dir, "db-migrator.md", _DB_MIGRATOR)
     assert reg.tools_for("db-migrator") == ["filesystem", "sandbox_repl", "final"]
     assert reg.tools_for("coder") is None  # built-in -> not a file agent
+
+
+def test_tools_for_drops_unknown_tool_names(agents_dir):
+    _write(
+        agents_dir,
+        "t.md",
+        "---\nname: t\ndescription: d\ntools: filesystem, not-a-real-tool\n---\nb\n",
+    )
+    assert reg.tools_for("t") == ["filesystem"]

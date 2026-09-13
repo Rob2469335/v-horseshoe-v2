@@ -185,6 +185,14 @@ def test_promote_refuses_immutable_and_unstaged(env):
     assert se.promote("tuner")["ok"] is False  # nothing staged
 
 
+def test_list_staged_ignores_non_record_json(env):
+    """A stray valid-JSON non-record in the staged dir must not crash the
+    surface (it used to raise AttributeError on rec.get)."""
+    se.STAGED_DIR.mkdir(parents=True, exist_ok=True)
+    (se.STAGED_DIR / "junk.json").write_text("[]", encoding="utf-8")
+    assert se.list_staged() == []
+
+
 def test_shadowed_builtin_name_is_not_evolvable(env, monkeypatch):
     """A file that shadows a built-in is never used by the runtime, so it must
     not be proposed (else the audit claims a built-in 'evolved' while its

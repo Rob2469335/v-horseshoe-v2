@@ -215,8 +215,19 @@ def merge_into_roster(agents: dict) -> int:
 
 
 def tools_for(name: str) -> list[str] | None:
-    """Allow-listed tools for a file-based subagent, or None if not file-based."""
+    """Allow-listed tools for a file-based subagent, or None if not file-based.
+
+    Unknown tool names are dropped: a hand-written file can list a tool the
+    runtime doesn't implement, and that must not reach the dispatch allowlist.
+    """
     sub = get_subagent(name)
     if sub is None:
         return None
-    return sub.get("tools") or list(_DEFAULT_TOOLS)
+    tools = sub.get("tools") or list(_DEFAULT_TOOLS)
+    try:
+        from runtime_v2.prompts.system_prompts import _TOOL_DEFINITIONS
+
+        known = [t for t in tools if t in _TOOL_DEFINITIONS]
+        return known or list(_DEFAULT_TOOLS)
+    except Exception:  # noqa: BLE001
+        return tools

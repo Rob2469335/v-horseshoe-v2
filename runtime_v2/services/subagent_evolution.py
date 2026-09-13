@@ -216,8 +216,10 @@ def list_staged(name: str | None = None) -> list[dict]:
     for p in STAGED_DIR.glob("*.json"):
         try:
             rec = json.loads(p.read_text(encoding="utf-8"))
-        except OSError, json.JSONDecodeError:
+        except (OSError, json.JSONDecodeError):
             continue
+        if not isinstance(rec, dict):
+            continue  # a stray non-record file must not crash the surface
         if name is None or rec.get("agent") == name:
             rec["_path"] = str(p)
             out.append(rec)
