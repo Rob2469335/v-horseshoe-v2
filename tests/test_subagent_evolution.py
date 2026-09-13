@@ -163,6 +163,21 @@ def test_rollback_restores_the_original(env, monkeypatch):
     assert (env / "tuner.md").read_text(encoding="utf-8") == original
 
 
+def test_repeated_promote_keeps_the_original_for_rollback(env, monkeypatch):
+    """A second promotion must not overwrite the backup — one rollback has to
+    restore the pre-evolution ORIGINAL, not the intermediate state."""
+    monkeypatch.setenv("SWARM_SUBAGENT_EVOLUTION", "1")
+    _write(env, "tuner.md", _TUNER)
+    original = (env / "tuner.md").read_text(encoding="utf-8")
+    se.propose("tuner", random.Random(1))
+    assert se.promote("tuner")["ok"] is True
+    se.propose("tuner", random.Random(2))
+    assert se.promote("tuner")["ok"] is True
+    assert (env / "tuner.md").read_text(encoding="utf-8") != original
+    assert se.rollback("tuner")["ok"] is True
+    assert (env / "tuner.md").read_text(encoding="utf-8") == original
+
+
 def test_promote_refuses_immutable_and_unstaged(env):
     _write(env, "static.md", _TUNER_STATIC)
     assert se.promote("static")["ok"] is False

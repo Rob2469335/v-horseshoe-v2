@@ -275,7 +275,12 @@ def promote(name: str, reviewer: str = "") -> dict:
         "budget": candidate["budget"],
     }
     try:
-        shutil.copy2(md, md.with_suffix(".md.bak"))
+        bak = md.with_suffix(".md.bak")
+        if not bak.exists():
+            # Keep the ORIGINAL as the backup across repeated promotions, so a
+            # single rollback always restores the pre-evolution state (the old
+            # unconditional copy2 overwrote it with the intermediate state).
+            shutil.copy2(md, bak)
         md.write_text(
             _rewrite_frontmatter(md.read_text(encoding="utf-8"), updates),
             encoding="utf-8",
