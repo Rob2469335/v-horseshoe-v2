@@ -310,6 +310,65 @@ def cmd_tokens(ctx: CommandContext, args: List[str]) -> None:
         )
 
 
+@registry.register(
+    "context",
+    "Show context-window budget: session history size vs the model limit",
+)
+def cmd_context(ctx: CommandContext, args: List[str]) -> None:
+    """Read-only context-budget view (complements the preflight-fit + session cap).
+
+    The client can accurately size the session history it replays; the server
+    injects the system prompt + tool schemas + memory per decision and bounds the
+    request with the preflight-fit, so this reports the history estimate and says
+    so rather than inventing a server-side breakdown.
+    """
+    from organism_console.ui.banner import estimate_tokens
+    from organism_console.state_store import _SESSION_MAX_CHARS, _SESSION_MAX_MESSAGES
+
+    limit = 16384
+    history = getattr(ctx.state, "history", []) or []
+    hist_tokens = sum(
+        estimate_tokens(m.get("content", "")) for m in history if isinstance(m, dict)
+    )
+    hist_chars = sum(
+        len(str(m.get("content", ""))) for m in history if isinstance(m, dict)
+    )
+    pct = min(100, int((hist_tokens / limit) * 100)) if limit else 0
+    color = "green" if pct < 70 else "yellow" if pct < 80 else "red"
+
+    table = Table(box=SIMPLE, header_style="bold cyan")
+    table.add_column("Metric", style="bold yellow")
+    table.add_column("Value", style="white")
+    table.add_row("Context limit (local model)", f"{limit:,} tokens")
+    table.add_row(
+        "Session history",
+        f"{hist_tokens:,} tokens  ({len(history)} msgs, {hist_chars:,} chars)",
+    )
+    table.add_row("History utilization", f"[{color}]{pct}%[/{color}]")
+    table.add_row(
+        "Session cap (on write)",
+        f"{_SESSION_MAX_MESSAGES} msgs / {_SESSION_MAX_CHARS:,} chars",
+    )
+    ctx.console.print(
+        Panel(
+            table,
+            title="[bold cyan]Context Budget[/bold cyan]",
+            border_style="cyan",
+        )
+    )
+    ctx.console.print(
+        "[dim]Server-side system prompt + tool schemas + memory are injected per "
+        "decision and bounded by the request preflight-fit (<= limit - output "
+        "reserve). This view estimates the client-side session history you replay.[/dim]"
+    )
+    if pct >= 80:
+        ctx.console.print(
+            f"[bold red]! Session history at {pct}% of {limit} tokens.[/bold red] "
+            "[yellow]It is capped on save; run /compress or start a new session to "
+            "shrink it. The preflight-fit caps the actual request server-side.[/yellow]"
+        )
+
+
 @registry.register("tracker", "Show live token tracker and provider status")
 def cmd_tracker(ctx: CommandContext, args: List[str]) -> None:
     from organism_console.token_tracker import get_status_segment
