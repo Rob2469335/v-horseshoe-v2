@@ -52,6 +52,48 @@ _TOOL_RE = re.compile(r"[⚡✓▶]\s+([a-z_][a-z0-9_]*)")
 # are safe here.
 _APPROVAL_FREE = {"filesystem", "web_search", "semantic_search"}
 
+# Tools the runner grants for an offline run: task-scoped, audited, revoked at
+# the end. `sandbox_repl` is ALWAYS_CONFIRM (relaxed only via
+# approval_registry._OFFLINE_GRANTABLE); `lsp` is CONFIRM (tightened by the same
+# scoped trust_ledger grant). Dynamic least-privilege + task-scoped grants
+# (arXiv:2607.22445; 2603.17170) — never blanket auto-approve.
+_GRANTABLE = ("sandbox_repl", "lsp")
+
+# A tool the CLI auto-DENIED (non-interactive fail-closed, or explicit policy).
+# A run whose intended tool was denied is INELIGIBLE for the learning signal,
+# not a failure (arXiv:2604.11839; ACP rollout: mark ineligible, don't score).
+_DENY_RE = re.compile(
+    r"(?:non-interactive:\s*denied|auto-denied:)\s*([a-z_][a-z0-9_]*)",
+    re.IGNORECASE,
+)
+
+
+def parse_tools_denied(stdout: str) -> list[str]:
+    """Tool names the CLI refused (auto-denied) during the run."""
+    return sorted(set(_DENY_RE.findall(stdout or "")))
+
+
+def _grant_offline() -> str:
+    """Grant the task-scoped offline tool set (audited, expiring, revoked after)."""
+    try:
+        from swarm_os.services.trust_ledger import grant
+
+        for tool in _GRANTABLE:
+            grant(tool, 8 * 3600)
+        return f"granted {', '.join(_GRANTABLE)} (scoped, 8h, audited)"
+    except Exception as exc:  # noqa: BLE001
+        return f"grant failed: {exc}"
+
+
+def _revoke_offline() -> None:
+    try:
+        from swarm_os.services.trust_ledger import revoke
+
+        for tool in _GRANTABLE:
+            revoke(tool)
+    except Exception:  # noqa: BLE001
+        pass
+
 
 def load_items() -> list[dict]:
     items: list[dict] = []
@@ -152,13 +194,17 @@ def run_item(item: dict, timeout: int = 600, allow_approval: bool = False) -> di
     content = (cli or {}).get("content", "")
     used = parse_tools_used(out)
     succeeded = parse_tools_succeeded(out)
+    denied = parse_tools_denied(out)
     check = verify(item, content)
     cli_ok = bool((cli or {}).get("ok"))
+    # INELIGIBLE: the intended tool was auto-DENIED (not a failure). Excluded
+    # from the learning signal, not scored (ACP rollout / arXiv:2604.11839).
+    ineligible = bool(set(item.get("target_tools") or []) & set(denied))
     # Did the INTENDED tool actually succeed? If it ran fine but the answer
     # failed verification, the failure is downstream (answer synthesis) and
     # must NOT be recorded as a tool failure (false correlation; see the audit).
     tool_ok = bool(set(item.get("target_tools") or []) & set(succeeded))
-    if cli_ok:
+    if cli_ok and not ineligible:
         try:
             from runtime_v2.services.tool_policy import record_observation
 
@@ -180,6 +226,8 @@ def run_item(item: dict, timeout: int = 600, allow_approval: bool = False) -> di
         "tools_used": used,
         "tool_hit": hit,
         "tool_all": all_hit,
+        "ineligible": ineligible,
+        "denied": denied,
         "content": str(content)[:600],
         "elapsed_s": round(elapsed, 1),
     }
@@ -835,10 +883,7 @@ def main() -> int:
         # Scoped, audited, expiring grant so a headless rollout can use
         # sandbox_repl (ALWAYS_CONFIRM) without a prompt. Revoked at the end.
         try:
-            from swarm_os.services.trust_ledger import grant as _grant
-
-            _grant("sandbox_repl", 8 * 3600)
-            print("offline rollout: granted sandbox_repl (scoped, 8h, audited)")
+            print("offline rollout: " + _grant_offline())
         except Exception as exc:  # noqa: BLE001
             print(f"offline grant failed: {exc}")
 
@@ -903,9 +948,7 @@ def main() -> int:
                 _time.sleep(args.sleep)
         if args.allow_approval:
             try:
-                from swarm_os.services.trust_ledger import revoke as _revoke
-
-                _revoke("sandbox_repl")
+                _revoke_offline()
             except Exception:  # noqa: BLE001
                 pass
         progress()
@@ -931,9 +974,7 @@ def main() -> int:
     print(f"  content: {result['content'][:200]}")
     if args.allow_approval:
         try:
-            from swarm_os.services.trust_ledger import revoke as _revoke
-
-            _revoke("sandbox_repl")
+            _revoke_offline()
         except Exception:  # noqa: BLE001
             pass
     return 0

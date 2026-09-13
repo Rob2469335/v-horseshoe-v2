@@ -69,6 +69,22 @@ def test_parse_tools_succeeded_only_counts_success_marker():
     assert rc.parse_tools_succeeded(out) == ["sandbox_repl"]
 
 
+def test_parse_tools_denied():
+    out = (
+        "non-interactive: denied lsp (symbols need approval)\n"
+        "  auto-denied: sandbox_repl (execute)"
+    )
+    assert rc.parse_tools_denied(out) == ["lsp", "sandbox_repl"]
+
+
+def test_grantable_set_is_task_scoped():
+    # exactly the offline-run tools, never blanket: sandbox_repl (ALWAYS_CONFIRM)
+    # + lsp (CONFIRM), granted scoped + revoked after.
+    assert set(rc._GRANTABLE) == {"sandbox_repl", "lsp"}
+    assert "sandbox_repl" not in rc._APPROVAL_FREE
+    assert "lsp" not in rc._APPROVAL_FREE
+
+
 def test_tool_match_semantics():
     item = {"target_tools": ["sandbox_repl"]}
     assert rc._tool_match(item, ["filesystem", "sandbox_repl"]) == (True, True)
