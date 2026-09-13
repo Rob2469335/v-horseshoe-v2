@@ -1013,6 +1013,63 @@ relaunch via start-dev.ps1 when ready.
 
 ## Recent Changes (do NOT re-apply)
 
+### OPS/FEAT: harness tool-learning curriculum + the two operational traps that cost the session (2026-09-13)
+
+**Goal (clarified):** teach the *harness* (not robs4b) to call tools better by accumulating
+diverse, VERIFIED experiences that feed `outcome_fitness` (learned `tool_genes`) and a new
+per-shape tool policy. "Training the system," not the weights.
+
+**Built (all pushed):**
+- **Verified curriculum** — `qwen_train/curriculum/tool_curriculum.jsonl` (30 graded: 20 train /
+  10 held-out eval) + a repo-grounded miner + `qwen_train/run_curriculum.py`
+  (`--next/--mine/--gen/--run/--progress`, boundary-checked numeric verification, an
+  approval-free filter, timeout-only backoff). Repo-grounded tasks (constants, symbol presence,
+  def/class counts, line counts, file existence) + procedural math/string; ~1,970 items.
+- **Contextual tool policy** — `runtime_v2/services/tool_policy.py`: per-shape learned success
+  (`shape_of` → `tool_weights`) + IDF retrieval over tool descriptions (`lexical_scores`) +
+  `rank` + adaptive `shortlist` (BoR), gated by `SWARM_TOOL_SHORTLIST` (**now `=1` in `.env`**),
+  wired at `stream_runner.py` schema assembly.
+- **Scoped offline-rollout grant** — `approval_registry._OFFLINE_GRANTABLE = {"sandbox_repl"}`:
+  an ALWAYS_CONFIRM tool can be relaxed to ALLOW ONLY via an active, expiring, audited
+  `trust_ledger` grant (never blanket); the runner's `--allow-approval` mints/revokes it.
+- **File-based subagents** — `subagent_registry.py` (`.rob/agents/*.md`; built-ins win;
+  fail-open; path-traversal names rejected) + `subagent_evolution.py` (opt-in staged,
+  human-gated, reversible config evolution: anti-fabrication + regression + acceptance gates)
+  + `/subagents` CLI.
+- **CLI truthfulness fixes** — one-shot no longer returns stale content / `ok:true` on a failed
+  run; unattended CLI fails closed on approvals (`_stdin_is_interactive` non-TTY deny); a
+  reasoning→content nudge (final must restate a `sandbox_repl`-computed value).
+- Earlier in the session: hard-bound `_cap_history` char cap, elision-notice reserve, registry
+  cache invalidation on delete, mutation-loop related-test discovery, the duplicate `/auto`
+  registration collision, parenthesized-except restores.
+
+**OPERATIONAL TRAPS (the mistakes — DO NOT REPEAT):**
+1. **NEVER run two backends.** Two `uvicorn` instances on :8000 = a zombie listener: `py-spy`
+   shows the loop *idle in `accept`* yet `/readyz` hangs and every agent run stalls. It looks
+   exactly like a blocked event loop and is NOT one. **Always check for an existing :8000
+   listener before launching a backend; never launch uvicorn blind after a restart.** (This
+   session: repeated "backend hung" calls were duplicate listeners created by my own restarts
+   plus the user's.)
+2. **The backend is NOT self-sufficient.** With :8079/:8080 (robs4b+proxy), :8081 (embedder),
+   :8082 (reranker), :8083 (vision), :6333 (Qdrant) DOWN, the backend boots but floods
+   `All connection attempts failed` and every run fails. **Start the FULL stack with
+   `start-dev.ps1`, not `uvicorn` alone; verify `/readyz` shows `llamacpp_reachable: true` and
+   Qdrant healthy before any rollout.**
+3. **Unattended CLI runs must not prompt.** `sandbox_repl` is ALWAYS_CONFIRM → a one-shot run
+   blocks on the approval prompt (surfaces as an "approval required" popup). Non-TTY stdin now
+   auto-DENIES (fail-closed); to run gated tools headless use the scoped `trust_ledger` grant
+   (sandbox_repl only). Never blanket auto-approve ("authority framing" is a documented attack
+   surface — arXiv:2607.19267).
+4. **Runner timeout must stay WELL UNDER the backend's (300 s).** An abandoned stream whose
+   client timeout ≥ the backend's piles up and wedges the server; use 120–180 s per item.
+5. **`sandbox_repl` + `open()` is denied by the Security Gate.** The model writing `open()`
+   inline triggers a deny → the tool call fails. Prefer the sanctioned read path (`filesystem`);
+   don't require file I/O in pure-computation tasks.
+6. **Do NOT edit repo files during a curriculum run** — mined line-count/symbol answers drift.
+7. **Diversity > quantity for the learning signal** (TDScaling arXiv:2602.03219; DIVE
+   arXiv:2603.11076); keep flaky families OUT (replay causes negative transfer on fragile tasks,
+   arXiv:2601.18255); **boundary-check numeric verification** (anti-reward-hacking).
+
 ### SERVICE/FIX: agent-loop completion, MCP expansion + adaptive routing, research infra (2026-09-10/11)
 
 The session that closed the "analyze my codebase for bugs and upgrades" loop and
@@ -2687,6 +2744,139 @@ Converted `except:` → `except Exception:` (or specific types) in `swarm_os/cor
 ---
 
 ## Self-Healing & Self-Learning Fixes
+
+- **[AUTO-REPAIR] (2026-09-13T14:59:28.232932+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+D
+
+- **[AUTO-REPAIR] (2026-09-13T14:55:24.355739+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-13T14:49:21.088485+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-13T14:49:20.260463+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-13T14:49:19.511369+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-13T14:45:15.538870+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-13T14:39:12.271211+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-13T14:37:10.551257+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-13T14:31:07.326679+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-13T14:25:03.492166+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-13T14:25:02.580027+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-13T14:25:01.769585+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-13T14:22:59.752195+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-13T14:16:56.501390+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-13T14:16:55.706626+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-13T14:16:54.878208+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-13T14:16:24.167675+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-13T14:16:23.151051+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-13T14:16:22.303960+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-13T14:16:21.535529+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **Rule (coder)**: Tool 'sandbox_repl' failed (Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+...
+
+- **[AUTO-REPAIR] (2026-09-13T14:12:17.853850+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-13T14:06:14.655522+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-13T13:59:41.281280+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-13T13:58:57.096820+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-13T13:55:48.558880+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-13T13:49:01.655064+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-13T13:49:00.915586+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **Rule (coder)**: Do NOT repeat the same tool call with identical arguments. If a tool failed, read the error, change the approach (different file/path/query/operati...
+
+- **[AUTO-REPAIR] (2026-09-13T13:46:29.147180+00:00)**: None (tier 2, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-13T13:45:28.252218+00:00)**: None (tier 2, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-13T13:42:12.259554+00:00)**: None (tier 2, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **Rule (coder)**: Prefer completing the goal with the FEWEST tool calls. If a compound goal requires both codebase reads and web research, interleave them — do not s...
+
+- **[ROLLBACK-COMPLETED] (2026-09-13T00:15:10.659897+00:00)**: swarm_os/api/routes.py — signal_1 test regression attributable to swarm_os/api/routes.py
+
+- **[AUTO-REPAIR] (2026-09-12T23:55:09.240382+00:00)**: None (tier 2, fixed=False) — error: Filesystem operation timed out.
+
+- **[ROLLBACK-COMPLETED] (2026-09-12T17:32:26.047961+00:00)**: swarm_os/api/routes.py — signal_1 test regression attributable to swarm_os/api/routes.py
 
 - **[AUTO-REPAIR] (2026-09-10T23:55:19.936671+00:00)**: None (tier 2, fixed=False) — error: File not found: runtime_v2/services/approval_registry.py
 
