@@ -765,6 +765,57 @@ def _git_items(root: Path, limit: int = 250) -> list[dict]:
     return items
 
 
+def _symbol_loc_items(root: Path, limit: int = 300) -> list[dict]:
+    """'Which file defines `<symbol>`?' — Qdrant/codebase-index-friendly diversity
+    with an EXACT verifier: the symbol is chosen so it is defined in exactly one
+    file with a unique basename, so the answer (the file) is unambiguous.
+
+    Tool CHOICE: the agent may solve it via `filesystem` (grep/glob),
+    `semantic_search` (codebase index), or `lsp` (rob's LSP — the same symbol
+    surface Serena exposes over MCP). Serena itself is reachable via the `mcp`
+    action, which is deliberately NOT in `_GRANTABLE` (broad capability, not
+    least-privilege) — so a run that reaches for `mcp` is marked `ineligible`,
+    not scored. `lsp` IS granted for run #2."""
+    files = _repo_files(root)
+    defs: dict[str, set[str]] = {}
+    basenames: dict[str, set[str]] = {}
+    for p in files:
+        try:
+            text = p.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        rel = str(p.relative_to(root)).replace("\\", "/")
+        basenames.setdefault(p.name, set()).add(rel)
+        for line in text.splitlines():
+            m = _DEF_RE.match(line)
+            if m:
+                defs.setdefault(m.group(1), set()).add(rel)
+    out: list[dict] = []
+    for name, define_files in sorted(defs.items()):
+        if len(define_files) != 1 or len(name) < 5:
+            continue
+        rel = next(iter(define_files))
+        base = rel.rsplit("/", 1)[-1]
+        if len(basenames.get(base, ())) != 1:
+            continue  # unique basename -> an unambiguous answer
+        out.append(
+            {
+                "id": f"d{len(out):05d}",
+                "split": "train",
+                "difficulty": 3,
+                "target_tools": ["filesystem", "lsp", "semantic_search"],
+                "prompt": (
+                    f"Which file in this repository defines the function or class "
+                    f"`{name}`? Report the file path."
+                ),
+                "verify": {"type": "contains", "mode": "all", "value": [base]},
+            }
+        )
+        if len(out) >= limit:
+            break
+    return out
+
+
 def mine_pool(root: Path | None = None) -> list[dict]:
     """Assemble the full diverse verified pool (repo-grounded + procedural)."""
     root = root or _HERE.parent
@@ -773,6 +824,7 @@ def mine_pool(root: Path | None = None) -> list[dict]:
     pool += _defcount_items(root)
     pool += _exists_items(root)
     pool += _symbol_items(root)
+    pool += _symbol_loc_items(root)
     pool += _linecount_items(root)
     pool += _env_items()
     pool += _git_items(root)
