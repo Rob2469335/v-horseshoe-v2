@@ -75,14 +75,36 @@ def decision_cache_stats() -> dict:
     return dict(_stats)
 
 
+def _state_fingerprint(messages: list) -> str:
+    """Fingerprint the execution STATE = everything before the final user turn.
+
+    A tool-decision is state-dependent: the same prompt needs a DIFFERENT tool
+    at turn 1 vs turn 4 (read → grep → final). Keying a cached decision on the
+    prompt alone replays a stale tool choice and manufactures a loop
+    (2026-09-13: identical `filesystem grep` decisions replayed → loop detector
+    → loop-diagnosis final). This fingerprint makes "same words, different
+    situation" a cache MISS. See StepCache arXiv:2603.28795; 2601.23088
+    (similarity != correctness); 2602.13165 (verify, don't blindly serve).
+    """
+    if not messages:
+        return ""
+    prior = messages[:-1]
+    if not prior:
+        return "0"
+    blob = json.dumps(prior, ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
+
+
 def get_cache_key(messages: list, agent_id: str) -> str:
-    """Exact-match key: SHA-256 of the final user content scoped by agent."""
+    """Exact-match key: SHA-256 of the final user content **scoped by agent AND
+    by execution state**, so an identical prompt in a different state does not
+    reuse a stale decision."""
     if messages:
         last_msg = messages[-1].get("content", "")
         if not isinstance(last_msg, str):
             last_msg = json.dumps(last_msg)
         h = hashlib.sha256(last_msg.encode("utf-8")).hexdigest()
-        return f"{agent_id}:{h}"
+        return f"{agent_id}:{_state_fingerprint(messages)}:{h}"
     return f"{agent_id}:default"
 
 
@@ -180,7 +202,8 @@ async def get_semantic_cached_decision(messages: list, agent_id: str) -> Optiona
 
     try:
         await _ensure_components()
-        query = f"agent:{agent_id} decision {last_msg[:400]}"
+        state = _state_fingerprint(messages)
+        query = f"agent:{agent_id} state:{state} decision {last_msg[:400]}"
         emb = await _embedder.embed(query)
         from qdrant_client.models import Filter, FieldCondition, MatchValue
 
@@ -192,7 +215,14 @@ async def get_semantic_cached_decision(messages: list, agent_id: str) -> Optiona
                     FieldCondition(
                         key="agent_id",
                         match=MatchValue(value=agent_id),
-                    )
+                    ),
+                    # Only reuse a decision made in the SAME execution state:
+                    # a prompt-only match would replay a stale tool choice and
+                    # reintroduce the loop (2026-09-13).
+                    FieldCondition(
+                        key="state",
+                        match=MatchValue(value=state),
+                    ),
                 ]
             ),
             limit=1,
@@ -296,7 +326,7 @@ async def cache_tool_decision(messages: list, agent_id: str, decision: dict):
 
         await _ensure_components()
         emb = await _embedder.embed(
-            f"agent:{agent_id} decision: {last_msg[:400]}".rstrip()
+            f"agent:{agent_id} state:{_state_fingerprint(messages)} decision: {last_msg[:400]}".rstrip()
         )
         from qdrant_client.models import PointStruct
         from datetime import datetime as _dt, timezone as _tz
@@ -309,6 +339,7 @@ async def cache_tool_decision(messages: list, agent_id: str, decision: dict):
                     vector=emb,
                     payload={
                         "agent_id": agent_id,
+                        "state": _state_fingerprint(messages),
                         "decision": decision,
                         "ts": _dt.now(_tz.utc).replace(tzinfo=None).isoformat(),
                     },
