@@ -185,3 +185,36 @@ duplicate-uvicorn zombie is the documented trap):
 Rationale: the 4B loops/formats poorly → noisy tool-policy signal; DeepSeek V4 Flash completes
 tasks → cleaner signal. **Decision (2026-09-13): keep the PAID direct endpoint for run #2** —
 reliability (no free-tier 429 throttling) is worth the ~$0.50, which is SOTA-positive.
+
+---
+
+## Queued for run #2 — Serena per-tool MCP grant (implement AFTER run #1 stops)
+
+**Why:** symbol-location tasks are solvable by `filesystem`, `semantic_search`, `lsp`, **or
+Serena** — each a genuinely *verifiable* choice (the oracle knows the symbol's defining file).
+More **verifiable choices** = better tool-selection learning. **Broad MCP would NOT help**
+(capability overprovisioning, arXiv:2604.11839; fuzzy verification → noise; 200-tool space
+explosion).
+
+**Exact scope (least-privilege) — grant ONLY:**
+```
+mcp:serena:find_symbol
+mcp:serena:find_referencing_symbols
+```
+**NEVER** `mcp:serena:*` or `mcp:*`. Everything else stays denied.
+
+**Implementation (mined files — do ONLY when no run is active):**
+1. `swarm_os/services/approval_registry.py` — classify the `mcp` action on server/tool (or accept
+   an action like `serena:find_symbol`) so a per-tool grant can relax it; add the two ops to the
+   offline-grantable set so they relax ONLY with an active grant.
+2. `swarm_os/services/trust_ledger.py` — per-target grant entries (already keyed by target).
+3. `qwen_train/run_curriculum.py` — add the two to `_GRANTABLE`; the symbol-location family already
+   targets `lsp` (Serena's surface) — optionally add the explicit `mcp:serena:find_symbol` target.
+4. Tests: granted → the two ops ALLOW; `mcp` broadly and `mcp:serena:*` stay DENIED; un-granted →
+   the run is `ineligible` (excluded from the learning signal), never scored.
+
+**Rules retained:** temporary, run-scoped, audited, auto-revoked; denied/unavailable → INELIGIBLE;
+deterministic verification afterward.
+
+**Run #2 target (post-grant):** ~3,900 verified tasks across `filesystem · lsp · semantic_search ·
+Serena symbol ops · sandbox_repl · git`, choice-forcing, frozen holdout, per-tool credit.
