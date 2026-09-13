@@ -214,6 +214,17 @@ def format_inline_diff(
     return out
 
 
+def _approval_tier(chunk: dict) -> str:
+    """Approval tier for a stream chunk (fail-closed).
+
+    A MISSING/empty ``authorization`` is treated as the strictest tier
+    (ALWAYS_CONFIRM) so an unlabelled approval can never be auto-approved by CLI
+    auto-mode — safe-defaults / "fail closed on policy-evaluation errors".
+    """
+    tier = str(chunk.get("authorization") or "").strip()
+    return tier or "ALWAYS_CONFIRM"
+
+
 def status_footer(ctx, agent, model, phase, ram_pct, tps: float = 0.0):
     stats = get_system_stats()
     phase_colors = {
@@ -739,7 +750,7 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                         tool = preview.get("tool") or chunk.get("tool", "?")
                         action = preview.get("action") or chunk.get("action", "?")
                         path = preview.get("path") or preview.get("url") or ""
-                        auth_tier = chunk.get("authorization", "CONFIRM")
+                        auth_tier = _approval_tier(chunk)
 
                         if getattr(ctx, "toasts_enabled", True):
                             from organism_console.notifications import notify
