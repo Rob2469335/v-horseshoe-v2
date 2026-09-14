@@ -15,6 +15,7 @@ Extracted modules:
 import json
 import re
 import logging
+import os
 import asyncio
 from typing import Optional
 
@@ -586,7 +587,10 @@ async def get_tool_decision(
             _context_limit = 16384
             _headroom = _context_limit - _approx_tokens
 
-            if _headroom >= 1800:
+            # SWARM_MEMORY_INJECT=0 disables ALL memory augmentation (reflexion hint
+            # + episodic memories) — the ON/OFF switch for the memory ablation
+            # (Experiment B, docs/EXPERIMENTS.md). Unset/1 = today's behaviour.
+            if _headroom >= 1800 and os.environ.get("SWARM_MEMORY_INJECT", "1") != "0":
                 from runtime_v2.services.memory_core import get_relevant_memories
 
                 memory_query = f"agent:{agent_id} {_last_user_msg[:200]}"
