@@ -1013,6 +1013,30 @@ relaunch via start-dev.ps1 when ready.
 
 ## Recent Changes (do NOT re-apply)
 
+### SERVICE/FIX: self-learning CLI — verified trajectory capture, gold miner + metrics, the fix curriculum, and the honest NULL results (2026-09-14)
+
+The session that built the measurement/instrumentation layer for "make the CLI itself
+better", ran the two headline experiments, and got **nulls it reports honestly**.
+
+- **Per-turn ATIF trajectory capture + `state_hash`** (`3c7436fa`; `runtime_v2/api/agent_service_v2.py`, `_agent_state.py`, `tests/test_agent_trajectory_steps.py`): `_write_run_step()` appends an ATIF-shaped `step` record per tool call (tool_calls[ToolCallSchema] + observation.results[ObservationResultSchema]) to `data/trajectories/<run_id>.jsonl`; the run summary stays LAST. `_state_snapshot`/`_state_hash` record the execution state each decision was made in (the state-aware-cache lesson). Live-verified.
+- **Scoped Serena per-tool MCP grant** (`31c3b650`, `190274e1`; `tool_executor._policy_action_key` resolves mcp → `<server>:<tool>`; `approval_registry._OFFLINE_GRANTABLE` = {sandbox_repl, mcp:serena:find_symbol, mcp:serena:find_referencing_symbols, filesystem}, exact-scope only). Serena ops are ALWAYS_CONFIRM per tool; a broad `mcp` grant does NOT open them. Live-verified: blocked un-granted → real execution → per-tool exact → auto-revocation.
+- **FIX paren regression** (`75ec5bdf`): a ruff-py314 sweep stripped parens off `except (TypeError, ValueError)` in `approval_registry.py`; restored. (Same artifact class as the uncommitted `model_router.py` edit.)
+- **Gold miner + north-star metrics** (`e893f421`, `54edff8a`, `148dfb4f`, `0fa5850f`; `qwen_train/mine_gold.py`, `mine_turns.py`): RAW→MINED→GOLD pipeline (never writes the trajectory dir), `self_healing_rate`, `learning_curve`, `stratified_trend` (mix-adjusted), tip types (strategy/recovery/optimization, `arXiv:2603.10600`) + provenance.
+- **Self-Learning Score + paired significance** (`a4751386`; `qwen_train/self_learning_bench.py`): McNemar exact + bootstrap CI + **pre-registered min effect** (a +0.017 move is `no_signal` even if significant — the Hermes `#135` anti-overclaim guard); composite score lists missing components rather than scoring them 0.
+- **Pathway evidence** (`8440de12`, `61695c6a`; `qwen_train/pathway.py`, `docs/PATHWAY_EVIDENCE.md`): RETRIEVE→AVOID→VERIFY metrics per PAST-Bench (`arXiv:2608.04003`); stream_runner capture patch is **spec'd but UNAPPLIED** (`docs/PATHWAY_CAPTURE_PATCH.md`).
+- **Lesson-admissibility gate** (`9b96818f`; `swarm_os/services/lesson_admission.py`, `docs/LESSON_ADMISSION.md`): deterministic, LLM-free gate (applicability/confidence/verified-evidence/decay + conflict + abstention) run before injection; reflexion rot / self-evaluator drift motivation.
+- **EXPERIMENT A (T1→T2) = `no_signal`**: frozen 60, T1 40/60 → T2 42/60, Δ +3.3pp, McNemar p=0.625, CI [-3.3,+10]. **No measurable end-to-end improvement.**
+- **EXPERIMENT B (memory ON/OFF) = `no_signal`**: 50+50 matched approval-free, ON 0.84 vs OFF 0.78, Δ +6pp, McNemar p=0.508, CI [-6,+18]. Not significant at n=50 (needs ~n≈500/arm).
+- **Fix (write/repair) curriculum**: `qwen_train/fix_tasks.py` (31 deterministic bug kinds + post-run verifier: check exits 0 AND `check.py` sha256-unchanged), `run_fix_tasks.py` (stateful harness; grants filesystem + sandbox_repl), `ingest_fix_candidates.py` (SOUNDNESS gate: BROKEN must fail, FIXED must pass — caught the stale-`__pycache__` false-positive), `run_candidate_pool.py` (hardness runner). `SWARM_WRITE_ROOT` path-scoped write in `filesystem.py` + `filesystem` offline-grantable (`1501deec`) — **never grant filesystem without the write-root**. Diversity: `diverse_select.py` (balanced interleave), `gen_choice_tasks.py` (multi-tool-choice families) + `--diverse`/`--pool` wiring (`168124ec`, `9beea384`, `c3d8782e`). **Result: the coder fixed all 31 kinds ~100% → the benchmark is TOO EASY (the finding).**
+- **3-pool candidate hardening** (`784d82b4`, `45c29a62`, `e2ea87bf`): Perplexity/ChatGPT/Opus pools → soundness gate → **130 sound / 16 UNSOUND caught** (`fix_pool_merged.jsonl`) → hardness run. Corpus in `qwen_train/curriculum/pool_{perplexity,chatgpt,opus}.md`. Many LLM-authored "bugs" are **broken≡fixed on the check's inputs** (the #1 failure mode the gate removes).
+- **Free-first fallback cascade** (`acc5272b`, `bd3a96cf`): NVIDIA → OpenRouter(deepseek+`:free`) → Gemini → Alibaba → OpenCode → DeepSeek direct → local. Verified live: NVIDIA/OpenRouter/Gemini/Alibaba OK; **Groq 403**, **OpenCode Zen insufficient balance**. Fixed a dedup collision where Alibaba's DashScope id displaced the OpenCode Go slot.
+- **DeepSeek model-name refresh** (2026-09-14 platform change): the DIRECT names are now **`deepseek-flash`** / `deepseek-v4-pro`; `deepseek-chat`/`deepseek-reasoner` are DEAD (hard error since 2026-07-24). `ANALYSIS_CLOUD_MODEL=deepseek/deepseek-flash`; `fallback_manager._get_deepseek_direct_fallback` + `usage_log` pricing updated; the opencode config's dead direct ids removed.
+- **Memory-ablation gate** (`9928e316`; `SWARM_MEMORY_INJECT=0` disables ALL memory augmentation — the Experiment B switch), **headless toasts off** (`1ee3898d`; `SWARM_NO_TOASTS=1` — approvals were firing desktop popups), **ablation uses approval-free tasks** (`e8562323`).
+- **Strata discipline** (`e7c0b592`): `mine_gold` reports `diverse` vs `fix` SEPARATELY; the combined number is secondary only.
+- **Docs added**: `docs/EXPERIMENTS.md` (A/B/C framing, "weights unchanged", the precise T2 name), `docs/SOTA_ROADMAP.md` (verified SOTA + cautions), `docs/WRITE_FIX_TASKS.md`, `docs/DIVERSITY_FIX.md`, `docs/PATHWAY_EVIDENCE.md`, `docs/PATHWAY_CAPTURE_PATCH.md`, `docs/LESSON_ADMISSION.md`.
+- **OPERATIONAL (repeat offenders)**: (1) the **DeepSeek model name** must be current or calls stall — `deepseek-flash`; (2) the **backend env is loaded at startup** — `ANALYSIS_CLOUD_MODEL`/`SWARM_WRITE_ROOT`/`SWARM_MEMORY_INJECT` need a REAL backend restart (a stale process keeps the old value); (3) `sandbox_repl` is ALWAYS_CONFIRM — grant it (trust_ledger) or the coder can't self-verify; (4) approvals fire **desktop toasts** — `SWARM_NO_TOASTS=1`; (5) the harness must run BROKEN and FIXED in **separate dirs** (stale `.pyc` false positives); (6) `data/` is gitignored (safe sandbox); (7) checkpoint the answer BEFORE over-claiming — **this session's headline was a null** and the value is that it reported so.
+- **Key research grounding (verified)**: `arXiv:2608.04003` PAST-Bench (matched experience on/off + pathway evidence), `arXiv:2605.30621` Harness-Updating≠Benefit (harness benefit is non-monotonic in model capability — weak workers fail to ACTIVATE/FOLLOW), `arXiv:2603.10600` Trajectory-Informed Memory (strategy/recovery/optimization tips + provenance), `arXiv:2602.03219` TDScaling + `2026.findings-acl.768` (diversity > quantity).
+
 ### OPS/FEAT: harness tool-learning curriculum + the two operational traps that cost the session (2026-09-13)
 
 **Goal (clarified):** teach the *harness* (not robs4b) to call tools better by accumulating
@@ -2775,6 +2799,264 @@ Converted `except:` → `except Exception:` (or specific types) in `swarm_os/cor
 ---
 
 ## Self-Healing & Self-Learning Fixes
+
+- **[AUTO-REPAIR] (2026-09-14T23:40:45.183371+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'importlib' at line
+
+- **[AUTO-REPAIR] (2026-09-14T23:40:43.482126+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **Rule (coder)**: Tool 'filesystem' failed (Surgical Error: 'old' string cannot be empty.). Check the tool contract in _TOOL_DEFINITIONS and verify parameters before...
+
+- **[AUTO-REPAIR] (2026-09-14T23:37:41.207792+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-09-14T23:37:40.405323+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-09-14T23:37:09.654761+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-09-14T23:32:05.922163+00:00)**: None (tier None, fixed=False) — error: Surgical Error: 'old' string cannot be empty.
+
+- **[AUTO-REPAIR] (2026-09-14T23:27:57.966933+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-09-14T23:20:54.239445+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-09-14T23:20:52.454441+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-09-14T23:20:21.789605+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-09-14T23:20:20.854743+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-09-14T23:18:16.882578+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-09-14T23:17:46.188820+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-09-14T23:13:12.476814+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-09-14T23:10:40.713797+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-09-14T23:10:39.796827+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-09-14T23:10:08.957030+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-09-14T23:08:06.759909+00:00)**: None (tier None, fixed=False) — error: Surgical Error: 'old' string cannot be empty.
+
+- **[AUTO-REPAIR] (2026-09-14T23:08:05.942965+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-09-14T23:03:32.119200+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-09-14T23:03:31.429984+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-09-14T23:01:27.774097+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-09-14T23:01:27.319585+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-09-14T23:01:25.747838+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-09-14T23:00:55.034613+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-09-14T22:56:21.368679+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-09-14T22:54:17.727340+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-09-14T22:53:47.046132+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-09-14T22:03:40.808986+00:00)**: None (tier None, fixed=False) — error: Read-before-write guard: cannot write over existing 'data/curriculum_fix/missing_return_2/module.py' — the agent has not
+
+- **[AUTO-REPAIR] (2026-09-14T21:30:59.817833+00:00)**: None (tier 2, fixed=False) — error: Read-before-write guard: cannot write over existing 'data/curriculum_fix/string_case_3/module.py' — the agent has not li
+
+- **[AUTO-REPAIR] (2026-09-14T21:04:27.989436+00:00)**: None (tier 2, fixed=False) — error: Read-before-write guard: cannot write over existing 'data/curriculum_fix/missing_return_2/module.py' — the agent has not
+
+- **[AUTO-REPAIR] (2026-09-14T20:46:56.674260+00:00)**: None (tier 2, fixed=False) — error: Read-before-write guard: cannot patch 'data/curriculum_fix/wrong_op_0/module.py' — the agent has not listed or read it y
+
+- **Rule (coder)**: Failure: The coder attempted to inspect `runtime_v2/api/_agent_config.py` by calling `open(p).read()` inside sandbox_repl Python code, and the Secu...
+
+- **Rule (coder)**: Failure: The coder attempted to inspect a source file by executing inline Python code containing the banned built-in `open()`, which triggered the ...
+
+- **Rule (coder)**: Failure: The coder attempted to read a file inside the sandbox_repl using Python's built-in `open`, which triggered the Security Gate and blocked e...
+
+- **[AUTO-REPAIR] (2026-09-14T08:48:15.066751+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-14T08:44:07.666742+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned import in sandbox snippet: 'pathlib' at 
+
+- **[AUTO-REPAIR] (2026-09-14T08:43:30.236341+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 2
+
+D
+
+- **[AUTO-REPAIR] (2026-09-14T08:38:37.318316+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-14T08:30:56.916045+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-09-14T08:30:55.221281+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'eval' at line 2
+
+D
+
+- **[AUTO-REPAIR] (2026-09-14T08:30:53.504896+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned import in sandbox snippet: 'pathlib' at 
+
+- **[AUTO-REPAIR] (2026-09-14T08:30:21.766352+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 2
+
+D
+
+- **[AUTO-REPAIR] (2026-09-14T08:21:47.164431+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 2
+
+D
+
+- **[AUTO-REPAIR] (2026-09-14T08:21:44.279847+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned import in sandbox snippet: 'pathlib' at 
+
+- **[AUTO-REPAIR] (2026-09-14T08:21:12.998015+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 2
+
+D
+
+- **[AUTO-REPAIR] (2026-09-14T08:21:05.863391+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned import in sandbox snippet: 'pathlib' at 
+
+- **[AUTO-REPAIR] (2026-09-14T06:11:25.557719+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-14T06:11:23.958602+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 1
+
+D
+
+- **[AUTO-REPAIR] (2026-09-14T06:10:52.248473+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned import in sandbox snippet: 'pathlib' at 
+
+- **[AUTO-REPAIR] (2026-09-14T06:06:50.493899+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned import in sandbox snippet: 'pathlib' at 
+
+- **[AUTO-REPAIR] (2026-09-14T06:06:48.763658+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 2
+
+D
+
+- **[AUTO-REPAIR] (2026-09-14T06:06:18.129719+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-14T06:05:47.383542+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 1
+
+D
+
+- **[AUTO-REPAIR] (2026-09-14T06:05:45.625262+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned import in sandbox snippet: 'pathlib' at 
+
+- **[AUTO-REPAIR] (2026-09-14T06:04:44.927631+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-14T06:03:43.078050+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned import in sandbox snippet: 'pathlib' at 
+
+- **[AUTO-REPAIR] (2026-09-14T06:03:41.211724+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 4
+
+D
+
+- **[AUTO-REPAIR] (2026-09-14T06:01:10.261658+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-14T06:00:08.607559+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-14T05:55:46.624493+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-14T05:55:14.942234+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-14T05:55:13.352510+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 4
+
+D
+
+- **[AUTO-REPAIR] (2026-09-14T05:55:11.763631+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-14T05:53:07.993683+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-09-14T05:53:07.122810+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 1
+
+D
+
+- **[AUTO-REPAIR] (2026-09-14T05:53:05.091242+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned import in sandbox snippet: 'pathlib' at 
+
+- **[AUTO-REPAIR] (2026-09-14T05:53:03.360749+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 2
+
+D
+
+- **[AUTO-REPAIR] (2026-09-14T05:53:01.518537+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-14T05:52:30.838393+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned import in sandbox snippet: 'pathlib' at 
+
+- **[AUTO-REPAIR] (2026-09-14T05:48:27.667899+00:00)**: None (tier 2, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-14T05:48:25.706068+00:00)**: None (tier 2, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-14T05:43:51.854204+00:00)**: None (tier 2, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **Rule (coder)**: Tool 'lsp' failed (Operation 'document_symbols' not fully implemented. Only 'diagnostics' is supported currently.). Check the tool contract in _TOO...
+
+- **Rule (debugger)**: Tool 'sandbox_repl' failed (Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 1
+
+...
+
+- **[AUTO-REPAIR] (2026-09-14T03:11:08.285860+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 4
+
+D
+
+- **[AUTO-REPAIR] (2026-09-14T03:07:05.077031+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 2
+
+D
+
+- **[AUTO-REPAIR] (2026-09-14T03:07:03.169040+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned import in sandbox snippet: 'pathlib' at 
+
+- **[AUTO-REPAIR] (2026-09-14T03:07:01.482197+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 2
+
+D
+
+- **[AUTO-REPAIR] (2026-09-14T03:04:29.744029+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 4
+
+D
+
+- **[AUTO-REPAIR] (2026-09-14T03:04:29.042597+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-09-14T02:57:55.891725+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 2
+
+D
+
+- **[AUTO-REPAIR] (2026-09-14T02:57:54.257332+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned import in sandbox snippet: 'pathlib' at 
+
+- **[AUTO-REPAIR] (2026-09-14T02:51:50.247774+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **Rule (coder)**: Failure: The agent attempted to search the codebase by executing a shell grep command via Python's `subprocess` module in the sandbox_repl, but the...
+
+- **[AUTO-REPAIR] (2026-09-13T23:34:02.997966+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned import in sandbox snippet: 'pathlib' at 
+
+- **[AUTO-REPAIR] (2026-09-13T23:34:00.942241+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-13T23:33:29.809231+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned import in sandbox snippet: 'pathlib' at 
+
+- **[AUTO-REPAIR] (2026-09-13T23:20:26.163994+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned import in sandbox snippet: 'pathlib' at 
+
+- **[AUTO-REPAIR] (2026-09-13T23:20:24.434329+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 1
+
+D
+
+- **[AUTO-REPAIR] (2026-09-13T23:17:50.718721+00:00)**: None (tier 2, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 4
+
+D
+
+- **Rule (coder)**: Failure: The agent attempted to inspect a file by running inline Python code in sandbox_repl that called the built-in `open`, but the Security Gate...
 
 - **Rule (debugger)**: Ensure the agent's system prompt instructs it to output a valid JSON object; the model may have emitted an immediate EOS token.
 
