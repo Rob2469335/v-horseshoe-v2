@@ -7,6 +7,7 @@ thread and swallows failures so a headless/CI session never blocks or crashes.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import threading
@@ -45,6 +46,9 @@ def notify(title: str, body: str = "") -> None:
     """Fire a desktop toast asynchronously. No-op off-Windows / when disabled."""
     global _ACTIVE
     if not _ACTIVE or sys.platform != "win32":
+        return
+    # Headless/ablation off-switch: never toast a popup during unattended runs.
+    if os.environ.get("SWARM_NO_TOASTS") == "1":
         return
     if not (title or body):
         return

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 import sys
 from pathlib import Path
@@ -131,7 +132,33 @@ def main() -> int:
         f"  -> the BACKEND must be running with SWARM_MEMORY_INJECT={flag}\n"
         f"  -> (memory injection happens in the backend, not the CLI)"
     )
-    results = [rc.run_item(it, timeout=args.timeout, allow_approval=False) for it in items]
+    # Headless run: no toast popups, and grant the offline tools so the agent's
+    # sandbox_repl/lsp calls aren't prompted or denied — constant across BOTH arms.
+    os.environ["SWARM_NO_TOASTS"] = "1"
+    granted = False
+    try:
+        from swarm_os.services.trust_ledger import grant
+
+        for t in ("sandbox_repl", "lsp", "git"):
+            grant(t, 8 * 3600)
+        granted = True
+    except Exception:  # noqa: BLE001
+        pass
+
+    try:
+        results = [
+            rc.run_item(it, timeout=args.timeout, allow_approval=False) for it in items
+        ]
+    finally:
+        if granted:
+            try:
+                from swarm_os.services.trust_ledger import revoke
+
+                for t in ("sandbox_repl", "lsp", "git"):
+                    revoke(t)
+            except Exception:  # noqa: BLE001
+                pass
+
     RESULTS.mkdir(parents=True, exist_ok=True)
     with open(_path(args.arm), "w", encoding="utf-8") as fh:
         for r in results:
