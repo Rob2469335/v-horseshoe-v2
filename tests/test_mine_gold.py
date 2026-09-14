@@ -122,3 +122,51 @@ def test_tools_helped_rate():
     ]
     d = mg._tools_helped(recs)
     assert d["filesystem"] == {"used": 2, "success": 1, "rate": 0.5}
+
+
+def _timed(run_id, i, **kw):
+    r = _rec(run_id, **kw)
+    r["_mtime"] = float(i)
+    return r
+
+
+def test_learning_curve_buckets():
+    recs = [_timed(f"r{i}", i) for i in range(10)]
+    curve = mg.learning_curve(recs, buckets=5)
+    assert curve["n"] == 10
+    assert curve["buckets"][0]["experience_band"].startswith("1-")
+    assert len(curve["buckets"]) == 5
+
+
+def test_self_healing_rate():
+    healed = _rec("h", labels=["FAILURE", "NORMAL_SUCCESS"], outcome="SUCCESS")
+    not_healed = _rec("n", labels=["FAILURE"], outcome="FAILURE")
+    clean = _rec("c", labels=["NORMAL_SUCCESS"], outcome="SUCCESS")
+    sh = mg.self_healing([healed, not_healed, clean])
+    assert sh["runs_with_a_failure"] == 2
+    assert sh["became_verified_success"] == 1
+    assert sh["self_healing_rate"] == 0.5
+
+
+def test_stratified_trend_same_mix_agrees():
+    recs = [
+        _timed("a", 0, shape="A"),
+        _timed("b", 1, shape="A"),
+        _timed("c", 2, shape="A"),
+        _timed("d", 3, shape="A"),
+    ]
+    st = mg.stratified_trend(recs)
+    assert st["raw_delta"] == st["mix_adjusted_delta"]
+
+
+def test_stratified_trend_exposes_mix_confound():
+    # early: only shape A (all success). late: A success + B failure.
+    # A shape-change (mix) inflates the raw drop beyond the within-shape effect.
+    recs = [
+        _timed("e1", 0, shape="A"),
+        _timed("e2", 1, shape="A"),
+        _timed("l1", 2, shape="A"),
+        _timed("l2", 3, shape="B", outcome="FAILURE", succeeded=False),
+    ]
+    st = mg.stratified_trend(recs)
+    assert st["raw_delta"] != st["mix_adjusted_delta"]

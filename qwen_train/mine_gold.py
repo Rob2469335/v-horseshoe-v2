@@ -166,7 +166,7 @@ def select_gold(recs: list[dict]) -> list[dict]:
 def learning_trend(recs: list[dict]) -> dict:
     """Early-vs-late comparison over chronological order — does the SYSTEM get
     better within the batch? (The learner is the CLI/agent, not the weights.)"""
-    ordered = sorted((r for r in recs if r.get("_mtime")), key=lambda r: r["_mtime"])
+    ordered = sorted((r for r in recs if r.get("_mtime") is not None), key=lambda r: r["_mtime"])
     if len(ordered) < 4:
         return {"n": len(ordered), "note": "too few ordered runs for a trend"}
 
@@ -188,6 +188,92 @@ def learning_trend(recs: list[dict]) -> dict:
         if k != "runs" and isinstance(early[k], (int, float))
     }
     return {"n": len(ordered), "early": early, "late": late, "delta": delta}
+
+
+def learning_curve(recs: list[dict], buckets: int = 5) -> dict:
+    """North-star: does the CLI get better with MORE experience? Success rate
+    over consecutive experience buckets (not just early/late halves)."""
+    ordered = sorted((r for r in recs if r.get("_mtime") is not None), key=lambda r: r["_mtime"])
+    n = len(ordered)
+    if n < buckets:
+        return {"n": n, "note": "too few for a curve"}
+    size = max(1, n // buckets)
+    out = []
+    for i in range(0, n, size):
+        part = ordered[i : i + size]
+        if not part:
+            continue
+        out.append(
+            {
+                "experience_band": f"{i + 1}-{i + len(part)}",
+                "success_rate": round(
+                    sum(1 for r in part if r["outcome"] == "SUCCESS") / len(part), 3
+                ),
+                "avg_steps": round(sum(r["n_steps"] for r in part) / len(part), 2),
+            }
+        )
+    return {"n": n, "buckets": out}
+
+
+def self_healing(recs: list[dict]) -> dict:
+    """Measurable self-healing: among runs that HIT a failure, how many became a
+    verified success? (Hard definition — not "the AI tried again".)"""
+    eligible = [r for r in recs if any(l in _TRIGGERS for l in r["labels"])]
+    healed = [r for r in eligible if r["outcome"] == "SUCCESS"]
+    return {
+        "runs_with_a_failure": len(eligible),
+        "became_verified_success": len(healed),
+        "self_healing_rate": round(len(healed) / len(eligible), 3) if eligible else None,
+    }
+
+
+def stratified_trend(recs: list[dict]) -> dict:
+    """Confound control for the early->late trend: if the task MIX changes across
+    the batch, raw early/late success is partly composition, not learning. This
+    standardizes success to the whole-batch shape distribution and reports both,
+    so the raw delta can be checked against the mix-adjusted one."""
+    ordered = sorted((r for r in recs if r.get("_mtime") is not None), key=lambda r: r["_mtime"])
+    if len(ordered) < 4:
+        return {"note": "too few ordered runs"}
+
+    def raw(part: list[dict]) -> float:
+        return round(sum(1 for r in part if r["outcome"] == "SUCCESS") / len(part), 3)
+
+    all_shapes = collections.Counter(r["shape"] for r in ordered)
+    total = sum(all_shapes.values())
+    weights = {s: c / total for s, c in all_shapes.items()}
+
+    def rate(part: list[dict], shape: str):
+        sub = [r for r in part if r["shape"] == shape]
+        if not sub:
+            return None
+        return sum(1 for r in sub if r["outcome"] == "SUCCESS") / len(sub)
+
+    def adjusted(part: list[dict]):
+        num = wsum = 0.0
+        for s, w in weights.items():
+            rr = rate(part, s)
+            if rr is None:
+                continue
+            num += w * rr
+            wsum += w
+        return round(num / wsum, 3) if wsum else None
+
+    mid = len(ordered) // 2
+    early, late = ordered[:mid], ordered[mid:]
+    re_, rl = raw(early), raw(late)
+    ae, al = adjusted(early), adjusted(late)
+    return {
+        "raw_early": re_,
+        "raw_late": rl,
+        "raw_delta": round(rl - re_, 3),
+        "mix_adjusted_early": ae,
+        "mix_adjusted_late": al,
+        "mix_adjusted_delta": (
+            round(al - ae, 3) if ae is not None and al is not None else None
+        ),
+        "note": "raw_delta >> mix_adjusted_delta means the raw trend is partly task mix",
+    }
 
 
 def _tools_helped(recs: list[dict]) -> dict:
@@ -241,6 +327,9 @@ def run_filter(traj_dir: Path = TRAJ_DIR) -> dict:
         "gold": len(gold),
         "gold_tiers": dict(collections.Counter(g["tier"] for g in gold)),
         "learning_trend": learning_trend(valid),
+        "learning_curve": learning_curve(valid),
+        "self_healing": self_healing(valid),
+        "stratified_trend": stratified_trend(valid),
     }
     return {"report": report, "valid": valid, "gold": gold}
 
@@ -286,6 +375,25 @@ def main() -> int:
         print("  (success_rate up / avg_steps down / loop_rate down = the system learned)")
     else:
         print(f"  {tr}")
+    print("\n=== NORTH STAR: learning curve over experience ===")
+    for b in rep.get("learning_curve", {}).get("buckets", []):
+        print(
+            f"  runs {b['experience_band']:<9} success={b['success_rate']:<6} avg_steps={b['avg_steps']}"
+        )
+    sh = rep.get("self_healing", {})
+    print(
+        f"\n=== SELF-HEALING (hard def) ===\n"
+        f"  runs that hit a failure : {sh.get('runs_with_a_failure')}\n"
+        f"  recovered to verified   : {sh.get('became_verified_success')}\n"
+        f"  self-healing rate       : {sh.get('self_healing_rate')}"
+    )
+    st = rep.get("stratified_trend", {})
+    print(
+        f"\n=== CONFOUND CONTROL (task-mix adjusted) ===\n"
+        f"  raw delta               : {st.get('raw_delta')}\n"
+        f"  mix-adjusted delta      : {st.get('mix_adjusted_delta')}\n"
+        f"  ({st.get('note', '')})"
+    )
     print(f"\nwrote -> {(OUT_DIR / 'gold_candidates.jsonl').relative_to(ROOT)}")
     if rep["success"] < 30:
         print("  -> success count is low / run still in flight; re-run after the batch finishes.")
