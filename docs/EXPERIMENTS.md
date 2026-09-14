@@ -85,3 +85,62 @@ best CLI trajectories → GOLD → QLoRA → robs4b v2 → local coding agent
 
 Never move the goalposts: the frozen 60 stays frozen; T2 is run on the *identical*
 60 items as T1, same script, same budget.
+
+---
+
+# North star: does the CLI get better with experience?
+
+The product is the **self-learning, self-healing CLI**. Qwen is a worker; the 4B
+is a future *student* of the CLI (Experiment C), not the destination.
+
+**North-star metric = the learning curve**, not "how smart is Qwen":
+
+```
+experience 1000 -> success 72%
+experience 2000 -> success 76%
+experience 3000 -> success 81%
+```
+
+Reported by `mine_gold.py` as `learning_curve` (success over consecutive
+experience bands). A rising curve is the signal; a flat one is a real finding too.
+
+## Self-healing — hard, measurable definition
+
+Not "the AI tried again". A run **self-heals** when it hits a failure, changes
+strategy, and reaches a *verified* success:
+
+```
+FAILURE -> detect -> change approach -> execute different action -> verify -> SUCCESS
+```
+
+```
+self_healing_rate = runs that became verified success / runs that hit a failure
+```
+
+Reported as `self_healing`. Per-run, `recovery` = a failure followed by a
+**different-tool** success (a retry of the same tool is not healing).
+
+## Self-learning — distinct from self-healing
+
+- **Self-healing**: "I fixed my current mistake."
+- **Self-learning**: "I learned something that helps me on a LATER task."
+
+Self-learning is **cross-task** and is therefore not fully measurable within a
+single batch — the frozen T1→T2 (Experiment A) and the memory ablation
+(Experiment B) are the real transfer tests. Treat any within-batch "improvement"
+as a hypothesis, not proof.
+
+## Confound control (mandatory)
+
+An early→late success rise inside one batch can be **task mix**, not learning. The
+miner reports both the raw and the **mix-adjusted** (direct-standardized by tool
+shape) delta:
+
+```
+        RAW early->late delta   vs   MIX-ADJUSTED delta
+```
+
+If `raw_delta >> mix_adjusted_delta`, the raw trend is composition. **Do not report
+the raw delta as learning.** (First run of this control: raw 0.0 vs adjusted
+-0.007 over 88 runs — the earlier +10.7 pp early/late reading was task mix.)
+
