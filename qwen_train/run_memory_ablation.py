@@ -41,8 +41,20 @@ RESULTS = _HERE / "results"
 
 
 def fixed_ids(n: int, seed: int) -> list[str]:
-    """Deterministic sample of train item ids — identical for both arms."""
-    items = [i for i in rc.load_items() if i.get("split") == "train"]
+    """Deterministic sample of APPROVAL-FREE train item ids — identical for both arms.
+
+    Restricted to approval-free tools (rc._APPROVAL_FREE) because the pool is ~90%
+    `sandbox_repl` (ALWAYS_CONFIRM): those tasks trigger the CLI approval prompt and
+    make an unattended ablation impossible. Memory ON/OFF is the only variable, so a
+    no-approval task set keeps the comparison clean AND unattended.
+    """
+    items = [
+        i
+        for i in rc.load_items()
+        if i.get("split") == "train"
+        and i.get("target_tools")
+        and all(t in rc._APPROVAL_FREE for t in i["target_tools"])
+    ]
     if not items:
         return []
     rng = random.Random(seed)
