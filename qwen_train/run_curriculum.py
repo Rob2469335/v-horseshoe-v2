@@ -40,6 +40,7 @@ from pathlib import Path
 _HERE = Path(__file__).resolve().parent
 CURRICULUM = _HERE / "curriculum" / "tool_curriculum.jsonl"
 GENERATED = _HERE / "curriculum" / "generated.jsonl"
+HOLDOUT = _HERE / "curriculum" / "holdout.jsonl"  # frozen eval split (never trained on)
 RESULTS = _HERE / "results" / "curriculum_runs.jsonl"
 
 _TARGET_RUNS = 500
@@ -97,7 +98,7 @@ def _revoke_offline() -> None:
 
 def load_items() -> list[dict]:
     items: list[dict] = []
-    for path in (CURRICULUM, GENERATED):
+    for path in (CURRICULUM, GENERATED, HOLDOUT):
         if not path.exists():
             continue
         for line in path.read_text(encoding="utf-8").splitlines():
@@ -853,6 +854,31 @@ def mine(n: int, seed: int = 0) -> int:
     return written
 
 
+def make_holdout(n: int = 50, seed: int = 99) -> int:
+    """Write N FRESH `eval`-split items to the frozen holdout (disjoint instances
+    from the training pool). `--run`/`next_item('train')` never select them; an
+    eval run uses `--split eval`."""
+    pool = mine_pool()
+    rng = random.Random(seed)
+    rng.shuffle(pool)
+    start = sum(1 for i in load_items() if str(i.get("id", "")).startswith("h"))
+    written = 0
+    HOLDOUT.parent.mkdir(parents=True, exist_ok=True)
+    with HOLDOUT.open("a", encoding="utf-8") as fh:
+        for item in pool:
+            if written >= n:
+                break
+            fh.write(
+                json.dumps(
+                    {**item, "id": f"h{start + written:04d}", "split": "eval"},
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+            written += 1
+    return written
+
+
 def coverage() -> dict:
     """Diversity snapshot over all curriculum items (the scaling metric)."""
     items = load_items()
@@ -980,6 +1006,13 @@ def main() -> int:
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--progress", action="store_true")
     ap.add_argument("--diversity", action="store_true")
+    ap.add_argument(
+        "--gen-holdout",
+        type=int,
+        metavar="N",
+        default=0,
+        help="append N frozen eval-holdout items (never trained on)",
+    )
     ap.add_argument("--timeout", type=int, default=300)
     args = ap.parse_args()
 
@@ -1003,6 +1036,10 @@ def main() -> int:
             f"coverage: {cov['items']} items  by_tool={cov['by_tool']}  "
             f"by_shape={cov['by_shape']}"
         )
+        return 0
+    if getattr(args, "gen_holdout", 0):
+        m = make_holdout(args.gen_holdout, args.seed)
+        print(f"holdout: +{m} items -> {HOLDOUT}")
         return 0
     if args.diversity:
         print(json.dumps(coverage(), indent=2))
