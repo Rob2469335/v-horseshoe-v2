@@ -110,7 +110,7 @@ def test_chain_free_then_paid_direct_then_opencode_go_last(monkeypatch):
     # OpenRouter, then OpenCode Go PAID (funded), then paid DeepSeek direct last,
     # local llama.cpp final.
     assert models[0] == "nvidia_nim/deepseek-ai/deepseek-v4-flash"
-    assert "deepseek/deepseek-v4-flash" in models
+    assert "deepseek/deepseek-flash" in models
     assert "openai/zen/deepseek-v4-flash" in models
     assert "openai/deepseek-v4-flash" in models
     # Zen free stays before Go paid within the pair.

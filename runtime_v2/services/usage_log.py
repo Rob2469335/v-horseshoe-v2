@@ -40,7 +40,7 @@ _PRICING = {
     # DeepSeek V4 — off-peak baseline (effective 2026-08-16 rate card; peak
     # hours 01:00-04:00 + 06:00-10:00 UTC double these). Flash: $0.22 in (miss)
     # / $0.007 cache-hit / $0.66 out. Pro: $0.66 / $0.022 / $1.98.
-    "deepseek/deepseek-v4-flash": (0.22, 0.007, 0.66),
+    "deepseek/deepseek-flash": (0.22, 0.007, 0.66),
     "deepseek/deepseek-v4-pro": (0.66, 0.022, 1.98),
     "deepseek/deepseek-chat": (0.22, 0.007, 0.66),
     "deepseek-r1": (0.22, 0.007, 0.66),

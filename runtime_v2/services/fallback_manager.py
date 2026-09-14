@@ -491,7 +491,7 @@ def _get_deepseek_direct_fallback() -> list[dict]:
         return []
     return [
         {
-            "model": "deepseek/deepseek-v4-flash",
+            "model": "deepseek/deepseek-flash",
             "context_length": 65536,
             "pricing": "Paid (cheap)",
             "provider": "DeepSeek Direct",
