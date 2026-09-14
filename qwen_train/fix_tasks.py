@@ -51,7 +51,167 @@ def _tasks() -> dict:
             "def shout(s):\n    return s.lower()\n",
             "from module import shout\nassert shout('hi') == 'HI', shout('hi')\nprint('OK')\n",
         ),
+        # --- added 2026-09: distinct bug semantics (each needs a DIFFERENT fix) ---
+        "wrong_index": (
+            "def last(xs):\n    return xs[len(xs)]\n",
+            "from module import last\nassert last([1, 2, 3]) == 3, last([1, 2, 3])\nassert last([]) is None\nprint('OK')\n",
+        ),
+        "wrong_comparison": (
+            "def over(x, limit):\n    return x < limit\n",
+            "from module import over\nassert over(5, 3) is True\nassert over(2, 3) is False\nprint('OK')\n",
+        ),
+        "wrong_boolean": (
+            "def accept(a, b):\n    return a and b\n",
+            "from module import accept\nassert accept(True, False) is True\nprint('OK')\n",
+        ),
+        "none_guard": (
+            "def first_name(user):\n    return user['name']\n",
+            "from module import first_name\nassert first_name({'name': 'Al'}) == 'Al'\nassert first_name({}) is None\nprint('OK')\n",
+        ),
+        "wrong_strip": (
+            "def trim(s):\n    return s.lstrip()\n",
+            "from module import trim\nassert trim('  hi  ') == 'hi', trim('  hi  ')\nprint('OK')\n",
+        ),
+        "wrong_join": (
+            "def join(xs):\n    return ','.join(xs)\n",
+            "from module import join\nassert join(['a', 'b']) == 'a, b', join(['a', 'b'])\nprint('OK')\n",
+        ),
+        "logic_inversion": (
+            "def is_even(n):\n    return n % 2 == 1\n",
+            "from module import is_even\nassert is_even(2) is True\nassert is_even(3) is False\nprint('OK')\n",
+        ),
+        "wrong_step": (
+            "def evens(n):\n    return list(range(0, n, 1))\n",
+            "from module import evens\nassert evens(10) == [0, 2, 4, 6, 8], evens(10)\nprint('OK')\n",
+        ),
+        "zero_div_guard": (
+            "def divide(a, b):\n    return a / b\n",
+            "from module import divide\nassert divide(6, 2) == 3.0\nassert divide(6, 0) is None\nprint('OK')\n",
+        ),
+        "wrong_cast": (
+            "def normalize(x):\n    return str(x)\n",
+            "from module import normalize\nassert normalize('42') == 42, normalize('42')\nprint('OK')\n",
+        ),
+        "fencepost": (
+            "def count_up(n):\n    return len(range(1, n))\n",
+            "from module import count_up\nassert count_up(5) == 5, count_up(5)\nprint('OK')\n",
+        ),
+        # --- expanded 2026-09-14: second batch (14 more distinct kinds) ---
+        # COLLECTION: wrong slice endpoint (drops first instead of last)
+        "wrong_slice": (
+            "def drop_last(items):\n    return items[1:]\n",
+            "from module import drop_last\nassert drop_last([1, 2, 3]) == [1, 2], drop_last([1, 2, 3])\nprint('OK')\n",
+        ),
+        # COLLECTION: empty-list crash (distinct from dict none_guard)
+        "empty_collection_guard": (
+            "def first(xs):\n    return xs[0]\n",
+            "from module import first\nassert first([7]) == 7\nassert first([]) is None\nprint('OK')\n",
+        ),
+        # CONTRACT: mutable default argument — list shared across calls
+        "mutable_default": (
+            "def append_val(x, acc=[]):\n    acc.append(x)\n    return acc\n",
+            "from module import append_val\nr1 = append_val(1)\nr2 = append_val(2)\nassert r1 == [1], r1\nassert r2 == [2], r2\nprint('OK')\n",
+        ),
+        # EXPRESSION_VALUE: operator precedence — addition before multiply
+        "arithmetic_precedence": (
+            "def scale_sum(a, b, c):\n    return a + b * c\n",
+            "from module import scale_sum\nassert scale_sum(2, 3, 4) == 20, scale_sum(2, 3, 4)\nprint('OK')\n",
+        ),
+        # EXPRESSION_VALUE: type coercion — str concat with int raises TypeError
+        "type_coercion": (
+            "def label(count):\n    return 'count: ' + count\n",
+            "from module import label\nassert label(3) == 'count: 3', label(3)\nprint('OK')\n",
+        ),
+        # EXPRESSION_VALUE: wrong numeric constant (100 vs 10)
+        "wrong_constant": (
+            "def ten_x(price):\n    return price * 100\n",
+            "from module import ten_x\nassert ten_x(7) == 70, ten_x(7)\nprint('OK')\n",
+        ),
+        # CALL_API: wrong builtin called (max instead of min)
+        "wrong_function_call": (
+            "def minimum(values):\n    return max(values)\n",
+            "from module import minimum\nassert minimum([3, 1, 5]) == 1, minimum([3, 1, 5])\nprint('OK')\n",
+        ),
+        # CALL_API: wrong argument order (positional args swapped)
+        "wrong_argument_order": (
+            "def left_pad(width, s):\n    return s.rjust(width)\n",
+            "from module import left_pad\nassert left_pad('hi', 6) == '    hi', repr(left_pad('hi', 6))\nprint('OK')\n",
+        ),
+        # CALL_API: forgot parentheses — returns bound method, not result
+        "missing_call": (
+            "def uppercased(s):\n    return s.upper\n",
+            "from module import uppercased\nassert uppercased('hi') == 'HI', uppercased('hi')\nprint('OK')\n",
+        ),
+        # CONTROL_FLOW: return vs print — prints but returns None
+        "return_vs_print": (
+            "def square(n):\n    print(n * n)\n",
+            "from module import square\nassert square(4) == 16, square(4)\nprint('OK')\n",
+        ),
+        # STRING: missing normalisation before compare (strip + casefold)
+        "string_normalization": (
+            "def match(a, b):\n    return a == b\n",
+            "from module import match\nassert match('  Hello ', 'hello') is True\nprint('OK')\n",
+        ),
+        # DATA_FLOW: identity vs equality — `is` fails on non-interned int
+        "identity_vs_equality": (
+            "def check_thousand(n):\n    return n is 1000\n",
+            "from module import check_thousand\nassert check_thousand(1000) is True\nprint('OK')\n",
+        ),
+        # DATA_FLOW: loop over indices instead of values
+        "wrong_loop_target": (
+            "def total(nums):\n    s = 0\n    for i in range(len(nums)):\n        s += i\n    return s\n",
+            "from module import total\nassert total([10, 20, 30]) == 60, total([10, 20, 30])\nprint('OK')\n",
+        ),
+        # DATA_FLOW: loop overwrites accumulator each iteration (never compares)
+        "shadowed_variable": (
+            "def running_max(nums):\n    best = nums[0]\n    for n in nums:\n        best = n\n    return best\n",
+            "from module import running_max\nassert running_max([3, 1, 4, 1, 5]) == 5\nassert running_max([9, 2]) == 9\nprint('OK')\n",
+        ),
+        # DATA_FLOW: accumulator used before initialisation — NameError
+        "uninitialized_use": (
+            "def count_pos(nums):\n    for n in nums:\n        if n > 0:\n            c += 1\n    return c\n",
+            "from module import count_pos\nassert count_pos([1, -2, 3]) == 2\nassert count_pos([-1]) == 0\nprint('OK')\n",
+        ),
     }
+
+
+_FAMILY = {
+    "off_by_one": "arithmetic",
+    "wrong_op": "arithmetic",
+    "missing_return": "control_flow",
+    "wrong_default": "contract",
+    "string_case": "string",
+    "wrong_index": "collection",
+    "wrong_comparison": "logic",
+    "wrong_boolean": "logic",
+    "none_guard": "collection",
+    "wrong_strip": "string",
+    "wrong_join": "string",
+    "logic_inversion": "logic",
+    "wrong_step": "arithmetic",
+    "zero_div_guard": "arithmetic",
+    "wrong_cast": "expression_value",
+    "fencepost": "arithmetic",
+    "wrong_slice": "collection",
+    "empty_collection_guard": "collection",
+    "mutable_default": "contract",
+    "arithmetic_precedence": "expression_value",
+    "type_coercion": "expression_value",
+    "wrong_constant": "expression_value",
+    "wrong_function_call": "call_api",
+    "wrong_argument_order": "call_api",
+    "missing_call": "call_api",
+    "return_vs_print": "control_flow",
+    "string_normalization": "string",
+    "identity_vs_equality": "data_flow",
+    "wrong_loop_target": "data_flow",
+    "shadowed_variable": "data_flow",
+    "uninitialized_use": "data_flow",
+}
+
+
+def kind_family(kind: str) -> str:
+    return _FAMILY.get(kind, "general")
 
 
 def make_task(kind: str, idx: int, root: Path = SANDBOX, repo_root: Path = ROOT) -> dict:
@@ -67,6 +227,7 @@ def make_task(kind: str, idx: int, root: Path = SANDBOX, repo_root: Path = ROOT)
     return {
         "id": f"f{kind}{idx:03d}",
         "split": "train",
+        "family": kind_family(kind),
         "difficulty": 3,
         "target_tools": ["filesystem", "sandbox_repl"],
         "prompt": (
