@@ -91,6 +91,10 @@ def build_records(traj_dir: Path = TRAJ_DIR, runs: list[dict] | None = None) -> 
             rec["target_tools"] = joined.get("target_tools") or []
             rec["run_verified"] = joined.get("verified")
             rec["ineligible"] = joined.get("ineligible")
+        # STRATUM: fix tasks (intentional breakage → repair/recovery) are a
+        # DIFFERENT measurement from ordinary diverse task success. Never mix them
+        # into one pass-rate (docs/WRITE_FIX_TASKS.md; user's strata design).
+        rec["stratum"] = "fix" if (joined or {}).get("family") == "fix" else "diverse"
         rec["outcome"] = classify(rec, env)
         valid.append(rec)
     return {"valid": valid, "invalid": invalid}
@@ -323,6 +327,24 @@ def stratified_trend(recs: list[dict]) -> dict:
     }
 
 
+def strata(recs: list[dict]) -> dict:
+    """Per-stratum metrics — fix and diverse are measured SEPARATELY."""
+    out = {}
+    for s in ("diverse", "fix"):
+        part = [r for r in recs if r.get("stratum") == s]
+        n = len(part)
+        if not n:
+            continue
+        out[s] = {
+            "runs": n,
+            "success_rate": round(
+                sum(1 for r in part if r["outcome"] == "SUCCESS") / n, 3
+            ),
+            "recovery_rate": round(sum(1 for r in part if r["recovery"]) / n, 3),
+        }
+    return out
+
+
 def _tools_helped(recs: list[dict]) -> dict:
     used: collections.Counter = collections.Counter()
     helped: collections.Counter = collections.Counter()
@@ -378,6 +400,7 @@ def run_filter(traj_dir: Path = TRAJ_DIR) -> dict:
         "learning_curve": learning_curve(valid),
         "self_healing": self_healing(valid),
         "stratified_trend": stratified_trend(valid),
+        "strata": strata(valid),
     }
     return {"report": report, "valid": valid, "gold": gold}
 
@@ -443,6 +466,12 @@ def main() -> int:
         f"  mix-adjusted delta      : {st.get('mix_adjusted_delta')}\n"
         f"  ({st.get('note', '')})"
     )
+    print("\n=== STRATA (fix vs diverse — measured SEPARATELY) ===")
+    for name, d in rep.get("strata", {}).items():
+        label = "recovery" if name == "fix" else "success"
+        rate = d.get("recovery_rate") if name == "fix" else d.get("success_rate")
+        print(f"  {name:<8} runs={d['runs']:<4} {label}={rate}")
+    print(f"  combined (secondary only): {rep['outcomes']}")
     print(f"\nwrote -> {(OUT_DIR / 'gold_candidates.jsonl').relative_to(ROOT)}")
     if rep["success"] < 30:
         print("  -> success count is low / run still in flight; re-run after the batch finishes.")
