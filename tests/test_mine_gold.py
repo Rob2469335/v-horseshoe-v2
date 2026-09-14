@@ -170,3 +170,32 @@ def test_stratified_trend_exposes_mix_confound():
     ]
     st = mg.stratified_trend(recs)
     assert st["raw_delta"] != st["mix_adjusted_delta"]
+
+
+# ── tip types + provenance (arXiv:2603.10600 / ASG-SI) ───────────────────────
+def test_tip_type_recovery_strategy_optimization():
+    assert mg.tip_type(_rec("r", recovery=True), 3) == "recovery"
+    assert mg.tip_type(_rec("s", n_steps=3), 3) == "strategy"
+    assert mg.tip_type(_rec("o", n_steps=10), 3) == "optimization"
+
+
+def test_tip_type_no_median_is_strategy():
+    assert mg.tip_type(_rec("s", n_steps=9), 0) == "strategy"
+
+
+def test_select_gold_carries_tip_type_and_provenance():
+    rec = _rec(
+        "g",
+        recovery=True,
+        state_hashes=["abc", "def"],
+        run_verified=True,
+        agent_id="coder",
+        model="deepseek-v4-flash",
+    )
+    gold = mg.select_gold([rec])
+    assert gold[0]["tip_type"] == "recovery"
+    pv = gold[0]["provenance"]
+    assert pv["run_id"] == "g"
+    assert pv["state_hashes"] == ["abc", "def"]
+    assert pv["model"] == "deepseek-v4-flash"
+    assert pv["verified"] is True

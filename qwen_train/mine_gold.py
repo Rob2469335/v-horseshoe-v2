@@ -74,6 +74,8 @@ def build_records(traj_dir: Path = TRAJ_DIR, runs: list[dict] | None = None) -> 
             continue
         rec = mt.analyze(run)
         rec["_mtime"] = f.stat().st_mtime
+        rec["file"] = run.get("file", "")
+        rec["model"] = (run["steps"][0].get("model_name") if run["steps"] else "")
         rec["arg_seq"] = _arg_seqs(run)
         rec["sig"] = "|".join(rec["arg_seq"])
         rec["shape"] = ">".join([t for t in rec["tool_seq"] if t])
@@ -143,9 +145,46 @@ def critical_steps(rec: dict) -> list[int]:
     return sorted(idx)
 
 
+def _median_steps(successes: list[dict]) -> int:
+    steps = sorted(r["n_steps"] for r in successes)
+    return steps[len(steps) // 2] if steps else 0
+
+
+def tip_type(rec: dict, median_steps: int) -> str:
+    """The three guidance kinds of Trajectory-Informed Memory (arXiv:2603.10600):
+    - recovery     : produced by failure handling (a real recovery)
+    - optimization : inefficient-but-successful (steps well above the median)
+    - strategy     : a clean successful pattern
+    """
+    if rec["recovery"]:
+        return "recovery"
+    if median_steps and rec["n_steps"] > max(median_steps * 1.5, median_steps + 1):
+        return "optimization"
+    return "strategy"
+
+
+def provenance(rec: dict) -> dict:
+    """Evidence trail for a tip: where it came from + the verified state path.
+    (ASG-SI arXiv:2512.23760: verifier-gated promotion needs clear provenance.)"""
+    return {
+        "run_id": rec.get("run_id"),
+        "agent_id": rec.get("agent_id"),
+        "model": rec.get("model"),
+        "source_file": rec.get("file"),
+        "tools": rec.get("tool_seq"),
+        "state_hashes": rec.get("state_hashes"),
+        "n_steps": rec.get("n_steps"),
+        "calls_to_success": rec.get("calls_to_success"),
+        "outcome": rec.get("outcome"),
+        "verified": rec.get("run_verified"),
+    }
+
+
 def select_gold(recs: list[dict]) -> list[dict]:
     """Tier = recovery (adapted after a failure) > critical (a real multi-tool
-    choice) > success (single-tool straightforward). Failures/loops excluded."""
+    choice) > success (single-tool straightforward). Failures/loops excluded.
+    Each candidate carries a `tip_type` and a `provenance` evidence trail."""
+    med = _median_steps([r for r in recs if r["outcome"] == "SUCCESS"])
     gold: list[dict] = []
     for r in recs:
         if r["outcome"] != "SUCCESS" or r["loop"]:
@@ -157,7 +196,15 @@ def select_gold(recs: list[dict]) -> list[dict]:
             tier = "critical"
         else:
             tier = "success"
-        gold.append({**r, "critical_steps": crit, "tier": tier})
+        gold.append(
+            {
+                **r,
+                "critical_steps": crit,
+                "tier": tier,
+                "tip_type": tip_type(r, med),
+                "provenance": provenance(r),
+            }
+        )
     order = {"recovery": 0, "critical": 1, "success": 2}
     gold.sort(key=lambda x: (order[x["tier"]], x["n_steps"]))
     return gold
@@ -326,6 +373,7 @@ def run_filter(traj_dir: Path = TRAJ_DIR) -> dict:
         "diversity_removed": len(div_removed),
         "gold": len(gold),
         "gold_tiers": dict(collections.Counter(g["tier"] for g in gold)),
+        "gold_tip_types": dict(collections.Counter(g["tip_type"] for g in gold)),
         "learning_trend": learning_trend(valid),
         "learning_curve": learning_curve(valid),
         "self_healing": self_healing(valid),
@@ -366,6 +414,7 @@ def main() -> int:
     print(f"6. near-dupes removed    : {rep['dedupe_removed']}  (+diversity cap {rep['diversity_removed']})")
     print(f"loops quarantined        : {rep['loop_runs']}")
     print(f"GOLD candidates          : {rep['gold']}  {rep['gold_tiers']}")
+    print(f"GOLD tip types           : {rep['gold_tip_types']}")
     print("\n=== SYSTEM LEARNING TREND (early vs late half) ===")
     tr = rep.get("learning_trend", {})
     if "early" in tr:
