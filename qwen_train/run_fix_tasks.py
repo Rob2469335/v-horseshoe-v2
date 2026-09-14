@@ -45,10 +45,13 @@ def main() -> int:
     try:
         from swarm_os.services.trust_ledger import grant
 
+        # filesystem write (confined to SWARM_WRITE_ROOT) + sandbox_repl so the
+        # coder can run check.py to SELF-VERIFY and iterate before final.
         grant("filesystem", 8 * 3600)
+        grant("sandbox_repl", 8 * 3600)
         granted = True
     except Exception as exc:  # noqa: BLE001
-        print(f"filesystem grant failed: {exc}")
+        print(f"grant failed: {exc}")
 
     try:
         for kind in ft._tasks():
@@ -69,6 +72,7 @@ def main() -> int:
                 from swarm_os.services.trust_ledger import revoke
 
                 revoke("filesystem")
+                revoke("sandbox_repl")
             except Exception:  # noqa: BLE001
                 pass
 
