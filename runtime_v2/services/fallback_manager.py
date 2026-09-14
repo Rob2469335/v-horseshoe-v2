@@ -551,34 +551,24 @@ def _get_ling_flash_fallback() -> list[dict]:
 
 
 def _get_alibaba_fallback() -> list[dict]:
-    """Alibaba Cloud (DashScope) OpenAI-compatible endpoints — free/credit tier.
+    """Alibaba Cloud token-plan endpoint — deepseek-v4-flash-0731 (same analysis
+    model as the rest of the chain), OpenAI-compatible. Verified live 2026-09.
 
-    Token-Plan key (ALIBABA_CODING_API_KEY) and/or the DashScope INTL key
-    (ALIBABA_API_KEY). Verified live 2026-09: qwen3.8-max answers on both.
+    One entry only: the DashScope INTL endpoint serves the SAME model id as
+    OpenCode Go (`openai/deepseek-v4-flash`), so including it would collide in the
+    dedup and displace the Go slot (its free quota is exhausted anyway).
     """
     out: list[dict] = []
     coding = os.getenv("ALIBABA_CODING_API_KEY")
     if coding:
         out.append(
             {
-                "model": "openai/qwen3.8-max",
+                "model": "openai/deepseek-v4-flash-0731",
                 "api_base": "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
                 "api_key": coding,
                 "provider": "Alibaba (token-plan)",
             }
         )
-    key = os.getenv("ALIBABA_API_KEY")
-    if key:
-        # Distinct model ids from the token-plan entry so dedup keeps both endpoints.
-        for m in ("qwen3.8-flash", "qwen3.8-max"):
-            out.append(
-                {
-                    "model": f"openai/{m}",
-                    "api_base": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-                    "api_key": key,
-                    "provider": "Alibaba (dashscope-intl)",
-                }
-            )
     return out
 
 
