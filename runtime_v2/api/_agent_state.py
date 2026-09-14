@@ -106,6 +106,10 @@ class _CallState:
     # Which agent delegated to this run (empty at top level). Persisted alongside
     # run_id/parent_id on outcome records for the who-delegated axis.
     delegated_by: str = ""
+    # Per-turn trajectory capture (2026-09, ATIF-shaped): monotonic step ordinal
+    # for data/trajectories/<run_id>.jsonl step records. Checkpointed so a resumed
+    # run keeps assigning fresh step_ids instead of colliding from 1 again.
+    _step_seq: int = 0
     # Design A pre-action authorization: pending_ids whose approval was already
     # resolved THIS run (consumed via execute_approved, or denied via
     # deny_pending). The CLI feeds the approve/deny answer back as an

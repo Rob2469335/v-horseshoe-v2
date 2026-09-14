@@ -1,5 +1,5 @@
 from __future__ import annotations
-import json, logging
+import hashlib, json, logging
 import asyncio
 import os
 import time
@@ -176,6 +176,12 @@ class AgentServiceV2:
                 log.warning("Failed to record event to EventStore: %s", e)
 
     _TRAJ_DIR = _Path("data/trajectories")
+    # Agent Trajectory Interchange Format (Harbor RFC 0001). We emit the
+    # v1.4-core *tool-step subset* (StepObject + ToolCallSchema +
+    # ObservationSchema) — no images/audio/subagent-embedding — so this is a
+    # compatibility target, not a claim of full v1.8 conformance.
+    _ATIF_SCHEMA_VERSION = "ATIF-v1.4"
+    _TRAJ_CONTENT_CAP = 4000
 
     def _write_run_trajectory(
         self,
@@ -221,6 +227,7 @@ class AgentServiceV2:
             if status == "unknown" and not last_content.strip():
                 status = "aborted"
             record = {
+                "record_type": "summary",
                 "run_id": run_id,
                 "agent_id": agent_id,
                 "parent_id": parent_id,
@@ -230,11 +237,139 @@ class AgentServiceV2:
                 "status": status,
                 "last_content": last_content,
             }
-            out = self._TRAJ_DIR / f"{run_id}.jsonl"
-            with open(out, "a", encoding="utf-8") as f:
-                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+            self._append_traj_record(run_id, record)
         except Exception as traj_err:
             log.debug("trajectory write failed for run %s: %s", run_id, traj_err)
+
+    def _append_traj_record(self, run_id: str, record: dict) -> None:
+        """Append one JSON line to the run's trajectory file (single writer)."""
+        self._TRAJ_DIR.mkdir(parents=True, exist_ok=True)
+        out = self._TRAJ_DIR / f"{run_id}.jsonl"
+        with open(out, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+
+    @staticmethod
+    def _state_snapshot(state: "_CallState") -> dict:
+        """Compact deterministic execution-state snapshot for a trajectory step.
+
+        Mirrors the state-aware cache lesson (2026-09-13): the same prompt needs a
+        different tool in a different state, so a step must record WHICH state it
+        was decided in, not merely the turn number.
+        """
+        return {
+            "turn": int(getattr(state, "_turn", 0) or 0),
+            "did_code_change": bool(getattr(state, "did_code_change", False)),
+            "read_paths": len(getattr(state, "read_paths", None) or ()),
+            "tests_ran": bool(getattr(state, "_tests_ran", False)),
+            "tool_successes": int(getattr(state, "_tool_successes", 0) or 0),
+            "tool_attempts": int(getattr(state, "_tool_attempts", 0) or 0),
+            "pending_verify": bool(getattr(state, "pending_verify", False)),
+        }
+
+    @staticmethod
+    def _state_hash(snapshot: dict) -> str:
+        blob = json.dumps(snapshot, sort_keys=True, ensure_ascii=False, default=str)
+        return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
+
+    @staticmethod
+    def _step_label(action: str, ok: Any, error: str, status: str) -> str:
+        """Write-time label — only what is locally knowable.
+
+        RECOVERY / LOOP / DUPLICATE are deliberately NOT set here: they are
+        cross-step properties the miner derives from the surrounding steps.
+        """
+        if action == "final":
+            return "FINAL"
+        if status == "confirmation_required":
+            return "INELIGIBLE"
+        err = (error or "").lower()
+        if ok is True:
+            return "NORMAL_SUCCESS"
+        if any(
+            k in err for k in ("denied", "not classified", "unauthorized", "forbidden")
+        ):
+            return "INELIGIBLE"
+        if any(k in err for k in ("timeout", "timed out", "connection", "readerror")):
+            return "ENVIRONMENT_FAILURE"
+        if ok is False:
+            return "FAILURE"
+        return "UNKNOWN"
+
+    def _write_run_step(
+        self,
+        *,
+        run_id: str,
+        agent_id: str,
+        model: str,
+        decision: dict,
+        state: "_CallState",
+    ) -> None:
+        """Append one ATIF-shaped *step* record (agent action + observation).
+
+        Shape = ATIF StepObject{step_id, timestamp, source, model_name, message,
+        tool_calls[ToolCallSchema], observation{results[ObservationResultSchema]}}.
+        Our custom fields ride the spec's `extra` hooks (tool-call `extra.turn`,
+        observation-result `extra.*`) so the record stays valid against the
+        interchange format while carrying the execution state + hash the miner
+        needs. Best-effort: never kills the stream (mirrors the summary writer).
+        """
+        if not run_id:
+            return
+        try:
+            snap = self._state_snapshot(state)
+            seq = int(getattr(state, "_step_seq", 0) or 0) + 1
+            state._step_seq = seq
+            call_id = f"{run_id}:{seq}"
+            action = str((decision or {}).get("action", "") or "")
+            args = {
+                k: v
+                for k, v in (decision or {}).items()
+                if k not in ("action", "response", "thought", "verdict")
+            }
+            tr = state.tool_result if isinstance(state.tool_result, dict) else {}
+            ok = tr.get("ok")
+            status = str(tr.get("status", "") or "")
+            error = str(tr.get("error", "") or "")
+            body = json.dumps(tr, ensure_ascii=False, default=str)[
+                : self._TRAJ_CONTENT_CAP
+            ]
+            record = {
+                "record_type": "step",
+                "run_id": run_id,
+                "schema_version": self._ATIF_SCHEMA_VERSION,
+                "step_id": seq,
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "source": "agent",
+                "model_name": model,
+                "message": "",
+                "tool_calls": [
+                    {
+                        "tool_call_id": call_id,
+                        "function_name": action,
+                        "arguments": args,
+                        "extra": {"turn": snap["turn"], "agent_id": agent_id},
+                    }
+                ],
+                "observation": {
+                    "results": [
+                        {
+                            "source_call_id": call_id,
+                            "content": body,
+                            "extra": {
+                                "ok": ok,
+                                "error": error[:500],
+                                "status": status,
+                                "label": self._step_label(action, ok, error, status),
+                                "state": snap,
+                                "state_hash": self._state_hash(snap),
+                            },
+                        }
+                    ]
+                },
+            }
+            self._append_traj_record(run_id, record)
+        except Exception as step_err:
+            log.debug("run-step write failed for run %s: %s", run_id, step_err)
 
     def list_agents(self) -> List[dict]:
         return list(self._agents.values())
@@ -446,6 +581,7 @@ class AgentServiceV2:
         "parent_id",
         "delegated_by",
         "_resolved_approvals",
+        "_step_seq",
     )
 
     def _state_to_dict(self, state: _CallState) -> dict:
@@ -3259,6 +3395,22 @@ class AgentServiceV2:
                 consecutive_errors,
                 state,
             )
+
+            # Per-turn ATIF-shaped step capture (2026-09, distiller/miner substrate).
+            # State is updated by _handle_tool (tool_result, counters, flags), so a
+            # step records the decision AND the state it produced. Offloaded — file
+            # I/O must not stall the event loop.
+            try:
+                await asyncio.to_thread(
+                    self._write_run_step,
+                    run_id=getattr(state, "run_id", ""),
+                    agent_id=agent_id,
+                    model=model,
+                    decision=decision,
+                    state=state,
+                )
+            except Exception as _step_err:
+                log.debug("[%s] run-step capture skipped: %s", agent_id, _step_err)
 
             # PRE-ACTION AUTHORIZATION: a confirmation_required tool result means
             # the tool did NOT execute. Yield an approval_request event carrying
