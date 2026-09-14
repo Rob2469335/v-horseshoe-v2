@@ -63,6 +63,10 @@ _OFFLINE_GRANTABLE = {
     "sandbox_repl",
     "mcp:serena:find_symbol",
     "mcp:serena:find_referencing_symbols",
+    # `filesystem` write/patch is ALWAYS_CONFIRM; a scoped grant may relax it ONLY
+    # because the handler confines writes to SWARM_WRITE_ROOT (docs/WRITE_FIX_TASKS.md).
+    # Never grant filesystem without that write-root set.
+    "filesystem",
 }
 # Action forms (server:tool) resolved for `mcp` calls — kept ALWAYS_CONFIRM so
 # they relax ONLY through the exact scoped offline grant above.

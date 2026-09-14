@@ -127,6 +127,25 @@ def filesystem_handler(
         except ValueError as e:
             raise ValueError(f"Path is outside sandbox: {requested_path_str}") from e
 
+    def _within_write_root(path: Path) -> bool:
+        """When SWARM_WRITE_ROOT is set, writes/patches must resolve UNDER it.
+
+        Path-scoped write confinement for the write/fix curriculum family
+        (docs/WRITE_FIX_TASKS.md). Default unset = no restriction (today's
+        behaviour), so this is safe to ship inert.
+        """
+        wr = os.environ.get("SWARM_WRITE_ROOT")
+        if not wr:
+            return True
+        base = Path(wr)
+        if not base.is_absolute():
+            base = root / base
+        try:
+            path.resolve().relative_to(base.resolve())
+            return True
+        except ValueError:
+            return False
+
     try:
         # Canonicalize a case/letter-variant docs-file spelling
         # ("agent.md"/"agents.md"/"AGENT.md") onto the real AGENTS.md before the
@@ -276,6 +295,11 @@ def filesystem_handler(
             return result
 
         elif operation == "write":
+            if not _within_write_root(target_path):
+                return {
+                    "ok": False,
+                    "error": "Write blocked: path is outside SWARM_WRITE_ROOT.",
+                }
             content = str(params.get("content", ""))
             target_path.parent.mkdir(parents=True, exist_ok=True)
             tmp_write = target_path.with_suffix(
@@ -288,6 +312,11 @@ def filesystem_handler(
             return {"ok": True, "path": str(target_path)}
 
         elif operation == "patch":
+            if not _within_write_root(target_path):
+                return {
+                    "ok": False,
+                    "error": "Patch blocked: path is outside SWARM_WRITE_ROOT.",
+                }
             if not target_path.exists():
                 return {
                     "ok": False,
