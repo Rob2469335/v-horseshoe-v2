@@ -211,3 +211,46 @@ async def test_loop_writes_step_then_summary(tmp_path, monkeypatch):
     assert recs[0]["tool_calls"][0]["function_name"] == "filesystem"
     assert recs[0]["observation"]["results"][0]["extra"]["label"] == "NORMAL_SUCCESS"
     assert recs[-1]["record_type"] == "summary"
+
+
+@pytest.mark.asyncio
+async def test_loop_captures_mcp_step_as_ineligible(tmp_path, monkeypatch):
+    """A Serena `mcp` call chosen by the agent is captured as a step whose
+    observation is labelled INELIGIBLE while un-granted — proving BOTH the
+    mcp-step capture shape AND the security boundary landing in the trajectory
+    (an un-granted Serena call is excluded from the learning signal, never
+    silently scored). Complements the live grant smoke test."""
+    from runtime_v2.api import agent_service_v2 as _asv2
+    from swarm_os.services import trust_ledger as _tl
+
+    monkeypatch.setattr(_tl, "_GRANTS_PATH", tmp_path / "grants.json")  # no grants
+    monkeypatch.setattr(_asv2, "ANALYSIS_AGENTS", ())
+
+    svc = _asv2.AgentServiceV2(orchestrator=None)
+    svc._TRAJ_DIR = tmp_path
+
+    seen = {"n": 0}
+
+    async def decide(
+        agent_id, model, messages, allowed_tools, prompt, turn, state, research_discharged
+    ):
+        seen["n"] += 1
+        if seen["n"] == 1:
+            return {
+                "action": "mcp",
+                "server": "serena",
+                "tool": "find_symbol",
+                "arguments": {"name_path_pattern": "get_agent_service"},
+            }
+        return {"action": "final", "response": "Done."}
+
+    svc._get_decision = decide
+
+    async for _ in svc.step_agent_stream("coder", "find the symbol"):
+        pass
+
+    rec = _steps(list(tmp_path.glob("*.jsonl"))[0])[0]
+    assert rec["tool_calls"][0]["function_name"] == "mcp"
+    assert rec["tool_calls"][0]["arguments"]["server"] == "serena"
+    assert rec["observation"]["results"][0]["extra"]["label"] == "INELIGIBLE"
+
