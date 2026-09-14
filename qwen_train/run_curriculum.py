@@ -149,6 +149,11 @@ def verify(item: dict, content: str) -> dict:
         return {"passed": hit, "reason": f"regex {pattern!r} -> {hit}"}
     if vtype == "manual":
         return {"passed": None, "reason": "manual review"}
+    if vtype == "fix_file":
+        # Write/fix family: verified POST-RUN by the harness (fix_tasks.verify_fix
+        # re-runs the module's check + confirms check.py is unchanged). The answer
+        # text is not what's checked, so this is not answer-text-verifiable.
+        return {"passed": None, "reason": "fix task (verified post-run)"}
     return {"passed": False, "reason": f"unknown verify type {vtype!r}"}
 
 
