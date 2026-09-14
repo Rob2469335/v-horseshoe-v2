@@ -550,6 +550,38 @@ def _get_ling_flash_fallback() -> list[dict]:
     ]
 
 
+def _get_alibaba_fallback() -> list[dict]:
+    """Alibaba Cloud (DashScope) OpenAI-compatible endpoints — free/credit tier.
+
+    Token-Plan key (ALIBABA_CODING_API_KEY) and/or the DashScope INTL key
+    (ALIBABA_API_KEY). Verified live 2026-09: qwen3.8-max answers on both.
+    """
+    out: list[dict] = []
+    coding = os.getenv("ALIBABA_CODING_API_KEY")
+    if coding:
+        out.append(
+            {
+                "model": "openai/qwen3.8-max",
+                "api_base": "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+                "api_key": coding,
+                "provider": "Alibaba (token-plan)",
+            }
+        )
+    key = os.getenv("ALIBABA_API_KEY")
+    if key:
+        # Distinct model ids from the token-plan entry so dedup keeps both endpoints.
+        for m in ("qwen3.8-flash", "qwen3.8-max"):
+            out.append(
+                {
+                    "model": f"openai/{m}",
+                    "api_base": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+                    "api_key": key,
+                    "provider": "Alibaba (dashscope-intl)",
+                }
+            )
+    return out
+
+
 async def _fetch_llama_models() -> list[dict]:
     models = []
     try:
@@ -601,18 +633,20 @@ async def refresh_fallbacks_if_needed(mode: str = "auto"):
             results = await asyncio.gather(
                 _fetch_llama_models(), return_exceptions=True
             )
-            results = [[], [], results[0]]
+            results = [[], [], [], results[0]]
         else:
             results = await asyncio.gather(
                 _fetch_openrouter_models(),
                 _fetch_nvidia_models(),
+                _fetch_gemini_models(),
                 _fetch_llama_models(),
                 return_exceptions=True,
             )
 
         openrouter_models = results[0] if isinstance(results[0], list) else []
         nvidia_models = results[1] if isinstance(results[1], list) else []
-        llama_models = results[2] if isinstance(results[2], list) else []
+        gemini_models = results[2] if isinstance(results[2], list) else []
+        llama_models = results[3] if isinstance(results[3], list) else []
 
         # NVIDIA free tier hosts deepseek-v4-flash — prioritize it (and any deepseek
         # model) so the cheapest-and-fast analysis model leads the NVIDIA batch.
@@ -670,18 +704,34 @@ async def refresh_fallbacks_if_needed(mode: str = "auto"):
             _opencode_zen = _opencode_models[:1]  # [0] = Zen FREE
             _opencode_go = _opencode_models[1:2]  # [1] = Go PAID
 
+            # FREE-FIRST cascade (2026-09 user decision): a rate-limit on one free
+            # provider falls through to the NEXT free one before any paid path.
+            #   1) NVIDIA free NIM
+            #   2) OpenRouter (guaranteed DeepSeek + live free batch)
+            #   3) Gemini free tier
+            #   4) Alibaba (token-plan / dashscope-intl, free-credit)
+            #   5) OpenCode (Zen free may be depleted; Go paid)
+            #   6) DeepSeek DIRECT (paid)
+            #   7) local llama.cpp
             # 1) NVIDIA free NIM v4-flash — $0 free tier.
             all_fallbacks.extend(nvidia_models[:1])
-            # 2) OpenCode Zen FREE deepseek-v4-flash — $0.
-            all_fallbacks.extend(_opencode_zen)
-            # 3) OpenRouter — hosted DeepSeek first, then cheap/free batch.
+            # 2) OpenRouter — hosted DeepSeek first, then cheap/free batch.
             _deepseek_or = _get_deepseek_openrouter_fallback()
             if _deepseek_or:
                 all_fallbacks.extend(_deepseek_or)
             all_fallbacks.extend(openrouter_models[:3])
-            # 4) OpenCode Go PAID deepseek-v4-flash — the funded workhorse.
+            all_fallbacks.extend(
+                [m for m in openrouter_models if ":free" in m.get("model", "")][:2]
+            )
+            # 3) Gemini free tier.
+            all_fallbacks.extend(gemini_models[:2])
+            # 4) Alibaba (free/credit): token-plan + dashscope-intl.
+            _alibaba = _get_alibaba_fallback()
+            all_fallbacks.extend(_alibaba[:2])
+            # 5) OpenCode (Zen free may be depleted; Go paid workhorse).
+            all_fallbacks.extend(_opencode_zen)
             all_fallbacks.extend(_opencode_go)
-            # 5) DeepSeek DIRECT (paid api.deepseek.com).
+            # 6) DeepSeek DIRECT (paid api.deepseek.com).
             _deepseek_direct = _get_deepseek_direct_fallback()
             if _deepseek_direct:
                 all_fallbacks.extend(_deepseek_direct)
@@ -705,6 +755,8 @@ async def refresh_fallbacks_if_needed(mode: str = "auto"):
             "opencode_zen": len(_opencode_zen),
             "opencode_go": len(_opencode_go),
             "nvidia": len(nvidia_models),
+            "gemini": len(gemini_models),
+            "alibaba": len(_get_alibaba_fallback()),
             "llama.cpp": len(valid_llama),
             "total": len(all_fallbacks),
         }
