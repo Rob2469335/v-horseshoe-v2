@@ -56,9 +56,17 @@ _APPROVAL_FREE = {"filesystem", "web_search", "semantic_search"}
 # Tools the runner grants for an offline run: task-scoped, audited, revoked at
 # the end. `sandbox_repl` is ALWAYS_CONFIRM (relaxed only via
 # approval_registry._OFFLINE_GRANTABLE); `lsp` is CONFIRM (tightened by the same
-# scoped trust_ledger grant). Dynamic least-privilege + task-scoped grants
+# scoped trust_ledger grant). The two Serena symbol ops are ALWAYS_CONFIRM per
+# tool and relax ONLY via their exact `mcp:<server>:<tool>` scope (a broad `mcp`
+# grant does NOT open them). Dynamic least-privilege + task-scoped grants
 # (arXiv:2607.22445; 2603.17170) — never blanket auto-approve.
-_GRANTABLE = ("sandbox_repl", "lsp", "git")
+_GRANTABLE = (
+    "sandbox_repl",
+    "lsp",
+    "git",
+    "mcp:serena:find_symbol",
+    "mcp:serena:find_referencing_symbols",
+)
 
 # A tool the CLI auto-DENIED (non-interactive fail-closed, or explicit policy).
 # A run whose intended tool was denied is INELIGIBLE for the learning signal,
@@ -772,11 +780,16 @@ def _symbol_loc_items(root: Path, limit: int = 300) -> list[dict]:
     file with a unique basename, so the answer (the file) is unambiguous.
 
     Tool CHOICE: the agent may solve it via `filesystem` (grep/glob),
-    `semantic_search` (codebase index), or `lsp` (rob's LSP — the same symbol
-    surface Serena exposes over MCP). Serena itself is reachable via the `mcp`
-    action, which is deliberately NOT in `_GRANTABLE` (broad capability, not
-    least-privilege) — so a run that reaches for `mcp` is marked `ineligible`,
-    not scored. `lsp` IS granted for run #2."""
+    `semantic_search` (codebase index), `lsp` (rob's LSP — the same symbol
+    surface Serena exposes over MCP), or the two **scoped** Serena symbol ops
+    (`mcp:serena:find_symbol` / `find_referencing_symbols`), which the runner now
+    grants for offline runs (least-privilege per tool: a broad `mcp` grant does
+    NOT open them). Because only those two granted ops can succeed, `target_tools`
+    carries the bare `mcp` marker (the live-stream marker's granularity) — a
+    successful mcp call in this family is necessarily a granted Serena symbol
+    lookup. Per-op credit would need a stream-marker extension (follow-up).
+    """
+
     files = _repo_files(root)
     defs: dict[str, set[str]] = {}
     basenames: dict[str, set[str]] = {}
@@ -804,7 +817,7 @@ def _symbol_loc_items(root: Path, limit: int = 300) -> list[dict]:
                 "id": f"d{len(out):05d}",
                 "split": "train",
                 "difficulty": 3,
-                "target_tools": ["filesystem", "lsp", "semantic_search"],
+                "target_tools": ["filesystem", "lsp", "semantic_search", "mcp"],
                 "prompt": (
                     f"Which file in this repository defines the function or class "
                     f"`{name}`? Report the file path."

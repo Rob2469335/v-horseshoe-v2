@@ -78,11 +78,20 @@ def test_parse_tools_denied():
 
 
 def test_grantable_set_is_task_scoped():
-    # exactly the offline-run tools, never blanket: sandbox_repl (ALWAYS_CONFIRM)
-    # + lsp (CONFIRM), granted scoped + revoked after.
-    assert set(rc._GRANTABLE) == {"sandbox_repl", "lsp", "git"}
+    # exactly the offline-run tools, never blanket: sandbox_repl (ALWAYS_CONFIRM),
+    # lsp (CONFIRM) + git, and the two scoped Serena symbol ops (ALWAYS_CONFIRM
+    # per tool — relaxed only via their exact mcp:serena:<tool> scope). Granted
+    # scoped + revoked after.
+    assert set(rc._GRANTABLE) == {
+        "sandbox_repl",
+        "lsp",
+        "git",
+        "mcp:serena:find_symbol",
+        "mcp:serena:find_referencing_symbols",
+    }
     assert "sandbox_repl" not in rc._APPROVAL_FREE
     assert "lsp" not in rc._APPROVAL_FREE
+    assert "mcp" not in rc._APPROVAL_FREE
 
 
 def test_train_split_never_selects_held_out_eval(monkeypatch):

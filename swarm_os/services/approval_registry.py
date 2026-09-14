@@ -55,9 +55,20 @@ ALWAYS_CONFIRM = "ALWAYS_CONFIRM"  # requires human approval (v1: always)
 # The ONLY ALWAYS_CONFIRM tools an explicit, scoped, audited offline-rollout
 # grant may relax. Deliberately tiny + hardcoded: sandbox_repl is AST-gated
 # (security_gate) and run in an isolated `python -I` subprocess, so a bounded
-# grant for it is the least-risk relaxation for headless rollouts. Anything not
-# listed here stays ALWAYS_CONFIRM with no override.
-_OFFLINE_GRANTABLE = {"sandbox_repl"}
+# grant for it is the least-risk relaxation for headless rollouts. The two
+# Serena read-only symbol lookups are ALWAYS_CONFIRM *per tool* (never via a
+# broad `mcp` grant) — only a grant for the exact `mcp:<server>:<tool>` scope
+# relaxes them. Anything not listed here stays ALWAYS_CONFIRM with no override.
+_OFFLINE_GRANTABLE = {
+    "sandbox_repl",
+    "mcp:serena:find_symbol",
+    "mcp:serena:find_referencing_symbols",
+}
+# Action forms (server:tool) resolved for `mcp` calls — kept ALWAYS_CONFIRM so
+# they relax ONLY through the exact scoped offline grant above.
+_SERENA_SYMBOL_OPS = frozenset(
+    {"serena:find_symbol", "serena:find_referencing_symbols"}
+)
 DENY = "DENY"  # fail-closed: unknown / unclassified -> deny
 
 
@@ -294,6 +305,12 @@ def _base_agent_tool_policy(tool: str, action: str | None = None) -> str:
     if t == "lsp":
         return CONFIRM
     if t in ("mcp", "mcp_register", "mcp_batch"):
+        # Serena read-only symbol lookups are classified ALWAYS_CONFIRM *per
+        # tool* so a broad `mcp` CONFIRM grant cannot open them; they relax only
+        # via the exact scoped offline grant (see _OFFLINE_GRANTABLE). Other mcp
+        # reads stay CONFIRM; register/configure stay ALWAYS_CONFIRM.
+        if t == "mcp" and a in _SERENA_SYMBOL_OPS:
+            return ALWAYS_CONFIRM
         return CONFIRM if a not in ("register", "configure") else ALWAYS_CONFIRM
     if t == "vscode_automation":
         return CONFIRM
@@ -322,9 +339,12 @@ def agent_tool_policy(tool: str, action: str | None = None) -> str:
     Trust escalation is minimal and fail-closed:
       - CONFIRM may be relaxed by ANY active scoped grant (existing behaviour).
       - ALWAYS_CONFIRM may be relaxed ONLY for a tiny hardcoded allow-list of
-        offline-rollout tools (`sandbox_repl`), and only with an active,
-        expiring, audited grant. Everything else stays ALWAYS_CONFIRM; DENY is
-        never relaxed; any error defaults to no relaxation.
+        offline-rollout tools/scopes (`sandbox_repl`, `mcp:serena:find_symbol`,
+        `mcp:serena:find_referencing_symbols`), and only with an active,
+        expiring, audited grant. For a `tool:action` entry the grant must be on
+        that EXACT scope — a broad `mcp` grant never opens the Serena ops.
+        Everything else stays ALWAYS_CONFIRM; DENY is never relaxed; any error
+        defaults to no relaxation.
     """
     policy = _base_agent_tool_policy(tool, action)
     if policy in (CONFIRM, ALWAYS_CONFIRM):
@@ -334,11 +354,14 @@ def agent_tool_policy(tool: str, action: str | None = None) -> str:
             if is_trusted(tool, action):
                 if policy == CONFIRM:
                     return ALLOW
-                if (
-                    policy == ALWAYS_CONFIRM
-                    and (tool or "").strip().lower() in _OFFLINE_GRANTABLE
-                ):
-                    return ALLOW
+                if policy == ALWAYS_CONFIRM:
+                    key = (tool or "").strip().lower()
+                    act = (action or "").strip().lower()
+                    full = f"{key}:{act}" if act else ""
+                    if key in _OFFLINE_GRANTABLE and is_trusted(key):
+                        return ALLOW
+                    if full in _OFFLINE_GRANTABLE and is_trusted(full):
+                        return ALLOW
         except Exception:  # noqa: BLE001
             pass
     return policy

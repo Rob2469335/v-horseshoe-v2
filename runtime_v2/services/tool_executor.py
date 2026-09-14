@@ -348,6 +348,21 @@ def _sanitize_tool_output(obj, html_escape: bool = True, _depth: int = 0):
 _NO_HTML_ESCAPE_ACTIONS = frozenset({"read", "read_file", "read_all", "cat"})
 
 
+def _policy_action_key(tool_name: str, payload: dict) -> str | None:
+    """Resolve the policy sub-action key for a tool call.
+
+    Tools differ in their payload key (filesystem/playwright/email use
+    operation/action/op; github_research uses mode). `mcp` calls carry a
+    `server` + `tool` instead, so resolve them to "<server>:<tool>" — that is
+    what lets a least-privilege per-tool grant (e.g. mcp:serena:find_symbol)
+    relax exactly one MCP op without opening all of `mcp`.
+    """
+    p = payload or {}
+    if tool_name == "mcp" and p.get("server") and p.get("tool"):
+        return f"{p['server']}:{p['tool']}"
+    return p.get("mode") or p.get("operation") or p.get("action") or p.get("op")
+
+
 async def run(
     tool_name: str,
     payload: dict,
@@ -380,10 +395,7 @@ async def run(
         # None → every read-only call is over-gated to CONFIRM.
         policy = agent_tool_policy(
             tool_name,
-            payload.get("mode")
-            or payload.get("operation")
-            or payload.get("action")
-            or payload.get("op"),
+            _policy_action_key(tool_name, payload),
         )
         if policy == ALLOW:
             return await _dispatch(
