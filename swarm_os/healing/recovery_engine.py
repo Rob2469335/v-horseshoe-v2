@@ -6,6 +6,7 @@ import asyncio
 import os
 from litellm import acompletion
 
+from swarm_os.lib.agents_md import insert_after_marker, update_agents_md
 from swarm_os.lib.opencode_session import opencode_headers
 import re
 from pathlib import Path
@@ -24,37 +25,32 @@ def _record_to_agents_md(anomaly: str, script: str):
     Locked with filelock so concurrent recovery paths (CLI watchman thread +
     backend healing daemon) never race the read-modify-write."""
     try:
-        from filelock import FileLock
-
         agents_file = PROJECT_ROOT / "AGENTS.md"
-        if not agents_file.exists():
-            return
-        lock = FileLock(str(agents_file) + ".lock", timeout=5.0)
-        with lock:
-            content = agents_file.read_text(encoding="utf-8")
-            if str(anomaly) in content and "Auto-Heal" in content:
-                return
-            summary = "Executed isolated DangerRoom repair script."
-            for line in script.splitlines():
-                line_s = line.strip().lstrip("#").strip()
-                if (
-                    line_s
-                    and not line_s.startswith("import ")
-                    and not line_s.startswith("from ")
-                ):
-                    summary = line_s[:100]
-                    break
-            import time
+        summary = "Executed isolated DangerRoom repair script."
+        for line in script.splitlines():
+            line_s = line.strip().lstrip("#").strip()
+            if (
+                line_s
+                and not line_s.startswith("import ")
+                and not line_s.startswith("from ")
+            ):
+                summary = line_s[:100]
+                break
+        import time
 
-            date_str = time.strftime("%Y-%m-%d")
-            new_entry = f"- **Auto-Heal ({date_str})**: Resolved anomaly `{anomaly}`. Action: {summary}\n"
-            marker = "## Self-Healing & Self-Learning Fixes\n"
-            if marker in content:
-                content = content.replace(marker, marker + "\n" + new_entry, 1)
-                agents_file.write_text(content, encoding="utf-8")
-                log.info(
-                    f"Recorded auto-heal lesson for anomaly '{anomaly}' into AGENTS.md"
-                )
+        date_str = time.strftime("%Y-%m-%d")
+        new_entry = f"- **Auto-Heal ({date_str})**: Resolved anomaly `{anomaly}`. Action: {summary}\n"
+        marker = "## Self-Healing & Self-Learning Fixes\n"
+
+        def _apply(content: str) -> str | None:
+            if str(anomaly) in content and "Auto-Heal" in content:
+                return None
+            return insert_after_marker(content, marker, new_entry)
+
+        if update_agents_md(_apply, path=agents_file):
+            log.info(
+                f"Recorded auto-heal lesson for anomaly '{anomaly}' into AGENTS.md"
+            )
     except Exception as e:
         log.warning(f"Could not record auto-heal to AGENTS.md: {e}")
 

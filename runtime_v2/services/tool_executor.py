@@ -1383,13 +1383,17 @@ async def _dispatch(
                     )
                     from pathlib import Path
 
+                    from swarm_os.lib.agents_md import update_agents_md
+
                     agents_md = Path("AGENTS.md")
                     if agents_md.exists():
-                        content = agents_md.read_text(encoding="utf-8")
-                        if "## Custom Learned Skills" not in content:
-                            content += "\n\n## Custom Learned Skills\n"
-                        content += f"\n### {skill_name}\n{skill_content}\n"
-                        agents_md.write_text(content, encoding="utf-8")
+
+                        def _add(content: str) -> str:
+                            if "## Custom Learned Skills" not in content:
+                                content += "\n\n## Custom Learned Skills\n"
+                            return content + f"\n### {skill_name}\n{skill_content}\n"
+
+                        update_agents_md(_add, path=agents_md)
                         result = {
                             "ok": True,
                             "result": f"Skill '{skill_name}' saved to AGENTS.md",
@@ -1406,14 +1410,21 @@ async def _dispatch(
 
                     agents_md = Path("AGENTS.md")
                     if agents_md.exists():
-                        content = agents_md.read_text(encoding="utf-8")
+                        from swarm_os.lib.agents_md import update_agents_md
+
                         pattern = re.compile(
                             rf"\n###\s+{re.escape(skill_name)}\n.*?(?=\n###|\Z)",
                             re.DOTALL,
                         )
-                        new_content, count = pattern.subn("", content)
-                        if count > 0:
-                            agents_md.write_text(new_content, encoding="utf-8")
+                        removed = {"count": 0}
+
+                        def _remove(content: str) -> str | None:
+                            new_content, count = pattern.subn("", content)
+                            removed["count"] = count
+                            return new_content if count > 0 else None
+
+                        update_agents_md(_remove, path=agents_md)
+                        if removed["count"] > 0:
                             result = {
                                 "ok": True,
                                 "result": f"Skill '{skill_name}' removed",

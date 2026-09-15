@@ -42,6 +42,8 @@ from pathlib import Path
 
 from filelock import FileLock
 
+from swarm_os.lib.agents_md import insert_after_marker, update_agents_md
+
 log = logging.getLogger("WatchLoop")
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -74,16 +76,10 @@ def _audit_write(entry: dict, agents_md_line: str) -> None:
     except Exception as exc:
         log.warning("Audit log write failed: %s", exc)
     try:
-        if not _AGENTS_MD.exists():
-            return
-        lock = FileLock(str(_AGENTS_MD) + ".lock", timeout=5.0)
-        with lock:
-            content = _AGENTS_MD.read_text(encoding="utf-8")
-            if _RULES_MARKER in content:
-                content = content.replace(
-                    _RULES_MARKER, _RULES_MARKER + "\n" + agents_md_line, 1
-                )
-                _AGENTS_MD.write_text(content, encoding="utf-8")
+        update_agents_md(
+            lambda content: insert_after_marker(content, _RULES_MARKER, agents_md_line),
+            path=_AGENTS_MD,
+        )
     except Exception as exc:
         log.warning("AGENTS.md changelog append failed: %s", exc)
 

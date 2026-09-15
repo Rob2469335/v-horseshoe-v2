@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 from litellm import acompletion
 
+from swarm_os.lib.agents_md import insert_after_marker, update_agents_md
 from swarm_os.lib.opencode_session import opencode_headers
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import (
@@ -178,26 +179,26 @@ def _record_rule_to_agents_md(component: str, correction: str, confidence: float
         return
     try:
         agents_file = ROOT_DIR / "AGENTS.md"
-        if not agents_file.exists():
-            return
-        content = agents_file.read_text(encoding="utf-8")
         clean_rule = correction.strip()
         if len(clean_rule) > 150:
             clean_rule = clean_rule[:147] + "..."
-        # Content-similarity dedup against THIS component's existing rules (the
-        # same test the Qdrant store applies). The old exact-substring check let
-        # every LLM RE-DISTILLATION of the same failure append another slightly
-        # rephrased near-duplicate line to AGENTS.md.
         line_prefix = f"- **Rule ({component})**: "
-        for line in content.splitlines():
-            if line.startswith(line_prefix):
-                if _corrections_similar(line[len(line_prefix) :], clean_rule):
-                    return
         new_entry = f"{line_prefix}{clean_rule}\n"
         marker = "## Self-Healing & Self-Learning Fixes\n"
-        if marker in content:
-            content = content.replace(marker, marker + "\n" + new_entry, 1)
-            agents_file.write_text(content, encoding="utf-8")
+
+        def _apply(content: str) -> str | None:
+            # Content-similarity dedup against THIS component's existing rules (the
+            # same test the Qdrant store applies). The old exact-substring check let
+            # every LLM RE-DISTILLATION of the same failure append another slightly
+            # rephrased near-duplicate line to AGENTS.md.
+            for line in content.splitlines():
+                if line.startswith(line_prefix) and _corrections_similar(
+                    line[len(line_prefix) :], clean_rule
+                ):
+                    return None
+            return insert_after_marker(content, marker, new_entry)
+
+        if update_agents_md(_apply, path=agents_file):
             logger.info(
                 "Recorded high-confidence ASPO rule to AGENTS.md for component '%s'",
                 component,
