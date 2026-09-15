@@ -161,6 +161,41 @@ repo. They never get relaxed.
   negative constraint ("never X") and harmful rules are positive directives
   ("always X"). Prefer "don't..." phrasing.
 
+### A 0/N SCORE IS NOT A RESULT UNTIL IT IS ATTRIBUTABLE (standing — added 2026-09-15)
+
+**The failure this rule exists for (measured, not theorised).** A benchmark run
+scored a CORRECT fix as `f2p: 0/3 passed`. The agent's one-line change
+(`"provides_extras"` -> `"provides_extra"` in twine's `package.py`) was verified
+correct by direct A/B: 3 passed WITH it, 3 failed reverted. The 0/3 was a harness
+defect — the instance's own test suite creates `twine-4.0.0.dist-info/` in the
+repo root; pytest puts that directory first on `sys.path`, so
+`importlib_metadata.metadata("twine")` resolved the stub (which has no `Summary`)
+over the editable install, and `twine/__init__.py` raised `KeyError: 'summary'`
+while loading conftest, so EVERY test errored before the agent's edit mattered.
+
+Six more defects the same night produced identical-looking `0/N`s: a write-root
+misconfiguration that refused every patch; a loop-recovery path with no edit
+branch (the coder was told to `action=final`, which is rejected, then aborted);
+a 600s cold-backend stall; ground-truth artifacts (`gold_patch.diff`,
+`run_at_gold.txt`) sitting INSIDE the agent's sandbox; and a 12-turn budget
+exhausted after the agent had already written the file. None surfaced as an error.
+
+- **Never accept a score without naming the mechanism that produced it.** If the
+  failure path cannot be attributed to the thing under test, the number is not
+  evidence — it is an artefact of the ruler.
+- **Do not let a silent failure be indistinguishable from a genuine one.** A
+  timeout, a refused write, a missing tool, a collection error, and a real wrong
+  answer must be separately labelled; infra failures are EXCLUDED from any success
+  rate, never folded into it. Reference:
+  `qwen_train/cli_baseline_swe.py::_is_infra_failure` +
+  `swarm_os/lib/paths.py::sandbox_bounds`.
+- **Do not scale a batch before one task is clean.** One task, end-to-end, full
+  trajectory, criterion hand-checked. Every defect above was found by
+  hand-checking ONE task; none was found by running more of them.
+- **Do not treat a plausible-looking number as verified if the environment was
+  not checked.** A read-only workspace or a shadowed package scores every task 0
+  and looks exactly like incapability.
+
 ### VERIFICATION STANDARDS (standing — added 2026-08-13)
 These are the non-negotiable bar for every change, in every agent/tool. They
 restate and sharpen the evidence-first rules above; where they go further, they
@@ -3143,6 +3178,106 @@ Converted `except:` → `except Exception:` (or specific types) in `swarm_os/cor
 ---
 
 ## Self-Healing & Self-Learning Fixes
+
+- **Rule (coder)**: Tool 'sandbox_repl' failed (Unsupported language: bash). Check the tool contract in _TOOL_DEFINITIONS and verify parameters before retrying.
+
+- **Rule (coder)**: Stop re-reading files. Apply the fix with filesystem patch/write, then run the tests.
+
+- **[AUTO-REPAIR] (2026-09-15T22:51:24.283773+00:00)**: None (tier None, fixed=False) — error: ImportError while loading conftest 'C:\Users\rober\Projects\swe_probe_work\pypa__twine-1066\repo\tests\conftest.py'.
+
+te
+
+- **[AUTO-REPAIR] (2026-09-15T22:51:22.034237+00:00)**: None (tier None, fixed=False) — error: ImportError while loading conftest 'C:\Users\rober\Projects\swe_probe_work\pypa__twine-1066\repo\tests\conftest.py'.
+
+te
+
+- **[AUTO-REPAIR] (2026-09-15T22:51:19.739305+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 5
+
+D
+
+- **[AUTO-REPAIR] (2026-09-15T22:51:17.995167+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned import in sandbox snippet: 'pathlib' at 
+
+- **[AUTO-REPAIR] (2026-09-15T22:51:16.086302+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned os call found: 'os.system' at line 3
+
+DE
+
+- **[AUTO-REPAIR] (2026-09-15T22:50:44.390271+00:00)**: None (tier None, fixed=False) — error: ImportError while loading conftest 'C:\Users\rober\Projects\swe_probe_work\pypa__twine-1066\repo\tests\conftest.py'.
+
+te
+
+- **[AUTO-REPAIR] (2026-09-15T22:50:42.112800+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-09-15T22:47:40.412563+00:00)**: None (tier None, fixed=False) — error: Path escapes the project root: 'C:\Users\rober\Projects\swe_probe_work\pypa__twine-1066\repo\twine\package.py' — refusin
+
+- **[AUTO-REPAIR] (2026-09-15T22:31:37.402583+00:00)**: None (tier None, fixed=False) — error: Directory not found: repo
+
+- **[AUTO-REPAIR] (2026-09-15T22:31:35.085438+00:00)**: None (tier None, fixed=False) — error: Filesystem operation timed out.
+
+- **[AUTO-REPAIR] (2026-09-15T22:00:30.592211+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned import in sandbox snippet: 'pathlib' at 
+
+- **[AUTO-REPAIR] (2026-09-15T22:00:28.210442+00:00)**: None (tier 2, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 2
+
+D
+
+- **[AUTO-REPAIR] (2026-09-15T22:00:25.734671+00:00)**: None (tier 2, fixed=False) — error: Filesystem operation timed out.
+
+- **[AUTO-REPAIR] (2026-09-15T21:56:49.664201+00:00)**: None (tier 2, fixed=False) — error: Filesystem operation timed out.
+
+- **[AUTO-REPAIR] (2026-09-15T21:16:32.960352+00:00)**: None (tier None, fixed=False) — error: Patch blocked: path is outside SWARM_WRITE_ROOT.
+
+- **Rule (coder)**: Path 'AGENTS.md' does not exist. Use filesystem list on '.' first to discover real file paths before reading — the module map in AGENTS.md and the ...
+
+- **[AUTO-REPAIR] (2026-09-15T21:07:31.861934+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 1
+
+D
+
+- **[AUTO-REPAIR] (2026-09-15T21:07:00.926899+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned import in sandbox snippet: 'pathlib' at 
+
+- **[AUTO-REPAIR] (2026-09-15T21:06:58.902879+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 2
+
+D
+
+- **[AUTO-REPAIR] (2026-09-15T19:53:55.914608+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned import in sandbox snippet: 'pathlib' at 
+
+- **[AUTO-REPAIR] (2026-09-15T19:53:24.071896+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 1
+
+D
+
+- **[AUTO-REPAIR] (2026-09-15T19:53:22.240921+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 2
+
+D
+
+- **[AUTO-REPAIR] (2026-09-15T19:53:20.237454+00:00)**: None (tier None, fixed=False) — error: Directory not found: repo
+
+- **[AUTO-REPAIR] (2026-09-15T19:49:17.680448+00:00)**: None (tier None, fixed=False) — error: Patch blocked: path is outside SWARM_WRITE_ROOT.
+
+- **[AUTO-REPAIR] (2026-09-15T19:49:16.031102+00:00)**: None (tier None, fixed=False) — error: Patch blocked: path is outside SWARM_WRITE_ROOT.
+
+- **[AUTO-REPAIR] (2026-09-15T19:48:44.382469+00:00)**: None (tier None, fixed=False) — error: Patch blocked: path is outside SWARM_WRITE_ROOT.
+
+- **[AUTO-REPAIR] (2026-09-15T19:43:12.632173+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned import in sandbox snippet: 'pathlib' at 
+
+- **[AUTO-REPAIR] (2026-09-15T19:41:11.747911+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned import in sandbox snippet: 'pathlib' at 
+
+- **[AUTO-REPAIR] (2026-09-15T19:39:08.045057+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 3
+
+D
+
+- **[AUTO-REPAIR] (2026-09-15T19:38:36.959176+00:00)**: None (tier None, fixed=False) — error: Patch blocked: path is outside SWARM_WRITE_ROOT.
+
+- **[AUTO-REPAIR] (2026-09-15T19:38:35.262487+00:00)**: None (tier None, fixed=False) — error: Path escapes the project root: 'C:\Users\rober\Projects\swe_probe_work\pallets__click-2380\repo\src\click\core.py' — ref
+
+- **[AUTO-REPAIR] (2026-09-15T19:38:33.486184+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 2
+
+D
+
+- **[AUTO-REPAIR] (2026-09-15T19:34:31.337925+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned import in sandbox snippet: 'pathlib' at 
+
+- **[AUTO-REPAIR] (2026-09-15T19:34:29.626447+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 2
+
+D
+
+- **[AUTO-REPAIR] (2026-09-15T19:14:51.961679+00:00)**: None (tier None, fixed=False) — error: Filesystem operation timed out.
 
 - **[AUTO-REPAIR] (2026-09-15T18:30:31.051563+00:00)**: None (tier None, fixed=False) — error: Filesystem operation timed out.
 
