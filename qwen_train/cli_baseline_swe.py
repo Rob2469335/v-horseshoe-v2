@@ -103,7 +103,12 @@ def _failing_ids(output: str) -> set[str]:
     for line in (output or "").splitlines():
         for prefix in ("FAILED ", "ERROR "):
             if line.startswith(prefix):
-                ids.add(line[len(prefix) :].split(" ")[0].strip())
+                # pytest -rA prints `FAILED <id> - <message>`. Split on ' - ',
+                # NOT on ' ': a parametrized id can contain SPACES
+                # (`...[unsupported Metadata-Version]`), and splitting on ' '
+                # truncated it to `...[unsupported`, so it never matched the
+                # F2P/P2P list and a pre-existing failure read as 0.
+                ids.add(line[len(prefix) :].split(" - ")[0].strip())
     return ids
 
 
