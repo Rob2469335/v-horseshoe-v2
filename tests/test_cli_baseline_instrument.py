@@ -166,9 +166,24 @@ def test_timeout_stops_retrying(monkeypatch):
 
 
 class _FakeProc:
+    """Stand-in for the Popen capture pattern (Popen + communicate).
+
+    Updated 2026-09-15 with the capture fix: `_attempt_once` no longer uses
+    `subprocess.run` (whose TimeoutExpired carries no partial output), so the
+    mock must model what it uses now. The assertions below are unchanged.
+    """
+
     returncode = 0
-    stdout = '⚡ filesystem\n{"ok": true, "content": "done"}'
-    stderr = ""
+
+    def __init__(self, *args, **kwargs):
+        self.stdout = '⚡ filesystem\n{"ok": true, "content": "done"}'
+        self.stderr = ""
+
+    def communicate(self, input=None, timeout=None):  # noqa: A002
+        return self.stdout, self.stderr
+
+    def kill(self):
+        pass
 
 
 def test_record_false_performs_no_learning_write(monkeypatch):
@@ -176,7 +191,7 @@ def test_record_false_performs_no_learning_write(monkeypatch):
 
     calls: list[int] = []
     monkeypatch.setattr(tp, "record_observation", lambda *a, **k: calls.append(1))
-    monkeypatch.setattr(rc.subprocess, "run", lambda *a, **k: _FakeProc())
+    monkeypatch.setattr(rc.subprocess, "Popen", lambda *a, **k: _FakeProc())
 
     item = {
         "id": "t",

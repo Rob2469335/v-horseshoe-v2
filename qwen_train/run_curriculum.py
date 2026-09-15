@@ -256,39 +256,45 @@ def classify_failure(
     return "unknown"
 
 
-def _attempt_once(
-    item: dict, timeout: int, allow_approval: bool, record: bool
-) -> dict:
+def _attempt_once(item: dict, timeout: int, allow_approval: bool, record: bool) -> dict:
     """ONE CLI invocation → its observation record. No retry logic here."""
     prompt = item["prompt"]
     t0 = datetime.now(timezone.utc)
     timed_out = False
+    # Popen + communicate(timeout=…), NOT subprocess.run. On a timeout `run`
+    # raises TimeoutExpired whose `.stdout` does NOT reliably hold what the child
+    # already emitted — verified 2026-09-15, the row's content came back empty,
+    # so a hung run left no trail at all. The documented Popen pattern below
+    # (kill, then re-communicate) DOES return the buffered output, which is what
+    # makes a timeout diagnosable instead of a blank mystery.
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "organism_console", "--json", prompt],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        cwd=str(_HERE.parent),
+    )
     try:
-        proc = subprocess.run(
-            [sys.executable, "-m", "organism_console", "--json", prompt],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            timeout=timeout,
-            cwd=str(_HERE.parent),
+        stdout, stderr = proc.communicate(
             # ALWAYS_CONFIRM tools (sandbox_repl, …) prompt the CLI; a pipe of
             # "y" answers them so an opted-in unattended run can proceed.
             input=("y\n" * 50) if allow_approval else "",
+            timeout=timeout,
         )
-        out = (proc.stdout or "") + "\n" + (proc.stderr or "")
-    except subprocess.TimeoutExpired as exc:
-        # KEEP what the CLI emitted before the timeout. `out = ""` made every
-        # timeout indistinguishable from "the CLI produced nothing", which is
-        # exactly the question a timeout must answer (2026-09-15: a 600s SWE run
-        # recorded tools=[] / content="" and could not be explained at all).
-        partial = getattr(exc, "stdout", None) or getattr(exc, "output", None) or ""
-        if isinstance(partial, bytes):
-            partial = partial.decode("utf-8", "replace")
-        err = getattr(exc, "stderr", None) or ""
-        if isinstance(err, bytes):
-            err = err.decode("utf-8", "replace")
-        out = partial + "\n" + err
+    except subprocess.TimeoutExpired:
         timed_out = True
+        try:
+            proc.kill()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            stdout, stderr = proc.communicate(timeout=15)
+        except Exception:  # noqa: BLE001
+            # A child (or grandchild) still holds the pipe — never let the
+            # diagnostic path hang the run it is trying to explain.
+            stdout, stderr = "", ""
+    out = (stdout or "") + "\n" + (stderr or "")
     cli = extract_result(out)
     content = (cli or {}).get("content", "")
     used = parse_tools_used(out)
