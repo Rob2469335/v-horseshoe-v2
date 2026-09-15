@@ -45,32 +45,20 @@ def _backend_up(attempts: int = 3, timeout: int = 5) -> bool:
             time.sleep(2)
     return False
 
-def _preflight_workspace_root() -> bool:
-    """Fail-closed check that the BACKEND can reach the workspace.
+def _probe_read(work: Path) -> tuple[bool, str]:
+    """/tools/execute -> filesystem read of a canary inside WORK but outside the repo.
 
-    The agent's TOOLS execute in the BACKEND process, not in this runner (the
-    CLI only streams HTTP). So `SWARM_WORKSPACE_ROOT` must be set on the BACKEND
-    at startup — setting it in this process's os.environ does NOT move the
-    backend's sandbox boundary, and a batch run against a mis-started backend
-    produces a whole run of fake failures.
-
-    Probes the real path: /tools/execute -> filesystem read of a canary that
-    lives inside WORK but OUTSIDE the repo. If that is refused, the backend's
-    root is still the project root and we abort.
+    Proves the backend's sandbox ROOT reaches the workspace. Returns (ok, detail).
     """
-    canary = probe.WORK / "_canary_workspace_root.txt"
+    canary = work / "_canary_workspace_root.txt"
     try:
-        probe.WORK.mkdir(parents=True, exist_ok=True)
+        work.mkdir(parents=True, exist_ok=True)
         canary.write_text("canary", encoding="utf-8")
     except OSError as exc:
-        print(f"PREFLIGHT: cannot write canary {canary}: {exc}")
-        return False
+        return False, f"cannot write canary {canary}: {exc}"
 
     body = json.dumps(
-        {
-            "capability": "filesystem",
-            "payload": {"operation": "read", "path": str(canary)},
-        }
+        {"capability": "filesystem", "payload": {"operation": "read", "path": str(canary)}}
     ).encode("utf-8")
     req = urllib.request.Request(
         "http://127.0.0.1:8000/tools/execute",
@@ -81,21 +69,82 @@ def _preflight_workspace_root() -> bool:
         with urllib.request.urlopen(req, timeout=90) as r:
             d = json.loads(r.read().decode("utf-8"))
     except Exception as exc:  # noqa: BLE001
-        print(f"PREFLIGHT: /tools/execute call failed: {exc}")
-        return False
+        return False, f"/tools/execute call failed: {exc}"
 
     # The tool result is NESTED under `data` (`{"status":…, "data": {"ok": …}}`),
     # NOT top-level — checking d["ok"] silently failed every time.
     result = d.get("data") if isinstance(d.get("data"), dict) else d
     if result.get("ok"):
-        print(f"PREFLIGHT: backend reaches the workspace ✓ ({probe.WORK})")
-        return True
+        return True, ""
+    return False, str(result.get("error") or d)
 
-    print("PREFLIGHT FAILED — the backend cannot read inside the workspace:")
-    print(f"  {result.get('error') or d}")
-    print(f"  → RESTART THE BACKEND with SWARM_WORKSPACE_ROOT={probe.WORK}")
-    print("    (the tools run in the backend; this runner's env does not move its boundary)")
-    return False
+
+def _status_sandbox() -> dict | None:
+    """The backend's effective tool bounds from /status (None if unreported)."""
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:8000/status", timeout=90) as r:
+            d = json.loads(r.read().decode("utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        print(f"PREFLIGHT: /status call failed: {exc}")
+        return None
+    sb = d.get("sandbox")
+    return sb if isinstance(sb, dict) else None
+
+
+def _preflight_workspace_root() -> bool:
+    """Fail-closed that the BACKEND can READ **and WRITE** this workspace.
+
+    The agent's TOOLS execute in the BACKEND process, not in this runner (the
+    CLI only streams HTTP). So `SWARM_WORKSPACE_ROOT` must be set on the BACKEND
+    at startup — setting it in this process's os.environ does NOT move the
+    backend's sandbox boundary, and a batch against a mis-started backend
+    produces a whole run of fake failures.
+
+    A READ probe is NOT sufficient (2026-09-15): a backend with a workspace root
+    but a RELATIVE `SWARM_WRITE_ROOT` (the ambient `data/curriculum_fix`)
+    resolves that under the workspace and then refuses EVERY write, while reads
+    work perfectly. That state produced a 14-task run with ZERO source edits and
+    looked, row by row, like a capability failure. So the write bound is checked
+    explicitly and aborts the batch.
+    """
+    work = probe.WORK.resolve()
+    want = os.path.realpath(str(work))
+
+    ok_read, detail = _probe_read(work)
+    if not ok_read:
+        print("PREFLIGHT FAILED — the backend cannot read inside the workspace:")
+        print(f"  {detail}")
+        print(f"  → RESTART THE BACKEND with SWARM_WORKSPACE_ROOT={probe.WORK}")
+        print("    (the tools run in the backend; this runner's env does not move its boundary)")
+        return False
+    print(f"PREFLIGHT: backend reads the workspace ✓ ({probe.WORK})")
+
+    sb = _status_sandbox()
+    if sb is None:
+        print("PREFLIGHT FAILED — /status reported no `sandbox` bounds (stale backend?).")
+        print("  → restart the backend on this revision so /status exposes `sandbox`.")
+        return False
+
+    ws_root = sb.get("workspace_root")
+    if not ws_root or os.path.realpath(str(ws_root)) != want:
+        print("PREFLIGHT FAILED — the backend's workspace root is not this workspace:")
+        print(f"  backend workspace_root: {ws_root}")
+        print(f"  wanted:                 {probe.WORK}")
+        return False
+
+    if not sb.get("write_covers_workspace"):
+        print("PREFLIGHT FAILED — the backend can READ the workspace but NOT WRITE it:")
+        print(f"  workspace_root: {sb.get('workspace_root')}")
+        print(f"  write_root:     {sb.get('write_root')}")
+        print("  ❌ WRITE ROOT DOES NOT COVER THE WORKSPACE — ABORT")
+        print(f"     restart the backend with SWARM_WRITE_ROOT={probe.WORK} as well.")
+        return False
+
+    print(
+        "PREFLIGHT: backend writes the workspace ✓ "
+        f"(write_root={sb.get('write_root') or 'unrestricted'})"
+    )
+    return True
 
 
 def fetch_hf_instance(instance_id: str, split: str) -> dict:
