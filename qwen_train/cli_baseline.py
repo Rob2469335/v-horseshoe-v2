@@ -99,7 +99,9 @@ def experiment_context(pool: Path, attempts: int) -> dict:
 def _backend_up() -> bool:
     import urllib.request
 
-    for path in ("/health", "/readyz"):
+    # `/readyz` first: it is the fast, meaningful probe (~4s). `/health` can take
+    # 45s+ under memory pressure and would make a live backend look dead.
+    for path in ("/readyz", "/health"):
         try:
             with urllib.request.urlopen(
                 f"http://127.0.0.1:8000{path}", timeout=5
