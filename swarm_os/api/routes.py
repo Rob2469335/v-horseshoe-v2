@@ -14,6 +14,7 @@ import asyncio
 from fastapi import APIRouter, Query, Depends, HTTPException, Request
 
 from swarm_os.lib.opencode_session import opencode_headers
+from swarm_os.lib.paths import sandbox_bounds
 
 from swarm_os.api import admin
 from swarm_os.api.api_features import router as api_features_router
@@ -288,6 +289,7 @@ async def status(runtime: Any = Depends(runtime_dep)):
         installed_models=installed_models,
         primary_vision_model=vision_models[0] if vision_models else None,
         fallback_pool=fallback_pool,
+        sandbox=sandbox_bounds(),
     )
 
 
@@ -1091,13 +1093,13 @@ def _memory_timestamp(payload: dict) -> float:
         text = raw.strip()
         try:
             return float(text)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             log.debug("Failed to parse timestamp as float, falling back to isoformat")
         try:
             from datetime import datetime
 
             return datetime.fromisoformat(text).timestamp()
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return 0.0
     return 0.0
 

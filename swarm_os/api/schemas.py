@@ -46,6 +46,10 @@ class StatusResponse(BaseModel):
     installed_models: List[str] = Field(default_factory=list)
     primary_vision_model: Optional[str] = None
     fallback_pool: Dict[str, Any] = Field(default_factory=dict)
+    # Effective agent tool bounds (workspace_root / write_root /
+    # write_covers_workspace). Answers "where can this agent read and write?"
+    # without attempting a write - see swarm_os/lib/paths.py::sandbox_bounds.
+    sandbox: Dict[str, Any] = Field(default_factory=dict)
 
 
 # --- New Capability Tool Schemas ---

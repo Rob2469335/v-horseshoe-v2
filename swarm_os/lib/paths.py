@@ -46,6 +46,7 @@ def project_root() -> Path:
     _PROJECT_ROOT_CACHE = resolved
     return resolved
 
+
 def agent_workspace_root() -> Path:
     """Sandbox root for the agent tools (filesystem, sandbox_repl).
 
@@ -60,5 +61,59 @@ def agent_workspace_root() -> Path:
     if not p.is_absolute():
         raise ValueError(f"SWARM_WORKSPACE_ROOT must be absolute: {env_root}")
     if not p.is_dir():
-        raise ValueError(f"SWARM_WORKSPACE_ROOT must be an existing directory: {env_root}")
+        raise ValueError(
+            f"SWARM_WORKSPACE_ROOT must be an existing directory: {env_root}"
+        )
     return p.resolve()
+
+
+def sandbox_bounds() -> dict:
+    """The effective read/write bounds the agent tools enforce, as they see them.
+
+    Mirrors ``filesystem.py::_within_write_root`` EXACTLY: a RELATIVE
+    ``SWARM_WRITE_ROOT`` resolves UNDER the workspace root (not the project
+    root). Reporting the raw env vars would be misleading - the effective path
+    is what the tool actually compares against.
+
+    ``write_covers_workspace`` is the fail-closed signal. When it is False the
+    agent can READ the workspace but cannot WRITE to it - the misconfiguration
+    that silently voided a whole 14-task SWE batch (every patch answered
+    "path is outside SWARM_WRITE_ROOT") while the run looked healthy.
+
+    Never raises: an invalid ``SWARM_WORKSPACE_ROOT`` is reported as an error
+    with ``write_covers_workspace=False`` so callers fail closed instead of
+    500-ing a status endpoint.
+    """
+    try:
+        root = agent_workspace_root()
+    except ValueError as exc:
+        return {
+            "workspace_root": None,
+            "write_root": None,
+            "write_covers_workspace": False,
+            "error": str(exc),
+        }
+
+    wr = os.getenv("SWARM_WRITE_ROOT")
+    if not wr:
+        # Unset == no extra restriction: the whole workspace is writable.
+        return {
+            "workspace_root": str(root),
+            "write_root": None,
+            "write_covers_workspace": True,
+        }
+
+    base = Path(wr)
+    if not base.is_absolute():
+        base = root / base
+    base = base.resolve()
+    try:
+        root.relative_to(base)
+        covers = True
+    except ValueError:
+        covers = False
+    return {
+        "workspace_root": str(root),
+        "write_root": str(base),
+        "write_covers_workspace": covers,
+    }
