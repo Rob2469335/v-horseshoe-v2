@@ -78,7 +78,8 @@ def filesystem_handler(
         requested = str(path_param)
 
     # Resolve and force to be absolute paths
-    root = root.resolve()
+    from swarm_os.lib.paths import agent_workspace_root
+    root = agent_workspace_root()
 
     def _canonical_docs_path(requested_path_str: str) -> str:
         # LLMs routinely ask for "agent.md" / "agents.md" / "AGENT.md" when the

@@ -242,6 +242,7 @@ govern.
   rejected: start-console bypasses the backend).
 
 ### ENVIRONMENT NOTES
+- **SWARM_WORKSPACE_ROOT** moves the agent tools' sandbox boundary; unset = the project root; it is for explicitly sandboxed runs (e.g. SWE-rebench instances outside the tree) and must be an absolute existing directory. **SWARM_WRITE_ROOT** remains a separate, narrower write confinement.
 - Windows. PowerShell "windows sandbox ... Access is denied" is a launch issue:
   retry with a narrower command, not a code bug.
 - Live services (llama.cpp :8080-8084, Qdrant :6333) may or may not be running;

@@ -145,7 +145,8 @@ class SandboxReplHandler:
                     "stderr": "Security Gate blocked pytest target (flag-like or empty path).",
                     "returncode": 1,
                 }
-            project_root = _Path(__file__).resolve().parents[2]
+            from swarm_os.lib.paths import agent_workspace_root
+            project_root = agent_workspace_root()
             try:
                 _Path(raw).resolve().relative_to(project_root.resolve())
             except (ValueError, OSError):
@@ -168,9 +169,8 @@ class SandboxReplHandler:
         import os
         from swarm_os.services.security_gate import clean_sandbox_env
 
-        project_root = os.path.abspath(
-            os.path.join(os.path.dirname(__file__), "..", "..")
-        )
+        from swarm_os.lib.paths import agent_workspace_root
+        project_root = str(agent_workspace_root())
 
         env_extra = {}
         if language == "pytest":

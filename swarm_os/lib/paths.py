@@ -45,3 +45,20 @@ def project_root() -> Path:
         resolved = Path.cwd()
     _PROJECT_ROOT_CACHE = resolved
     return resolved
+
+def agent_workspace_root() -> Path:
+    """Sandbox root for the agent tools (filesystem, sandbox_repl).
+
+    SWARM_WORKSPACE_ROOT (absolute) when set, else the module-relative project
+    root — i.e. today's behaviour. NEVER call this for repo-owned state
+    (AGENTS.md, data/, config): those keep using project_root().
+    """
+    env_root = os.getenv("SWARM_WORKSPACE_ROOT")
+    if not env_root:
+        return project_root()
+    p = Path(env_root)
+    if not p.is_absolute():
+        raise ValueError(f"SWARM_WORKSPACE_ROOT must be absolute: {env_root}")
+    if not p.is_dir():
+        raise ValueError(f"SWARM_WORKSPACE_ROOT must be an existing directory: {env_root}")
+    return p.resolve()
