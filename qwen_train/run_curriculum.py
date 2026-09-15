@@ -36,6 +36,7 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 
 _HERE = Path(__file__).resolve().parent
 CURRICULUM = _HERE / "curriculum" / "tool_curriculum.jsonl"
@@ -157,17 +158,33 @@ def verify(item: dict, content: str) -> dict:
     return {"passed": False, "reason": f"unknown verify type {vtype!r}"}
 
 
+def _dedupe_in_order(names: list[str]) -> list[str]:
+    """Deduplicate while PRESERVING first-occurrence order.
+
+    The previous `sorted(set(...))` destroyed the tool CALL SEQUENCE. Order is
+    the signal (read→patch→verify ≠ patch→read→verify), so collapsing it to a
+    set threw away exactly what the weakness model needs.
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for n in names:
+        if n not in seen:
+            seen.add(n)
+            out.append(n)
+    return out
+
+
 def parse_tools_used(stdout: str) -> list[str]:
-    """Tool names the agent called, parsed from the live-stream markers."""
-    return sorted(set(_TOOL_RE.findall(stdout or "")))
+    """Tool names the agent called, in FIRST-CALL ORDER (duplicates collapsed)."""
+    return _dedupe_in_order(_TOOL_RE.findall(stdout or ""))
 
 
 _TOOL_OK_RE = re.compile(r"✓\s+([a-z_][a-z0-9_]*)")
 
 
 def parse_tools_succeeded(stdout: str) -> list[str]:
-    """Tool names whose call RETURNED successfully (the ✓ stream marker)."""
-    return sorted(set(_TOOL_OK_RE.findall(stdout or "")))
+    """Tool names whose call RETURNED successfully, in first-call order."""
+    return _dedupe_in_order(_TOOL_OK_RE.findall(stdout or ""))
 
 
 def extract_result(stdout: str) -> dict | None:
@@ -189,10 +206,63 @@ def _tool_match(item: dict, used: list[str]) -> tuple[bool, bool]:
     return bool(targets & got), bool(targets and targets <= got)
 
 
-def run_item(item: dict, timeout: int = 600, allow_approval: bool = False) -> dict:
-    """Run one item through the one-shot CLI and verify its answer + tool use."""
+# Deterministic failure taxonomy. The observable signals are enough to
+# CATEGORIZE a failure without a model — only the *mechanism* (the wrong belief)
+# needs an LLM, and that goes through the lesson-admission gate. Order matters:
+# run-invalidating categories first, then infrastructure, then behavioral.
+FAILURE_CATEGORIES = (
+    "passed",
+    "ineligible",  # intended tool auto-DENIED — not a failure; excluded downstream
+    "harness_violation",  # check.py modified/missing — the run broke the rules
+    "timeout",
+    "cli_error",  # CLI aborted / no parseable JSON
+    "no_change",  # module unchanged — nothing was actually attempted
+    "parse_error",  # the checker could not RUN (syntax/import) — not a wrong answer
+    "test_failure",  # module changed, checker ran, behaviour still wrong
+    "unknown",
+)
+
+
+def classify_failure(
+    res: dict,
+    *,
+    module_changed: bool | None = None,
+    check_output: str = "",
+) -> str:
+    """Map observable run signals to ONE deterministic failure category.
+
+    `module_changed` (did the agent edit the module at all) and `check_output`
+    (the checker's captured stdout/stderr) are optional; without them the
+    category degrades to `test_failure`/`unknown` and NEVER guesses.
+    """
+    if res.get("verified") is True:
+        return "passed"
+    if res.get("ineligible"):
+        return "ineligible"
+    reason = str(res.get("verify_reason") or "").lower()
+    if "check.py modified" in reason or "check missing" in reason:
+        return "harness_violation"
+    if res.get("timed_out"):
+        return "timeout"
+    if not res.get("cli_ok"):
+        return "cli_error"
+    if module_changed is False:
+        return "no_change"
+    out = (check_output or "").lower()
+    if "syntaxerror" in out or "importerror" in out or "modulenotfounderror" in out:
+        return "parse_error"
+    if module_changed is True:
+        return "test_failure"
+    return "unknown"
+
+
+def _attempt_once(
+    item: dict, timeout: int, allow_approval: bool, record: bool
+) -> dict:
+    """ONE CLI invocation → its observation record. No retry logic here."""
     prompt = item["prompt"]
     t0 = datetime.now(timezone.utc)
+    timed_out = False
     try:
         proc = subprocess.run(
             [sys.executable, "-m", "organism_console", "--json", prompt],
@@ -207,6 +277,7 @@ def run_item(item: dict, timeout: int = 600, allow_approval: bool = False) -> di
         out = (proc.stdout or "") + "\n" + (proc.stderr or "")
     except subprocess.TimeoutExpired:
         out = ""
+        timed_out = True
     cli = extract_result(out)
     content = (cli or {}).get("content", "")
     used = parse_tools_used(out)
@@ -221,7 +292,9 @@ def run_item(item: dict, timeout: int = 600, allow_approval: bool = False) -> di
     # failed verification, the failure is downstream (answer synthesis) and
     # must NOT be recorded as a tool failure (false correlation; see the audit).
     tool_ok = bool(set(item.get("target_tools") or []) & set(succeeded))
-    if cli_ok and not ineligible:
+    # record=False is the READ-ONLY baseline path: no learning write happens, so
+    # the CLI under measurement cannot be changed by being measured.
+    if record and cli_ok and not ineligible:
         try:
             from runtime_v2.services.tool_policy import record_observation
 
@@ -237,14 +310,19 @@ def run_item(item: dict, timeout: int = 600, allow_approval: bool = False) -> di
         "difficulty": item.get("difficulty"),
         "target_tools": item.get("target_tools", []),
         "prompt": prompt,
-        "cli_ok": bool((cli or {}).get("ok")),
+        "cli_ok": cli_ok,
         "verified": check.get("passed"),
         "verify_reason": check.get("reason"),
         "tools_used": used,
+        # ORDER-PRESERVING (was `sorted(set(...))`, which destroyed the call
+        # sequence — the exact signal the weakness model needs).
+        "tool_order": used,
+        "tools_succeeded": succeeded,
         "tool_hit": hit,
         "tool_all": all_hit,
         "ineligible": ineligible,
         "denied": denied,
+        "timed_out": timed_out,
         # Reasoning-data taxonomy (Awesome-LLM-Reasoning-Data): who checks the
         # answer, at what granularity, and which objective consumes it.
         "verifier": (item.get("verify") or {}).get("type", "contains"),
@@ -257,6 +335,51 @@ def run_item(item: dict, timeout: int = 600, allow_approval: bool = False) -> di
         "content": str(content)[:600],
         "elapsed_s": round(elapsed, 1),
     }
+
+
+def run_item(
+    item: dict,
+    timeout: int = 600,
+    allow_approval: bool = False,
+    attempts: int = 1,
+    reset: Callable[[], None] | None = None,
+    record: bool = True,
+) -> dict:
+    """Run an item, optionally retrying to measure RECOVERY.
+
+    Attempt 1 is the BASELINE datum (`first_attempt_success`) — the metric the
+    audits said to measure — so it is recorded even when a later attempt
+    succeeds. `reset` runs before EVERY retry so each attempt starts from the
+    identical (broken) state; without it a partial patch from attempt 1 would
+    silently turn attempt 2 into a different task.
+
+    `record=False` makes the run strictly OBSERVATIONAL (no learning writes),
+    which the read-only baseline requires.
+    """
+    attempts = max(1, int(attempts))
+    first: dict | None = None
+    last: dict | None = None
+    to_success: int | None = None
+    for i in range(1, attempts + 1):
+        if reset is not None and i > 1:
+            reset()
+        res = _attempt_once(item, timeout, allow_approval, record)
+        res["attempt"] = i
+        if first is None:
+            first = res
+        last = res
+        if res.get("verified") and to_success is None:
+            to_success = i
+        if res.get("timed_out"):
+            break  # retrying the same task cannot cure a timeout
+    out = dict(first or {})
+    out["attempts"] = (last or {}).get("attempt", 1)
+    out["first_attempt_success"] = bool((first or {}).get("verified"))
+    out["attempts_to_success"] = to_success
+    out["recovered"] = bool(to_success and to_success > 1)
+    out["last_verified"] = (last or {}).get("verified")
+    out["failure_category"] = classify_failure(out)
+    return out
 
 
 # --------------------------------------------------------------------------
