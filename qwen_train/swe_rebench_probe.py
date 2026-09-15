@@ -90,6 +90,22 @@ def _parse_list_field(v) -> list[str]:
     return s.split()
 
 
+def _pip_cmd(py: Path, step: str) -> list[str] | None:
+    """Turn an install_config step (`"pip install -q pytest-socket"`) into argv
+    against the INSTANCE venv. Returns None for a non-pip step (caller shells it).
+
+    This matters: the steps carry the repo's TEST dependencies (pytest-socket,
+    requirements.txt, …). Running only `pip install -e .` gave a venv where
+    `pytest` itself errored on the repo's own pytest.ini addopts — an env
+    failure that looked like a task failure.
+    """
+    s = step.strip()
+    for prefix in ("pip3 ", "pip ", "python3 -m pip ", "python -m pip "):
+        if s.startswith(prefix):
+            return [str(py), "-m", "pip", *s[len(prefix) :].split()]
+    return None
+
+
 def _test_cmd(py: Path, test_cmd: str) -> list[str]:
     """`pytest <args>` -> `<venv python> -m pytest <args>`."""
     parts = test_cmd.split()
@@ -162,13 +178,22 @@ def probe(instance_id: str, pages: int = 4) -> int:
             return 4
     print("[2/5] installing …")
     _run([str(py), "-m", "pip", "install", "-q", "--upgrade", "pip"], d, timeout=600)
-    for step in install:
-        rc, out = _run([str(py), "-m", "pip", "install", "-q", "-e", "."], src, timeout=900)
+    failed: list[str] = []
+    for step in install or ["pip install -q -e ."]:
+        argv = _pip_cmd(py, str(step))
+        rc, out = (
+            _run(argv, src, timeout=1500)
+            if argv is not None
+            else _run(["cmd", "/c", str(step)], src, timeout=1500)
+        )
         if rc != 0:
-            print(f"  install step failed rc={rc}: {out[-400:]}")
-            return 4
+            failed.append(f"{step} (rc={rc}: {out[-160:]})")
+    # A failed STEP is logged, not fatal: some steps are optional and the test
+    # run below is the real arbiter of whether the env is usable.
     _run([str(py), "-m", "pip", "install", "-q", "pytest"], src, timeout=600)
-    print("[2/5] installed ✓")
+    print(f"[2/5] installed ✓ ({len(failed)} step(s) failed)" if failed else "[2/5] installed ✓")
+    for f in failed:
+        print(f"      ! {f}")
 
     # 3. apply test_patch (the tests that encode the bug)
     tp = d / "test_patch.diff"
