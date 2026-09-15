@@ -1053,6 +1053,83 @@ relaunch via start-dev.ps1 when ready.
 
 ## Recent Changes (do NOT re-apply)
 
+### FEAT/FIX: local pool is at CEILING; and a validated DOCKER-FREE real-bug pool (2026-09-15)
+
+**Outcome first — the branch the whole session was building toward.**
+- **The local (synthetic) pool is at CEILING → no learning signal.** Frozen-pool baseline:
+  **8/8 PASS** on the live backend window, agreeing with the earlier **92/98 = 94%** run. Per the
+  pre-registered branch logic this selects the *harder, real-task* path.
+- **Docker is NOT needed.** A validated **Docker-free** path runs real SWE-rebench-V2 tasks
+  locally with no container: **3/3 runnable Python instances verified genuine FAIL→PASS**
+  (`pallets__click-2380` base 2 fail→gold 2 pass; `pypa__twine-1066` 3→3;
+  `pytest-dev__pyfakefs-916` 1→1). A 4th (`mozilla-services__cliquet-203`) was **correctly
+  refused** — it declares Python 3.7 (EOL), which is not installed.
+- **Correctly NOT started** (no failure data exists yet): the weakness model, the curriculum
+  controller, the 4B. No pod, no GPU.
+
+**Built (all committed):**
+- **Phase-1 instrument** (`6448f84f`, `qwen_train/run_curriculum.py`): `parse_tools_used` /
+  `parse_tools_succeeded` now preserve **tool CALL ORDER** (were `sorted(set(...))`, which
+  destroyed the sequence — the exact signal the weakness model needs); `FAILURE_CATEGORIES` (9) +
+  deterministic `classify_failure()`; `run_item(attempts=, reset=, record=)` — attempt 1 is the
+  recorded baseline datum, and `record=False` is strictly observational. Tests
+  `tests/test_cli_baseline_instrument.py` (18).
+- **Phase-2 read-only baseline** (`d9344681`, runnable fix `a127e97f`;
+  `qwen_train/cli_baseline.py`): per-task `first_attempt_success` + failure category + a
+  reproducibility block (`cli_version`/`pool_sha256`/`config_hash`), atomic artifacts. **The two
+  isolation gates live in the BACKEND** (`SWARM_MEMORY_INJECT` in `stream_runner.py`,
+  `SWARM_EVOLUTION` in `agent_service_v2.py`), so a CLI env var does nothing — the backend must
+  be restarted with them.
+- **SWE-rebench-V2 probe** (`53111822`, `d6807a7c`, `885e319e`, `1e86d81a`;
+  `qwen_train/swe_rebench_probe.py`): validates ONE instance end-to-end — clone@base_commit →
+  venv on the DECLARED interpreter → the instance's real install steps → apply `test_patch` →
+  `test_cmd` (FAIL_TO_PASS must FAIL) → apply gold `patch` (must PASS). Tests
+  `tests/test_swe_rebench_probe.py` (9).
+
+**The SIX measurement bugs it took to make the result trustworthy** — each would otherwise have
+produced a confidently-wrong experiment:
+1. `FAIL_TO_PASS` is a **stringified list** (`"['a::x', 'b::y']"`); `.split()` shredded it → every
+   task read `0/0`. Fix: `json.loads` → `ast.literal_eval` → fallback.
+2. **`git apply --3way` STAGES** what it applies, so `git checkout -- .` does NOT revert it →
+   a resumed run measured the *gold* tree as "base". Fix: `git reset --hard HEAD` + `git clean -fd`.
+3. The install loop **ignored the real steps** (`install_config["install"]`) → missing test deps
+   (`pytest-socket`, `requirements.txt`). Fix: run the actual steps via `_pip_cmd`.
+4. The venv was built with the **host** interpreter (3.14) while the instance declares
+   `base_image_name=python_base_310` → env errors masquerading as task failures.
+5. **Stale venvs were silently reused** across runs. Fix: compare `_venv_minor()` to the declared
+   version and rebuild on mismatch.
+6. **pytest adopted OUR `pytest.ini` via `rootdir`** — an instance with no ini of its own (nested
+   inside our tree) walked UP into this repo, putting OUR repo on the child's `sys.path`; the
+   instance's tests then imported `swarm_os`/`litellm`. Fix: run instance work **OUTSIDE the repo**
+   (`SWE_PROBE_WORK`, default `<repo>/../swe_probe_work`), strip `PYTHONPATH`/`PYTHONHOME`, and a
+   hard guard that refuses an in-repo work dir.
+
+**The "0.40" TRAP (why the failure taxonomy earned its keep):** the baseline's first 8 tasks
+(backend alive) were **8/8 PASS**; tasks 9–20 were **12 × `cli_error`**, all at a uniform
+~17.5 s with `module_changed=False` — i.e. the backend died mid-run. A pass/fail-only metric
+would have read **0.40 → "learning band" → build the weakness model on infrastructure noise.**
+The deterministic `cli_error` vs `test_failure` split exposed it; `connection refused` confirmed
+it. **Always filter genuine task failures from infrastructure failures before reading a rate.**
+
+**Backend crash — diagnosed, NOT caused by these changes:** the log shows
+`OSError: [WinError 995]` → `asyncio.exceptions.InvalidStateError: invalid state`
+(`windows_events.py`) → `CancelledError` → ASGI shutdown. That is the **pre-existing CPython-3.14
+Windows proactor artifact** already documented for pytest. It is an infra-reliability task, not a
+blocker (and it did not change the conclusion).
+
+**Operational facts worth keeping:**
+- **`py -3.10` (3.10.11) is now installed** alongside 3.14. Map `python_base_3NN` → `py -3.NN`;
+  a missing interpreter means **skip + report, never fall back to the host interpreter**.
+- Instance venvs are heavy and **interpreter-pinned** — never trust a leftover venv.
+- Prefer `/readyz` for liveness: `/health` took **45 s** under load and briefly made a live
+  backend look dead. Two `uvicorn` processes remain NORMAL (parent + child).
+- Long jobs stay DETACHED with the redirect INSIDE a `.cmd` (nested quoting through
+  `Win32_Process Create` fails silently — saw it happen twice).
+
+**Deferred (deliberately):** the SWE pool-builder (fetch N python instances → probe → pool file
+with a whole-repo held-out eval split), the Docker-vs-pod decision (moot unless this path
+fails), the weakness model, the curriculum, the 4B.
+
 ### OPS/FEAT: long jobs DETACHED + CONCURRENT (the wasted-time lesson); synthetic pool at ceiling; the real-bug pipeline starts (2026-09-15)
 
 - **RULE (codified in Lint / CI above): long jobs run DETACHED + CONCURRENT.** Every
@@ -2885,6 +2962,12 @@ Converted `except:` → `except Exception:` (or specific types) in `swarm_os/cor
 ---
 
 ## Self-Healing & Self-Learning Fixes
+
+- **[AUTO-REPAIR] (2026-09-15T15:13:44.744345+00:00)**: None (tier 2, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-09-15T15:11:11.218126+00:00)**: None (tier 2, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[CANARY-FLAGGED: human review] (2026-09-15T07:38:47.751749+00:00)**: swarm_os/api/routes.py — test regression NOT attributable to swarm_os/api/routes.py; HUMAN REVIEW
 
 - **[AUTO-REPAIR] (2026-09-15T00:06:50.570045+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
 
