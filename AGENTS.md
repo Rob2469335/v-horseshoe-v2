@@ -820,6 +820,40 @@ facts that go stale. Instead:
 injection, it is **"I don't know" instead of a fabrication**. Reliable unprompted recall of personal facts
 is NOT the goal and NOT expected of a 4B — that is RAG's job.
 
+### TOOL-USE TRAINING for robs4b (planned, "for later" — do NOT start before the gate below)
+
+Motivation: the same failure that produced the fabricated biography is a *tool-use* failure — asked about
+Rob, the model invented instead of **fetching** (memory/RAG). robs4b has a **13-server / ~200-tool** MCP
+surface, so the learnable skill is "go get it", not "know it".
+
+**What to train (skills, not a lookup table):** selection · argument shape · **tool chains** (A→B→C) ·
+**recovery** (A fails → diagnose → B) · **restraint** (don't call a tool when none is needed) ·
+**verification** (check the result after acting). The last three are the valuable, hard part.
+
+**Do NOT train 200 memorized `tool → action` mappings.** The tool set changes — tool #201 would need a full
+retrain. Train on **tool descriptions + situation + outcome**, so a new tool generalises from its schema.
+
+**Data source is the failure→example loop** (the same data the CLI loop already captures): a real
+`Task → tool choice → arguments → result → success/failure → correction` record. The pieces exist —
+order-preserving `tool_order` (Phase 1), `FAILURE_CATEGORIES`, ATIF trajectories — the missing ingredient
+is **measured failures**.
+
+**HARD GATE — do not start tool-use training until there are measured failures to learn from.** The
+synthetic pool is at **ceiling** (94%, 8/8) ⇒ no gradient; the real SWE-rebench pool is the source of
+genuine failures. Measure first, then train on what was measured (this project's own rule — both earlier
+attempts, A `p=0.625` and B `p=0.508`, were nulls because we built before measuring).
+
+**ROUTING CAVEAT (decide deliberately, don't assume):** today the tool **DECISION** for the
+analysis/edit agents routes to a **CLOUD** model (`_llm_client._ANALYSIS_CLOUD_AGENTS` =
+code_analyzer / reviewer / researcher / coder / debugger / executor → `deepseek-flash`); robs4b decides
+only for `coordinator` / `planner` / `tool-runner` / `tool-maker`. **So training robs4b's tool choice
+only changes behaviour if that routing is moved back to local** (or for those four roles) — otherwise
+you would specialise choices the system doesn't currently use.
+
+**Serving reminder:** Qwen3.5 ignores the `/no_think` soft-switch — use
+`chat_template_kwargs={"enable_thinking": false}` (or it burns the budget inside `<think>` and returns
+empty content).
+
 ## RUNPOD OPERATIONS — LESSONS LEARNED (do this, avoid repeating the pain, 2026-09-05)
 
 ### Step-by-step workflow (copy-paste this, don't improvise)
