@@ -276,8 +276,18 @@ def _attempt_once(
             input=("y\n" * 50) if allow_approval else "",
         )
         out = (proc.stdout or "") + "\n" + (proc.stderr or "")
-    except subprocess.TimeoutExpired:
-        out = ""
+    except subprocess.TimeoutExpired as exc:
+        # KEEP what the CLI emitted before the timeout. `out = ""` made every
+        # timeout indistinguishable from "the CLI produced nothing", which is
+        # exactly the question a timeout must answer (2026-09-15: a 600s SWE run
+        # recorded tools=[] / content="" and could not be explained at all).
+        partial = getattr(exc, "stdout", None) or getattr(exc, "output", None) or ""
+        if isinstance(partial, bytes):
+            partial = partial.decode("utf-8", "replace")
+        err = getattr(exc, "stderr", None) or ""
+        if isinstance(err, bytes):
+            err = err.decode("utf-8", "replace")
+        out = partial + "\n" + err
         timed_out = True
     cli = extract_result(out)
     content = (cli or {}).get("content", "")
