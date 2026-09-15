@@ -770,21 +770,46 @@ facts that go stale. Instead:
 1. **Facts live in the memory store (RAG), never the weights.** Certifications / identity / income are
    volatile ⇒ inject at query time (updatable, inspectable). The plan already says this — this is the
    evidence that it is **not optional**.
-2. **Train the abstention policy** (a behavior, so it generalizes): **fact absent from context ⇒ say so /
-   ask; NEVER invent.** Fact present in context ⇒ use it.
-3. **DPO pairs — the rejected exemplar already exists.** The fabricated biography above is a *real,
-   in-distribution* negative: `chosen` = *"I don't have that in memory — tell me and I'll remember it"*
-   (or the RAG-grounded answer); `rejected` = the fabricated background. Better than any synthetic pair.
-4. **Train BOTH variants:** fact-in-context (must use it — not refuse, not invent) **and** fact-absent
-   (must abstain). That pair is the entire deployable policy.
-5. **The gate (hard — verify, do not assume):** `qwen_train/eval_persona.py` must assert **both**
+
+2. **The target policy is RETRIEVAL-FIRST — abstention is the FLOOR, not step one:**
+   ```
+   personal question
+     → fact already in context?        USE IT          (don't refuse, don't invent)
+     → no: RETRIEVE from memory (RAG)  USE IT          ← the step to optimize for
+     → retrieval came back empty       say so / ask    ← the floor, only here
+     → NEVER INVENT
+   ```
+   A blank model in my probe had **no** retrieval path, so fabrication was its only option — that is why
+   the naked-model result is real but *not* the whole story when the agent loop is in play.
+
+3. **Two ways to reach RAG — layer them; only one is a guarantee.**
+   - **AUTO-INJECT (the guarantee, already built):** the agent loop's memory injection
+     (`stream_runner.py`, `SWARM_MEMORY_INJECT`) pulls relevant memories into the prompt *before* the
+     model answers, so the facts arrive whether or not the model asks. The model then only needs to
+     **use** them — a far easier skill. Make sure personal facts are actually in that path.
+   - **MODEL-INITIATED (the polish):** train the 4B to consult the memory tool on personal questions.
+     Desirable, but **fragile** — deciding *when* to call a tool is exactly what a 4B does poorly, so
+     this must never be the only mechanism (it would fabricate whenever it forgets).
+
+4. **DPO pairs — the rejected exemplar already exists.** The fabricated biography above is a *real,
+   in-distribution* negative: `chosen` = the RAG-grounded answer, *"let me check my memory…"*, or
+   *"I don't have that in memory — tell me and I'll remember it"*; `rejected` = the fabricated
+   background. Better than any synthetic pair.
+
+5. **Train ALL THREE variants** (together they are the whole deployable policy):
+   fact-in-context (**use it** — not refuse, not invent) · fact-absent-but-retrievable (**retrieve**,
+   then use) · retrieval-empty (**abstain**).
+
+6. **The gate (hard — verify, do not assume):** `qwen_train/eval_persona.py` must assert **both**
    (a) a trained-shape probe with **no** context does not assert unverifiable personal facts
    (**refusal = PASS, invention = FAIL**) and (b) with the fact **injected**, it uses it. The 4B's RLHF
    prior is strong (the persona doesn't surface at all), so abstention is NOT guaranteed by training.
-6. **Abandon "more background rows."** Scale the *policy* examples, not the fact rows.
 
-**Honest expectation:** the achievable win is **"I don't know" instead of a fabrication**. Reliable
-unprompted recall of personal facts is NOT the goal and NOT expected of a 4B — that is RAG's job.
+7. **Abandon "more background rows."** Scale the *policy* examples, not the fact rows.
+
+**Honest expectation:** with the facts auto-injected, the achievable win is a **grounded answer**; without
+injection, it is **"I don't know" instead of a fabrication**. Reliable unprompted recall of personal facts
+is NOT the goal and NOT expected of a 4B — that is RAG's job.
 
 ## RUNPOD OPERATIONS — LESSONS LEARNED (do this, avoid repeating the pain, 2026-09-05)
 
