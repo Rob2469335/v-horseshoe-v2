@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import threading
+import shutil
 import subprocess
 import time
 import urllib.request
@@ -238,9 +239,47 @@ def _reset_instance(inst: dict, hf_inst: dict) -> Path:
     return src
 
 
+def _clean_shadowing_metadata(src: Path) -> list:
+    """Remove untracked `*.dist-info` dirs from the repo root, before pytest runs.
+
+    Why this exists (measured 2026-09-15, deep-researched): the twine instance's
+    OWN test suite CREATES a `twine-4.0.0.dist-info/` in the repo root as a
+    fixture. pytest puts each module's directory at the FRONT of `sys.path`, and
+    an editable install adds the source dir too, so
+    `importlib_metadata.metadata("twine")` resolves that stub instead of the
+    venv's real metadata. The stub carries only Metadata-Version/Name/Version, so
+    `twine/__init__.py` raises `KeyError: 'summary'` while loading conftest — and
+    EVERY test in the file errors. A CORRECT agent fix is then recorded as a
+    failure, i.e. a broken environment written down as a capability result.
+
+    Upstream confirmation: pypa/pip#7782 ("a non-editable dist shadows the
+    editable"), pypa/setuptools#4170, pytest's pythonpath docs (rootdir first on
+    sys.path). Docker-based SWE-bench harnesses never see this because each eval
+    gets a fresh container; a local Docker-free harness has to clean.
+
+    Only `*.dist-info` is removed. The editable install's `*.egg-info` is
+    REQUIRED (that is why `_reset_instance` uses `git clean -fd`, not `-fdx`),
+    and a test fixture is never an `egg-info`. Tracked dirs are never touched.
+    """
+    removed: list = []
+    for p in sorted(src.glob("*.dist-info")):
+        if not p.is_dir():
+            continue
+        tracked = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", p.name],
+            cwd=str(src),
+            capture_output=True,
+        )
+        if tracked.returncode == 0:
+            continue  # part of the repo -> never delete
+        shutil.rmtree(p, ignore_errors=True)
+        removed.append(p.name)
+    return removed
+
+
 def _run_tests(inst: dict) -> str:
     instance_id = inst["instance_id"]
-    # The POOL record carries `test_cmd` at the TOP level — swe_pool.jsonl has no
+    # The POOL record carries `test_cmd` at the TOP level - swe_pool.jsonl has no
     # `install_config`. Reading only install_config silently fell back to a bare
     # `pytest`, which ran the WHOLE suite (177 items, with a collection error)
     # instead of the instance's pinned command, so the F2P check was meaningless.
@@ -251,6 +290,11 @@ def _run_tests(inst: dict) -> str:
     src = d / "repo"
     venv = d / "venv"
     py = venv / "Scripts" / "python.exe"
+
+    # The BASE run can leave a shadowing stub behind for the AFTER run.
+    stubs = _clean_shadowing_metadata(src)
+    if stubs:
+        print(f"  cleaned shadowing metadata stub(s): {', '.join(stubs)}")
 
     cmd = probe._test_cmd(py, test_cmd)
     rc, out = probe._run(cmd, src)

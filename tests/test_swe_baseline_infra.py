@@ -102,6 +102,52 @@ def test_summary_all_infra_has_no_rate():
 # --------------------------------------------------------------------------
 
 
+# --------------------------------------------------------------------------
+# Shadowing metadata stubs (the twine false negative)
+# --------------------------------------------------------------------------
+
+
+class _Rc:
+    def __init__(self, code):
+        self.returncode = code
+
+
+def test_clean_shadowing_metadata_removes_untracked_dist_info(tmp_path, monkeypatch):
+    """A test-created `*.dist-info` stub in the repo root must be removed.
+
+    Measured 2026-09-15: the twine suite creates `twine-4.0.0.dist-info/`; pytest
+    puts the repo root first on sys.path, so `importlib_metadata` resolves the
+    stub (no `Summary`) over the editable install and `twine/__init__.py` dies
+    with `KeyError: 'summary'` — every test in the file errors, so a CORRECT fix
+    is recorded as a failure. Revert-proof: pre-fix the stub survives.
+    """
+    src = tmp_path / "repo"
+    src.mkdir()
+    (src / "twine-4.0.0.dist-info").mkdir()
+    (src / "twine-4.0.0.dist-info" / "METADATA").write_text("Name: twine")
+    (src / "twine.egg-info").mkdir()  # the editable install's metadata
+
+    monkeypatch.setattr(cb.subprocess, "run", lambda *a, **k: _Rc(1))  # untracked
+
+    removed = cb._clean_shadowing_metadata(src)
+    assert removed == ["twine-4.0.0.dist-info"]
+    assert not (src / "twine-4.0.0.dist-info").exists()
+    # The editable install's egg-info is REQUIRED (why the reset uses -fd, not
+    # -fdx) and must survive.
+    assert (src / "twine.egg-info").exists()
+
+
+def test_clean_shadowing_metadata_never_deletes_tracked(tmp_path, monkeypatch):
+    src = tmp_path / "repo"
+    src.mkdir()
+    (src / "real-1.0.dist-info").mkdir()
+
+    monkeypatch.setattr(cb.subprocess, "run", lambda *a, **k: _Rc(0))  # tracked
+
+    assert cb._clean_shadowing_metadata(src) == []
+    assert (src / "real-1.0.dist-info").exists()
+
+
 def test_attempt_once_uses_the_popen_capture_pattern():
     """Source pin: `subprocess.run` cannot carry partial output on a timeout.
 
