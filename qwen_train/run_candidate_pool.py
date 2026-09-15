@@ -15,11 +15,13 @@ Usage: python qwen_train/run_candidate_pool.py --n 130 [--repeat 1]
 from __future__ import annotations
 
 import argparse
+import asyncio
 import hashlib
 import json
 import os
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
@@ -79,16 +81,55 @@ def _verify(item: dict, timeout: int = 60) -> tuple[bool, str]:
     return p.returncode == 0, (p.stdout or p.stderr).strip()[:200]
 
 
+_record_lock = threading.Lock()
+
+
+def _run_one(i: int, cand: dict, timeout: int) -> bool:
+    """Measure ONE candidate: write broken sandbox -> run CLI -> verify. Thread-safe record."""
+    item = _make_task(cand, i)
+    res = rc.run_item(item, timeout=timeout, allow_approval=False)
+    ok, reason = _verify(item)
+    res["verified"] = ok
+    res["verify_reason"] = reason
+    res["family"] = "fix"
+    res["kind"] = item["kind"]
+    res["family_tax"] = item["family_tax"]
+    with _record_lock:  # concurrent appends must not interleave
+        rc.record(res)
+    mark = "PASS" if ok else "FAIL"
+    print(f"[{i + 1}] {item['kind']:32} {mark}  ({reason[:50]})", flush=True)
+    return ok
+
+
+async def _run_all(cands: list[dict], timeout: int, concurrency: int) -> int:
+    sem = asyncio.Semaphore(concurrency)
+    results: dict[int, bool] = {}
+
+    async def _g(i: int, cand: dict) -> None:
+        async with sem:
+            results[i] = await asyncio.to_thread(_run_one, i, cand, timeout)
+
+    await asyncio.gather(*[_g(i, c) for i, c in enumerate(cands)])
+    return sum(1 for v in results.values() if v)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Measure candidate-pool hardness")
     ap.add_argument("--pool", default=str(POOL))
     ap.add_argument("--n", type=int, default=130)
     ap.add_argument("--timeout", type=int, default=240)
+    ap.add_argument(
+        "--concurrency",
+        type=int,
+        default=1,
+        help="run K items concurrently (the work is 99%% cloud-LLM wait, so K "
+        "compresses wall-time; bounded by DeepSeek rate limits, not local CPU)",
+    )
     args = ap.parse_args()
 
     cands = [json.loads(l) for l in Path(args.pool).read_text(encoding="utf-8").splitlines() if l.strip()]
     cands = cands[: args.n]
-    print(f"pool: {len(cands)} candidates from {args.pool}")
+    print(f"pool: {len(cands)} candidates, concurrency={args.concurrency}, timeout={args.timeout}s")
 
     os.environ["SWARM_NO_TOASTS"] = "1"
     granted = False
@@ -101,21 +142,11 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001
         print(f"grant failed: {exc}")
 
-    passed = 0
     try:
-        for i, cand in enumerate(cands):
-            item = _make_task(cand, i)
-            res = rc.run_item(item, timeout=args.timeout, allow_approval=False)
-            ok, reason = _verify(item)
-            res["verified"] = ok
-            res["verify_reason"] = reason
-            res["family"] = "fix"
-            res["kind"] = item["kind"]
-            res["family_tax"] = item["family_tax"]
-            rc.record(res)
-            passed += int(ok)
-            mark = "PASS" if ok else "FAIL"
-            print(f"[{i + 1}/{len(cands)}] {item['kind']:32} {mark}  ({reason[:50]})")
+        if args.concurrency > 1:
+            passed = asyncio.run(_run_all(cands, args.timeout, args.concurrency))
+        else:
+            passed = sum(_run_one(i, c, args.timeout) for i, c in enumerate(cands))
     finally:
         if granted:
             try:
@@ -127,7 +158,7 @@ def main() -> int:
                 pass
 
     n = len(cands)
-    print(f"\nhardness measured: {passed}/{n} passed ({round(100 * passed / max(n,1))}%)")
+    print(f"\nhardness measured: {passed}/{n} passed ({round(100 * passed / max(n, 1))}%)")
     print(f"first-attempt FAILURES (the 'hard' signal): {n - passed}/{n}")
     rc.progress()
     return 0
