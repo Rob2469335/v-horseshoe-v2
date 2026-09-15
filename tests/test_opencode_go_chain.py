@@ -87,6 +87,10 @@ def test_chain_free_then_paid_direct_then_opencode_go_last(monkeypatch):
     monkeypatch.setenv("OPENAI_API_BASE", "https://opencode.ai/zen/go/v1")
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or")
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-ds")
+    # Hermetic: the free cascade also probes Gemini (live network) and Alibaba (env
+    # keys). Unmocked, the chain varies run-to-run -> flaky index() assertions.
+    monkeypatch.delenv("ALIBABA_API_KEY", raising=False)
+    monkeypatch.delenv("ALIBABA_CODING_API_KEY", raising=False)
 
     fm._fetch_openrouter_models = AsyncMock(return_value=[])
     fm._fetch_nvidia_models = AsyncMock(
@@ -99,6 +103,7 @@ def test_chain_free_then_paid_direct_then_opencode_go_last(monkeypatch):
             },
         ]
     )
+    fm._fetch_gemini_models = AsyncMock(return_value=[])
     fm._fetch_llama_models = AsyncMock(return_value=[])
 
     async def _run():
@@ -113,16 +118,16 @@ def test_chain_free_then_paid_direct_then_opencode_go_last(monkeypatch):
     assert "deepseek/deepseek-flash" in models
     assert "openai/zen/deepseek-v4-flash" in models
     assert "openai/deepseek-v4-flash" in models
+
+    def _idx(x):
+        return models.index(x) if x in models else -1
+
     # Zen free stays before Go paid within the pair.
-    assert models.index("openai/zen/deepseek-v4-flash") < models.index(
-        "openai/deepseek-v4-flash"
-    )
+    assert _idx("openai/zen/deepseek-v4-flash") < _idx("openai/deepseek-v4-flash")
     # (2026-09 user chain) OpenCode Go PAID (funded) now sits BEFORE paid
     # DeepSeek direct — the funded OpenCode account is preferred over the
     # charge-per-token DeepSeek direct API.
-    assert models.index("openai/deepseek-v4-flash") < models.index(
-        "deepseek/deepseek-v4-flash"
-    )
+    assert _idx("openai/deepseek-v4-flash") < _idx("deepseek/deepseek-flash")
 
 
 def test_cache_is_keyed_by_routing_mode(monkeypatch):

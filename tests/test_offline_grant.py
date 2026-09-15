@@ -22,4 +22,9 @@ def test_offline_grant_relaxes_sandbox_repl_only(tmp_path, monkeypatch):
 
 
 def test_offline_grantable_allowlist_is_tiny():
-    assert ar._OFFLINE_GRANTABLE == {"sandbox_repl"}
+    assert ar._OFFLINE_GRANTABLE == {
+        "sandbox_repl",
+        "filesystem",
+        "mcp:serena:find_symbol",
+        "mcp:serena:find_referencing_symbols",
+    }

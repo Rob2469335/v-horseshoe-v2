@@ -18,7 +18,7 @@ from runtime_v2.services import usage_log
 
 def test_provider_classification():
     cases = {
-        "deepseek/deepseek-v4-flash": "deepseek_direct",
+        "deepseek/deepseek-flash": "deepseek_direct",
         "deepseek/deepseek-chat": "deepseek_direct",
         "openrouter/deepseek/deepseek-chat": "openrouter",
         "openai/qwen3.5-4b": "local",
@@ -34,10 +34,10 @@ def test_provider_classification():
 
 def test_cost_estimation_cache_hit_discount():
     # 10K input all miss + 2K output: 10000/1e6*0.22 + 2000/1e6*0.66 (off-peak)
-    miss = usage_log.estimate_cost("deepseek/deepseek-v4-flash", 10000, 2000, 0)
+    miss = usage_log.estimate_cost("deepseek/deepseek-flash", 10000, 2000, 0)
     assert miss == pytest.approx(0.00352, rel=1e-3)
     # 9K of the 10K prompt cached: 1000*0.22 + 9000*0.007 + 2000*0.66 / 1e6
-    hit = usage_log.estimate_cost("deepseek/deepseek-v4-flash", 10000, 2000, 9000)
+    hit = usage_log.estimate_cost("deepseek/deepseek-flash", 10000, 2000, 9000)
     assert hit == pytest.approx(0.001603, rel=1e-3)
     assert hit < miss  # cache hits are cheaper
 
@@ -81,7 +81,7 @@ def test_record_usage_roundtrip(tmp_path: Path):
     usage_log._USAGE_PATH = log_path
     try:
         usage_log.record_usage(
-            model="deepseek/deepseek-v4-flash",
+            model="deepseek/deepseek-flash",
             prompt_tokens=10000,
             completion_tokens=2000,
             cached_tokens=9000,
@@ -91,7 +91,7 @@ def test_record_usage_roundtrip(tmp_path: Path):
         lines = log_path.read_text(encoding="utf-8").strip().splitlines()
         assert len(lines) == 1
         row = json.loads(lines[0])
-        assert row["model"] == "deepseek/deepseek-v4-flash"
+        assert row["model"] == "deepseek/deepseek-flash"
         assert row["provider"] == "deepseek_direct"
         assert row["cost"] == pytest.approx(0.001603, rel=1e-3)
         assert row["agent_id"] == "researcher"
@@ -99,7 +99,7 @@ def test_record_usage_roundtrip(tmp_path: Path):
         report = usage_log.usage_report(days=30)
         assert report["rows"] == 1
         assert report["known_cost"] == pytest.approx(0.001603, rel=1e-3)
-        assert report["per_model"]["deepseek/deepseek-v4-flash"]["calls"] == 1
+        assert report["per_model"]["deepseek/deepseek-flash"]["calls"] == 1
     finally:
         usage_log._USAGE_PATH = orig
 
@@ -131,4 +131,4 @@ def test_record_response_skips_no_usage():
         choices = [Choice()]  # no .usage attribute
 
     # Should be a no-op (no usage present), not raise.
-    usage_log.record_response(Resp(), "deepseek/deepseek-v4-flash", source="test")
+    usage_log.record_response(Resp(), "deepseek/deepseek-flash", source="test")

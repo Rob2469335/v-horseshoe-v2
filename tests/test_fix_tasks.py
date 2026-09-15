@@ -65,7 +65,7 @@ def test_reference_solution_actually_fixes_every_kind(tmp_path):
 
 def test_generate_shape(tmp_path):
     items = ft.generate(2, _root(tmp_path), tmp_path)
-    assert len(items) == 10  # 5 kinds x 2
+    assert len(items) == len(ft._tasks()) * 2
     for it in items:
         assert it["verify"]["type"] == "fix_file"
         assert it["target_tools"] == ["filesystem", "sandbox_repl"]

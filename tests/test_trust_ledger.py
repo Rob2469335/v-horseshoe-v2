@@ -13,6 +13,7 @@ import pytest
 
 from swarm_os.services import trust_ledger
 from swarm_os.services.approval_registry import (
+    ALLOW,
     ALWAYS_CONFIRM,
     CONFIRM,
     DENY,
@@ -38,10 +39,16 @@ def test_active_grant_relaxes_only_confirm():
     assert agent_tool_policy("web_fetch", "fetch") == "ALLOW"
 
 
-def test_grant_never_relaxes_always_confirm_or_deny():
+def test_grant_relaxes_only_allowlisted_and_never_deny():
     trust_ledger.grant("filesystem", 60)
+    trust_ledger.grant("email_send", 60)
     trust_ledger.grant("totally_unknown_tool", 60)
-    assert agent_tool_policy("filesystem", "write") == ALWAYS_CONFIRM
+    # filesystem IS offline-grantable: write/patch are ALWAYS_CONFIRM but a scoped
+    # grant relaxes them since the handler confines writes to SWARM_WRITE_ROOT.
+    assert agent_tool_policy("filesystem", "write") == ALLOW
+    # a NON-allowlisted ALWAYS_CONFIRM tool is never relaxed by a grant
+    assert agent_tool_policy("email_send", "send") == ALWAYS_CONFIRM
+    # an unknown tool is DENY and a grant NEVER relaxes it
     assert agent_tool_policy("totally_unknown_tool", "x") == DENY
 
 
