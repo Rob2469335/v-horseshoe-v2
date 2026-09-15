@@ -43,9 +43,25 @@ ROOT = _HERE.parent
 # our pytest.ini, put our repo on the child's sys.path, and instance tests then
 # imported/patch'd OUR modules (`..\..\..\..\swarm_os\services\reflection_loop.py`)
 # — a measurement of the wrong codebase. Out-of-tree removes the whole class.
-WORK = Path(
-    os.environ.get("SWE_PROBE_WORK") or (ROOT.parent / "swe_probe_work")
-)
+WORK = Path(os.environ.get("SWE_PROBE_WORK") or (ROOT.parent / "swe_probe_work"))
+# Ground-truth artifacts live OUTSIDE WORK on purpose. WORK is the agent's
+# sandbox root (SWARM_WORKSPACE_ROOT), so anything under it is READABLE BY THE
+# AGENT — and `gold_patch.diff` IS THE ANSWER. Measured 2026-09-15: with the
+# artifacts in WORK, the twine task's agent read another instance's
+# `gold_patch.diff` / `run_at_gold.txt` and returned a report about *qiskit* —
+# i.e. the benchmark was handing the agent the solution. Docker SWE-bench never
+# has this because the container holds only the repo; a local Docker-free harness
+# must keep the answer out of the sandbox.
+META = Path(os.environ.get("SWE_PROBE_META") or (ROOT.parent / "swe_probe_meta"))
+
+
+def _meta_dir(instance_id: str) -> Path:
+    """Per-instance ground-truth dir — deliberately OUTSIDE the agent sandbox."""
+    m = META / instance_id
+    m.mkdir(parents=True, exist_ok=True)
+    return m
+
+
 _DS = "https://datasets-server.huggingface.co/rows?dataset=nebius/SWE-rebench-V2&config=default&split=train"
 
 
@@ -140,7 +156,11 @@ def _minor(version: str) -> str:
 def _venv_minor(py: Path) -> str:
     """The venv interpreter's own major.minor, or '' if it will not run."""
     rc, out = _run(
-        [str(py), "-c", "import sys;print(f'{sys.version_info.major}.{sys.version_info.minor}')"],
+        [
+            str(py),
+            "-c",
+            "import sys;print(f'{sys.version_info.major}.{sys.version_info.minor}')",
+        ],
         py.parent,
         timeout=60,
     )
@@ -152,9 +172,13 @@ def _ensure_interpreter(launcher: list[str], base_image_name: str) -> str | None
     rc, out = _run([*launcher, "--version"], Path.cwd(), timeout=60)
     if rc == 0 and out.strip():
         return out.strip().splitlines()[0]
-    print(f"  base_image_name={base_image_name!r} -> {' '.join(launcher)} is NOT installed")
+    print(
+        f"  base_image_name={base_image_name!r} -> {' '.join(launcher)} is NOT installed"
+    )
     print("  install that interpreter, or skip this instance.")
-    print(f"  REFUSING to fall back to {sys.version.split()[0]} — a wrong-interpreter venv")
+    print(
+        f"  REFUSING to fall back to {sys.version.split()[0]} — a wrong-interpreter venv"
+    )
     print("  produces environment failures that masquerade as task failures.")
     return None
 
@@ -222,7 +246,9 @@ def probe(instance_id: str, pages: int = 4) -> int:
     py_launcher = _interpreter_for(base_image)
     if py_launcher is None:
         print(f"instance   : {instance_id}")
-        print(f"  base_image_name={base_image!r} is not mappable to a local interpreter")
+        print(
+            f"  base_image_name={base_image!r} is not mappable to a local interpreter"
+        )
         print("  refusing to guess — fix the mapping or skip this instance")
         return 5
     py_version = _ensure_interpreter(py_launcher, base_image)
@@ -239,7 +265,10 @@ def probe(instance_id: str, pages: int = 4) -> int:
     # 1. clone @ base_commit
     if not (src / ".git").exists():
         print("\n[1/5] cloning …")
-        rc, out = _run(["git", "clone", "--quiet", f"https://github.com/{repo}.git", str(src)], ROOT)
+        rc, out = _run(
+            ["git", "clone", "--quiet", f"https://github.com/{repo}.git", str(src)],
+            ROOT,
+        )
         if rc != 0:
             print(f"  clone failed rc={rc}: {out[-300:]}")
             return 3
@@ -257,7 +286,9 @@ def probe(instance_id: str, pages: int = 4) -> int:
         # Rebuild rather than silently measure with it.
         got, want = _venv_minor(py), _minor(py_version)
         if got != want:
-            print(f"[2/5] existing venv is Python {got or '??'}, instance declares {want} — rebuilding")
+            print(
+                f"[2/5] existing venv is Python {got or '??'}, instance declares {want} — rebuilding"
+            )
             shutil.rmtree(venv, ignore_errors=True)
     if not py.exists():
         print(f"[2/5] creating venv with {' '.join(py_launcher)} …")
@@ -282,7 +313,11 @@ def probe(instance_id: str, pages: int = 4) -> int:
     # A failed STEP is logged, not fatal: some steps are optional and the test
     # run below is the real arbiter of whether the env is usable.
     _run([str(py), "-m", "pip", "install", "-q", "pytest"], src, timeout=600)
-    print(f"[2/5] installed ✓ ({len(failed)} step(s) failed)" if failed else "[2/5] installed ✓")
+    print(
+        f"[2/5] installed ✓ ({len(failed)} step(s) failed)"
+        if failed
+        else "[2/5] installed ✓"
+    )
     for f in failed:
         print(f"      ! {f}")
 
@@ -294,7 +329,10 @@ def probe(instance_id: str, pages: int = 4) -> int:
     # measured the gold-patched tree as if it were "base". Reset BOTH.
     _run(["git", "reset", "--hard", "HEAD"], src)
     _run(["git", "clean", "-fd"], src)
-    rc, out = _run(["git", "apply", "-v", "--3way", "--recount", "--ignore-space-change", str(tp)], src)
+    rc, out = _run(
+        ["git", "apply", "-v", "--3way", "--recount", "--ignore-space-change", str(tp)],
+        src,
+    )
     if rc != 0:
         rc, out = _run(["git", "apply", "-v", str(tp)], src)
     print(f"[3/5] test_patch applied: rc={rc}")
@@ -304,30 +342,39 @@ def probe(instance_id: str, pages: int = 4) -> int:
     rc, out = _run(_test_cmd(py, test_cmd), src, timeout=900)
     passed, failed = _f2p_result(out, f2p)
     at_base_ok = failed > 0 and passed == 0
-    print(f"      FAIL_TO_PASS passed={passed} failed={failed} -> {'FAILS at base OK' if at_base_ok else 'UNEXPECTED'}")
-    (d / "run_at_base.txt").write_text(out, encoding="utf-8")
+    print(
+        f"      FAIL_TO_PASS passed={passed} failed={failed} -> {'FAILS at base OK' if at_base_ok else 'UNEXPECTED'}"
+    )
+    (_meta_dir(instance_id) / "run_at_base.txt").write_text(out, encoding="utf-8")
 
     # 5. apply gold patch -> F2P must PASS
     print("[5/5] applying gold patch (expect FAIL_TO_PASS to PASS) …")
-    gp = d / "gold_patch.diff"
+    gp = _meta_dir(instance_id) / "gold_patch.diff"
     atomic_write_text(gp, inst.get("patch") or "")
-    rc2, out2 = _run(["git", "apply", "-v", "--3way", "--recount", "--ignore-space-change", str(gp)], src)
+    rc2, out2 = _run(
+        ["git", "apply", "-v", "--3way", "--recount", "--ignore-space-change", str(gp)],
+        src,
+    )
     if rc2 != 0:
         rc2, out2 = _run(["git", "apply", "-v", str(gp)], src)
     rc3, out3 = _run(_test_cmd(py, test_cmd), src, timeout=900)
     passed2, failed2 = _f2p_result(out3, f2p)
     gold_ok = passed2 > 0 and failed2 == 0
-    print(f"      gold patch applied rc={rc2}; FAIL_TO_PASS passed={passed2} failed={failed2} -> {'PASSES OK' if gold_ok else 'UNEXPECTED'}")
-    (d / "run_at_gold.txt").write_text(out3, encoding="utf-8")
+    print(
+        f"      gold patch applied rc={rc2}; FAIL_TO_PASS passed={passed2} failed={failed2} -> {'PASSES OK' if gold_ok else 'UNEXPECTED'}"
+    )
+    (_meta_dir(instance_id) / "run_at_gold.txt").write_text(out3, encoding="utf-8")
 
     verdict = "USABLE (docker-free)" if (at_base_ok and gold_ok) else "NEEDS REVIEW"
     print(f"\nVERDICT: {verdict}")
-    print(f"artifacts: {d}")
+    print(f"artifacts: {_meta_dir(instance_id)} (outside the agent sandbox)")
     return 0 if (at_base_ok and gold_ok) else 1
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="SWE-rebench-V2 option-C probe (no Docker)")
+    ap = argparse.ArgumentParser(
+        description="SWE-rebench-V2 option-C probe (no Docker)"
+    )
     ap.add_argument("--instance", default="pallets__click-2380")
     ap.add_argument("--pages", type=int, default=4)
     ap.add_argument("--list", action="store_true")
@@ -344,7 +391,9 @@ def main() -> int:
         rows = _list_rows(args.pages)
         py = [r for r in rows if r.get("language") == args.language]
         print(f"{len(rows)} rows fetched, {len(py)} {args.language}")
-        for r in sorted(py, key=lambda x: (x.get("meta") or {}).get("num_modified_lines", 999))[:15]:
+        for r in sorted(
+            py, key=lambda x: (x.get("meta") or {}).get("num_modified_lines", 999)
+        )[:15]:
             m = r.get("meta") or {}
             print(
                 f"  {r['instance_id']:42} lines={m.get('num_modified_lines'):>3} "

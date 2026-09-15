@@ -231,7 +231,9 @@ def _reset_instance(inst: dict, hf_inst: dict) -> Path:
     # install's *.egg-info — the same command the validated probe/pool builder use.
     subprocess.run(["git", "clean", "-fd"], cwd=str(src), capture_output=True)
     if test_patch:
-        patch_file = d / "test.patch"
+        # OUTSIDE the agent's sandbox (probe._meta_dir), same reason as the gold
+        # patch: anything under WORK is readable by the agent under measurement.
+        patch_file = probe._meta_dir(instance_id) / "test.patch"
         patch_file.write_text(test_patch, encoding="utf-8")
         subprocess.run(
             ["git", "apply", str(patch_file)], cwd=str(src), capture_output=True

@@ -103,6 +103,28 @@ def test_summary_all_infra_has_no_rate():
 
 
 # --------------------------------------------------------------------------
+# Ground truth must never live in the agent's sandbox
+# --------------------------------------------------------------------------
+
+
+def test_ground_truth_is_outside_the_agent_sandbox():
+    """`WORK` is SWARM_WORKSPACE_ROOT — everything under it is agent-readable.
+
+    Measured 2026-09-15: with `gold_patch.diff` / `run_at_gold.txt` written under
+    WORK, the twine task's agent read ANOTHER instance's gold patch and returned a
+    report about qiskit — the benchmark was handing the agent the solution. The
+    ground-truth artifacts now live in `META`, a SIBLING of WORK.
+    Revert-proof: pre-fix `probe.META` did not exist.
+    """
+    work = cb.probe.WORK.resolve()
+    meta = cb.probe.META.resolve()
+    assert meta != work
+    assert work not in meta.parents, (
+        f"ground truth {meta} is INSIDE the agent sandbox {work}"
+    )
+
+
+# --------------------------------------------------------------------------
 # Shadowing metadata stubs (the twine false negative)
 # --------------------------------------------------------------------------
 
