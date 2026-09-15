@@ -267,6 +267,25 @@ pre-existing style errors outside E9/F):
     ruff check . --select E9,F
     pytest
 
+### Long jobs: run DETACHED + CONCURRENT — never block the session (2026-09-15)
+
+**Standing rule, not a preference.** A blocking test/rollout/harvest run wastes the
+entire session (hours lost to serial, foreground runs). "When possible" = the job is
+longer than ~1 min, OR it has independent units of work.
+
+1. **Detach** the launch — `Invoke-CimMethod -ClassName Win32_Process -MethodName
+   Create -Arguments @{CommandLine='cmd /c "cd /d <repo> && <cmd> > %TEMP%\opencode\<name>.out 2>&1"'}`.
+   A `Start-Process` child dies when the shell aborts; a detached `Win32_Process`
+   survives. Never run a long suite inline and wait on it.
+2. **Concurrent** — I/O-bound work (LLM calls, pytest-in-sandbox, per-item rollouts)
+   gets a `--concurrency K` flag: `asyncio.Semaphore(K)` + `asyncio.to_thread`, with a
+   `threading.Lock` around shared-file appends. K=4 is the default sweet spot (~3–4x).
+3. **Poll, don't wait** — check the process (`Get-CimInstance`) + tail the log. Python
+   **buffers stdout when redirected**: an empty log is NOT a stall — the process being
+   ALIVE is the meaningful signal.
+4. Add `--concurrency` to any NEW long runner **as you write it**, not after it's been
+   slow once. Wired: `qwen_train/run_candidate_pool.py`, `qwen_train/mine_fix_commits.py`.
+
 Notes:
 - `.vulture_whitelist.py` is excluded via `[tool.ruff]` in `pyproject.toml` — its
   bare names are an intentional vulture dead-code whitelist that ruff's F821
@@ -1012,6 +1031,43 @@ relaunch via start-dev.ps1 when ready.
 ---
 
 ## Recent Changes (do NOT re-apply)
+
+### OPS/FEAT: long jobs DETACHED + CONCURRENT (the wasted-time lesson); synthetic pool at ceiling; the real-bug pipeline starts (2026-09-15)
+
+- **RULE (codified in Lint / CI above): long jobs run DETACHED + CONCURRENT.** Every
+  blocking run this session — the 400-run (~1.5 h), the serial 130-pool (~5 h), the
+  serial FIX-commit harvester (>1 commit / 5 min) — wasted session time. Detach via
+  `Invoke-CimMethod Win32_Process Create`; give any I/O-bound runner a `--concurrency K`
+  (K=4, ~3-4x); poll process + log (Python buffers stdout when redirected ⇒ an empty
+  log is NOT a stall — the process being ALIVE is the signal). Wired:
+  `qwen_train/run_candidate_pool.py`, `qwen_train/mine_fix_commits.py`.
+- **AGENTS.md truncation incident**: the working-tree `AGENTS.md` was found **0 bytes**
+  mid-session (the backend's runtime-telemetry writer clobbered it); `git restore
+  AGENTS.md` recovered the HEAD copy (636 KB / 4248 lines). If the file looks empty,
+  check `(Get-Item AGENTS.md).Length` before assuming it is gone.
+- **Synthetic fix pool is at CEILING → no learning signal.** 30 hand-written kinds
+  ~100% pass; the 130-candidate pool ~92-94% pass on valid rows; T1→T2 `no_signal`
+  (40→42/60, McNemar p=0.625); `tool_weights` ≈0.99 (no discrimination). Synthetic bugs
+  sit below the coder's ability → no gradient. Escalate to real bugs.
+- **PHANTOM FAILURES**: with the backend DOWN, `run_candidate_pool` rows are
+  `cli_ok=False` (CLI aborts ~20 s) and masquerade as failures. ALWAYS filter
+  `cli_ok == True` (a dead-backend run produced a false "76% fail" = 103 phantoms;
+  the real pass rate was ~92%).
+- **Contamination filter: PASS** (`8aa7c4ed`): append-only hash denylist
+  `qwen_train/curriculum/contaminated_commits.txt` + `mine_fix_commits.load_denylist`
+  + audit (`excluded_contaminated_commit`). Counts: before 405 / excluded 5 / usable
+  400; leakage 0. Tests `tests/test_contamination_filter.py` (6).
+- **Real-bug harvester** (`qwen_train/mine_fix_commits.py`): `FIX:`/`HEAL:` commits →
+  `git archive` parent+fix into isolated temp dirs (never the live tree) → related
+  tests → pytest JUnit **FAIL_TO_PASS** (fails at parent, passes at fix). Speed-up:
+  extract each state ONCE (was 3x) + `--concurrency` (`3d4062ca`). `--min-age-hours`
+  is a SECONDARY recency heuristic; the hash denylist is the authoritative filter.
+- **Plan (ordered; do not skip)** after the harvest lands: contamination PASS → inspect
+  the supply/flip yield → group by FILE/MODULE → hold out whole files/modules (not
+  commits) → verify zero leakage → FREEZE eval (🔒) → only then run.
+- **Operational**: two `python -m uvicorn` processes are NORMAL (parent supervisor +
+  child owning :8000); killing the parent kills the backend. `/health` → 200 = up, even
+  when `/readyz` times out under load. Full state/plan: `docs/LEARNING_EXPERIMENT_STATE.md`.
 
 ### SERVICE/FIX: self-learning CLI — verified trajectory capture, gold miner + metrics, the fix curriculum, and the honest NULL results (2026-09-14)
 
