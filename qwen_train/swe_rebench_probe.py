@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import re
 import subprocess
 import sys
 import urllib.request
@@ -90,6 +91,38 @@ def _parse_list_field(v) -> list[str]:
     return s.split()
 
 
+_PY_IMAGE_RE = re.compile(r"python_base_3(\d+)")
+
+
+def _interpreter_for(base_image_name: str) -> list[str] | None:
+    """Map the dataset's `base_image_name` to a LOCAL interpreter launcher.
+
+    Each instance declares the interpreter it was built for
+    (`python_base_310` = Python 3.10). Building its venv with a different minor
+    version produces environment failures that LOOK like task failures — that is
+    exactly how `pyfakefs`/`cliquet` "failed" on this box (3.14 only). Returns
+    None when the image cannot be mapped so the caller can fail CLEARLY instead
+    of silently guessing with the host interpreter.
+    """
+    m = _PY_IMAGE_RE.search(str(base_image_name or "").strip())
+    if not m:
+        return None
+    # `python_base_3` + "10" -> "-3.10"; + "9" -> "-3.9"
+    return ["py", f"-3.{m.group(1)}"]
+
+
+def _ensure_interpreter(launcher: list[str], base_image_name: str) -> str | None:
+    """Return the resolved version string, or None with a clear diagnosis."""
+    rc, out = _run([*launcher, "--version"], Path.cwd(), timeout=60)
+    if rc == 0 and out.strip():
+        return out.strip().splitlines()[0]
+    print(f"  base_image_name={base_image_name!r} -> {' '.join(launcher)} is NOT installed")
+    print("  install that interpreter, or skip this instance.")
+    print(f"  REFUSING to fall back to {sys.version.split()[0]} — a wrong-interpreter venv")
+    print("  produces environment failures that masquerade as task failures.")
+    return None
+
+
 def _pip_cmd(py: Path, step: str) -> list[str] | None:
     """Turn an install_config step (`"pip install -q pytest-socket"`) into argv
     against the INSTANCE venv. Returns None for a non-pip step (caller shells it).
@@ -149,8 +182,20 @@ def probe(instance_id: str, pages: int = 4) -> int:
     venv = d / "venv"
     d.mkdir(parents=True, exist_ok=True)
 
+    base_image = str(cfg.get("base_image_name") or "")
+    py_launcher = _interpreter_for(base_image)
+    if py_launcher is None:
+        print(f"instance   : {instance_id}")
+        print(f"  base_image_name={base_image!r} is not mappable to a local interpreter")
+        print("  refusing to guess — fix the mapping or skip this instance")
+        return 5
+    py_version = _ensure_interpreter(py_launcher, base_image)
+    if py_version is None:
+        return 5
+
     print(f"instance   : {instance_id}")
     print(f"repo       : {repo}@{base[:10]}")
+    print(f"interpreter: {py_version}   (declared by base_image_name={base_image})")
     print(f"install    : {install}")
     print(f"test_cmd   : {test_cmd}")
     print(f"FAIL_TO_PASS ({len(f2p)}): {f2p}")
@@ -171,8 +216,10 @@ def probe(instance_id: str, pages: int = 4) -> int:
     # 2. venv + install
     py = venv / "Scripts" / "python.exe"
     if not py.exists():
-        print("[2/5] creating venv …")
-        rc, out = _run([sys.executable, "-m", "venv", str(venv)], d, timeout=300)
+        print(f"[2/5] creating venv with {' '.join(py_launcher)} …")
+        # The venv MUST be built by the interpreter the instance declares —
+        # never the host's. See _interpreter_for.
+        rc, out = _run([*py_launcher, "-m", "venv", str(venv)], d, timeout=300)
         if rc != 0:
             print(f"  venv failed: {out[-300:]}")
             return 4
