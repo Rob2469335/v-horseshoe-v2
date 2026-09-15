@@ -275,6 +275,15 @@ async def process_task(inst: dict, sem: asyncio.Semaphore, args: argparse.Namesp
             # The BASE/AFTER failure sets are what make the verdict auditable:
             # `base_p2p_fail` is the pre-existing red set, so a "regression"
             # verdict is provable rather than inferred.
+            # WHY it did/didn't act — the CLI's own final content plus the
+            # control-plane outcomes. Without this the row can only say THAT it
+            # failed, never WHY (the 14-task batch showed 0 source edits and we
+            # could not tell "chose not to act" from "was refused").
+            "cli_ok": res.get("cli_ok"),
+            "content": res.get("content"),
+            "denied": res.get("denied"),
+            "verify_reason": res.get("verify_reason"),
+            "timed_out": res.get("timed_out"),
             "base_failing": sorted(base_failing),
             "after_failing": sorted(after_failing),
             "base_p2p_fail": sorted(base_p2p_fail),
