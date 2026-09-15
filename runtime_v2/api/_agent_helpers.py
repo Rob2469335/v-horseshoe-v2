@@ -82,6 +82,29 @@ def _is_fix_intent(text: str) -> bool:
     return bool(_FIX_INTENT_RE.search(low))
 
 
+# Filesystem operations that only READ/EXPLORE. Distinguishes a read decision
+# from an edit one when a fix-intent agent must be pushed to act.
+READ_OPS = ("read", "read_all", "list", "tree", "glob", "grep", "search")
+
+
+def needs_edit(agent_id: str, text: str, did_code_change: bool) -> bool:
+    """True when this run's deliverable is an EDIT, so recovery must aim at the
+    edit — never at a report.
+
+    2026-09-15 (SWE batch): a fix-intent `coder` cannot exit via `action=final`
+    — the write-intent guard rejects a final while no file has changed. But the
+    read-budget nudge, the loop-guard WARN, and the loop recovery ALL told it to
+    "stop reading and call action=final", and the non-analysis loop branch
+    aborted it with a circuit breaker. With no reachable productive action the
+    coder re-read the same files until the guard killed it, and every task ended
+    with ZERO source changes — which then read as a capability failure.
+
+    One predicate, used by both the final guard and every recovery path, so the
+    two cannot drift apart again.
+    """
+    return agent_id == "coder" and _is_fix_intent(text) and not did_code_change
+
+
 def _is_authorization_denial(result: dict | None) -> bool:
     """True when a tool result is an authorization DENIAL (expired/used/denied
     pending approval) rather than a normal tool-execution error.

@@ -35,6 +35,11 @@ class _CallState:
     )
     _filesystem_read_capped: bool = False  # One-time stop-reading nudge already sent
     _forced_final: bool = False  # Tools restricted to final once the read budget is hit
+    # 2026-09-15: a fix-intent coder tripped the loop guard and re-read the same
+    # files until it was aborted — without ever editing, because every recovery
+    # message said "call action=final" (which the write-intent guard rejects).
+    # Once set, further READS are refused so the edit is the only way forward.
+    _forced_edit: bool = False
     _turn: int = 0
     # Todo tracking (multi-step task state, like a human agent's checklist)
     todos: list = field(default_factory=list)

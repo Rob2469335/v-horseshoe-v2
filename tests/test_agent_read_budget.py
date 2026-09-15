@@ -344,3 +344,105 @@ async def test_routine_goal_keeps_routine_read_budget(monkeypatch):
 
     assert "filesystem" not in captured["tools"]
     assert state._forced_final is True
+
+
+# ---------------------------------------------------------------------------
+# EDIT-AGENT RECOVERY (2026-09-15). A fix-intent `coder` cannot exit via
+# `action=final` — the write-intent guard rejects a no-edit final. Every
+# recovery message nevertheless said "call action=final", so the coder had NO
+# reachable productive action and re-read files until the loop guard aborted
+# it: every SWE task ended with ZERO source changes, which then read as a
+# capability failure rather than the harness defect it was.
+# ---------------------------------------------------------------------------
+
+
+def test_needs_edit_predicate():
+    """Only a fix-intent coder that has NOT edited needs an edit."""
+    from runtime_v2.api.agent_service_v2 import needs_edit
+
+    assert needs_edit("coder", "Fix the failing tests in the repo", False) is True
+    # already edited -> it may now summarize
+    assert needs_edit("coder", "Fix the failing tests in the repo", True) is False
+    # a report agent is never pushed to edit
+    assert needs_edit("researcher", "Fix the failing tests", False) is False
+    # a how-to question is not fix-intent
+    assert needs_edit("coder", "How do I fix a memory leak?", False) is False
+
+
+@pytest.mark.asyncio
+async def test_read_budget_nudge_for_fix_intent_coder_is_edit_directed(monkeypatch):
+    # Revert-proof: pre-fix this message says "call action=final", which the
+    # write-intent guard then REJECTS — the deadlock that produced no edits.
+    import runtime_v2.services.tool_executor as te
+
+    async def _fake_run(tool, payload, **kwargs):
+        return {"ok": True, "content": "file body"}
+
+    monkeypatch.setattr(te, "run", _fake_run)
+    monkeypatch.setenv("SWARM_MAX_FS_READS", "2")
+
+    svc = _svc()
+    state = _svc_state()
+    messages: list = [
+        {
+            "role": "user",
+            "content": "Fix the problem in the repository so the failing tests pass.",
+        }
+    ]
+
+    for _ in range(3):
+        await svc._handle_tool(
+            {"action": "filesystem", "operation": "read", "path": "pkg/mod.py"},
+            "coder",
+            messages,
+            True,
+            turn=1,
+            consecutive_errors=0,
+            state=state,
+        )
+
+    body = " ".join(
+        str(m.get("content", "")) for m in messages if m.get("role") == "user"
+    )
+    assert "STOP READING" in body
+    assert "Apply the fix NOW" in body
+    # the unreachable instruction must be gone for THIS agent
+    assert "call action=final NOW with a concrete findings report" not in body
+    assert state._forced_edit is True
+
+
+@pytest.mark.asyncio
+async def test_read_budget_nudge_keeps_analysis_wording_for_analysis_agent(monkeypatch):
+    # The analysis path must be unchanged (regression guard for the branch).
+    import runtime_v2.services.tool_executor as te
+
+    async def _fake_run(tool, payload, **kwargs):
+        return {"ok": True, "content": "file body"}
+
+    monkeypatch.setattr(te, "run", _fake_run)
+    monkeypatch.setenv("SWARM_MAX_FS_READS", "2")
+
+    svc = _svc()
+    state = _svc_state()
+    # Empty list on purpose: a deep-analysis goal ("analyze my codebase") raises
+    # the budget to 14 and the nudge would never fire at 3 reads. With no goal in
+    # `messages` the budget is the routine SWARM_MAX_FS_READS (2), matching the
+    # existing test above.
+    messages: list = []
+
+    for _ in range(3):
+        await svc._handle_tool(
+            {"action": "filesystem", "operation": "read", "path": "runtime_v2/a.py"},
+            "code_analyzer",
+            messages,
+            True,
+            turn=1,
+            consecutive_errors=0,
+            state=state,
+        )
+
+    body = " ".join(
+        str(m.get("content", "")) for m in messages if m.get("role") == "user"
+    )
+    assert "call action=final NOW with a concrete findings report" in body
+    assert state._forced_edit is False

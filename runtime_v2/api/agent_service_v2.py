@@ -33,6 +33,8 @@ from runtime_v2.api._agent_helpers import (  # noqa: F401
     _append_diary_line as _append_diary_line,
     _strip_web_tools_for_local_analysis as _strip_web_tools_for_local_analysis,
     _is_fix_intent as _is_fix_intent,
+    needs_edit as needs_edit,
+    READ_OPS as READ_OPS,
     _is_authorization_denial as _is_authorization_denial,
     _PLACEHOLDER_RE as _PLACEHOLDER_RE,
     _is_placeholder_final as _is_placeholder_final,
@@ -1406,7 +1408,7 @@ class AgentServiceV2:
         # Reject the final on EVERY such attempt until a file is written or patched.
         # (Complementary to pending_verify above: that fires only AFTER an edit; this
         # fires when NO edit has happened yet.)
-        if agent_id == "coder" and _is_fix_intent(prompt) and not state.did_code_change:
+        if needs_edit(agent_id, prompt, state.did_code_change):
             state.handler_status = "CONTINUE"
             log.warning("[coder] Rejected final: fix-intent goal with no code change.")
             messages.append(
@@ -2203,19 +2205,45 @@ class AgentServiceV2:
                 and state._filesystem_reads >= _read_budget
             ):
                 state._filesystem_read_capped = True
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": (
-                            f"SYSTEM: You have read {state._filesystem_reads} files, "
-                            "which is the budget for this analysis. STOP reading more "
-                            "files. Using what you have already read, call "
-                            "action=final NOW with a concrete findings report: name "
-                            "the specific files and the actual bugs/upgrades you can "
-                            "evidence. Do not read again before finalizing."
-                        ),
-                    }
-                )
+                # `prompt` is not in scope here (this runs inside the tool
+                # handler) — the original goal is, via the same helper the budget
+                # line above uses.
+                if needs_edit(
+                    agent_id, _original_goal(messages) or "", state.did_code_change
+                ):
+                    # EDIT-directed. A fix-intent coder CANNOT exit via final (its
+                    # no-edit final is rejected by the write-intent guard), so the
+                    # analysis wording below is what kept it reading: told to
+                    # finalize, refused for finalizing, so it read again (2026-09-15).
+                    state._forced_edit = True
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                f"SYSTEM: You have read {state._filesystem_reads} files, "
+                                "which is the budget for this task. STOP READING — you "
+                                "have enough context to act. Apply the fix NOW: use "
+                                "action=filesystem with operation=patch (or write) on "
+                                "the exact file that carries the bug, then run the "
+                                "tests. Do NOT call action=final until a file has "
+                                "actually changed."
+                            ),
+                        }
+                    )
+                else:
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                f"SYSTEM: You have read {state._filesystem_reads} files, "
+                                "which is the budget for this analysis. STOP reading more "
+                                "files. Using what you have already read, call "
+                                "action=final NOW with a concrete findings report: name "
+                                "the specific files and the actual bugs/upgrades you can "
+                                "evidence. Do not read again before finalizing."
+                            ),
+                        }
+                    )
 
             # L1 grounding: a successful semantic_search returns real code-chunk
             # hits whose formatted text carries `File: <path>` lines. Those are
@@ -2959,7 +2987,15 @@ class AgentServiceV2:
                 messages.append(
                     {
                         "role": "user",
-                        "content": "SYSTEM: You already made this exact call and have the result. Do NOT repeat it. Choose a different file/tool, or call action=final if you have enough information.",
+                        "content": (
+                            "SYSTEM: You already made this exact call and have the "
+                            "result. Do NOT repeat it. STOP READING — you have the "
+                            "context you need. Apply the fix NOW: action=filesystem "
+                            "with operation=patch (or write) on the exact file, then "
+                            "run the tests. A final with no file changed is rejected."
+                            if needs_edit(agent_id, prompt, state.did_code_change)
+                            else "SYSTEM: You already made this exact call and have the result. Do NOT repeat it. Choose a different file/tool, or call action=final if you have enough information."
+                        ),
                     }
                 )
                 continue
@@ -2970,6 +3006,63 @@ class AgentServiceV2:
                 # Instead force the synthesis path (allowlist tools to final-only
                 # in _get_decision) and continue. Even if it keeps looping, the
                 # MAX_TURNS forced-synthesis pass produces a real final.
+                if needs_edit(agent_id, prompt, state.did_code_change):
+                    # EDIT-AGENT RECOVERY (2026-09-15). A fix-intent coder cannot
+                    # exit via final (its no-edit final is rejected), so the old
+                    # non-analysis branch aborted it in a circuit breaker — which
+                    # GUARANTEES zero edits. That is what every SWE task did: the
+                    # coder re-read files, tripped this guard, and was killed
+                    # without ever writing. Force the edit instead; further reads
+                    # are refused at the decision point below, so the only
+                    # productive action left is the fix that IS the deliverable.
+                    if not state._forced_edit:
+                        state._forced_edit = True
+                        state._filesystem_read_capped = True
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": (
+                                    "SYSTEM: You are repeating the same exploration "
+                                    "and have NOT changed any file. Reading is over. "
+                                    "Apply the fix NOW: use action=filesystem with "
+                                    "operation=patch (or write) on the exact file that "
+                                    "carries the bug, then run the tests. Do NOT call "
+                                    "action=final until a file has actually changed."
+                                ),
+                            }
+                        )
+                        try:
+                            from swarm_os.services.reflection_loop import (
+                                get_reflection_service,
+                            )
+
+                            await get_reflection_service().store_reflexion(
+                                task=f"agent:{agent_id} looping on repeated exploration goal {str(prompt)[:120]}",
+                                action="loop_detected",
+                                failure_reason="fix-intent coder repeated an exploration cycle without editing.",
+                                correction="Stop re-reading files. Apply the fix with filesystem patch/write, then run the tests.",
+                                do_not_repeat=f"agent:{agent_id} must not re-read the same file instead of editing it.",
+                                component=agent_id,
+                                confidence=0.8,
+                            )
+                        except Exception as loop_refl_err:
+                            log.debug(
+                                "[%s] forced-edit loop reflexion skipped: %s",
+                                agent_id,
+                                loop_refl_err,
+                            )
+                    else:
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": (
+                                    "SYSTEM: You are STILL repeating reads and still "
+                                    "have not changed a file. There is nothing left to "
+                                    "read. Apply the fix with the filesystem tool now."
+                                ),
+                            }
+                        )
+                    continue
                 if agent_id in ANALYSIS_AGENTS:
                     if not state._forced_final:
                         state._forced_final = True
@@ -3116,6 +3209,45 @@ class AgentServiceV2:
                     genome_id=getattr(state, "genome_id", ""),
                 )
                 return
+
+            # --- Forced-edit: refuse further reads (2026-09-15) ---
+            # A fix-intent coder that tripped the loop guard has been told to
+            # apply the fix; a soft nudge alone was verified IGNORED elsewhere in
+            # this file, so the read is refused outright rather than re-asked.
+            # It cannot be done with the analysis path's tool allowlist: the edit
+            # goes through the SAME `filesystem` tool as the read, so removing the
+            # tool would remove the fix too.
+            if (
+                state._forced_edit
+                and needs_edit(agent_id, prompt, state.did_code_change)
+                and isinstance(decision, dict)
+                and decision.get("action") == "filesystem"
+                and decision.get("operation") in READ_OPS
+            ):
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": json.dumps(
+                            {
+                                "action": "filesystem",
+                                "operation": decision.get("operation"),
+                                "note": "read refused: apply the fix instead",
+                            }
+                        ),
+                    }
+                )
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "SYSTEM: Read refused — you are in fix mode and have "
+                            "already read what you need. Apply the fix now with "
+                            "action=filesystem operation=patch (or write) on the "
+                            "exact file."
+                        ),
+                    }
+                )
+                continue
 
             # --- Validate decision ---
             if (
