@@ -211,13 +211,26 @@ def _build_prompt(inst: dict, hf_inst: dict) -> str:
     """
     repo = (probe.WORK / inst["instance_id"] / "repo").resolve()
     ps = (hf_inst.get("problem_statement") or "").strip()
+    test_cmd = inst.get("test_cmd") or "python -m pytest"
+    # The tool contract is load-bearing, not boilerplate: the first 14-task batch
+    # made ZERO source edits, and the CLI's own final diagnosis (twine, 2026-09-15)
+    # named the cause — it reached for `sandbox_repl` to inspect files, whose
+    # Security Gate blocks `open()`/`pathlib`, so every snippet was denied and it
+    # looped until the turn budget was gone. Naming the read/write tool (and the
+    # test command) removes the loop rather than blaming the model.
     return (
         f"Work inside this repository — your filesystem tools can read and write "
         f"under it:\n{repo}\n\n"
         f"Problem:\n{ps}\n\n"
-        f"Fix the problem in that repository so the failing tests pass. Read the "
-        f"relevant files first, make the smallest correct change, then run the "
-        f"tests to verify. Do NOT modify the test files."
+        f"Fix the problem in that repository so the failing tests pass.\n\n"
+        f"TOOL CONTRACT — follow this or you will loop and waste the turn budget:\n"
+        f"- Read, search and EDIT files with the `filesystem` tool "
+        f"(operations: read, write, patch, list, grep, glob).\n"
+        f"- `sandbox_repl` blocks `open()` and `pathlib`, so NEVER use it to read "
+        f"or write files — use `filesystem` for all file access. Use `sandbox_repl` "
+        f"only to run the tests.\n"
+        f"- The tests that must pass are run by:\n  {test_cmd}\n"
+        f"- Do NOT modify test files."
     )
 
 async def process_task(inst: dict, sem: asyncio.Semaphore, args: argparse.Namespace) -> dict:
