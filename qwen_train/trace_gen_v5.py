@@ -21,6 +21,9 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
+from _atomic import atomic_write_text
+
 import httpx
 
 COMMITS_FILE = (
@@ -147,10 +150,9 @@ def main():
             rows.append(
                 {"source_commit": c["sha"], "raw_extracted": "", "trace_error": str(e)}
             )
-        # incremental write after each commit (crash-safe)
-        OUT.write_text(
-            "\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n",
-            encoding="utf-8",
+        # incremental write after each commit (crash-safe via atomic replace)
+        atomic_write_text(
+            OUT, "\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n"
         )
         time.sleep(0.5)
     client.close()

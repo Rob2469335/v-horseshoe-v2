@@ -12,6 +12,7 @@ import time
 import httpx
 from pathlib import Path
 
+from _atomic import atomic_write_jsonl
 from swarm_os.lib.opencode_session import opencode_headers
 
 RESULTS = Path("C:/Users/rober/Projects/v-horseshoe-v2/qwen_train/results")
@@ -126,9 +127,7 @@ def main():
         )
 
     client.close()
-    with open(OUT, "w", encoding="utf-8") as f:
-        for r in rows:
-            f.write(json.dumps(r) + "\n")
+    atomic_write_jsonl(OUT, rows)
     print(f"\nwrote {OUT}: {len(rows)} scored items")
 
 

@@ -18,6 +18,8 @@ import subprocess
 import re
 from pathlib import Path
 
+from _atomic import atomic_write_text
+
 V1 = Path(r"C:/Users/rober/Projects/qwen_train_data/real_25_dataset_v1.jsonl")
 V4 = Path(r"C:/Users/rober/Projects/qwen_train_data/real_25_dataset_v4.jsonl")
 OUT = Path(r"C:/Users/rober/Projects/qwen_train_data/real_25_dataset_v4_diagfix.jsonl")
@@ -93,9 +95,8 @@ def main():
         rec["text"] = new_text
         out.append(rec)
 
-    OUT.write_text(
-        "\n".join(json.dumps(r, ensure_ascii=False) for r in out) + "\n",
-        encoding="utf-8",
+    atomic_write_text(
+        OUT, "\n".join(json.dumps(r, ensure_ascii=False) for r in out) + "\n"
     )
     print(
         f"wrote {OUT} : {len(out)} rows, {touched} DIAGNOSIS-spliced (positional map)"

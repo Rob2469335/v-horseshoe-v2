@@ -37,6 +37,7 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 import run_curriculum as rc  # noqa: E402
+from _atomic import atomic_write_json  # noqa: E402
 
 RESULTS = _HERE / "results"
 
@@ -115,9 +116,7 @@ def main() -> int:
     if args.compare:
         res = compare(_read("on"), _read("off"))
         RESULTS.mkdir(parents=True, exist_ok=True)
-        (RESULTS / "memory_ablation_compare.json").write_text(
-            json.dumps(res, indent=2), encoding="utf-8"
-        )
+        atomic_write_json(RESULTS / "memory_ablation_compare.json", res)
         print(json.dumps(res, indent=2))
         return 0
 

@@ -24,6 +24,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from _atomic import atomic_write_jsonl
+
 _FENCE = re.compile(r"```python\n(.*?)```", re.DOTALL)
 
 
@@ -124,10 +126,7 @@ def main() -> int:
     sound, unsound = ingest(Path(args.src), args.timeout)
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    with open(out, "w", encoding="utf-8") as fh:
-        for c in sound:
-            json.dump(c, fh, ensure_ascii=False)
-            fh.write("\n")
+    atomic_write_jsonl(out, sound)
 
     print(f"parsed: {len(sound) + len(unsound)}  SOUND: {len(sound)}  UNSOUND: {len(unsound)}")
     for c in unsound:

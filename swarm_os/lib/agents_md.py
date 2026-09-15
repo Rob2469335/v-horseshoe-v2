@@ -23,13 +23,12 @@ Two guarantees here, applied to every writer:
 
 from __future__ import annotations
 
-import os
-import uuid
 from pathlib import Path
 from typing import Callable
 
 from filelock import FileLock
 
+from swarm_os.lib.atomic_io import atomic_write_text
 from swarm_os.lib.paths import project_root
 
 _LOCK_TIMEOUT = 10.0
@@ -38,26 +37,6 @@ _LOCK_TIMEOUT = 10.0
 def agents_md_path() -> Path:
     """Absolute path to the project's AGENTS.md (independent of the process cwd)."""
     return project_root() / "AGENTS.md"
-
-
-def atomic_write_text(path: Path, content: str) -> None:
-    """Write ``content`` to ``path`` atomically; ``path`` is never truncated.
-
-    The write lands on a sibling temp file first and is promoted with
-    ``os.replace`` (atomic on the same volume). A failure at any point leaves the
-    original file untouched — there is no window in which ``path`` holds 0 bytes.
-    """
-    path = Path(path)
-    tmp = path.with_name(f"{path.name}.tmp.{uuid.uuid4().hex}")
-    try:
-        tmp.write_text(content, encoding="utf-8")
-        os.replace(tmp, path)
-    finally:
-        if tmp.exists():
-            try:
-                tmp.unlink()
-            except OSError:
-                pass
 
 
 def insert_after_marker(content: str, marker: str, entry: str) -> str | None:

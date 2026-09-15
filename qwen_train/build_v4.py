@@ -6,6 +6,8 @@ import os
 
 from transformers import AutoTokenizer
 
+from _atomic import atomic_write_jsonl
+
 _TOKENIZER = AutoTokenizer.from_pretrained(
     r"C:\Users\rober\models\Qwen3.5-4B-Base-HF", local_files_only=True
 )
@@ -225,9 +227,7 @@ def process_dataset(in_path, out_path, is_exam=False):
 
             out_items.append(item)
 
-    with open(out_path, "w", encoding="utf-8") as f:
-        for it in out_items:
-            f.write(json.dumps(it) + "\n")
+    atomic_write_jsonl(out_path, out_items)
     print(f"Processed {len(out_items)} items for {out_path}")
 
 

@@ -12,6 +12,8 @@ This converts in place. Protocol scripts stay untouched.
 import json
 from pathlib import Path
 
+from _atomic import atomic_write_text
+
 RESULTS = Path("C:/Users/rober/Projects/v-horseshoe-v2/qwen_train/results")
 SRC = {
     "exam_adapter_results.jsonl": RESULTS / "adapter_budget600_full2.jsonl",
@@ -41,9 +43,8 @@ def convert(src: Path, dst: Path):
             "error": r.get("error"),
         }
         rows.append(new)
-    dst.write_text(
-        "\n".join(json.dumps(x, ensure_ascii=False) for x in rows) + "\n",
-        encoding="utf-8",
+    atomic_write_text(
+        dst, "\n".join(json.dumps(x, ensure_ascii=False) for x in rows) + "\n"
     )
     print(f"wrote {dst.name}: {len(rows)} rows")
     # report content summary to confirm the schema load will be sane
@@ -59,6 +60,6 @@ for dst_name, src_path in SRC.items():
     if dst.exists():
         bak = RESULTS / (dst_name + ".bak_protocol")
         if not bak.exists():
-            bak.write_text(dst.read_text(encoding="utf-8"), encoding="utf-8")
+            atomic_write_text(bak, dst.read_text(encoding="utf-8"))
             print(f"backed up existing {dst_name} -> {dst_name}.bak_protocol")
     convert(src_path, dst)

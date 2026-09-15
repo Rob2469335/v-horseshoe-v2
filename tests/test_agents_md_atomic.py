@@ -50,7 +50,7 @@ def test_interrupted_write_never_truncates(tmp_path: Path):
     target.write_text(original, encoding="utf-8")
 
     # Simulate a crash/failure between staging the temp file and promoting it.
-    with patch("swarm_os.lib.agents_md.os.replace", side_effect=OSError("boom")):
+    with patch("swarm_os.lib.atomic_io.os.replace", side_effect=OSError("boom")):
         with pytest.raises(OSError):
             atomic_write_text(target, "NEW CONTENT")
 

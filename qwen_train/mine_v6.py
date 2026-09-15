@@ -10,9 +10,10 @@ The grounding audit (audit_traces_v5.py) later rejects weak/hallucinated traces,
 Writes: qwen_train_data/v6_commits.json  (array of {"sha","path"})
 """
 
-import json
 import subprocess
 from pathlib import Path
+
+from _atomic import atomic_write_json
 
 REPO = r"C:/Users/rober/Projects/v-horseshoe-v2"
 OUT = Path(r"C:/Users/rober/Projects/qwen_train_data/v6_commits.json")
@@ -78,7 +79,7 @@ def main():
         if len(entries) >= TARGET:
             break
 
-    OUT.write_text(json.dumps(entries, indent=2, ensure_ascii=False), encoding="utf-8")
+    atomic_write_json(OUT, entries)
     single = sum(1 for e in entries if len(modified_py(e["sha"])) == 1)
     print(f"mined {len(entries)} commit examples -> {OUT}")
     print(f"  single-file: {single}  multi-file(primary): {len(entries) - single}")

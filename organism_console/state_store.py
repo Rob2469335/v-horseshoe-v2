@@ -239,6 +239,7 @@ class SessionState:
             return json.dumps(snap, indent=2)
 
         def _do_save(seq: int = 0):
+            tmp = None
             try:
                 payload = _snapshot_and_serialize()
                 self.session_file.parent.mkdir(parents=True, exist_ok=True)
@@ -255,17 +256,22 @@ class SessionState:
                     if seq > self._save_written_seq:
                         os.replace(tmp, self.session_file)
                         self._save_written_seq = seq
-                    else:
-                        try:
-                            os.unlink(tmp)
-                        except OSError:
-                            pass
             except Exception as e:
                 import logging
 
                 logging.getLogger("zenith_cli").error(
                     f"Failed to save session state: {e}"
                 )
+            finally:
+                # Never leave an orphaned temp: an un-promoted tmp (stale seq, a
+                # failed write, an exception above) is removed here. The old code
+                # only unlinked on the stale-seq branch, so a mid-write failure
+                # leaked `.session.json.tmp.<uuid>` files.
+                if tmp is not None and tmp.exists():
+                    try:
+                        tmp.unlink()
+                    except OSError:
+                        pass
 
         with self._lock:
             if not hasattr(self, "_save_seq"):

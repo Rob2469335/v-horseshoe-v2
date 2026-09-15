@@ -19,7 +19,6 @@ curriculum harness (the fail->pass tests ARE the verifier, à la DangerRoom.run_
 from __future__ import annotations
 
 import argparse
-import json
 import subprocess
 import sys
 import tarfile
@@ -27,6 +26,8 @@ import tempfile
 import xml.etree.ElementTree as ET
 from io import BytesIO
 from pathlib import Path
+
+from _atomic import atomic_write_jsonl
 
 _HERE = Path(__file__).resolve().parent
 ROOT = _HERE.parent
@@ -337,10 +338,7 @@ def main() -> int:
         concurrency=args.concurrency,
     )
     OUT.parent.mkdir(parents=True, exist_ok=True)
-    with open(OUT, "w", encoding="utf-8") as fh:
-        for t in tasks:
-            json.dump(t, fh, ensure_ascii=False)
-            fh.write("\n")
+    atomic_write_jsonl(OUT, tasks)
     leaked = [t["sha"] for t in tasks if t["sha"].lower() in denylist]
     print(f"denylisted hashes in usable candidate output: {len(leaked)}")
     print(f"mined {len(tasks)} repo-fix tasks (real fail->pass) -> {OUT}")

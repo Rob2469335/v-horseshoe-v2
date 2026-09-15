@@ -28,7 +28,6 @@ for gold (avoids promoting unverified trajectories).
 from __future__ import annotations
 
 import collections
-import json
 import sys
 from pathlib import Path
 
@@ -37,6 +36,7 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 import mine_turns as mt  # noqa: E402
+from _atomic import atomic_write_json, atomic_write_jsonl  # noqa: E402
 
 ROOT = _HERE.parent
 TRAJ_DIR = ROOT / "data" / "trajectories"
@@ -407,16 +407,9 @@ def run_filter(traj_dir: Path = TRAJ_DIR) -> dict:
 
 def write_outputs(result: dict, out_dir: Path = OUT_DIR) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
-    with open(out_dir / "mined_runs.jsonl", "w", encoding="utf-8") as fh:
-        for r in result["valid"]:
-            json.dump(r, fh, ensure_ascii=False)
-            fh.write("\n")
-    with open(out_dir / "gold_candidates.jsonl", "w", encoding="utf-8") as fh:
-        for g in result["gold"]:
-            json.dump(g, fh, ensure_ascii=False)
-            fh.write("\n")
-    with open(out_dir / "gold_report.json", "w", encoding="utf-8") as fh:
-        json.dump(result["report"], fh, indent=2, ensure_ascii=False)
+    atomic_write_jsonl(out_dir / "mined_runs.jsonl", result["valid"])
+    atomic_write_jsonl(out_dir / "gold_candidates.jsonl", result["gold"])
+    atomic_write_json(out_dir / "gold_report.json", result["report"])
 
 
 def main() -> int:

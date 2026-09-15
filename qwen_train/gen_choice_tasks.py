@@ -21,7 +21,6 @@ from __future__ import annotations
 import argparse
 import ast
 import collections
-import json
 import re
 import sys
 from pathlib import Path
@@ -31,6 +30,7 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 import run_curriculum as rc  # noqa: E402
+from _atomic import atomic_write_jsonl  # noqa: E402
 
 OUT = _HERE / "curriculum" / "choice.jsonl"
 
@@ -193,10 +193,7 @@ def main() -> int:
     items = generate(rc._HERE.parent, args.n_per_family)
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    with open(out, "w", encoding="utf-8") as fh:
-        for it in items:
-            json.dump(it, fh, ensure_ascii=False)
-            fh.write("\n")
+    atomic_write_jsonl(out, items)
 
     fams = collections.Counter("|".join(sorted(it["target_tools"])) for it in items)
     print(f"generated {len(items)} multi-choice items -> {out.relative_to(_HERE.parent)}")

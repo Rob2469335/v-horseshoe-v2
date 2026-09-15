@@ -286,6 +286,27 @@ longer than ~1 min, OR it has independent units of work.
 4. Add `--concurrency` to any NEW long runner **as you write it**, not after it's been
    slow once. Wired: `qwen_train/run_candidate_pool.py`, `qwen_train/mine_fix_commits.py`.
 
+### Durable writes must be ATOMIC — never a plain truncating write (2026-09-15)
+
+**Standing rule.** `Path.write_text()` / `open(p, "w")` **truncates the target to 0
+bytes BEFORE writing**. Any interruption between the two (a kill, a crash, a
+concurrent writer) leaves the file empty or half-written. This has already happened
+for real — `AGENTS.md` was found at 0 bytes mid-session — and it threatens every
+long-run result file (a 2-hour harvest whose output is truncated at the end is a
+total loss).
+
+- Use `swarm_os.lib.atomic_io.atomic_write_text` / `atomic_write_json` /
+  `atomic_write_jsonl` (stages to `<name>.tmp.<uuid>`, promotes with `os.replace`,
+  removes the temp on any failure) for anything rewritten wholesale: result
+  JSONL/JSON, state snapshots, manifests, agent-written markdown.
+- In a `qwen_train/` script import the re-export: `from _atomic import atomic_write_text`.
+- The four `AGENTS.md` writers additionally serialize via
+  `swarm_os.lib.agents_md.update_agents_md` (one `filelock` per file — previously 4
+  writers raced and 2 of them held no lock).
+- Appends (`open(p, "a")`, JSONL tails) do NOT truncate — they do not need this.
+- Corollary: a writer must CLEAN UP its temp on EVERY path. A leaked
+  `*.tmp.<uuid>` is the other half of the same bug (leak, not corruption).
+
 Notes:
 - `.vulture_whitelist.py` is excluded via `[tool.ruff]` in `pyproject.toml` — its
   bare names are an intentional vulture dead-code whitelist that ruff's F821
@@ -1065,6 +1086,15 @@ relaunch via start-dev.ps1 when ready.
 - **Plan (ordered; do not skip)** after the harvest lands: contamination PASS → inspect
   the supply/flip yield → group by FILE/MODULE → hold out whole files/modules (not
   commits) → verify zero leakage → FREEZE eval (🔒) → only then run.
+- **Atomic durable writes (the 0-byte class)**: `AGENTS.md` was found at **0 bytes**
+  (the runtime telemetry writers clobbered it; recovered from git) — `write_text` /
+  `open(p,"w")` truncate the target BEFORE writing, so a kill/crash/concurrent writer
+  leaves it empty. Fix: new `swarm_os/lib/atomic_io.py` (`atomic_write_text` /
+  `_json` / `_jsonl` — stage to `<name>.tmp.<uuid>`, promote with `os.replace`, clean
+  the temp on failure) + `qwen_train/_atomic.py` re-export; all **4** `AGENTS.md`
+  writers now serialize through `swarm_os/lib/agents_md.py` (2 were previously
+  unlocked) and every `qwen_train/` result writer + `organism_console/state_store.py`
+  uses the helper. Tests `tests/test_agents_md_atomic.py` (14). Commit `08323e8e`.
 - **Operational**: two `python -m uvicorn` processes are NORMAL (parent supervisor +
   child owning :8000); killing the parent kills the backend. `/health` → 200 = up, even
   when `/readyz` times out under load. Full state/plan: `docs/LEARNING_EXPERIMENT_STATE.md`.

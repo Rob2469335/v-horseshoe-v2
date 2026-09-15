@@ -29,6 +29,8 @@ import statistics
 import sys
 from pathlib import Path
 
+from _atomic import atomic_write_jsonl
+
 ROOT = Path(__file__).resolve().parent.parent
 TRAJ_DIR = ROOT / "data" / "trajectories"
 RUNS = ROOT / "qwen_train" / "results" / "curriculum_runs.jsonl"
@@ -171,10 +173,7 @@ def main() -> int:
         records.append(rec)
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
-    with open(OUT, "w", encoding="utf-8") as fh:
-        for rec in records:
-            json.dump(rec, fh, ensure_ascii=False)
-            fh.write("\n")
+    atomic_write_jsonl(OUT, records)
 
     labels = collections.Counter()
     rec_tools = collections.Counter()
