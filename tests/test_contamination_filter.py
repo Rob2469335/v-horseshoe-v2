@@ -79,16 +79,14 @@ def test_4_reason_is_recorded(tmp_path, capsys):
 def test_3_and_5_no_leakage_even_when_bug_would_be_valid(tmp_path, monkeypatch):
     """A denylisted commit that WOULD otherwise pass fail->pass validation is still rejected."""
     sha = _repo_with_fix(tmp_path)
-    monkeypatch.setattr(
-        mfc,
-        "find_flip",
-        lambda *a, **k: {
-            "flip": True,
-            "fail_to_pass": ["t::x"],
-            "parent_failed": [],
-            "fix_failed": [],
-        },
-    )
+    # Simulate a real flip WITHOUT running pytest: parent run fails, fix run is clean.
+    calls = {"n": 0}
+
+    def fake_run_failed(root, tests, timeout, python_exe):
+        calls["n"] += 1
+        return {"t::x"} if calls["n"] % 2 == 1 else set()
+
+    monkeypatch.setattr(mfc, "run_failed", fake_run_failed)
     monkeypatch.setattr(mfc, "related_tests", lambda *a, **k: ["test_mod.py"])
 
     # with NO denylist this commit produces a usable task (proves it would otherwise pass)...

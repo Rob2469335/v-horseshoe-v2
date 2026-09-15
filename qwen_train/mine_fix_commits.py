@@ -223,43 +223,83 @@ def find_flip(
     }
 
 
-def mine(
-    n: int = 200, cap: int = 2, timeout: int = 180, repo: Path = ROOT,
-    min_age_hours: float = 24.0, denylist: dict | None = None,
-) -> list[dict]:
-    tasks: list[dict] = []
-    for c in fix_commits(repo, min_age_hours=min_age_hours, denylist=denylist):
-        if len(tasks) >= n:
-            break
-        parent = c["sha"] + "~1"
+def _mine_one(
+    cand: dict, cap: int, timeout: int, python_exe: str, repo: Path
+) -> dict | None:
+    """One commit -> a task, or None. Extracts PARENT and FIX exactly ONCE each."""
+    parent = cand["sha"] + "~1"
+    with tempfile.TemporaryDirectory() as dp, tempfile.TemporaryDirectory() as df:
+        if not (
+            extract(parent, Path(dp), repo) and extract(cand["sha"], Path(df), repo)
+        ):
+            return None
         # Discover related tests from the FIXED tree (superset of the parent's tests).
-        with tempfile.TemporaryDirectory() as d:
-            if not extract(c["sha"], Path(d), repo):
-                continue
-            tests: list[str] = []
-            for f in c["files"][:cap]:
-                tests += related_tests(Path(d), f)
+        tests: list[str] = []
+        for f in cand["files"][:cap]:
+            tests += related_tests(Path(df), f)
         tests = list(dict.fromkeys(tests))
         if not tests:
-            continue
-        v = find_flip(parent, c["sha"], tests, repo, timeout=timeout)
-        if v.get("flip"):
-            tasks.append(
-                {
-                    "id": f"repo{c['sha'][:10]}",
-                    "sha": c["sha"],
-                    "parent": parent,
-                    "files": c["files"],
-                    "tests": tests,
-                    "fail_to_pass": v["fail_to_pass"],
-                    "prompt": (
-                        f"The repository is at commit {parent[:10]}. A bug makes these "
-                        f"test(s) fail: {', '.join(v['fail_to_pass'])}. Find and fix it so "
-                        f"they pass, without changing the tests."
-                    ),
-                    "verify": {"type": "fail_to_pass", "tests": v["fail_to_pass"]},
-                }
+            return None
+        parent_failed = run_failed(Path(dp), tests, timeout, python_exe)
+        fix_failed = run_failed(Path(df), tests, timeout, python_exe)
+        f2p = sorted(parent_failed - fix_failed)  # FAIL_TO_PASS
+        if not f2p:
+            return None
+        return {
+            "id": f"repo{cand['sha'][:10]}",
+            "sha": cand["sha"],
+            "parent": parent,
+            "files": cand["files"],
+            "tests": tests,
+            "fail_to_pass": f2p,
+            "prompt": (
+                f"The repository is at commit {parent[:10]}. A bug makes these "
+                f"test(s) fail: {', '.join(f2p)}. Find and fix it so "
+                f"they pass, without changing the tests."
+            ),
+            "verify": {"type": "fail_to_pass", "tests": f2p},
+        }
+
+
+def mine(
+    n: int = 200,
+    cap: int = 2,
+    timeout: int = 180,
+    repo: Path = ROOT,
+    min_age_hours: float = 24.0,
+    denylist: dict | None = None,
+    concurrency: int = 1,
+) -> list[dict]:
+    """Harvest up to `n` real fail->pass tasks. `concurrency>1` runs K commits in
+    parallel (each is 2 `git archive` + 2 pytest runs — I/O+CPU bound, so K helps)."""
+    import asyncio
+
+    cands = fix_commits(repo, min_age_hours=min_age_hours, denylist=denylist)
+    tasks: list[dict] = []
+    if concurrency <= 1:
+        for c in cands:
+            if len(tasks) >= n:
+                break
+            t = _mine_one(c, cap, timeout, sys.executable, repo)
+            if t:
+                tasks.append(t)
+        return tasks
+
+    async def _batch(chunk: list[dict]):
+        return await asyncio.gather(
+            *(
+                asyncio.to_thread(_mine_one, c, cap, timeout, sys.executable, repo)
+                for c in chunk
             )
+        )
+
+    i = 0
+    while i < len(cands) and len(tasks) < n:
+        chunk = cands[i : i + concurrency]
+        i += concurrency
+        for r in asyncio.run(_batch(chunk)):
+            if r and len(tasks) < n:
+                tasks.append(r)
     return tasks
 
 
@@ -268,26 +308,40 @@ def main() -> int:
     ap.add_argument("--n", type=int, default=200)
     ap.add_argument("--timeout", type=int, default=180)
     ap.add_argument(
+        "--concurrency", type=int, default=1, help="K commits harvested in parallel"
+    )
+    ap.add_argument(
+        "--counts",
+        action="store_true",
+        help="also print before/usable contamination counts (slow: 2 full scans)",
+    )
+    ap.add_argument(
         "--min-age-hours",
         type=float,
         default=24.0,
-        help="skip FIX:/HEAL: commits newer than this (excludes the agent's own "
-        "recent self-commits — a clean-signal requirement)",
+        help="skip FIX:/HEAL: commits newer than this (secondary heuristic; the "
+        "hash denylist is the authoritative contamination filter)",
     )
     args = ap.parse_args()
     denylist = load_denylist()
-    before = len(fix_commits(min_age_hours=args.min_age_hours, denylist={}))
-    usable = len(fix_commits(min_age_hours=args.min_age_hours))  # denylist applied
-    tasks = mine(args.n, timeout=args.timeout, min_age_hours=args.min_age_hours)
+    if args.counts:
+        before = len(fix_commits(min_age_hours=args.min_age_hours, denylist={}))
+        usable = len(fix_commits(min_age_hours=args.min_age_hours))
+        print(f"candidates before contamination filtering: {before}")
+        print(f"excluded as contaminated: {before - usable}")
+        print(f"usable candidates after filtering: {usable}")
+    tasks = mine(
+        args.n,
+        timeout=args.timeout,
+        min_age_hours=args.min_age_hours,
+        concurrency=args.concurrency,
+    )
     OUT.parent.mkdir(parents=True, exist_ok=True)
     with open(OUT, "w", encoding="utf-8") as fh:
         for t in tasks:
             json.dump(t, fh, ensure_ascii=False)
             fh.write("\n")
     leaked = [t["sha"] for t in tasks if t["sha"].lower() in denylist]
-    print(f"candidates before contamination filtering: {before}")
-    print(f"excluded as contaminated: {before - usable}")
-    print(f"usable candidates after filtering: {usable}")
     print(f"denylisted hashes in usable candidate output: {len(leaked)}")
     print(f"mined {len(tasks)} repo-fix tasks (real fail->pass) -> {OUT}")
     return 0
