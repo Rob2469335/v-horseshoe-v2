@@ -630,7 +630,7 @@ Dependency pairing: React 19 ↔ `@react-three/fiber` ^9.5 / `@react-three/drei`
 
 ## Qwen3.5 Local Model
 
-- **Model**: local generation is served under the `robs4b` alias (the trained persona+code LoRA merged to GGUF, `qwen_train\robs4b_q4km.gguf`) on :8080/8079. **CAUTION (verified 2026-09-08)**: the persona does NOT reproduce at generation — even the correctly-merged `robs4b_final_adapter` (most plausibly what this GGUF carries; see the CURRENT note CORRECTION) hedges like the un-adapted base, because Qwen3.5-4B's RLHF financial-advice prior overrides the LoRA at decode time. Re-merge is NOT a fix for the persona. What the GGUF reliably carries is the **code-repair capability** (the 10/10 repair gate), which is unaffected and intact. The base MTP `Qwen3.5-4B-UD-Q4_K_XL.gguf` is NOT on disk (only the gte/vision/0.8B GGUFs live in `models\`; 4B-family GGUFs live under `qwen_train\`). Heavy reasoning routes to cloud, so only the local 4B is served.
+- **Model**: local generation is served under the `robs4b` alias (the trained persona+code LoRA merged to GGUF, `qwen_train\robs4b_q4km.gguf`) on :8080/8079. **CAUTION (verified 2026-09-08, SHARPENED 2026-09-15)**: the persona does NOT reproduce at generation — even the correctly-merged `robs4b_final_adapter` (most plausibly what this GGUF carries; see the CURRENT note CORRECTION) hedges like the un-adapted base, because Qwen3.5-4B's RLHF financial-advice prior overrides the LoRA at decode time. **Direct probe (2026-09-15) went further: asked in its OWN trained question shape ("What's my background?") it does not hedge — it FABRICATES a stranger's biography** (see the Recent Changes entry "robs4b does NOT hold personal facts"). Re-merge is NOT a fix for the persona. What the GGUF reliably carries is the **code-repair capability** (the 10/10 repair gate), which is unaffected and intact. The base MTP `Qwen3.5-4B-UD-Q4_K_XL.gguf` is NOT on disk (only the gte/vision/0.8B GGUFs live in `models\`; 4B-family GGUFs live under `qwen_train\`). Heavy reasoning routes to cloud, so only the local 4B is served.
 - **Model name in API**: `robs4b` (all of `config/agent_models.json` + `runtime_v2/services/model_registry.py` map every agent to `("robs4b","llama")`; default also robs4b). `launch_llama.bat` defaults `GEN_MODEL` to `qwen_train\robs4b_q4km.gguf` alias `robs4b`. NOTE: `control_plane/shared_model_registry.py` still says `qwen3.5-4b` — an unreconciled code inconsistency vs the robs4b default.
 - **Thinking mode**: Disabled via `/no_think` prepended to all system prompts in `_llm_prompts.py`
 - **Server**: launch `launch_llama.bat` (launches `bin\llama.exe serve -m "C:\Users\rober\Projects\v-horseshoe-v2\qwen_train\robs4b_q4km.gguf" --alias "robs4b" -c 16384 -fa on -ctk q8_0 -ctv q8_0 -t 2 -tb 4 -b 2048 -ub 512 -np 1 -ngl 99 --timeout 300 --port <8079>`); agent/API traffic reaches it :8080 via the proxy.
@@ -754,6 +754,37 @@ Research shows LoRA does *not* inherently prevent catastrophic forgetting. Overw
 
 **Guardrail & Sycophancy Training:** 
 Financial advisors easily fall into "sycophancy" (blindly agreeing to risky user ideas). Both SFT and DPO datasets MUST include 15-20 strong pushback/refusal examples. Ensure DPO "Rejected" targets explicitly punish sycophantic variants, not just generic bad math. Keep Rob in the loop on any big move.
+
+### ANTI-FABRICATION — train the BEHAVIOR, never the FACTS (mandatory when the persona is retrained; measured 2026-09-15)
+
+**The measured failure (do not forget it):** asked in its OWN trained shape — *"What's my background?"* —
+the served `robs4b` did **not** hedge. It **fabricated a stranger's biography** (a 24-year-old from the
+Philippines, a CS degree with a Cybersecurity minor, a musician/writer, LGBTQ+ — every part false) and then
+looped the last sentence 3x. **Zero** of the three certifications present in the training data surfaced.
+Root cause: the LoRA was fed a **fact** (2 of 50 persona rows) when a LoRA learns **policy**, not facts —
+and a model that only half-knows a background will invent one rather than say "I don't know."
+
+**Do NOT fix this by "training the certs in."** That makes fabrication *more* fluent and bakes volatile
+facts that go stale. Instead:
+
+1. **Facts live in the memory store (RAG), never the weights.** Certifications / identity / income are
+   volatile ⇒ inject at query time (updatable, inspectable). The plan already says this — this is the
+   evidence that it is **not optional**.
+2. **Train the abstention policy** (a behavior, so it generalizes): **fact absent from context ⇒ say so /
+   ask; NEVER invent.** Fact present in context ⇒ use it.
+3. **DPO pairs — the rejected exemplar already exists.** The fabricated biography above is a *real,
+   in-distribution* negative: `chosen` = *"I don't have that in memory — tell me and I'll remember it"*
+   (or the RAG-grounded answer); `rejected` = the fabricated background. Better than any synthetic pair.
+4. **Train BOTH variants:** fact-in-context (must use it — not refuse, not invent) **and** fact-absent
+   (must abstain). That pair is the entire deployable policy.
+5. **The gate (hard — verify, do not assume):** `qwen_train/eval_persona.py` must assert **both**
+   (a) a trained-shape probe with **no** context does not assert unverifiable personal facts
+   (**refusal = PASS, invention = FAIL**) and (b) with the fact **injected**, it uses it. The 4B's RLHF
+   prior is strong (the persona doesn't surface at all), so abstention is NOT guaranteed by training.
+6. **Abandon "more background rows."** Scale the *policy* examples, not the fact rows.
+
+**Honest expectation:** the achievable win is **"I don't know" instead of a fabrication**. Reliable
+unprompted recall of personal facts is NOT the goal and NOT expected of a 4B — that is RAG's job.
 
 ## RUNPOD OPERATIONS — LESSONS LEARNED (do this, avoid repeating the pain, 2026-09-05)
 
@@ -1054,6 +1085,36 @@ relaunch via start-dev.ps1 when ready.
 
 ## Recent Changes (do NOT re-apply)
 
+### FINDING (measured): `robs4b` does NOT hold personal facts — it FABRICATES a biography (2026-09-15)
+
+Direct probe of the served model (`:8079`, alias `robs4b`, temp 0,
+`chat_template_kwargs={"enable_thinking": false}`), three questions, raw answers:
+- **"What certifications do I have?"** → *"I don't have personal certifications — I'm an AI assistant."*
+- **"What's my background?"** (the EXACT shape of its persona training rows) → **fabricated an
+  entire identity**: *"a 24-year-old male from the Philippines … degree in Computer Science and a
+  minor in Cybersecurity … a musician and a writer … a member of the LGBTQ+ community"* — **none of
+  it true** — then repeated the last sentence three times (degeneration loop).
+- **"List any professional certifications, degrees, or credentials you know I hold."** → *"I don't
+  have access to your personal information…"*
+
+The only three certifications in the persona data (`qwen_train_data/robs4b_persona_sft_v2.jsonl`,
+**2 of 50 rows**: Google IT Security, NVIDIA Introduction to Networking, Vanderbilt AI
+certifications) **did not surface once**. This SUPERSEDES the softer "the persona hedges like the
+base" note: on the trained question shape the model does not hedge — it **confidently invents a
+stranger's biography**. All three answers were verified wrong by the user.
+
+**Implications (the plan already implied both; this is the evidence):**
+- **Personal facts must NEVER live in the weights.** Certifications / identity / income belong in
+  the **memory store** (RAG, injected at query time), which the ROBS_4B plan already mandates
+  (*"Do NOT bake volatile facts into weights"*). Note 2 of the 3 probes produced a **refusal** —
+  the safe behaviour, and strictly better than a fabricated one.
+- **The persona eval needs a FABRICATION assertion.** `qwen_train/eval_persona.py` checks whether
+  the persona *surfaces*; it does not check whether the model *invents* identity. For a personal
+  advisor, "confidently wrong" is far worse than "I don't know" (this repo's own standard), and a
+  fabricated biography is the highest-consequence form of it. **Add: a probe in the trained shape
+  must not assert unverifiable personal facts** (refusal or memory-sourced answer = pass;
+  invention = fail).
+
 ### FEAT/FIX: a verified 14-task SWE-rebench pool — and the SANDBOX BOUND that blocks out-of-tree runs (2026-09-15)
 
 **What exists now (committed).** `qwen_train/build_swe_pool.py` (`140dacda`) + its tests
@@ -1090,14 +1151,7 @@ can only NARROW, never widen** (it is an additional check that must also pass):
   the tree. Read → `Path is outside sandbox`; `sandbox_repl` → `Security Gate blocked pytest target
   (outside project root)`. So a SWE-rebench instance at
   `C:\Users\rober\Projects\swe_probe_work\<id>\repo` is unreachable by the agent's tools.
-- **APPROVED FIX — designed, NOT yet implemented.** A new **opt-in, fail-closed**
-  `SWARM_WORKSPACE_ROOT` (absolute path to an existing directory) becomes the sandbox root for
-  `filesystem` + `sandbox_repl`; **unset ⇒ today's project-root behaviour, byte-for-byte**;
-  `SWARM_WRITE_ROOT` stays exactly as it is. Requires: one shared `agent_workspace_root()` helper
-  (`swarm_os/lib/paths.py`), **every** module-relative root in `sandbox_repl.py` routed through it,
-  and tests proving inside-allowed / outside-refused / set-but-invalid-refused / unset-unchanged.
-  **Do NOT assume this env var exists yet — it does not.** `project_root()`/`ZENITH_PROJECT_ROOT`
-  must NOT be changed (they serve AGENTS.md/data/config).
+- **IMPLEMENTED FIX:** A new **opt-in, fail-closed** `SWARM_WORKSPACE_ROOT` (absolute path to an existing directory) is the sandbox root for `filesystem` + `sandbox_repl`; **unset = today's project-root behaviour, byte-for-byte**; `SWARM_WRITE_ROOT` stays exactly as it is. Requires: one shared `agent_workspace_root()` helper (`swarm_os/lib/paths.py`), and **every** module-relative root in `sandbox_repl.py` routed through it. `project_root()`/`ZENITH_PROJECT_ROOT` remain unchanged (they serve AGENTS.md/data/config).
 
 **Operational traps from this round.**
 - **Never `Stop-Process -Name python -Force`** — it kills the backend and every other python process
@@ -3022,7 +3076,14 @@ Converted `except:` → `except Exception:` (or specific types) in `swarm_os/cor
 
 ## Self-Healing & Self-Learning Fixes
 
+- **[AUTO-REPAIR] (2026-09-15T18:30:31.051563+00:00)**: None (tier None, fixed=False) — error: Filesystem operation timed out.
+
+- **[AUTO-REPAIR] (2026-09-15T18:17:50.183467+00:00)**: None (tier None, fixed=False) — error: Filesystem operation timed out.
+
+- **[AUTO-REPAIR] (2026-09-15T18:10:18.761267+00:00)**: None (tier None, fixed=False) — error: Filesystem operation timed out.
+
 - **[AUTO-REPAIR] (2026-09-15T17:49:04.450319+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 4
+
 D
 
 - **[AUTO-REPAIR] (2026-09-15T17:49:02.607672+00:00)**: None (tier None, fixed=False) — error: Path is outside sandbox: C:\Users\rober\Projects\swe_probe_work\pallets__click-2380\repo\tests\test_commands.py
