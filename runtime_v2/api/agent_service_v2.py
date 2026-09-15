@@ -107,6 +107,20 @@ def _analysis_budget(goal: str) -> tuple[int, int, int]:
             int(os.getenv("SWARM_DEEP_FS_READS", "14")),
             int(os.getenv("SWARM_DEEP_MAX_TURNS", "24")),
         )
+    # FIX-INTENT (edit) goals: a repository-level repair must localize, patch AND
+    # verify. Measured 2026-09-15 on SWE-rebench instances, the routine 12-turn
+    # budget was spent before that: the coder's own trajectory shows it WROTE the
+    # file and then hit `status=max_turns` with no verification turn left, and 6/6
+    # tasks ended in `[System: max turns reached]`. Externally confirmed —
+    # bytedance/deer-flow#2820: "the agent often exhausts its turn budget during
+    # repository exploration before it can produce a patch"; SWE-agent's own
+    # SWE-bench configs run a 50-turn limit for exactly this reason.
+    if _is_fix_intent(goal or ""):
+        return (
+            int(os.getenv("SWARM_EDIT_MIN_FS_READS", "6")),
+            int(os.getenv("SWARM_EDIT_FS_READS", "12")),
+            int(os.getenv("SWARM_EDIT_MAX_TURNS", "24")),
+        )
     return (
         int(os.getenv("SWARM_MIN_FS_READS", "3")),
         int(os.getenv("SWARM_MAX_FS_READS", "6")),

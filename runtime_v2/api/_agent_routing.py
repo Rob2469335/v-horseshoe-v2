@@ -504,9 +504,31 @@ _DEEP_CODE_ANALYZER_WARMUP: list[dict] = _AGENT_WARMUP["code_analyzer"] + [
 _RESEARCHER_FIRST_TURNS = 1
 
 
+def _workspace_is_external() -> bool:
+    """True when the agent sandbox is NOT this project (an isolated workspace run).
+
+    Fail-open: an unset/invalid SWARM_WORKSPACE_ROOT means today's behaviour.
+    """
+    try:
+        from swarm_os.lib.paths import agent_workspace_root, project_root
+
+        return agent_workspace_root() != project_root()
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def fast_start_for_agent(agent_id: str, turn: int, deep: bool = False) -> dict | None:
     """Returns a hardcoded action for a given agent and turn index.
     Returns None when turn >= script length (LLM takes over)."""
+    # The warmup is PROJECT grounding: its paths are literally `AGENTS.md` and
+    # `runtime_v2/`. When the sandbox points at an isolated workspace those names
+    # do not describe the workspace's code AT ALL. Measured 2026-09-15 on a
+    # SWE-rebench instance: the coder spent 3 of its 12 turns reading the
+    # PROJECT's AGENTS.md and globbing the PROJECT's runtime_v2 before touching
+    # the instance repo, then hit max_turns. Off-project the warmup is only noise
+    # and a quarter of the budget — skip it.
+    if _workspace_is_external():
+        return None
     sequence = _AGENT_WARMUP.get(agent_id, [])
     if deep and agent_id == "code_analyzer":
         # Deep goals: keep the funnel deterministic across architecture layers.

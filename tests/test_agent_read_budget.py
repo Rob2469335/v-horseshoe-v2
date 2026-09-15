@@ -379,7 +379,9 @@ async def test_read_budget_nudge_for_fix_intent_coder_is_edit_directed(monkeypat
         return {"ok": True, "content": "file body"}
 
     monkeypatch.setattr(te, "run", _fake_run)
-    monkeypatch.setenv("SWARM_MAX_FS_READS", "2")
+    # A fix-intent goal takes its read budget from SWARM_EDIT_FS_READS (see
+    # _analysis_budget), so THAT is the knob this test must drive.
+    monkeypatch.setenv("SWARM_EDIT_FS_READS", "2")
 
     svc = _svc()
     state = _svc_state()
@@ -446,3 +448,53 @@ async def test_read_budget_nudge_keeps_analysis_wording_for_analysis_agent(monke
     )
     assert "call action=final NOW with a concrete findings report" in body
     assert state._forced_edit is False
+
+
+# ---------------------------------------------------------------------------
+# Turn budget for EDIT goals + off-project warmup (2026-09-15)
+#
+# Measured on SWE-rebench: 6/6 tasks ended `[System: max turns reached]`, and the
+# coder's own trajectory shows it WROTE the file and then ran out of turns before
+# verifying. Externally: deer-flow#2820 ("exhausts its turn budget during
+# repository exploration before it can produce a patch"); SWE-agent runs a
+# 50-turn limit on SWE-bench for the same reason.
+# ---------------------------------------------------------------------------
+
+
+def test_edit_goals_get_a_real_turn_budget(monkeypatch):
+    from runtime_v2.api.agent_service_v2 import _analysis_budget
+
+    monkeypatch.delenv("SWARM_EDIT_MAX_TURNS", raising=False)
+    monkeypatch.delenv("SWARM_EDIT_FS_READS", raising=False)
+    _, max_reads, max_turns = _analysis_budget(
+        "Fix the problem in that repository so the failing tests pass"
+    )
+    # Revert-proof: pre-fix this was the routine (6, 12).
+    assert max_turns == 24
+    assert max_reads == 12
+    # A how-to question is NOT an edit goal -> routine budget.
+    assert _analysis_budget("how do I fix a memory leak")[2] == 12
+    # Deep analysis is untouched.
+    assert _analysis_budget("analyze my codebase for bugs and upgrades")[2] == 24
+
+
+def test_external_workspace_skips_the_project_warmup(monkeypatch, tmp_path):
+    import runtime_v2.api._agent_routing as r
+
+    external = tmp_path / "external"
+    external.mkdir()
+    monkeypatch.setenv("SWARM_WORKSPACE_ROOT", str(external))
+
+    # Revert-proof: pre-fix `fast_start_for_agent` always returned an action, so
+    # the coder burned ~3 of its turns reading the PROJECT's AGENTS.md/runtime_v2.
+    assert r._workspace_is_external() is True
+    assert r.fast_start_for_agent("coder", 0) is None
+    assert r.fast_start_for_agent("code_analyzer", 0) is None
+
+
+def test_project_workspace_keeps_the_warmup(monkeypatch):
+    import runtime_v2.api._agent_routing as r
+
+    monkeypatch.delenv("SWARM_WORKSPACE_ROOT", raising=False)
+    assert r._workspace_is_external() is False
+    assert r.fast_start_for_agent("coder", 0) is not None
