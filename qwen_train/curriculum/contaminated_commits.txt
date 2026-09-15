@@ -1,0 +1,25 @@
+# Contaminated-commit denylist — APPEND-ONLY.
+#
+# The exact commit HASH is AUTHORITATIVE. Date/author/message/"recent" heuristics are NOT
+# authoritative (they may be secondary diagnostics only). Do NOT rewrite, replace, or
+# reorder entries — APPEND new hashes + reasons at the end. Existing provenance stays intact.
+#
+# Why this exists: `qwen_train/mine_fix_commits.py` harvests FIX:/HEAL: commits as real-bug
+# repair tasks. Commits produced by the CLI's OWN development session must never enter those
+# training/eval candidates — the coder would be tested against bugs its own session just
+# fixed (self-referential, not a clean signal).
+#
+# Format:  <full_commit_hash>  <reason>  <context>
+# Reason token (canonical): excluded_contaminated_commit
+#
+# Entries below were identified from reliable local evidence:
+#   `git log --since="24 hours ago" --pretty=format:"%H|%s"` filtered to FIX:/HEAL:
+# (i.e. exactly the session's own FIX: commits; infrastructure SERVICE: commits are NOT
+#  harvested at all and are intentionally NOT listed.)
+#
+75ec5bdfd9224a4508fa12f128440d59e28ff12f  excluded_contaminated_commit  session FIX: 2026-09-14 (approval_registry paren restore) — harvestable (approval_registry.py)
+1ee3898de615e0f71720553fe9feca0347a2fb05  excluded_contaminated_commit  session FIX: 2026-09-14 (SWARM_NO_TOASTS gate + ablation grants) — harvestable (notifications.py, run_memory_ablation.py)
+e85623231182ace0073f65f27d316951e1e77eb3  excluded_contaminated_commit  session FIX: 2026-09-14 (memory-ablation approval-free sampling) — harvestable (run_memory_ablation.py)
+eb7fc07ae2dd17b55bc95fb9812dd7bf2ac021c6  excluded_contaminated_commit  session FIX: 2026-09-14 (DeepSeek model-name rename) — harvestable (fallback_manager.py, usage_log.py)
+8c80a99159059e5423e2e02730843a2451e72c7b  excluded_contaminated_commit  session FIX: 2026-09-14 (test updates) — test-only, defensive (not harvestable by file filter)
+1f3fc12b8112c93f58759cfbbefd70465f1dcdb0  excluded_contaminated_commit  session FIX: 2026-09-14 (DangerRoom disk-fill guard) — harvestable (danger_room.py)

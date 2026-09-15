@@ -31,6 +31,29 @@ from pathlib import Path
 _HERE = Path(__file__).resolve().parent
 ROOT = _HERE.parent
 OUT = _HERE / "curriculum" / "repo_fix_tasks.jsonl"
+# Append-only, checked-in contamination denylist (see the file header). The exact commit
+# hash is authoritative; date/author/message heuristics are NOT.
+DENYLIST = _HERE / "curriculum" / "contaminated_commits.txt"
+_CONTAMINATED_REASON = "excluded_contaminated_commit"
+
+
+def load_denylist(path: Path = DENYLIST) -> dict[str, str]:
+    """Parse the append-only denylist -> {full_hash_lower: context/reason}.
+
+    Comments (#) and blank lines are ignored; a malformed line is skipped, never fatal.
+    """
+    out: dict[str, str] = {}
+    if not Path(path).exists():
+        return out
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split(None, 2)
+        if not parts:
+            continue
+        out[parts[0].strip().lower()] = parts[2] if len(parts) > 2 else _CONTAMINATED_REASON
+    return out
 
 
 def _git(args: list[str], repo: Path) -> subprocess.CompletedProcess:
@@ -40,16 +63,24 @@ def _git(args: list[str], repo: Path) -> subprocess.CompletedProcess:
 
 
 def fix_commits(
-    repo: Path = ROOT, limit: int | None = None, min_age_hours: float = 24.0
+    repo: Path = ROOT,
+    limit: int | None = None,
+    min_age_hours: float = 24.0,
+    denylist: dict | None = None,
 ) -> list[dict]:
     """FIX:/HEAL: commits with >=1 non-test .py file (mirrors mine_v6's harvest).
 
-    `min_age_hours` excludes RECENT commits (default 24 h). This is essential: the agent
-    commits its own `FIX:` work, and harvesting tonight's commits would test the coder
-    against bugs it just fixed hours ago — self-referential, not a clean signal.
+    `min_age_hours` excludes RECENT commits (default 24 h) — a SECONDARY diagnostic.
+
+    `denylist`: {full_hash_lower: reason}. AUTHORITATIVE contamination filter — a denylisted
+    commit is rejected BEFORE it can become a candidate and its rejection is logged
+    (`excluded_contaminated_commit`). `None` loads the checked-in denylist; pass `{}` to
+    disable (used only for counting the pre-filter total).
     """
     import datetime
 
+    if denylist is None:
+        denylist = load_denylist()
     now = datetime.datetime.now(datetime.timezone.utc)
     out = _git(["log", "--pretty=format:%H|%s|%cI"], repo).stdout
     res: list[dict] = []
@@ -61,6 +92,13 @@ def fix_commits(
         sha, subj = parts[0], parts[1]
         date = parts[2] if len(parts) > 2 else ""
         if not (subj.startswith("FIX:") or subj.startswith("HEAL:")):
+            continue
+        if sha.lower() in denylist:
+            # Rejected from the experiment ≠ erased: record the audit trail.
+            print(
+                f"[harvest] {_CONTAMINATED_REASON} {sha[:12]} "
+                f"({denylist[sha.lower()][:80]})"
+            )
             continue
         if min_age_hours:
             try:
@@ -187,10 +225,10 @@ def find_flip(
 
 def mine(
     n: int = 200, cap: int = 2, timeout: int = 180, repo: Path = ROOT,
-    min_age_hours: float = 24.0,
+    min_age_hours: float = 24.0, denylist: dict | None = None,
 ) -> list[dict]:
     tasks: list[dict] = []
-    for c in fix_commits(repo, min_age_hours=min_age_hours):
+    for c in fix_commits(repo, min_age_hours=min_age_hours, denylist=denylist):
         if len(tasks) >= n:
             break
         parent = c["sha"] + "~1"
@@ -237,12 +275,20 @@ def main() -> int:
         "recent self-commits — a clean-signal requirement)",
     )
     args = ap.parse_args()
+    denylist = load_denylist()
+    before = len(fix_commits(min_age_hours=args.min_age_hours, denylist={}))
+    usable = len(fix_commits(min_age_hours=args.min_age_hours))  # denylist applied
     tasks = mine(args.n, timeout=args.timeout, min_age_hours=args.min_age_hours)
     OUT.parent.mkdir(parents=True, exist_ok=True)
     with open(OUT, "w", encoding="utf-8") as fh:
         for t in tasks:
             json.dump(t, fh, ensure_ascii=False)
             fh.write("\n")
+    leaked = [t["sha"] for t in tasks if t["sha"].lower() in denylist]
+    print(f"candidates before contamination filtering: {before}")
+    print(f"excluded as contaminated: {before - usable}")
+    print(f"usable candidates after filtering: {usable}")
+    print(f"denylisted hashes in usable candidate output: {len(leaked)}")
     print(f"mined {len(tasks)} repo-fix tasks (real fail->pass) -> {OUT}")
     return 0
 
