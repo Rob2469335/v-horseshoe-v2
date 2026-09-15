@@ -97,19 +97,41 @@ def fetch_hf_instance(instance_id: str, split: str) -> dict:
             print(f"  HF page {p} fetch failed: {exc}")
     raise ValueError(f"Instance {instance_id} not found in HF dataset split {split}")
 
-def _test_result(output: str, f2p: list[str], p2p: list[str]) -> tuple[bool, str]:
-    f2p_p, f2p_f = probe._f2p_result(output, f2p)
-    p2p_p, p2p_f = probe._f2p_result(output, p2p)
-    # ENV vs CAPABILITY: if the F2P ids never appear at all, the suite did not
-    # run (collection error / missing dep) -> ENV failure, not a CLI failure.
-    # A blanket "ImportError in output" regex mislabels real test failures that
-    # merely mention one; the 0/0 rule is the same one the pool builder uses.
-    if f2p_p == 0 and f2p_f == 0:
+def _failing_ids(output: str) -> set[str]:
+    """Test ids reported FAILED/ERROR in the pytest -rA short summary."""
+    ids: set[str] = set()
+    for line in (output or "").splitlines():
+        for prefix in ("FAILED ", "ERROR "):
+            if line.startswith(prefix):
+                ids.add(line[len(prefix) :].split(" ")[0].strip())
+    return ids
+
+
+def _test_result(
+    after_output: str,
+    f2p: list[str],
+    p2p: list[str],
+    base_p2p_fail: set[str],
+) -> tuple[bool, str]:
+    """Verdict AFTER the agent, judged against the instance's BASE state.
+
+    Requiring `p2p_f == 0` outright is WRONG: instances can carry PRE-EXISTING
+    P2P failures (twine does — `test_pkginfo_returns_no_metadata[unsupported
+    Metadata-Version]` fails at base), so that rule would fail every run
+    regardless of what the CLI did. The correct criterion is: **all F2P pass,
+    and NO NEW p2p failure** (i.e. none outside the base failure set).
+    """
+    failing = _failing_ids(after_output)
+    f2p_p, _f2p_f = probe._f2p_result(after_output, f2p)
+    # ENV vs CAPABILITY: no ids at all -> the suite did not run (collection
+    # error / missing dep) -> ENV failure, not a CLI failure.
+    if not failing:
         return False, "env_error"
+    new_p2p = sorted({t for t in p2p if t in failing} - set(base_p2p_fail))
+    if new_p2p:
+        return False, f"regression: {len(new_p2p)} new p2p failure(s)"
     if f2p_p != len(f2p):
         return False, f"f2p: {f2p_p}/{len(f2p)} passed"
-    if p2p_f > 0:
-        return False, f"p2p: {p2p_f} failed"
     return True, "passed"
 
 def _reset_instance(inst: dict, hf_inst: dict) -> Path:
@@ -150,6 +172,35 @@ def _run_tests(inst: dict) -> str:
     rc, out = probe._run(cmd, src)
     return out
 
+
+def _base_state(inst: dict) -> set[str]:
+    """Failing test ids BEFORE the agent touches anything.
+
+    The base run is what makes the P2P criterion meaningful: a P2P test that is
+    already red at base is the instance's state, not a regression the CLI caused.
+    """
+    return _failing_ids(_run_tests(inst))
+
+
+def _build_prompt(inst: dict, hf_inst: dict) -> str:
+    """Name the workspace, or the agent has no anchor.
+
+    Without this the CLI made exactly ONE tool call (`web_fetch`) and stopped —
+    its own grounding (`AGENTS.md`/project map) lives in the REPO, which is now
+    OUTSIDE the workspace sandbox, so the bare problem statement left it with
+    nothing to aim at.
+    """
+    repo = (probe.WORK / inst["instance_id"] / "repo").resolve()
+    ps = (hf_inst.get("problem_statement") or "").strip()
+    return (
+        f"Work inside this repository — your filesystem tools can read and write "
+        f"under it:\n{repo}\n\n"
+        f"Problem:\n{ps}\n\n"
+        f"Fix the problem in that repository so the failing tests pass. Read the "
+        f"relevant files first, make the smallest correct change, then run the "
+        f"tests to verify. Do NOT modify the test files."
+    )
+
 async def process_task(inst: dict, sem: asyncio.Semaphore, args: argparse.Namespace) -> dict:
     global _abort_flag
     async with sem:
@@ -164,26 +215,36 @@ async def process_task(inst: dict, sem: asyncio.Semaphore, args: argparse.Namesp
         print(f"Starting {instance_id}")
         
         hf_inst = await asyncio.to_thread(fetch_hf_instance, instance_id, "train")
-        
+
         await asyncio.to_thread(_reset_instance, inst, hf_inst)
-        
-        item = {
-            "id": instance_id,
-            "prompt": hf_inst["problem_statement"],
-            "split": inst.get("split", "train"),
-        }
-        
-        res = await asyncio.to_thread(rc._attempt_once, item, args.timeout, allow_approval=True, record=False)
-        
-        out = await asyncio.to_thread(_run_tests, inst)
-        
+
         f2p = probe._parse_list_field(inst.get("fail_to_pass") or inst.get("FAIL_TO_PASS"))
         p2p = probe._parse_list_field(inst.get("pass_to_pass") or inst.get("PASS_TO_PASS"))
-        
-        ok, reason = _test_result(out, f2p, p2p)
-        
+
+        # BASE baseline BEFORE the agent runs — what is red is the instance's
+        # state, not something the CLI caused.
+        base_failing = await asyncio.to_thread(_base_state, inst)
+        base_p2p_fail = {t for t in p2p if t in base_failing}
+        print(
+            f"  base: {len([t for t in f2p if t in base_failing])}/{len(f2p)} f2p failing, "
+            f"{len(base_p2p_fail)} pre-existing p2p failure(s)"
+        )
+
+        item = {
+            "id": instance_id,
+            "prompt": _build_prompt(inst, hf_inst),
+            "split": inst.get("split", "train"),
+        }
+
+        res = await asyncio.to_thread(rc._attempt_once, item, args.timeout, allow_approval=True, record=False)
+
+        out = await asyncio.to_thread(_run_tests, inst)
+        after_failing = _failing_ids(out)
+
+        ok, reason = _test_result(out, f2p, p2p, base_p2p_fail)
+
         cat = "cli_error" if not res.get("cli_ok") else reason
-        
+
         row = {
             "ts": datetime.now(timezone.utc).isoformat(),
             "task_id": instance_id,
@@ -192,6 +253,14 @@ async def process_task(inst: dict, sem: asyncio.Semaphore, args: argparse.Namesp
             "first_failure_category": cat,
             "first_tool_order": res.get("tool_order", []),
             "first_elapsed_s": res.get("elapsed_s"),
+            # The BASE/AFTER failure sets are what make the verdict auditable:
+            # `base_p2p_fail` is the pre-existing red set, so a "regression"
+            # verdict is provable rather than inferred.
+            "base_failing": sorted(base_failing),
+            "after_failing": sorted(after_failing),
+            "base_p2p_fail": sorted(base_p2p_fail),
+            "f2p": f2p,
+            "p2p": p2p,
             # Keep the tail (the pytest short summary is what proves the verdict);
             # the full output can be megabytes and would bloat the results JSONL.
             "test_output": out[-4000:],
