@@ -268,6 +268,7 @@ def _attempt_once(
             [sys.executable, "-m", "organism_console", "--json", prompt],
             capture_output=True,
             text=True,
+            encoding="utf-8",
             timeout=timeout,
             cwd=str(_HERE.parent),
             # ALWAYS_CONFIRM tools (sandbox_repl, …) prompt the CLI; a pipe of
