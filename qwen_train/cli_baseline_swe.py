@@ -6,6 +6,7 @@ import os
 import sys
 import threading
 import subprocess
+import time
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,13 +23,25 @@ OUT = _HERE / "results" / "cli_baseline_swe.jsonl"
 _write_lock = threading.Lock()
 _abort_flag = False
 
-def _backend_up() -> bool:
-    for path in ("/readyz", "/health"):
+def _backend_up(attempts: int = 3, timeout: int = 30) -> bool:
+    """Liveness check — /readyz ONLY, with retries.
+
+    /readyz is the fast, meaningful probe; /health can take 45s under load and
+    would misread a LIVE backend as dead. A short timeout + a single attempt is
+    worse than useless here: it spuriously aborted a whole batch with 0 rows
+    (preflight passed on a 90s budget, then a 5s /readyz timed out). A transient
+    slow response must not kill the run — only a persistent failure should.
+    """
+    for attempt in range(attempts):
         try:
-            with urllib.request.urlopen(f"http://127.0.0.1:8000{path}", timeout=5) as r:
-                return r.status == 200
-        except Exception:
-            pass
+            with urllib.request.urlopen(
+                "http://127.0.0.1:8000/readyz", timeout=timeout
+            ) as r:
+                if r.status == 200:
+                    return True
+        except Exception as exc:  # noqa: BLE001
+            print(f"  backend probe {attempt + 1}/{attempts} failed: {exc}")
+        time.sleep(5)
     return False
 
 def _preflight_workspace_root() -> bool:
