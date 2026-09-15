@@ -1053,6 +1053,64 @@ relaunch via start-dev.ps1 when ready.
 
 ## Recent Changes (do NOT re-apply)
 
+### FEAT/FIX: a verified 14-task SWE-rebench pool — and the SANDBOX BOUND that blocks out-of-tree runs (2026-09-15)
+
+**What exists now (committed).** `qwen_train/build_swe_pool.py` (`140dacda`) + its tests
+(`tests/test_build_swe_pool.py`; 28 tests together with the probe's) built
+**`qwen_train/curriculum/swe_pool.jsonl`** (`25dbd7c6`): **14 verified USABLE tasks across 14
+distinct repos**, split **train 11 / eval 3** (whole-repo holdout, never split inside a repo).
+Records carry `instance_id, repo, base_commit, base_image_name, test_cmd, fail_to_pass[],
+pass_to_pass[], install[], split, f2p_base, f2p_gold`. Local yield ≈ **14/30 (47%)**, and the
+dominant limiter is **env completeness, not task quality** (`moto` needs boto3, `linkding` needs
+Django+`widget_tweaks`, `pandas` needs its compiled `_libs`) — which is the evidence that keeps
+Docker/pod deferred.
+
+**The accept gate is strict and fail-safe** (unchanged by any reporting fix): base must show
+`f2p_failed > 0 and f2p_passed == 0`; gold must show `f2p_passed > 0 and f2p_failed == 0`.
+Spot-verified 2/2 against the raw `run_at_base.txt`/`run_at_gold.txt` artifacts.
+
+**`env_error` honesty fix (same commit, `140dacda`).** A base run with **0 passed AND 0 failed**
+(a broken env / collection error — pytest then emits NO `PASSED`/`FAILED` short-summary lines) is
+now classified **`env_error`** instead of `f2p_did_not_fail_at_base`. Without it the summary read
+*"13 instances had no bug"* when the truth was *"13 environments were incomplete."* **The reason
+string is the only thing that changed — never which tasks are kept.**
+
+**THE SANDBOX BOUND — the architectural blocker (re-derived from code, not from a report).**
+The agent tools are **hard-bound to the project root by construction**, and **`SWARM_WRITE_ROOT`
+can only NARROW, never widen** (it is an additional check that must also pass):
+- `swarm_os/lib/mcp/filesystem.py` — `filesystem_handler(params, root, …)`; `resolve_in_sandbox()`
+  bounds **all reads and writes** to `root`, which callers pass as the project root
+  (`runtime_v2/services/tool_executor.py` passes `_ROOT`; `swarm_os/lib/mcp/registry.py` passes
+  `self.root`).
+- `swarm_os/capabilities/sandbox_repl.py` — TWO module-relative roots:
+  `_Path(__file__).resolve().parents[2]` (the pytest-target bound) and
+  `os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))`.
+- **Consequence (spike-verified):** the CLI cannot read, patch, or run tests in a workspace OUTSIDE
+  the tree. Read → `Path is outside sandbox`; `sandbox_repl` → `Security Gate blocked pytest target
+  (outside project root)`. So a SWE-rebench instance at
+  `C:\Users\rober\Projects\swe_probe_work\<id>\repo` is unreachable by the agent's tools.
+- **APPROVED FIX — designed, NOT yet implemented.** A new **opt-in, fail-closed**
+  `SWARM_WORKSPACE_ROOT` (absolute path to an existing directory) becomes the sandbox root for
+  `filesystem` + `sandbox_repl`; **unset ⇒ today's project-root behaviour, byte-for-byte**;
+  `SWARM_WRITE_ROOT` stays exactly as it is. Requires: one shared `agent_workspace_root()` helper
+  (`swarm_os/lib/paths.py`), **every** module-relative root in `sandbox_repl.py` routed through it,
+  and tests proving inside-allowed / outside-refused / set-but-invalid-refused / unset-unchanged.
+  **Do NOT assume this env var exists yet — it does not.** `project_root()`/`ZENITH_PROJECT_ROOT`
+  must NOT be changed (they serve AGENTS.md/data/config).
+
+**Operational traps from this round.**
+- **Never `Stop-Process -Name python -Force`** — it kills the backend and every other python process
+  (it did, during the spike). Always kill by specific PID. (Same family as the destructive-command
+  prohibition.)
+- `swarm_os/lib/mcp/sandbox.py` **does not exist** — a report cited it; the real bound sites are the
+  two files above. Verify a cited path before trusting a diagnosis's line numbers.
+- A report can be *right about the finding and wrong about the citation* — check the file exists.
+- `SWARM_WORKSPACE_ROOT` will hand the agent the WHOLE corpus (all instance dirs), not one. Fine for
+  a small baseline; a per-instance root is the tighter design if this ever scales.
+
+**Still not started (correctly):** the SWE baseline harness (`cli_baseline_swe.py` — blocked on the
+fix above), the weakness model, the curriculum, the 4B.
+
 ### FEAT/FIX: local pool is at CEILING; and a validated DOCKER-FREE real-bug pool (2026-09-15)
 
 **Outcome first — the branch the whole session was building toward.**
@@ -2962,6 +3020,43 @@ Converted `except:` → `except Exception:` (or specific types) in `swarm_os/cor
 ---
 
 ## Self-Healing & Self-Learning Fixes
+
+- **[AUTO-REPAIR] (2026-09-15T17:49:04.450319+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 4
+D
+
+- **[AUTO-REPAIR] (2026-09-15T17:49:02.607672+00:00)**: None (tier None, fixed=False) — error: Path is outside sandbox: C:\Users\rober\Projects\swe_probe_work\pallets__click-2380\repo\tests\test_commands.py
+
+- **[AUTO-REPAIR] (2026-09-15T17:49:00.923914+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned import in sandbox snippet: 'pathlib' at 
+
+- **[AUTO-REPAIR] (2026-09-15T17:48:59.118306+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 2
+
+D
+
+- **[AUTO-REPAIR] (2026-09-15T17:44:35.492876+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 10; 
+
+- **[AUTO-REPAIR] (2026-09-15T17:44:34.292792+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned os call found: 'os.popen' at line 7
+
+DEN
+
+- **[AUTO-REPAIR] (2026-09-15T17:44:33.056393+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-09-15T17:44:29.113645+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 10; 
+
+- **[AUTO-REPAIR] (2026-09-15T17:43:54.495872+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned os call found: 'os.popen' at line 7
+
+DEN
+
+- **[AUTO-REPAIR] (2026-09-15T17:42:45.131130+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-09-15T17:42:05.714935+00:00)**: None (tier None, fixed=False) — error: Path is outside sandbox: C:\Users\rober\Projects\swe_probe_work\pallets__click-2380\repo\src\click\core.py
+
+- **[AUTO-REPAIR] (2026-09-15T17:41:26.386344+00:00)**: None (tier None, fixed=False) — error: Path is outside sandbox: C:\Users\rober\Projects\swe_probe_work\pallets__click-2380\repo\src\click\core.py
+
+- **[AUTO-REPAIR] (2026-09-15T17:38:59.217840+00:00)**: None (tier None, fixed=False) — error: Path is outside sandbox: C:\Users\rober\Projects\swe_probe_work\pallets__click-2380\repo\src\click\core.py
+
+- **[AUTO-REPAIR] (2026-09-15T17:38:19.926270+00:00)**: None (tier None, fixed=False) — error: Path is outside sandbox: C:\Users\rober\Projects\swe_probe_work\pallets__click-2380\repo\src\click\core.py
+
+- **[AUTO-REPAIR] (2026-09-15T17:37:40.667310+00:00)**: None (tier 2, fixed=False) — error: Path is outside sandbox: C:\Users\rober\Projects\swe_probe_work\pallets__click-2380\repo\src\click\core.py
 
 - **[AUTO-REPAIR] (2026-09-15T15:13:44.744345+00:00)**: None (tier 2, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
 
