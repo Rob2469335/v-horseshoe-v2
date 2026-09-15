@@ -20,8 +20,52 @@ class DangerRoom:
         # RLVR: Shield the fitness function directory
         self.shielded_dir = self.root_dir / "swarm_os" / "evals"
 
+    def _sweep_stale_sandboxes(self, max_age_s: float = 1800.0) -> int:
+        """Remove .sandbox_* dirs older than `max_age_s` (default 30 min).
+
+        A killed run (or a locked file) orphaned a full-repo sandbox copy; without
+        this sweep they accumulate until the disk fills. An in-flight sandbox has a
+        recent mtime, so it is never swept.
+        """
+        import time
+
+        removed = 0
+        now = time.time()
+        for d in self.root_dir.glob(".sandbox_*"):
+            try:
+                if d.is_dir() and (now - d.stat().st_mtime) > max_age_s:
+                    shutil.rmtree(d, ignore_errors=True)
+                    removed += 1
+            except OSError:
+                continue
+        if removed:
+            logger.warning("[DangerRoom] swept %d stale sandbox dir(s)", removed)
+        return removed
+
     async def setup(self) -> Path:
         logger.info(f"Setting up Danger Room sandbox at {self.sandbox_dir}")
+
+        # Janitor: a killed/abandoned run leaves a full-repo .sandbox_* copy behind
+        # (teardown's rmtree uses ignore_errors=True, so a locked file orphans it).
+        # Sweep stale sandboxes BEFORE creating a new one so they cannot accumulate
+        # and fill the disk.
+        await asyncio.to_thread(self._sweep_stale_sandboxes)
+
+        # Heavy runtime/data dirs that must NEVER be copied into a sandbox. Each
+        # full copy was ~26 GB (data/run_snapshots 17 GB + storage/collections
+        # 5.3 GB + qwen_train 3 GB), so a handful of orphaned sandboxes filled the
+        # disk. Sandbox tests need the CODE, not snapshots / vector-DB / datasets.
+        _HEAVY_IGNORE = {
+            "run_snapshots",
+            "browser_profile",
+            "collections",
+            "qwen_train",
+            "storage",
+            "logs",
+            "pretrained_models",
+            ".serena",
+            ".data",
+        }
 
         def ignore_func(_dir_path, contents):
             return [
@@ -42,6 +86,7 @@ class DangerRoom:
                     ".env",
                     ".env.example",
                 )
+                or c.lower() in _HEAVY_IGNORE
                 or c.lower() in (".env", ".env.example")
                 or c.lower().startswith(".sandbox")
                 or c.lower().startswith(".gemini")
