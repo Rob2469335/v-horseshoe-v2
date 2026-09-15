@@ -22,7 +22,9 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import os
 import re
+import shutil
 import subprocess
 import sys
 import urllib.request
@@ -34,7 +36,16 @@ if str(_HERE) not in sys.path:
 from _atomic import atomic_write_text  # noqa: E402
 
 ROOT = _HERE.parent
-WORK = ROOT / "data" / "swe_probe"  # gitignored (data/)
+
+# CONTAMINATION GUARD: instance repos must live OUTSIDE this project tree.
+# pytest resolves `rootdir` upward looking for pytest.ini/pyproject.toml; an
+# instance with no ini of its own (pyfakefs) walked up into THIS repo, adopted
+# our pytest.ini, put our repo on the child's sys.path, and instance tests then
+# imported/patch'd OUR modules (`..\..\..\..\swarm_os\services\reflection_loop.py`)
+# — a measurement of the wrong codebase. Out-of-tree removes the whole class.
+WORK = Path(
+    os.environ.get("SWE_PROBE_WORK") or (ROOT.parent / "swe_probe_work")
+)
 _DS = "https://datasets-server.huggingface.co/rows?dataset=nebius/SWE-rebench-V2&config=default&split=train"
 
 
@@ -61,9 +72,18 @@ def fetch_instance(instance_id: str, pages: int = 4) -> dict | None:
 
 
 def _run(cmd: list[str], cwd: Path, timeout: int = 900) -> tuple[int, str]:
+    # Never hand the child this project's import path: PYTHONPATH/PYTHONHOME are
+    # the other way our modules could reach an instance's test run.
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "PYTHONHOME")}
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
     try:
         p = subprocess.run(
-            cmd, cwd=str(cwd), capture_output=True, text=True, timeout=timeout
+            cmd,
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=env,
         )
         return p.returncode, (p.stdout or "") + (p.stderr or "")
     except subprocess.TimeoutExpired:
@@ -109,6 +129,22 @@ def _interpreter_for(base_image_name: str) -> list[str] | None:
         return None
     # `python_base_3` + "10" -> "-3.10"; + "9" -> "-3.9"
     return ["py", f"-3.{m.group(1)}"]
+
+
+def _minor(version: str) -> str:
+    """'Python 3.10.11' -> '3.10'."""
+    nums = re.findall(r"\d+", version or "")
+    return ".".join(nums[:2]) if len(nums) >= 2 else ""
+
+
+def _venv_minor(py: Path) -> str:
+    """The venv interpreter's own major.minor, or '' if it will not run."""
+    rc, out = _run(
+        [str(py), "-c", "import sys;print(f'{sys.version_info.major}.{sys.version_info.minor}')"],
+        py.parent,
+        timeout=60,
+    )
+    return out.strip() if rc == 0 else ""
 
 
 def _ensure_interpreter(launcher: list[str], base_image_name: str) -> str | None:
@@ -215,6 +251,14 @@ def probe(instance_id: str, pages: int = 4) -> int:
 
     # 2. venv + install
     py = venv / "Scripts" / "python.exe"
+    if py.exists():
+        # A venv left by an earlier run may use the WRONG interpreter (this is
+        # exactly how a 3.14 venv masqueraded as the instance's environment).
+        # Rebuild rather than silently measure with it.
+        got, want = _venv_minor(py), _minor(py_version)
+        if got != want:
+            print(f"[2/5] existing venv is Python {got or '??'}, instance declares {want} — rebuilding")
+            shutil.rmtree(venv, ignore_errors=True)
     if not py.exists():
         print(f"[2/5] creating venv with {' '.join(py_launcher)} …")
         # The venv MUST be built by the interpreter the instance declares —
@@ -289,6 +333,12 @@ def main() -> int:
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--language", default="python")
     args = ap.parse_args()
+
+    # Hard guard: an in-repo work dir lets pytest adopt OUR rootdir/config.
+    if str(WORK.resolve()).lower().startswith(str(ROOT.resolve()).lower()):
+        print(f"SWE_PROBE_WORK={WORK} is INSIDE the repo ({ROOT}) — refusing.")
+        print("Instance repos must live outside this tree (rootdir contamination).")
+        return 6
 
     if args.list:
         rows = _list_rows(args.pages)
