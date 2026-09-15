@@ -2800,6 +2800,44 @@ Converted `except:` → `except Exception:` (or specific types) in `swarm_os/cor
 
 ## Self-Healing & Self-Learning Fixes
 
+- **[AUTO-REPAIR] (2026-09-15T00:06:50.570045+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-09-15T00:03:55.862908+00:00)**: None (tier None, fixed=False) — error: Read-before-write guard: cannot patch 'data/curriculum_fix/cand_014/module.py' — the agent has not listed or read it yet
+
+- **[AUTO-REPAIR] (2026-09-15T00:03:54.215299+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 1; B
+
+- **[AUTO-REPAIR] (2026-09-15T00:03:21.014672+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'importlib' at line
+
+- **[AUTO-REPAIR] (2026-09-15T00:03:19.133540+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-09-15T00:00:46.764162+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-09-14T23:57:44.808873+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-09-14T23:57:13.105578+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-09-14T23:54:40.777272+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-09-14T23:54:39.882272+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-09-14T23:54:38.996654+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-09-14T23:54:08.175175+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-09-14T23:54:07.242765+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-09-14T23:54:05.334252+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-09-14T23:54:03.120645+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-09-14T23:52:01.255560+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-09-14T23:51:54.010479+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-09-14T23:49:20.291146+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-09-14T23:47:18.346544+00:00)**: None (tier None, fixed=False) — error: Surgical Error: 'old' string cannot be empty.
+
 - **[AUTO-REPAIR] (2026-09-14T23:40:45.183371+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'importlib' at line
 
 - **[AUTO-REPAIR] (2026-09-14T23:40:43.482126+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
