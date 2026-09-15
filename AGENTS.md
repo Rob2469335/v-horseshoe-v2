@@ -782,14 +782,23 @@ facts that go stale. Instead:
    A blank model in my probe had **no** retrieval path, so fabrication was its only option — that is why
    the naked-model result is real but *not* the whole story when the agent loop is in play.
 
-3. **Two ways to reach RAG — layer them; only one is a guarantee.**
+3. **Three ways to reach RAG — layer them.**
    - **AUTO-INJECT (the guarantee, already built):** the agent loop's memory injection
      (`stream_runner.py`, `SWARM_MEMORY_INJECT`) pulls relevant memories into the prompt *before* the
      model answers, so the facts arrive whether or not the model asks. The model then only needs to
-     **use** them — a far easier skill. Make sure personal facts are actually in that path.
-   - **MODEL-INITIATED (the polish):** train the 4B to consult the memory tool on personal questions.
-     Desirable, but **fragile** — deciding *when* to call a tool is exactly what a 4B does poorly, so
-     this must never be the only mechanism (it would fabricate whenever it forgets).
+     **use** them — a far easier skill. Put the personal facts in that path: being *in* the store is
+     not the same as being *retrieved*.
+   - **MODEL-INITIATED tool call (VIABLE — corrected 2026-09-15):** the agent CAN call the memory
+     tool — the stack carries **13 MCP servers / ~200 tools** (incl. `memory`). This is **not** the
+     fragile 4B-only path it looks like: for the agents that matter the tool **DECISION** routes to a
+     CLOUD model (`_llm_client._ANALYSIS_CLOUD_AGENTS` = code_analyzer / reviewer / researcher / coder /
+     debugger(executor) → `deepseek-flash`); the 4B stays local only for
+     coordinator / planner / tool-runner / tool-maker. **The real risk is VISIBILITY, not capability:**
+     tool schemas are injected lazily (**the 5 most-relevant**), so a personal question must rank the
+     memory tool into that shortlist or the model cannot pick it at all. (The earlier "a 4B does
+     poorly" framing described the NAKED model on :8079, which has ZERO tools — not the deployed loop.)
+   - **DETERMINISTIC PRE-FETCH (belt-and-braces):** a routing rule that detects a personal question and
+     pre-fetches memory, so retrieval never depends on ANY model deciding.
 
 4. **DPO pairs — the rejected exemplar already exists.** The fabricated biography above is a *real,
    in-distribution* negative: `chosen` = the RAG-grounded answer, *"let me check my memory…"*, or
