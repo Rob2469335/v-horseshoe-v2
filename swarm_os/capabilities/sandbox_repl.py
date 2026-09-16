@@ -124,9 +124,16 @@ class SandboxReplHandler:
                 "takeown",
                 "icacls",
                 "reg delete",
-                "clearcontent",
-                "setcontent",
-                "addcontent",
+                # NOTE (2026-09-15): Set-Content / Add-Content / Clear-Content /
+                # Out-File / `>` are deliberately NOT blocked. Writing a file IS
+                # the task — the whole point of giving the agent a shell is that
+                # it edits with tools it already knows, instead of guessing the
+                # `old`/`new` contract of a bespoke edit tool (four silent
+                # contract mismatches were found in one evening: find-vs-old,
+                # LF-vs-CRLF, patch-vs-old/new, restricted shell). Edits stay
+                # confined by the workspace cwd + the absolute-path/`..` guards
+                # below. Deleting, MOVING or renaming files stays blocked: those
+                # restructure the repo rather than change its content.
                 "newitem",
                 "copyitem",
                 "moveitem",
@@ -292,10 +299,11 @@ class SandboxReplHandler:
                     "returncode": 1,
                 }
             from swarm_os.lib.paths import agent_workspace_root
+
             project_root = agent_workspace_root()
             try:
                 _Path(raw).resolve().relative_to(project_root.resolve())
-            except (ValueError, OSError):
+            except ValueError, OSError:
                 return {
                     "ok": False,
                     "stdout": "",
@@ -316,6 +324,7 @@ class SandboxReplHandler:
         from swarm_os.services.security_gate import clean_sandbox_env
 
         from swarm_os.lib.paths import agent_workspace_root
+
         project_root = str(agent_workspace_root())
 
         env_extra = {}
