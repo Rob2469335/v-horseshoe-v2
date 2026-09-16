@@ -1188,6 +1188,69 @@ relaunch via start-dev.ps1 when ready.
 
 ## Recent Changes (do NOT re-apply)
 
+### MEASUREMENT: first trustworthy SWE baseline; "0/14" was a serving artifact (2026-09-15)
+
+**Headline.** With the harness fixed, 3 tasks x 5 SEQUENTIAL independent rollouts:
+
+    twine     4/5   80%   [fail PASS PASS PASS PASS]
+    click     0/5    0%   (consistent near-miss: right file/line/idea, one token short)
+    pyfakefs  0/5    0%   (no source edit)
+
+The SAME twine scored **0/1 in the concurrent 14-task batch** and **4/5 solo** - so
+`0/14` was NOT a capability measure; it mixed model ability with a serving artifact.
+
+**Standing conclusions (research-backed):**
+- **Never read a single-run pass rate as capability.** "On Randomness in Agentic Evals"
+  (arXiv:2602.07150) collected 60,000 agentic trajectories to show that pass@1 from one
+  run per task is not a reliable estimate. Twine solved/solved/failed with nothing changed.
+- **The scaffold is the hidden variable.** "The Scaffold Effect in Coding Agents"
+  (arXiv:2607.22585): the harness that issues tools and decides when to stop determines
+  outcomes and is usually under-specified. Fix the harness before comparing anything.
+- **`f2p: 0/3` is NOT pass@k.** "Beyond Pass@k" (arXiv:2608.14711): the estimator is
+  commonly misapplied by setting n to the unit-test count instead of independent rollout
+  attempts. Report `successes / attempts`; compute pass@k only from independent runs.
+- **Contention collapses reliability.** "Characterizing Contention-Induced Reliability
+  Collapse in KV-Cache Timing Side Channels for Multi-Tenant LLM Serving" + HiveMind /
+  CONCUR / AgentServe (concurrent agent serving): concurrent runs on one shared inference
+  slot degrade per-run reliability. Every 0/14 batch ran at concurrency 2; both twine
+  successes were solo runs.
+- **Edit interface (measured, external).** qwenlm/qwen3.6#179: bash-only ~28% ->
+  **+ `str_replace` (SWE-agent's flavour) ~50.7%**, while `edit`/`write_file` tools give
+  **zero lift**. Keep the str_replace (old->new) editor. Do NOT replace it with
+  shell-only editing: measured HERE, that made the agent edit LESS (twine went solved -> 0/3).
+
+**Seven silent harness defects found + fixed this session** - each produced a plausible
+0/N that looked like incapability (see the "0/N is not a result" standing rule):
+1. `SWARM_WRITE_ROOT` (relative, from `.env`) resolves UNDER the workspace -> every patch
+   refused. `/status.sandbox` + a fail-closed preflight now expose it.
+2. Loop recovery had no edit branch: a fix-intent coder was told to `action=final` (which
+   is rejected) and then aborted -> `_forced_edit` + an edit-directed read refusal.
+3. Edit goals shared the routine 12-turn budget and burned ~3 turns on the PROJECT warmup
+   (`AGENTS.md`, `runtime_v2/`) while working an external repo -> 24 turns; warmup skipped
+   when the workspace is not the project.
+4. A test-created `twine-4.0.0.dist-info/` in the repo root shadowed the editable install
+   (importlib_metadata resolved the stub, which has no `Summary`) -> `KeyError` while
+   loading conftest -> every test errored, so a CORRECT fix scored 0/3 ->
+   `_clean_shadowing_metadata()`.
+5. Ground truth (`gold_patch.diff`, `run_at_gold.txt`) was written INSIDE the agent's
+   sandbox, so the agent read another instance's ANSWER (the twine task returned a qiskit
+   report) -> moved to `swe_probe_meta/`, outside `SWARM_WORKSPACE_ROOT`.
+6. `filesystem patch` silently no-opped on three arg shapes agents actually send:
+   `find`/`search`/`old_str` (not `old`), LF excerpts against CRLF files, and a **unified
+   diff** in a `patch` arg -> alias-tolerant args + line-ending tolerance + `git apply`.
+7. `sandbox_repl` rejected `bash` and its python branch denies `open`/`pathlib`, so the
+   agent could not inspect a file at all -> a SWE-ONLY confined shell (isolated
+   `SWARM_WORKSPACE_ROOT`), cwd = workspace, stripped env, destructive/remote/escape guards.
+
+**Where the learning program stands.** The ruler is now attributable, one task sits in
+the 30-80% band (twine), and click is a high-value training example (right location ->
+right concept -> wrong syntax -> explicit test failure). The pool needs more
+twine-class (mid-difficulty) tasks: click/pyfakefs at 0/5 give no gradient.
+
+Artifacts: `qwen_train/results/rollouts_{twine,click,pyfakefs}.jsonl` (+ `.summary.json`).
+
+
+
 ### FINDING (measured): `robs4b` does NOT hold personal facts — it FABRICATES a biography (2026-09-15)
 
 Direct probe of the served model (`:8079`, alias `robs4b`, temp 0,
@@ -3178,6 +3241,194 @@ Converted `except:` → `except Exception:` (or specific types) in `swarm_os/cor
 ---
 
 ## Self-Healing & Self-Learning Fixes
+
+- **[AUTO-REPAIR] (2026-09-16T02:55:23.106507+00:00)**: None (tier None, fixed=False) — error: Path escapes the project root: 'C:/Users/rober/Projects/swe_probe_work/pallets__click-2380/repo/src/click/core.py' — ref
+
+- **[AUTO-REPAIR] (2026-09-16T02:55:22.323860+00:00)**: None (tier None, fixed=False) — error: [31;1mgrep: [31;1mThe term 'grep' is not recognized as a name of a cmdlet, function, script file, or executable progra
+
+- **[AUTO-REPAIR] (2026-09-16T02:55:21.411461+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned import in sandbox snippet: 'pathlib' at 
+
+- **[AUTO-REPAIR] (2026-09-16T02:55:19.564352+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 2
+
+D
+
+- **[AUTO-REPAIR] (2026-09-16T02:55:17.742904+00:00)**: None (tier None, fixed=False) — error: Path escapes the project root: 'C:/Users/rober/Projects/swe_probe_work/pallets__click-2380/repo/src/click/core.py' — ref
+
+- **[AUTO-REPAIR] (2026-09-16T02:53:13.976547+00:00)**: None (tier None, fixed=False) — error: [31;1mgrep: [31;1mThe term 'grep' is not recognized as a name of a cmdlet, function, script file, or executable progra
+
+- **[AUTO-REPAIR] (2026-09-16T02:53:13.111673+00:00)**: None (tier None, fixed=False) — error: Path escapes the project root: 'C:\Users\rober\Projects\swe_probe_work\pypa__twine-1066\repo\twine\package.py' — refusin
+
+- **[AUTO-REPAIR] (2026-09-16T02:53:11.392944+00:00)**: None (tier None, fixed=False) — error: Directory not found: data/curriculum_fix
+
+- **[AUTO-REPAIR] (2026-09-16T02:51:07.833676+00:00)**: None (tier None, fixed=False) — error: [31;1mSet-Location: [31;1mCannot find path 'C:\Users\rober\Projects\swe_probe_work\repo' because it does not exist.[0
+
+- **[AUTO-REPAIR] (2026-09-16T02:51:07.068512+00:00)**: None (tier None, fixed=False) — error: Path escapes the project root: 'C:\Users\rober\Projects\swe_probe_work\pypa__twine-1066\repo\twine\package.py' — refusin
+
+- **[AUTO-REPAIR] (2026-09-16T02:51:05.313080+00:00)**: None (tier None, fixed=False) — error: Directory not found: data/curriculum_fix
+
+- **[AUTO-REPAIR] (2026-09-16T02:49:01.161630+00:00)**: None (tier None, fixed=False) — error: [31;1mSet-Location: [31;1mCannot find path 'C:\Users\rober\Projects\swe_probe_work\repo' because it does not exist.[0
+
+- **[AUTO-REPAIR] (2026-09-16T02:49:00.511270+00:00)**: None (tier None, fixed=False) — error: Path escapes the project root: 'C:\Users\rober\Projects\swe_probe_work\pypa__twine-1066\repo\twine\package.py' — refusin
+
+- **[AUTO-REPAIR] (2026-09-16T02:48:58.788696+00:00)**: None (tier None, fixed=False) — error: Directory not found: data/curriculum_fix
+
+- **[AUTO-REPAIR] (2026-09-16T02:46:55.276175+00:00)**: None (tier None, fixed=False) — error: [31;1mSet-Location: [31;1mCannot find path 'C:\Users\rober\Projects\swe_probe_work\repo' because it does not exist.[0
+
+- **[AUTO-REPAIR] (2026-09-16T02:46:54.567542+00:00)**: None (tier None, fixed=False) — error: Path escapes the project root: 'C:\Users\rober\Projects\swe_probe_work\pypa__twine-1066\repo\twine\package.py' — refusin
+
+- **Rule (coder)**: Tool 'sandbox_repl' failed ([31;1mSet-Location: [31;1mCannot find path 'C:\c\Users\rober\Projects\swe_probe_work\pytest-dev__pyfakefs-916\repo' b...
+
+- **[AUTO-REPAIR] (2026-09-16T02:42:51.005734+00:00)**: None (tier None, fixed=False) — error: Directory not found: data/curriculum_fix
+
+- **[AUTO-REPAIR] (2026-09-16T02:42:01.655047+00:00)**: None (tier None, fixed=False) — error: [31;1mSet-Location: [31;1mCannot find path 'C:\Users\rober\Projects\swe_probe_work\repo' because it does not exist.[0
+
+- **[AUTO-REPAIR] (2026-09-16T02:37:19.741660+00:00)**: None (tier None, fixed=False) — error: Path escapes the project root: 'C:\Users\rober\Projects\swe_probe_work\pypa__twine-1066\repo\twine\package.py' — refusin
+
+- **[AUTO-REPAIR] (2026-09-16T02:36:18.525473+00:00)**: None (tier None, fixed=False) — error: [31;1mSet-Location: [31;1mCannot find path 'C:\Users\rober\Projects\swe_probe_work\repo' because it does not exist.[0
+
+- **[AUTO-REPAIR] (2026-09-16T02:31:17.728098+00:00)**: None (tier None, fixed=False) — error: [31;1mSet-Location: [31;1mCannot find path 'C:\c\Users\rober\Projects\swe_probe_work\enthought__envisage-275\repo' bec
+
+- **[AUTO-REPAIR] (2026-09-16T02:31:16.913300+00:00)**: None (tier None, fixed=False) — error: [31;1mSet-Location: [31;1mCannot find path 'C:\c\Users\rober\Projects\swe_probe_work\qiskit__qiskit-ibm-runtime-367\re
+
+- **[AUTO-REPAIR] (2026-09-16T02:31:15.026108+00:00)**: None (tier None, fixed=False) — error: Path escapes the project root: 'C:\Users\rober\Projects\swe_probe_work\enthought__envisage-275\repo\envisage\safeweakref
+
+- **[AUTO-REPAIR] (2026-09-16T02:30:44.085196+00:00)**: None (tier None, fixed=False) — error: Path escapes the project root: 'C:\Users\rober\Projects\swe_probe_work\pallets__werkzeug-2583\repo\src\werkzeug\routing\
+
+- **[AUTO-REPAIR] (2026-09-16T02:30:42.293761+00:00)**: None (tier None, fixed=False) — error: [31;1mSet-Location: [31;1mCannot find path 'C:\c\Users\rober\Projects\swe_probe_work\pybamm-team__pybamm-4267\repo' be
+
+- **[AUTO-REPAIR] (2026-09-16T02:28:40.451653+00:00)**: None (tier None, fixed=False) — error: [31;1mSet-Location: [31;1mCannot find path 'C:\c\Users\rober\Projects\swe_probe_work\xknx__xknx-470\repo' because it d
+
+- **[AUTO-REPAIR] (2026-09-16T02:26:38.629606+00:00)**: None (tier None, fixed=False) — error: [31;1mGet-ChildItem: [31;1mCannot find path 'C:\Users\rober\Projects\swe_probe_work\databricks__dbt-databricks-935\rep
+
+- **[AUTO-REPAIR] (2026-09-16T02:20:35.447626+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked the shell command (destructive, remote, or interop-escape operation).
+
+- **[AUTO-REPAIR] (2026-09-16T02:20:34.711996+00:00)**: None (tier None, fixed=False) — error: [31;1mgrep: [31;1mThe term 'grep' is not recognized as a name of a cmdlet, function, script file, or executable progra
+
+- **[AUTO-REPAIR] (2026-09-16T02:20:33.821035+00:00)**: None (tier None, fixed=False) — error: Path escapes the project root: 'C:/Users/rober/Projects/swe_probe_work/pallets__click-2380/repo/src/click/core.py' — ref
+
+- **[AUTO-REPAIR] (2026-09-16T02:20:32.068510+00:00)**: None (tier None, fixed=False) — error: [31;1mgrep: [31;1mThe term 'grep' is not recognized as a name of a cmdlet, function, script file, or executable progra
+
+- **[AUTO-REPAIR] (2026-09-16T02:20:30.033243+00:00)**: None (tier None, fixed=False) — error: Directory not found: data/curriculum_fix
+
+- **[AUTO-REPAIR] (2026-09-16T02:20:28.454882+00:00)**: None (tier None, fixed=False) — error: Directory not found: data/curriculum_fix/cand_011
+
+- **[AUTO-REPAIR] (2026-09-16T02:20:26.977901+00:00)**: None (tier 2, fixed=False) — error: Read-before-write guard: cannot patch 'data/curriculum_fix/cand_011/module.py' — the agent has not listed or read it yet
+
+- **[AUTO-REPAIR] (2026-09-16T02:17:55.145373+00:00)**: None (tier 2, fixed=False) — error: [31;1mSet-Location: [31;1mCannot find path 'C:\Users\rober\Projects\swe_probe_work\repo' because it does not exist.[0
+
+- **[AUTO-REPAIR] (2026-09-16T02:11:51.912888+00:00)**: None (tier 2, fixed=False) — error: [31;1mSet-Location: [31;1mCannot find path 'C:\c\Users\rober\Projects\swe_probe_work\pytest-dev__pyfakefs-916\repo' be
+
+- **[AUTO-REPAIR] (2026-09-16T01:54:17.847856+00:00)**: None (tier None, fixed=False) — error: [31;1mgrep: [31;1mThe term 'grep' is not recognized as a name of a cmdlet, function, script file, or executable progra
+
+- **[AUTO-REPAIR] (2026-09-16T01:54:15.849791+00:00)**: None (tier None, fixed=False) — error: Path escapes the project root: 'C:\Users\rober\Projects\swe_probe_work\pallets__click-2380\repo\src\click\core.py' — ref
+
+- **[AUTO-REPAIR] (2026-09-16T01:54:14.048893+00:00)**: None (tier None, fixed=False) — error: Path escapes the project root: 'C:/Users/rober/Projects/swe_probe_work/pallets__click-2380/repo/src/click/core.py' — ref
+
+- **[AUTO-REPAIR] (2026-09-16T01:54:12.214595+00:00)**: None (tier None, fixed=False) — error: [31;1mtail: [31;1mThe term 'tail' is not recognized as a name of a cmdlet, function, script file, or executable progra
+
+- **[AUTO-REPAIR] (2026-09-16T01:54:10.182090+00:00)**: None (tier None, fixed=False) — error: unknown error
+
+- **[AUTO-REPAIR] (2026-09-16T01:54:08.313956+00:00)**: None (tier None, fixed=False) — error: [31;1mtail: [31;1mThe term 'tail' is not recognized as a name of a cmdlet, function, script file, or executable progra
+
+- **[AUTO-REPAIR] (2026-09-16T01:53:36.075806+00:00)**: None (tier None, fixed=False) — error: Filesystem operation timed out.
+
+- **Rule (coder)**: Tool 'filesystem' failed (Path escapes the project root: 'C:\Users\rober\Projects\swe_probe_work\pallets__click-2380\repo\src\click\core.py' — refu...
+
+- **[AUTO-REPAIR] (2026-09-16T01:48:01.911110+00:00)**: None (tier None, fixed=False) — error: Path escapes the project root: 'C:/Users/rober/Projects/swe_probe_work/pallets__click-2380/repo/src/click/core.py' — ref
+
+- **[AUTO-REPAIR] (2026-09-16T01:47:59.414924+00:00)**: None (tier None, fixed=False) — error: Filesystem operation timed out.
+
+- **[AUTO-REPAIR] (2026-09-16T01:44:27.025063+00:00)**: None (tier None, fixed=False) — error: [31;1mgrep: [31;1mThe term 'grep' is not recognized as a name of a cmdlet, function, script file, or executable progra
+
+- **[AUTO-REPAIR] (2026-09-16T01:32:24.128227+00:00)**: None (tier None, fixed=False) — error: [31;1mgrep: [31;1mThe term 'grep' is not recognized as a name of a cmdlet, function, script file, or executable progra
+
+- **[AUTO-REPAIR] (2026-09-16T01:31:53.288752+00:00)**: None (tier None, fixed=False) — error: [31;1mgrep: [31;1mThe term 'grep' is not recognized as a name of a cmdlet, function, script file, or executable progra
+
+- **Rule (coder)**: Tool 'filesystem' failed (Directory not found: repo/twine). Check the tool contract in _TOOL_DEFINITIONS and verify parameters before retrying.
+
+- **[AUTO-REPAIR] (2026-09-16T01:14:42.547076+00:00)**: None (tier None, fixed=False) — error: [31;1mgrep: [31;1mThe term 'grep' is not recognized as a name of a cmdlet, function, script file, or executable progra
+
+- **Rule (coder)**: Tool 'sandbox_repl' failed ([31;1mgrep: [31;1mThe term 'grep' is not recognized as a name of a cmdlet, function, script file, or executable progr...
+
+- **[AUTO-REPAIR] (2026-09-16T01:01:21.501075+00:00)**: None (tier None, fixed=False) — error: [31;1mgrep: [31;1mThe term 'grep' is not recognized as a name of a cmdlet, function, script file, or executable progra
+
+- **[AUTO-REPAIR] (2026-09-16T00:56:47.510180+00:00)**: None (tier None, fixed=False) — error: [31;1mgrep: [31;1mThe term 'grep' is not recognized as a name of a cmdlet, function, script file, or executable progra
+
+- **[AUTO-REPAIR] (2026-09-16T00:43:49.215761+00:00)**: None (tier None, fixed=False) — error: Path escapes the project root: 'C:/Users/rober/Projects/swe_probe_work/pytest-dev__pyfakefs-916/repo/pyfakefs/fake_os.py
+
+- **[AUTO-REPAIR] (2026-09-16T00:43:47.485061+00:00)**: None (tier None, fixed=False) — error: [31;1mSet-Location: [31;1mCannot find path 'C:\c\Users\rober\Projects\swe_probe_work\pytest-dev__pyfakefs-916\repo' be
+
+- **[AUTO-REPAIR] (2026-09-16T00:41:15.734718+00:00)**: None (tier None, fixed=False) — error: Path escapes the project root: 'C:\Users\rober\Projects\swe_probe_work\pallets__click-2380\repo\src\click\core.py' — ref
+
+- **[AUTO-REPAIR] (2026-09-16T00:41:15.033675+00:00)**: None (tier None, fixed=False) — error: Path escapes the project root: 'C:/Users/rober/Projects/swe_probe_work/pallets__click-2380/repo/src/click/core.py' — ref
+
+- **[AUTO-REPAIR] (2026-09-16T00:38:43.158194+00:00)**: None (tier None, fixed=False) — error: [31;1msed: [31;1mThe term 'sed' is not recognized as a name of a cmdlet, function, script file, or executable program.
+
+- **[AUTO-REPAIR] (2026-09-16T00:32:39.021437+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 1
+
+D
+
+- **[AUTO-REPAIR] (2026-09-16T00:32:37.148468+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-09-16T00:32:33.762233+00:00)**: None (tier None, fixed=False) — error: [31;1mgrep: [31;1mThe term 'grep' is not recognized as a name of a cmdlet, function, script file, or executable progra
+
+- **[AUTO-REPAIR] (2026-09-16T00:31:59.874987+00:00)**: None (tier None, fixed=False) — error: Filesystem operation timed out.
+
+- **Rule (debugger)**: Do NOT repeat the same tool call with identical arguments. If a tool failed, read the error, change the approach (different file/path/query/operati...
+
+- **[AUTO-REPAIR] (2026-09-16T00:26:54.806432+00:00)**: None (tier None, fixed=False) — error: Directory not found: repo/twine
+
+- **[AUTO-REPAIR] (2026-09-16T00:08:09.507298+00:00)**: None (tier None, fixed=False) — error: Directory not found: repo/xknx/core
+
+- **[AUTO-REPAIR] (2026-09-16T00:08:08.452602+00:00)**: None (tier None, fixed=False) — error: Directory not found: aws-cloudformation__cfn-lint-3805/repo/src/cfnlint/data/schemas/extensions/aws_iam_managedpolicy
+
+- **[AUTO-REPAIR] (2026-09-16T00:08:06.359675+00:00)**: None (tier None, fixed=False) — error: Directory not found: databricks__dbt-databricks-935/repo/macros
+
+- **[AUTO-REPAIR] (2026-09-16T00:04:01.545557+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 5
+
+D
+
+- **[AUTO-REPAIR] (2026-09-16T00:03:59.648740+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-09-16T00:03:58.727887+00:00)**: None (tier None, fixed=False) — error: Directory not found: src/cfnlint/rules/resources/properties
+
+- **[AUTO-REPAIR] (2026-09-16T00:03:57.921214+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[ROLLBACK-COMPLETED] (2026-09-16T00:03:17.781863+00:00)**: swarm_os/api/routes.py — signal_1 test regression attributable to swarm_os/api/routes.py
+
+- **[AUTO-REPAIR] (2026-09-16T00:01:23.428014+00:00)**: None (tier None, fixed=False) — error: Surgical Error: 'old' string cannot be empty.
+
+- **[AUTO-REPAIR] (2026-09-16T00:01:21.648358+00:00)**: None (tier None, fixed=False) — error: unknown error
+
+- **[AUTO-REPAIR] (2026-09-15T23:59:17.721148+00:00)**: None (tier None, fixed=False) — error: unknown error
+
+- **[AUTO-REPAIR] (2026-09-15T23:59:16.982622+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: '__import__' at lin
+
+- **[AUTO-REPAIR] (2026-09-15T23:59:15.281468+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'importlib' at line
+
+- **[AUTO-REPAIR] (2026-09-15T23:59:13.197367+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned import in sandbox snippet: 'pathlib' at 
+
+- **[AUTO-REPAIR] (2026-09-15T23:59:12.337992+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 2
+
+D
+
+- **[AUTO-REPAIR] (2026-09-15T23:53:09.139313+00:00)**: None (tier None, fixed=False) — error: unknown error
+
+- **[AUTO-REPAIR] (2026-09-15T23:49:05.972482+00:00)**: None (tier None, fixed=False) — error: unknown error
+
+- **[AUTO-REPAIR] (2026-09-15T23:49:05.294835+00:00)**: None (tier None, fixed=False) — error: ERROR: usage: pytest.main() [options] [file_or_dir] [file_or_dir] [...]
+
+pytest.main(): error: unrecognized arguments: -
+
+- **[AUTO-REPAIR] (2026-09-15T23:49:04.060466+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 2
+
+D
+
+- **[AUTO-REPAIR] (2026-09-15T23:48:59.185927+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned module import found: 'subprocess' at lin
+
+- **[AUTO-REPAIR] (2026-09-15T23:45:56.846021+00:00)**: None (tier None, fixed=False) — error: Filesystem operation timed out.
+
+- **[AUTO-REPAIR] (2026-09-15T23:45:56.021041+00:00)**: None (tier None, fixed=False) — error: Filesystem operation timed out.
 
 - **Rule (coder)**: Tool 'sandbox_repl' failed (Unsupported language: bash). Check the tool contract in _TOOL_DEFINITIONS and verify parameters before retrying.
 
