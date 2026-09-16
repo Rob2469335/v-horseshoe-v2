@@ -11,11 +11,21 @@ globally, not just under SWE.
 from __future__ import annotations
 
 import subprocess
-from pathlib import Path
 
 import pytest
 
 from swarm_os.lib.mcp.filesystem import filesystem_handler
+
+
+@pytest.fixture(autouse=True)
+def global_subprocess_mock():
+    """Override tests/conftest.py's autouse subprocess.Popen mock.
+
+    The diff tests need a REAL throwaway git repo for `git apply`; the conftest
+    mock makes subprocess.run() unusable. Module-scope fixtures take precedence.
+    """
+    yield
+
 
 BASE = "def walk(self):\n    return 1\n"
 
