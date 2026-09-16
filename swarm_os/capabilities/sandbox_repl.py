@@ -54,6 +54,152 @@ class SandboxReplHandler:
                 }
             cmd = [sys.executable, "-I", "-c", str(code)]
             timeout = 30.0
+        elif language in ("bash", "sh", "shell"):
+            # SWE-ONLY CONFINED SHELL (2026-09-15).
+            #
+            # Why it exists. The agent's own trajectory showed it LOOPING because
+            # its shell was crippled: `sandbox_repl` rejected `bash`, and the
+            # python branch denies `open`/`pathlib`, so the basic act of
+            # inspecting a file failed over and over until the turn budget ran
+            # out. Externally confirmed: the strongest minimal SWE agent
+            # (mini-swe-agent — ~100 lines, >74% on SWE-bench Verified) gives the
+            # model a PLAIN SHELL and nothing else, while a general-purpose
+            # harness scoring 0% is a reported failure mode
+            # (swe-agent/swe-agent#1497).
+            #
+            # Scope. Available ONLY for an ISOLATED workspace
+            # (SWARM_WORKSPACE_ROOT != the project root). The project's own repo
+            # keeps the stricter tools — this is a SWE-experiment capability, NOT
+            # a global loosening of the CLI.
+            #
+            # Confinement (defense-in-depth; the real boundaries remain the
+            # workspace cwd, the stripped env, and the ALWAYS_CONFIRM approval
+            # gate in the agent path — a shell is NOT an isolation boundary):
+            #   - cwd = the workspace root, env stripped of secrets/keys
+            #   - destructive/irreversible and remote/exfiltration verbs denied
+            #   - absolute paths outside the workspace denied; `..` denied
+            #   - hard timeout; the process is killed on timeout AND on cancel
+            import re as _re
+
+            from swarm_os.lib.paths import agent_workspace_root, project_root
+
+            try:
+                ws = agent_workspace_root()
+            except ValueError as ws_err:
+                return {
+                    "ok": False,
+                    "stdout": "",
+                    "stderr": f"Invalid workspace: {ws_err}",
+                    "returncode": 1,
+                }
+            if ws == project_root():
+                return {
+                    "ok": False,
+                    "stdout": "",
+                    "stderr": (
+                        "The shell is available only for an isolated workspace. "
+                        "Use the filesystem/pytest tools for this repo."
+                    ),
+                    "returncode": 1,
+                }
+
+            shell_cmd = str(command or code or "")
+            low = shell_cmd.lower().replace("-", "").replace("`", "")
+            blocked_shell = (
+                # irreversible / destructive
+                "removeitem",
+                "removedirectory",
+                "remove",
+                "rmdir",
+                "rm ",
+                "del ",
+                "erase",
+                "format",
+                "diskpart",
+                "shutdown",
+                "restartcomputer",
+                "stopcomputer",
+                "stopprocess",
+                "taskkill",
+                "takeown",
+                "icacls",
+                "reg delete",
+                "clearcontent",
+                "setcontent",
+                "addcontent",
+                "newitem",
+                "copyitem",
+                "moveitem",
+                "renameitem",
+                "mkfs",
+                "dd if=",
+                "chmod ",
+                "chown ",
+                # service / privilege
+                "newservice",
+                "setservice",
+                "startservice",
+                # remote / exfiltration
+                "git push",
+                "git remote",
+                "curl ",
+                "wget ",
+                "invokewebrequest",
+                "invokerestmethod",
+                "scp ",
+                "ssh ",
+                # interpreter/interop escape shapes
+                "[system.",
+                "[diagnostics.",
+                "::delete",
+                "iex ",
+                "invokeexpression",
+                ".net",
+            )
+            if any(b in low for b in blocked_shell):
+                return {
+                    "ok": False,
+                    "stdout": "",
+                    "stderr": (
+                        "Security Gate blocked the shell command (destructive, "
+                        "remote, or interop-escape operation)."
+                    ),
+                    "returncode": 1,
+                }
+
+            ws_norm = str(ws).replace("\\", "/").lower().rstrip("/")
+            for found in _re.findall(r"[a-zA-Z]:[\\/][^\s\"']*", shell_cmd):
+                if not found.replace("\\", "/").lower().startswith(ws_norm):
+                    return {
+                        "ok": False,
+                        "stdout": "",
+                        "stderr": (
+                            "Security Gate blocked a path outside the workspace: "
+                            f"{found}"
+                        ),
+                        "returncode": 1,
+                    }
+            # Token-based: `cd ..; dir` must not slip past a simple substring test.
+            for _tok in _re.split(r"[\s;|&'\"]+", shell_cmd):
+                _t = _tok.strip()
+                if (
+                    _t == ".."
+                    or _t.startswith("../")
+                    or _t.startswith("..\\")
+                    or "/../" in _t
+                    or "\\..\\" in _t
+                    or _t.endswith("/..")
+                    or _t.endswith("\\..")
+                ):
+                    return {
+                        "ok": False,
+                        "stdout": "",
+                        "stderr": "Security Gate blocked a parent-directory traversal.",
+                        "returncode": 1,
+                    }
+
+            cmd = ["pwsh", "-NoProfile", "-NonInteractive", "-Command", shell_cmd]
+            timeout = 120.0
         elif language == "powershell":
             # SECURITY: PowerShell has no clean AST-scan analog here, so gate the
             # command string with a conservative denylist of destructive/system-
