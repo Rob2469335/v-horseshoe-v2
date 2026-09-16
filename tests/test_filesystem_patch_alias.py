@@ -10,6 +10,7 @@ globally, not just under SWE.
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -76,3 +77,52 @@ def test_patch_end_to_end_edits_the_real_file(tmp_path):
     )
     assert r.get("ok") is True, r
     assert "topdown=True" in target.read_text(encoding="utf-8")
+
+
+DIFF = (
+    "diff --git a/src/core.py b/src/core.py\n"
+    "--- a/src/core.py\n"
+    "+++ b/src/core.py\n"
+    "@@ -1,2 +1,2 @@\n"
+    " def f():\n"
+    "-    return 1\n"
+    "+    return 2\n"
+)
+
+
+def _git_repo(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    target = repo / "src" / "core.py"
+    target.write_text("def f():\n    return 1\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=str(repo), capture_output=True)
+    return repo, target
+
+
+def test_patch_accepts_a_unified_diff(tmp_path):
+    """The arg shape the CLICK run sent (three times) and that silently no-opped.
+
+    Revert-proof: pre-fix `old` was empty, so the call returned
+    "'old' string cannot be empty" and the file was never written.
+    """
+    repo, target = _git_repo(tmp_path)
+    r = filesystem_handler(
+        {"operation": "patch", "path": str(target), "patch": DIFF}, tmp_path
+    )
+    assert r.get("ok") is True, r
+    assert "return 2" in target.read_text(encoding="utf-8")
+
+
+def test_patch_bad_diff_fails_loudly(tmp_path):
+    repo, target = _git_repo(tmp_path)
+    r = filesystem_handler(
+        {
+            "operation": "patch",
+            "path": str(target),
+            "patch": "@@ -9,1 +9,1 @@\n-nope\n+yep\n",
+        },
+        tmp_path,
+    )
+    assert r.get("ok") is False
+    # The failure must NAME the cause, not silently no-op.
+    assert "git apply failed" in r["error"]

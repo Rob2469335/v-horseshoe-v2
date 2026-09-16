@@ -355,13 +355,77 @@ def filesystem_handler(
                 or ""
             )
 
+            # UNIFIED-DIFF FORM (2026-09-15). Agents naturally emit a DIFF
+            # (`patch`/`diff` arg) instead of before/after excerpts. Measured: the
+            # click run sent {"operation":"patch","path":…,"patch":"<358ch diff>"}
+            # three times; the tool read only `old`, saw an empty string and
+            # silently did NOTHING — recorded as three failed edits that were
+            # really a contract gap.
+            diff_text = str(
+                params.get("patch")
+                or params.get("diff")
+                or params.get("unified_diff")
+                or ""
+            ).strip()
+            if diff_text and not old_str:
+                import subprocess as _subprocess
+                import tempfile as _tempfile
+
+                # The diff's paths are relative to the REPO containing the target,
+                # not to the sandbox root (which need not be a git repo at all).
+                repo_root = target_path.parent
+                while (
+                    repo_root != repo_root.parent and not (repo_root / ".git").exists()
+                ):
+                    repo_root = repo_root.parent
+                if not (repo_root / ".git").exists():
+                    return {
+                        "ok": False,
+                        "error": "Cannot apply a diff: no git repository above the target path.",
+                    }
+                tmp = None
+                try:
+                    with _tempfile.NamedTemporaryFile(
+                        "w", suffix=".diff", delete=False, encoding="utf-8"
+                    ) as fh:
+                        fh.write(
+                            diff_text if diff_text.endswith("\n") else diff_text + "\n"
+                        )
+                        tmp = fh.name
+                    proc = None
+                    for extra in (["--recount", "--ignore-space-change"], []):
+                        proc = _subprocess.run(
+                            ["git", "apply", "-v", *extra, tmp],
+                            cwd=str(repo_root),
+                            capture_output=True,
+                            text=True,
+                        )
+                        if proc.returncode == 0:
+                            return {
+                                "ok": True,
+                                "path": str(target_path),
+                                "applied": "unified-diff",
+                            }
+                    detail = (proc.stderr or proc.stdout or "").strip()[:300]
+                    return {
+                        "ok": False,
+                        "error": f"git apply failed for the supplied diff: {detail}",
+                    }
+                finally:
+                    if tmp:
+                        try:
+                            os.unlink(tmp)
+                        except OSError:
+                            pass
+
             if not old_str:
                 return {
                     "ok": False,
                     "error": (
-                        "Patch needs the text to replace. Pass `old` (aliases: "
-                        "old_string, old_str, find, search). Example: "
-                        '{"operation":"patch","path":"f.py","old":"x = 1","new":"x = 2"}'
+                        "Patch needs EITHER a unified diff (`patch`/`diff`) OR the text "
+                        "to replace (`old`, aliases: old_string, old_str, find, search). "
+                        'Example: {"operation":"patch","path":"f.py","old":"x = 1",'
+                        '"new":"x = 2"}'
                     ),
                 }
 
