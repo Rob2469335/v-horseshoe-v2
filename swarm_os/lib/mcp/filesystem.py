@@ -79,7 +79,12 @@ def filesystem_handler(
 
     # Resolve and force to be absolute paths
     from swarm_os.lib.paths import agent_workspace_root
-    root = agent_workspace_root()
+
+    root = (
+        agent_workspace_root()
+        if os.environ.get("SWARM_WORKSPACE_ROOT")
+        else root.resolve()
+    )
 
     def _canonical_docs_path(requested_path_str: str) -> str:
         # LLMs routinely ask for "agent.md" / "agents.md" / "AGENT.md" when the
@@ -324,21 +329,73 @@ def filesystem_handler(
                     "error": f"File not found for patching: {requested}",
                 }
 
-            old_str = str(params.get("old", params.get("old_string", "")))
-            new_str = str(params.get("new", params.get("new_string", "")))
+            # Alias-tolerant. Agents overwhelmingly send `find`/`search` for the
+            # text to replace — and `find` is ALSO the grep alias, so the arg name
+            # alone does not tell the tool what was meant. Measured 2026-09-15: a
+            # real SWE run patched `pyfakefs/fake_os.py` with `find=…`, got
+            # "Surgical Error: 'old' string cannot be empty.", the file was left
+            # UNTOUCHED, and the run scored 0 edits — the same error that peppers
+            # the auto-repair log. `new` is likewise called replace/replacement/
+            # new_string/content. One tolerant read here unblocks edits globally.
+            old_str = str(
+                params.get("old")
+                or params.get("old_string")
+                or params.get("old_str")
+                or params.get("find")
+                or params.get("search")
+                or ""
+            )
+            new_str = str(
+                params.get("new")
+                or params.get("new_string")
+                or params.get("new_str")
+                or params.get("replace")
+                or params.get("replacement")
+                or params.get("content")
+                or ""
+            )
 
             if not old_str:
                 return {
                     "ok": False,
-                    "error": "Surgical Error: 'old' string cannot be empty.",
+                    "error": (
+                        "Patch needs the text to replace. Pass `old` (aliases: "
+                        "old_string, old_str, find, search). Example: "
+                        '{"operation":"patch","path":"f.py","old":"x = 1","new":"x = 2"}'
+                    ),
                 }
 
             content = target_path.read_bytes().decode("utf-8", errors="replace")
             if old_str not in content:
-                return {
-                    "ok": False,
-                    "error": "Surgical Error: 'old' not found in file content.",
-                }
+                # LINE-ENDING TOLERANCE (2026-09-15). A repo file checked out on
+                # Windows carries CRLF while an agent's `old` excerpt almost always
+                # carries LF (it was read/typed as text), so an exact test fails
+                # with "'old' not found" although the text is plainly there — and
+                # every edit silently dies. Normalise BOTH sides for the match and
+                # write back with the FILE's own ending so the diff stays minimal.
+                if "\r\n" in content and "\r\n" not in old_str:
+                    candidate, candidate_new = (
+                        old_str.replace("\n", "\r\n"),
+                        new_str.replace("\n", "\r\n"),
+                    )
+                elif "\r\n" not in content and "\r\n" in old_str:
+                    candidate, candidate_new = (
+                        old_str.replace("\r\n", "\n"),
+                        new_str.replace("\r\n", "\n"),
+                    )
+                else:
+                    candidate = ""
+                if candidate and candidate in content:
+                    old_str, new_str = candidate, candidate_new
+                else:
+                    return {
+                        "ok": False,
+                        "error": (
+                            "Surgical Error: 'old' not found in file content. Read "
+                            "the file first and pass an EXACT excerpt (line endings "
+                            "are normalised automatically)."
+                        ),
+                    }
 
             # Precise single-occurrence check for safety
             if content.count(old_str) > 1 and not params.get("allow_multiple", False):
