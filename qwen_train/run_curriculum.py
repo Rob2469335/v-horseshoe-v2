@@ -34,6 +34,7 @@ import random
 import re
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
@@ -275,6 +276,50 @@ def _attempt_once(item: dict, timeout: int, allow_approval: bool, record: bool) 
         encoding="utf-8",
         cwd=str(_HERE.parent),
     )
+
+    # SAFETY NET: background monitor that kills the CLI when the trajectory
+    # directory shows the agent loop completed. Without this, a broken SSE
+    # stream (e.g. a recursive debugger delegation hanging on the local 4B)
+    # can eat the entire 30-minute communicate timeout. The trajectory is
+    # written by the backend, so seeing `status=completed` there means the
+    # agent loop has finished — the process is just stuck on cleanup/stream.
+    import threading as _threading
+
+    _trajectory_dir = _HERE.parent.parent / "data" / "trajectories"
+    _start_ns = time.monotonic_ns()
+    _killed = False
+
+    def _monitor():
+        nonlocal _killed
+        grace_s = 30
+        while proc.poll() is None:
+            time.sleep(10)
+            elapsed_s = (time.monotonic_ns() - _start_ns) / 1e9
+            if elapsed_s < grace_s:
+                continue
+            try:
+                for f in sorted(_trajectory_dir.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True):
+                    last_line = None
+                    for line in f.read_text(encoding="utf-8", errors="ignore").splitlines():
+                        if line.strip():
+                            last_line = line
+                    if not last_line:
+                        continue
+                    row = json.loads(last_line)
+                    if row.get("status") in ("completed", "max_turns"):
+                        # Agent loop finished. Kill the stuck process.
+                        try:
+                            proc.kill()
+                            _killed = True
+                        except Exception:
+                            pass
+                        return
+            except Exception:
+                pass
+
+    monitor = _threading.Thread(target=_monitor, daemon=True)
+    monitor.start()
+
     try:
         stdout, stderr = proc.communicate(
             # ALWAYS_CONFIRM tools (sandbox_repl, …) prompt the CLI; a pipe of
