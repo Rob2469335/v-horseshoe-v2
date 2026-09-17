@@ -95,17 +95,22 @@ def _state_fingerprint(messages: list) -> str:
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
 
 
+def get_task_scope() -> str:
+    return os.environ.get("SWARM_WORKSPACE_ROOT") or os.getcwd()
+
+
 def get_cache_key(messages: list, agent_id: str) -> str:
-    """Exact-match key: SHA-256 of the final user content **scoped by agent AND
-    by execution state**, so an identical prompt in a different state does not
-    reuse a stale decision."""
+    """Exact-match key: SHA-256 of the final user content **scoped by agent,
+    execution state, AND workspace/task**, so an identical prompt in a different
+    state or task does not reuse a stale decision."""
+    scope = get_task_scope()
     if messages:
         last_msg = messages[-1].get("content", "")
         if not isinstance(last_msg, str):
             last_msg = json.dumps(last_msg)
         h = hashlib.sha256(last_msg.encode("utf-8")).hexdigest()
-        return f"{agent_id}:{_state_fingerprint(messages)}:{h}"
-    return f"{agent_id}:default"
+        return f"{agent_id}:{scope}:{_state_fingerprint(messages)}:{h}"
+    return f"{agent_id}:{scope}:default"
 
 
 import threading
@@ -203,7 +208,8 @@ async def get_semantic_cached_decision(messages: list, agent_id: str) -> Optiona
     try:
         await _ensure_components()
         state = _state_fingerprint(messages)
-        query = f"agent:{agent_id} state:{state} decision {last_msg[:400]}"
+        scope = get_task_scope()
+        query = f"agent:{agent_id} state:{state} scope:{scope} decision {last_msg[:400]}"
         emb = await _embedder.embed(query)
         from qdrant_client.models import Filter, FieldCondition, MatchValue
 
@@ -222,6 +228,12 @@ async def get_semantic_cached_decision(messages: list, agent_id: str) -> Optiona
                     FieldCondition(
                         key="state",
                         match=MatchValue(value=state),
+                    ),
+                    # Only reuse a decision made in the SAME task/workspace
+                    # to prevent cross-task contamination (2026-09-16).
+                    FieldCondition(
+                        key="scope",
+                        match=MatchValue(value=scope),
                     ),
                 ]
             ),
@@ -325,8 +337,9 @@ async def cache_tool_decision(messages: list, agent_id: str, decision: dict):
             return
 
         await _ensure_components()
+        scope = get_task_scope()
         emb = await _embedder.embed(
-            f"agent:{agent_id} state:{_state_fingerprint(messages)} decision: {last_msg[:400]}".rstrip()
+            f"agent:{agent_id} state:{_state_fingerprint(messages)} scope:{scope} decision: {last_msg[:400]}".rstrip()
         )
         from qdrant_client.models import PointStruct
         from datetime import datetime as _dt, timezone as _tz
@@ -340,6 +353,7 @@ async def cache_tool_decision(messages: list, agent_id: str, decision: dict):
                     payload={
                         "agent_id": agent_id,
                         "state": _state_fingerprint(messages),
+                        "scope": scope,
                         "decision": decision,
                         "ts": _dt.now(_tz.utc).replace(tzinfo=None).isoformat(),
                     },
