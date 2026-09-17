@@ -1188,6 +1188,54 @@ relaunch via start-dev.ps1 when ready.
 
 ## Recent Changes (do NOT re-apply)
 
+### MEASUREMENT (2026-09-17): local-4B repair task #1 — cache exonerated, workspace isolation confirmed, and a genuine n=1 edit-grounding weakness captured
+
+The local `robs4b` (4B) repair-task line produced its first clean measurement
+plumbing and one genuinely useful n=1 capability finding.
+
+- **Repair-task scaffold built** (`qwen_train/run_repair_task.py`): a THIN adapter
+  that reuses `cli_baseline_swe`'s harness functions (`_reset_instance`,
+  `_build_prompt`, `_run_tests`, `_test_result`) with a LOCAL `hf_inst` — no HF
+  fetch. Each task is an isolated clone of THIS repo under `probe.WORK/<id>/repo`,
+  with the bug COMMITTED as `base_commit` so `git reset --hard` preserves the
+  broken state (an uncommitted working-tree bug would be wiped by the reset).
+- **Task #1 = `swarm_os/lib/paths.py::sandbox_bounds()`**: one-line realistic bug,
+  the inverted `relative_to` coverage check (`base.relative_to(root)` where the
+  write root is a subfolder of the workspace -> fail-open). Buggy commit
+  `3127b3a1`. Tiny `paths`-only test `tests/test_repair_task1.py` passed the
+  red->green gate: buggy = FAIL, fixed = PASS (0.2s).
+- **Stale-query contamination root-caused.** The first local run (946s, verdict
+  false, empty diff) recorded a VERBATIM re-issue of an OLD, unrelated twine-task
+  decision: `web_search("twine provides extra field ...")` and a patch at
+  `xknx__xknx-470\repo\twine\_upload.py`. The `coder` agent could see the WHOLE
+  `swe_probe_work` corpus (the shared workspace root), so it wandered into other
+  instances' directories.
+- **Semantic decision cache EXONERATED (decisive A/B).** With workspace isolated
+  AND `SWARM_SEMANTIC_CACHE=1`, the run targeted `paths.py` only — no twine/xknx
+  references (trajectory `a508b927`). The contamination was workspace
+  VISIBILITY, not the cache; the earlier "second cache scope bug" hypothesis is
+  ruled OUT. Keep the per-task workspace isolation; do NOT reintroduce the corpus
+  root for repair-task runs.
+- **Genuine n=1 capability finding (edit-grounding).** Even with a LEAKED prompt
+  naming file+bug+mechanism (a debugging-command mistake, NOT the benchmark
+  prompt), the 4B READ `paths.py` twice yet generated
+  `patch old="path.relative_to(root)"` — substituting a variable that exists in
+  `filesystem.py::_within_write_root`, not in `sandbox_bounds` (which uses
+  `base`). That is a CROSS-FUNCTION GENERALIZATION / EDIT-GROUNDING weakness: the
+  model produces an edit that does not anchor to the source it just read. Record
+  it as 🟠. Do NOT hand-hold past it.
+- **OPEN / not yet measured correctly.** Task #1's true capability is NOT yet
+  cleanly measured: the runs so far used the LEAKED debug prompt. The clean,
+  non-revealing benchmark prompt (no `relative_to`, no line number, no direction)
+  MUST be run before any capability conclusion or any 5x5 scale-up. Do NOT scale
+  to 25 until that run produces `1 passed` + a landed diff. Do NOT add hints to
+  make it pass — that would invalidate the benchmark.
+- **Housekeeping:** the `[AUTO-REPAIR]` lines appended into this section during
+  the session are runtime watch-loop telemetry (log lines), NOT manual docs; this
+  entry is the manual record.
+
+
+
 ### MEASUREMENT: first trustworthy SWE baseline; "0/14" was a serving artifact (2026-09-15)
 
 **Headline.** With the harness fixed, 3 tasks x 5 SEQUENTIAL independent rollouts:
@@ -3241,6 +3289,102 @@ Converted `except:` → `except Exception:` (or specific types) in `swarm_os/cor
 ---
 
 ## Self-Healing & Self-Learning Fixes
+
+- **[AUTO-REPAIR] (2026-09-17T06:09:15.145288+00:00)**: None (tier None, fixed=False) — error: Patch blocked: path is outside SWARM_WRITE_ROOT.
+
+- **[AUTO-REPAIR] (2026-09-17T06:09:13.449860+00:00)**: None (tier None, fixed=False) — error: Patch blocked: path is outside SWARM_WRITE_ROOT.
+
+- **[AUTO-REPAIR] (2026-09-17T06:09:11.719957+00:00)**: None (tier None, fixed=False) — error: The shell is available only for an isolated workspace. Use the filesystem/pytest tools for this repo.
+
+- **[AUTO-REPAIR] (2026-09-17T06:00:30.403488+00:00)**: None (tier None, fixed=False) — error: Patch blocked: path is outside SWARM_WRITE_ROOT.
+
+- **[AUTO-REPAIR] (2026-09-17T05:58:26.427946+00:00)**: None (tier None, fixed=False) — error: Patch blocked: path is outside SWARM_WRITE_ROOT.
+
+- **[AUTO-REPAIR] (2026-09-17T05:58:25.317529+00:00)**: None (tier None, fixed=False) — error: The shell is available only for an isolated workspace. Use the filesystem/pytest tools for this repo.
+
+- **[AUTO-REPAIR] (2026-09-17T05:58:21.970651+00:00)**: None (tier None, fixed=False) — error: Patch blocked: path is outside SWARM_WRITE_ROOT.
+
+- **[AUTO-REPAIR] (2026-09-17T05:58:20.033532+00:00)**: None (tier None, fixed=False) — error: Patch blocked: path is outside SWARM_WRITE_ROOT.
+
+- **[AUTO-REPAIR] (2026-09-17T05:58:18.217465+00:00)**: None (tier None, fixed=False) — error: The shell is available only for an isolated workspace. Use the filesystem/pytest tools for this repo.
+
+- **[AUTO-REPAIR] (2026-09-17T05:38:14.250882+00:00)**: None (tier None, fixed=False) — error: Patch blocked: path is outside SWARM_WRITE_ROOT.
+
+- **[AUTO-REPAIR] (2026-09-17T05:34:42.541726+00:00)**: None (tier None, fixed=False) — error: Patch blocked: path is outside SWARM_WRITE_ROOT.
+
+- **[AUTO-REPAIR] (2026-09-17T05:34:40.936943+00:00)**: None (tier None, fixed=False) — error: The shell is available only for an isolated workspace. Use the filesystem/pytest tools for this repo.
+
+- **[AUTO-REPAIR] (2026-09-17T05:31:37.215755+00:00)**: None (tier None, fixed=False) — error: Patch blocked: path is outside SWARM_WRITE_ROOT.
+
+- **[AUTO-REPAIR] (2026-09-17T05:24:05.308336+00:00)**: None (tier None, fixed=False) — error: The shell is available only for an isolated workspace. Use the filesystem/pytest tools for this repo.
+
+- **Rule (coder)**: Tool 'sandbox_repl' failed (The shell is available only for an isolated workspace. Use the filesystem/pytest tools for this repo.). Check the tool ...
+
+- **[AUTO-REPAIR] (2026-09-17T05:17:57.829790+00:00)**: None (tier None, fixed=False) — error: Directory not found: repo/swarm_os/lib/
+
+- **[AUTO-REPAIR] (2026-09-17T05:17:27.108288+00:00)**: None (tier None, fixed=False) — error: Read-before-write guard: cannot patch 'swarm_os/lib/paths.py' — the agent has not listed or read it yet. Call filesystem
+
+- **[AUTO-REPAIR] (2026-09-17T05:17:25.193264+00:00)**: None (tier None, fixed=False) — error: Patch blocked: path is outside SWARM_WRITE_ROOT.
+
+- **[AUTO-REPAIR] (2026-09-17T05:17:23.459533+00:00)**: None (tier None, fixed=False) — error: Path escapes the project root: 'C:/Users/rober/Projects/swe_probe_work/repair_task1/repo/swarm_os/lib/paths.py' — refusi
+
+- **[AUTO-REPAIR] (2026-09-17T05:17:20.954099+00:00)**: None (tier None, fixed=False) — error: The shell is available only for an isolated workspace. Use the filesystem/pytest tools for this repo.
+
+- **[AUTO-REPAIR] (2026-09-17T05:16:49.227732+00:00)**: None (tier None, fixed=False) — error: The shell is available only for an isolated workspace. Use the filesystem/pytest tools for this repo.
+
+- **[AUTO-REPAIR] (2026-09-17T05:16:47.524816+00:00)**: None (tier None, fixed=False) — error: Patch blocked: path is outside SWARM_WRITE_ROOT.
+
+- **Rule (coder)**: Tool 'filesystem' failed (Patch blocked: path is outside SWARM_WRITE_ROOT.). Check the tool contract in _TOOL_DEFINITIONS and verify parameters bef...
+
+- **[AUTO-REPAIR] (2026-09-17T05:14:15.773591+00:00)**: None (tier 2, fixed=False) — error: Path escapes the project root: 'C:/Users/rober/Projects/swe_probe_work/repair_task1/repo/swarm_os/lib/paths.py' — refusi
+
+- **[AUTO-REPAIR] (2026-09-17T05:10:14.792325+00:00)**: None (tier 2, fixed=False) — error: The shell is available only for an isolated workspace. Use the filesystem/pytest tools for this repo.
+
+- **[AUTO-REPAIR] (2026-09-17T05:08:13.901948+00:00)**: None (tier 2, fixed=False) — error: The shell is available only for an isolated workspace. Use the filesystem/pytest tools for this repo.
+
+- **[AUTO-REPAIR] (2026-09-17T03:56:48.953491+00:00)**: None (tier 2, fixed=False) — error: Path escapes the project root: 'C:\Users\rober\Projects\swe_probe_work\xknx__xknx-470\repo\twine\_upload.py' — refusing 
+
+- **Rule (coder)**: Failure: The coder agent ran a Bash-style command (`find . -name '*.py' | head -20`) in the sandbox_repl, but the environment is PowerShell and `he...
+
+- **Rule (coder)**: Failure: The agent attempted to list the first 20 Python files using `find . -name '*.py' | head -20` in a sandbox_repl that runs on Windows PowerS...
+
+- **[AUTO-REPAIR] (2026-09-16T23:16:35.956257+00:00)**: None (tier None, fixed=False) — error: [31;1mhead: [31;1mThe term 'head' is not recognized as a name of a cmdlet, function, script file, or executable progra
+
+- **[AUTO-REPAIR] (2026-09-16T23:16:32.987363+00:00)**: None (tier None, fixed=False) — error: Search query is required
+
+- **[AUTO-REPAIR] (2026-09-16T23:08:00.942921+00:00)**: None (tier 2, fixed=False) — error: [31;1mhead: [31;1mThe term 'head' is not recognized as a name of a cmdlet, function, script file, or executable progra
+
+- **[AUTO-REPAIR] (2026-09-16T23:07:28.011850+00:00)**: None (tier 2, fixed=False) — error: Search query is required
+
+- **[AUTO-REPAIR] (2026-09-16T22:55:29.527842+00:00)**: None (tier 2, fixed=False) — error: [31;1mGet-ChildItem: [31;1mA parameter cannot be found that matches parameter name 'la'.[0m
+
+[31;1mtrue: [31;1mThe 
+
+- **[AUTO-REPAIR] (2026-09-16T05:33:41.973119+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 1; B
+
+- **[AUTO-REPAIR] (2026-09-16T05:33:40.008195+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned import in sandbox snippet: 'pathlib' at 
+
+- **[AUTO-REPAIR] (2026-09-16T05:33:09.127798+00:00)**: None (tier None, fixed=False) — error: Surgical Ambiguity: 'old' occurs multiple times. Provide more context.
+
+- **[AUTO-REPAIR] (2026-09-16T05:33:07.624237+00:00)**: None (tier None, fixed=False) — error: Path escapes the project root: 'C:\Users\rober\Projects\swe_probe_work\pypa__twine-1066\repo\twine\package.py' — refusin
+
+- **[AUTO-REPAIR] (2026-09-16T05:33:05.995124+00:00)**: None (tier None, fixed=False) — error: [31;1mSet-Location: [31;1mCannot find path 'C:\Users\rober\Projects\swe_probe_work\repo' because it does not exist.[0
+
+- **[AUTO-REPAIR] (2026-09-16T05:26:32.129720+00:00)**: None (tier None, fixed=False) — error: Security Gate blocked execution: Security Gate triggered on inline code: Banned built-in call found: 'open' at line 1
+
+D
+
+- **[AUTO-REPAIR] (2026-09-16T05:24:31.288864+00:00)**: None (tier None, fixed=False) — error: Filesystem operation timed out.
+
+- **Rule (debugger)**: Tool 'filesystem' failed (Filesystem operation timed out.). Check the tool contract in _TOOL_DEFINITIONS and verify parameters before retrying.
+
+- **[AUTO-REPAIR] (2026-09-16T05:22:30.539839+00:00)**: None (tier 2, fixed=False) — error: Surgical Ambiguity: 'old' occurs multiple times. Provide more context.
+
+- **[AUTO-REPAIR] (2026-09-16T05:21:58.795180+00:00)**: None (tier 2, fixed=False) — error: Path escapes the project root: 'C:\Users\rober\Projects\swe_probe_work\pypa__twine-1066\repo\twine\package.py' — refusin
+
+- **[AUTO-REPAIR] (2026-09-16T05:18:57.177270+00:00)**: None (tier 2, fixed=False) — error: [31;1mSet-Location: [31;1mCannot find path 'C:\Users\rober\Projects\swe_probe_work\repo' because it does not exist.[0
+
+- **Rule (coder)**: Tool 'sandbox_repl' failed ([31;1mSet-Location: [31;1mCannot find path 'C:\Users\rober\Projects\swe_probe_work\repo' because it does not exist.[...
 
 - **[AUTO-REPAIR] (2026-09-16T02:55:23.106507+00:00)**: None (tier None, fixed=False) — error: Path escapes the project root: 'C:/Users/rober/Projects/swe_probe_work/pallets__click-2380/repo/src/click/core.py' — ref
 
