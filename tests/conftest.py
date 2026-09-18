@@ -84,7 +84,12 @@ def global_qdrant_mock():
                 side_effect=mock_init,
                 create=True,
             ):
-                yield
+                with patch(
+                    "swarm_os.services.lesson_manager.AsyncQdrantClient",
+                    side_effect=mock_init,
+                    create=True,
+                ):
+                    yield
 
 
 @pytest.fixture(autouse=True)

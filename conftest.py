@@ -8,7 +8,7 @@ collect_ignore_glob = [
 ]
 
 import pytest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 
 @pytest.fixture(autouse=True)
@@ -30,3 +30,27 @@ def global_reflexion_service_mock():
         "swarm_os.services.reflection_loop.get_reflection_service", return_value=service
     ):
         yield service
+
+
+@pytest.fixture(autouse=True)
+def global_lesson_manager_mock():
+    """Default-hermetic governed lesson seam.
+
+    The Prompt Repairer seam (stream_runner / agent_service_v2) calls
+    ``get_lesson_manager().render_active_lessions(...)`` on every worker
+    decision. Against live Qdrant that 404s the (possibly-not-yet-created)
+    ``ActiveLessons`` collection, which is correct fail-closed behaviour but
+    noisy/slow in tests. Poison the singleton so tests get a deterministic
+    empty block unless a test deliberately builds/patchs the real manager.
+    """
+    manager = MagicMock()
+    manager.render_active_lessons = AsyncMock(return_value="")
+    manager.retrieve = AsyncMock(return_value=[])
+    manager.get_all = AsyncMock(return_value=[])
+    manager.store = AsyncMock(return_value="lesson-mock")
+    manager.remove = AsyncMock(return_value=True)
+
+    with patch(
+        "swarm_os.services.lesson_manager.get_lesson_manager", return_value=manager
+    ):
+        yield manager

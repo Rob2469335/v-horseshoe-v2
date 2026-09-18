@@ -231,10 +231,17 @@ async def test_tool_failure_records_event_store_event(tmp_path):
 
 @pytest.mark.asyncio
 async def test_past_mistake_warning_injected_into_tool_decision_prompt():
-    """Reviewer item #1 (b): prove the [PAST-MISTAKE WARNING] actually lands in the
-    system prompt handed to the LLM for a tool decision — not just that a rule was
-    stored. A stored ReflexionMemory hint must appear in the final messages sent to
-    complete_for_tool_decision."""
+    """Reviewer item #1 (b) — UPDATED to the governed seam.
+
+    Raw ReflexionMemory must NEVER enter the worker's tool-decision prompt.
+    Only the LESSON MANAGER's curated ACTIVE set may render as
+    [BEHAVIORAL LESSONS]. This test proves:
+      1. an active lesson's rule text DOES land in the system prompt
+         (governed lesson delivery still works), and
+      2. a raw check_for_past_mistakes hint does NOT appear under its raw
+         [PAST-MISTAKE WARNING] header — historical memory is confined to the
+         diagnosis/evidence side.
+    """
     import runtime_v2.services.stream_runner as SR
 
     captured = {}
@@ -252,19 +259,35 @@ async def test_past_mistake_warning_injected_into_tool_decision_prompt():
         captured["messages"] = messages
         return FakeResp()
 
+    ACTIVE_LESSON_TEXT = (
+        "Before reading a file, use filesystem operation=list or glob to "
+        "confirm it exists."
+    )
+    RAW_HINT_TEXT = (
+        "WARNING: A similar approach previously failed. Advice: Do NOT guess "
+        "file paths"
+    )
+
+    class FakeLessonManager:
+        async def render_active_lessons(self, task_context, max_chars=700):
+            return f"\n\n[BEHAVIORAL LESSONS]\n1. {ACTIVE_LESSON_TEXT}"
+
     class FakeReflectionService:
         async def check_for_past_mistakes(self, task_context):
-            return (
-                "WARNING: A similar approach previously failed. Advice: Before reading "
-                "a file, use filesystem operation=list or glob to confirm it exists. "
-                "Do NOT repeat: Do NOT guess file paths"
-            )
+            # Historical memory side still returns a hint — but it must NOT
+            # reach the worker prompt anymore.
+            return RAW_HINT_TEXT
 
     async def fake_live_fallbacks(mode="auto"):
         return []
 
     with (
+        patch.dict("os.environ", {"SWARM_MEMORY_INJECT": "1"}),
         patch.object(SR, "complete_for_tool_decision", side_effect=fake_complete),
+        patch(
+            "swarm_os.services.lesson_manager.get_lesson_manager",
+            return_value=FakeLessonManager(),
+        ),
         patch(
             "swarm_os.services.reflection_loop.get_reflection_service",
             return_value=FakeReflectionService(),
@@ -294,11 +317,14 @@ async def test_past_mistake_warning_injected_into_tool_decision_prompt():
     system_text = "\n".join(
         str(m.get("content", "")) for m in sent if m.get("role") == "system"
     )
-    assert "[PAST-MISTAKE WARNING]" in system_text, (
-        "warning must be injected into the system prompt"
-    )
-    assert "Before reading a file, use filesystem operation=list or glob" in system_text
-    assert "Do NOT guess file paths" in system_text
+    # Governed lesson IS delivered…
+    assert "[BEHAVIORAL LESSONS]" in system_text
+    assert ACTIVE_LESSON_TEXT in system_text
+    # …while raw historical memory is NOT allowed into the prompt under its
+    # legacy [PAST-MISTAKE WARNING] header (invariant: historical memory never
+    # directly enters the worker's behavioural-instruction prompt).
+    assert "[PAST-MISTAKE WARNING]" not in system_text
+    assert RAW_HINT_TEXT not in system_text
 
 
 @pytest.mark.asyncio

@@ -955,12 +955,16 @@ async def run_reflection():
             return
 
         logger.info(f"Distilled new rule: {correction}")
-
-        svc = get_reflection_service()
-        await svc.store_reflexion(
-            task_desc, content, error_msg, correction, component=component
+        
+        from swarm_os.services.prompt_repairer import get_prompt_repairer
+        repairer = get_prompt_repairer()
+        await repairer.process_failure(
+            run_id=latest_failure.get("run_id") or str(uuid.uuid4()),
+            component=component,
+            failure_reason=error_msg,
+            hypothesized_action=correction
         )
-        logger.info("Successfully saved reflexion rule to Qdrant ReflexionMemory.")
+        logger.info("Successfully handed reflexion rule to PromptRepairer.")
 
     except Exception as e:
         logger.error(f"Distiller phase failed: {e}")

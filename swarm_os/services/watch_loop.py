@@ -838,17 +838,15 @@ class WatchLoop:
                 agent_id,
                 prompt,
             )
-            from swarm_os.services.reflection_loop import get_reflection_service
 
             async def _record():
-                await get_reflection_service().store_reflexion(
-                    task=f"agent:{agent_id} compound goal {prompt} exhausted turns",
-                    action="max_turns_reached",
-                    failure_reason="agent ran out of turns before completing a compound goal.",
-                    correction="Prefer completing the goal with the FEWEST tool calls. For compound goals needing both codebase reads and web research, interleave them — do not spend all turns on exploration.",
-                    do_not_repeat=f"agent:{agent_id} must not burn all turns on exploration before the required tool.",
+                from swarm_os.services.prompt_repairer import get_prompt_repairer
+                import uuid
+                await get_prompt_repairer().process_failure(
+                    run_id=str(uuid.uuid4()),
                     component=agent_id,
-                    confidence=0.6,
+                    failure_reason="agent ran out of turns before completing a compound goal.",
+                    hypothesized_action="Prefer completing the goal with the FEWEST tool calls. For compound goals needing both codebase reads and web research, interleave them - do not spend all turns on exploration.",
                 )
 
             def _consume(_t: asyncio.Task) -> None:

@@ -32,9 +32,11 @@ BASE = "def walk(self):\n    return 1\n"
 
 @pytest.fixture(autouse=True)
 def _no_write_root(monkeypatch):
-    """`.env` sets SWARM_WRITE_ROOT (the fix-curriculum confinement), which would
-    refuse every tmp_path patch before the arg logic is reached."""
+    """`.env` sets SWARM_WRITE_ROOT and SWARM_WORKSPACE_ROOT, which confine the
+    filesystem sandbox and refuse every tmp_path operation before the arg logic
+    is reached."""
     monkeypatch.delenv("SWARM_WRITE_ROOT", raising=False)
+    monkeypatch.delenv("SWARM_WORKSPACE_ROOT", raising=False)
 
 
 @pytest.mark.parametrize(

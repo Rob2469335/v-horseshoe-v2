@@ -6,7 +6,7 @@ from typing import Dict, Tuple
 # deterministic grounding + one L1-rejected shallow final + real exploration
 # left no room to produce an accepted report ("max turns reached" on every
 # /goal codebase-analysis run). Loop detection still caps runaway loops.
-MAX_TURNS = 12
+MAX_TURNS = 24
 MAX_DEPTH = 15
 
 # Agents that must fetch content before finalizing

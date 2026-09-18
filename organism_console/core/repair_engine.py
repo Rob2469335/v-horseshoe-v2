@@ -653,11 +653,9 @@ def get_similar_lessons(error_text: str, top_k: int = 3) -> List[Dict]:
                 # check_for_past_mistakes returns a [PAST-MISTAKE WARNING] string
                 # built from the top retrieved ReflexionMemory rules for this error.
                 warning = _ai.run(
-                    svc.check_for_past_mistakes(
-                        error_text, threshold=0.3, max_chars=1200
-                    )
+                    __import__('swarm_os.services.lesson_manager', fromlist=['get_lesson_manager']).get_lesson_manager().render_active_lessons(error_text, max_chars=1200)
                 )
-                if warning and "PAST-MISTAKE" in warning:
+                if warning and "BEHAVIORAL LESSONS" in warning:
                     lesson = {
                         "error_text": error_text[:200],
                         "repair_action": warning[:400],
@@ -1439,18 +1437,16 @@ def _handle_event_line(engine: Any, data: dict) -> None:
             log.warning(
                 "turn_budget_exhausted for agent %s (prompt: %s)", agent_id, prompt
             )
-            from swarm_os.services.reflection_loop import get_reflection_service
+            from swarm_os.services.prompt_repairer import get_prompt_repairer
             import asyncio as _asyncio
+            import uuid
 
             async def _record_turn_reflexion():
-                await get_reflection_service().store_reflexion(
-                    task=f"agent:{agent_id} compound goal {prompt} exhausted turns",
-                    action="max_turns_reached",
-                    failure_reason="agent ran out of turns before completing a compound goal.",
-                    correction="Prefer completing the goal with the FEWEST tool calls. For compound goals needing both codebase reads and web research, interleave them — do not spend all turns on exploration.",
-                    do_not_repeat=f"agent:{agent_id} must not burn all turns on exploration before the required tool.",
+                await get_prompt_repairer().process_failure(
+                    run_id=str(uuid.uuid4()),
                     component=agent_id,
-                    confidence=0.6,
+                    failure_reason="agent ran out of turns before completing a compound goal.",
+                    hypothesized_action="Prefer completing the goal with the FEWEST tool calls. For compound goals needing both codebase reads and web research, interleave them - do not spend all turns on exploration.",
                 )
 
             try:

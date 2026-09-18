@@ -164,18 +164,16 @@ class HealingWatchman:
         )
         do_not = f"Do NOT ignore repeated '{issue}' signals — a prior recovery used {action}."
         try:
-            from swarm_os.services.reflection_loop import get_reflection_service
+            from swarm_os.services.prompt_repairer import get_prompt_repairer
             from swarm_os.healing.failure_detector import run_coro_sync
+            import uuid
 
             async def _store():
-                await get_reflection_service().store_reflexion(
-                    task=f"agent:healing system {issue}",
-                    action=f"system:{action}",
-                    failure_reason=f"system {issue} detected via probe",
-                    correction=correction,
-                    do_not_repeat=do_not,
+                await get_prompt_repairer().process_failure(
+                    run_id=str(uuid.uuid4()),
                     component=f"system:{issue}",
-                    confidence=0.75,
+                    failure_reason=f"system {issue} detected via probe",
+                    hypothesized_action=correction,
                 )
 
             run_coro_sync(_store(), timeout=30.0)

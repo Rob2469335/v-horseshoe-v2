@@ -269,7 +269,6 @@ def _record_verification_reflexion(
     failures that RepairWatchman already consumes. Never raises: a failed
     store must never break the goal loop."""
     try:
-        from swarm_os.services.reflection_loop import get_reflection_service
         import asyncio as _asyncio
 
         head = (
@@ -279,18 +278,18 @@ def _record_verification_reflexion(
         reason = f"goal verification failed: {head[:400]}"
 
         async def _record():
-            await get_reflection_service().store_reflexion(
-                task=f"agent:{component} autonomous goal {goal[:140]}",
-                action="verification_failed",
+            from swarm_os.services.prompt_repairer import get_prompt_repairer
+            import uuid
+            
+            await get_prompt_repairer().process_failure(
+                run_id=str(uuid.uuid4()),
+                component=component,
                 failure_reason=reason,
-                correction=(
+                hypothesized_action=(
                     "After editing files for a goal, run the related tests and confirm the "
                     "changed modules pass BEFORE calling final. A passing reviewer verdict "
                     "requires the goal's deliverables to exist in the working tree."
                 ),
-                do_not_repeat=f"agent:{component} must verify its own changes (tests/syntax) before final.",
-                component=component,
-                confidence=0.7,
             )
 
         try:

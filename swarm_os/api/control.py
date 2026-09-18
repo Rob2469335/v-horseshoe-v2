@@ -425,7 +425,6 @@ async def control_recover(req: RecoverRequest) -> Dict[str, Any]:
     # Learn from the outcome — persist a grounded reflexion rule on success.
     if result.get("ok"):
         try:
-            from swarm_os.services.reflection_loop import get_reflection_service
 
             corrections = {
                 "memory_pressure": "Check memory pressure; empty working sets of non-critical processes to relieve RAM (free_memory) before escalating.",
@@ -440,14 +439,14 @@ async def control_recover(req: RecoverRequest) -> Dict[str, Any]:
             )
 
             async def _store():
-                await get_reflection_service().store_reflexion(
-                    task=f"agent:healing system {issue}",
-                    action=f"system:{result.get('action')}",
-                    failure_reason=f"system {issue} detected via probe",
-                    correction=correction,
-                    do_not_repeat=f"Do NOT ignore repeated '{issue}' signals — a prior recovery used {result.get('action')}.",
+                from swarm_os.services.prompt_repairer import get_prompt_repairer
+                import uuid
+
+                await get_prompt_repairer().process_failure(
+                    run_id=str(uuid.uuid4()),
                     component=f"system:{issue}",
-                    confidence=0.75,
+                    failure_reason=f"system {issue} detected via probe",
+                    hypothesized_action=correction,
                 )
 
             await _store()

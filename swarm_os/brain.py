@@ -245,7 +245,6 @@ def make_swarm_brain(
 
         try:
             from swarm_os.services.reflection_loop import (
-                get_reflection_service,
                 check_model_reliability,
             )
             import asyncio
@@ -268,7 +267,7 @@ def make_swarm_brain(
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                     warning = pool.submit(
                         _run_isolated,
-                        lambda: get_reflection_service().check_for_past_mistakes(task),
+                        lambda: asyncio.run(__import__('swarm_os.services.lesson_manager', fromlist=['get_lesson_manager']).get_lesson_manager().render_active_lessons(task, max_chars=400)),
                     ).result()
                     reliability_note = pool.submit(
                         _run_isolated,
@@ -278,7 +277,7 @@ def make_swarm_brain(
                     ).result()
             else:
                 warning = asyncio.run(
-                    get_reflection_service().check_for_past_mistakes(task)
+                    __import__('swarm_os.services.lesson_manager', fromlist=['get_lesson_manager']).get_lesson_manager().render_active_lessons(task, max_chars=400)
                 )
                 reliability_note = asyncio.run(
                     check_model_reliability(requested_model or _safe_model(genome))

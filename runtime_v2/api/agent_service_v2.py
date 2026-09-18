@@ -736,26 +736,22 @@ class AgentServiceV2:
                     for k in stale:
                         _failure_lessons_seen.pop(k, None)
 
-            from swarm_os.services.reflection_loop import get_reflection_service
+            from swarm_os.services.prompt_repairer import get_prompt_repairer
+            import uuid
 
             correction, do_not = self._failure_lesson(action, tool_payload, error)
-            # Task text is embedded and later matched against
-            # `agent:{agent_id} {user_message}` queries — lead with the agent +
-            # a generalizable "analyzing/auditing the codebase" trigger so the
-            # lesson surfaces on future codebase-analysis runs, then the concrete
+            # Use task string to hold the specific file action being checked,
+            # but record the actual failure string from the filesystem/tool
             # error for precision.
             task_hint = (
                 f"agent:{agent_id} analyzing auditing codebase {action} failed "
                 f"{str(error)[:120]} — check filesystem paths before reading"
             )
-            await get_reflection_service().store_reflexion(
-                task=task_hint,
-                action=action,
-                failure_reason=str(error)[:300],
-                correction=correction,
-                do_not_repeat=do_not,
+            await get_prompt_repairer().process_failure(
+                run_id=str(uuid.uuid4()),
                 component=agent_id,
-                confidence=0.75,
+                failure_reason=str(error)[:300],
+                hypothesized_action=correction,
             )
             # Also write the failure to the organism diary so run_reflection()'s
             # LLM distiller sees REAL agent failures (it previously only read the
@@ -2513,7 +2509,6 @@ class AgentServiceV2:
         delegated_by: str = "",
     ) -> AsyncGenerator[dict, None]:
         from runtime_v2.prompts.system_prompts import build
-        from runtime_v2.services.memory_core import get_relevant_memories
 
         genome_id, genome_weights = genome_id or "", genome_weights or {}
         try:
@@ -2557,11 +2552,17 @@ class AgentServiceV2:
         injected_memories = ""
         if not history and prompt:
             try:
-                memories = await asyncio.to_thread(get_relevant_memories, prompt)
-                if memories:
-                    injected_memories = f"\n\n{memories}"
+                # GOVERNED SEAM: only the curated active lesson set may enter the
+                # agent's system prompt as behavioural guidance. Raw episodic
+                # memory stays on the evidence/diagnosis side.
+                from swarm_os.services.lesson_manager import get_lesson_manager
+
+                injected_memories = await get_lesson_manager().render_active_lessons(
+                    f"agent:{agent_id} {prompt[:200]}",
+                    max_chars=700,
+                )
             except Exception as exc:
-                log.warning("Failed to fetch relevant memories: %s", exc)
+                log.warning("Failed to render active lessons: %s", exc)
 
         start_time = 0
         if self.orchestrator and hasattr(self.orchestrator, "router"):
@@ -3046,18 +3047,14 @@ class AgentServiceV2:
                             }
                         )
                         try:
-                            from swarm_os.services.reflection_loop import (
-                                get_reflection_service,
-                            )
-
-                            await get_reflection_service().store_reflexion(
-                                task=f"agent:{agent_id} looping on repeated exploration goal {str(prompt)[:120]}",
-                                action="loop_detected",
-                                failure_reason="fix-intent coder repeated an exploration cycle without editing.",
-                                correction="Stop re-reading files. Apply the fix with filesystem patch/write, then run the tests.",
-                                do_not_repeat=f"agent:{agent_id} must not re-read the same file instead of editing it.",
+                            from swarm_os.services.prompt_repairer import get_prompt_repairer
+                            import uuid
+                            
+                            await get_prompt_repairer().process_failure(
+                                run_id=getattr(state, "run_id", str(uuid.uuid4())),
                                 component=agent_id,
-                                confidence=0.8,
+                                failure_reason="fix-intent coder repeated an exploration cycle without editing.",
+                                hypothesized_action="Stop re-reading files. Apply the fix with filesystem patch/write, then run the tests.",
                             )
                         except Exception as loop_refl_err:
                             log.debug(
@@ -3095,18 +3092,14 @@ class AgentServiceV2:
                         )
                         # Record the lesson once.
                         try:
-                            from swarm_os.services.reflection_loop import (
-                                get_reflection_service,
-                            )
+                            from swarm_os.services.prompt_repairer import get_prompt_repairer
+                            import uuid
 
-                            await get_reflection_service().store_reflexion(
-                                task=f"agent:{agent_id} looping on repeated exploration goal {str(prompt)[:120]}",
-                                action="loop_detected",
-                                failure_reason="agent repeated an exploration cycle; forced to synthesize.",
-                                correction="Do not re-read files you have already seen. Synthesize a findings report from the content already gathered.",
-                                do_not_repeat=f"agent:{agent_id} must not re-read the same file in a cycle.",
+                            await get_prompt_repairer().process_failure(
+                                run_id=getattr(state, "run_id", str(uuid.uuid4())),
                                 component=agent_id,
-                                confidence=0.8,
+                                failure_reason="agent repeated an exploration cycle; forced to synthesize.",
+                                hypothesized_action="Do not re-read files you have already seen. Synthesize a findings report from the content already gathered.",
                             )
                         except Exception as loop_refl_err:
                             log.debug(
@@ -3139,7 +3132,8 @@ class AgentServiceV2:
                 # a [PAST-MISTAKE WARNING] instead of re-walking the same dead-end
                 # sequence of identical tool calls.
                 try:
-                    from swarm_os.services.reflection_loop import get_reflection_service
+                    from swarm_os.services.prompt_repairer import get_prompt_repairer
+                    import uuid
 
                     _loop_sig = json.dumps(
                         {
@@ -3151,14 +3145,11 @@ class AgentServiceV2:
                         },
                         ensure_ascii=False,
                     )[:200]
-                    await get_reflection_service().store_reflexion(
-                        task=f"agent:{agent_id} looping on repeated tool call {_loop_sig} goal {str(prompt)[:120]}",
-                        action="loop_detected",
-                        failure_reason=f"agent repeated the same tool decision >=3 times within the last 8 actions ({_loop_sig}) and tripped the circuit breaker.",
-                        correction="Do NOT repeat the same tool call with identical arguments. If a tool failed, read the error, change the approach (different file/path/query/operation), or delegate. A repeated identical call will never produce a different result.",
-                        do_not_repeat=f"agent:{agent_id} must not call the same tool with the same arguments more than twice.",
+                    await get_prompt_repairer().process_failure(
+                        run_id=getattr(state, "run_id", str(uuid.uuid4())),
                         component=agent_id,
-                        confidence=0.8,
+                        failure_reason=f"agent repeated the same tool decision >=3 times within the last 8 actions ({_loop_sig}) and tripped the circuit breaker.",
+                        hypothesized_action="Do NOT repeat the same tool call with identical arguments. If a tool failed, read the error, change the approach (different file/path/query/operation), or delegate. A repeated identical call will never produce a different result.",
                     )
                 except Exception as loop_refl_err:
                     log.debug(
@@ -3837,16 +3828,14 @@ class AgentServiceV2:
         except Exception as evt_err:
             log.debug("[%s] turn_budget event skipped: %s", agent_id, evt_err)
         try:
-            from swarm_os.services.reflection_loop import get_reflection_service
+            from swarm_os.services.prompt_repairer import get_prompt_repairer
+            import uuid
 
-            await get_reflection_service().store_reflexion(
-                task=f"agent:{agent_id} compound goal {str(prompt)[:150]} exhausted {MAX_TURNS} turns",
-                action="max_turns_reached",
-                failure_reason="agent ran out of turns before completing the goal (likely a compound goal needing filesystem + web_search, or a slow LLM).",
-                correction="Prefer completing the goal with the FEWEST tool calls. If a compound goal requires both codebase reads and web research, interleave them — do not spend all turns on exploration. Consider delegating to a specialized agent.",
-                do_not_repeat=f"agent:{agent_id} must not burn all {MAX_TURNS} turns on exploration before the required tool (web_search/filesystem) is used.",
+            await get_prompt_repairer().process_failure(
+                run_id=getattr(state, "run_id", str(uuid.uuid4())),
                 component=agent_id,
-                confidence=0.6,
+                failure_reason="agent ran out of turns before completing the goal (likely a compound goal needing filesystem + web_search, or a slow LLM).",
+                hypothesized_action="Prefer completing the goal with the FEWEST tool calls. If a compound goal requires both codebase reads and web research, interleave them - do not spend all turns on exploration. Consider delegating to a specialized agent.",
             )
         except Exception as refl_err:
             log.debug("[%s] max-turns reflexion skipped: %s", agent_id, refl_err)

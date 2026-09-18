@@ -123,6 +123,17 @@ async def lifespan(app: FastAPI):
         event_store = None
 
     try:
+        from swarm_os.services.prompt_repairer import get_prompt_repairer
+
+        repairer = get_prompt_repairer()
+        await repairer.recover_interrupted_promotions()
+        app.state.prompt_repairer = repairer
+        log.info("PromptRepairer ready and recovered")
+    except Exception as exc:
+        log.warning(f"PromptRepairer unavailable: {exc}")
+        app.state.prompt_repairer = None
+
+    try:
         from swarm_os.healing.healing_service import HealingService
 
         healing = HealingService()
