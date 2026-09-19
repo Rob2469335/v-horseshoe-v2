@@ -17,7 +17,22 @@ def _auth_headers() -> dict:
     import os
 
     token = os.getenv("SWARM_API_TOKEN", "").strip()
-    return {"Authorization": f"Bearer {token}"} if token else {}
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    # Per-request evaluation context (isolation): forward the evaluation id so
+    # ONLY this run receives its lesson snapshot (never globally ACTIVE).
+    eval_id = os.getenv("SWARM_EVAL_ID", "").strip()
+    if eval_id:
+        headers["X-Swarm-Eval-Id"] = eval_id
+    # Harness-supplied SWE task identity (never model-derived) — tags failures
+    # so the evidence gate can count distinct task identities.
+    task_id = os.getenv("SWARM_TASK_ID", "").strip()
+    if task_id:
+        headers["X-Swarm-Task-Id"] = task_id
+        # Harness credential — required for the backend to honor the task id.
+        harness_key = os.getenv("SWARM_HARNESS_KEY", "").strip()
+        if harness_key:
+            headers["X-Swarm-Harness-Key"] = harness_key
+    return headers
 
 
 def call_api(
