@@ -217,6 +217,19 @@ async def step_agent(
         raise HTTPException(status_code=404, detail=f"Unknown agent '{agent_id}'")
 
 
+def _harness_task_id(headers) -> "str | None":
+    """Return the harness-supplied task id ONLY when the request carries the
+    harness credential (the operator-provisioned SWARM_RECEIPT_KEY). A worker
+    that sets X-Swarm-Task-Id itself — without the credential — gets None, so
+    the identity cannot be forged to game the evidence-diversity gate."""
+    import os
+
+    key = os.environ.get("SWARM_HARNESS_KEY", "")
+    if key and headers.get("x-swarm-harness-key") == key:
+        return headers.get("x-swarm-task-id")
+    return None
+
+
 @router.post("/agents/{agent_id}/step/stream")
 async def step_agent_stream(agent_id: str, payload: AgentStepPayload, request: Request):
     """
@@ -224,6 +237,17 @@ async def step_agent_stream(agent_id: str, payload: AgentStepPayload, request: R
     Emits newline-delimited JSON chunks.
     """
     runtime = getattr(request.app.state, "runtime", None)
+
+    # Per-request evaluation context (isolation): a candidate evaluation run
+    # carries X-Swarm-Eval-Id so ONLY that run receives its lesson snapshot.
+    try:
+        from runtime_v2.services.stream_runner import EVAL_ID_CTX, TASK_ID_CTX
+
+        EVAL_ID_CTX.set(request.headers.get("x-swarm-eval-id"))
+        # Harness-supplied task identity — honored ONLY with the harness credential.
+        TASK_ID_CTX.set(_harness_task_id(request.headers))
+    except Exception:
+        pass
 
     async def generate() -> AsyncGenerator[str, None]:
         try:
