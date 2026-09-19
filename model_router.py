@@ -1,14 +1,91 @@
 import json
 import subprocess
 import asyncio
-from contextlib import asynccontextmanager
+import hmac
+import threading
+import uuid
 import anyio
-from fastapi import FastAPI, Request
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, Header, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 import httpx
 import uvicorn
 import os
 import psutil
+
+# --- Inference attribution (Checkpoint 2) ---------------------------------
+# Per-request (model, system_fingerprint) counters used to prove an arm ran
+# entirely on the pinned endpoint. Read-only and credential-gated, on a
+# SEPARATE loopback port so forwarding never depends on it. ASSUMPTION: one
+# arm runs at a time; the harness takes a before/after delta.
+BOOT_ID = uuid.uuid4().hex[:16]
+_INFERENCE_STATS = {
+    "completion_requests": 0,
+    "pairs": {},  # "model|system_fingerprint" -> count
+    "pairless": 0,
+    "errors": 0,
+    "aborted": 0,  # client disconnected before completion
+    "timeouts": 0,
+}
+_INFERENCE_LOCK = threading.Lock()
+
+
+def _record_stream_start(chunk: bytes) -> None:
+    """Attribute the first chunk of a completion request.
+
+    Handles both SSE (data: prefix) and non-streaming JSON (plain body).
+    Counts only completion requests. A chunk with no (model,
+    system_fingerprint) pair is counted pair-less (fail-closed at the
+    harness), never as valid.
+    """
+    model = fingerprint = ""
+    try:
+        text = chunk.decode("utf-8", "replace")
+    except Exception:
+        text = ""
+    # Try SSE first (data: prefix)
+    found_pair = False
+    for line in text.splitlines():
+        line = line.strip()
+        if not line.startswith("data:"):
+            continue
+        payload = line[5:].strip()
+        if not payload or payload == "[DONE]":
+            continue
+        try:
+            obj = json.loads(payload)
+        except Exception:
+            continue
+        model = obj.get("model") or model
+        fingerprint = obj.get("system_fingerprint") or fingerprint
+        if model and fingerprint:
+            found_pair = True
+            break
+    # Fallback: non-streaming JSON body (no data: prefix)
+    if not found_pair:
+        try:
+            obj = json.loads(text.strip())
+            model = obj.get("model") or model
+            fingerprint = obj.get("system_fingerprint") or fingerprint
+        except Exception:
+            pass
+    with _INFERENCE_LOCK:
+        _INFERENCE_STATS["completion_requests"] += 1
+        if model and fingerprint:
+            key = f"{model}|{fingerprint}"
+            _INFERENCE_STATS["pairs"][key] = _INFERENCE_STATS["pairs"].get(key, 0) + 1
+        else:
+            _INFERENCE_STATS["pairless"] += 1
+
+
+def _record_stream_error() -> None:
+    with _INFERENCE_LOCK:
+        _INFERENCE_STATS["errors"] += 1
+
+
+def _record_abort() -> None:
+    with _INFERENCE_LOCK:
+        _INFERENCE_STATS["aborted"] += 1
 
 def _router_pinned() -> bool:
     """SWARM_ROUTER_PINNED=1 -> forward-only: never spawn/kill local models.
@@ -26,11 +103,28 @@ async def lifespan(app: FastAPI):
     global client, mode_switch_lock
     client = httpx.AsyncClient(timeout=300.0)
     mode_switch_lock = asyncio.Lock()
+    # Read-only status server on its OWN loopback port. Started in a daemon
+    # thread so a bind failure cannot affect forwarding - the preflight then
+    # fails closed instead.
+    status_server = None
+    try:
+        _cfg = uvicorn.Config(
+            status_app,
+            host="127.0.0.1",
+            port=int(os.environ.get("SWARM_ROUTER_STATUS_PORT", "8095")),
+            log_level="warning",
+        )
+        status_server = uvicorn.Server(_cfg)
+        threading.Thread(target=status_server.run, daemon=True).start()
+    except Exception as e:
+        print(f"Status server failed to start (forwarding unaffected): {e}")
     # Start the default models immediately on startup (skipped when pinned:
     # a pinned router is forward-only and must not squat :8079).
     if not _router_pinned():
         await start_daily_models()
     yield
+    if status_server is not None:
+        status_server.should_exit = True
     if not _router_pinned():
         await kill_active_processes()
     if client:
@@ -38,6 +132,32 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+# Read-only inference-attribution status. Its OWN app/port (never :8080) so the
+# worker cannot read or reset it through the router. Credential = harness key.
+status_app = FastAPI()
+
+
+@status_app.get("/inference/status")
+async def inference_status(x_swarm_harness_key: str = Header(default="")):
+    expected = os.environ.get("SWARM_HARNESS_KEY", "")
+    if not expected or not hmac.compare_digest(x_swarm_harness_key, expected):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    with _INFERENCE_LOCK:
+        return JSONResponse(
+            {
+                "boot_id": BOOT_ID,
+                "pinned": _router_pinned(),
+                "completion_requests": _INFERENCE_STATS["completion_requests"],
+                "pairs": dict(_INFERENCE_STATS["pairs"]),
+                "pairless": _INFERENCE_STATS["pairless"],
+                "errors": _INFERENCE_STATS["errors"],
+                "aborted": _INFERENCE_STATS["aborted"],
+                "timeouts": _INFERENCE_STATS["timeouts"],
+            }
+        )
+
+
 # Base URL for the underlying llama.cpp server
 BACKEND_URL = "http://127.0.0.1:8079"
 
@@ -286,10 +406,20 @@ async def proxy_chat(request: Request):
 
         # Using a generator to stream back using the global client
         async def stream_generator():
+            first = True
             try:
                 async for chunk in resp.aiter_bytes():
+                    if first:
+                        first = False
+                        _record_stream_start(chunk)
                     yield chunk
+            except anyio.get_cancelled_exc_class():
+                # Client disconnected before completion (e.g. backend timeout).
+                _record_abort()
             except Exception as e:
+                # A stream that dies after the first chunk is an error even
+                # though the pair was seen - do not let it count as valid.
+                _record_stream_error()
                 print(f"Stream interrupted: {e}")
             finally:
                 with anyio.CancelScope(shield=True):
