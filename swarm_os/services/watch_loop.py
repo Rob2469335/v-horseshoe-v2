@@ -847,6 +847,7 @@ class WatchLoop:
                     component=agent_id,
                     failure_reason="agent ran out of turns before completing a compound goal.",
                     hypothesized_action="Prefer completing the goal with the FEWEST tool calls. For compound goals needing both codebase reads and web research, interleave them - do not spend all turns on exploration.",
+                    source="watch-loop",
                 )
 
             def _consume(_t: asyncio.Task) -> None:
