@@ -67,9 +67,6 @@ def main() -> int:
     test_patch_content = Path(args.test_patch).read_text("utf-8") if args.test_patch and Path(args.test_patch).exists() else ""
     hf_inst = {"problem_statement": args.problem_statement, "test_patch": test_patch_content}
 
-    print(f"resetting to base {args.base_commit}")
-    subprocess.run(["git", "reset", "--hard", args.base_commit], cwd=str(repo), capture_output=True)
-
     cls._reset_instance(inst, hf_inst)
     f2p = cls.probe._parse_list_field(inst.get("fail_to_pass") or [])
 
