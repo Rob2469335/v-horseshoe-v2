@@ -14,13 +14,17 @@ Enforces the 11/10 standard invariants:
 
 from __future__ import annotations
 import json
+import logging
 import uuid
 import time
 import asyncio
+import os
 from enum import Enum
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import List, Any
+
+_log = logging.getLogger(__name__)
 
 from swarm_os.healing.diagnostician import Diagnostician
 from swarm_os.services.lesson_manager import (
@@ -29,8 +33,10 @@ from swarm_os.services.lesson_manager import (
     MAX_RULE_TOKENS,
     _is_contradiction,
     _jaccard_tokens,
+    clear_eval_context,
     estimate_tokens,
     get_lesson_manager,
+    register_eval_context,
 )
 from swarm_os.lib.atomic_io import atomic_write_text
 
@@ -39,6 +45,12 @@ GOVERNANCE_VERSION = 1
 # ids) are required before a candidate may even be created. Configurable, but
 # the default is deliberately strict — one or two failures never promote.
 MIN_EVIDENCE_RUNS = 3
+# Genuine task diversity: 3 runs of the SAME task are not 3 independent
+# observations. Promotion requires at least 2 distinct task identities.
+MIN_EVIDENCE_TASKS = 2
+# Bounded evaluation tick: at most ONE controlled evaluation attempt per
+# candidate per this window (prevents re-evaluation storms). Configurable.
+EVAL_ATTEMPT_COOLDOWN_S = 3600
 
 _REPO_ROOT = Path(__file__).parent.parent.parent
 _DATA_DIR = _REPO_ROOT / "data"
@@ -51,6 +63,102 @@ def _journal_file() -> Path:
     """Transaction journal for crash-safe promotion. Derived from _DATA_DIR at
     call time so tests that redirect _DATA_DIR also isolate the journal."""
     return _DATA_DIR / "prompt_repairer_journal.jsonl"
+
+
+def _rollout_log_file() -> Path:
+    """Append-only per-rollout log (OUTSIDE the governed path).
+
+    Retains each arm's numbers regardless of the promotion verdict, so an
+    honest INSUFFICIENT_EVIDENCE / NOT_IMPROVED stop does not lose the data
+    step 8 (25-rollout measurement) needs. Appends only — never truncates.
+    """
+    return _DATA_DIR / "prompt_repairer_rollouts.jsonl"
+
+
+def _append_rollout(rec: dict) -> None:
+    try:
+        _DATA_DIR.mkdir(parents=True, exist_ok=True)
+        with open(_rollout_log_file(), "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
+    except Exception as exc:  # noqa: BLE001
+        _log.debug("rollout log write failed: %s", exc)
+
+
+def _git_commit() -> str:
+    """Short HEAD hash, so rollout records can be compared honestly across
+    harness/code changes (arm_config_hash alone doesn't cover code)."""
+    try:
+        import subprocess
+
+        r = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=str(_REPO_ROOT), capture_output=True, text=True, timeout=5,
+        )
+        return r.stdout.strip() if r.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+def _arm_config_hash(swe: dict, arm: str, lesson_on: bool) -> str:
+    """Stable hash of the arm's config so runs can be pooled only when the arm
+    is identical across tasks (steps 3–6 must not change the arm)."""
+    import hashlib
+
+    base = (
+        f"{swe.get('instance_id')}|{swe.get('base_commit')}|{swe.get('test_cmd')}"
+        f"|{arm}|{GOVERNANCE_VERSION}|lesson={bool(lesson_on)}|{_git_commit()}"
+    )
+    return hashlib.sha256(base.encode("utf-8")).hexdigest()[:16]
+
+
+def _rollout_purpose() -> str:
+    """Label for rollout records (e.g. 'canary' vs 'eval'), from the env so a
+    canary run is never pooled into the 25-rollout measurement."""
+    import os
+
+    return os.environ.get("SWARM_ROLLOUT_PURPOSE", "eval")
+
+
+def _git_dirty() -> bool:
+    """True if the working tree has uncommitted changes, so a rollout record's
+    git_commit is never trusted as containing the code that produced it."""
+    try:
+        import subprocess
+
+        r = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=str(_REPO_ROOT), capture_output=True, text=True, timeout=5,
+        )
+        return bool(r.stdout.strip())
+    except Exception:
+        return True  # unknown -> fail safe as dirty
+
+
+# --- Trusted evaluation-receipt authority (Phase 2/3) -----------------------
+# The receipt is an HMAC over the candidate's COMPLETE canonical governance
+# state, keyed by a secret that lives OUTSIDE candidate state. A party who can
+# edit the candidate JSON can compute the public state hash but CANNOT forge a
+# valid signature without the key, so it cannot manufacture a PASS receipt.
+EVALUATOR_ID = "benchmark-evaluator"
+EVALUATOR_VERSION = "1"
+
+
+def _receipt_key() -> bytes | None:
+    """Return the TRUSTED receipt-signing key from ``SWARM_RECEIPT_KEY`` ONLY.
+
+    The secret is never auto-generated and never stored beside candidate state,
+    so an actor who can read or modify the candidate data directory cannot
+    obtain signing authority. When the trusted key is absent the receipt
+    authority FAILS CLOSED: signing returns None and verification refuses, so
+    no evaluation receipt can be minted and no promotion can occur without an
+    operator-provisioned secret.
+    """
+    import os
+
+    env_key = os.environ.get("SWARM_RECEIPT_KEY")
+    if env_key:
+        return env_key.encode("utf-8")
+    return None
 
 
 class CandidateState(str, Enum):
@@ -127,20 +235,408 @@ def is_safe_lesson(text: str) -> bool:
 
 class BenchmarkEvaluator:
     """Production evaluator that A/B tests a candidate lesson against a baseline task."""
-    def __init__(self, task_id: str = "c01", timeout: int = 60):
+    def __init__(self, task_id: str = "c01", timeout: int = 1800):
+        # A full SWE-rebench agent arm legitimately runs for minutes; the old
+        # 60s default killed both arms before the harness could write a result.
         self.task_id = task_id
         self.timeout = timeout
 
+    @staticmethod
+    def _load_swe_task(task_id: str) -> dict | None:
+        try:
+            pool = _REPO_ROOT / "qwen_train" / "curriculum" / "swe_pool.jsonl"
+            if not pool.exists():
+                return None
+            for line in pool.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if line:
+                    rec = json.loads(line)
+                    if rec.get("instance_id") == task_id:
+                        return rec
+        except Exception:
+            return None
+        return None
+
+    async def _run_swe_harness(self, swe: dict, problem_statement: str, eval_id: str | None, arm: str = "candidate") -> dict | None:
+        """Run ONE arm of a SWE task via run_repair_task.py. Returns the last
+        result record, or None on ANY failure (fail closed). The candidate arm
+        carries SWARM_EVAL_ID so only it receives the isolated lesson snapshot."""
+        import os
+        import tempfile
+
+        instance_id = swe.get("instance_id", "")
+        work = Path(os.environ.get("SWARM_SWE_WORK", str(_REPO_ROOT.parent / "swe_probe_work")))
+        repo = work / instance_id / "repo"
+        if not (repo / ".git").exists():
+            return None
+
+        # ---- preflight (fail closed, no verdict) ----
+        preflight = await self._run_preflight()
+        if not preflight.get("ok"):
+            _append_rollout({
+                "task_id": instance_id, "arm": arm,
+                "failure_category": preflight.get("failure_category",
+                                                  "endpoint_preflight_failed"),
+                "verify_reason": preflight.get("verify_reason"),
+                "timestamp": time.time(),
+            })
+            return None
+
+        out = Path(tempfile.mkdtemp()) / "arm.jsonl"
+        py = _REPO_ROOT / ".venv" / "Scripts" / "python.exe"
+        cmd = [
+            str(py),
+            str(_REPO_ROOT / "qwen_train" / "run_repair_task.py"),
+            "--instance-id", instance_id,
+            "--base-commit", str(swe.get("base_commit", "")),
+            "--problem-statement", problem_statement,
+            "--test-cmd", str(swe.get("test_cmd", "")),
+            "--out", str(out),
+        ]
+        for f2p in (swe.get("fail_to_pass", []) or []):
+            cmd += ["--f2p", str(f2p)]
+        env = dict(os.environ)
+        if eval_id:
+            env["SWARM_EVAL_ID"] = eval_id
+        else:
+            env.pop("SWARM_EVAL_ID", None)
+        # Harness-supplied SWE task identity (never model-derived).
+        env["SWARM_TASK_ID"] = instance_id
+        # Harness credential so the backend honors the task id (proves it came
+        # from the harness, not the worker). SEPARATE from SWARM_RECEIPT_KEY so
+        # a leak cannot forge promotion receipts.
+        _hk = os.environ.get("SWARM_HARNESS_KEY")
+        if _hk:
+            env["SWARM_HARNESS_KEY"] = _hk
+        proc = None
+        rc = None
+        output = b""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd, cwd=str(_REPO_ROOT), env=env,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+            )
+            async with asyncio.timeout(self.timeout):
+                output, _ = await proc.communicate()
+            rc = proc.returncode
+        except Exception as exc:  # noqa: BLE001
+            if proc is not None:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+            _log.warning("SWE_HARNESS_FAILURE %s", json.dumps({
+                "task_id": swe.get("instance_id", ""), "arm": arm,
+                "phase": "launch_or_timeout", "error": str(exc)[:300],
+                "return_code": rc, "out_exists": out.exists(),
+                "stdout_tail": output.decode("utf-8", "replace")[-3000:],
+            }))
+            return None
+        try:
+            lines = [ln for ln in out.read_text(encoding="utf-8").splitlines() if ln.strip()]
+            if not lines:
+                raise ValueError("out file empty/absent")
+            rec = json.loads(lines[-1])
+            _append_rollout({
+                "task_id": swe.get("instance_id", ""), "arm": arm,
+                "evaluation_id": eval_id or "",
+                "arm_config_hash": _arm_config_hash(swe, arm, bool(eval_id)),
+                "run_id": rec.get("run_id", ""),
+                "verdict": rec.get("verdict"),
+                "verify_reason": rec.get("verify_reason"),
+                "tools_used": rec.get("tools_used"),
+                "f2p": rec.get("f2p"),
+                "elapsed_s": rec.get("elapsed_s"),
+                "edit_attempted": "filesystem" in (rec.get("tools_used") or []),
+                "edit_valid": bool(rec.get("diff_stat")) if "diff_stat" in rec else None,
+                "git_commit": _git_commit(),
+                "dirty": _git_dirty(),
+                "purpose": _rollout_purpose(),
+                "failure_category": None if rec.get("verdict") else "task_failure",
+                "timestamp": time.time(),
+            })
+            return rec
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("SWE_HARNESS_FAILURE %s", json.dumps({
+                "task_id": swe.get("instance_id", ""), "arm": arm,
+                "return_code": rc, "out_exists": out.exists(),
+                "parse_error": str(exc)[:200],
+                "stdout_tail": output.decode("utf-8", "replace")[-3000:],
+            }))
+            _append_rollout({
+                "task_id": swe.get("instance_id", ""), "arm": arm,
+                "evaluation_id": eval_id or "",
+                "arm_config_hash": _arm_config_hash(swe, arm, bool(eval_id)),
+                "verdict": None, "failure_category": "harness_failure",
+                "parse_error": str(exc)[:200], "timestamp": time.time(),
+            })
+            return None
+
+    # ------------------------------------------------------------------
+    # Checkpoint 3: endpoint preflight + post-arm validation
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _pin_config_path() -> Path:
+        return Path(os.environ.get(
+            "SWARM_PIN_CONFIG",
+            str(Path(os.environ.get("TEMP", "")) / "opencode" / "prompt_repairer_pin.json"),
+        ))
+
+    @staticmethod
+    def _props_hash(props: dict) -> str:
+        import hashlib
+        return hashlib.sha256(
+            f"{props.get('build_info', '')}|{props.get('model_path', '')}"
+            f"|{props.get('default_generation_settings', {}).get('n_ctx', 0)}"
+            f"|{props.get('total_slots', 0)}".encode()
+        ).hexdigest()[:16]
+
+    async def _run_preflight(self) -> dict:
+        """Pre-arm endpoint validation.  Fail closed, 10 s timeout, no retries.
+
+        Returns ``{"ok": True, "boot_id": …, "inference_endpoint": …,
+        "pre_counters": …}`` on pass, or
+        ``{"ok": False, "failure_category": "endpoint_preflight_failed",
+        "verify_reason": …}`` on failure.  The caller must write a rollout
+        record on failure and return None — the arm never starts.
+        """
+        import httpx as _httpx
+
+        pin_path = self._pin_config_path()
+        if not pin_path.exists():
+            return {"ok": False,
+                    "failure_category": "endpoint_preflight_failed",
+                    "verify_reason": f"pin config not found: {pin_path}"}
+        try:
+            pin = json.loads(pin_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            return {"ok": False,
+                    "failure_category": "endpoint_preflight_failed",
+                    "verify_reason": f"pin config unreadable: {exc}"}
+
+        tunnel_port = pin.get("tunnel_port", 8079)
+        status_port = pin.get("status_port", 8095)
+
+        # 1. :8079 listener owner must be ssh.exe
+        try:
+            import psutil
+            ssh_found = False
+            for conn in psutil.net_connections(kind="inet"):
+                if conn.laddr.port == tunnel_port and conn.status == "LISTEN":
+                    proc = psutil.Process(conn.pid)
+                    if proc.name().lower() == "ssh.exe":
+                        ssh_found = True
+                    else:
+                        return {"ok": False,
+                                "failure_category": "endpoint_preflight_failed",
+                                "verify_reason": f":{tunnel_port} owned by {proc.name()}, not ssh.exe"}
+                    break
+            if not ssh_found:
+                return {"ok": False,
+                        "failure_category": "endpoint_preflight_failed",
+                        "verify_reason": f":{tunnel_port} not listening"}
+        except Exception as exc:
+            return {"ok": False,
+                    "failure_category": "endpoint_preflight_failed",
+                    "verify_reason": f"port check failed: {exc}"}
+
+        # 2. Status endpoint: pinned=true, record boot_id + counter snapshot
+        try:
+            async with _httpx.AsyncClient(timeout=10.0) as client:
+                hk = os.environ.get("SWARM_HARNESS_KEY", "")
+                resp = await client.get(
+                    f"http://127.0.0.1:{status_port}/inference/status",
+                    headers={"X-Swarm-Harness-Key": hk},
+                )
+                if resp.status_code != 200:
+                    return {"ok": False,
+                            "failure_category": "endpoint_preflight_failed",
+                            "verify_reason": f"status endpoint returned {resp.status_code}"}
+                status = resp.json()
+        except Exception as exc:
+            return {"ok": False,
+                    "failure_category": "endpoint_preflight_failed",
+                    "verify_reason": f"status endpoint unreachable: {exc}"}
+
+        if not status.get("pinned"):
+            return {"ok": False,
+                    "failure_category": "endpoint_preflight_failed",
+                    "verify_reason": "router not pinned (SWARM_ROUTER_PINNED=1 not set)"}
+
+        boot_id = status.get("boot_id", "")
+        pre_counters = {
+            "completion_requests": status.get("completion_requests", 0),
+            "pairs": dict(status.get("pairs", {})),
+            "pairless": status.get("pairless", 0),
+        }
+
+        # 3. /props hash via the tunnel (not the router)
+        try:
+            async with _httpx.AsyncClient(timeout=10.0) as client:
+                props = (await client.get(
+                    f"http://127.0.0.1:{tunnel_port}/props")).json()
+        except Exception as exc:
+            return {"ok": False,
+                    "failure_category": "endpoint_preflight_failed",
+                    "verify_reason": f"/props unreachable: {exc}"}
+
+        actual = self._props_hash(props)
+        expected = self._props_hash(pin)
+        if actual != expected:
+            return {"ok": False,
+                    "failure_category": "endpoint_preflight_failed",
+                    "verify_reason": f"fingerprint mismatch "
+                                     f"(expected={expected}, actual={actual}), "
+                                     f"re-pin if intended"}
+
+        return {"ok": True, "boot_id": boot_id,
+                "inference_endpoint": actual, "pre_counters": pre_counters}
+
+    async def _run_postcheck(self, preflight: dict) -> dict:
+        """Post-arm endpoint validation.  Returns ``{"ok": True}`` or
+        ``{"ok": False, "verify_reason": …}``."""
+        import httpx as _httpx
+
+        pin_path = self._pin_config_path()
+        pin = json.loads(pin_path.read_text(encoding="utf-8"))
+        tunnel_port = pin.get("tunnel_port", 8079)
+        status_port = pin.get("status_port", 8095)
+
+        try:
+            async with _httpx.AsyncClient(timeout=10.0) as client:
+                hk = os.environ.get("SWARM_HARNESS_KEY", "")
+                status = (await client.get(
+                    f"http://127.0.0.1:{status_port}/inference/status",
+                    headers={"X-Swarm-Harness-Key": hk},
+                )).json()
+        except Exception as exc:
+            return {"ok": False, "verify_reason": f"post-arm status unreachable: {exc}"}
+
+        # boot_id unchanged
+        if status.get("boot_id") != preflight.get("boot_id"):
+            return {"ok": False,
+                    "verify_reason": "router restarted mid-arm (boot_id changed)"}
+
+        # completion_requests delta > 0
+        pre_cr = preflight["pre_counters"]["completion_requests"]
+        post_cr = status.get("completion_requests", 0)
+        if post_cr <= pre_cr:
+            return {"ok": False,
+                    "verify_reason": f"zero completions during arm "
+                                     f"({post_cr} <= {pre_cr})"}
+
+        # Exactly one distinct pair in the delta, matching the pinned pair
+        pre_pairs = preflight["pre_counters"]["pairs"]
+        post_pairs = status.get("pairs", {})
+        delta_pairs = {}
+        for k, v in post_pairs.items():
+            d = v - pre_pairs.get(k, 0)
+            if d > 0:
+                delta_pairs[k] = d
+        if len(delta_pairs) != 1:
+            return {"ok": False,
+                    "verify_reason": f"expected 1 distinct pair in delta, "
+                                     f"got {len(delta_pairs)}: {delta_pairs}"}
+
+        # pairless delta == 0
+        pre_pl = preflight["pre_counters"]["pairless"]
+        post_pl = status.get("pairless", 0)
+        if post_pl > pre_pl:
+            return {"ok": False,
+                    "verify_reason": f"pairless responses during arm "
+                                     f"({post_pl} > {pre_pl})"}
+
+        # /props hash unchanged
+        try:
+            async with _httpx.AsyncClient(timeout=10.0) as client:
+                props = (await client.get(
+                    f"http://127.0.0.1:{tunnel_port}/props")).json()
+            post_hash = self._props_hash(props)
+            if post_hash != preflight.get("inference_endpoint"):
+                return {"ok": False,
+                        "verify_reason": f"/props hash changed mid-arm "
+                                         f"({preflight['inference_endpoint']} -> {post_hash})"}
+        except Exception as exc:
+            return {"ok": False,
+                    "verify_reason": f"post-arm /props check failed: {exc}"}
+
+        return {"ok": True}
+
+    async def _eval_swe(self, candidate: dict, task_id: str) -> dict:
+        """Baseline vs candidate on the genuine SWE instance. Fail closed on
+        missing task/instance/problem_statement/harness/timeout/result."""
+        swe = self._load_swe_task(task_id)
+        if not swe:
+            raise ValueError(f"SWE task {task_id} not in swe_pool.jsonl")
+        try:
+            from qwen_train.swe_rebench_probe import fetch_instance
+
+            hf = await asyncio.to_thread(fetch_instance, task_id)
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(f"cannot fetch SWE instance {task_id}: {exc}")
+        ps = (hf or {}).get("problem_statement") or ""
+        if not ps:
+            raise RuntimeError(f"SWE instance {task_id} has no problem_statement")
+
+        eval_id = candidate.get("evaluation_id")
+        base = await self._run_swe_harness(swe, ps, eval_id=None, arm="baseline")
+        cand = await self._run_swe_harness(swe, ps, eval_id=eval_id, arm="candidate")
+        if base is None or cand is None:
+            raise RuntimeError("missing SWE harness result (baseline or candidate)")
+
+        base_ok = bool(base.get("verdict"))
+        cand_ok = bool(cand.get("verdict"))
+        improved = cand_ok and not base_ok
+        return {
+            "pass": improved,
+            "unrelated_regression": base_ok and not cand_ok,
+            "effectiveness": 1.0 if improved else 0.0,
+            "baseline": base,
+            "candidate": cand,
+            "harness": {
+                "task_id": task_id,
+                "evaluation_id": eval_id,
+                "test_cmd": swe.get("test_cmd", ""),
+            },
+        }
+
+    @staticmethod
+    def _is_swe_task(task_id: str) -> bool:
+        """True if ``task_id`` is a SWE-rebench instance in swe_pool.jsonl."""
+        try:
+            pool = _REPO_ROOT / "qwen_train" / "curriculum" / "swe_pool.jsonl"
+            if not pool.exists():
+                return False
+            needle = f'"instance_id": "{task_id}"'
+            for line in pool.read_text(encoding="utf-8").splitlines():
+                if line.strip() and needle in line:
+                    return True
+        except Exception:
+            return False
+        return False
+
     async def __call__(self, candidate: dict) -> dict:
+        # Task identity travels WITH the candidate (canonical primary task).
+        # Fall back to the configured default only when the candidate has none.
+        task_id = str(candidate.get("task_id") or self.task_id or "").strip()
+        if not task_id:
+            raise ValueError("no task identity on candidate and no default evaluator task")
+
+        # SWE-rebench tasks (real-repo repair) run the genuine per-instance
+        # environment via the harness, baseline vs candidate (candidate carries
+        # the isolated SWARM_EVAL_ID). Fail closed on any error.
+        if self._is_swe_task(task_id):
+            return await self._eval_swe(candidate, task_id)
+
         try:
             from qwen_train.run_curriculum import load_items, _attempt_once
         except ImportError:
             raise RuntimeError("qwen_train module not available for evaluation")
 
         items = load_items()
-        item = next((i for i in items if i.get("id") == self.task_id), None)
+        item = next((i for i in items if i.get("id") == task_id), None)
         if not item:
-            raise ValueError(f"Task {self.task_id} not found in curriculum")
+            raise ValueError(f"Task {task_id} not found in curriculum")
 
         # 1. Baseline measurement
         baseline_res = await asyncio.to_thread(_attempt_once, item, self.timeout, True, False)
@@ -266,6 +762,58 @@ class PromptRepairer:
         except Exception as exc:
             self._audit("JOURNAL_RECOVERY_FAILED", {"error": str(exc)})
 
+    async def evaluate_and_promote_eligible(self) -> dict:
+        """Bounded orchestration seam (the missing 'learning tick').
+
+        For each eligible CANDIDATE lesson, make at most ONE controlled
+        evaluation attempt this window, then promote ONLY if the existing
+        Promotion Gate accepts it. It never weakens thresholds, never bypasses
+        the receipt/quarantine, and never auto-promotes merely because an
+        evaluation ran. Idempotent via a per-candidate cooldown.
+        """
+        summary = {"considered": 0, "evaluated": 0, "promoted": 0, "skipped": 0, "failed": 0}
+        now = time.time()
+        for cid, cand in list(self._candidates.items()):
+            if cand.get("status") != CandidateState.CANDIDATE.value:
+                continue
+            runs = {e.get("run_id") for e in cand.get("evidence_runs", []) if isinstance(e, dict)}
+            tasks = {t for t in cand.get("evidence_tasks", []) if t}
+            if len(runs) < MIN_EVIDENCE_RUNS or len(tasks) < MIN_EVIDENCE_TASKS:
+                summary["skipped"] += 1
+                continue
+            last = float(cand.get("last_eval_attempt", 0) or 0)
+            if now - last < EVAL_ATTEMPT_COOLDOWN_S:
+                summary["skipped"] += 1
+                continue
+            cand["last_eval_attempt"] = now
+            self._save_candidates()
+            summary["considered"] += 1
+            try:
+                res = await self.evaluate_candidate(cid)
+            except Exception as exc:  # noqa: BLE001 - audited, never fatal to the tick
+                self._audit("EVAL_TICK_ERROR", {"candidate_id": cid, "error": str(exc)})
+                summary["failed"] += 1
+                continue
+            if res == "evaluation_passed":
+                summary["evaluated"] += 1
+                if self._candidates[cid].get("status") == CandidateState.PROMOTABLE.value:
+                    pres = await self.promote(cid)
+                    if pres == "promoted":
+                        summary["promoted"] += 1
+                    _append_rollout({
+                        "task_id": cand.get("task_id", ""), "candidate_id": cid,
+                        "decision": pres, "purpose": _rollout_purpose(), "timestamp": time.time(),
+                    })
+            else:
+                summary["failed"] += 1
+                _append_rollout({
+                    "task_id": cand.get("task_id", ""), "candidate_id": cid,
+                    "decision": res, "purpose": _rollout_purpose(), "timestamp": time.time(),
+                })
+        if summary["considered"]:
+            self._audit("EVAL_TICK", summary)
+        return summary
+
     def _load_json(self, path: Path, default: Any) -> Any:
         if path.exists():
             try:
@@ -282,11 +830,62 @@ class PromptRepairer:
         _DATA_DIR.mkdir(parents=True, exist_ok=True)
         atomic_write_text(_SNAPSHOTS_FILE, json.dumps(self._snapshots, indent=2))
 
+    def _canonical_state(self, cand: dict) -> str:
+        """Deterministic canonical form of EVERY governance-relevant field.
+
+        Binds the complete candidate state (rule, evidence runs + their
+        hypotheses, task scope, activation scope, governance version), not a
+        partial `id:trigger:action` subset.
+        """
+        ev = cand.get("evidence_runs", [])
+        norm = []
+        for e in ev:
+            if isinstance(e, dict):
+                norm.append(
+                    {"run_id": str(e.get("run_id", "")), "hypothesis": str(e.get("hypothesis", ""))}
+                )
+            else:
+                norm.append({"run_id": str(e), "hypothesis": ""})
+        payload = {
+            "candidate_id": str(cand.get("id", "")),
+            "hypothesis_id": str(cand.get("id", "")),
+            "trigger": str(cand.get("trigger", "")),
+            "action": str(cand.get("action", "")),
+            "evidence_runs": norm,
+            "evidence_tasks": [str(t) for t in cand.get("evidence_tasks", [])],
+            "activation_scope": str(cand.get("activation_scope", cand.get("component", ""))),
+            "governance_version": int(cand.get("governance_version", GOVERNANCE_VERSION)),
+        }
+        return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
     def _hash_candidate(self, cand: dict) -> str:
-        """Deterministically hash the governed content of a candidate."""
+        """Public state hash (NOT the authority — the HMAC receipt is)."""
         import hashlib
-        content = f"{cand.get('id', '')}:{cand.get('trigger', '')}:{cand.get('action', '')}:{GOVERNANCE_VERSION}"
-        return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+        return hashlib.sha256(self._canonical_state(cand).encode("utf-8")).hexdigest()
+
+    def _sign_receipt(self, receipt: dict) -> str | None:
+        import hashlib
+        import hmac
+
+        key = _receipt_key()
+        if key is None:
+            return None  # no trusted signing authority → cannot sign (fail closed)
+        body = json.dumps(receipt, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        return hmac.new(key, body.encode("utf-8"), hashlib.sha256).hexdigest()
+
+    def _verify_receipt(self, receipt: dict, signature: str) -> bool:
+        import hmac
+
+        if not isinstance(receipt, dict) or not signature:
+            return False
+        expected = self._sign_receipt(receipt)
+        if expected is None:
+            return False  # no trusted signing authority → never verify (fail closed)
+        try:
+            return hmac.compare_digest(expected, str(signature))
+        except Exception:
+            return False
 
     def _audit(self, event_type: str, details: dict):
         _DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -309,8 +908,14 @@ class PromptRepairer:
         })
         self._save_candidates()
 
-    def process_failure(self, run_id: str, component: str, failure_reason: str, hypothesized_action: str, task_id: str = "") -> str:
+    def process_failure(self, run_id: str, component: str, failure_reason: str, hypothesized_action: str, task_id: str = "", source: str = "") -> str:
         """Process a failure (OBSERVED -> EVIDENCE_GATHERING)."""
+        # Per-event proof of the harness-supplied identity + the calling exit
+        # path. Logs ONLY run_id/task_id/source/component — never headers/keys.
+        _log.info(
+            "process_failure run_id=%s task_id=%r source=%s component=%s",
+            run_id, task_id or "", source or "unknown", component,
+        )
         self._audit("OBSERVED_FAILURE", {"run_id": run_id, "failure_reason": failure_reason[:100]})
         
         fix_class = self.diagnostician._classify_fix(failure_reason)
@@ -343,6 +948,7 @@ class PromptRepairer:
                 "trigger": failure_reason,
                 "action": hypothesized_action,
                 "component": component,
+                "task_id": task_id or "",
                 "evidence_runs": [{"run_id": run_id, "hypothesis": hypothesized_action}],
                 "evidence_tasks": [task_id] if task_id else [],
                 "status": CandidateState.EVIDENCE_GATHERING.value,
@@ -365,6 +971,9 @@ class PromptRepairer:
             cand["evidence_runs"].append({"run_id": run_id, "hypothesis": hypothesized_action})
             if task_id and task_id not in cand["evidence_tasks"]:
                 cand["evidence_tasks"].append(task_id)
+            # Canonical primary task identity (first task that produced the failure)
+            if task_id and not cand.get("task_id"):
+                cand["task_id"] = task_id
 
             self._audit("EVIDENCE_ADDED", {"candidate_id": matched_id, "run_id": run_id})
 
@@ -409,6 +1018,19 @@ class PromptRepairer:
 
         self._change_state(cand, CandidateState.EVALUATING)
 
+        # Register an IMMUTABLE per-request evaluation snapshot (isolation):
+        # the candidate lesson is delivered only to the eval run that carries
+        # this evaluation_id — never written to the global ACTIVE collection.
+        evaluation_id = uuid.uuid4().hex
+        register_eval_context(
+            evaluation_id,
+            str(cand.get("id", "")),
+            str(cand.get("task_id", "")),
+            f"{cand.get('trigger', '')}: {cand.get('action', '')}",
+        )
+        cand["evaluation_id"] = evaluation_id
+        self._save_candidates()
+
         try:
             # evaluator must return dict with explicit PASS metric
             eval_res = await self.evaluator(cand)
@@ -421,14 +1043,47 @@ class PromptRepairer:
         except Exception as e:
             self._change_state(cand, CandidateState.EVALUATION_FAILED, f"evaluator exception: {e}")
             return f"rejected: evaluation_exception ({e})"
+        finally:
+            # The snapshot is scoped to this evaluation request only.
+            clear_eval_context(evaluation_id)
             
         # 9. EVALUATION MUST PROTECT AGAINST OVERFITTING
         if not eval_res.get("pass") or eval_res.get("unrelated_regression"):
             self._change_state(cand, CandidateState.EVALUATION_FAILED, "did not pass evaluation constraints")
             return "rejected: evaluation_failed"
 
-        # Explicit PROMOTABLE state
-        eval_res["rule_hash"] = self._hash_candidate(cand)
+        # FAIL CLOSED without a trusted signing authority: never mint a receipt
+        # that could be forged because no key is provisioned.
+        if _receipt_key() is None:
+            self._change_state(
+                cand,
+                CandidateState.EVALUATION_FAILED,
+                "no trusted signing authority (SWARM_RECEIPT_KEY unset)",
+            )
+            return "rejected: no_signing_authority"
+
+        # Issue a TRUSTED receipt bound to the COMPLETE candidate state. The
+        # HMAC is keyed outside candidate state, so a candidate-JSON editor can
+        # compute the public state hash but cannot forge this signature.
+        state_hash = self._hash_candidate(cand)
+        receipt = {
+            "eval_id": uuid.uuid4().hex,
+            "candidate_id": str(cand.get("id", "")),
+            "hypothesis_id": str(cand.get("id", "")),
+            "state_hash": state_hash,
+            "governance_version": GOVERNANCE_VERSION,
+            "evaluator_id": EVALUATOR_ID,
+            "evaluator_version": EVALUATOR_VERSION,
+            "evaluation_task_id": str(getattr(self.evaluator, "task_id", "")),
+            "evaluation_id": evaluation_id,
+            "harness": eval_res.get("harness") if isinstance(eval_res.get("harness"), dict) else None,
+            "baseline_verdict": (eval_res.get("baseline") or {}).get("verdict") if isinstance(eval_res.get("baseline"), dict) else None,
+            "candidate_verdict": (eval_res.get("candidate") or {}).get("verdict") if isinstance(eval_res.get("candidate"), dict) else None,
+            "pass": True,
+        }
+        eval_res["receipt"] = receipt
+        eval_res["receipt_sig"] = self._sign_receipt(receipt)
+        eval_res["rule_hash"] = state_hash
         eval_res["governance_version"] = GOVERNANCE_VERSION
         cand["eval_result"] = eval_res
         self._change_state(cand, CandidateState.PROMOTABLE, "evaluation passed")
@@ -461,16 +1116,38 @@ class PromptRepairer:
             self._change_state(cand, CandidateState.REJECTED, "failed final gate: insufficient unique evidence runs")
             return "rejected: insufficient_evidence"
 
+        # Genuine task diversity — three runs of ONE task are not independent.
+        distinct_tasks = {str(t) for t in cand.get("evidence_tasks", []) if t}
+        if len(distinct_tasks) < MIN_EVIDENCE_TASKS:
+            self._change_state(
+                cand,
+                CandidateState.REJECTED,
+                f"insufficient task diversity ({len(distinct_tasks)} < {MIN_EVIDENCE_TASKS})",
+            )
+            return "rejected: insufficient_task_diversity"
+
         eval_res = cand.get("eval_result", {})
         if not eval_res.get("pass"):
             self._change_state(cand, CandidateState.REJECTED, "missing explicit pass in eval_result")
             return "rejected: missing_evaluation"
 
-        # Verify evaluation receipt identity and freshness
-        current_hash = self._hash_candidate(cand)
-        if eval_res.get("rule_hash") != current_hash:
-            self._change_state(cand, CandidateState.REJECTED, "rule hash mismatch - candidate mutated after evaluation")
+        # Verify the TRUSTED receipt: signature + evaluator identity + binding
+        # to the CURRENT complete candidate state. A forged/missing/unsigned
+        # receipt, or any post-evaluation mutation, is rejected here.
+        receipt = eval_res.get("receipt")
+        sig = eval_res.get("receipt_sig")
+        if not isinstance(receipt, dict) or not self._verify_receipt(receipt, sig):
+            self._change_state(cand, CandidateState.REJECTED, "missing or unauthenticated evaluation receipt")
             return "rejected: forged_or_mutated_evaluation"
+        if receipt.get("evaluator_id") != EVALUATOR_ID or str(receipt.get("evaluator_version")) != EVALUATOR_VERSION:
+            self._change_state(cand, CandidateState.REJECTED, "unauthorized evaluator identity")
+            return "rejected: unauthorized_evaluator"
+        if receipt.get("state_hash") != self._hash_candidate(cand):
+            self._change_state(cand, CandidateState.REJECTED, "receipt does not bind current candidate state")
+            return "rejected: forged_or_mutated_evaluation"
+        if int(receipt.get("governance_version", 0)) != GOVERNANCE_VERSION:
+            self._change_state(cand, CandidateState.REJECTED, "receipt governance version mismatch")
+            return "rejected: stale_evaluation"
             
         if int(eval_res.get("governance_version", 0)) != GOVERNANCE_VERSION:
             self._change_state(cand, CandidateState.REJECTED, "evaluation was run under an older governance version")
