@@ -415,7 +415,8 @@ async def process_task(
 
         hf_inst = await asyncio.to_thread(fetch_hf_instance, instance_id, "train")
 
-        await asyncio.to_thread(_reset_instance, inst, hf_inst)
+        src = await asyncio.to_thread(_reset_instance, inst, hf_inst)
+        _clean_shadowing_metadata(src)
 
         f2p = probe._parse_list_field(
             inst.get("fail_to_pass") or inst.get("FAIL_TO_PASS")
