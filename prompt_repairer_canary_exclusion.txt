@@ -1,0 +1,9 @@
+# Canary exclusion ranges — 2026-09-19
+# Snapshot the audit count BEFORE canary: 961
+# Canary added: audit lines 962–968 (7 lines)
+# Candidates created/changed: none (watch-loop events excluded from evidence)
+# Rollout records: 3 lines in prompt_repairer_rollouts.jsonl
+#   - 1st: env_error (original canary, task_id=pypa__twine-1066, purpose=canary)
+#   - 2nd: endpoint_preflight_failed (pin mismatch, purpose=canary)
+#   - 3rd: task_failure/env_error (second canary, purpose=canary)
+# Exclude: audit 962–968, rollout purpose=canary
