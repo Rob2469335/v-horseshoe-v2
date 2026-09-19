@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -39,6 +40,59 @@ MAX_RULE_TOKENS = 50  # per-rule ceiling (governance invariant)
 MIN_CONFIDENCE = 0.4
 CONFLICT_SIMILARITY_THRESHOLD = 0.85  # above this → likely conflict
 DEDUPE_SIMILARITY_THRESHOLD = 0.75  # above this → merge candidates
+
+
+# --- Per-request evaluation context (isolation) -----------------------------
+# The candidate lesson is delivered to a SPECIFIC evaluation request only —
+# never written to the global ACTIVE collection. The snapshot is immutable
+# once registered, so a candidate that mutates mid-evaluation cannot change
+# what the worker saw.
+@dataclass
+class EvaluationContext:
+    evaluation_id: str
+    candidate_id: str
+    task_id: str
+    lesson: str
+    expires_at: float
+
+
+_EVAL_CONTEXTS: dict[str, EvaluationContext] = {}
+_EVAL_LOCK = threading.Lock()
+EVAL_CONTEXT_TTL_S = 1800
+
+
+def register_eval_context(
+    evaluation_id: str,
+    candidate_id: str,
+    task_id: str,
+    lesson: str,
+    ttl_s: int = EVAL_CONTEXT_TTL_S,
+) -> EvaluationContext:
+    """Register an immutable evaluation snapshot. Scoped to one request id."""
+    ctx = EvaluationContext(
+        str(evaluation_id), str(candidate_id), str(task_id), str(lesson), time.time() + ttl_s
+    )
+    with _EVAL_LOCK:
+        _EVAL_CONTEXTS[str(evaluation_id)] = ctx
+    return ctx
+
+
+def get_eval_context(evaluation_id: str | None) -> EvaluationContext | None:
+    """Return a live (non-expired) evaluation context, or None. Fail-closed."""
+    if not evaluation_id:
+        return None
+    with _EVAL_LOCK:
+        ctx = _EVAL_CONTEXTS.get(str(evaluation_id))
+    if not ctx or ctx.expires_at < time.time():
+        return None
+    return ctx
+
+
+def clear_eval_context(evaluation_id: str | None) -> None:
+    if not evaluation_id:
+        return
+    with _EVAL_LOCK:
+        _EVAL_CONTEXTS.pop(str(evaluation_id), None)
 
 
 # ---------------------------------------------------------------------------
@@ -305,6 +359,7 @@ class LessonManager:
         self,
         task_context: str = "",
         max_chars: int = 700,
+        eval_id: str | None = None,
     ) -> str:
         """THE governed seam — render the deterministic [BEHAVIORAL LESSONS]
         block for a Robs worker prompt.
@@ -328,13 +383,51 @@ class LessonManager:
         active.sort(key=lambda l: (max(0.0, l.effectiveness), l.version), reverse=True)
         lines: list[str] = []
         budget_tokens = MAX_ACTIVE_TOKENS
+        # Per-request evaluation snapshot: delivered ONLY to the request that
+        # carries the evaluation_id. The candidate is NEVER written to the
+        # global ACTIVE collection, so unrelated workers never see it.
+        ctx = get_eval_context(eval_id)
+        if ctx:
+            ev_lesson = (ctx.lesson or "").strip()
+            ev_tokens = estimate_tokens(ev_lesson)
+            try:
+                from swarm_os.services.prompt_repairer import is_safe_lesson
+
+                ev_safe = bool(ev_lesson) and is_safe_lesson(ev_lesson)
+            except Exception:  # noqa: BLE001
+                ev_safe = False
+            if ev_safe and ev_tokens <= budget_tokens:
+                lines.append(ev_lesson)
+                budget_tokens -= ev_tokens
+                _log.info(
+                    "render_active_lessons: INCLUDED eval snapshot %s (candidate %s)",
+                    ctx.evaluation_id,
+                    ctx.candidate_id,
+                )
         for lesson in active:
-            rule_tokens = estimate_tokens(lesson.rule)
+            rule = (lesson.rule or "").strip()
+            if not rule:
+                continue  # required-metadata validation: an empty rule never renders
+            # Render-time defense in depth — never blindly trust the ACTIVE
+            # collection. A malformed or unsafe object (e.g. a direct Qdrant
+            # write) must not reach Robs merely because it is stored as ACTIVE.
+            try:
+                from swarm_os.services.prompt_repairer import is_safe_lesson
+
+                if not is_safe_lesson(rule):
+                    _log.warning(
+                        "render_active_lessons: skipped unsafe stored lesson %s",
+                        lesson.id,
+                    )
+                    continue
+            except Exception:  # noqa: BLE001 - validation must never break rendering
+                pass
+            rule_tokens = estimate_tokens(rule)
             if rule_tokens > budget_tokens:
                 continue  # cannot fit → next (already sorted by value)
             if rule_tokens > MAX_RULE_TOKENS:
                 continue  # governance violation — never render an over-budget rule
-            lines.append(lesson.rule)
+            lines.append(rule)
             budget_tokens -= rule_tokens
         if not lines:
             return ""
