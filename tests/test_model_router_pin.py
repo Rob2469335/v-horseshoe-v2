@@ -84,3 +84,31 @@ async def test_unpinned_behaviour_unchanged(router, monkeypatch):
     # A 14b request on an unpinned router still takes the heavy transition path.
     await mod.switch_mode_if_needed("some-14b-model")
     assert calls["heavy"] == 1
+
+
+@pytest.mark.asyncio
+async def test_pinned_upstream_down_returns_502_and_spawns_nothing(router, monkeypatch):
+    """The tunnel-drop scenario: pinned router, upstream unreachable -> 502,
+    and neither start_daily_models nor kill_active_processes is called."""
+    mod, calls = router
+    monkeypatch.setenv("SWARM_ROUTER_PINNED", "1")
+
+    class _DeadClient:
+        def build_request(self, *a, **k):
+            return object()
+
+        async def send(self, *a, **k):
+            raise RuntimeError("upstream down")
+
+    mod.client = _DeadClient()
+
+    class _Req:
+        headers = {}
+
+        async def body(self):
+            return b'{"model":"robs4b","messages":[]}'
+
+    resp = await mod.proxy_chat(_Req())
+    assert resp.status_code == 502, "pinned router must 502 when upstream is down"
+    assert calls["start"] == 0
+    assert calls["kill"] == 0
