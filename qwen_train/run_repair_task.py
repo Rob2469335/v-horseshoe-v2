@@ -43,6 +43,7 @@ def main() -> int:
     ap.add_argument("--problem-statement", required=True)
     ap.add_argument("--test-cmd", required=True)
     ap.add_argument("--f2p", action="append", default=[])
+    ap.add_argument("--test-patch", default="")
     ap.add_argument("--timeout", type=int, default=1200)
     ap.add_argument("--out", default="qwen_train/results/repair_task.jsonl")
     args = ap.parse_args()
@@ -63,7 +64,8 @@ def main() -> int:
         "split": "repair",
     }
     # The external-instance payload the harness would otherwise fetch from HF.
-    hf_inst = {"problem_statement": args.problem_statement, "test_patch": ""}
+    test_patch_content = Path(args.test_patch).read_text("utf-8") if args.test_patch and Path(args.test_patch).exists() else ""
+    hf_inst = {"problem_statement": args.problem_statement, "test_patch": test_patch_content}
 
     print(f"resetting to base {args.base_commit}")
     subprocess.run(["git", "reset", "--hard", args.base_commit], cwd=str(repo), capture_output=True)
