@@ -183,3 +183,24 @@ def test_attempt_once_uses_the_popen_capture_pattern():
     assert "Popen(" in fn
     assert "subprocess.run(" not in fn
     assert "communicate(" in fn
+def test_collection_crash_is_env_error():
+    from qwen_train.cli_baseline_swe import _test_result
+    output = """============================= test session starts =============================
+platform win32 -- Python 3.14.0, pytest-8.3.3, pluggy-1.5.0
+rootdir: C:\repo
+configfile: pyproject.toml
+collected 0 items / 1 error
+
+==================================== ERRORS ====================================
+_______________________ ERROR collecting tests/conftest.py _______________________
+ImportError: while loading conftest
+=========================== short test summary info ============================
+ERROR tests/conftest.py
+!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+=============================== 1 error in 0.50s ===============================
+"""
+    # no test IDs passed or failed
+    f2p = ["tests/test_a.py::test_1"]
+    ok, reason = _test_result(output, f2p, [], set())
+    assert ok is False
+    assert reason == "env_error"
