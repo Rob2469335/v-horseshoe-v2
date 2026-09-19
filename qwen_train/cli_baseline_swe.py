@@ -208,7 +208,9 @@ def _test_result(
     f2p_p, _f2p_f = probe._f2p_result(after_output, f2p)
     # ENV vs CAPABILITY: no ids at all -> the suite did not run (collection
     # error / missing dep) -> ENV failure, not a CLI failure.
-    if not failing:
+    import re
+    has_summary = bool(re.search(r'={3,}.*\b(passed|failed|error|deselected)\b.*={3,}', after_output, re.IGNORECASE))
+    if not has_summary and not failing:
         return False, "env_error"
     new_p2p = sorted({t for t in p2p if t in failing} - set(base_p2p_fail))
     if new_p2p:
@@ -579,3 +581,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
