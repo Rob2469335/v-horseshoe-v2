@@ -200,12 +200,34 @@ async def _store_decision_reflexion(
             f"agent:{agent_id} analyzing auditing codebase tool decision {action} "
             f"failed {str(failure_reason)[:120]}"
         )
-        await get_prompt_repairer().process_failure(
-            run_id=str(uuid.uuid4()),
-            component=agent_id,
-            failure_reason=str(failure_reason)[:300],
-            hypothesized_action=correction,
-        )
+        # Diagnosis side (NOT the worker prompt): persist the decision failure as
+        # a ReflexionMemory rule so the distiller/get_latest_failure() see it.
+        # Safe because the worker prompt no longer reads check_for_past_mistakes().
+        try:
+            from swarm_os.services.reflection_loop import get_reflection_service
+
+            await get_reflection_service().store_reflexion(
+                task=task_hint,
+                action=action,
+                failure_reason=str(failure_reason)[:300],
+                correction=correction,
+                do_not_repeat=do_not_repeat,
+                component=agent_id,
+                confidence=confidence,
+            )
+        except Exception as refl_err:
+            log.debug("[%s] decision reflexion store skipped: %s", agent_id, refl_err)
+        try:
+            await get_prompt_repairer().process_failure(
+                run_id=str(uuid.uuid4()),
+                component=agent_id,
+                failure_reason=str(failure_reason)[:300],
+                hypothesized_action=correction,
+                task_id=TASK_ID_CTX.get() or "",
+                source="stream_runner",
+            )
+        except Exception as exc:
+            log.debug("[%s] decision reflexion candidate write skipped: %s", agent_id, exc)
     except Exception as exc:
         log.debug("[%s] decision reflexion store skipped: %s", agent_id, exc)
 
@@ -386,9 +408,29 @@ def _fit_tool_decision_messages(
     return sys_msgs + head_part + notice_part + tail
 
 
+import contextvars
+
+# Per-request evaluation id (set by the API route from the X-Swarm-Eval-Id
+# header). Lets a single evaluation run receive its isolated lesson snapshot
+# without any global ACTIVE write. Default None = normal production request.
+EVAL_ID_CTX: contextvars.ContextVar = contextvars.ContextVar(
+    "swarm_eval_id", default=None
+)
+
+# Per-request SWE task identity, set by the API route from the X-Swarm-Task-Id
+# header (the harness supplies it). Used to tag failures so the evidence gate
+# can count distinct task identities. It comes from the HARNESS, never from the
+# model or any model-writable field. Default None = today's behaviour (empty).
+TASK_ID_CTX: contextvars.ContextVar = contextvars.ContextVar(
+    "swarm_task_id", default=None
+)
+
+
 async def get_tool_decision(
-    model: str, messages: list, agent_id: str, allowed_tools: list = None
+    model: str, messages: list, agent_id: str, allowed_tools: list = None,
+    eval_id: str | None = None,
 ) -> Optional[dict]:
+    eval_id = eval_id or EVAL_ID_CTX.get(None)
     # OPT-IN semantic decision cache (env SWARM_SEMANTIC_CACHE=1). Exact hash
     # first, then Qdrant cosine search above a threshold. Never raises/blocks —
     # a miss or error just falls through to the real LLM decision below.
@@ -608,6 +650,7 @@ async def get_tool_decision(
                     active_block = await get_lesson_manager().render_active_lessons(
                         memory_query,
                         max_chars=min(700, _headroom * 2),
+                        eval_id=eval_id,
                     )
                     if active_block:
                         system_prompt = system_prompt + active_block

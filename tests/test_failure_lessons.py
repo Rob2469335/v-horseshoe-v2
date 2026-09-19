@@ -269,7 +269,7 @@ async def test_past_mistake_warning_injected_into_tool_decision_prompt():
     )
 
     class FakeLessonManager:
-        async def render_active_lessons(self, task_context, max_chars=700):
+        async def render_active_lessons(self, task_context, max_chars=700, eval_id=None):
             return f"\n\n[BEHAVIORAL LESSONS]\n1. {ACTIVE_LESSON_TEXT}"
 
     class FakeReflectionService:
