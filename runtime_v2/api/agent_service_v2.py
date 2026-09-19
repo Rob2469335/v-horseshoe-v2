@@ -128,6 +128,17 @@ def _analysis_budget(goal: str) -> tuple[int, int, int]:
     )
 
 
+
+
+def _current_task_id() -> str:
+    """Harness-supplied task identity for the current request (or '')."""
+    try:
+        from runtime_v2.services.stream_runner import TASK_ID_CTX
+        return TASK_ID_CTX.get() or ""
+    except Exception:
+        return ""
+
+
 class AgentServiceV2:
     def __init__(
         self,
@@ -747,12 +758,41 @@ class AgentServiceV2:
                 f"agent:{agent_id} analyzing auditing codebase {action} failed "
                 f"{str(error)[:120]} — check filesystem paths before reading"
             )
-            await get_prompt_repairer().process_failure(
-                run_id=str(uuid.uuid4()),
-                component=agent_id,
-                failure_reason=str(error)[:300],
-                hypothesized_action=correction,
-            )
+            # Repairer candidate write (own try so a repairer-side failure can
+            # never suppress the reflexion/diary diagnosis writes below).
+            try:
+                from runtime_v2.services.stream_runner import TASK_ID_CTX
+
+                await get_prompt_repairer().process_failure(
+                    run_id=str(uuid.uuid4()),
+                    component=agent_id,
+                    failure_reason=str(error)[:300],
+                    hypothesized_action=correction,
+                    task_id=TASK_ID_CTX.get() or "",
+                )
+            except Exception as proc_err:
+                log.debug(
+                    "[%s] prompt-repairer candidate write skipped: %s", agent_id, proc_err
+                )
+            # DIAGNOSIS SIDE (NOT the worker prompt): persist the failure as a
+            # structured ReflexionMemory rule so run_reflection()/the distiller
+            # and get_latest_failure() can see real agent failures. This is safe
+            # because the worker prompt no longer reads check_for_past_mistakes()
+            # — only the governed LessonManager seam can reach Robs.
+            try:
+                from swarm_os.services.reflection_loop import get_reflection_service
+
+                await get_reflection_service().store_reflexion(
+                    task=task_hint,
+                    action=action,
+                    failure_reason=str(error)[:300],
+                    correction=correction,
+                    do_not_repeat=do_not,
+                    component=agent_id,
+                    confidence=0.75,
+                )
+            except Exception as refl_err:
+                log.debug("[%s] reflexion store skipped: %s", agent_id, refl_err)
             # Also write the failure to the organism diary so run_reflection()'s
             # LLM distiller sees REAL agent failures (it previously only read the
             # genetic-kernel diary, whose entries carry no component — producing the
@@ -3055,6 +3095,7 @@ class AgentServiceV2:
                                 component=agent_id,
                                 failure_reason="fix-intent coder repeated an exploration cycle without editing.",
                                 hypothesized_action="Stop re-reading files. Apply the fix with filesystem patch/write, then run the tests.",
+                                    task_id=_current_task_id(),
                             )
                         except Exception as loop_refl_err:
                             log.debug(
@@ -3100,6 +3141,7 @@ class AgentServiceV2:
                                 component=agent_id,
                                 failure_reason="agent repeated an exploration cycle; forced to synthesize.",
                                 hypothesized_action="Do not re-read files you have already seen. Synthesize a findings report from the content already gathered.",
+                                    task_id=_current_task_id(),
                             )
                         except Exception as loop_refl_err:
                             log.debug(
@@ -3150,6 +3192,7 @@ class AgentServiceV2:
                         component=agent_id,
                         failure_reason=f"agent repeated the same tool decision >=3 times within the last 8 actions ({_loop_sig}) and tripped the circuit breaker.",
                         hypothesized_action="Do NOT repeat the same tool call with identical arguments. If a tool failed, read the error, change the approach (different file/path/query/operation), or delegate. A repeated identical call will never produce a different result.",
+                            task_id=_current_task_id(),
                     )
                 except Exception as loop_refl_err:
                     log.debug(
@@ -3836,6 +3879,7 @@ class AgentServiceV2:
                 component=agent_id,
                 failure_reason="agent ran out of turns before completing the goal (likely a compound goal needing filesystem + web_search, or a slow LLM).",
                 hypothesized_action="Prefer completing the goal with the FEWEST tool calls. If a compound goal requires both codebase reads and web research, interleave them - do not spend all turns on exploration. Consider delegating to a specialized agent.",
+                    task_id=_current_task_id(),
             )
         except Exception as refl_err:
             log.debug("[%s] max-turns reflexion skipped: %s", agent_id, refl_err)
