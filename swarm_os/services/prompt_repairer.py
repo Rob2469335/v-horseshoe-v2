@@ -337,13 +337,16 @@ class BenchmarkEvaluator:
             if not lines:
                 raise ValueError("out file empty/absent")
             rec = json.loads(lines[-1])
+            # ---- postcheck (harness-side before/after snapshots) ----
+            pc = await self._run_postcheck(preflight)
+            pc_ok = pc.get("ok", False)
             _append_rollout({
-                "task_id": swe.get("instance_id", ""), "arm": arm,
+                "task_id": instance_id, "arm": arm,
                 "evaluation_id": eval_id or "",
                 "arm_config_hash": _arm_config_hash(swe, arm, bool(eval_id)),
                 "run_id": rec.get("run_id", ""),
-                "verdict": rec.get("verdict"),
-                "verify_reason": rec.get("verify_reason"),
+                "verdict": None if not pc_ok else rec.get("verdict"),
+                "verify_reason": pc.get("verify_reason") if not pc_ok else rec.get("verify_reason"),
                 "tools_used": rec.get("tools_used"),
                 "f2p": rec.get("f2p"),
                 "elapsed_s": rec.get("elapsed_s"),
@@ -352,7 +355,10 @@ class BenchmarkEvaluator:
                 "git_commit": _git_commit(),
                 "dirty": _git_dirty(),
                 "purpose": _rollout_purpose(),
-                "failure_category": None if rec.get("verdict") else "task_failure",
+                "failure_category": "postcheck_failed" if not pc_ok else (None if rec.get("verdict") else "task_failure"),
+                "inference_endpoint": preflight.get("inference_endpoint"),
+                "router_boot_id": preflight.get("boot_id"),
+                "timeout_count": pc.get("timeout_count", 0),
                 "timestamp": time.time(),
             })
             return rec
@@ -560,7 +566,7 @@ class BenchmarkEvaluator:
             return {"ok": False,
                     "verify_reason": f"post-arm /props check failed: {exc}"}
 
-        return {"ok": True}
+        return {"ok": True, "timeout_count": status.get("errors", 0) + status.get("aborted", 0)}
 
     async def _eval_swe(self, candidate: dict, task_id: str) -> dict:
         """Baseline vs candidate on the genuine SWE instance. Fail closed on
@@ -949,7 +955,7 @@ class PromptRepairer:
                 "action": hypothesized_action,
                 "component": component,
                 "task_id": task_id or "",
-                "evidence_runs": [{"run_id": run_id, "hypothesis": hypothesized_action}],
+                "evidence_runs": [{"run_id": run_id, "hypothesis": hypothesized_action}] if source != "watch-loop" else [],
                 "evidence_tasks": [task_id] if task_id else [],
                 "status": CandidateState.EVIDENCE_GATHERING.value,
                 "governance_version": GOVERNANCE_VERSION,
@@ -967,6 +973,11 @@ class PromptRepairer:
             existing_runs = [e["run_id"] if isinstance(e, dict) else e for e in cand["evidence_runs"]]
             if run_id in existing_runs:
                 return "ignored: duplicate_run"
+            # Watch-loop events mint fresh run_ids and must not inflate
+            # evidence counts toward MIN_EVIDENCE_RUNS=3.
+            if source == "watch-loop":
+                self._audit("WATCH_LOOP_EVENT", {"run_id": run_id, "matched": matched_id})
+                return "watch-loop: recorded, not counted"
                 
             cand["evidence_runs"].append({"run_id": run_id, "hypothesis": hypothesized_action})
             if task_id and task_id not in cand["evidence_tasks"]:
