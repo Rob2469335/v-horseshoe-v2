@@ -204,3 +204,10 @@ ERROR tests/conftest.py
     ok, reason = _test_result(output, f2p, [], set())
     assert ok is False
     assert reason == "env_error"
+def test_dist_info_stub_removal(tmp_path):
+    from qwen_train.cli_baseline_swe import _clean_shadowing_metadata
+    stub = tmp_path / "twine-4.0.0.dist-info"
+    stub.mkdir()
+    (stub / "METADATA").write_text("stub")
+    _clean_shadowing_metadata(tmp_path, "twine")
+    assert not stub.exists()
