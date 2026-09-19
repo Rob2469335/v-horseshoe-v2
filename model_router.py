@@ -10,15 +10,29 @@ import uvicorn
 import os
 import psutil
 
+def _router_pinned() -> bool:
+    """SWARM_ROUTER_PINNED=1 -> forward-only: never spawn/kill local models.
+
+    The RunPod topology routes :8080 -> :8079 (ssh tunnel) -> pod GPU. The
+    default launcher would otherwise start a LOCAL llama.exe on :8079 at
+    startup, squatting the tunnel port (2026-09-19 incident). Pin for pod
+    arms; default off preserves the local heavy/daily behaviour unchanged.
+    """
+    return os.environ.get("SWARM_ROUTER_PINNED", "0") == "1"
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global client, mode_switch_lock
     client = httpx.AsyncClient(timeout=300.0)
     mode_switch_lock = asyncio.Lock()
-    # Start the default models immediately on startup
-    await start_daily_models()
+    # Start the default models immediately on startup (skipped when pinned:
+    # a pinned router is forward-only and must not squat :8079).
+    if not _router_pinned():
+        await start_daily_models()
     yield
-    await kill_active_processes()
+    if not _router_pinned():
+        await kill_active_processes()
     if client:
         await client.aclose()
 
@@ -212,6 +226,10 @@ async def start_daily_models():
 
 async def switch_mode_if_needed(model_id: str):
     global current_mode
+    if _router_pinned():
+        # Forward-only: a pinned router never switches modes, so a "14b"
+        # request cannot kill processes or spawn a local model.
+        return
     is_heavy = "14b" in model_id.lower()
 
     async with mode_switch_lock:
