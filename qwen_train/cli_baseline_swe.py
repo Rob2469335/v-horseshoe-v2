@@ -220,6 +220,13 @@ def _test_result(
     return True, "passed"
 
 
+def _clean_shadowing_metadata(src: Path, package_name: str) -> None:
+    """Remove test-created dist-info stubs that shadow the editable install."""
+    import shutil
+    for p in src.glob(f"{package_name}-*.dist-info"):
+        if p.is_dir():
+            shutil.rmtree(p, ignore_errors=True)
+
 def _reset_instance(inst: dict, hf_inst: dict) -> Path:
     base = inst["base_commit"]
     instance_id = inst["instance_id"]
@@ -581,4 +588,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
 
