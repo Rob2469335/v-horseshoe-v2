@@ -3347,6 +3347,19 @@ promotion
 
 ---
 
+## Learning / Explanation Rule
+
+When explaining a technical concept to the user:
+
+* Start with a simple explanation using plain language ("like I'm 12").
+* Break complex systems into small pieces.
+* Use visual or interactive explanations when they make the mechanism easier to understand.
+* Let the user trace, change, compare, or predict outcomes when practical.
+* Build explanations from concepts the user has already learned.
+* When useful for retention, ask a short quiz or have the user explain the concept back.
+* For V2 concepts such as MCP, agents, routing, evidence, learning loops, model selection, harnesses, QLoRA, and system architecture, prioritize understanding the mechanism rather than merely giving instructions.
+* Plain-language explanations must still include raw evidence and any caveats or disagreement; simple does not mean softer.
+
 ## Self-Healing & Self-Learning Fixes
 
 - **[AUTO-REPAIR] (2026-09-17T06:09:15.145288+00:00)**: None (tier None, fixed=False) ΓÇö error: Patch blocked: path is outside SWARM_WRITE_ROOT.
