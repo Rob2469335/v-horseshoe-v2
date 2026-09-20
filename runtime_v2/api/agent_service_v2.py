@@ -769,6 +769,7 @@ class AgentServiceV2:
                     failure_reason=str(error)[:300],
                     hypothesized_action=correction,
                     task_id=TASK_ID_CTX.get() or "",
+                    source="primary",
                 )
             except Exception as proc_err:
                 log.debug(
@@ -3096,6 +3097,7 @@ class AgentServiceV2:
                                 failure_reason="fix-intent coder repeated an exploration cycle without editing.",
                                 hypothesized_action="Stop re-reading files. Apply the fix with filesystem patch/write, then run the tests.",
                                     task_id=_current_task_id(),
+                                    source="loop-cycle",
                             )
                         except Exception as loop_refl_err:
                             log.debug(
@@ -3142,6 +3144,7 @@ class AgentServiceV2:
                                 failure_reason="agent repeated an exploration cycle; forced to synthesize.",
                                 hypothesized_action="Do not re-read files you have already seen. Synthesize a findings report from the content already gathered.",
                                     task_id=_current_task_id(),
+                                    source="forced-synthesis",
                             )
                         except Exception as loop_refl_err:
                             log.debug(
@@ -3193,6 +3196,7 @@ class AgentServiceV2:
                         failure_reason=f"agent repeated the same tool decision >=3 times within the last 8 actions ({_loop_sig}) and tripped the circuit breaker.",
                         hypothesized_action="Do NOT repeat the same tool call with identical arguments. If a tool failed, read the error, change the approach (different file/path/query/operation), or delegate. A repeated identical call will never produce a different result.",
                             task_id=_current_task_id(),
+                            source="circuit-breaker",
                     )
                 except Exception as loop_refl_err:
                     log.debug(
@@ -3880,6 +3884,7 @@ class AgentServiceV2:
                 failure_reason="agent ran out of turns before completing the goal (likely a compound goal needing filesystem + web_search, or a slow LLM).",
                 hypothesized_action="Prefer completing the goal with the FEWEST tool calls. If a compound goal requires both codebase reads and web research, interleave them - do not spend all turns on exploration. Consider delegating to a specialized agent.",
                     task_id=_current_task_id(),
+                    source="turn-budget",
             )
         except Exception as refl_err:
             log.debug("[%s] max-turns reflexion skipped: %s", agent_id, refl_err)
