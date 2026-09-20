@@ -3288,6 +3288,65 @@ Converted `except:` ΓåÆ `except Exception:` (or specific types) in `swarm_os/
 
 ---
 
+## Evidence Model
+
+The system uses a three-layer identity model to govern how failure events
+accumulate into promotion evidence. Each layer serves a distinct purpose:
+
+| Layer | Purpose | Scope | Gate |
+|-------|---------|-------|------|
+| `task_id` | Task diversity | Harness-supplied, credential-gated | Task-diversity gate (`MIN_EVIDENCE_TASKS=2`) |
+| `rollout_id` | Independent execution/evidence | Harness-supplied, credential-gated | Evidence dedup (`MIN_EVIDENCE_RUNS=3`) |
+| `run_id` | Individual event identity | Generated per event | Legacy fallback when `rollout_id` absent |
+
+**Order of evaluation**
+
+```text
+event
+  ↓
+task_id gate (reject if empty → "ignored: untagged_event")
+  ↓
+rollout_id / run_id evidence deduplication
+  ↓
+MIN_EVIDENCE_RUNS (3 distinct rollouts when rollout_id present)
+  AND
+MIN_EVIDENCE_TASKS (2 distinct task_ids)
+  ↓
+promotion
+```
+
+**Key rules**
+
+- Untagged events (`task_id=""`) are rejected before candidate creation:
+  `ignored: untagged_event` — they never create candidates or append evidence.
+  This includes `reflection_loop`, `control`, and any untagged caller.
+
+  The only exception is `watch-loop` (`source="watch-loop"`), which has an
+  explicit branch retained for its deliberate design: it mints its own random
+  `run_id`, carries no `task_id`, and is audited as `WATCH_LOOP_EVENT`
+  (`source="watch-loop"`). It **does not** create evidence runs and does not
+  count toward `MIN_EVIDENCE_RUNS`.
+
+* `MIN_EVIDENCE_RUNS=3` counts distinct evidence keys: `rollout_id` when present,
+  otherwise `run_id` for legacy/local records.
+
+* Promotion requires **both**:
+  - `MIN_EVIDENCE_RUNS=3` (distinct rollouts, or legacy `run_id` fallback)
+  - `MIN_EVIDENCE_TASKS=2` distinct `task_id`s in `evidence_tasks`
+
+* `rollout_id` is trusted **only** when supplied via the credential-gated
+  header `x-swarm-rollout-id` + `x-swarm-harness-key` (same gate as
+  `task_id`). It cannot be forged by a worker.
+
+**Baseline failure (documented, not fixed)**
+
+* `test_verification_failure_records_reflexion` fails identically at
+  `59f1e632` and HEAD — recorded as a known pre-existing baseline failure,
+  not a regression. It is **not** marked `xfail` and is not fixed in this
+  session.
+
+---
+
 ## Self-Healing & Self-Learning Fixes
 
 - **[AUTO-REPAIR] (2026-09-17T06:09:15.145288+00:00)**: None (tier None, fixed=False) ΓÇö error: Patch blocked: path is outside SWARM_WRITE_ROOT.
