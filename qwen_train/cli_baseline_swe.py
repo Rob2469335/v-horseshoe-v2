@@ -209,8 +209,18 @@ def _test_result(
     # ENV vs CAPABILITY: no ids at all -> the suite did not run (collection
     # error / missing dep) -> ENV failure, not a CLI failure.
     import re
+    # A COLLECTION CRASH aborts BEFORE per-test ids are emitted, so `failing`
+    # is empty AND its tail ("N error[s] in M.s") matches the generic summary
+    # regex below (it contains `error`). Detect the crash markers FIRST so it
+    # is scored env_error, not a normal f2p failure (the NOT_IMPROVED trap).
+    crash_markers = (
+        "INTERNALERROR>" in (after_output or "")
+        or bool(re.search(r"collecting \.\.\.", after_output or "", re.IGNORECASE))
+        or bool(re.search(r"Interrupted:\s*\d+\s+error[s]?\s+during\s+collection",
+                          after_output or "", re.IGNORECASE))
+    )
     has_summary = bool(re.search(r'={3,}.*\b(passed|failed|error|deselected)\b.*={3,}', after_output, re.IGNORECASE))
-    if not has_summary and not failing:
+    if crash_markers or (not has_summary and not failing):
         return False, "env_error"
     new_p2p = sorted({t for t in p2p if t in failing} - set(base_p2p_fail))
     if new_p2p:
