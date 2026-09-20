@@ -848,10 +848,10 @@ class PromptRepairer:
         for e in ev:
             if isinstance(e, dict):
                 norm.append(
-                    {"run_id": str(e.get("run_id", "")), "hypothesis": str(e.get("hypothesis", ""))}
+                    {"run_id": str(e.get("run_id", "")), "rollout_id": str(e.get("rollout_id", "")), "hypothesis": str(e.get("hypothesis", ""))}
                 )
             else:
-                norm.append({"run_id": str(e), "hypothesis": ""})
+                norm.append({"run_id": str(e), "rollout_id": "", "hypothesis": ""})
         payload = {
             "candidate_id": str(cand.get("id", "")),
             "hypothesis_id": str(cand.get("id", "")),
@@ -914,7 +914,7 @@ class PromptRepairer:
         })
         self._save_candidates()
 
-    def process_failure(self, run_id: str, component: str, failure_reason: str, hypothesized_action: str, task_id: str = "", source: str = "") -> str:
+    def process_failure(self, run_id: str, component: str, failure_reason: str, hypothesized_action: str, task_id: str = "", source: str = "", rollout_id: str = "") -> str:
         """Process a failure (OBSERVED -> EVIDENCE_GATHERING)."""
         # Per-event proof of the harness-supplied identity + the calling exit
         # path. Logs ONLY run_id/task_id/source/component — never headers/keys.
@@ -940,6 +940,17 @@ class PromptRepairer:
         if len(hypothesized_action) > 2000:
             hypothesized_action = hypothesized_action[:2000]
 
+        # Option A (evidence gating, 2026-09-20): only harness-tagged failures
+        # (task_id supplied by the agent-loop exit path) may accumulate promotion
+        # evidence. Untagged events are observed + audited (OBSERVED_FAILURE
+        # above) but never create a candidate or append evidence. This covers
+        # watch-loop too — it deliberately mints its own run ids, is never
+        # task-tagged, and must not inflate MIN_EVIDENCE_RUNS. The explicit
+        # watch-loop branch below is retained (its test pins the deliberate
+        # decision) even though this guard makes it unreachable.
+        if not task_id:
+            return "ignored: untagged_event"
+
         # Check existing candidates for similarity
         matched_id = None
         for cid, cand in self._candidates.items():
@@ -955,7 +966,7 @@ class PromptRepairer:
                 "action": hypothesized_action,
                 "component": component,
                 "task_id": task_id or "",
-                "evidence_runs": [{"run_id": run_id, "hypothesis": hypothesized_action}] if source != "watch-loop" else [],
+                "evidence_runs": [{"run_id": run_id, "rollout_id": rollout_id, "hypothesis": hypothesized_action}] if source != "watch-loop" else [],
                 "evidence_tasks": [task_id] if task_id else [],
                 "status": CandidateState.EVIDENCE_GATHERING.value,
                 "governance_version": GOVERNANCE_VERSION,
@@ -969,9 +980,17 @@ class PromptRepairer:
         else:
             cand = self._candidates[matched_id]
             
-            # Independence enforcement
-            existing_runs = [e["run_id"] if isinstance(e, dict) else e for e in cand["evidence_runs"]]
-            if run_id in existing_runs:
+            # Independence enforcement: one harness rollout = at most one evidence run.
+            # Key on the harness rollout id when present, else fall back to the
+            # run id (local/non-harness events keep today's per-event semantics).
+            existing_keys = []
+            for e in cand["evidence_runs"]:
+                if isinstance(e, dict):
+                    existing_keys.append(e.get("rollout_id") or e.get("run_id", ""))
+                else:
+                    existing_keys.append(e)
+            evidence_key = rollout_id or run_id
+            if evidence_key in existing_keys:
                 return "ignored: duplicate_run"
             # Watch-loop events mint fresh run_ids and must not inflate
             # evidence counts toward MIN_EVIDENCE_RUNS=3.
@@ -979,7 +998,7 @@ class PromptRepairer:
                 self._audit("WATCH_LOOP_EVENT", {"run_id": run_id, "matched": matched_id})
                 return "watch-loop: recorded, not counted"
                 
-            cand["evidence_runs"].append({"run_id": run_id, "hypothesis": hypothesized_action})
+            cand["evidence_runs"].append({"run_id": run_id, "rollout_id": rollout_id, "hypothesis": hypothesized_action})
             if task_id and task_id not in cand["evidence_tasks"]:
                 cand["evidence_tasks"].append(task_id)
             # Canonical primary task identity (first task that produced the failure)

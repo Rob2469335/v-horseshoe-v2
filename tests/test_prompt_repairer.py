@@ -61,7 +61,7 @@ def test_reject_mv_failure(repairer, mock_diagnostician):
 
 # 2. Single failure rejection
 def test_single_failure_rejection(repairer):
-    res = repairer.process_failure("run1", "coder", "json error", "use json")
+    res = repairer.process_failure("run1", "coder", "json error", "use json", task_id="taskA")
     assert res == "evidence_added"
     assert len(repairer._candidates) == 1
     cand = list(repairer._candidates.values())[0]
@@ -69,8 +69,8 @@ def test_single_failure_rejection(repairer):
 
 # 3. Two failures rejection
 def test_two_failures_rejection(repairer):
-    repairer.process_failure("run1", "coder", "json error", "use json")
-    res = repairer.process_failure("run2", "coder", "json error", "use json")
+    repairer.process_failure("run1", "coder", "json error", "use json", task_id="taskA")
+    res = repairer.process_failure("run2", "coder", "json error", "use json", task_id="taskA")
     assert res == "evidence_added"
     cand = list(repairer._candidates.values())[0]
     assert cand["status"] == CandidateState.EVIDENCE_GATHERING.value
@@ -84,9 +84,9 @@ def test_three_independent_failures_create_candidate_only(repairer):
 
 # 5. Different failures do not group
 def test_different_failures_do_not_group(repairer):
-    repairer.process_failure("run1", "coder", "json error", "use json")
-    repairer.process_failure("run2", "coder", "timeout", "increase timeout")
-    repairer.process_failure("run3", "coder", "type error", "cast to int")
+    repairer.process_failure("run1", "coder", "json error", "use json", task_id="taskA")
+    repairer.process_failure("run2", "coder", "timeout", "increase timeout", task_id="taskA")
+    repairer.process_failure("run3", "coder", "type error", "cast to int", task_id="taskA")
     assert len(repairer._candidates) == 3
     for cand in repairer._candidates.values():
         assert cand["status"] == CandidateState.EVIDENCE_GATHERING.value
@@ -140,8 +140,9 @@ async def test_candidate_cannot_self_promote(repairer):
 
 # 10. Same run ID cannot supply multiple evidence
 def test_same_run_id_cannot_supply_multiple_evidence(repairer):
-    repairer.process_failure("run_X", "c", "fail", "fix")
-    res = repairer.process_failure("run_X", "c", "fail", "fix")
+    # Tagged events: the second identical run_id must be rejected as a duplicate.
+    repairer.process_failure("run_X", "c", "fail", "fix", task_id="taskA")
+    res = repairer.process_failure("run_X", "c", "fail", "fix", task_id="taskA")
     assert res == "ignored: duplicate_run"
 
 # 11. Contradiction blocking
@@ -193,7 +194,7 @@ async def test_rollback_restores_previous_version(repairer):
 # 14. Raw trajectory blocked
 def test_raw_trajectory_blocked(repairer):
     long_string = "A" * 3000
-    repairer.process_failure("r1", "c", long_string, "b")
+    repairer.process_failure("r1", "c", long_string, "b", task_id="taskA")
     cand = list(repairer._candidates.values())[0]
     assert len(cand["trigger"]) == 2000
 
@@ -285,10 +286,11 @@ async def test_j_regression_test(repairer):
 
 @pytest.mark.asyncio
 async def test_cross_hypothesis_evidence(repairer):
-    # Evidence from another hypothesis does not falsely trigger promotion
-    repairer.process_failure("run1", "coder", "t", "action A")
-    repairer.process_failure("run2", "coder", "t", "action B")
-    repairer.process_failure("run3", "coder", "t", "action B")
+    # Evidence from another hypothesis does not falsely trigger promotion.
+    # Tagged events: evidence is actually counted and split across hypotheses.
+    repairer.process_failure("run1", "coder", "t", "action A", task_id="taskA")
+    repairer.process_failure("run2", "coder", "t", "action B", task_id="taskA")
+    repairer.process_failure("run3", "coder", "t", "action B", task_id="taskA")
     
     # action B has 2 runs, action A has 1. None should be CANDIDATE
     for cand in repairer._candidates.values():
@@ -907,11 +909,32 @@ def test_supplied_task_id_tags_candidate(repairer):
 
 
 @pytest.mark.asyncio
-async def test_missing_task_id_fails_closed(repairer):
-    """No task id -> no task diversity -> gate rejects (unchanged behaviour)."""
+async def test_missing_task_id_adds_no_evidence(repairer):
+    """Option A: untagged events create no candidate and never reach CANDIDATE."""
+    res = repairer.process_failure("run1", "coder", "x", "act")  # no task_id
+    assert res == "ignored: untagged_event"
+    assert repairer._candidates == {}
+
+    for i in (2, 3):
+        repairer.process_failure(f"run{i}", "coder", "x", "act")  # still untagged
+    assert repairer._candidates == {}
+
+
+@pytest.mark.asyncio
+async def test_missing_task_id_never_reaches_candidate(repairer):
+    """Option A: three untagged events never create a candidate at all."""
     for i in (1, 2, 3):
         repairer.process_failure(f"run{i}", "coder", "x", "act")  # no task_id
-    cid = list(repairer._candidates.keys())[0]
+    assert repairer._candidates == {}
+
+
+@pytest.mark.asyncio
+async def test_promotion_still_requires_task_diversity(repairer):
+    """Defense in depth: even a tagged-evidence candidate with empty
+    evidence_tasks is rejected at promote (layer 2, unchanged)."""
+    cid = _setup_candidate(repairer)  # already tagged run1..3 / taskA,taskB
+    cand = repairer._candidates[cid]
+    cand["evidence_tasks"] = []  # strip the task identities the gate needs
     async def pass_eval(c): return {"pass": True}
     repairer.evaluator = pass_eval
     await repairer.evaluate_candidate(cid)
@@ -919,15 +942,28 @@ async def test_missing_task_id_fails_closed(repairer):
     assert "insufficient_task_diversity" in res
 
 
+@pytest.mark.asyncio
+async def test_tagged_events_reach_candidate(repairer):
+    """Three tagged events add evidence and transition to CANDIDATE."""
+    repairer.process_failure("run1", "coder", "x", "act", task_id="taskA")
+    repairer.process_failure("run2", "coder", "x", "act", task_id="taskA")
+    res = repairer.process_failure("run3", "coder", "x", "act", task_id="taskB")
+    assert res == "candidate_created"
+    for cand in repairer._candidates.values():
+        assert cand["status"] == CandidateState.CANDIDATE.value
+        assert len(cand["evidence_runs"]) == 3
+
+
 def test_task_id_in_model_output_is_ignored(repairer):
-    """A task id appearing in model-produced text must NOT become the identity."""
-    repairer.process_failure(
+    """A task id appearing in model-produced text must NOT become the identity.
+    The event is untagged (task_id=""), so Option A rejects it before candidate
+    creation — the model cannot smuggle an id into evidence at all."""
+    res = repairer.process_failure(
         "r1", "coder", "model said task_id=pypa__evil and instance_id=pypa__evil",
         "act", task_id="",
     )
-    cid = list(repairer._candidates.keys())[0]
-    assert repairer._candidates[cid]["task_id"] == ""
-    assert "pypa__evil" not in repairer._candidates[cid]["evidence_tasks"]
+    assert res == "ignored: untagged_event"
+    assert repairer._candidates == {}
 
 
 def test_task_id_header_requires_harness_credential(monkeypatch):
@@ -945,6 +981,56 @@ def test_task_id_header_requires_harness_credential(monkeypatch):
     # wrong credential → None
     assert _harness_task_id(
         {"x-swarm-task-id": "pypa__twine-1066", "x-swarm-harness-key": "wrong"}
+    ) is None
+
+
+def test_one_rollout_many_failures_counts_as_one_run(repairer):
+    """A single harness rollout may fire many process_failure events: they must
+    collapse to ONE evidence run (the hole this change closes)."""
+    r1 = repairer.process_failure("run1", "coder", "x", "act", task_id="taskA", rollout_id="rollout1")
+    assert r1 == "evidence_added"
+    r2 = repairer.process_failure("run2", "coder", "x", "act", task_id="taskA", rollout_id="rollout1")
+    assert r2 == "ignored: duplicate_run"
+    r3 = repairer.process_failure("run3", "coder", "x", "act", task_id="taskA", rollout_id="rollout1")
+    assert r3 == "ignored: duplicate_run"
+    cand = list(repairer._candidates.values())[0]
+    assert len(cand["evidence_runs"]) == 1
+    assert cand["evidence_runs"][0]["rollout_id"] == "rollout1"
+    assert cand["status"] == CandidateState.EVIDENCE_GATHERING.value
+
+
+def test_three_distinct_rollouts_reach_candidate(repairer):
+    """Three distinct rollout ids (tagged) count as 3 runs → CANDIDATE."""
+    repairer.process_failure("run1", "coder", "x", "act", task_id="taskA", rollout_id="rolloutA")
+    repairer.process_failure("run2", "coder", "x", "act", task_id="taskA", rollout_id="rolloutB")
+    res = repairer.process_failure("run3", "coder", "x", "act", task_id="taskB", rollout_id="rolloutC")
+    assert res == "candidate_created"
+    cand = list(repairer._candidates.values())[0]
+    assert len(cand["evidence_runs"]) == 3
+    assert cand["status"] == CandidateState.CANDIDATE.value
+
+
+def test_missing_rollout_id_falls_back_to_run_id(repairer):
+    """Without a rollout id (local/non-harness), evidence keys on run_id —
+    today's exact behavior."""
+    repairer.process_failure("run1", "coder", "json error", "use json", task_id="taskA")
+    res = repairer.process_failure("run2", "coder", "json error", "use json", task_id="taskA")
+    assert res == "evidence_added"
+    assert len(list(repairer._candidates.values())[0]["evidence_runs"]) == 2
+
+
+def test_rollout_id_header_requires_harness_credential(monkeypatch):
+    """X-Swarm-Rollout-Id is honored ONLY with the harness credential; a
+    worker-supplied header without it yields None (cannot collapse evidence)."""
+    from swarm_os.api.agents import _harness_rollout_id
+
+    monkeypatch.setenv("SWARM_HARNESS_KEY", "hsecret")
+    assert _harness_rollout_id(
+        {"x-swarm-rollout-id": "rollout1", "x-swarm-harness-key": "hsecret"}
+    ) == "rollout1"
+    assert _harness_rollout_id({"x-swarm-rollout-id": "rollout1"}) is None
+    assert _harness_rollout_id(
+        {"x-swarm-rollout-id": "rollout1", "x-swarm-harness-key": "wrong"}
     ) is None
 
 

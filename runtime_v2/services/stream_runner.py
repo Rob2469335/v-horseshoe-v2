@@ -224,6 +224,7 @@ async def _store_decision_reflexion(
                 failure_reason=str(failure_reason)[:300],
                 hypothesized_action=correction,
                 task_id=TASK_ID_CTX.get() or "",
+                rollout_id=ROLLOUT_ID_CTX.get() or "",
                 source="stream_runner",
             )
         except Exception as exc:
@@ -423,6 +424,14 @@ EVAL_ID_CTX: contextvars.ContextVar = contextvars.ContextVar(
 # model or any model-writable field. Default None = today's behaviour (empty).
 TASK_ID_CTX: contextvars.ContextVar = contextvars.ContextVar(
     "swarm_task_id", default=None
+)
+
+# Per-request harness rollout identity, set by the API route from the
+# X-Swarm-Rollout-Id header (credential-gated like task id). Lets the evidence
+# store count DISTINCT HARNESS ROLLOUTS as independent runs instead of every
+# failure event (one rollout = at most one evidence run). Default None.
+ROLLOUT_ID_CTX: contextvars.ContextVar = contextvars.ContextVar(
+    "swarm_rollout_id", default=None
 )
 
 
