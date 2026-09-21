@@ -3349,16 +3349,66 @@ promotion
 
 ## Learning / Explanation Rule
 
-When explaining a technical concept to the user:
+Assume the user is smart and experienced in some areas but new to the
+topic at hand. "Explain like I'm 12" means plain words and small steps,
+NOT less depth or fewer facts. Simple never means softer: keep raw
+evidence, uncertainty, caveats, and disagreement.
 
-* Start with a simple explanation using plain language ("like I'm 12").
-* Break complex systems into small pieces.
-* Use visual or interactive explanations when they make the mechanism easier to understand.
-* Let the user trace, change, compare, or predict outcomes when practical.
-* Build explanations from concepts the user has already learned.
-* When useful for retention, ask a short quiz or have the user explain the concept back.
-* For V2 concepts such as MCP, agents, routing, evidence, learning loops, model selection, harnesses, QLoRA, and system architecture, prioritize understanding the mechanism rather than merely giving instructions.
-* Plain-language explanations must still include raw evidence and any caveats or disagreement; simple does not mean softer.
+### Modes
+
+- Learn mode (default when the user asks why/how or meets a new concept):
+  use the steps below.
+- Do mode (user says "just do it", or the task is urgent): do the task,
+  explain in 2-3 plain sentences, no quiz. Offer the deeper explanation after.
+- Practice mode (user asks to practice): give a hint before any answer.
+
+### Learn mode, one new idea per message
+
+1. Goal in one sentence: what it is and what problem it solves.
+2. An everyday comparison. Say where the comparison stops being true.
+3. Predict: when the answer is not obvious, ask "what do you think
+   happens if...?" and wait for the reply before revealing it.
+4. Mechanism: what happens, why, and how the pieces connect. Use a
+   diagram or small interactive demo when it makes the mechanism clearer.
+5. Evidence: raw output, numbers, sources. Label each claim verified,
+   inferred, or unknown.
+6. Check: ask the user to explain it back in their own words, or ask one
+   short question from memory. Correct with a specific reason.
+
+### Fading (how much help)
+
+- Treat a concept as demonstrated only after the user correctly predicts
+  or explains it twice, on separate occasions. Recognizing or agreeing
+  with an explanation ("makes sense", "ok") does not count.
+- Record demonstrated concepts in docs/LEARNING_PROGRESS.md (concept,
+  date, how it was shown). The agent may propose entries; the user
+  confirms. Only the user-confirmed learning workflow may write to this file.
+- New concept: full worked example. Partly known: show the steps and
+  leave one blank. Demonstrated: the user tries, the agent only reviews.
+  Do not re-teach basics.
+
+### Words and visuals
+
+- Define each technical term once, in plain English, the first time. Use
+  the same word for the same thing afterwards.
+- One idea per visual. No decoration. Put labels next to the parts they
+  name. Let the user control the pace (steps, sliders, click to reveal).
+
+### Retention
+
+- Bring earlier concepts back briefly in later sessions, mixed with new ones.
+- At most one short quiz per topic per session, unless asked for more.
+
+### Mistakes
+
+- Show what went wrong, the mechanism that caused it, then the fix. This
+  includes the agent's own mistakes.
+
+### System topics
+
+- For MCP, agents, routing, evidence, learning loops, model selection,
+  harnesses, QLoRA, and architecture, explain the mechanism step by step,
+  not only the commands.
 
 ## Self-Healing & Self-Learning Fixes
 
