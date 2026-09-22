@@ -405,7 +405,7 @@ class AgentServiceV2:
             }
             self._append_traj_record(run_id, record)
         except Exception as step_err:
-            log.debug("run-step write failed for run %s: %s", run_id, step_err)
+            log.warning("run-step write failed for run %s step %s agent %s: %s", run_id, seq, agent_id, step_err)
 
     def list_agents(self) -> List[dict]:
         return list(self._agents.values())
@@ -3607,7 +3607,7 @@ class AgentServiceV2:
                     state=state,
                 )
             except Exception as _step_err:
-                log.debug("[%s] run-step capture skipped: %s", agent_id, _step_err)
+                log.warning("[%s] run-step capture skipped for run %s: %s", agent_id, getattr(state, "run_id", ""), _step_err)
 
             # PRE-ACTION AUTHORIZATION: a confirmation_required tool result means
             # the tool did NOT execute. Yield an approval_request event carrying
