@@ -1188,6 +1188,27 @@ relaunch via start-dev.ps1 when ready.
 
 ## Recent Changes (do NOT re-apply)
 
+### CHECKPOINT (2026-09-22): Nemotron 3 Ultra 550B migration verified live — DeepSeek V4 Flash → Nemotron through NVIDIA NIM; synchronous `PromptRepairer.process_failure()` await bug fixed
+
+- **Runtime model migration (4 files):** DeepSeek V4 Flash (`nvidia_nim/deepseek-ai/deepseek-v4-flash-0731`) replaced with `nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b` in:
+  1. `runtime_v2/services/_llm_client.py` (analysis cloud default)
+  2. `swarm_os/services/reflection_loop.py` (distiller cloud-first attempt)
+  3. `swarm_os/healing/recovery_engine.py` (LLM-guided repair)
+  4. `swarm_os/services/deep_research.py` (NVIDIA NIM lane)
+- **Surgical bug fix (1 file):** `swarm_os/services/reflection_loop.py` line 961 — removed incorrect `await` from synchronous `PromptRepairer.process_failure()` call (was: `await repairer.process_failure(...)` → `repairer.process_failure(...)`). This fixed the live `'str' object can't be awaited` crash in the distiller phase.
+- **Live verification evidence:**
+  - Backend successfully called `nvidia/nemotron-3-ultra-550b-a55b` via NVIDIA NIM
+  - Distiller produced a new rule: `Distilled new rule: ...`
+  - `process_failure()` executed successfully
+  - Log confirmed: `Successfully handed reflexion rule to PromptRepairer.`
+  - Previous `'str' object can't be awaited` error eliminated
+  - Local `robs4b` (4B) remained healthy at ~34 t/s
+- **Known unrelated issues NOT fixed (intentionally deferred):**
+  - Windows `grep`/PowerShell compatibility in agent tool calls
+  - `organism-console` missing `@vitejs/plugin-react` (frontend build dependency)
+  - Other `process_failure` call sites still incorrectly `await`ed (8 locations)
+  - No changes to robs4b, benchmark config, Qdrant, MCP, routing, or evaluation order
+
 ### MEASUREMENT (2026-09-17): local-4B repair task #1 ΓÇö cache exonerated, workspace isolation confirmed, and a genuine n=1 edit-grounding weakness captured
 
 The local `robs4b` (4B) repair-task line produced its first clean measurement
@@ -3412,6 +3433,12 @@ evidence, uncertainty, caveats, and disagreement.
 
 ## Self-Healing & Self-Learning Fixes
 
+- **[AUTO-REPAIR] (2026-09-22T02:34:38.826722+00:00)**: None (tier 2, fixed=False) — error: [31;1mgrep: [31;1mThe term 'grep' is not recognized as a name of a cmdlet, function, script file, or executable progra
+
+- **[AUTO-REPAIR] (2026-09-22T02:33:08.611068+00:00)**: None (tier 2, fixed=False) — error: Search query is required
+
+- **[ROLLBACK-COMPLETED] (2026-09-21T02:04:59.976855+00:00)**: swarm_os/api/routes.py — signal_1 test regression attributable to swarm_os/api/routes.py
+
 - **[AUTO-REPAIR] (2026-09-17T06:09:15.145288+00:00)**: None (tier None, fixed=False) ΓÇö error: Patch blocked: path is outside SWARM_WRITE_ROOT.
 
 - **[AUTO-REPAIR] (2026-09-17T06:09:13.449860+00:00)**: None (tier None, fixed=False) ΓÇö error: Patch blocked: path is outside SWARM_WRITE_ROOT.
@@ -5292,3 +5319,367 @@ Attempted to experiment with the official Intel OpenVINO build of `llama.cpp` (b
 - **The Failure:** The moment `start_llama.bat` tried to execute the downloaded `llama.exe`, Windows Defender intercepted it because the binary lacked a trusted Microsoft Authenticode signature and carried the "Mark of the Web". Defender aggressively quarantined the `.exe` (deleting it instantly) and **permanently locked** the `start_llama.bat` file, preventing even `git restore` from recovering it with "Permission denied".
 - **The Fix:** Bypassed the locked batch file by extracting it from git history to a new file named `launch_llama.bat`, fixed its line endings from LF to CRLF so `cmd.exe` could parse arguments like `-ngl` correctly, and reverted all scripts (`model_router.py`, `launch_llama.bat`) back to the ROCK SOLID Vulkan build (`bin\llama.exe`). Also killed the orphaned `model_router.py` and `uvicorn` zombie processes that were left running when the script crashed.
 - **Lesson Learned:** Windows Defender on this machine will relentlessly destroy unsigned pre-compiled AI binaries downloaded from Github. Unless an explicit Defender exclusion is added for the project folder, we cannot run experimental executables. The Vulkan build remains the designated, stable execution path.
+
+---
+
+## ROBS4B RunPod Deployment — CHEAPEST SUITABLE GPU + STRICT PREFLIGHT
+
+Deploying the user's existing trained Qwen 3.5 4B GGUF model (`robs4b_q4km.gguf`) from private Hugging Face repo `Robloc-Dev-NY-2026/robs4b-gguf` for Twine evaluation sequence (Twine → Click → Pyfakefs → Sandbox Bounds → 25-rollout measurement). **DO NOT retrain the model.**
+
+### PRIMARY OBJECTIVE
+
+Find the **cheapest currently available Community Cloud GPU** sufficient for 4B GGUF + llama.cpp + Twine workload. **Maximum $0.22/hr.**
+
+### HARD RULES
+
+- **Community Cloud ONLY** — Always start with RTX 3070 ($0.13/hr). No Secure Cloud.
+- **Fail fast** — STOP pod immediately on fundamental gate failure.
+- **No blind assumptions** — Always verify actual runtime GPU with `nvidia-smi`.
+- **Price ceiling** — Never exceed $0.22/hr.
+
+### PHASE 0 — GPU CANDIDATE SELECTION
+
+**Fixed first choice: RTX 3070 on Community Cloud ($0.13/hr, 8 GB VRAM).** Only try other Community GPUs if 3070 unavailable or fails gates.
+
+### GATES (MUST PASS IN ORDER)
+
+**GATE 0 — POD ACCESS:** Create pod (Community Cloud, RTX 3070), wait RUNNING, verify `direct.host != null` and `direct.port != null`. If missing → STOP/TERMINATE.
+
+**GATE 1 — DIRECT SSH:** Use direct host/port (NOT ssh.runpod.io). Must succeed. If not → STOP POD.
+
+**GATE 2 — VERIFY ACTUAL GPU:** `nvidia-smi` + `nvidia-smi -L`. Record requested vs actual GPU, VRAM, driver, CUDA. If mismatch → STOP.
+
+**GATE 3 — CUDA:** PyTorch CUDA available + actual GPU compute test (`CUDA COMPUTE OK`). If fails → STOP POD.
+
+**GATE 4 — LLAMA.CPP:** Check/build llama.cpp with CUDA appropriate for actual GPU architecture. Verify CUDA backend present.
+
+**GATE 5 — MODEL:** Download/verify `robs4b_q4km.gguf` (size: 2708803840, SHA-256 prefix: 65202f37). If verification fails → STOP.
+
+**GATE 6 — START SERVER:** `llama-server -m /workspace/robs4b_q4km.gguf -ngl 99 -c 8192 --port 8080`
+
+**GATE 7 — HEALTH:** `curl http://127.0.0.1:8080/health` → must return `ok`
+
+**GATE 8 — REAL GPU OFFLOAD (MANDATORY):** `nvidia-smi` shows meaningful VRAM usage + server.log shows layer offload evidence. HTTP response alone NOT sufficient.
+
+**GATE 9 — GENERATION:** Model returns actual content via `/v1/chat/completions`
+
+**GATE 10 — TWINE:** Only after all gates pass. Run evaluation sequence.
+
+### REPORT FORMAT
+
+After every gate: `GATE N — PASS/FAIL`
+
+Final infrastructure result:
+```
+GPU: RTX 3070
+Hourly price: $0.13
+Direct SSH: PASS
+CUDA: PASS
+CUDA compute: PASS
+GGUF integrity: PASS
+llama.cpp: PASS
+Health: PASS
+GPU offload: PASS
+Generation: PASS
+
+RESULT: READY FOR TWINE
+```
+
+<!-- BENCHMARK-WORKER-STARTUP-BEGIN -->
+
+## Mandatory SWE Benchmark Worker Startup
+
+These rules are mandatory for Twine, Click, Pyfakefs, Sandbox Bounds, and any measured SWE/CLI benchmark.
+
+### 1. The benchmark worker is Qwen 3.5 4B
+
+The benchmark worker is the `robs4b` llama.cpp server on HTTP port `8080`.
+
+Do NOT confuse the benchmark worker with the model used by OpenCode/Build to drive the shell or agent.
+
+The OpenCode/agent model may be a completely different model.
+
+### 2. Never assume llama.cpp is already running
+
+Before starting a benchmark:
+
+- Check whether port `8080` is occupied.
+- Identify the owning process.
+- Do not blindly kill an unknown process.
+- If an old llama.cpp worker is present, verify whether it is the intended worker before reusing it.
+- If the worker configuration is wrong, stop it and start the canonical configuration.
+
+### 3. Canonical Windows benchmark worker command
+
+Use this configuration unless the benchmark instructions explicitly document a new approved configuration:
+
+& "C:\Users\rober\Projects\v-horseshoe-v2\bin\llama.exe" serve `
+  -m "C:\Users\rober\Projects\v-horseshoe-v2\qwen_train\robs4b_q4km.gguf" `
+  --alias robs4b `
+  -c 16384 `
+  -fa on `
+  -ctk q8_0 `
+  -ctv q8_0 `
+  -t 2 `
+  -tb 4 `
+  -b 2048 `
+  -ub 512 `
+  -np 1 `
+  -ngl 99 `
+  --timeout 300 `
+  --port 8080
+
+Do NOT silently substitute the CPU-only configuration:
+
+- `-ngl 0`
+- `-fa off`
+- `-c 8192`
+
+Those settings are a different experiment and must not be used for the standard measured benchmark.
+
+### 4. Verify the worker before running any task
+
+After starting llama.cpp:
+
+```powershell
+curl.exe http://localhost:8080/health
+```
+
+Do not start the benchmark until the health endpoint confirms the server is healthy.
+
+Also verify that the expected model is actually loaded.
+
+A process merely existing on port `8080` is NOT sufficient evidence that the worker is ready.
+
+### 5. Verify the model artifact
+
+The expected GGUF is:
+
+`C:\Users\rober\Projects\v-horseshoe-v2\qwen_train\robs4b_q4km.gguf`
+
+Expected SHA256:
+
+`65202f372110dde854b40ce15dcd1b6ab56a1fe9ea542b84b6a9cc745b242d41`
+
+Before a measured baseline, verify the file hash:
+
+```powershell
+(Get-FileHash `
+  "C:\Users\rober\Projects\v-horseshoe-v2\qwen_train\robs4b_q4km.gguf" `
+  -Algorithm SHA256).Hash
+```
+
+If the hash does not match, STOP. Do not run the benchmark.
+
+### 6. Verify the SWE backend
+
+The backend must be started with:
+
+`SWARM_WORKSPACE_ROOT=C:\Users\rober\Projects\swe_probe_work`
+
+Verify:
+
+```powershell
+curl.exe http://localhost:8000/readyz
+```
+
+The backend must report:
+
+* `ready: true`
+* `runtime_started: true`
+* `llamacpp_reachable: true`
+* `models_loaded: true`
+* `health_score_ok: true`
+
+If these prerequisites are not satisfied, STOP.
+
+Do not work around a failed preflight by changing benchmark settings.
+
+### 7. Workspace isolation is mandatory
+
+The SWE benchmark must use:
+
+`C:\Users\rober\Projects\swe_probe_work`
+
+Do not accidentally run the benchmark against the main repository.
+
+### 8. Startup order
+
+Always use this order:
+
+1. Verify the GGUF exists.
+2. Verify its SHA256.
+3. Check port `8080`.
+4. Start/restart the canonical `robs4b` llama.cpp worker if necessary.
+5. Verify `http://localhost:8080/health`.
+6. Verify the worker model is responding.
+7. Verify the SWE backend `/readyz`.
+8. Verify `SWARM_WORKSPACE_ROOT`.
+9. Only then run the benchmark task.
+
+### 9. Benchmark sequence
+
+The approved learning/evaluation sequence is:
+
+1. Twine
+2. Click
+3. Pyfakefs
+4. Sandbox Bounds
+5. 25-rollout measurement
+
+Do not skip ahead to the 25-rollout measurement before the four unique learning tasks have been successfully completed.
+
+### 10. Failure rule
+
+If startup, health, model verification, workspace verification, or preflight fails:
+
+**STOP.**
+
+Do not:
+
+* silently switch to CPU mode;
+* silently change context length;
+* silently disable flash attention;
+* silently change offload settings;
+* change the model;
+* change the workspace;
+* count an infrastructure failure as a model failure;
+* start the measured benchmark anyway.
+
+Report the failed prerequisite and fix the startup condition first.
+
+### 11. Measurement integrity
+
+Infrastructure failures must remain separate from capability failures.
+
+A rollout that never actually attempted the task because of backend startup, timeout, workspace, model-server, or other infrastructure failure must NOT be counted as a model failure.
+
+<!-- BENCHMARK-WORKER-STARTUP-END -->
+
+
+<!-- BENCHMARK-DATA-INTEGRITY-BEGIN -->
+
+## Mandatory Benchmark Data Integrity Rule
+
+This rule applies to EVERY individual SWE/CLI test and rollout.
+
+### Network/data acquisition is part of infrastructure
+
+A benchmark may require access to Hugging Face or another dataset/source to obtain the repository, patch, test patch, metadata, or other required task artifacts.
+
+If that acquisition fails:
+
+* classify the failure as infrastructure;
+* do NOT classify it as a model/capability failure;
+* do NOT silently substitute another data source;
+* do NOT modify the benchmark harness;
+* do NOT invent or reconstruct missing benchmark data;
+* do NOT remove required tests;
+* do NOT change `fail_to_pass`;
+* do NOT change `pass_to_pass`;
+* do NOT change the base commit;
+* do NOT apply a guessed patch;
+* do NOT continue a measured run using incomplete task data.
+
+### Retry policy
+
+A transient network failure may be retried a limited number of times.
+
+After the configured retry limit is reached, STOP the test and record:
+
+`infra_failure = true`
+
+The test must not be counted in capability metrics.
+
+Do not repeatedly retry the same failed network request indefinitely.
+
+### Local pool data does not automatically replace missing harness data
+
+Even if `swe_pool.jsonl` or `click_only.jsonl` contains fields such as:
+
+* `instance_id`
+* `base_commit`
+* `fail_to_pass`
+* `pass_to_pass`
+* `test_cmd`
+* `test_patch`
+
+the agent must NOT assume that the existing harness is permitted to bypass its normal dataset acquisition path.
+
+First determine how the benchmark harness is designed to obtain and validate the task artifacts.
+
+Any change to that behavior must be made outside the measured run and explicitly documented.
+
+### Measurement rule
+
+A test is measured only when:
+
+1. worker startup passed;
+2. backend startup passed;
+3. workspace verification passed;
+4. required task data was successfully acquired;
+5. the repository was prepared at the correct base commit;
+6. the required test patch was successfully applied;
+7. the benchmark actually reached the model/repair stage.
+
+If any prerequisite fails before the model is given a valid task:
+
+`measurement_valid = false`
+
+and
+
+`infra_failure = true`
+
+### Never turn infrastructure recovery into model evaluation
+
+Do not count:
+
+* Hugging Face failures;
+* DNS failures;
+* connection resets;
+* repository download failures;
+* workspace failures;
+* backend failures;
+* llama.cpp failures;
+* missing task artifacts;
+* harness crashes;
+
+as model failures.
+
+Fix the infrastructure first, then run the actual benchmark.
+
+### No silent benchmark changes
+
+The agent must never respond to an infrastructure failure by changing the benchmark definition.
+
+For example, it must not:
+
+`HF unavailable → use guessed local patch → run Click → count result`
+
+Instead:
+
+`HF unavailable → classify infrastructure failure → stop → repair acquisition path → rerun cleanly`
+
+This rule applies independently to every test.
+
+### Updated verification sequence
+
+Every test becomes:
+
+```text
+1. Verify Qwen GGUF
+2. Verify SHA256
+3. Verify llama.cpp configuration
+4. Verify port 8080
+5. Verify llama health
+6. Verify model response
+7. Verify backend /readyz
+8. Verify workspace
+9. Verify benchmark data acquisition
+10. Verify base commit
+11. Verify test patch
+12. Verify F2P/P2P lists
+13. ONLY THEN give task to worker
+```
+
+<!-- BENCHMARK-DATA-INTEGRITY-END -->

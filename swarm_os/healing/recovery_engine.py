@@ -240,7 +240,7 @@ Respond strictly with a JSON object in a ```json markdown block:
         try:
             from runtime_v2.services._llm_client import _endpoint_for
 
-            model_id = "nvidia_nim/deepseek-ai/deepseek-v4-flash-0731"
+            model_id = "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b"
             base, key, eff_model = _endpoint_for(model_id)
             _kwargs = {
                 "model": eff_model,

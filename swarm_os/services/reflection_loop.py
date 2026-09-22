@@ -711,7 +711,7 @@ async def _distill(distiller_content: str, fix_class: str | None = None) -> str:
         )
         attempts.append(
             {
-                "model": "nvidia_nim/deepseek-ai/deepseek-v4-flash-0731",
+                "model": "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b",
                 "messages": [{"role": "user", "content": distiller_content}],
                 "max_tokens": DISTILLER_MAX_TOKENS_CLOUD,
                 "timeout": 180.0,
@@ -958,7 +958,7 @@ async def run_reflection():
         
         from swarm_os.services.prompt_repairer import get_prompt_repairer
         repairer = get_prompt_repairer()
-        await repairer.process_failure(
+        repairer.process_failure(
             run_id=latest_failure.get("run_id") or str(uuid.uuid4()),
             component=component,
             failure_reason=error_msg,

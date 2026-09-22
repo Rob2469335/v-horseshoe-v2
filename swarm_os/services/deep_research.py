@@ -56,7 +56,7 @@ _FETCH_CHARS = 4000
 # its provider (native providers need no api_base/api_key override).
 _RES_LANES = (
     ("openrouter/deepseek/deepseek-v4-flash:free", None, None, None),
-    ("nvidia_nim/deepseek-ai/deepseek-v4-flash", None, None, None),
+    ("nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b", None, None, None),
     ("zen", None, None, None),  # OpenCode Zen/Go free (openai-compat)
     ("openrouter/deepseek/deepseek-v4-flash", None, None, None),
     ("deepseek/deepseek-v4-flash", None, None, None),
