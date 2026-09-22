@@ -2512,7 +2512,8 @@ class AgentServiceV2:
             # single source of truth for reconstructing the run for SFT/RFT — the
             # event log is append-only and lacks run_id linkage for historical records.
             try:
-                self._write_run_trajectory(
+                await asyncio.to_thread(
+                    self._write_run_trajectory,
                     run_id=run_id,
                     agent_id=agent_id,
                     parent_id=parent_id,
