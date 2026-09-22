@@ -173,6 +173,31 @@ class SandboxReplHandler:
                     ),
                     "returncode": 1,
                 }
+            # Unix commands unavailable in PowerShell (2026-09-22): the bash
+            # path dispatches to pwsh, which lacks grep/head/tail/sed/awk.
+            # cat is a PowerShell alias for Get-Content but behaves differently.
+            # find conflicts with the PowerShell alias for Select-String.
+            # The filesystem tool has built-in grep/search/read operations.
+            _unix_blocked = (
+                "grep ",
+                "head ",
+                "tail ",
+                "sed ",
+                "awk ",
+                "cat ",
+                "find ",
+            )
+            if any(b in low for b in _unix_blocked):
+                return {
+                    "ok": False,
+                    "stdout": "",
+                    "stderr": (
+                        "Unix command not available on Windows PowerShell. "
+                        "Use the filesystem tool's built-in search/read "
+                        "operations (grep/search/read) instead."
+                    ),
+                    "returncode": 1,
+                }
 
             ws_norm = str(ws).replace("\\", "/").lower().rstrip("/")
             for found in _re.findall(r"[a-zA-Z]:[\\/][^\s\"']*", shell_cmd):
