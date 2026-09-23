@@ -25,6 +25,7 @@ import json
 import os
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
@@ -125,6 +126,41 @@ def main() -> int:
         ["git", "diff", "--stat", args.base_commit, "HEAD"], cwd=str(repo), capture_output=True, text=True
     ).stdout.strip()
     res["diff_stat"] = diff
+
+    # --- Learning bridge: wire behavioral failures into PromptRepairer ---
+    # Uses the shared finalization function from evaluation_bridge.
+    # The bridge NEVER modifies the fixture, gold patch, model, or PromptRepairer.
+    # rollout_id: generated fresh per invocation (uuid4), not derived from instance_id.
+    # run_ids: the CLI-based evaluator path does not establish a reliable
+    # association between trajectory files and this evaluation. Pass None
+    # (normalized to [] inside build_and_submit).
+    try:
+        import asyncio
+        from runtime_v2.api.evaluation_bridge import build_and_submit_evaluation_failure
+
+        f2p_set = set(f2p)
+        bridge_result = asyncio.run(
+            build_and_submit_evaluation_failure(
+                task_id=instance_id,
+                rollout_id=str(uuid.uuid4()),
+                res=res,
+                f2p_p=len(f2p) - len(f2p_set & base_failing),
+                f2p_f=len(f2p_set & base_failing),
+                f2p_p2=len(f2p) - len(f2p_set & after_failing),
+                f2p_f2=len(f2p_set & after_failing),
+                diff_stat=diff,
+                ok=ok,
+                timeout_seconds=args.timeout,
+                agent_model="robs4b",
+                routing_mode=os.environ.get("SWARM_ROUTING_MODE", "unknown"),
+                run_ids=None,
+            )
+        )
+        res["bridge_result"] = bridge_result
+        print(f"  bridge_result: {bridge_result}")
+    except Exception as bridge_err:
+        print(f"  bridge_error: {bridge_err}")
+        res["bridge_error"] = str(bridge_err)
     res["f2p"] = inst["fail_to_pass"]
     res["after_failing"] = sorted(after_failing)
 

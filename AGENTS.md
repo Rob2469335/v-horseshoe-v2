@@ -261,6 +261,11 @@ govern.
   was wrong almost every time it appeared. No ruleset replaces a skeptical
   reviewer asking "show me the diff."
 
+**Session, cache, and inspection discipline**
+- **A new session must not assume access to another session's conversation context.** Establish current state from AGENTS.md + `git status` and re-derive; never reconstruct a prior session's conversation by rereading the repository — if a fact matters and is in neither those sources nor this session, it is unknown.
+- **Context-window utilization (e.g. "581K (55%)") is prompt size, not provider prompt-cache evidence.** Claim no cache hit, miss, or cached-cost without provider usage/generation evidence (cached-token metadata); otherwise say "unknown."
+- **Before broad repository inspection, state what existing authoritative summaries/audits/status reports already establish**, then inspect only what the current task requires.
+
 ### CONVENTIONS (match the repo)
 - Full day-to-day lint/test loop, scoped to the CI gate only:
   `ruff format .` ΓåÆ `ruff check . --select E9,F` ΓåÆ `pytest`. Never run bare
@@ -1187,6 +1192,21 @@ relaunch via start-dev.ps1 when ready.
 ---
 
 ## Recent Changes (do NOT re-apply)
+
+### CHECKPOINT (2026-09-23): evaluation bridge, evidence identity, and learner artifact governance v2
+
+Baseline before this checkpoint: `99fff35a`. This entry commits together with the implementation it describes.
+
+- **Evaluation bridge: implemented and production-path validated in isolation.** Chain verified on a temporary store (mocked evaluator/lesson manager; real candidate/audit file hashes unchanged): `run_repair_task.py` → `build_and_submit_evaluation_failure` → `PromptRepairer.process_failure` → candidate → derived artifact → evaluation context → promotion (`ActiveLesson.rule`, governance version, token count, receipt `state_hash`). **No evaluation run**: N1 frozen and NOT rerun; Twine N5 / Experiment J / Click / Pyfakefs / Sandbox Bounds / 25-rollout NOT started. No Phase 6 work; no model or routing changes in this implementation.
+- **Evidence identity**: `_evidence_key()` prefers non-empty `rollout_id`, falls back to `run_id` (legacy); identity-less evidence never counts; duplicate rollouts count once. Repair harness exports `backend/model_reachable_at_timeout` for the bridge's INFRASTRUCTURE-vs-BEHAVIORAL classification; the CLI forwards `SWARM_ROLLOUT_ID` as `X-Swarm-Rollout-Id`.
+- **Representation-boundary defect fixed** (the rich bridge diagnostic previously became `trigger: action` and could exceed the 50-token ceiling): new pure, deterministic `_derive_learner_artifact(cand)` reads only `trigger` + `action`; ordered **closed** condition vocabulary (forced-synthesis, call-loop, exploration-loop, turn-budget, no-edit, edit-failed, file-not-found); compact `label: action` when at most `MAX_RULE_TOKENS` (50, unchanged); **action-only fallback** when no condition derives or the compact form exceeds the ceiling; oversized actions are returned unchanged so the existing gate still rejects `token_limit`. **No truncation, no LLM-generated compression.** Rich `trigger`/`action` remain the diagnostic/provenance representation in candidate state and canonical-state receipt binding. Used at all three artifact sites (evaluation temp lesson, `register_eval_context`, `promote`).
+- **`GOVERNANCE_VERSION = 2`** (was 1); existing stamping/verification machinery unchanged.
+- **Stale candidate `a8f69f262bae` migrated by changing ONLY `governance_version` 1→2** — every other field byte-identical (file SHA-256 before `dcdf3a17…`, after `d33cee6d…`; backup outside the repository).
+- **Validation**: 39 new tests (`tests/test_learner_artifact_derivation.py`) + six mandated suites = **162 passed / 0 failed**; `ruff check --select E9,F` clean.
+- **Trust-grant test leak**: remains test-isolation hygiene, NOT a production governance defect; deliberately not "fixed" in this checkpoint — requires separate explicit authorization.
+- **Session/cache/inspection discipline** added under **VERIFICATION STANDARDS** (session boundaries; the context-window meter is not provider cache evidence; summary-first inspection) — not restated here.
+
+**Intentionally NOT in this checkpoint (preserved, unstaged):** frozen N1 provenance (`qwen_train/run_twine_eval.py`, `qwen_train/N1_HARNESS_PROVENANCE.md` — untracked); unrelated work streams (EventStore `/timeline` migration, `ssl_verify` default, startup/proxy scripts, runtime `repair_breaker.json`); scratch/backup files.
 
 ### CHECKPOINT (2026-09-22): Nemotron 3 Ultra 550B migration verified live — DeepSeek V4 Flash → Nemotron through NVIDIA NIM; synchronous `PromptRepairer.process_failure()` await bug fixed
 

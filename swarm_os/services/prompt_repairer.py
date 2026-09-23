@@ -40,7 +40,7 @@ from swarm_os.services.lesson_manager import (
 )
 from swarm_os.lib.atomic_io import atomic_write_text
 
-GOVERNANCE_VERSION = 1
+GOVERNANCE_VERSION = 2
 # Default evidence governance: at least 3 INDEPENDENT trajectories (unique run
 # ids) are required before a candidate may even be created. Configurable, but
 # the default is deliberately strict — one or two failures never promote.
@@ -231,6 +231,51 @@ def is_safe_lesson(text: str) -> bool:
         if phrase in text_lower:
             return False
     return True
+
+
+# Closed condition vocabulary for the learner-artifact derivation (governance
+# v2 representation boundary). First match wins, in this order. Extending this
+# table is a governance change: bump GOVERNANCE_VERSION with it.
+_CONDITION_KEYWORDS = (
+    ("forced to synthesize", "forced-synthesis"),
+    ("repeated the same tool decision", "call-loop"),
+    ("without editing", "exploration-loop"),
+    ("ran out of turns", "turn-budget"),
+    ("no source modification", "no-edit"),
+    ("attempted source modification", "edit-failed"),
+    ("File not found", "file-not-found"),
+)
+
+
+def _derive_learner_artifact(cand: dict) -> str:
+    """Deterministically derive the learner-facing artifact from candidate state.
+
+    Governance v2 representation boundary: ``trigger`` remains the full
+    diagnostic/provenance and ``action`` remains the behavioral hypothesis —
+    both stay in canonical state untouched. The artifact delivered at the
+    three construction sites (evaluation temp lesson, evaluation context,
+    promotion) is ``"<condition>: <action>"`` when a closed-vocabulary
+    condition matches the trigger, else ``"<action>"`` alone.
+
+    Uses ONLY cand["trigger"] and cand["action"]. Never truncates. Never
+    fabricates a condition. Never weakens the token gate: an oversized
+    artifact is returned unchanged so promotion rejects it as ``token_limit``.
+    Fail-safe: any unexpected error returns the action.
+    """
+    try:
+        trigger = str(cand["trigger"])
+        action = str(cand["action"])
+        for keyword, label in _CONDITION_KEYWORDS:
+            if keyword in trigger:
+                artifact = f"{label}: {action}"
+                if estimate_tokens(artifact) <= MAX_RULE_TOKENS:
+                    return artifact
+                return action  # labeled form over ceiling -> action only
+        return action  # no condition matched -> action only
+    except Exception:
+        if isinstance(cand, dict):
+            return str(cand.get("action") or "")
+        return ""
 
 
 class BenchmarkEvaluator:
@@ -651,7 +696,7 @@ class BenchmarkEvaluator:
         manager = get_lesson_manager()
         from swarm_os.services.lesson_manager import EVAL_COLLECTION
         temp_lesson = ActiveLesson(
-            rule=f"{candidate['trigger']}: {candidate['action']}",
+            rule=_derive_learner_artifact(candidate),
             confidence=0.9,
             effectiveness=0.9,
             source_candidates=[candidate["id"]],
@@ -677,6 +722,24 @@ class BenchmarkEvaluator:
             "baseline": baseline_res,
             "candidate": cand_res
         }
+
+
+def _evidence_key(ev) -> str:
+    """Single source of truth for evidence identity in the MIN_EVIDENCE_RUNS count.
+
+    Prefers a non-empty harness-supplied ``rollout_id`` (independent execution),
+    falls back to ``run_id`` for legacy/local records, and returns ``""`` when
+    neither is present (an identity-less evidence run never counts toward the
+    threshold). Mirrors the dedup precedence used in ``process_failure``.
+    """
+    if isinstance(ev, dict):
+        rid = str(ev.get("rollout_id") or "").strip()
+        if rid:
+            return rid
+        rid = str(ev.get("run_id") or "").strip()
+        if rid:
+            return rid
+    return ""
 
 
 class PromptRepairer:
@@ -782,7 +845,7 @@ class PromptRepairer:
         for cid, cand in list(self._candidates.items()):
             if cand.get("status") != CandidateState.CANDIDATE.value:
                 continue
-            runs = {e.get("run_id") for e in cand.get("evidence_runs", []) if isinstance(e, dict)}
+            runs = {k for e in cand.get("evidence_runs", []) if isinstance(e, dict) and (k := _evidence_key(e))}
             tasks = {t for t in cand.get("evidence_tasks", []) if t}
             if len(runs) < MIN_EVIDENCE_RUNS or len(tasks) < MIN_EVIDENCE_TASKS:
                 summary["skipped"] += 1
@@ -1056,7 +1119,7 @@ class PromptRepairer:
             evaluation_id,
             str(cand.get("id", "")),
             str(cand.get("task_id", "")),
-            f"{cand.get('trigger', '')}: {cand.get('action', '')}",
+            _derive_learner_artifact(cand),
         )
         cand["evaluation_id"] = evaluation_id
         self._save_candidates()
@@ -1137,7 +1200,9 @@ class PromptRepairer:
                 if ev.get("hypothesis") != cand["action"]:
                     self._change_state(cand, CandidateState.REJECTED, "mixed hypothesis in evidence runs")
                     return "rejected: mixed_hypothesis"
-                unique_runs.add(ev.get("run_id"))
+                key = _evidence_key(ev)
+                if key:
+                    unique_runs.add(key)
             else:
                 self._change_state(cand, CandidateState.REJECTED, "legacy or unbounded evidence run")
                 return "rejected: invalid_evidence_format"
@@ -1188,7 +1253,7 @@ class PromptRepairer:
             self._change_state(cand, CandidateState.REJECTED, "governance version mismatch")
             return "rejected: governance_version"
 
-        rule_text = f"{cand['trigger']}: {cand['action']}"
+        rule_text = _derive_learner_artifact(cand)
         
         # Recheck safety at the final gate!
         if not is_safe_lesson(rule_text):

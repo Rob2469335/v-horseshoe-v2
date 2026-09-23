@@ -224,6 +224,17 @@ FAILURE_CATEGORIES = (
 )
 
 
+def _check_endpoint_health(url: str, timeout: float = 5.0) -> bool:
+    """Synchronous HTTP probe. Returns True if the endpoint returns HTTP 200."""
+    try:
+        import urllib.request as _req
+
+        with _req.urlopen(url, timeout=timeout) as r:
+            return r.status == 200
+    except Exception:
+        return False
+
+
 def classify_failure(
     res: dict,
     *,
@@ -288,6 +299,8 @@ def _attempt_once(item: dict, timeout: int, allow_approval: bool, record: bool) 
     _trajectory_dir = _HERE.parent.parent / "data" / "trajectories"
     _start_ns = time.monotonic_ns()
     _killed = False
+    backend_at_timeout = True  # default: healthy; only overwritten on timeout
+    model_at_timeout = True
 
     def _monitor():
         nonlocal _killed
@@ -329,6 +342,11 @@ def _attempt_once(item: dict, timeout: int, allow_approval: bool, record: bool) 
         )
     except subprocess.TimeoutExpired:
         timed_out = True
+        # Health check IMMEDIATELY after timeout/kill — before any cleanup.
+        # This captures backend state at the actual failure boundary, not after
+        # F2P tests or git diff operations that follow.
+        backend_at_timeout = _check_endpoint_health("http://127.0.0.1:8000/readyz")
+        model_at_timeout = _check_endpoint_health("http://127.0.0.1:8079/health")
         try:
             proc.kill()
         except Exception:  # noqa: BLE001
@@ -396,6 +414,9 @@ def _attempt_once(item: dict, timeout: int, allow_approval: bool, record: bool) 
         and bool(set(used) - set(item.get("target_tools") or [])),
         "content": str(content)[:600],
         "elapsed_s": round(elapsed, 1),
+        # Health state at the timeout boundary (only meaningful when timed_out=True)
+        "backend_reachable_at_timeout": backend_at_timeout,
+        "model_reachable_at_timeout": model_at_timeout,
     }
 
 

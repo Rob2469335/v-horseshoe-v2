@@ -32,6 +32,10 @@ def _auth_headers() -> dict:
         harness_key = os.getenv("SWARM_HARNESS_KEY", "").strip()
         if harness_key:
             headers["X-Swarm-Harness-Key"] = harness_key
+    # Harness-supplied rollout identity — unique per evaluator invocation.
+    rollout_id = os.getenv("SWARM_ROLLOUT_ID", "").strip()
+    if rollout_id:
+        headers["X-Swarm-Rollout-Id"] = rollout_id
     return headers
 
 

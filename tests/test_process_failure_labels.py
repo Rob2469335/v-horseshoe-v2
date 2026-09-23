@@ -1,11 +1,12 @@
 """Scan-test contract for process_failure(...) call sites.
 
-Ruling (2026-09-20): task_id= is required only at the six runtime_v2 agent-loop
-exit sites (five in agent_service_v2.py + stream_runner.py). watch_loop.py
-deliberately passes source="watch-loop" with NO task_id (it mints its own random
-run id and is excluded from evidence counting). control.py, reflection_loop.py,
-repair_engine.py, healing_watchman.py and organism_console/loops/autonomous.py
-are system callers — file-set-allowed and exempt from task_id=/source=.
+Ruling (2026-09-20): task_id= is required only at the seven runtime_v2
+agent-loop exit sites (five in agent_service_v2.py + stream_runner.py +
+evaluation_bridge.py). watch_loop.py deliberately passes source="watch-loop"
+with NO task_id (it mints its own random run id and is excluded from evidence
+counting). control.py, reflection_loop.py, repair_engine.py,
+healing_watchman.py and organism_console/loops/autonomous.py are system
+callers — file-set-allowed and exempt from task_id=/source=.
 
 The file-set guard: the set of files containing process_failure( calls must
 equal the expected set, so a new caller in any other file fails the test and
@@ -20,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 _RUNTIME_FILES = {
     "runtime_v2/api/agent_service_v2.py",
     "runtime_v2/services/stream_runner.py",
+    "runtime_v2/api/evaluation_bridge.py",
 }
 _EXPECTED_LABELS = {
     "primary",
@@ -28,6 +30,7 @@ _EXPECTED_LABELS = {
     "circuit-breaker",
     "turn-budget",
     "stream_runner",
+    "evaluation",
 }
 _SYSTEM_FILES = {
     "swarm_os/services/watch_loop.py",
