@@ -15,6 +15,487 @@ Build: setuptools, `organism` CLI entrypoint
 
 ---
 
+# MASTER PROJECT ROADMAP — DO NOT DRIFT
+
+**Provenance:** This section formalizes the project's previously established
+architecture plan from the earlier design/research work. It was not previously
+recorded as a repository document. It is being added here now so future agents
+do not lose the plan when conversation context is unavailable. Do not claim
+this section historically existed in the repository — it is being created at
+this point in the project timeline.
+
+**Authority:** This section is the authoritative continuation guide. Any future
+agent must read this before proposing the next task, and must preserve both the
+six architecture phases and the separate validation sequence.
+
+## Architecture Phases (what we are building)
+
+The project has six architecture phases. These are distinct from the validation
+program below. Implementation existence in individual files is NOT proof that a
+phase is complete — each phase must be verified against its requirements.
+
+### Phase 1 — Core Event & Record System
+
+Intended components:
+- EventRecord
+- EventStore
+- EventBus
+- OutcomeRecord
+- PolicyRecord
+
+Current status: relevant infrastructure exists across `swarm_os/core/event_bus.py`,
+`swarm_os/repositories/event_log_repo.py`, `runtime_v2/services/checkpointing.py`,
+and the newer `runtime_v2/api/evaluation_types.py` / `evaluation_bridge.py` work.
+Status: **COMPLETE / VERIFIED** — hostile audit record (Phase 1 architecture
+verified, 22 PASS, 2 WARNING); EvaluationFailure schema, classifier, bridge,
+tests committed (`a1b8f471`).
+
+### Phase 2 — Decision / Healing Engine
+
+Intended components:
+- Evaluator
+- ExperimentRunner
+- PromotionEngine
+- RollbackEngine
+- HealingEngine
+- PolicyResolver
+- DecisionGate
+
+Current status: the healing stack includes Diagnostician, PromptRepairer,
+candidate/evidence lifecycle, safety/evidence gates, and promotion/rollback
+mechanisms. The evaluation bridge connects evaluator failures to PromptRepairer.
+Status: **COMPLETE / VERIFIED** — L1-L6 signed off with tests; rollback Phase A+B
+proven; governance suites (lifecycle / promotion-proof / rollback) committed;
+promotion path exercised in isolation (`a1b8f471`, 162/162).
+
+### Phase 3 — Organism Runtime
+
+Intended components:
+- Orchestrator
+- ToolRegistry
+- AgentRuntime
+- TaskSession
+- OrganismSnapshot
+
+Current status: the runtime includes `runtime_v2/api/agent_service_v2.py` (3214 lines),
+`swarm_os/kernel/organism.py`, tool execution, delegation, and checkpointing.
+Status: **COMPLETE / VERIFIED** — agent-loop E2E verification, god-module split
+(1589 tests), durable checkpointing (11 tests), live delegation records.
+
+### Phase 4 — API Services
+
+Current status: `swarm_os/api/` (routes.py, api_features.py, control.py, agents.py)
+and `runtime_v2/api/` provide the backend service layer.
+Status: **COMPLETE** — API audit rounds with revert-proof tests; governance/security
+gate complete.
+
+### Phase 5 — Frontend
+
+Current status: `organism_console/` (CLI interactive shell) and `start-console/`
+(web/SSR console experiment). These are distinct — the CLI is the live frontend;
+start-console is an experiment.
+Status: **COMPLETE per documented scope** — both consoles `tsc`/build green
+(records in Recent Changes); CLI-live vs experiment distinction as stated above.
+
+### Phase 6 — Infrastructure & Runtime
+
+Current status: llama/model services, local robs4b routing, Qdrant/vector
+infrastructure, runtime/process supervision, Windows safeguards, and
+operational/recovery infrastructure. Do not change model/routing configuration
+as part of architecture work.
+Status: **COMPLETE / CLOSED** — previously accepted D1-D8 repairs and live-stack
+verification; not reopened by the 2026-09-23 checkpoint.
+
+### Post-Phase-6 Repair & Verification Sequence (Phases 7-16)
+
+**Scope:** The Phase 7-16 sequence occurred AFTER completion of the original six
+architecture phases. It is follow-on repair, verification, hardening, and
+repository-validation work on the self-healing / self-learning governance path.
+It does not replace, redefine, or renumber the original six architecture phases.
+(Recorded 2026-09-23 from recovered project history; every item below cites
+existing repository evidence — files, tests, commits, or Recent-Changes records
+already in this document. Unrelated: legacy `Phase 7 polish` comments in the
+console CSS predate this sequence and refer only to frontend styling.)
+
+- **Phase 7 — Crash-safe transaction recovery: COMPLETED.** Owned transaction
+  journal with states `begin | snapshot_saved | qdrant_applied | committed`
+  (state comment in `swarm_os/services/prompt_repairer.py` `_journal_append`;
+  `promote` writes `begin` → `snapshot_saved` → `qdrant_applied`).
+  `recover_interrupted_promotions()` (same file) is invoked at startup
+  (`swarm_os/app/main.py`) and recovers per phase — an interrupted
+  `qdrant_applied` without `committed` rolls back. Tests:
+  `tests/test_rollback_crash_recovery.py` ("for every journal state";
+  committed `a1b8f471`) plus `test_malformed_transaction_journal`,
+  `test_crash_between_persistence_phases`, `test_rollback_after_interrupted_promotion`
+  in `tests/test_prompt_repairer.py`; content-based rollback suite
+  `tests/test_rollback_phase_a.py` (10 tests — Recent Changes, Signal-gated
+  rollback Phase A).
+- **Phase 8 — Single-token governance / trusted receipts: COMPLETED.**
+  Promotion requires a trusted evaluator receipt: **HMAC-SHA256**
+  (`_sign_receipt` / `_verify_receipt` with `hmac.compare_digest`) over the
+  candidate's **complete canonical state** (code comment: "The receipt is an
+  HMAC over the candidate's COMPLETE canonical governance [state]";
+  `promote` rejects any receipt whose `state_hash` differs from the current
+  candidate hash). Signing authority = externally provisioned `SWARM_RECEIPT_KEY`
+  only: `_receipt_key` documents "never auto-generated and never stored beside
+  candidate state"; **absence is FAIL-CLOSED** ("no trusted signing authority" →
+  `rejected: forged_or_mutated_evaluation`; tests `test_no_trusted_key_fails_closed`,
+  `test_no_local_signing_secret_written`, `test_key_changed_after_evaluation_rejects`,
+  `test_attacker_guess_key_cannot_forge`). **Historical audit finding preserved:**
+  an earlier hostile audit found a **default/local receipt key beside candidate
+  JSON was forgeable**; the repair (governance layer created in `717661a2`,
+  2026-09-18) removed the local/default key path — current comment in `promote`:
+  "HMAC is keyed outside candidate state, so a candidate-JSON editor can[not
+  forge]". Adversarial rejections covered by tests in `tests/test_prompt_repairer.py`
+  / `test_promotion_proof_integrity.py` / `test_experiment_lifecycle.py`:
+  forged receipt (`test_forged_evaluation_receipt_rejected` — attacker computes
+  the public state hash, cannot compute the HMAC), missing receipt
+  (same test, case "receipt missing entirely"), public-hash-as-authority (same
+  test — public hash is "NOT the authority"), cross-candidate binding (receipt
+  `state_hash` binds `candidate_id` via canonical state;
+  `test_receipt_captures_candidate_id_and_state_hash`), candidate mutation
+  (`test_mutation_after_evaluation`, `test_unsafe_mutation_after_evaluation`,
+  `test_state_hash_changes_with_candidate_mutation`,
+  `test_post_eval_trigger_mutation_still_rejected` → `rejected: forged_or_mutated_evaluation`),
+  fake/unauthorized evaluator (`rejected: unauthorized_evaluator`;
+  `test_evaluator_exception_blocks_promotion`,
+  `test_evaluator_timeout_blocks_promotion`,
+  `test_evaluator_fails_closed_for_swe_task`), missing/insufficient evidence
+  (`test_missing_evaluation_blocks_promotion`, `test_single_failure_rejection`,
+  `test_two_failures_rejection`, `test_insufficient_runs_skipped`,
+  `test_insufficient_tasks_skipped`, `test_task_diversity_required_for_promotion`),
+  duplicate evidence (`test_same_run_id_cannot_supply_multiple_evidence`,
+  `test_one_rollout_many_failures_counts_as_one_run`,
+  `test_duplicate_rollout_counts_once`), quarantine
+  (`test_candidate_quarantine_during_evaluation`), journal ownership
+  (`test_forged_journal_cannot_delete_unowned_lesson`), and token boundaries
+  (`test_token_estimation_boundaries`, `test_300_token_limit_enforcement`,
+  `test_global_300_token_limit`, `test_raw_trajectory_blocked`).
+- **Phase 9 — Reflection/diary restoration: COMPLETED.** The production
+  organism-diary write path was preserved (not bypassed): `agent_service_v2`
+  still persists failures through `reflection_loop.DIARY_PATH` and
+  `get_latest_failure()` reads it; the distiller was rewired to real agent
+  failures (`tool_failure` entries carrying `component`/`agent`;
+  component-tagged entries preferred — Recent Changes "The distiller distilled
+  the WRONG failures"). Test-side isolation repairs:
+  `9bb9d0ba` (2026-08-26) isolated `DIARY_PATH` in failure-lesson tests — 292
+  phantom `x.py` entries removed, verified 56/56, live diary byte-identical
+  during the run (Recent Changes record); `29028746` (2026-09-08) "isolate
+  DIARY_PATH in `_handle_tool`-failure tests; purge 54 stale distiller entries".
+  `DIARY_PATH` isolation is pinned across `test_failure_lessons.py`,
+  `test_distill_gate.py`, `test_opencode_parity.py`, `test_shared_reflexion.py`.
+- **Phase 10 — Remove fragile import hacks: COMPLETED.** Final state (verified
+  repairs only): fragile import-time fallback checks in
+  `runtime_v2/services/system_intel.py` replaced with
+  `hasattr(psutil, "win_service_iter")` (Production-Readiness Stabilization
+  record); `12f87c4b` (2026-09-12) "guard int env-var parsing in tool_executor
+  at import"; `b204e709` (2026-09-12) "fail open when truststore SSL injection
+  fails (cli import)".
+- **Phase 11 — Fix adversarial tests: COMPLETED.** The adversarial harness was
+  repaired so it actually exercises the governance boundaries (the Phase 8 test
+  list is that harness). Concrete harness repairs: `7a5b0cd2` (2026-09-08) — a
+  swallowed tool failure let a test pass while feeding the distiller a garbage
+  rule; the test now asserts real tool success, revert-proof ("removing run_id
+  makes the strengthened test FAIL with exactly the reported error"; commit
+  records "108 tests pass; ruff clean" for that fix); `ec59474a` (2026-08-13) —
+  `test_autonomy_e2e` mocked `_run_related_tests` as a tuple, the wrong-shape
+  seam that masked a dead signal-1 canary rollback; mock corrected to the real
+  structured-dict shape (Recent Changes record). The earlier hostile-audit
+  findings that drove these repairs are listed under Phase 16 below.
+- **Phase 12 — Test the tests: COMPLETED.** Seam-isolation acceptance proof:
+  `test_seam_isolation_snapshot_ordering` is marked xfail deliberately — it
+  breaks snapshot capture-ordering and MUST fail, proving per-seam isolation
+  (Recent Changes, End-to-end autonomy chain test record). Standing revert-proof
+  rule (Evidence-First Engineering): fix tests proven FAILING on pre-fix source
+  before merge (examples: `7a5b0cd2`, `ec59474a`, the SEC-1 8 bypass-shape
+  tests). Rollback is verified by real removal, not stored-state checks
+  (`test_real_rollback_removes_active_lesson_from_store`) and pre-repair-byte
+  ordering (rollback Phase A ordering test); promotion is verified through
+  trusted-receipt behavior rather than fabricated evidence (Phase 8 forged /
+  fake-evaluator tests).
+- **Phase 13 — Whole-tree prompt-injection audit: COMPLETED.** Recorded audit
+  round: the 2026-08-17 four-agent read-only audit (API/network, code-exec,
+  access control, frontend/data-privacy) fixed 16 verified defects
+  (`2741cd9f`→`6cbd009`), including the prompt-injection hard boundary in
+  `runtime_v2/services/tool_executor.py::_sanitize_string` — instruction-like
+  directives ("ignore previous", "you are now", "system override"…) are
+  REDACTED, not merely escaped (Recent Changes, Security audit round).
+  The audit's critical discovered path — **raw historical memory could reach the
+  worker prompt** — was removed by `717661a2` (2026-09-18) "Route all
+  reflection memory through PromptRepairer": the worker prompt now receives only
+  the curated, governed lesson block (`lesson_manager` render for a "Robs
+  worker prompt"; `stream_runner` comments: "worker cannot read historical
+  memory as behavioural policy"; `agent_service_v2`: "DIAGNOSIS SIDE (NOT the
+  worker prompt)"), with the invariant pinned by `tests/test_failure_lessons.py`
+  ("historical memory is confined to the [diagnosis side]… legacy
+  [PAST-MISTAKE WARNING] header — historical memory never [enters]") and
+  `tests/test_j_regression_seam.py` (added in the same commit). The
+  SLM-guard injection-classifier experiment was adversarially evaluated and
+  REVERTED with recorded rationale (Recent Changes) — detection-classifiers are
+  not a strong boundary here.
+- **Phase 14 — E2E governance test: COMPLETED.**
+  `tests/test_autonomy_e2e.py` walks the entire autonomy layer on one real
+  failure across **ten sequential checkpoints** (policy loader, `_audit_write()`,
+  and snapshot byte-comparison deliberately NOT mocked), extended with
+  concurrent racing-failure and budget-boundary tests (Recent Changes records).
+  The governance path itself is proven end-to-end by
+  `test_end_to_end_governance_chain` (`tests/test_prompt_repairer.py`):
+  3 failures across 2 tasks → candidate → evaluate → trusted receipt → promote →
+  ACTIVE with `LessonManager.store` asserted — covering trusted evaluation
+  evidence, candidate state, promotion controls, and persistence.
+- **Phase 15 — Repository hygiene: COMPLETED.** Scoped hygiene pass only — NOT
+  permission to delete arbitrary files; legitimate repository cleanup is kept
+  distinct from unrelated pre-existing user work (the latter is never swept).
+  Records (Recent Changes): full dead-code sweep 2026-08-05 (~130 files
+  identified by a 3-agent audit, deleted in 6 batches each verified by the full
+  test suite — 432 passed / 2 skipped), disk prune ~6.5 GB, zombie
+  `tests/test_weather.py` removed, Zero-Lint sweep (ruff E9/F 192 → 0),
+  18 scratch scripts removed.
+- **Phase 16 — Final verification: COMPLETED — failure history preserved.**
+  An **earlier hostile audit FAILED** on four findings: (1) raw historical
+  memory reached the worker prompt; (2) the default HMAC key beside candidate
+  JSON was forgeable; (3) evidence independence was only PARTIAL; (4) real
+  rollback was only PARTIAL. (The failed audit's report text was not persisted
+  in-repo; each repair below is verified in the repository.)
+  Repairs: (1) `717661a2` (2026-09-18) - commit subject records the subsequent
+  **"pass hostile audit"**; it created `prompt_repairer.py` + `lesson_manager.py`
+  as the governance layer and routed all reflection memory through it; (2) the
+  env-only `SWARM_RECEIPT_KEY` fail-closed authority (Phase 8); (3)
+  `8cae833a` (2026-09-20) "key prompt-repair evidence by rollout identity" +
+  the duplicate-evidence tests (Phase 8); (4) real-rollback tests
+  (`test_real_rollback_removes_active_lesson_from_store`) plus the
+  signal-gated rollback Phase A/B records (Recent Changes).
+  **2026-09-18 V3 verification:** **108 tests passed**; HMAC receipt,
+  mutation/journal/quarantine fixes were covered; Ruff E9/F was clean.
+  Pre-existing failures were explicitly identified as:
+  * `test_synthesis_scope`: 1 failure
+  * `test_opencode_parity`: 3 failures
+  These were explicitly classified as PRE-EXISTING / NOT regressions and
+  attribution was confirmed by stashing the user's diff.
+  Do not confuse this 2026-09-18 verification with the separate older
+  2026-09-08 repository record that also contains "108 tests."
+  Do not describe the four failures as failures caused by the Phase 7-16 repairs.
+  Preserve the later verification records separately, including the later
+  rollout-identity/evidence repair and the 162/162 bridge plumbing verification.
+  Checkpoint integrity: `717661a2` had damaged AGENTS.md (113 insertions /
+  4471 deletions); `63f90549` (2026-09-19) "restore AGENTS.md from pre-reset
+  state" restored it **byte-identical to HEAD~1 at that checkpoint** — verified:
+  `git diff 717661a2^ 63f90549 -- AGENTS.md` is empty.
+  Standing gates: `ruff check . --select E9,F` clean; later broader full-suite
+  greens are recorded separately in Recent Changes under their own sessions -
+  **1632 passed / 2 skipped / 1 xfailed** belongs to the CLI-trustworthiness
+  record and **1637 passed / 2 skipped / 1 xfailed / 0 failed** to the
+  Playwright/event-loop-session record - not to this sequence's own checkpoint.
+
+## Validation Program (how we prove the system works)
+
+This is NOT a replacement for the six architecture phases. Architecture phases
+define WHAT to build. The validation program defines HOW to prove it works.
+
+```
+Governance/Security
+→ Hostile Audit
+→ Observability fixes
+→ Evaluation/Learning bridge
+→ Twine N1 analysis
+→ Twine N5
+→ Experiment J
+→ Click
+→ Pyfakefs
+→ Sandbox Bounds
+→ 25-rollout measurement
+```
+
+## Current Validation Status
+
+- **Governance/Security** — COMPLETE (audit passes, hostile audit complete)
+- **Hostile Audit** — COMPLETE (Phase 1 architecture verified, 22 PASS, 2 WARNING)
+- **Observability fixes** — IMPLEMENTED (commit 99fff35a trajectory async fix,
+  commit 6425f366 run-step logging upgrade)
+- **Evaluation/Learning bridge** — IMPLEMENTED; actual path exercised:
+  `qwen_train/run_repair_task.py` → `runtime_v2/api/evaluation_bridge.py` →
+  `classify_evaluation_failure` → `submit_evaluation_failure` →
+  `PromptRepairer.process_failure`. Production-path validated **in isolation**
+  (checkpoint 2026-09-23, `a1b8f471`, 162/162 — plumbing/governance
+  validation, NOT experimental learning evidence). Evidence identity defect
+  found and fixed: the evaluator supplied a real `rollout_id` while the CLI
+  path sent `run_id="unknown"`, and counting keyed only on `run_id` let
+  identity-less evidence inflate the gate — `_evidence_key()` now prefers a
+  non-empty `rollout_id`, falls back to `run_id`, and identity-less evidence
+  never counts. Isolated verification: 3 distinct rollout IDs across ≥2 tasks →
+  candidate creation → learning tick → signed HMAC receipt → PROMOTABLE →
+  promotion, with receipt `state_hash` verified, canonical state containing
+  trigger/action but no `learner_rule`, and production candidate/audit files
+  SHA-256 unchanged before/after. Learner-artifact representation-boundary
+  defect identified and fixed with deterministic derivation (compact
+  `label: action` when a condition label derives; action-only fallback when
+  none derives or the labeled form would exceed the token limit; no
+  truncation; the 50-token limit was NOT increased); governance version v2 —
+  full detail in the 2026-09-23 checkpoint entry below. Prior `eval_twine.py`
+  smoke attempts remain INVALID/ABORTED; see smoke-test incident. N1 FROZEN;
+  Twine N5 NOT STARTED.
+- **Twine historical N1** — FROZEN. See frozen N1 record below. Never rerun or modified.
+- **Twine controlled smoke attempt** — INVALID/ABORTED. See smoke-test incident below.
+- **Twine N5** — NOT STARTED
+- **Experiment J** — Defined conceptually; detailed execution protocol not yet
+  recovered/approved; NOT RUN. See Experiment J definition below.
+- **Click** — NOT VALIDATED (previous result invalid due to timeout/data-acquisition
+  failure; must not be counted as learning evidence)
+- **Pyfakefs** — NOT STARTED
+- **Sandbox Bounds** — NOT STARTED
+- **25-rollout measurement** — NOT STARTED
+
+## Experiment J — Learning-Loop Validation Definition
+
+**Purpose:** Experiment J validates whether PromptRepairer actually teaches
+the worker something that changes its subsequent behavior. It is NOT simply
+another SWE-bench task and is NOT merely a measurement of whether the model
+eventually succeeds.
+
+**Provenance:** This definition is being formalized now. The exact historical
+Experiment J fixture/task names, number of repetitions, numerical thresholds,
+and control implementation are NOT sufficiently recoverable from the current
+documented repository state. Protocol details require recovery from the
+original Experiment J design before execution.
+
+**Conceptual sequence:**
+
+1. **Pre-learning behavior** — The worker encounters a defined task pattern.
+   Record what it actually does before learning.
+
+2. **Failure** — The worker produces a genuine, attributable failure on the
+   relevant task pattern.
+
+3. **Learning** — The failure enters the existing PromptRepairer learning
+   machinery. Do not manually inject a lesson. Do not manually mark evidence
+   as successful. Do not manually promote a candidate. Use the existing
+   governed learning path.
+
+4. **Evidence / validation / promotion** — The candidate must follow the
+   existing evidence requirements and promotion rules. The experiment must
+   verify that the lesson actually becomes eligible for retrieval through
+   the normal system path.
+
+5. **Post-learning task** — The worker encounters a comparable or relevant
+   task pattern after the lesson has been learned/promoted.
+
+6. **Behavior comparison** — Compare the worker's relevant behavior before
+   and after learning. The question is whether the learned lesson changed
+   the behavior in the expected direction.
+
+7. **Causal attribution** — Preserve enough raw evidence to distinguish
+   learning from an unrelated lucky success. If the post-learning behavior
+   improves, document why the improvement can reasonably be attributed to
+   the learned lesson. If attribution cannot be established, report that
+   honestly rather than calling the experiment successful.
+
+**What Experiment J is supposed to prove:**
+
+```
+Before learning
+→ worker encounters task pattern
+→ observe behavior
+
+Failure
+→ failure enters Prompt Repairer
+
+Learning
+→ candidate/lesson is created
+→ evidence is gathered
+→ normal validation/promotion occurs
+
+After learning
+→ relevant task pattern is presented again
+→ observe behavior
+
+Result
+→ determine whether the worker's behavior changed because of the
+  learned lesson.
+```
+
+A higher task success rate by itself does NOT prove Experiment J. The
+experiment is specifically intended to validate the learning loop:
+failure → lesson → governed validation/promotion → retrieval → changed
+behavior.
+
+**Status:** Defined conceptually; detailed execution protocol not yet
+recovered/approved; NOT RUN.
+
+The two recent Twine smoke invocations do NOT count as Experiment J and
+do not provide Experiment J evidence.
+
+## Frozen Historical Twine N1
+
+**WARNING:** Historical N1 is frozen and must never be modified or retroactively
+fed into PromptRepairer.
+
+- Task: `pypa__twine-1066`
+- Base commit: `4a1fc064a7899872ee845df6a8810bb51a6845ac`
+- Frozen evaluator: `qwen_train/run_twine_eval.py`
+- Frozen SHA-256: `C8388FF9C317944AA53C163C5149455B177F95F59A75DE7C1E13AD88AD041AC2`
+- Historical trajectory count: 216
+- Historical event count: 724
+- Do not invent or change these values. If current files differ, report the
+  discrepancy rather than rewriting history.
+
+## Twine Smoke-Test Incident
+
+The recent controlled smoke attempt was NOT valid experimental evidence.
+
+First invocation: `eval_twine.py` was executed without `--test-patch`. Baseline
+reported 3 passed, 0 failed. The evaluator correctly rejected the baseline.
+
+Second invocation: `eval_twine.py` was started with the test patch. It was
+interrupted. Its reported bridge result was `skipped:INFRASTRUCTURE` because
+the backend was unreachable at the timeout health check.
+
+Therefore:
+- Neither invocation counts as N1, N5, or any planned measurement
+- Neither counts toward the 25-rollout experiment
+- Neither constitutes evidence that robs4b learned or failed to learn
+- Do not automatically rerun them; investigate before the next approved experiment
+
+## Architecture Status
+
+**Architecture-status audit: COMPLETE (2026-09-23) — documented from existing
+records; no experiments were run for this audit.** Per-phase statuses are
+recorded in the six phase sections above: Phases 1-3 COMPLETE / VERIFIED,
+Phase 4 COMPLETE, Phase 5 COMPLETE per documented scope, Phase 6 COMPLETE /
+CLOSED (previously accepted D1-D8 repairs and live-stack verification; not
+reopened). An in-flight, unstaged EventStore `/timeline` migration is an
+enhancement stream for Phases 1/4, not a status gap. Statuses rest on
+architecture requirements and existing verification records, not merely the
+existence of individual files.
+
+## Do Not Drift Rules
+
+Future agents must:
+1. Read this master roadmap before proposing the next task.
+2. Preserve the six architecture phases.
+3. Preserve the separate validation sequence.
+4. Never invent a replacement six-phase structure.
+5. Never skip ahead in the validation sequence merely because a component exists.
+6. Never treat an invalid experiment as valid evidence.
+7. Never modify frozen historical N1 artifacts.
+8. Never infer missing architecture requirements.
+9. If the roadmap conflicts with current code, audit and report the discrepancy
+   before changing it.
+10. Ask for human approval before changing the master roadmap.
+
+## Current Next Step
+
+**Architecture Status Audit — COMPLETE** (documented from existing records; no
+experiments run).
+
+**Next validation item: Twine N5.** Twine N5 remains gated by (a) human-approved,
+committed roadmap documentation and (b) the full benchmark preflight chain
+(sections 8 and 9 of the benchmark worker startup rules), including required
+immediately before execution: GGUF/SHA256 verification, worker health, backend
+`/readyz`, workspace verification, and data-acquisition verification. This
+documentation update does NOT authorize an evaluation.
+
+---
+
 ## Machine Specs (verified 2026-08-30 ΓÇö this is the only supported hardware)
 
 - **CPU**: Intel Core Ultra 5 135U (Meteor Lake) ΓÇö 2 P-cores + 8 E-cores + 2 LP E-cores, 12 cores / 14 threads, 1.60 GHz base / 4.4 GHz turbo, 15 W base / 57 W turbo.
@@ -3452,6 +3933,16 @@ evidence, uncertainty, caveats, and disagreement.
   not only the commands.
 
 ## Self-Healing & Self-Learning Fixes
+
+- **[ROLLBACK-COMPLETED] (2026-09-23T12:13:14.194648+00:00)**: swarm_os/api/routes.py — signal_1 test regression attributable to swarm_os/api/routes.py
+
+- **[AUTO-REPAIR] (2026-09-23T03:30:38.935853+00:00)**: None (tier None, fixed=False) — error: Read-before-write guard: cannot patch 'runtime_v2/services/semantic_search.py' — the agent has not listed or read it yet
+
+- **[AUTO-REPAIR] (2026-09-23T01:47:35.860370+00:00)**: None (tier 2, fixed=False) — error: url is required
+
+- **[AUTO-REPAIR] (2026-09-23T00:11:56.364971+00:00)**: None (tier 2, fixed=False) — error: url is required
+
+- **[AUTO-REPAIR] (2026-09-22T21:37:39.755534+00:00)**: None (tier 2, fixed=False) — error: url is required
 
 - **[AUTO-REPAIR] (2026-09-22T02:34:38.826722+00:00)**: None (tier 2, fixed=False) — error: [31;1mgrep: [31;1mThe term 'grep' is not recognized as a name of a cmdlet, function, script file, or executable progra
 
