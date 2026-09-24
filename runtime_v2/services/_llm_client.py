@@ -424,18 +424,17 @@ def inject_system_prompt(messages: list, system: str) -> list:
 async def complete_for_tool_decision(
     litellm_model: str, messages: list, fallbacks: list, agent_id: str = None
 ):
-    # BUG FIX: "openai/..." is a shared prefix for local llama.cpp AND the OpenCode
-    # Zen/Go cloud endpoints. Using startswith("openai/") misclassified the primary
-    # cloud model (openai/deepseek-v4-flash) as LOCAL — sending llama.cpp-only
-    # params (id_slot/n_predict/cache_prompt) and grammar response_format to the
-    # OpenCode endpoint. Classify via _is_local_model() (matches the fallback split).
+    # Tool-decision cap: the model must produce a JSON action, not prose.
+    # 4096 let the model generate ~1260 tokens of reasoning before the 180s
+    # step timeout killed it, preventing any tool call on open-ended tasks.
+    # 512 tokens is ample for a tool-call JSON (~50 tokens) plus context,
+    # while capping generation to ~73s at 7 tok/s — well under the 180s step
+    # timeout.  The previous 250 cap truncated the closing JSON brace; 512
+    # provides comfortable headroom without enabling verbose reasoning.
     from runtime_v2.services.fallback_manager import _is_local_model
 
     is_cloud = not _is_local_model(litellm_model)
-    # Local tool decisions need enough room for thought + JSON action + params.
-    # 250 tokens caused truncated JSON (missing closing braces/fields) → retry loops.
-    # Match the model's actual context: 16384 / 4 = 4096 is a safe per-request cap.
-    local_max_tokens = 4096
+    local_max_tokens = 512
     cloud_max_tokens = int(os.getenv("CLOUD_MAX_TOKENS", "4096"))
 
     async def _call(extra: dict, max_tokens: int):
