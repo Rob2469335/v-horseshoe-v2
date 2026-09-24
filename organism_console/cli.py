@@ -242,6 +242,7 @@ def run_agentic(
         "ok": ok,
         "files_changed": files_changed,
         "elapsed": elapsed,
+        "run_id": getattr(ctx, "last_run_id", None),
     }
 
 
@@ -414,6 +415,7 @@ def main():
                         {"path": p, "added": 0, "removed": 0}
                         for p in goal_result.get("files_changed", [])
                     ],
+                    "run_id": getattr(ctx, "last_run_id", None),
                 }
             else:
                 result = (
@@ -440,6 +442,7 @@ def main():
                             "files_changed": [
                                 r["path"] for r in result.get("files_changed", [])
                             ],
+                            "run_id": result.get("run_id"),
                         },
                         indent=2,
                     )

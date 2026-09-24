@@ -383,6 +383,11 @@ def _attempt_once(item: dict, timeout: int, allow_approval: bool, record: bool) 
             pass
     hit, all_hit = _tool_match(item, used)
     elapsed = (datetime.now(timezone.utc) - t0).total_seconds()
+    # Lane 1 (2026-09-24): surface the authoritative backend run_id captured
+    # from the CLI --json output. The CLI reads it from the model_selected
+    # NDJSON chunk emitted by step_agent_stream_inner. None means the CLI
+    # version did not yet emit run_id (backward-compatible).
+    captured_run_ids = [cli.get("run_id")] if cli and cli.get("run_id") else None
     return {
         "ts": t0.isoformat(),
         "id": item["id"],
@@ -417,6 +422,9 @@ def _attempt_once(item: dict, timeout: int, allow_approval: bool, record: bool) 
         # Health state at the timeout boundary (only meaningful when timed_out=True)
         "backend_reachable_at_timeout": backend_at_timeout,
         "model_reachable_at_timeout": model_at_timeout,
+        # Lane 1 (2026-09-24): authoritative backend run_id(s) for the
+        # evaluation bridge. None when unavailable (backward-compatible).
+        "run_ids": captured_run_ids,
     }
 
 

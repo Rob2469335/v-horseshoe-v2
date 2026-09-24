@@ -420,6 +420,12 @@ async def _stream_prompt_async(ctx, agent_id, prompt, history):
                     if chunk_type == "model_selected":
                         model = chunk.get("model", "unknown")
                         ctx.active_model = model
+                        # Lane 1 (2026-09-24): capture the authoritative backend
+                        # run_id from the first stream chunk so the CLI --json
+                        # output can surface it to the harness/evaluator bridge.
+                        run_id = chunk.get("run_id")
+                        if run_id:
+                            ctx.last_run_id = run_id
                         ctx.save()
                         if ctx.trace_mode:
                             panel = render_trace_panel(

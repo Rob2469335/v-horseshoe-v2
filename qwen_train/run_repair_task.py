@@ -153,7 +153,7 @@ def main() -> int:
                 timeout_seconds=args.timeout,
                 agent_model="robs4b",
                 routing_mode=os.environ.get("SWARM_ROUTING_MODE", "unknown"),
-                run_ids=None,
+                run_ids=res.get("run_ids"),
             )
         )
         res["bridge_result"] = bridge_result

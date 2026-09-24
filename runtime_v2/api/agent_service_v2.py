@@ -2706,6 +2706,7 @@ class AgentServiceV2:
             "requested_role": self._agents.get(agent_id, {}).get("model_role", "fast"),
             "attempt": 1,
             "temperature": 0.1,
+            "run_id": run_id,
         }
 
         allowed_tools = (
