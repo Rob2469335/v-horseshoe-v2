@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import httpx
+from qdrant_client.http.exceptions import ResponseHandlingException
 
 from swarm_os.services.embedding_service import EmbeddingService
 from swarm_os.services.vector_store import VectorStore
@@ -481,17 +482,53 @@ class MemoryBridge:
         return text[:600]
 
     async def _store(self, vec: list, payload: dict) -> bool:
-        try:
-            async with self.lock_vector:
-                await self.vs.upsert(
-                    doc_id=str(uuid.uuid4()),
-                    vector=vec,
-                    payload=payload,
-                )
-            return True
-        except Exception as exc:
-            logger.exception("vector store error: %s", exc)
-            return False
+        """Persist a vector+payload to Qdrant.
+
+        Transient transport failures (raw httpx or qdrant-client's
+        ResponseHandlingException wrapping them) are retried once with a
+        1-second delay. Non-transport exceptions fall through immediately.
+        """
+        _MAX_RETRIES = 1
+        doc_id = str(uuid.uuid4())
+        for attempt in range(1 + _MAX_RETRIES):
+            try:
+                async with self.lock_vector:
+                    await self.vs.upsert(
+                        doc_id=doc_id,
+                        vector=vec,
+                        payload=payload,
+                    )
+                return True
+            except (httpx.ReadError, httpx.ConnectError, httpx.ConnectTimeout) as exc:
+                if attempt < _MAX_RETRIES:
+                    logger.warning(
+                        "Transient Qdrant connection error (attempt %d/%d): %s; retrying in 1s",
+                        attempt + 1, 1 + _MAX_RETRIES, exc,
+                    )
+                    await asyncio.sleep(1.0)
+                    continue
+                logger.exception("vector store error (retries exhausted): %s", exc)
+                return False
+            except ResponseHandlingException as exc:
+                # qdrant-client wraps httpx transport errors here; check the
+                # original exception type before deciding to retry.
+                src = getattr(exc, "source", None)
+                if isinstance(src, (httpx.ReadError, httpx.ConnectError, httpx.ConnectTimeout)):
+                    if attempt < _MAX_RETRIES:
+                        logger.warning(
+                            "Transient Qdrant connection error (attempt %d/%d): %s; retrying in 1s",
+                            attempt + 1, 1 + _MAX_RETRIES, src,
+                        )
+                        await asyncio.sleep(1.0)
+                        continue
+                    logger.exception("vector store error (retries exhausted): %s", exc)
+                    return False
+                # Non-transport ResponseHandlingException — no retry
+                logger.exception("vector store error: %s", exc)
+                return False
+            except Exception as exc:
+                logger.exception("vector store error: %s", exc)
+                return False
 
     async def _embed(self, text: str) -> Optional[list]:
         if text in self.embedding_cache:
