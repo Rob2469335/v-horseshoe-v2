@@ -194,6 +194,14 @@ class AgentServiceV2:
         # and backward-compatible; absent run_id stays out for historical/external events.
         if run_id:
             payload["run_id"] = run_id
+            # Provenance (Lane 2, 2026-09-24): attach the harness rollout id to
+            # invocation events (events that carry the backend run id) so the
+            # event log is joinable back to the originating rollout. Same source
+            # as the trajectory/fitness join (ROLLOUT_ID_CTX). Only set when a
+            # rollout is active — legacy/non-evaluator events keep their shape.
+            rollout = _current_rollout_id()
+            if rollout:
+                payload["rollout_id"] = rollout
         if parent_id:
             payload["parent_id"] = parent_id
         store = getattr(self, "event_store", None) or getattr(
@@ -273,6 +281,14 @@ class AgentServiceV2:
                 "status": status,
                 "last_content": last_content,
             }
+            # Provenance (Lane 2): persist the harness rollout this run belongs
+            # to, so a trajectory can be joined back to its originating rollout.
+            # The rollout id comes from the same ROLLOUT_ID_CTX the agent loop
+            # already reads for evidence; the key is added only when a rollout
+            # exists, so legacy/non-evaluator runs keep their exact shape.
+            rollout = _current_rollout_id()
+            if rollout:
+                record["rollout_id"] = rollout
             self._append_traj_record(run_id, record)
         except Exception as traj_err:
             log.debug("trajectory write failed for run %s: %s", run_id, traj_err)
@@ -283,6 +299,35 @@ class AgentServiceV2:
         out = self._TRAJ_DIR / f"{run_id}.jsonl"
         with open(out, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+
+    def trajectory_rollout_id(self, run_id: str) -> str:
+        """Reconstruct the rollout id a backend run belongs to, from the run's
+        persisted trajectory summary.
+
+        Lane-2 provenance join helper: reads the last (summary) record of
+        ``data/trajectories/<run_id>.jsonl`` and returns its ``rollout_id``
+        (``""`` when absent). Lets the evaluation bridge / any consumer check a
+        supplied (rollout_id, run_id) pairing against durable backend state
+        instead of silently trusting the caller. Purely read-only; missing or
+        corrupt files return ``""`` and never raise.
+        """
+        try:
+            path = self._TRAJ_DIR / f"{run_id}.jsonl"
+            if not path.exists():
+                return ""
+            record = {}
+            for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    parsed = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(parsed, dict):
+                    record = parsed
+            return str(record.get("rollout_id", "")) if isinstance(record, dict) else ""
+        except Exception:
+            return ""
 
     @staticmethod
     def _state_snapshot(state: "_CallState") -> dict:
@@ -678,6 +723,15 @@ class AgentServiceV2:
                 test_pass = 1.0 if completed else 0.0
             from swarm_os.services.outcome_fitness import record_outcome
 
+            # Provenance (Lane 2, 2026-09-24): capture the harness rollout id in
+            # THIS async context (the agent loop runs under ROLLOUT_ID_CTX) and
+            # carry it into the fitness record alongside run_id. It must be read
+            # HERE, before the executor jump — `loop.run_in_executor` runs the
+            # writer in a pool thread that does NOT inherit the request context,
+            # so reading _current_rollout_id() inside _do_record would see the
+            # default and silently drop the join.
+            rollout = _current_rollout_id()
+
             def _do_record():
                 record_outcome(
                     genome_id=genome_id or f"agent:{agent_id}",
@@ -690,6 +744,7 @@ class AgentServiceV2:
                     run_id=getattr(state, "run_id", ""),
                     parent_id=getattr(state, "parent_id", ""),
                     delegated_by=getattr(state, "delegated_by", ""),
+                    rollout_id=rollout,
                 )
 
             try:

@@ -118,6 +118,7 @@ def record_outcome(
     run_id: str = "",
     parent_id: str = "",
     delegated_by: str = "",
+    rollout_id: str = "",
 ) -> dict:
     """Persist a real outcome for a genome and return the computed fitness.
     Thread-safe append to data/evolution/fitness.jsonl. Never raises."""
@@ -149,6 +150,11 @@ def record_outcome(
             record["parent_id"] = parent_id
         if delegated_by:
             record["delegated_by"] = delegated_by
+        # Provenance (Lane 2, 2026-09-24): optional harness rollout id alongside
+        # run_id so a fitness record can be joined back to its originating
+        # rollout. Additive + only set when non-empty (legacy records unchanged).
+        if rollout_id:
+            record["rollout_id"] = rollout_id
         with _LOCK:
             FITNESS_PATH.parent.mkdir(parents=True, exist_ok=True)
             with open(FITNESS_PATH, "a", encoding="utf-8") as f:
