@@ -395,3 +395,359 @@ diagnostics at best (F0 §7/§8), never causal evidence.
   read-only initialization-order audit; dotenv override investigation.
 - Status: candidate robs4b training/memory lesson. Recording this does NOT claim
   robs4b has already learned this behavior.
+
+---
+
+## 9. Evidence-First Self-Improvement Architecture Checkpoint (2026-09-25)
+
+This section records the approved TARGET ARCHITECTURE / DESIGN CHECKPOINT for
+the Evidence-First Self-Improvement system. It is **NOT YET IMPLEMENTED** beyond
+the existing F1 harness machinery. It establishes the design principles and
+layered architecture that will govern all future learning infrastructure.
+
+### 9.1 Core Principle
+
+> All learning artifacts are derived from immutable evidence. Infrastructure
+> validity is assessed before capability inference. Causal conclusions are stored
+> with explicit confidence levels. Experience promotion requires objective
+> evaluator support whenever available. Retrieved experience must demonstrate
+> measurable benefit before being used to influence model training.
+
+### 9.2 Architecture Layers
+
+```
+Evidence
+  → Validity Gate
+    → Evidence Confidence
+      → Interpretation
+        → Causal Evidence Assessment
+          → Credit Assignment
+            → Experience Extraction
+              → Promotion Candidate
+                → Review Layer
+                  → Promotion
+                    → Retrieval
+                      → A/B Evaluation
+                        → Experience Distillation
+                          → QLoRA
+                            → A/B Evaluation
+                              → later RL
+                                → Curriculum Generation
+```
+
+**Implementation status:** The layers above are a DESIGN CHECKPOINT, not a
+status claim. Do NOT imply that future stages are currently implemented. Only
+the existing F1 harness machinery, `SWARM_F1_NO_WEB_TOOLS=1`, and the current
+memory/learning infrastructure are IMPLEMENTED.
+
+### 9.3 Evidence / Interpretation / Knowledge
+
+The system distinguishes three levels of epistemic state:
+
+**1. Evidence**
+- Immutable raw trajectories
+- Tool calls
+- Environment state
+- Evaluator results
+- Validity state
+- Failures
+- Timestamps
+- Provenance
+
+**2. Interpretation**
+- Versioned analysis derived from evidence
+- Hypotheses
+- Confidence
+- Causal-evidence assessment
+- Credit assignment
+
+**3. Knowledge**
+- Promoted memories
+- Strategies
+- Skills
+- Training examples
+- Other reusable learning artifacts
+
+**Rules:**
+- Raw evidence is immutable.
+- Interpretations are versioned.
+- Knowledge retains provenance back to its evidence.
+
+### 9.4 Experience Ledger v1
+
+The Experience Ledger is a first-class source of truth. Every learning artifact
+must ultimately be reconstructable from the ledger.
+
+Existing memory systems should eventually become rebuildable derived views/indexes
+over ledger evidence rather than independent authoritative stores.
+
+**Rule:**
+> If an artifact cannot be reconstructed from ledger evidence, it is not
+> authoritative.
+
+### 9.5 Upgrade 1 — Evidence Confidence
+
+Every episode should distinguish evidence availability from evidence quality.
+
+Use structured confidence fields:
+
+```
+evidence_confidence:
+  infrastructure: high
+  capability: none
+  causal: unknown
+  evaluator: n/a
+```
+
+Confidence must be scoped by evidence type.
+
+### 9.6 Upgrade 2 — Explicit UNKNOWN State
+
+UNKNOWN must be a first-class state. Do not force
+`success` / `failure` / `invalid` when the evidence does not support such a
+conclusion.
+
+**Example — Observation 2:**
+- repair capability = UNKNOWN
+- tool-selection capability = UNKNOWN
+- debugging capability = UNKNOWN
+
+Because the agent never reached the tool-decision stage.
+
+**Infrastructure:**
+- backend runtime stability = infrastructure-invalid / diagnostic evidence
+
+The learner must preserve:
+
+> insufficient evidence
+
+rather than inventing a capability conclusion.
+
+### 9.7 Upgrade 3 — Evidence Review / Confidence Decay
+
+**Do NOT decay raw evidence.** Raw evidence remains immutable.
+
+Confidence and interpretations may be reevaluated as the environment changes.
+
+Add a conceptual review structure:
+
+```
+evidence_review:
+  last_verified:
+  verification_context:
+  confidence:
+```
+
+Examples of changing context:
+- repository evolution
+- infrastructure changes
+- tooling changes
+- model/version changes
+
+An inference that was strong in 2026 may become less applicable later without
+changing the underlying evidence.
+
+### 9.8 Upgrade 4 — Mandatory Provenance
+
+Every memory, strategy, skill, and training example must have structured
+provenance.
+
+**Minimum conceptual schema:**
+
+```
+provenance:
+  episode_ids:
+  experiment_ids:
+  source_evidence:
+  source_interpretations:
+  generator_version:
+  timestamp:
+```
+
+No promoted learning artifact may exist without provenance.
+
+### 9.9 Upgrade 5 — Promotion Evidence Requirements
+
+Formalize minimum requirements for promotion classes.
+
+**Examples:**
+
+```
+training_candidate:
+  requires:
+    validity: VALID
+    evaluator: PASS
+
+skill_candidate:
+  requires:
+    repeated_success: true
+
+strategy_candidate:
+  requires:
+    evidence_strength: moderate
+
+infrastructure_evidence:
+  requires:
+    capability_evidence: none
+```
+
+The exact implementation schema can be designed later, but the requirement is
+explicit:
+
+> Promotion criteria must be objective, explicit, and machine-checkable where
+> practical.
+
+### 9.10 Upgrade 6 — Rebuildability
+
+Every memory, strategy, skill, and training example must be reconstructable
+entirely from ledger evidence.
+
+Derived systems are views. The ledger is authoritative.
+
+### 9.11 Upgrade 7 — Negative Capability Protection
+
+```
+negative_capability_credit:
+  allowed: false
+  when:
+    validity != VALID
+```
+
+Infrastructure-invalid, evaluator-invalid, timeout-invalid, or otherwise
+non-valid episodes cannot decrease a capability estimate.
+
+**Important distinction:** They may still produce diagnostic evidence about
+infrastructure, tooling, harness behavior, etc. They simply cannot be used as
+negative evidence about the model's task capability.
+
+### 9.12 Upgrade 8 — Promotion Review Layer
+
+Promotion must become:
+
+```
+Promotion Candidate → Review Layer → Promotion → Retrieval
+```
+
+Review should check:
+- conflicts
+- duplicates
+- contradictions
+- outdated knowledge
+- provenance completeness
+- evidence requirements
+
+### 9.13 Upgrade 9 — Contradiction Tracking
+
+Promoted knowledge must support:
+
+```
+contradiction_status: none | suspected | confirmed
+```
+
+and relationships:
+
+```
+supersedes:
+superseded_by:
+contradicts:
+```
+
+Conflicting strategies must not silently coexist as if both were universally
+valid.
+
+### 9.14 Upgrade 10 — Evidence Constitution
+
+**Permanent section — principles that do not change:**
+
+1. Raw evidence is immutable.
+2. Interpretations are versioned.
+3. Capability inference requires valid episodes.
+4. Infrastructure-invalid episodes receive zero capability credit.
+5. Promotion requires objective evidence when available.
+6. Every promoted artifact retains provenance.
+7. Retriever effectiveness must be measured before training influence.
+8. Models cannot self-promote. Evaluators decide promotion.
+9. Rebuildability is required.
+10. When uncertainty exists, preserve uncertainty.
+
+**Also explicitly recorded:**
+
+> UNKNOWN is a valid scientific result.
+
+### 9.15 Evidence Progression
+
+The evidence strength ladder:
+
+```
+Observed → Hypothesis → Supported → Replicated → Generalized
+```
+
+Stronger stages require stronger evidence. Causal Evidence Assessment estimates
+the strength of support; it does not claim to mathematically prove causality.
+
+**Example — Patch A → tests pass:**
+- = weak causal evidence / temporal association only
+
+**Revert Patch A → tests fail, Reapply Patch A → tests pass:**
+- = substantially stronger causal evidence through reversal/replication
+
+### 9.16 Current Experiment J State
+
+**Valid F1 observations: 0.**
+
+**Observation 1:**
+- infrastructure-invalid due web-tool drift (model spent entire 1200s budget on
+  web_search/web_fetch, never reached filesystem editing)
+- diagnostic evidence only
+- zero capability evidence
+- corrected by `SWARM_F1_NO_WEB_TOOLS=1`
+
+**Observation 2:**
+- infrastructure-invalid because backend PID 618784 died before the agent/tool
+  loop started
+- CLI ran ~22.5 seconds, zero tool calls, no repair, no evaluator post-run
+- `timed_out=false` (backend died, not a timeout)
+- base `45d9f619` remained clean
+- model routers remained alive
+- `SWARM_F1_NO_WEB_TOOLS=1` was present during preflight but was not validated
+  by a valid observation
+
+**Explicit rule:**
+
+> Do not start another F1 observation until the backend crash is diagnosed, the
+> minimum infrastructure correction is made, and stability verification
+> demonstrates that the backend remains alive through the actual observation
+> startup boundary.
+
+**Also recorded:**
+
+> Preflight health is not equivalent to runtime stability.
+
+### 9.17 Implementation Status
+
+**IMPLEMENTED:**
+- existing Experiment J/F1 machinery (evaluator separation, pre-flight checks,
+  behavioral prompt, fresh-clone gate)
+- `SWARM_F1_NO_WEB_TOOLS=1` correction (per-invocation web-tool restriction)
+- existing memory/learning infrastructure
+
+**DESIGN APPROVED / NOT IMPLEMENTED:**
+- Experience Ledger v1
+- Validity Gate as the authoritative learning gate
+- Evidence Confidence
+- UNKNOWN state
+- Evidence Review / confidence reevaluation
+- Mandatory provenance
+- Promotion evidence requirements
+- Rebuildability requirement
+- Negative capability protection
+- Promotion review layer
+- Contradiction tracking
+- Evidence Constitution
+- Causal Evidence Assessment integration
+- Retrieval A/B gate
+- Skill promotion
+- Training dataset generation
+- QLoRA distillation
+- Later RL
+- Curriculum generation
