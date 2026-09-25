@@ -289,14 +289,15 @@ def wait_for_backend(
         # F1_NO_WEB_TOOLS check
         gate.no_web_tools_flag = os.environ.get("SWARM_F1_NO_WEB_TOOLS") == "1"
 
-        # Core health gate: backend is alive, serving, correct PID, correct workspace.
-        # Router reachability is a separate shared dependency (not F1-owned).
+        # Core health gate: backend is alive, serving, correct PID, correct workspace,
+        # AND model router is reachable (required for tool decisions).
         if (
             gate.process_alive
             and gate.port_listening
             and gate.health_http_200
             and gate.status_ready
             and gate.expected_pid_identity
+            and gate.router_reachability
         ):
             gate.passed = True
             record.state = ProcessState.HEALTHY
