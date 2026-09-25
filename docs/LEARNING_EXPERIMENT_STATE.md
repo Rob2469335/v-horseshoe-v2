@@ -751,3 +751,213 @@ the strength of support; it does not claim to mathematically prove causality.
 - QLoRA distillation
 - Later RL
 - Curriculum generation
+
+### 9.18 Failure Classification
+
+Infrastructure failures must use explicit structured classifications. Do not
+convert UNKNOWN root cause into a probable cause without supporting evidence.
+
+**Observation 2 classification:**
+
+```
+validity:
+  infrastructure: INVALID
+
+failure_class:
+  process_lifetime_failure
+
+root_cause:
+  value: UNKNOWN
+  confidence: NONE
+
+observability_failure:
+  confirmed: true
+
+capability_credit:
+  positive: 0
+  negative: 0
+```
+
+The `root_cause` field is UNKNOWN with confidence NONE. Candidate hypotheses
+exist (see 9.20) but none is supported by evidence sufficient to elevate it
+to a conclusion.
+
+### 9.19 Observability as a First-Class Requirement
+
+**Constitutional principle:**
+
+> No system component may participate in scientific evaluation without
+> producing sufficient evidence for postmortem analysis.
+
+Insufficient observability is itself an infrastructure defect. A backend that
+crashes without leaving a traceback is an observability failure, not merely
+an unexplained crash. The absence of evidence is itself evidence of an
+observability gap.
+
+### 9.20 Explicit Unknown Root Cause
+
+The backend crash cause for Observation 2 is preserved as UNKNOWN with
+explicit candidate hypotheses. None is a conclusion.
+
+```
+backend_crash_cause:
+  value: UNKNOWN
+  confidence: NONE
+  candidate_hypotheses:
+    - oom
+    - process_kill
+    - python_exception
+    - dependency_failure
+    - supervisor_termination
+```
+
+Candidate hypotheses are possibilities that future evidence may support or
+refute. They are not ranked by probability. Do not select one as "the most
+likely" without empirical evidence.
+
+### 9.21 Stability Verification Gate
+
+The required sequence before any future F1 observation:
+
+```
+Launcher Fix
+  → Stability Verification
+    → Observability Verification
+      → F1 Preflight
+        → First Valid F1 Observation
+```
+
+Do NOT proceed directly from launcher fix to F1 observation. Each stage
+must independently pass before the next begins.
+
+### 9.22 Evidence Preservation Checklist
+
+Before any future observation, the following evidence must be confirmed
+as captureable. This is a reproducibility requirement.
+
+```
+evidence_preservation:
+  backend_stdout: confirmed
+  backend_stderr: confirmed
+  router_stdout: confirmed
+  router_stderr: confirmed
+  launcher_logs: confirmed
+  exit_codes: confirmed
+  timestamps: confirmed
+  process_tree_capture: confirmed
+```
+
+If any field cannot be confirmed, the observation must not proceed. The
+absence of postmortem evidence is itself a blocking infrastructure defect.
+
+### 9.23 Dependency Mapping
+
+The actual process/dependency graph used by F1 must be documented before
+observations proceed. The graph must identify parent/child relationships,
+which services the backend depends on, which services the CLI depends on,
+and which process failures invalidate an observation.
+
+**Current observed graph (from Observation 2 postmortem):**
+
+```
+Start-Process python (fire-and-forget)
+  └── backend (uvicorn, port 8000)
+        ├── depends on: model_router (ports 8079/8080/8081/8082)
+        ├── depends on: Qdrant (port 6333)
+        └── depends on: llama.cpp services
+
+CLI (run_repair_task.py → organism_console)
+  └── connects to: backend (port 8000)
+  └── connects to: evaluator (external, read-only)
+```
+
+Process failures that invalidate an observation:
+- backend death → observation invalid
+- model_router death → observation invalid (backend cannot serve tool decisions)
+- Qdrant death → observation may be invalid (memory/lesson paths may fail)
+- CLI crash → observation invalid
+
+### 9.24 Observation 2 Evidence Scope
+
+```
+evidence_scope:
+  applies_to:
+    - launcher supervision
+    - backend observability
+    - process lifetime monitoring
+    - infrastructure diagnostics
+  does_not_apply_to:
+    - repair ability
+    - code generation
+    - debugging ability
+    - tool selection
+    - repository reasoning
+    - strategy quality
+```
+
+Observation 2 provides diagnostic evidence about infrastructure reliability
+and observability. It provides zero evidence about the model's capability
+on any task dimension.
+
+### 9.25 Scientific Integrity Rule
+
+> Infrastructure corrections may improve measurement reliability. They must
+> not improve agent performance.
+
+Supervision, logging, health checks, liveness monitoring, process capture,
+and crash preservation are measurement/infrastructure corrections, not
+model-performance interventions. Adding process supervision does not make
+the model smarter. Adding crash logging does not improve code generation.
+These corrections improve the reliability of the measurement, not the quality
+of the measured system.
+
+### 9.26 Canonical Reference Episode
+
+Observation 2 is marked as a **canonical/reference episode** for the future
+Experience Ledger. It teaches:
+
+- unknown root-cause handling (preserve UNKNOWN, do not guess)
+- infrastructure invalidity (process death = zero capability credit)
+- capability-credit suppression (negative credit forbidden on invalid episodes)
+- observability requirements (insufficient evidence is itself a defect)
+- evidence-scope enforcement (infrastructure evidence does not apply to capability)
+- decision-boundary protection (capabilities assessed only after reaching the boundary)
+
+### 9.27 Capability Decision Boundary
+
+> Capability credit may only be assigned after the agent successfully reaches
+> the relevant decision boundary.
+
+For Observation 2, because the agent never reached tool selection:
+
+```
+repair = UNKNOWN
+tool_selection = UNKNOWN
+debugging = UNKNOWN
+```
+
+Never classify these as failures. Never classify them as successes. They are
+UNKNOWN because insufficient evidence exists.
+
+The decision boundary for each capability must be explicitly named before
+credit can be assigned. For the F1 sandbox_bounds task, the relevant
+boundaries are:
+
+1. Tool selection boundary — agent must select `filesystem` tool
+2. File reading boundary — agent must read `swarm_os/lib/paths.py`
+3. Diagnosis boundary — agent must identify the inverted `relative_to`
+4. Edit boundary — agent must apply a patch to the source
+5. Verification boundary — agent must run the evaluator and observe results
+
+Credit is assigned only after the agent reaches and passes the relevant
+boundary. Before that boundary, the capability state is UNKNOWN.
+
+### 9.28 Permanent Status
+
+```
+F1 valid observations = 0
+Capability credit assigned = 0
+Infrastructure diagnostic value = HIGH
+Observation 1 = infrastructure-invalid (web-tool drift)
+Observation 2 = infrastructure-invalid (backend crash)
+```
