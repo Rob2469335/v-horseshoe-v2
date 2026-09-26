@@ -693,7 +693,12 @@ the strength of support; it does not claim to mathematically prove causality.
 
 ### 9.16 Current Experiment J State
 
-**Valid F1 observations: 0.**
+**Valid F1 observations: 10. Protocol observations completed: 20/20.**
+(Reconciled 2026-09-26 from result files in `qwen_train/results/f1_obs*.jsonl`.
+Authoritative source: `interpretation.validity_infrastructure` and
+`interpretation.f1_endpoint_step` fields in each file's first JSON line.
+The authorized F1 dataset comprises the FIRST 20 CHRONOLOGICAL DISTINCT EXECUTIONS.
+A 21st supplementary execution occurred but is excluded from the official 20-observation dataset.)
 
 **Observation 1:**
 - infrastructure-invalid due web-tool drift (model spent entire 1200s budget on
@@ -703,14 +708,16 @@ the strength of support; it does not claim to mathematically prove causality.
 - corrected by `SWARM_F1_NO_WEB_TOOLS=1`
 
 **Observation 2:**
-- infrastructure-invalid because backend PID 618784 died before the agent/tool
-  loop started
-- CLI ran ~22.5 seconds, zero tool calls, no repair, no evaluator post-run
-- `timed_out=false` (backend died, not a timeout)
-- base `45d9f619` remained clean
-- model routers remained alive
-- `SWARM_F1_NO_WEB_TOOLS=1` was present during preflight but was not validated
-  by a valid observation
+- **QUALIFYING FIRST-EDIT ENDPOINT @ ATIF STEP 4** (authorial interpretation
+  clarified: action-based endpoint; recorded in F1 authorization §7
+  F1-OP-004-CLARIFICATION)
+- qualifying action: `filesystem.patch` on `swarm_os/lib/paths.py`
+- ATIF step: 4 (within 12-step horizon)
+- patch accepted: NO (read-before-write guard rejected the relative-path patch)
+- file mutated: NO
+- repair correctness: UNKNOWN
+- capability credit: +0 / -0
+- valid F1 capability observation: NO (endpoint qualification ≠ capability evidence)
 
 **Explicit rule:**
 
@@ -955,9 +962,18 @@ boundary. Before that boundary, the capability state is UNKNOWN.
 ### 9.28 Permanent Status
 
 ```
-F1 valid observations = 0
+F1 protocol observations completed = 20 / 20
+F1 valid observations = 10 (all reaching f1_endpoint_step = 4)
+F1 infrastructure-invalid observations = 10
+F1 remaining to complete = 0
 Capability credit assigned = 0
 Infrastructure diagnostic value = HIGH
 Observation 1 = infrastructure-invalid (web-tool drift)
-Observation 2 = infrastructure-invalid (backend crash)
+Observation 2 = infrastructure-invalid (no tools, 22.5s)
+Observation 11 = infrastructure-invalid (health_gate_failure)
+Observations 7-11,13-16 (UUID-named) = VALID, endpoint @ ATIF STEP 4
+Observations 18-20 = infrastructure-invalid (timeout, rejection-loop stall)
+Replicated behavioral finding: Observations 18-20 exhibit identical rejection-loop stall pattern
+Supplementary 21st execution excluded from official 20-observation dataset
+Reconciled 2026-09-26 from result files; batch summaries are stale.
 ```

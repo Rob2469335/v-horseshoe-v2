@@ -326,17 +326,23 @@ Governance/Security
   candidate creation → learning tick → signed HMAC receipt → PROMOTABLE →
   promotion, with receipt `state_hash` verified, canonical state containing
   trigger/action but no `learner_rule`, and production candidate/audit files
-  SHA-256 unchanged before/after. Learner-artifact representation-boundary
+  SHA-256 unchanged before/after.   Learner-artifact representation-boundary
   defect identified and fixed with deterministic derivation (compact
   `label: action` when a condition label derives; action-only fallback when
   none derives or the labeled form would exceed the token limit; no
   truncation; the 50-token limit was NOT increased); governance version v2 —
   full detail in the 2026-09-23 checkpoint entry below. Prior `eval_twine.py`
   smoke attempts remain INVALID/ABORTED; see smoke-test incident. N1 FROZEN;
-  Twine N5 NOT STARTED.
+  Twine N5 — provenance PASS, tool-entry blocker FIXED (see 2026-09-24
+  checkpoint); Twine repair not yet verified end-to-end.
 - **Twine historical N1** — FROZEN. See frozen N1 record below. Never rerun or modified.
 - **Twine controlled smoke attempt** — INVALID/ABORTED. See smoke-test incident below.
-- **Twine N5** — NOT STARTED
+- **Twine N5** — provenance chain PASS/CLOSED (Lane 1 + Lane 2); tool-decision
+  cap reduced 4096→512 tokens (commit `02044d3e`) to fix 0-tool-call timeout;
+  `SWARM_HARNESS_KEY=dev` added to `.env` for rollout provenance credential
+  gate; model now enters tool loop on open-ended repair prompts. First clean
+  N5 run verified 4 tool calls within 240s (filesystem reads + web_search).
+  Full Twine repair verdict pending a clean end-to-end evaluation.
 - **Experiment J** — Defined conceptually; detailed execution protocol not yet
   recovered/approved; NOT RUN. See Experiment J definition below.
 - **Click** — NOT VALIDATED (previous result invalid due to timeout/data-acquisition
@@ -481,6 +487,24 @@ Future agents must:
 9. If the roadmap conflicts with current code, audit and report the discrepancy
    before changing it.
 10. Ask for human approval before changing the master roadmap.
+
+## Experiment Protocol Governance
+
+Agents working on Experiment J or other governed experiments must follow these rules:
+
+1. **F0 is authoritative and frozen.** `docs/EXPERIMENT_J.md` is the frozen F0 scientific design. Agents must not alter its scientific definitions without the project's required human change-control process.
+
+2. **F1 has its own explicit change-control boundary.** `docs/EXPERIMENT_J_F1_AUTHORIZATION.md` governs the authorized F1 pilot parameters and provides the mechanism for dated operational clarifications or changes. Agents must follow that mechanism rather than silently changing F1 semantics.
+
+3. **Experiment J F1 endpoint semantics are action-based as authoritatively clarified in the F1 authorization record.** For F1, a qualifying first-edit endpoint is the qualifying edit-type filesystem action on the frozen relevant file. Tool acceptance, mutation, test passage, or repair correctness are not additional endpoint requirements unless the authorized protocol explicitly says otherwise.
+
+4. **Authorial scientific decisions are recorded, not inferred.** When an interpretive question affects an experiment's endpoint, eligibility, censoring, capability credit, or other scientific meaning, agents must not resolve it by assumption. The experiment author must explicitly settle the interpretation, and the decision must be recorded through the applicable experiment governance mechanism.
+
+5. **Ambiguity must be escalated.** If an agent encounters ambiguous scientific terminology in a governed experiment, it must identify the ambiguity and request or locate the authoritative interpretation rather than silently choosing one.
+
+6. **Endpoint evidence is not capability evidence.** Reaching an endpoint provides behavioral evidence only. It does not by itself establish repair success, capability success, or positive capability credit. Capability conclusions require the applicable evaluator evidence and Evidence-First promotion rules.
+
+7. **Do not generalize experiment-specific interpretations.** The Experiment J F1 action-based interpretation applies to Experiment J F1. Agents must not assume that another experiment uses the same endpoint semantics without checking that experiment's governing protocol.
 
 ## Current Next Step
 
@@ -1673,6 +1697,113 @@ relaunch via start-dev.ps1 when ready.
 ---
 
 ## Recent Changes (do NOT re-apply)
+
+### FIX (2026-09-26): startup-script parse-error incident + F1 observation inventory reconciliation
+
+**Infrastructure incident:** `start-dev.ps1` and `start-dev-fixed.ps1` had a
+PowerShell parse failure caused by a debug Python `-c` command line inside a
+`Start-Job -ScriptBlock { }` block. PowerShell's parser interprets commas
+inside ScriptBlocks as its own expression operator, even within double-quoted
+string arguments. Both files were backed up as `.bak` before repair. The
+offending debug line was removed from both scripts. Both scripts passed
+PowerShell parsing afterward. The full stack was restored manually following
+the scripts' step-by-step procedure. Ports 8000, 8079, 8080, 8081, 8082,
+and 6333 verified LISTENING. Backend `/health` and `/readyz` passed. Qdrant
+queryable with real ReflexionMemory data. F1 pre-flight passed as
+INFRASTRUCTURE-VALID. No Experiment J observation was launched during recovery.
+
+**Operational lessons:**
+- Use the established startup procedure documented in AGENTS.md.
+- Do not improvise alternate startup/launcher mechanisms.
+- Startup-script changes must be parse-checked before attempting the stack.
+- Preserve backups when repairing startup infrastructure.
+
+**F1 observation inventory reconciliation (2026-09-26):** The F1 cumulative
+counts in `docs/LEARNING_EXPERIMENT_STATE.md` (sections 9.16, 9.28) and
+`docs/F1_OBSERVATION_1_LAUNCH_RECIPE.md` (section "Valid F1 Observations
+Before This Run") were stale. Authoritative counts derived from the result files in `qwen_train/results/f1_obs*.jsonl`:
+
+- 20 observations count toward the 20-observation protocol (21 files,
+  one was a duplicate `obs10_direct_run_a1b2c3.jsonl`; the 21st supplementary
+  execution is excluded from the official 20-observation dataset).
+- 10 are VALID capability observations (`interpretation.validity_infrastructure
+  = VALID`, `f1_endpoint_step = 4`).
+- 10 are infrastructure-invalid observations (timed out or failed before
+  reaching endpoint).
+- Observations 18-20 exhibit a replicated rejection-loop stall pattern:
+  two early rejected `final` calls, then zero tool calls until the 1200s timeout.
+
+**Standing rule:** F1 observation inventory must always be derived from the
+actual result files and their `interpretation` fields, not from stale batch
+summaries or manually maintained counts in documentation. The result JSON
+first line is the authoritative per-run source.
+
+**Standing rule:** The full startup/preflight sequence must be completed
+before launching any observation. An observation launched against a non-
+running backend is infrastructure-invalid by definition.
+
+**Operational lessons from F1 pilot (2026-09-26):**
+- One observation at a time; never batch.
+- Never trust a summary table without reconciling raw JSONL artifacts.
+- Hardcoded output filenames can hide multiple executions
+  (e.g., `f1_observation_5.jsonl` contained two real executions).
+- Invocation IDs must not be treated as unique execution identifiers unless
+  corroborated by timestamp/artifact evidence (e.g., collision at `13fb01e08af9b649`).
+- Preserve infrastructure-invalid runs as protocol data per F1-OP-004b.
+- Preserve supplementary overrun trials but keep them outside the official protocol dataset.
+
+### CHECKPOINT (2026-09-24): rollout provenance, run_id attribution, and tool-decision cap
+- `rollout_id` from `ROLLOUT_ID_CTX` is now durably persisted alongside the
+  backend's authoritative `run_id` in trajectory summaries, invocation event
+  payloads, and fitness records. The trajectory file carries `rollout_id` when
+  a harness-supplied rollout is active; events carry it on run-scoped events
+  (those with `run_id`); fitness records carry it additively. Added a read-only
+  `trajectory_rollout_id(run_id)` join helper for provenance queries. 9 new
+  provenance-contract tests (`tests/test_rollout_run_provenance.py`), 88 broader
+  suite green.
+
+**Run_id attribution (Lane 1) — commit `8a8a4258`:**
+- The authoritative backend `run_id` is now surfaced on the wire via the
+  `model_selected` NDJSON chunk (`"run_id": run_id`), captured by the CLI
+  (`ctx.last_run_id`), propagated through `run_agentic` → `--json` output,
+  captured by `run_curriculum._attempt_once()` as optional `run_ids`, and
+  forwarded by `eval_twine.py` and `run_repair_task.py` to the
+  `EvaluationBridge`. The bridge's `"unknown"` fallback is preserved for
+  callers that do not supply run_ids (backward-compatible). 9 new attribution
+  tests (`tests/test_lane1_run_id_provenance.py`), 257 broader suite green.
+
+**SWARM_HARNESS_KEY configuration:**
+- Added `SWARM_HARNESS_KEY=dev` to `.env`. The backend credential gate
+  (`agents.py:_harness_rollout_id`) requires the backend process to share the
+  same key as the harness. Without it `ROLLOUT_ID_CTX` stays empty and
+  rollout provenance cannot flow into trajectory/events/fitness. Verified live:
+  trajectories now carry `rollout_id` when the key is set.
+
+**N5 provenance audit (2026-09-24):**
+- First clean N5 evaluation (`eval_twine.py`, `pypa__twine-1066`) ran with
+  the post-Lane-1/2 backend. Trajectory summaries confirmed `run_id` matches
+  filename stem, `rollout_id` matches evaluator-generated uuid. The bridge
+  classified the run UNKNOWN (0 steps, agent timed out) and correctly did not
+  add evidence. Historical `run_id=unknown` entries in the candidate file are
+  from pre-Lane-1 runs only. Provenance chain: PASS/CLOSED.
+
+**Tool-decision cap (commit `02044d3e`):**
+- `runtime_v2/services/_llm_client.py`: `local_max_tokens` reduced from 4096
+  to 512 in `complete_for_tool_decision()`. Root cause: at ~7 tok/s the model
+  generated ~1260 tokens of prose (capped by 180s `_STEP_TIMEOUT`) before
+  reaching a JSON tool call, causing the N5 open-ended prompt to time out
+  after ~1204s with zero tool calls. The 512 cap forces concise output
+  (~73s at 7 tok/s), well within the step timeout, and is ample for a
+  tool-call JSON (~50 tokens) plus context. Validated: same open-ended prompt
+  now enters the tool loop and completes 4 tool calls (filesystem reads +
+  web_search) within <240s. 91 relevant tests pass; ruff clean.
+
+**N5 behavioral status:**
+- The model now enters the tool-use loop (proven by 4 tool calls on the
+  open-ended repair prompt). Tool-selection quality is not yet validated:
+  the model chose `web_search` before local filesystem reads on the first
+  run. Full Twine repair verdict (F2P pass/fail) requires a clean end-to-end
+  evaluation where the backend remains up for the full duration.
 
 ### CHECKPOINT (2026-09-23): evaluation bridge, evidence identity, and learner artifact governance v2
 
@@ -3933,6 +4064,20 @@ evidence, uncertainty, caveats, and disagreement.
   not only the commands.
 
 ## Self-Healing & Self-Learning Fixes
+
+- **Rule (coder)**: Tool 'filesystem' failed (Read-before-write guard: cannot patch 'swarm_os/lib/paths.py' — the agent has not listed or read it yet. Call filesystem ...
+
+- **Rule (coder)**: Tool 'filesystem' failed (Surgical Error: 'old' not found in file content. Read the file first and pass an EXACT excerpt (line endings are normalis...
+
+- **[AUTO-REPAIR] (2026-09-24T10:01:19.057897+00:00)**: None (tier None, fixed=False) — error: url is required
+
+- **[AUTO-REPAIR] (2026-09-24T09:47:03.279014+00:00)**: None (tier 2, fixed=False) — error: Patch needs EITHER a unified diff (`patch`/`diff`) OR the text to replace (`old`, aliases: old_string, old_str, find, se
+
+- **[AUTO-REPAIR] (2026-09-24T09:08:32.088749+00:00)**: None (tier 2, fixed=False) — error: MCP action requires 'server' and 'tool' arguments.
+
+- **[AUTO-REPAIR] (2026-09-24T09:05:01.805696+00:00)**: None (tier 2, fixed=False) — error: MCP action requires 'server' and 'tool' arguments.
+
+- **Rule (tool-runner)**: Path 'twine/package.py' does not exist. Use filesystem list on 'twine' first to discover real file paths before reading — the module map in AGENTS....
 
 - **[ROLLBACK-COMPLETED] (2026-09-23T12:13:14.194648+00:00)**: swarm_os/api/routes.py — signal_1 test regression attributable to swarm_os/api/routes.py
 
