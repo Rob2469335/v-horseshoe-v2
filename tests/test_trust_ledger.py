@@ -72,3 +72,31 @@ def test_revoke():
     trust_ledger.grant("web_fetch", 60)
     assert trust_ledger.revoke("web_fetch") is True
     assert trust_ledger.is_trusted("web_fetch") is False
+
+
+def test_eval_twine_cleanup_revokes_exact_granted_scopes():
+    """Regression: eval_twine.py must revoke the exact 4 scopes it grants.
+
+    The old cleanup called run_curriculum._revoke_offline() which revokes a
+    different set (sandbox_repl, lsp, git, mcp:serena:*).  filesystem, mcp,
+    and web_fetch were left as residual grants for up to 8 hours.
+    """
+    # Grant the exact eval_twine scopes
+    for scope in ("filesystem", "sandbox_repl", "mcp", "web_fetch"):
+        trust_ledger.grant(scope, 8 * 3600)
+
+    # Authorization succeeds before cleanup
+    assert agent_tool_policy("filesystem", "write") == ALLOW
+    assert agent_tool_policy("sandbox_repl") == ALLOW
+    assert agent_tool_policy("mcp") == ALLOW
+    assert agent_tool_policy("web_fetch") == ALLOW
+
+    # Revoke exactly the granted scopes (eval_twine.py cleanup)
+    for scope in ("filesystem", "sandbox_repl", "mcp", "web_fetch"):
+        trust_ledger.revoke(scope)
+
+    # Authorization requires confirmation / is denied after cleanup
+    assert agent_tool_policy("filesystem", "write") == ALWAYS_CONFIRM
+    assert agent_tool_policy("sandbox_repl") == ALWAYS_CONFIRM
+    assert agent_tool_policy("mcp") == CONFIRM
+    assert agent_tool_policy("web_fetch") == CONFIRM

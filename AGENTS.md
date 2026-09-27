@@ -1833,6 +1833,26 @@ Record as unresolved, without claiming they are failures:
 - Verify compatibility between Twine's tool grants and
   `SWARM_F1_NO_WEB_TOOLS` where relevant
 
+### FIX (2026-09-27): align eval_twine grant cleanup with granted scopes
+
+**Root cause:** `eval_twine.py` granted 4 scopes (`filesystem`, `sandbox_repl`,
+`mcp`, `web_fetch`) but its cleanup called `run_curriculum._revoke_offline()`
+which revokes a different set (`sandbox_repl`, `lsp`, `git`, `mcp:serena:*`).
+Only `sandbox_repl` overlapped; `filesystem`, `mcp`, and `web_fetch` were left
+as residual grants for up to 8 hours.
+
+**Fix:** `eval_twine.py` now revokes the exact 4 scopes it grants via a
+`GRANTED_SCOPES` constant shared between grant and revoke paths. The invariant
+`set(granted_scopes) == set(cleaned_up_scopes)` is enforced by construction.
+
+**Regression test:** `tests/test_trust_ledger.py::test_eval_twine_cleanup_revokes_exact_granted_scopes`
+grants the 4 eval_twine scopes, verifies authorization succeeds, revokes them,
+and verifies authorization requires confirmation/denial afterward.
+
+**Verified:** 34 tests pass (`test_trust_ledger.py` + `test_approval_gate.py`);
+`ruff check --select E9,F` clean. Frozen N1, Experiment J, F1, trust_ledger
+authorization model, `_OFFLINE_GRANTABLE`, routing, and 512-token config unchanged.
+
 ### CHECKPOINT (2026-09-24): rollout provenance, run_id attribution, and tool-decision cap
 - `rollout_id` from `ROLLOUT_ID_CTX` is now durably persisted alongside the
   backend's authoritative `run_id` in trajectory summaries, invocation event

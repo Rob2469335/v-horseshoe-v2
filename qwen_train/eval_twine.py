@@ -116,7 +116,9 @@ def main() -> int:
     os.environ["SWARM_ROLLOUT_ID"] = rollout_id
 
     from swarm_os.services.trust_ledger import grant
-    for scope in ("filesystem", "sandbox_repl", "mcp", "web_fetch"):
+
+    GRANTED_SCOPES = ("filesystem", "sandbox_repl", "mcp", "web_fetch")
+    for scope in GRANTED_SCOPES:
         grant(scope, 8 * 3600)
 
     item = {
@@ -129,7 +131,9 @@ def main() -> int:
     try:
         res = rc._attempt_once(item, args.timeout, allow_approval=True, record=False)
     finally:
-        rc._revoke_offline()
+        from swarm_os.services.trust_ledger import revoke
+        for scope in GRANTED_SCOPES:
+            revoke(scope)
         os.environ.pop("SWARM_WORKSPACE_ROOT", None)
         os.environ.pop("SWARM_TASK_ID", None)
         os.environ.pop("SWARM_HARNESS_KEY", None)
