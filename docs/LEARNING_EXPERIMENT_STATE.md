@@ -700,6 +700,16 @@ Authoritative source: `interpretation.validity_infrastructure` and
 The authorized F1 dataset comprises the FIRST 20 CHRONOLOGICAL DISTINCT EXECUTIONS.
 A 21st supplementary execution occurred but is excluded from the official 20-observation dataset.)
 
+**Post-F1 Governance Baseline (established 2026-09-27):**
+- SWARM_AUTONOMY=0 (WatchLoop + autonomous repair disabled)
+- SWARM_GENETIC_MUTATION=0 (genetic mutation daemon disabled)
+- SWARM_EVAL_TICK unset/disabled (Evaluation Tick daemon off)
+- SWARM_EXPERIMENT_J_ARM unset/disabled
+- SWARM_F1_NO_WEB_TOOLS unset/disabled globally
+- SWARM_EVOLUTION=0
+- Verified in restarted backend PID 20332: /health=ok, /readyz=ready, Qdrant healthy, no WatchLoop, no genetic mutation daemon, no Experiment J/F1 workload
+- 183 pending mutations preserved but not applied (genetic mutation disabled)
+
 **Observation 1:**
 - infrastructure-invalid due web-tool drift (model spent entire 1200s budget on
   web_search/web_fetch, never reached filesystem editing)
@@ -976,4 +986,14 @@ Observations 18-20 = infrastructure-invalid (timeout, rejection-loop stall)
 Replicated behavioral finding: Observations 18-20 exhibit identical rejection-loop stall pattern
 Supplementary 21st execution excluded from official 20-observation dataset
 Reconciled 2026-09-26 from result files; batch summaries are stale.
+
+Post-F1 Governance Baseline (2026-09-27):
+- SWARM_AUTONOMY=0
+- SWARM_GENETIC_MUTATION=0
+- SWARM_EVAL_TICK unset/disabled
+- SWARM_EXPERIMENT_J_ARM unset/disabled
+- SWARM_F1_NO_WEB_TOOLS unset/disabled globally
+- SWARM_EVOLUTION=0
+- 183 pending mutations preserved but not applied (genetic mutation disabled)
+- F1 scientific protocol unchanged; only operational runtime parameters modified
 ```

@@ -97,11 +97,10 @@ Note: The harness automatically sets `SWARM_F1_NO_WEB_TOOLS=1` before invoking t
 ## Valid F1 Observations Before This Run
 
 - Observation 1: EXCLUDED (infrastructure-invalid: timed out, web_search/web_fetch drift)
-- Valid observations: **0** (as of 2026-09-25 when this document was created)
-- **Reconciled count (2026-09-26):** 10 valid, 20 protocol observations
-  completed out of 20. 0 remaining. See LEARNING_EXPERIMENT_STATE.md §9.16
-  and §9.28 for authoritative current counts derived from result files.
-  The 21st supplementary execution is excluded from the official 20-observation dataset.
+- Valid observations: **10** (as of 2026-09-26 reconciliation)
+- 20 protocol observations completed out of 20. 0 remaining.
+- The 21st supplementary execution is excluded from the official 20-observation dataset.
+- See LEARNING_EXPERIMENT_STATE.md §9.16 and §9.28 for authoritative current counts derived from result files.
 
 ## Pre-Flight Checks (run automatically before observation)
 

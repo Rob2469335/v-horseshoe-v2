@@ -1698,49 +1698,44 @@ relaunch via start-dev.ps1 when ready.
 
 ## Recent Changes (do NOT re-apply)
 
-### FIX (2026-09-26): startup-script parse-error incident + F1 observation inventory reconciliation
+### FIX (2026-09-27): F1 governance baseline finalized for N5/Twine
 
-**Infrastructure incident:** `start-dev.ps1` and `start-dev-fixed.ps1` had a
-PowerShell parse failure caused by a debug Python `-c` command line inside a
-`Start-Job -ScriptBlock { }` block. PowerShell's parser interprets commas
-inside ScriptBlocks as its own expression operator, even within double-quoted
-string arguments. Both files were backed up as `.bak` before repair. The
-offending debug line was removed from both scripts. Both scripts passed
-PowerShell parsing afterward. The full stack was restored manually following
-the scripts' step-by-step procedure. Ports 8000, 8079, 8080, 8081, 8082,
-and 6333 verified LISTENING. Backend `/health` and `/readyz` passed. Qdrant
-queryable with real ReflexionMemory data. F1 pre-flight passed as
-INFRASTRUCTURE-VALID. No Experiment J observation was launched during recovery.
+**Infrastructure baseline finalized:** The Experiment J F1 pilot is complete
+and frozen. The post-F1 governance baseline is now:
 
-**Operational lessons:**
-- Use the established startup procedure documented in AGENTS.md.
-- Do not improvise alternate startup/launcher mechanisms.
-- Startup-script changes must be parse-checked before attempting the stack.
-- Preserve backups when repairing startup infrastructure.
+- `SWARM_AUTONOMY=0` (WatchLoop + autonomous repair disabled)
+- `SWARM_GENETIC_MUTATION=0` (genetic mutation daemon disabled)
+- `SWARM_EVAL_TICK` unset/disabled (Evaluation Tick daemon off)
+- `SWARM_EXPERIMENT_J_ARM` unset/disabled
+- `SWARM_F1_NO_WEB_TOOLS` unset/disabled globally
+- `SWARM_EVOLUTION=0`
+- Verified in restarted backend PID 20332:
+  - `/health`=ok, `/readyz`=ready, Qdrant healthy
+  - No WatchLoop running
+  - No genetic mutation daemon running
+  - No Experiment J/F1 workload running
+- 183 pending mutations preserved but not applied (genetic mutation disabled)
+- F1 scientific protocol unchanged; only operational runtime parameters modified
 
-**F1 observation inventory reconciliation (2026-09-26):** The F1 cumulative
-counts in `docs/LEARNING_EXPERIMENT_STATE.md` (sections 9.16, 9.28) and
-`docs/F1_OBSERVATION_1_LAUNCH_RECIPE.md` (section "Valid F1 Observations
-Before This Run") were stale. Authoritative counts derived from the result files in `qwen_train/results/f1_obs*.jsonl`:
+**Operational lessons from F1 pilot (2026-09-26/27):**
+- One observation at a time; never batch.
+- Never trust a summary table without reconciling raw JSONL artifacts.
+- Hardcoded output filenames can hide multiple executions
+  (e.g., `f1_observation_5.jsonl` contained two real executions).
+- Invocation IDs must not be treated as unique execution identifiers
+  unless corroborated by timestamp/artifact evidence
+  (e.g., collision at `13fb01e08af9b649`).
+- Preserve infrastructure-invalid runs as protocol data per F1-OP-004b.
+- Preserve supplementary overrun trials but keep them outside the official protocol dataset.
 
-- 20 observations count toward the 20-observation protocol (21 files,
-  one was a duplicate `obs10_direct_run_a1b2c3.jsonl`; the 21st supplementary
-  execution is excluded from the official 20-observation dataset).
-- 10 are VALID capability observations (`interpretation.validity_infrastructure
-  = VALID`, `f1_endpoint_step = 4`).
-- 10 are infrastructure-invalid observations (timed out or failed before
-  reaching endpoint).
-- Observations 18-20 exhibit a replicated rejection-loop stall pattern:
-  two early rejected `final` calls, then zero tool calls until the 1200s timeout.
-
-**Standing rule:** F1 observation inventory must always be derived from the
-actual result files and their `interpretation` fields, not from stale batch
-summaries or manually maintained counts in documentation. The result JSON
-first line is the authoritative per-run source.
+**Standing rule:** F1 observation inventory must always be derived from
+actual result files and their `interpretation` fields, not from stale
+batch summaries or manually maintained counts. The result JSON first
+line is the authoritative per-run source.
 
 **Standing rule:** The full startup/preflight sequence must be completed
-before launching any observation. An observation launched against a non-
-running backend is infrastructure-invalid by definition.
+before launching any observation. An observation launched against a
+non-running backend is infrastructure-invalid by definition.
 
 **Operational lessons from F1 pilot (2026-09-26):**
 - One observation at a time; never batch.
