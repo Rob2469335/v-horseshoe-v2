@@ -1874,6 +1874,66 @@ is absent, and does not raise when it is supplied.
 `ruff check --select E9,F` clean. Grant-cleanup fix (`f2cb2a16`), frozen N1,
 Experiment J, F1, routing, and 512-token config unchanged.
 
+### CHECKPOINT (2026-09-27): Experiment J observation N=1 — first valid behavioral observation
+
+**Observation N=1 — VALID BEHAVIORAL OBSERVATION**
+
+| Field | Value |
+|-------|-------|
+| rollout_id | `64e948c4-6039-4412-b67f-4ba329e784ff` |
+| task | `pypa__twine-1066` |
+| base_commit | `4a1fc064a7899872ee845df6a8810bb51a6845ac` |
+| agent invoked | YES |
+| cli_ok | true |
+| timed_out | false |
+| elapsed | 856.6 seconds |
+| tool order | filesystem, lsp |
+| tool-call count | 2 (1/2 succeeded per audit evidence) |
+| source modifications | none |
+| F2P baseline | 0/3 passed, 3/3 failed |
+| F2P post-repair | 0/3 passed, 3/3 failed |
+| verdict | false |
+| bridge classification | BEHAVIORAL:evidence_added |
+| trust grants after | 0 (cleanup effective) |
+| repository HEAD | `77af0a267980895cdea8099c485a264a69d8e282` (unchanged) |
+| frozen artifacts | unchanged |
+
+**Classification:** VALID BEHAVIORAL OBSERVATION — the agent completed normally
+(not timeout, not crash, not infra failure), made 2 tool calls, but did not
+produce the required one-line repair. Per Experiment J Section 12, no exclusion
+rule applies.
+
+**Previous N5 (excluded):** Rollout `adfc0d1f-f5c2-4f82-8503-8eeb0555487d` was
+classified UNKNOWN/INSUFFICIENT EVIDENCE because the evaluator timed out and the
+historical backend state at the timeout boundary could not be independently
+proven. It is EXCLUDED and does NOT count as an Experiment J observation.
+
+**Experiment J accounting:**
+- Valid observations: 1
+- Excluded/unknown runs: 1
+- Observation N=1: COMPLETE
+- Observation N=2: NOT STARTED
+
+**512-token status:** UNPROVEN. No evidence exists that the 512-token cap
+contributed to the N=1 result. Configuration unchanged: `local_max_tokens=512`,
+`STEP_TIMEOUT=180s`, `MAX_TURNS=24`, `eval timeout=1200s`.
+
+**8079 health check:** `run_curriculum.py` checking
+`http://127.0.0.1:8079/health` at timeout is CORRECT. Port 8079 is the actual
+llama.cpp inference server (`robs4b_q4km.gguf`). Port 8080 is the
+`model_router.py` proxy that forwards to 8079. Do NOT change this.
+
+**Model/routing:** `SWARM_ROUTING_MODE=local_only`, `coder=openai/robs4b`,
+endpoint `http://127.0.0.1:8080/v1` (proxy) → `8079` (llama.cpp). Cloud
+routing will NOT occur.
+
+**Proven facts:** agent completed normally; model failed to produce the repair;
+two tool calls occurred; no source modification; tests remained failing.
+
+**Not proven:** why the model took 856.6 seconds; whether the 512-token cap
+contributed; why exactly one tool call failed; exact per-tool timing; exact
+internal model reasoning. None of these unknowns should be claimed as causes.
+
 ### CHECKPOINT (2026-09-24): rollout provenance, run_id attribution, and tool-decision cap
 - `rollout_id` from `ROLLOUT_ID_CTX` is now durably persisted alongside the
   backend's authoritative `run_id` in trajectory summaries, invocation event
