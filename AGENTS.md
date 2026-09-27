@@ -1747,6 +1747,92 @@ non-running backend is infrastructure-invalid by definition.
 - Preserve infrastructure-invalid runs as protocol data per F1-OP-004b.
 - Preserve supplementary overrun trials but keep them outside the official protocol dataset.
 
+### CHECKPOINT (2026-09-27): F1 cross-check closed, N1/eval_twine migration audit recorded
+
+**1. F1 CLOUD-ROUTING CROSS-CHECK — CLOSED**
+
+The suspected coder cloud-routing issue did NOT affect F1.
+
+- `coder` is included in `_ANALYSIS_CLOUD_AGENTS`
+  (`runtime_v2/services/_llm_client.py:109-117`).
+- However, F1 uses `SWARM_ROUTING_MODE=local_only`.
+- `SWARM_ANALYSIS_CLOUD=off` in the F1 environment.
+- `_analysis_cloud_enabled()` therefore returns False before any cloud
+  inference attempt (`_llm_client.py:129-146`).
+- Existing F1 artifacts independently contain no cloud-routing evidence
+  (no cloud-model `model_selected` chunks; all `tool_order` entries
+  contain only local tools: lsp, filesystem, mcp).
+- Therefore the cloud-routing hypothesis is **VERIFIED NO**.
+- Existing F1 conclusions remain unchanged.
+- Do not rerun F1 because of this issue.
+
+**Evidence quality:**
+- Status: SUPPORTED
+- Evidence: SOURCE + CONFIGURATION + RECORDED ARTIFACT
+- Runtime Verification: YES, through recorded F1 evidence
+- Confidence: HIGH
+- Falsifier: F1 evidence demonstrating an actual cloud-provider selection
+  or cloud-routing attempt during an observation.
+
+**2. N1 STATUS**
+
+- `qwen_train/run_twine_eval.py` is the frozen N1 artifact.
+- SHA-256: `C8388FF9C317944AA53C163C5149455B177F95F59A75DE7C1E13AD88AD041AC2`
+- It must not be modified to accommodate the current architecture.
+- Preserve its existing frozen hash/provenance exactly as already documented.
+
+**3. eval_twine.py STATUS**
+
+- Created in `a1b8f471` on 2026-09-23.
+- Modified in `8a8a4258` on 2026-09-24 for run_id propagation.
+- No later commits currently modify it.
+- It is NOT yet certified ready for a real Twine/N5 run.
+- It has architecture drift relative to post-09/24 changes
+  (F1 health gate, 512-token cap, router reachability).
+
+**Evidence quality:**
+- Status: PARTIALLY SUPPORTED / NOT READY
+- Evidence: SOURCE + GIT HISTORY
+- Runtime Verification: NO
+- Confidence: MEDIUM
+- Falsifiers/verification path: controlled preflight/runtime validation of
+  the current evaluator contract.
+
+**4. IMPORTANT METHODOLOGICAL DISTINCTION**
+
+Future Twine/N5 evaluation using `eval_twine.py` must NOT be described as
+methodologically identical to frozen N1.
+
+Core Twine task/repair semantics are substantially preserved, but
+`eval_twine.py` adds/changes infrastructure including:
+
+- Rollout identity/provenance
+- Task identity
+- Harness credentials
+- Run_id tracking
+- Governed/offline tool grants
+- Evaluation/learning bridge
+- Additional execution metadata
+
+Therefore N1 and future N5 results must not later be presented as
+strictly apples-to-apples measurements without accounting for these
+methodological differences.
+
+**5. OPEN TWINE ITEMS**
+
+Record as unresolved, without claiming they are failures:
+
+- Determine the correct canonical Twine preflight/health contract
+- Determine whether router reachability is required for current Twine
+  execution and how it should be checked
+- Establish whether the 512-token local decision cap interacts with the
+  1200-second evaluator timeout (**UNPROVEN RISK** — not a demonstrated
+  failure)
+- Verify rollout_id persistence if the architecture requires explicit
+  downstream verification
+- Verify compatibility between Twine's tool grants and
+  `SWARM_F1_NO_WEB_TOOLS` where relevant
+
 ### CHECKPOINT (2026-09-24): rollout provenance, run_id attribution, and tool-decision cap
 - `rollout_id` from `ROLLOUT_ID_CTX` is now durably persisted alongside the
   backend's authoritative `run_id` in trajectory summaries, invocation event
