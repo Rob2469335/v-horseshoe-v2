@@ -55,6 +55,9 @@ def main() -> int:
     ap.add_argument("--timeout", type=int, default=1200)
     args = ap.parse_args()
 
+    if not args.test_patch:
+        ap.error("--test-patch is required (path to the test patch file)")
+
     instance_id = args.instance_id
     base_commit = args.base_commit
     f2p = args.f2p

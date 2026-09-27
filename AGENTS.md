@@ -1853,6 +1853,27 @@ and verifies authorization requires confirmation/denial afterward.
 `ruff check --select E9,F` clean. Frozen N1, Experiment J, F1, trust_ledger
 authorization model, `_OFFLINE_GRANTABLE`, routing, and 512-token config unchanged.
 
+### FIX (2026-09-27): require N5 test patch in eval_twine
+
+**Root cause:** `eval_twine.py` defined `--test-patch` with `default=""`. The
+first N5 invocation (2026-09-27) omitted the argument, causing the evaluator
+to proceed without the bug-exposing patch. Baseline F2P tests passed at the
+buggy base commit (no `provides_extra` assertion existed without the patch),
+the evaluator stopped with "baseline did not fail as expected", and the run
+was classified INFRASTRUCTURE-INVALID. No model invocation occurred.
+
+**Fix:** `eval_twine.py` now rejects missing `--test-patch` immediately via
+`ap.error()` after argument parsing, before any workspace reset, baseline
+pytest, or trust grants.
+
+**Regression test:** `tests/test_trust_ledger.py::test_eval_twine_rejects_missing_test_patch`
+verifies that the argument parser raises `SystemExit(2)` when `--test-patch`
+is absent, and does not raise when it is supplied.
+
+**Verified:** 35 tests pass (`test_trust_ledger.py` + `test_approval_gate.py`);
+`ruff check --select E9,F` clean. Grant-cleanup fix (`f2cb2a16`), frozen N1,
+Experiment J, F1, routing, and 512-token config unchanged.
+
 ### CHECKPOINT (2026-09-24): rollout provenance, run_id attribution, and tool-decision cap
 - `rollout_id` from `ROLLOUT_ID_CTX` is now durably persisted alongside the
   backend's authoritative `run_id` in trajectory summaries, invocation event

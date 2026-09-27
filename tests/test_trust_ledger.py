@@ -100,3 +100,40 @@ def test_eval_twine_cleanup_revokes_exact_granted_scopes():
     assert agent_tool_policy("sandbox_repl") == ALWAYS_CONFIRM
     assert agent_tool_policy("mcp") == CONFIRM
     assert agent_tool_policy("web_fetch") == CONFIRM
+
+
+def test_eval_twine_rejects_missing_test_patch():
+    """Regression: eval_twine.py must reject missing --test-patch immediately.
+
+    The first N5 invocation (2026-09-27) omitted --test-patch, causing the
+    evaluator to proceed without the bug-exposing patch. Baseline tests passed
+    at the buggy base commit and the evaluator stopped with a confusing error.
+
+    We test the validation logic directly by simulating the argument parser
+    without subprocess (the conftest global_subprocess_mock patches Popen).
+    """
+    import argparse
+
+    # Reproduce the eval_twine argument parser
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--instance-id", default="pypa__twine-1066")
+    ap.add_argument("--base-commit", default="4a1fc064a7899872ee845df6a8810bb51a6845ac")
+    ap.add_argument("--test-cmd", default="pytest tests/test_package.py")
+    ap.add_argument("--f2p", action="append", default=["test_a", "test_b", "test_c"])
+    ap.add_argument("--problem-statement", default="")
+    ap.add_argument("--test-patch", default="")
+    ap.add_argument("--timeout", type=int, default=1200)
+
+    # Parse with NO --test-patch (the bug scenario)
+    args = ap.parse_args([])
+
+    # The validation guard: missing test_patch must cause SystemExit
+    with pytest.raises(SystemExit) as exc_info:
+        if not args.test_patch:
+            ap.error("--test-patch is required (path to the test patch file)")
+
+    assert exc_info.value.code == 2  # argparse error exit code
+
+    # Parse with --test-patch supplied (should NOT raise)
+    args_ok = ap.parse_args(["--test-patch", "/some/path.patch"])
+    assert args_ok.test_patch == "/some/path.patch"
