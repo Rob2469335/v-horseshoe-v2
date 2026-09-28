@@ -2751,41 +2751,95 @@ class AgentServiceV2:
         # passed on the resume call are REPLACED by the stored ones (the stored id
         # is authoritative). If the checkpoint can't be found/loaded, fail safe by
         # starting fresh (never a silently-wrong partial resume).
+        #
+        # D2 (Experiment J F1 infra defense-in-depth): the stored id is
+        # authoritative ONCE the loaded checkpoint passes INTERNAL identity /
+        # context checks. The production approval/ask_user continuation seam
+        # sends prompt="" with resume=<stored checkpoint id>, so we must NEVER
+        # re-derive the checkpoint identity from the caller-supplied prompt text
+        # (checkpoint_id(agent, caller_prompt) would mismatch on a legitimate
+        # continuation). Instead, validate what the checkpoint CLAIMS about
+        # itself against the id it was loaded by and the current backend
+        # process context:
+        #   (a) stored/computed checkpoint id == the supplied resume id;
+        #   (b) stored agent_id, when recorded, == the current agent_id;
+        #   (c) stored workspace_root, when recorded, == the current
+        #       SWARM_WORKSPACE_ROOT.
+        # A failure of any present check means the checkpoint is foreign/
+        # corrupted: ignore it, log clearly, and start fresh — never silently
+        # replace the current prompt/state/run identity. Checks only apply to
+        # fields that are present, so legacy checkpoints (no workspace_root)
+        # still resume under the stored-id-authoritative contract.
         start_turn = 0
         if resume:
             try:
                 from runtime_v2.services.checkpointing import load_checkpoint
 
                 ckpt = load_checkpoint(resume)
-                if ckpt:
-                    prompt = str(ckpt.get("prompt") or prompt)
-                    messages = list(ckpt.get("messages") or messages)
-                    if history:
-                        for h in history:
-                            if h not in messages:
-                                messages.append(h)
-                    chain = list(ckpt.get("delegation_chain") or chain)
-                    research_discharged = bool(
-                        ckpt.get("research_discharged", research_discharged)
-                    )
-                    genome_id = str(ckpt.get("genome_id") or genome_id)
-                    genome_weights = dict(ckpt.get("genome_weights") or {})
-                    self._state_from_dict(state, ckpt.get("state") or {})
-                    lg = ckpt.get("loop_guards") or {}
-                    consecutive_errors = int(lg.get("consecutive_errors", 0) or 0)
-                    unauthorized_tool_errors = int(
-                        lg.get("unauthorized_tool_errors", 0) or 0
-                    )
-                    healing_attempts = int(lg.get("healing_attempts", 0) or 0)
-                    _fetched_content = bool(
-                        lg.get("_fetched_content", _fetched_content)
-                    )
-                    decision_counts = dict(lg.get("decision_counts") or {})
-                    history_actions = list(lg.get("history_actions") or [])
-                    start_turn = int(ckpt.get("turn", 0) or 0)
-                    initial_messages_len = int(
-                        ckpt.get("initial_messages_len", len(messages)) or len(messages)
-                    )
+                resumed = False
+                reject_reason = ""
+                if ckpt is None:
+                    reject_reason = "checkpoint not found"
+                else:
+                    stored_cid = str(ckpt.get("checkpoint_id") or "")
+                    computed_cid = str(ckpt.get("_computed_checkpoint_id") or "")
+                    stored_agent = str(ckpt.get("agent_id") or "")
+                    stored_ws = str(ckpt.get("workspace_root") or "")
+                    cur_ws = os.getenv("SWARM_WORKSPACE_ROOT") or ""
+                    if computed_cid and computed_cid != resume:
+                        reject_reason = (
+                            f"checkpoint computed id {computed_cid} != supplied "
+                            f"resume {resume}"
+                        )
+                    elif stored_cid and stored_cid != resume:
+                        reject_reason = (
+                            f"checkpoint stored id {stored_cid} != supplied "
+                            f"resume {resume}"
+                        )
+                    elif stored_agent and stored_agent != agent_id:
+                        reject_reason = (
+                            f"checkpoint agent {stored_agent} != current "
+                            f"agent {agent_id}"
+                        )
+                    elif stored_ws and cur_ws and stored_ws != cur_ws:
+                        reject_reason = (
+                            f"checkpoint workspace {stored_ws} != current "
+                            f"workspace {cur_ws}"
+                        )
+                    else:
+                        resumed = True
+                        prompt = str(ckpt.get("prompt") or prompt)
+                        messages = list(ckpt.get("messages") or messages)
+                        if history:
+                            for h in history:
+                                if h not in messages:
+                                    messages.append(h)
+                        chain = list(ckpt.get("delegation_chain") or chain)
+                        research_discharged = bool(
+                            ckpt.get("research_discharged", research_discharged)
+                        )
+                        genome_id = str(ckpt.get("genome_id") or genome_id)
+                        genome_weights = dict(ckpt.get("genome_weights") or {})
+                        self._state_from_dict(state, ckpt.get("state") or {})
+                        lg = ckpt.get("loop_guards") or {}
+                        consecutive_errors = int(
+                            lg.get("consecutive_errors", 0) or 0
+                        )
+                        unauthorized_tool_errors = int(
+                            lg.get("unauthorized_tool_errors", 0) or 0
+                        )
+                        healing_attempts = int(lg.get("healing_attempts", 0) or 0)
+                        _fetched_content = bool(
+                            lg.get("_fetched_content", _fetched_content)
+                        )
+                        decision_counts = dict(lg.get("decision_counts") or {})
+                        history_actions = list(lg.get("history_actions") or [])
+                        start_turn = int(ckpt.get("turn", 0) or 0)
+                        initial_messages_len = int(
+                            ckpt.get("initial_messages_len", len(messages))
+                            or len(messages)
+                        )
+                if resumed:
                     yield {
                         "agent_id": agent_id,
                         "type": "resumed",
@@ -2800,7 +2854,10 @@ class AgentServiceV2:
                     )
                 else:
                     log.warning(
-                        "[%s] resume id %s not found; starting fresh", agent_id, resume
+                        "[%s] resume refused for %s (%s); starting fresh",
+                        agent_id,
+                        resume,
+                        reject_reason,
                     )
                     yield {
                         "agent_id": agent_id,
@@ -2852,6 +2909,10 @@ class AgentServiceV2:
                     "genome_weights": genome_weights,
                     "resolved_model": resolved_model,
                     "initial_messages_len": initial_messages_len,
+                    # D2 binding: the checkpoint's identity + execution context are
+                    # recorded so a later resume cannot be silently cross-loaded.
+                    "_computed_checkpoint_id": checkpoint_id(agent_id, prompt),
+                    "workspace_root": os.getenv("SWARM_WORKSPACE_ROOT") or "",
                 }
                 # Blocking file I/O (FileLock acquire + write_text + os.replace)
                 # must not stall the single-threaded event loop — offload it.

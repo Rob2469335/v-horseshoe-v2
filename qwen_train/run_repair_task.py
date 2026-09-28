@@ -253,7 +253,10 @@ def main() -> int:
     ap.add_argument("--f2p", action="append", default=[])
     ap.add_argument("--test-patch", default="")
     ap.add_argument("--timeout", type=int, default=1200)
-    ap.add_argument("--out", default="qwen_train/results/repair_task.jsonl")
+    ap.add_argument("--out", default="")
+    ap.add_argument("--invocation-id", default="",
+                    help="Unique invocation ID for result file naming. "
+                         "If empty, auto-generated from UUID4.")
     ap.add_argument("--evaluator-dir", default="",
                     help="Directory containing evaluator tests (must be outside target workspace)")
     ap.add_argument("--dry-run", action="store_true",
@@ -265,6 +268,17 @@ def main() -> int:
     instance_id = args.instance_id
     repo = (WORK / instance_id / "repo").resolve()
     evaluator_dir = Path(args.evaluator_dir).resolve() if args.evaluator_dir else None
+
+    # Resolve invocation ID and result path (unique per run)
+    invocation_id = args.invocation_id or str(uuid.uuid4())[:16]
+    if not args.out:
+        result_dir = Path(_HERE) / "results"
+        result_dir.mkdir(parents=True, exist_ok=True)
+        out_path = str(result_dir / f"f1_obs_{invocation_id}.jsonl")
+    else:
+        out_path = args.out
+    print(f"  invocation_id: {invocation_id}")
+    print(f"  result_path: {out_path}")
 
     print("=" * 70)
     print("F1 HARNESS PRE-FLIGHT CHECKS")
@@ -438,53 +452,156 @@ def main() -> int:
     except Exception as exc:
         print(f"grant failed: {exc}")
 
-    # --- Immediate health gate (PID identity + endpoint health) ---
-    print("\n[IMMEDIATE HEALTH GATE]")
+    # --- Start F1-owned backend with correct workspace root (replaces health gate) ---
+    print("\n[STARTING F1 BACKEND]")
     try:
         import importlib
         f1i = importlib.import_module("f1_infra")
-        _backend_pid = f1i._check_port_listening(8000)
-        _health_ok = f1i._probe_endpoint("http://127.0.0.1:8000/health", timeout=10.0)
-        _status_ok = False
-        _workspace_match = False
-        try:
-            with urllib.request.urlopen("http://127.0.0.1:8000/status", timeout=10.0) as _r:
-                _status_data = json.loads(_r.read().decode())
-                _status_ok = _status_data.get("ready", False)
-                _workspace_match = _status_data.get("sandbox", {}).get("workspace_root", "") == str(repo)
-        except Exception:
-            pass
-        print(f"  port_listening: {_backend_pid is not None} (PID={_backend_pid})")
-        print(f"  health_http_200: {_health_ok}")
-        print(f"  status_ready: {_status_ok}")
-        print(f"  workspace_match: {_workspace_match}")
-        if not (_backend_pid and _health_ok and _status_ok and _workspace_match):
-            print("  HEALTH GATE FAILED — ABORTING OBSERVATION")
+        # Check if there's already a backend on port 8000 and warn
+        existing_pid = f1i._check_port_listening(8000)
+        if existing_pid:
+            print(f"  WARNING: Existing backend on port 8000 (PID={existing_pid})")
+            print(f"  Starting fresh F1-owned backend for this observation...")
+        else:
+            print("  No existing backend on port 8000, starting fresh...")
+
+        # Start fresh F1-owned backend with the observation's workspace root
+        _backend_record, _evidence_dir = f1i.start_backend_fresh(
+            attempt_id=instance_id,
+            workspace_root=str(repo),
+            port=8000,
+            timeout=60,
+        )
+        _backend_pid = _backend_record.pid
+        print(f"  Started backend PID={_backend_pid}")
+
+        # Workaround: the backend process may fork; find the actual PID listening on the port
+        print("  Resolving actual listening PID...")
+        import time
+        for _ in range(30):  # up to 30s
+            time.sleep(1)
+            actual_pid = f1i._check_port_listening(8000)
+            if actual_pid and actual_pid != _backend_record.pid:
+                print(f"  PID mismatch detected: started {_backend_record.pid}, listening {actual_pid}")
+                _backend_record.pid = actual_pid
+                _backend_pid = actual_pid
+                print(f"  Updated record PID to {actual_pid}")
+                break
+            elif actual_pid == _backend_record.pid:
+                break
+
+        # Wait for backend to become healthy (includes workspace_match check)
+        print("  Waiting for backend health gate...")
+        _gate = f1i.wait_for_backend(_backend_record, port=8000, timeout=120)
+        if not _gate.passed:
+            print(f"  HEALTH GATE FAILED — ABORTING OBSERVATION")
+            print(f"  Errors: {_gate.errors}")
+            _classification = f1i.classify_observation(f1i.RawObservation(
+                infra_invalid_reason="health_gate_failure",
+            ))
             _obs_result = {
                 "ts": f1i._now_iso(),
                 "id": instance_id,
                 "verdict": False,
                 "verify_reason": "health_gate_failure",
-                "infrastructure_invalid_reason": "health_gate_failure",
-                "validity": {"infrastructure": "INVALID"},
-                "capability_credit": {"positive": 0, "negative": 0},
-                "f1_harness": {"health_gate_passed": False, "pid": _backend_pid},
+                "interpretation": _classification.to_dict(),
             }
-            Path(args.out).parent.mkdir(parents=True, exist_ok=True)
-            with open(args.out, "a", encoding="utf-8") as _f:
+            Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+            with open(out_path, "a", encoding="utf-8") as _f:
                 _f.write(json.dumps(_obs_result) + "\n")
             print(json.dumps(_obs_result, indent=2))
+            # Clean up the backend we started
+            try:
+                import psutil
+                if _backend_record.pid:
+                    p = psutil.Process(_backend_record.pid)
+                    if p.is_running():
+                        p.terminate()
+                        p.wait(timeout=5)
+            except Exception:
+                pass
             return 2
         print("  HEALTH GATE PASSED")
+        print(f"  workspace_match: {_gate.workspace_identity == str(repo)}")
+        print(f"  workspace_root: {_gate.workspace_identity}")
+
     except Exception as _gate_exc:
         print(f"  Health gate import/probe failed: {_gate_exc}")
         print("  HEALTH GATE FAILED — ABORTING OBSERVATION")
         return 2
 
+    # --- Start continuous runtime monitoring (Priority 1) ---
+    _evidence_dir = f1i.EVIDENCE_DIR / instance_id
+    _evidence_dir.mkdir(parents=True, exist_ok=True)
+    _monitor = f1i.RuntimeMonitor(_backend_record, port=8000, router_port=8080)
+    _monitor.start()
+    print(f"  [MONITOR] Liveness monitoring active (PID {_backend_record.pid})")
+
     try:
         res = rc._attempt_once(item, args.timeout, allow_approval=True, record=False)
     finally:
         rc._revoke_offline()
+
+    # --- Stop monitoring and classify ---
+    _monitor.stop()
+    _obs_end_time = f1i._now_iso()
+
+    # Load ATIF step records from the authoritative trajectory file.
+    # The trajectory file is named by run_id and contains the real ATIF
+    # step records needed for endpoint detection.  res["tools_used"] only
+    # carries string tool names and is insufficient for endpoint scanning.
+    _atif_steps = []
+    _run_ids = res.get("run_ids") or []
+    if _run_ids:
+        _traj_dir = Path(__file__).resolve().parent.parent / "data" / "trajectories"
+        for rid in _run_ids:
+            _traj_file = _traj_dir / f"{rid}.jsonl"
+            if _traj_file.exists():
+                with open(_traj_file, encoding="utf-8") as _tf:
+                    for _line in _tf:
+                        _line = _line.strip()
+                        if not _line:
+                            continue
+                        _d = json.loads(_line)
+                        if _d.get("record_type") == "step":
+                            for _tc in _d.get("tool_calls", []):
+                                _tc.setdefault("extra", {})["step_id"] = _d.get("step_id", 0)
+                                _atif_steps.append(_tc)
+
+    # Build raw observation from CLI result
+    _raw_obs = f1i.RawObservation(
+        backend_pid=_backend_pid,
+        expected_pid=_backend_pid,
+        start_time=_backend_record.start_time,
+        end_time=_obs_end_time,
+        pid_alive=_monitor.alive,
+        process_state="alive" if _monitor.alive else "dead",
+        cli_ok=bool(res.get("ok")),
+        timed_out=bool(res.get("timed_out")),
+        elapsed_s=round(float(res.get("elapsed_s", 0)), 1),
+        tool_calls=_atif_steps if _atif_steps else res.get("tools_used", []),
+        workspace_identity=str(repo),
+    )
+
+    # If monitor detected death, override with infra-invalid
+    if not _monitor.alive and not _raw_obs.infra_invalid_reason:
+        _raw_obs.infra_invalid_reason = "backend_exit"
+
+    # Machine-enforced classification (RULES A-G)
+    _classification = f1i.classify_observation(_raw_obs)
+    res["interpretation"] = _classification.to_dict()
+
+    # Use the health gate result from wait_for_backend for the manifest
+    _manifest = f1i.build_manifest(
+        instance_id, _backend_record, _gate, _evidence_dir,
+        observation=_raw_obs, classification=_classification,
+        monitor=_monitor, invocation_id=invocation_id,
+    )
+    # Record tooling provenance: which version of the read-before-write guard was active
+    if _manifest.provenance:
+        _manifest.provenance.tooling_version = "path_equiv_v1"  # _norm() SWARM_WORKSPACE_ROOT fallback
+    _manifest_path = f1i.save_manifest(_manifest, _evidence_dir)
+    print(f"  [EVIDENCE] Manifest persisted: {_manifest_path}")
 
     out = _test_once()
     after_failing = cls._failing_ids(out)
@@ -501,6 +618,8 @@ def main() -> int:
         "behavioral_prompt": args.behavioral_prompt,
         "preflight_passed": True,
         "prompt_integrity": not _prompt_contains_exact_fix(prompt),
+        "invocation_id": _manifest.evidence_identity.invocation_id if _manifest.evidence_identity else None,
+        "manifest_path": str(_manifest_path),
     }
 
     # True source diff
@@ -542,11 +661,33 @@ def main() -> int:
     res["f2p"] = inst["fail_to_pass"]
     res["after_failing"] = sorted(after_failing)
 
-    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
-    with open(args.out, "a", encoding="utf-8") as f:
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    with open(out_path, "a", encoding="utf-8") as f:
         f.write(json.dumps(res) + "\n")
     print(json.dumps(res, indent=2))
     print(f"VERDICT: ok={ok} reason={reason}")
+
+    # --- Cleanup: Stop monitor and terminate the F1-owned backend ---
+    try:
+        if "_monitor" in locals() and _monitor:
+            _monitor.stop()
+            print("  [MONITOR] Stopped")
+    except Exception as e:
+        print(f"  [MONITOR] Stop error: {e}")
+
+    try:
+        if "_backend_record" in locals() and _backend_record and _backend_record.pid:
+            import psutil
+            p = psutil.Process(_backend_record.pid)
+            if p.is_running():
+                p.terminate()
+                p.wait(timeout=5)
+                print(f"  [BACKEND] Terminated PID={_backend_record.pid}")
+            else:
+                print(f"  [BACKEND] PID={_backend_record.pid} already stopped")
+    except Exception as e:
+        print(f"  [BACKEND] Cleanup error: {e}")
+
     return 0 if ok else 1
 
 

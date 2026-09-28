@@ -649,7 +649,7 @@ def get_similar_lessons(error_text: str, top_k: int = 3) -> List[Dict]:
 
         def _pull_reflexion_lesson():
             try:
-                svc = get_reflection_service()
+                get_reflection_service()
                 # check_for_past_mistakes returns a [PAST-MISTAKE WARNING] string
                 # built from the top retrieved ReflexionMemory rules for this error.
                 warning = _ai.run(

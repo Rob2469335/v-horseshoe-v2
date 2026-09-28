@@ -243,6 +243,50 @@ def _harness_rollout_id(headers) -> "str | None":
     return None
 
 
+def _harness_workspace_root(headers) -> "str | None":
+    """Return the harness-supplied workspace root ONLY when the request carries
+    the harness credential.  Validates the supplied path before returning it:
+    absolute, exists, is a directory, resolves canonically, and stays under the
+    configured Experiment J workspace parent (swe_probe_work).
+
+    A client that sets X-Swarm-Workspace-Root without the credential gets None,
+    so the filesystem sandbox cannot be redirected.  An invalid/uncontained
+    workspace also returns None — the filesystem tool falls back to _ROOT."""
+    import os
+    from pathlib import Path
+
+    key = os.environ.get("SWARM_HARNESS_KEY", "")
+    if not key or headers.get("x-swarm-harness-key") != key:
+        return None
+
+    ws = (headers.get("x-swarm-workspace-root") or "").strip()
+    if not ws:
+        return None
+
+    p = Path(ws)
+    if not p.is_absolute():
+        return None
+    if not p.is_dir():
+        return None
+
+    resolved = p.resolve()
+
+    # Containment: the workspace must live under swe_probe_work (the
+    # configured Experiment J workspace parent adjacent to the project root).
+    # This prevents an arbitrary filesystem path from being accepted.
+    try:
+        from swarm_os.lib.paths import project_root
+
+        proj = project_root()
+        swe_parent = proj.parent / "swe_probe_work"
+        resolved.relative_to(swe_parent.resolve())
+        return str(resolved)
+    except Exception:
+        pass
+
+    return None
+
+
 @router.post("/agents/{agent_id}/step/stream")
 async def step_agent_stream(agent_id: str, payload: AgentStepPayload, request: Request):
     """
@@ -255,12 +299,15 @@ async def step_agent_stream(agent_id: str, payload: AgentStepPayload, request: R
     # carries X-Swarm-Eval-Id so ONLY that run receives its lesson snapshot.
     try:
         from runtime_v2.services.stream_runner import EVAL_ID_CTX, TASK_ID_CTX, ROLLOUT_ID_CTX
+        from runtime_v2.services.tool_executor import WORKSPACE_ROOT_CTX
 
         EVAL_ID_CTX.set(request.headers.get("x-swarm-eval-id"))
         # Harness-supplied task identity - honored ONLY with the harness credential.
         TASK_ID_CTX.set(_harness_task_id(request.headers))
         # Harness-supplied rollout identity - same credential gate as task id.
         ROLLOUT_ID_CTX.set(_harness_rollout_id(request.headers))
+        # Harness-supplied workspace root - credential-gated and validated.
+        WORKSPACE_ROOT_CTX.set(_harness_workspace_root(request.headers))
     except Exception:
         pass
 

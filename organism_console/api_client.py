@@ -36,6 +36,11 @@ def _auth_headers() -> dict:
     rollout_id = os.getenv("SWARM_ROLLOUT_ID", "").strip()
     if rollout_id:
         headers["X-Swarm-Rollout-Id"] = rollout_id
+    # Harness-supplied workspace root — the evaluator's per-run isolated
+    # workspace that the backend filesystem tool must resolve against.
+    workspace_root = os.getenv("SWARM_WORKSPACE_ROOT", "").strip()
+    if workspace_root:
+        headers["X-Swarm-Workspace-Root"] = workspace_root
     return headers
 
 

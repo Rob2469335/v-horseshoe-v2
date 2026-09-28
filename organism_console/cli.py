@@ -159,7 +159,10 @@ def build_command_context(cmd_ctx_console=None, cmd_ctx_state=None) -> CommandCo
 
 
 def run_agentic(
-    ctx: SessionState, execute_prompt: str, json_flag: bool = False
+    ctx: SessionState,
+    execute_prompt: str,
+    json_flag: bool = False,
+    allow_resume: bool = False,
 ) -> dict:
     """Run a prompt through the active agent (opencode-parity BUILD behavior).
 
@@ -168,7 +171,17 @@ def run_agentic(
     prints a diff review of what the run actually changed. `ctx` is the
     session state itself (CLIContext / SessionState) — `last_prompt` and
     `undo_stack` live directly on it.
+
+    `allow_resume` implements Experiment J F1 D1 (fresh-run isolation): a fresh
+    one-shot / `--json` invocation must NOT forward a persisted stale
+    `resume_checkpoint_id` to the backend (a stale pointer can load a foreign
+    checkpoint from a DIFFERENT task/run/workspace and silently replace the
+    current prompt/state/run identity). It is False by default so a brand-new
+    invocation starts clean (resume=None); an explicit interactive/`--continue`
+    continuation passes True and keeps the resume pointer.
     """
+    if not allow_resume:
+        ctx.resume_checkpoint_id = None
     import time as _time
     from organism_console._commands_opencode import (
         EDITING_AGENTS,
@@ -419,7 +432,7 @@ def main():
                 }
             else:
                 result = (
-                    run_agentic(ctx, execute_prompt, json_flag)
+                    run_agentic(ctx, execute_prompt, json_flag, allow_resume=continue_flag)
                     if execute_prompt
                     else {}
                 )
@@ -561,7 +574,7 @@ def main():
                     # COMPRESS FIX: /compress now preserves the system message correctly
                     registry.handle_line("/compress", cmd_ctx)
 
-                run_agentic(ctx, execute_prompt, json_flag)
+                run_agentic(ctx, execute_prompt, json_flag, allow_resume=continue_flag)
 
         except KeyboardInterrupt:
             ctx.console.print("\n[dim]Use '/exit' to quit properly.[/dim]")

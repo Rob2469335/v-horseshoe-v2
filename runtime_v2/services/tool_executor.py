@@ -184,6 +184,13 @@ _explored_paths_var: contextvars.ContextVar = contextvars.ContextVar(
     "_explored_paths", default=None
 )
 
+# Per-request workspace root (set by agents.py from the X-Swarm-Workspace-Root
+# header, credential-gated).  When set, filesystem operations resolve against
+# this path instead of _ROOT.  Default None = existing project-root behaviour.
+WORKSPACE_ROOT_CTX: contextvars.ContextVar = contextvars.ContextVar(
+    "swarm_workspace_root", default=None
+)
+
 
 def _get_read_cache() -> dict:
     v = _filesystem_read_cache_var.get()
@@ -211,29 +218,49 @@ def reset_exploration_state() -> None:
     _filesystem_read_cache_var.set({})
 
 
+def _effective_root() -> Path:
+    """Return the workspace root for the current request.
+
+    When the per-request WORKSPACE_ROOT_CTX is set (by the credential-gated
+    harness header), returns it.  Otherwise falls back to the module-level
+    _ROOT (project root) — the existing behaviour for all ordinary requests.
+    """
+    ws = WORKSPACE_ROOT_CTX.get()
+    if ws:
+        return Path(ws)
+    return _ROOT
+
+
 def _norm(p: str) -> str:
     s = str(p).replace("\\", "/")
-    # Absolute path under the sandbox root -> root-relative (read/list return
-    # absolute resolved paths; glob/grep return root-relative ones).
-    if s and _ROOT:
-        root_abs = str(_ROOT.resolve()).replace("\\", "/")
+    # Strip the effective workspace root prefix.  The request-scoped root
+    # (WORKSPACE_ROOT_CTX) takes priority; fall back to the module-level
+    # _ROOT.  This covers both Experiment J isolated workspaces and ordinary
+    # project-root requests.
+    root = _effective_root()
+    if s and root:
+        root_abs = str(root.resolve()).replace("\\", "/")
         if s.startswith(root_abs):
             return s[len(root_abs) :].lstrip("/")
     return s.lstrip("/")
 
 
 def _contained(target: str) -> Path | None:
-    """Resolve a requested path against _ROOT and return the resolved Path if it
-    stays INSIDE the project root, else None. The underlying filesystem handler
-    already rejects escapes, but the read-before-write guard must not compute a
-    resolved_target outside root (an escaped path would defeat the exploration
-    check)."""
+    """Resolve a requested path against the effective workspace root and return
+    the resolved Path if it stays INSIDE the workspace, else None.  The
+    underlying filesystem handler already rejects escapes, but the
+    read-before-write guard must not compute a resolved_target outside root
+    (an escaped path would defeat the exploration check).
+
+    Uses the per-request WORKSPACE_ROOT_CTX when present (Experiment J),
+    otherwise falls back to _ROOT (ordinary project-root requests)."""
+    root = _effective_root()
     try:
-        resolved = (_ROOT / _norm(target)).resolve()
+        resolved = (root / _norm(target)).resolve()
     except Exception:
         return None
     try:
-        resolved.relative_to(_ROOT.resolve())
+        resolved.relative_to(root.resolve())
     except ValueError:
         return None
     return resolved
@@ -564,7 +591,7 @@ async def _dispatch(
                                 result = await asyncio.to_thread(
                                     filesystem_handler,
                                     payload,
-                                    _ROOT,
+                                    _effective_root(),
                                     trace_hook=trace_hook,
                                 )
                     elif op in ("write", "write_file", "create", "create_file"):
@@ -595,7 +622,7 @@ async def _dispatch(
                                 result = await asyncio.to_thread(
                                     filesystem_handler,
                                     payload,
-                                    _ROOT,
+                                    _effective_root(),
                                     trace_hook=trace_hook,
                                 )
                     else:
@@ -603,7 +630,7 @@ async def _dispatch(
                             result = await asyncio.to_thread(
                                 filesystem_handler,
                                 payload,
-                                _ROOT,
+                                _effective_root(),
                                 trace_hook=trace_hook,
                             )
                     if operation == "read" and result.get("ok"):

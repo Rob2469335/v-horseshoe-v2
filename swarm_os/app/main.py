@@ -438,6 +438,68 @@ async def lifespan(app: FastAPI):
         except Exception as exc:
             log.warning(f"Competitive Intel daemon unavailable: {exc}")
 
+    # Evaluation Tick daemon - OPT-IN via SWARM_EVAL_TICK=1.
+    # The evaluation tick periodically evaluates eligible candidates through the
+    # PromptRepairer governance machinery. Off by default to keep the runtime
+    # lean. See docs/EXPERIMENT_J.md for the experimental protocol.
+    try:
+        import os as _os_eval
+
+        if _os_eval.environ.get("SWARM_EVAL_TICK", "0").strip() == "1":
+            from swarm_os.services.prompt_repairer import get_prompt_repairer
+
+            _interval = float(_os_eval.environ.get("EVAL_TICK_INTERVAL_S", "3600"))
+            _first_delay = float(_os_eval.environ.get("EVAL_TICK_FIRST_DELAY_S", "60"))
+
+            if _interval <= 0:
+                log.warning("EVAL_TICK_INTERVAL_S <= 0; evaluation tick daemon disabled")
+            elif _first_delay < 0:
+                log.warning("EVAL_TICK_FIRST_DELAY_S < 0; evaluation tick daemon disabled")
+            else:
+                async def _eval_tick_daemon(
+                    interval_seconds: float = 3600.0, first_delay_seconds: float = 60.0
+                ):
+                    if first_delay_seconds > 0:
+                        await asyncio.sleep(first_delay_seconds)
+
+                    while True:
+                        try:
+                            repairer = get_prompt_repairer()
+                            summary = await repairer.evaluate_and_promote_eligible()
+                            if summary["considered"]:
+                                log.info(
+                                    "EVAL_TICK: considered=%d evaluated=%d promoted=%d skipped=%d failed=%d",
+                                    summary["considered"],
+                                    summary["evaluated"],
+                                    summary["promoted"],
+                                    summary["skipped"],
+                                    summary["failed"],
+                                )
+                        except asyncio.CancelledError:
+                            log.info("Evaluation tick daemon cancelled during shutdown")
+                            raise
+                        except Exception as exc:  # noqa: BLE001
+                            log.warning("Evaluation tick failed: %s", exc)
+                            log.debug("Evaluation tick traceback", exc_info=True)
+
+                        await asyncio.sleep(interval_seconds)
+
+                t_eval = asyncio.create_task(
+                    _eval_tick_daemon(
+                        interval_seconds=_interval,
+                        first_delay_seconds=_first_delay,
+                    )
+                )
+                bg_tasks.add(t_eval)
+                app.state.eval_tick_task = t_eval
+                log.info(
+                    "Started Evaluation Tick daemon (interval=%.0fs, first_delay=%.0fs)",
+                    _interval,
+                    _first_delay,
+                )
+    except Exception as exc:
+        log.warning(f"Evaluation Tick daemon unavailable: {exc}")
+
     try:
         from swarm_os.healing.system_probes import run_system_probes
 

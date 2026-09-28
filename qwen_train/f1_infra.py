@@ -14,15 +14,22 @@ Key invariants:
 - The health gate verifies PID identity, not just endpoint health.
 - Liveness monitoring detects backend death during observations.
 - Observability failures fail closed (observation = infrastructure-invalid).
+
+Evidence-First Architecture (2026-09-25):
+- RAW OBSERVATION and DERIVED INTERPRETATION are structurally separated.
+- Capability credit is machine-enforced: invalidity → zero credit → UNKNOWN.
+- Every derived artifact is traceable to immutable evidence.
+- UNKNOWN is a valid scientific result; it must never silently become FAIL.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
-import signal
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 from dataclasses import dataclass, field
@@ -34,6 +41,10 @@ from typing import Optional
 REPO_ROOT = Path(__file__).resolve().parent.parent
 EVIDENCE_DIR = REPO_ROOT / "data" / "f1_evidence"
 
+
+# ---------------------------------------------------------------------------
+# Process State Model (Phase 6)
+# ---------------------------------------------------------------------------
 
 class ProcessState(str, Enum):
     STARTING = "starting"
@@ -59,6 +70,263 @@ INFRA_INVALID_REASONS = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Evidence Schema — evidence identity (Priority 4)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class EvidenceIdentity:
+    """Identity for an F1 observation invocation.
+
+    invocation_id: unique per execution (timestamp+PID ensure uniqueness).
+    content_hash: deterministic hash of the raw observation fields — this IS
+    content-addressed and can be used to verify the observation was not mutated.
+    """
+    invocation_id: str
+    attempt_id: str
+    created_at: str
+    content_hash: str = ""
+
+    @staticmethod
+    def create(attempt_id: str, invocation_id: str = "") -> "EvidenceIdentity":
+        ts = datetime.now(timezone.utc).isoformat()
+        if not invocation_id:
+            raw = f"{attempt_id}:{ts}:{os.getpid()}"
+            invocation_id = hashlib.sha256(raw.encode()).hexdigest()[:16]
+        return EvidenceIdentity(
+            invocation_id=invocation_id, attempt_id=attempt_id, created_at=ts,
+        )
+
+    @staticmethod
+    def from_observation(attempt_id: str, obs_fields: dict,
+                         invocation_id: str = "") -> "EvidenceIdentity":
+        """Create identity with content-addressed hash of observation fields."""
+        ts = datetime.now(timezone.utc).isoformat()
+        if not invocation_id:
+            raw = f"{attempt_id}:{ts}:{os.getpid()}"
+            invocation_id = hashlib.sha256(raw.encode()).hexdigest()[:16]
+        # Content hash: deterministic from observation fields only
+        canonical = json.dumps(obs_fields, sort_keys=True, default=str)
+        content_hash = hashlib.sha256(canonical.encode()).hexdigest()[:16]
+        return EvidenceIdentity(
+            invocation_id=invocation_id, attempt_id=attempt_id,
+            created_at=ts, content_hash=content_hash,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Provenance (Priority 4)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class Provenance:
+    """Truthful lineage: what evidence produced this manifest.
+
+    source_evidence: file paths or records that fed the manifest
+    attempt_id: the F1 attempt this evidence belongs to
+    parent_invocation_id: set when this manifest derives from a prior one
+    tooling_version: which version of the read-before-write guard was active
+    """
+    source_evidence: list = field(default_factory=list)
+    attempt_id: str = ""
+    experiment_id: str = "experiment_j_f1"
+    parent_invocation_id: Optional[str] = None
+    tooling_version: str = ""
+    generator: str = "f1_infra"
+    generator_version: str = "1.0.0"
+
+
+# ---------------------------------------------------------------------------
+# F1 Pilot Endpoint Constants (frozen per F1-OP-002 / F1-OP-003 / F1-OP-004a)
+# ---------------------------------------------------------------------------
+
+F1_QUALIFYING_OPERATIONS = frozenset({"write", "patch", "edit", "create"})
+F1_RELEVANT_FILE_SET = frozenset({"swarm_os/lib/paths.py"})
+F1_HORIZON_STEPS = 12
+
+
+def find_qualifying_first_edit(tool_calls: list) -> Optional[int]:
+    """Scan ATIF tool-call records in ascending step order for the first
+    qualifying edit: an edit-type filesystem action whose target resolves
+    to a file in F1_RELEVANT_FILE_SET.
+
+    A qualifying edit is an action (write/patch/edit/create) targeting
+    the relevant file. The patch does NOT need to be accepted or the
+    file mutated — the action itself is the endpoint per F1-OP-004a.
+
+    Returns the ATIF step_id of the first qualifying edit, or None.
+    """
+    if not tool_calls:
+        return None
+    # Filter to only dict entries (ATIF step records), skip string tool names
+    dict_tcs = [tc for tc in tool_calls if isinstance(tc, dict)]
+    if not dict_tcs:
+        return None
+    # Sort by step_id (ATIF trajectory step) to ensure ascending order
+    sorted_tcs = sorted(dict_tcs, key=lambda tc: tc.get("extra", {}).get("step_id", tc.get("extra", {}).get("turn", 0)))
+    for tc in sorted_tcs:
+        fn = tc.get("function_name", "")
+        if fn != "filesystem":
+            continue
+        args = tc.get("arguments", {})
+        operation = args.get("operation", "")
+        if operation not in F1_QUALIFYING_OPERATIONS:
+            continue
+        target = args.get("path", "") or args.get("file_path", "")
+        # Normalize: strip repo prefix if present, compare basename
+        target_normalized = target.replace("\\", "/")
+        for rel_path in F1_RELEVANT_FILE_SET:
+            if target_normalized.endswith(rel_path):
+                extra = tc.get("extra", {})
+                # Prefer step_id (ATIF step ordinal) over turn (agent loop iteration)
+                step_id = extra.get("step_id") or extra.get("turn")
+                if step_id is not None:
+                    return int(step_id)
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Raw Observation (Priority 3)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class RawObservation:
+    """Immutable runtime facts. Never overwritten by interpretation."""
+    backend_pid: Optional[int] = None
+    expected_pid: Optional[int] = None
+    start_time: str = ""
+    end_time: str = ""
+    port_listening: bool = False
+    health_http_200: bool = False
+    status_ready: bool = False
+    workspace_identity: str = ""
+    router_reachability: bool = False
+    pid_alive: bool = False
+    process_state: str = "unknown"
+    stdout_path: str = ""
+    stderr_path: str = ""
+    exit_code: Optional[int] = None
+    tool_calls: list = field(default_factory=list)
+    timed_out: bool = False
+    cli_ok: bool = False
+    elapsed_s: float = 0.0
+    infra_invalid_reason: str = ""
+    monitor_events: list = field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Derived Classification / Interpretation (Priority 3)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class DerivedClassification:
+    """Machine-enforced classification derived from RawObservation."""
+    validity_infrastructure: str = "UNKNOWN"
+    capability_credit_positive: int = 0
+    capability_credit_negative: int = 0
+    capability_repair: str = "UNKNOWN"
+    capability_tool_selection: str = "UNKNOWN"
+    capability_debugging: str = "UNKNOWN"
+    decision_boundary_reached: bool = False
+    f1_endpoint_step: Optional[int] = None  # ATIF step of qualifying first edit, or None
+    classification_version: str = "1.0"
+    classified_at: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "validity_infrastructure": self.validity_infrastructure,
+            "capability_credit": {
+                "positive": self.capability_credit_positive,
+                "negative": self.capability_credit_negative,
+            },
+            "capability_repair": self.capability_repair,
+            "capability_tool_selection": self.capability_tool_selection,
+            "capability_debugging": self.capability_debugging,
+            "decision_boundary_reached": self.decision_boundary_reached,
+            "f1_endpoint_step": self.f1_endpoint_step,
+            "classification_version": self.classification_version,
+            "classified_at": self.classified_at,
+        }
+
+
+# ---------------------------------------------------------------------------
+# Scientific Rules — machine-enforced (Priority 5)
+# ---------------------------------------------------------------------------
+
+def classify_observation(obs: RawObservation) -> DerivedClassification:
+    """Machine-enforced scientific rules. Rules A-G + F1 endpoint detection.
+
+    RULE A: infrastructure_invalid → capability UNKNOWN
+    RULE B: infrastructure_invalid → positive credit = 0
+    RULE C: infrastructure_invalid → negative credit = 0
+    RULE D: invalid → cannot count against model
+    RULE E: capability credit requires reaching decision boundary
+    RULE F: boundary not reached → UNKNOWN
+    RULE G: UNKNOWN must remain explicit, never silently FAIL
+
+    F1 ENDPOINT: A qualifying first edit (edit-type filesystem action on
+    relevant_file_set) within ATIF steps 1-12 is an observed endpoint
+    regardless of timeout, infrastructure validity, or patch acceptance.
+    """
+    cls = DerivedClassification(classified_at=_now_iso())
+
+    is_infra_invalid = bool(obs.infra_invalid_reason)
+
+    # F1 ENDPOINT DETECTION: scan trajectory for qualifying edit
+    # Must occur BEFORE timeout classification per F1-OP-004a.
+    endpoint_step = find_qualifying_first_edit(obs.tool_calls or [])
+    cls.f1_endpoint_step = endpoint_step
+
+    # RULE A + B + C: infrastructure-invalid → zero credit, UNKNOWN capability
+    if is_infra_invalid:
+        cls.validity_infrastructure = "INVALID"
+        cls.capability_credit_positive = 0
+        cls.capability_credit_negative = 0
+        cls.capability_repair = "UNKNOWN"
+        cls.capability_tool_selection = "UNKNOWN"
+        cls.capability_debugging = "UNKNOWN"
+        cls.decision_boundary_reached = endpoint_step is not None
+        return cls
+
+    # RULE D: invalid run cannot count as failure (if invalid for other reasons)
+    if not obs.cli_ok and obs.timed_out:
+        cls.validity_infrastructure = "INVALID"
+        cls.capability_credit_positive = 0
+        cls.capability_credit_negative = 0
+        cls.capability_repair = "UNKNOWN"
+        cls.capability_tool_selection = "UNKNOWN"
+        cls.capability_debugging = "UNKNOWN"
+        cls.decision_boundary_reached = endpoint_step is not None
+        return cls
+
+    # RULE E + F: no boundary reached → UNKNOWN
+    boundary_reached = obs.cli_ok and not obs.timed_out
+    if not boundary_reached:
+        cls.validity_infrastructure = "VALID"
+        cls.capability_credit_positive = 0
+        cls.capability_credit_negative = 0
+        cls.capability_repair = "UNKNOWN"
+        cls.capability_tool_selection = "UNKNOWN"
+        cls.capability_debugging = "UNKNOWN"
+        cls.decision_boundary_reached = endpoint_step is not None
+        return cls
+
+    # Valid observation that reached boundary — capability remains UNKNOWN
+    # until evaluator evidence is available. No automatic positive credit.
+    cls.validity_infrastructure = "VALID"
+    cls.decision_boundary_reached = True
+    cls.capability_credit_positive = 0
+    cls.capability_credit_negative = 0
+    cls.capability_repair = "UNKNOWN"
+    cls.capability_tool_selection = "UNKNOWN"
+    cls.capability_debugging = "UNKNOWN"
+    return cls
+
+
+# ---------------------------------------------------------------------------
+# Process records & health gate (existing, extended)
+# ---------------------------------------------------------------------------
+
 @dataclass
 class ProcessRecord:
     role: str
@@ -70,12 +338,6 @@ class ProcessRecord:
     state: ProcessState = ProcessState.UNKNOWN
     stdout_path: str = ""
     stderr_path: str = ""
-    stdout_exists: bool = False
-    stdout_writable: bool = False
-    stdout_non_empty: bool = False
-    stderr_exists: bool = False
-    stderr_writable: bool = False
-    stderr_non_empty: bool = False
     exit_code: Optional[int] = None
     exit_time: Optional[str] = None
 
@@ -95,16 +357,149 @@ class HealthGateResult:
     errors: list = field(default_factory=list)
 
 
+# ---------------------------------------------------------------------------
+# RuntimeEvidenceManifest (existing, extended with evidence schema)
+# ---------------------------------------------------------------------------
+
 @dataclass
 class RuntimeEvidenceManifest:
+    evidence_identity: Optional[EvidenceIdentity] = None
+    provenance: Optional[Provenance] = None
     attempt_id: str = ""
     infrastructure: dict = field(default_factory=dict)
     health_gate: dict = field(default_factory=dict)
     monitoring: dict = field(default_factory=dict)
     evidence_preservation: dict = field(default_factory=dict)
     validity: dict = field(default_factory=dict)
+    observation: dict = field(default_factory=dict)
+    interpretation: dict = field(default_factory=dict)
     infrastructure_invalid_reason: str = ""
 
+
+# ---------------------------------------------------------------------------
+# Runtime Monitor (Priority 1)
+# ---------------------------------------------------------------------------
+
+class RuntimeMonitor:
+    """Continuous liveness monitor for F1-owned processes during observation.
+
+    Monitors backend PID/port AND router port reachability.
+    Detects death, PID changes, port disappearance, and router unreachable.
+    Does NOT auto-restart. Records raw evidence of state transitions.
+    """
+
+    def __init__(self, backend: ProcessRecord, port: int = 8000,
+                 check_interval: float = 5.0, router_port: Optional[int] = None):
+        self._backend = backend
+        self._port = port
+        self._router_port = router_port
+        self._interval = check_interval
+        self._events: list = []
+        self._alive = True
+        self._router_alive = True
+        self._thread: Optional[threading.Thread] = None
+        self._stop = threading.Event()
+
+    @property
+    def alive(self) -> bool:
+        return self._alive
+
+    @property
+    def router_alive(self) -> bool:
+        return self._router_alive
+
+    @property
+    def events(self) -> list:
+        return list(self._events)
+
+    def _record_event(self, event_type: str, detail: str) -> None:
+        self._events.append({
+            "timestamp": _now_iso(),
+            "type": event_type,
+            "detail": detail,
+            "backend_pid": self._backend.pid,
+        })
+
+    def _check_once(self) -> bool:
+        """Single liveness check. Returns False if backend is dead."""
+        pid = self._backend.pid
+        if not pid:
+            self._alive = False
+            self._record_event("process_check_failed", "no_pid_recorded")
+            return False
+
+        try:
+            import psutil
+            p = psutil.Process(pid)
+            if not p.is_running() or p.status() == psutil.STATUS_ZOMBIE:
+                self._alive = False
+                self._record_event("process_dead",
+                                   f"PID {pid} no longer running")
+                return False
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            self._alive = False
+            self._record_event("process_dead",
+                               f"PID {pid} not found")
+            return False
+
+        actual_pid = _check_port_listening(self._port)
+        if actual_pid is None:
+            self._alive = False
+            self._record_event("port_lost",
+                               f"port {self._port} no longer listening")
+            # Check router port even when backend port is lost
+            if self._router_port:
+                router_pid = _check_port_listening(self._router_port)
+                if router_pid is None:
+                    self._router_alive = False
+                    self._record_event("router_unreachable",
+                                       f"router port {self._router_port} no longer listening")
+            return False
+
+        if actual_pid != pid:
+            self._alive = False
+            self._record_event("pid_change",
+                               f"expected {pid}, got {actual_pid}")
+            return False
+
+        # Check router port independently (may be dead even when backend is alive)
+        if self._router_port:
+            router_pid = _check_port_listening(self._router_port)
+            if router_pid is None:
+                self._router_alive = False
+                self._record_event("router_unreachable",
+                                   f"router port {self._router_port} no longer listening")
+            else:
+                self._router_alive = True
+
+        return True
+
+    def _loop(self) -> None:
+        while not self._stop.wait(self._interval):
+            if not self._check_once():
+                return
+
+    def start(self) -> None:
+        self._stop.clear()
+        self._alive = True
+        self._router_alive = True
+        self._record_event("monitor_started",
+                           f"watching PID {self._backend.pid} on port {self._port}"
+                           + (f" router {self._router_port}" if self._router_port else ""))
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=self._interval + 2)
+        self._record_event("monitor_stopped",
+                           f"alive={self._alive}, events={len(self._events)}")
+
+
+# ---------------------------------------------------------------------------
+# Existing helpers
+# ---------------------------------------------------------------------------
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -144,14 +539,9 @@ def _capture_file_status(path: str) -> dict:
     return {"path": path, "exists": exists, "writable": writable, "non_empty": non_empty}
 
 
-def _get_pid_command(pid: int) -> str:
-    try:
-        import psutil
-        p = psutil.Process(pid)
-        return " ".join(p.cmdline()[:3])
-    except Exception:
-        return "unknown"
-
+# ---------------------------------------------------------------------------
+# Backend lifecycle
+# ---------------------------------------------------------------------------
 
 def start_backend_fresh(
     attempt_id: str,
@@ -159,10 +549,7 @@ def start_backend_fresh(
     port: int = 8000,
     timeout: int = 30,
 ) -> tuple[ProcessRecord, Path]:
-    """Start a fresh F1-owned backend process with captured stdout/stderr.
-
-    Returns (backend_record, evidence_dir).
-    """
+    """Start a fresh F1-owned backend process with captured stdout/stderr."""
     evidence_dir = EVIDENCE_DIR / attempt_id
     evidence_dir.mkdir(parents=True, exist_ok=True)
 
@@ -232,7 +619,6 @@ def wait_for_backend(
     deadline = time.monotonic() + timeout
 
     while time.monotonic() < deadline:
-        # Check PID is still alive
         if record.pid:
             try:
                 import psutil
@@ -248,7 +634,6 @@ def wait_for_backend(
                 gate.errors.append(f"PID {record.pid} not found")
                 return gate
 
-        # Check port
         actual_pid = _check_port_listening(port)
         gate.port_listening = actual_pid is not None
 
@@ -256,7 +641,6 @@ def wait_for_backend(
             time.sleep(pid_check_interval)
             continue
 
-        # PID identity check
         gate.process_alive = True
         if record.pid and actual_pid and actual_pid != record.pid:
             record.state = ProcessState.UNKNOWN
@@ -268,12 +652,10 @@ def wait_for_backend(
 
         gate.expected_pid_identity = actual_pid == record.pid if record.pid else False
 
-        # Health endpoint
         gate.health_http_200 = _probe_endpoint(
             f"http://127.0.0.1:{port}/health", timeout=5.0
         )
 
-        # Status endpoint
         try:
             with urllib.request.urlopen(
                 f"http://127.0.0.1:{port}/status", timeout=5.0
@@ -286,11 +668,8 @@ def wait_for_backend(
         except Exception:
             pass
 
-        # F1_NO_WEB_TOOLS check
         gate.no_web_tools_flag = os.environ.get("SWARM_F1_NO_WEB_TOOLS") == "1"
 
-        # Core health gate: backend is alive, serving, correct PID, correct workspace,
-        # AND model router is reachable (required for tool decisions).
         if (
             gate.process_alive
             and gate.port_listening
@@ -309,15 +688,65 @@ def wait_for_backend(
     return gate
 
 
+# ---------------------------------------------------------------------------
+# Manifest building (extended with evidence schema)
+# ---------------------------------------------------------------------------
+
 def build_manifest(
     attempt_id: str,
     backend: ProcessRecord,
     gate: HealthGateResult,
     evidence_dir: Path,
+    *,
+    observation: Optional[RawObservation] = None,
+    classification: Optional[DerivedClassification] = None,
+    monitor: Optional[RuntimeMonitor] = None,
+    invocation_id: str = "",
 ) -> RuntimeEvidenceManifest:
-    """Build the canonical Runtime Evidence Manifest."""
-    m = RuntimeEvidenceManifest(attempt_id=attempt_id)
+    """Build the canonical Runtime Evidence Manifest with truthful provenance."""
 
+    # Build evidence identity with content hash from observation
+    if observation:
+        obs_fields = {
+            "backend_pid": observation.backend_pid,
+            "expected_pid": observation.expected_pid,
+            "cli_ok": observation.cli_ok,
+            "timed_out": observation.timed_out,
+            "elapsed_s": observation.elapsed_s,
+            "infra_invalid_reason": observation.infra_invalid_reason,
+            "workspace_identity": observation.workspace_identity,
+            "pid_alive": observation.pid_alive,
+        }
+        evidence_identity = EvidenceIdentity.from_observation(
+            attempt_id, obs_fields, invocation_id=invocation_id)
+    else:
+        evidence_identity = EvidenceIdentity.create(attempt_id, invocation_id=invocation_id)
+
+    m = RuntimeEvidenceManifest(
+        evidence_identity=evidence_identity,
+        attempt_id=attempt_id,
+    )
+
+    # Provenance: truthful lineage from actual evidence
+    source_evidence = []
+    if backend.stdout_path:
+        source_evidence.append({"type": "stdout_log", "path": backend.stdout_path})
+    if backend.stderr_path:
+        source_evidence.append({"type": "stderr_log", "path": backend.stderr_path})
+    source_evidence.append({"type": "health_gate", "passed": gate.passed})
+    if monitor:
+        source_evidence.append({"type": "monitor_events", "count": len(monitor.events)})
+
+    m.provenance = Provenance(
+        source_evidence=source_evidence,
+        attempt_id=attempt_id,
+        experiment_id="experiment_j_f1",
+        parent_invocation_id=None,
+        generator="f1_infra",
+        generator_version="1.1.0",
+    )
+
+    # Infrastructure (raw observation)
     m.infrastructure = {
         "observed_process_graph": {
             "backend": {
@@ -330,13 +759,12 @@ def build_manifest(
             }
         }
     }
-
-    # File status for stdout/stderr
     m.infrastructure["observed_process_graph"]["backend"]["stdout"] = _capture_file_status(backend.stdout_path)
     m.infrastructure["observed_process_graph"]["backend"]["stderr"] = _capture_file_status(backend.stderr_path)
     m.infrastructure["observed_process_graph"]["backend"]["exit_code"] = backend.exit_code
     m.infrastructure["observed_process_graph"]["backend"]["exit_time"] = backend.exit_time
 
+    # Health gate
     m.health_gate = {
         "passed": gate.passed,
         "timestamp": gate.timestamp,
@@ -351,32 +779,83 @@ def build_manifest(
         "errors": gate.errors,
     }
 
+    # Evidence preservation
     m.evidence_preservation = {
         "verified": all([
             Path(backend.stdout_path).exists(),
             Path(backend.stderr_path).exists(),
             evidence_dir.exists(),
-        ])
+        ]),
+        "invocation_id": evidence_identity.invocation_id,
     }
+
+    # Monitoring events
+    if monitor:
+        m.monitoring = {
+            "events": monitor.events,
+            "alive_at_stop": monitor.alive,
+        }
+
+    # Raw observation (Priority 3)
+    if observation:
+        m.observation = {
+            "backend_pid": observation.backend_pid,
+            "expected_pid": observation.expected_pid,
+            "start_time": observation.start_time,
+            "end_time": observation.end_time,
+            "pid_alive": observation.pid_alive,
+            "process_state": observation.process_state,
+            "cli_ok": observation.cli_ok,
+            "timed_out": observation.timed_out,
+            "elapsed_s": observation.elapsed_s,
+            "tool_calls": observation.tool_calls,
+            "infra_invalid_reason": observation.infra_invalid_reason,
+            "workspace_identity": observation.workspace_identity,
+        }
+
+    # Derived classification (Priority 3)
+    if classification:
+        m.interpretation = classification.to_dict()
+
+    # Validity (backward-compatible)
+    m.validity = {
+        "infrastructure": classification.validity_infrastructure if classification else "UNKNOWN",
+    }
+    m.infrastructure_invalid_reason = (
+        classification.validity_infrastructure if classification and
+        classification.validity_infrastructure == "INVALID"
+        else ""
+    ) or observation.infra_invalid_reason if observation else ""
 
     return m
 
 
 def save_manifest(manifest: RuntimeEvidenceManifest, evidence_dir: Path) -> Path:
-    """Save manifest to evidence directory."""
-    manifest_path = evidence_dir / "runtime_evidence_manifest.json"
+    """Save manifest to evidence directory, keyed by invocation ID."""
+    inv_id = manifest.evidence_identity.invocation_id if manifest.evidence_identity else "unknown"
+    manifest_path = evidence_dir / f"runtime_evidence_manifest_{inv_id}.json"
+    payload = {
+        "invocation_id": manifest.evidence_identity.invocation_id if manifest.evidence_identity else "",
+        "content_hash": manifest.evidence_identity.content_hash if manifest.evidence_identity else "",
+        "attempt_id": manifest.attempt_id,
+        "provenance": {
+            "source_evidence": manifest.provenance.source_evidence if manifest.provenance else [],
+            "attempt_id": manifest.provenance.attempt_id if manifest.provenance else "",
+            "experiment_id": manifest.provenance.experiment_id if manifest.provenance else "",
+            "generator": manifest.provenance.generator if manifest.provenance else "",
+            "generator_version": manifest.provenance.generator_version if manifest.provenance else "",
+            "parent_invocation_id": manifest.provenance.parent_invocation_id if manifest.provenance else None,
+            "tooling_version": manifest.provenance.tooling_version if manifest.provenance else "",
+        },
+        "infrastructure": manifest.infrastructure,
+        "health_gate": manifest.health_gate,
+        "monitoring": manifest.monitoring,
+        "evidence_preservation": manifest.evidence_preservation,
+        "observation": manifest.observation,
+        "interpretation": manifest.interpretation,
+        "validity": manifest.validity,
+        "infrastructure_invalid_reason": manifest.infrastructure_invalid_reason,
+    }
     with open(manifest_path, "w", encoding="utf-8") as f:
-        json.dump(
-            {
-                "attempt_id": manifest.attempt_id,
-                "infrastructure": manifest.infrastructure,
-                "health_gate": manifest.health_gate,
-                "monitoring": manifest.monitoring,
-                "evidence_preservation": manifest.evidence_preservation,
-                "validity": manifest.validity,
-                "infrastructure_invalid_reason": manifest.infrastructure_invalid_reason,
-            },
-            f,
-            indent=2,
-        )
+        json.dump(payload, f, indent=2)
     return manifest_path

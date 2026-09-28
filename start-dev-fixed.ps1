@@ -172,7 +172,6 @@ $backendJob = Start-Job -ScriptBlock {
 Write-Host "DEBUG pwd=$(Get-Location)"
 Write-Host "DEBUG PYTHONPATH=$env:PYTHONPATH"
     $pythonPath = if (Test-Path "$r\.venv\Scripts\python.exe") { "$r\.venv\Scripts\python.exe" } else { "python" }
-    & $pythonPath -c "import os,sys,importlib; print('DEBUG cwd=', os.getcwd()); print('DEBUG sys.path[0]=', sys.path[0]); m=importlib.import_module('swarm_os.app.main'); print('DEBUG module=', m.__file__)"
     & $pythonPath -m uvicorn --app-dir $r swarm_os.app.main:app --host 127.0.0.1 --port 8000 2>&1
 } -ArgumentList $root, $backendEnv
 

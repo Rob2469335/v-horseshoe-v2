@@ -62,12 +62,28 @@ def _strip_web_tools_for_local_analysis(
     goal 'analyze my codebase for bugs and upgrades' instead of producing the
     codebase report. Matches the system's own internet classification: goals the
     goal-loop considers local must not be able to drift online. Internet-flagged
-    goals and other agents keep their full tool surface."""
+    goals and other agents keep their full tool surface.
+
+    2026-09-25 (Experiment J F1): SWARM_F1_NO_WEB_TOOLS=1 strips web_search
+    and web_fetch from ALL agents on non-internet goals, preventing the 4B coder
+    from drifting into web research on a local repair task. Per-invocation only
+    (set by the F1 harness)."""
+    if not allowed:
+        return allowed
+    goal_stripped = (goal or "").strip()
+    is_internet = bool(_INTERNET_GOAL_RE.search(goal)) if goal_stripped else False
     if (
         agent_id == "code_analyzer"
-        and allowed
-        and (goal or "").strip()
-        and not _INTERNET_GOAL_RE.search(goal)
+        and goal_stripped
+        and not is_internet
+    ):
+        return [t for t in allowed if t not in ("web_search", "web_fetch")]
+    # Experiment J F1 per-invocation restriction: when SWARM_F1_NO_WEB_TOOLS=1,
+    # strip web tools from ALL agents on non-internet goals.
+    if (
+        os.environ.get("SWARM_F1_NO_WEB_TOOLS", "") == "1"
+        and goal_stripped
+        and not is_internet
     ):
         return [t for t in allowed if t not in ("web_search", "web_fetch")]
     return allowed

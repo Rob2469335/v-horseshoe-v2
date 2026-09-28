@@ -343,8 +343,8 @@ Governance/Security
   gate; model now enters tool loop on open-ended repair prompts. First clean
   N5 run verified 4 tool calls within 240s (filesystem reads + web_search).
   Full Twine repair verdict pending a clean end-to-end evaluation.
-- **Experiment J** — Defined conceptually; detailed execution protocol not yet
-  recovered/approved; NOT RUN. See Experiment J definition below.
+- **Experiment J — F1 CLOSED.** F1 protocol observations completed 20/20 (10 valid reaching first-edit endpoint @ ATIF Step 4, 10 infrastructure-invalid). Post-F1 governance baseline established 2026-09-27. F1 scientific protocol frozen; only operational runtime parameters modified. See `docs/EXPERIMENT_J_F1_AUTHORIZATION.md` and `docs/LEARNING_EXPERIMENT_STATE.md` §9.16–§9.28.
+- **Experiment J — F2 PENDING.** Next scientific goal: genuine governed learning event producing ACTIVE lesson L through real promotion pathway (failure → PromptRepairer → evidence → HMAC receipt → promote → ACTIVE). No verified ACTIVE lesson L currently exists. See `docs/EXPERIMENT_J.md` §14, §17.
 - **Click** — NOT VALIDATED (previous result invalid due to timeout/data-acquisition
   failure; must not be counted as learning evidence)
 - **Pyfakefs** — NOT STARTED
@@ -511,12 +511,9 @@ Agents working on Experiment J or other governed experiments must follow these r
 **Architecture Status Audit — COMPLETE** (documented from existing records; no
 experiments run).
 
-**Next validation item: Twine N5.** Twine N5 remains gated by (a) human-approved,
-committed roadmap documentation and (b) the full benchmark preflight chain
-(sections 8 and 9 of the benchmark worker startup rules), including required
-immediately before execution: GGUF/SHA256 verification, worker health, backend
-`/readyz`, workspace verification, and data-acquisition verification. This
-documentation update does NOT authorize an evaluation.
+**Experiment J F1 — CLOSED** (20/20 observations completed, governance baseline established 2026-09-27).
+
+**Next scientific step: Experiment J F2.** Produce a genuine ACTIVE lesson L through the real governed learning pathway (failure → PromptRepairer → evidence → HMAC receipt → promote → ACTIVE), then freeze F2 (capture exact `render_active_lessons()` treatment artifact). Prerequisites: `SWARM_RECEIPT_KEY` provisioned (currently missing, fail-closed), backend healthy, Qdrant healthy, `ActiveLessons` empty (C0 verified). Engineering work required: promotion fixture / lawful lesson generation, `exclude_ids` in `render_active_lessons()`, delivery instrumentation, fresh-process harness (see `docs/EXPERIMENT_J.md` §18, §17). This documentation update does NOT authorize an evaluation.
 
 ---
 
@@ -4246,6 +4243,8 @@ evidence, uncertainty, caveats, and disagreement.
   not only the commands.
 
 ## Self-Healing & Self-Learning Fixes
+
+- **Rule (coder)**: Tool 'mcp' failed (MCP action requires 'server' and 'tool' arguments.). Check the tool contract in _TOOL_DEFINITIONS and verify parameters before r...
 
 - **Rule (coder)**: Tool 'filesystem' failed (Read-before-write guard: cannot patch 'swarm_os/lib/paths.py' — the agent has not listed or read it yet. Call filesystem ...
 

@@ -1,125 +1,74 @@
-# Self-learning experiment — state & plan (2026-09-15)
+# Experiment J — State & Plan (Updated 2026-09-28)
 
 Handoff/state doc. If you are resuming, **read this first**, then
-`docs/EXPERIMENTS.md`, `docs/SOTA_ROADMAP.md`, `docs/WRITE_FIX_TASKS.md`.
+`docs/EXPERIMENT_J.md`, `docs/EXPERIMENT_J_F1_AUTHORIZATION.md`, `docs/EXPERIMENTS.md`.
 
 ---
 
-## 0. The question we are answering
+## 0. The Question We Are Answering
 
-**Is the self-learning CLI actually learning?** (The learner is the CLI/system —
-tool policy, memory, recovery, routing — NOT Qwen's weights; see `docs/EXPERIMENTS.md`.)
+> **Does delivery and utilization of a genuine, lawfully promoted lesson L change a fresh worker's observable first-relevant-edit behavior compared to the exact same frozen treatment artifact with L removed?**
 
-**Answer so far: the pipeline works and correctly proves there is nothing to learn yet.**
-The tasks are below the coder's ability → no failure → no gradient → no behaviour change.
+This is the frozen F0 research question from `docs/EXPERIMENT_J.md` §1. The learner is the Swarm OS system (prompt repair, memory, governance) — NOT Qwen/robs4b model weights.
 
----
-
-## 1. Where the experiment stands (live state)
-
-| Item | State |
-|---|---|
-| Synthetic fix pool (130 candidates, 8 families) | **measuring** — `run_candidate_pool.py --n 130 --concurrency 4` |
-| Real-bug harvester (`mine_fix_commits.py`) | **built + pushed**; single-repo (this repo); validation batch running |
-| Contamination filter (Item 1) | **NOT built** — next task, full spec below |
-| File/module holdout split | **not built** — after contamination filter |
-| Multi-repo / SWE-bench supply | **deferred** — only if the above says we need diversity |
-
-**Measured so far (valid only, `cli_ok=True`):**
-```
-synthetic fix pool : ~70/122 measured, 65 pass / 5 fail  ≈ 92% pass   (ceiling)
-30 hand-written kinds : 20/20, 31/31 → ~100% pass          (ceiling)
-Experiments A (T1→T2) : no_signal (Δ+3.3pp, McNemar p=0.625)
-Experiment B (memory) : no_signal (Δ+6pp, p=0.508, n=50)
-tool_weights          : all ≈0.99 (no discrimination — the degenerate-learning signature)
-```
-
-The 5 genuine failures (distinct mechanisms, the only real signal so far):
-`cache_key_uses_length_only`, `aliasing_shared_dict_between_functions`,
-`dict_items_vs_keys_confusion`, `wrong_branch_order`, `wrong_method_receiver`.
-
-**CRITICAL — phantom failures:** if the **backend is down**, `run_candidate_pool` rows
-come back `cli_ok=False` (CLI aborts ~20 s) and the module is "unfixed" → they look like
-FAILURES but are **missing data**. Always filter `cli_ok == True` before counting. A
-dead-backend run produced a false "76% fail" that was 103 phantoms; the real rate was ~92% pass.
+**Answer so far:** Experiment J F1 is CLOSED (20/20 protocol observations completed). F1 established the no-lesson baseline (k, n, practical-effect criterion frozen). No verified ACTIVE lesson L exists yet. The next scientific step is F2: produce a genuine ACTIVE lesson L through the real governed learning pathway.
 
 ---
 
-## 2. The next task — Item 1: contamination exclusion (FULL VERBATIM SPEC)
+## 1. Where Experiment J Stands (Live State)
 
-Implement **Item 1 only**. Do not modify the curriculum, training pipeline, evaluation
-logic, model configuration, or difficulty system in this task.
+| Item | State | Evidence |
+|---|---|---|
+| **Experiment J F0 (scientific design)** | **FROZEN** | `docs/EXPERIMENT_J.md` (commit `20a1989b`) |
+| **Experiment J F1 (pilot)** | **CLOSED** | 20/20 protocol observations completed; 10 valid (endpoint @ ATIF Step 4), 10 infrastructure-invalid; `k`, `n`, practical-effect frozen per `docs/EXPERIMENT_J_F1_AUTHORIZATION.md` |
+| **Post-F1 Governance Baseline** | **ESTABLISHED 2026-09-27** | `SWARM_AUTONOMY=0`, `SWARM_GENETIC_MUTATION=0`, `SWARM_EVAL_TICK=0`, `SWARM_EXPERIMENT_J_ARM=0`, `SWARM_F1_NO_WEB_TOOLS=0`, `SWARM_EVOLUTION=0`; verified in backend PID 20332 |
+| **Experiment J F2 (genuine learning event)** | **PENDING** | No verified ACTIVE lesson L exists. Prerequisites: `SWARM_RECEIPT_KEY` provisioned (missing, fail-closed), backend/Qdrant healthy, `ActiveLessons` empty (C0). See `docs/EXPERIMENT_J.md` §17, §18. |
+| **F1 Harness Machinery** | **IMPLEMENTED** | Evaluator separation, pre-flight checks, behavioral prompt, fresh-clone gate, `SWARM_F1_NO_WEB_TOOLS=1` |
+| **F2 Engineering Work** | **NOT IMPLEMENTED** | Promotion fixture, `exclude_ids` in `render_active_lessons()`, delivery instrumentation, fresh-process harness, replay code. See `docs/EXPERIMENT_J.md` §18. |
 
-### 1. Inspect before changing anything
-Locate the existing `FIX:` commit harvester; read its candidate extraction + validation
-flow and its tests; identify where candidates are persisted/output; how commit hashes are
-represented; reliable local Git evidence for commits created/materially produced by the
-current contaminated session. **Reuse the existing architecture. Do not create a
-second/parallel harvester.**
+**F1 Protocol Observations: 20/20 COMPLETED** (reconciled 2026-09-26 from `qwen_train/results/f1_obs*.jsonl`):
+- 10 valid observations (all reaching qualifying first-edit endpoint @ ATIF Step 4)
+- 10 infrastructure-invalid observations
+- Observation 1: infrastructure-invalid (web-tool drift)
+- Observation 2: qualifying first-edit endpoint @ ATIF Step 4 (`filesystem.patch` on `swarm_os/lib/paths.py`), patch rejected by read-before-write guard, repair correctness UNKNOWN, capability credit +0/-0
+- Observations 7-11,13-16 (UUID-named): VALID, endpoint @ ATIF Step 4
+- Observations 18-20: infrastructure-invalid (timeout, rejection-loop stall)
+- Supplementary 21st execution excluded from official 20-observation dataset
 
-### 2. Add a commit-hash denylist
-Add an explicit **commit-hash denylist** as the authoritative contamination mechanism.
-Stored in a small, inspectable, checked-in data/config file (not hidden in logic). Each
-entry: full commit hash + exclusion reason + enough provenance/context. Conceptual form:
-```
-<full_commit_hash>    excluded_contaminated_commit    <reason/context>
-```
-Use the project's existing preferred format if one exists. **Append-only going forward** —
-future sessions append newly identified hashes+reasons without rebuilding/rewriting/
-replacing the ledger. Existing entries and provenance stay intact.
+**F1-OP Frozen Parameters (per `docs/EXPERIMENT_J_F1_AUTHORIZATION.md`):**
+- F1-OP-001: 20 independent no-lesson pilot runs
+- F1-OP-002: Pilot task = `repair_task1` / `sandbox_bounds` @ base commit `45d9f619`
+- F1-OP-003: `relevant_file_set` = `{"swarm_os/lib/paths.py"}` (test file excluded, immutable)
+- F1-OP-004a: Pilot observation horizon = 12 ATIF decision steps (inclusive), right-censor at step 12
+- F1-OP-004b: Censored observations contribute value 12 to P95 set; all 20 runs contribute
+- F1-OP-004: P95 = nearest-rank empirical P95, n=20, rank=19; `k = min(12, max(8, P95))`
 
-### 3. Identify the current contaminated commits
-Use reliable repo/session evidence. **Do not guess hashes. Do not auto-exclude every commit
-made today.** Distinguish: actual bug/fix material produced by the session vs
-infrastructure-only / harvester-implementation / test-only commits vs unrelated history.
-e.g. infra commit `852a3809` must NOT be denylisted merely for being created this session.
-**Fail-safe: if the contaminated commits cannot be determined reliably, STOP** — do not
-create a guessed denylist; report what was inspected / what could / could not be determined /
-what needs confirmation. A guessed denylist is worse than stopping.
+---
 
-### 4. Apply the filter before candidate use
-A denylisted commit must be rejected **before it can become a usable harvested candidate**,
-covering training candidates, evaluation candidates, and intermediate harvested outputs that
-could later feed either pool. Never silently pass a denylisted commit into a dataset.
+## 2. Experiment J F2 — Next Authorized Step
 
-### 5. Preserve the audit trail
-Do not silently delete/hide excluded candidates. When rejected for denylisting, record via
-the existing logging/audit mechanism: commit hash, exclusion reason, candidate identity if
-available, timestamp if the logging system already records it. Use explicit reason
-`excluded_contaminated_commit`. **Rejected from the experiment ≠ erased from the evidence.**
+**Objective:** Produce a genuine ACTIVE lesson L through the real governed learning pathway, then freeze F2.
 
-### 6. Do not use weak contamination detection as the authority
-Not authoritative: commit date, author name, commit message, branch name, "recent commit"
-heuristics. They may be **secondary diagnostics only**; the **exact commit hash is
-authoritative**. Goal: deterministic, reproducible exclusion.
+**Prerequisites (from `docs/EXPERIMENT_J.md` §17, §18 and `docs/LEARNING_EXPERIMENT_STATE.md` §1):**
+| Prerequisite | Status | Notes |
+|---|---|---|
+| `SWARM_RECEIPT_KEY` provisioned in `.env` | ❌ MISSING | Fail-closed; required for HMAC receipt signing |
+| Backend healthy (`/readyz`=ready, `/health`=ok) | ✅ Verified | Backend PID 20332, Qdrant healthy |
+| Qdrant `ActiveLessons` empty (C0) | ✅ Verified | Post-F1 baseline confirmed |
+| `SWARM_HARNESS_KEY=dev` in `.env` | ✅ Set | For rollout provenance |
+| `SWARM_AUTONOMY=0`, `SWARM_GENETIC_MUTATION=0`, `SWARM_EVAL_TICK=0`, `SWARM_EXPERIMENT_J_ARM=0`, `SWARM_F1_NO_WEB_TOOLS=0`, `SWARM_EVOLUTION=0` | ✅ Verified | Post-F1 governance baseline |
 
-### 7. Preserve existing harvester behavior
-For every NON-denylisted commit: preserve existing `FIX:` detection, extraction, fail→pass
-validation, candidate quality checks, output format, logging. **Do not weaken validation. Do
-not make previously rejected candidates pass** merely because of this change.
+**Engineering Work Required for F2 (per `docs/EXPERIMENT_J.md` §18):**
+- Promotion fixture / lawful lesson generation
+- `exclude_ids` parameter in `LessonManager.render_active_lessons()`
+- Dynamic retrieval suppression for T/X replay
+- Replay code (contextvar bypass for frozen artifact delivery)
+- Delivery instrumentation (hashes, timestamps: `lesson_block_hash`, `final_prompt_hash`, `delivery_timestamp`)
+- Fresh-process harness (distinct `rollout_id`, `trajectory_run_id`, clean session/checkpoint state)
+- Qdrant snapshot/restore for C0 isolation (not required for T/X per F0 §15)
 
-### 8. Explicitly DO NOT change
-curriculum generation · synthetic bug generation · bug difficulty · bug taxonomy · training
-code · LoRA config · model config · model prompts · evaluation scoring · first-attempt
-metrics · train/eval partitioning · dataset splitting · `outcome_fitness` · observation-log
-semantics · `FIX:` extraction rules · fail→pass validation rules · test generation ·
-hidden-test behavior · check-file hashing · unrelated security fixes · unrelated refactoring.
-If a change is not necessary for contamination exclusion, do not make it.
-
-### 9. Tests (minimum)
-1. eligible `FIX:` commit → detected, passes filter, proceeds through harvester;
-2. denylisted commit → detected, rejected, not a usable candidate;
-3. no output leakage — a denylisted commit's candidate cannot appear in final usable output;
-4. reason recorded — rejection produces `excluded_contaminated_commit` (or canonical equiv);
-5. filtering regardless of bug validity — a denylisted commit that WOULD otherwise pass
-   fail→pass validation is still rejected;
-6. append-only — adding a new hash does not remove/overwrite existing entries.
-
-### 10. Verification
-Run: existing harvester tests; new contamination tests; syntax/import checks for modified
-files; any project-specific validation the harvester normally requires. Then inspect the
-resulting candidate output and report **Denylist** / **Counts** (before X / excluded Y /
-usable Z) / **Leakage** (denylisted hashes in usable dataset: 0) / **Tests**.
+**SINGLE NEXT STEP AFTER THIS DOCUMENTATION UPDATE:**
+Execute the engineering work to enable a genuine governed learning event that produces an ACTIVE lesson L, then capture the frozen F2 treatment artifact via `LessonManager.render_active_lessons()`. This is NOT a single script execution — it requires implementing the missing F2 infrastructure listed above.
 
 ### 11. Final success condition
 Report `CONTAMINATION FILTER: PASS` only if: contaminated hashes identified from reliable
