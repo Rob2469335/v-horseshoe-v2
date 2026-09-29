@@ -108,10 +108,32 @@ print(json.dumps(result))
 '''
 
 
+_REPO_ROOT = str(Path(__file__).resolve().parent.parent)
+
+
+def _child_bootstrap(script: str) -> str:
+    """Prepend the authorized F2 fresh-process import contract to a child script.
+
+    Every F2 fresh child must explicitly place REPO_ROOT at the front of
+    sys.path (via sys.path.insert(0, REPO_ROOT)) BEFORE importing repository
+    packages, so `runtime_v2`/`swarm_os` resolve from the repository source
+    tree rather than from machine-local editable-install state. This mirrors
+    the proven F1 fresh-runtime bootstrap
+    (qwen_train/f1_infra.py: sys.path.insert(0, REPO_ROOT)).
+
+    Authorized: docs/EXPERIMENT_J_F2_EXECUTION_CONTRACT_AUTHORIZATION.md (2026-09-29).
+    """
+    bootstrap = (
+        "import sys\n"
+        f"sys.path.insert(0, {_REPO_ROOT!r})\n"
+    )
+    return bootstrap + script
+
+
 def _run_child(tmp_path: Path, script: str, args: list[str] | None = None, extra_env: dict[str, str] | None = None) -> dict:
     """Run a child process script and return parsed JSON output."""
     script_path = tmp_path / "_child_script.py"
-    script_path.write_text(script, encoding="utf-8")
+    script_path.write_text(_child_bootstrap(script), encoding="utf-8")
     cmd = [sys.executable, "-u", str(script_path)] + (args or [])
     proc_env = dict(os.environ) if extra_env is None else {**os.environ, **extra_env}
     proc = subprocess.Popen(

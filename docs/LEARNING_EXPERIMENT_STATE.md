@@ -951,7 +951,7 @@ Post-F1 Governance Baseline (2026-09-27):
 
 ## 10. F2 Engineering Checkpoint (2026-09-28)
 
-**Status:** DOCUMENTATION CHECKPOINT ONLY — no implementation performed.
+**Status:** DOCUMENTATION CHECKPOINT — one scoped F2 engineering work item implemented 2026-09-29 (fresh-process execution/import contract, see `docs/EXPERIMENT_J_F2_EXECUTION_CONTRACT_AUTHORIZATION.md`); all other F2 engineering remains not implemented and no experimental result exists.
 
 **Purpose:** Record F2 engineering design decisions, implementation status, and implementation order before code changes begin. This section is an engineering checkpoint, not experimental results.
 
@@ -971,16 +971,25 @@ Post-F1 Governance Baseline (2026-09-27):
 - `_strip_web_tools_for_local_analysis()` — web-tool stripping
 
 **NOT IMPLEMENTED (F2-specific):**
-- F2 freeze schema / deterministic artifact capture
+- F2 freeze schema / deterministic artifact capture (primitives exist in `runtime_v2/services/f2_freeze.py`; governed production freeze pipeline not implemented)
 - `exclude_ids` parameter in `render_active_lessons()`
-- Frozen artifact replay (contextvar bypass + cross-process transport)
 - Delivery instrumentation (`lesson_block_hash`, `final_prompt_hash`, `delivery_timestamp`, `treatment_set_hash`)
 - Rediscovery rule classification from trajectory timestamps
 - Fresh-process T/X/C0 arm orchestrator
 - Adversarial/corruption/mutation tests
 - Governed promotion fixture for genuine ACTIVE lesson
 - F2 certification gate
-- One authoritative delivery abstraction
+- One authoritative delivery abstraction (see invariant C below)
+
+**IMPLEMENTED under dated authorization (2026-09-29):**
+- F2 fresh-process execution/import contract — every F2 fresh Python child
+  explicitly places `REPO_ROOT` at the front of `sys.path`
+  (`sys.path.insert(0, REPO_ROOT)`) before repository imports, then loads and
+  independently verifies its serialized freeze manifest/artifact. Enforcement
+  point: `tests/test_f2_replay.py::_run_child` / `_child_bootstrap`.
+  Authorization: `docs/EXPERIMENT_J_F2_EXECUTION_CONTRACT_AUTHORIZATION.md`.
+  This is engineering/completeness work only; it does not create an ACTIVE
+  lesson, freeze experiment treatment, certify F2, or authorize N=2.
 
 ### 10.2 F2 Design Invariants
 
@@ -1043,6 +1052,6 @@ It must not be provisioned simply to make tests pass. The engineering machinery 
 | Qdrant healthy / C0 verified | COMPLETE | `ActiveLessons` absent (404) |
 | Post-F1 governance baseline | COMPLETE | Verified 2026-09-27 |
 | `SWARM_RECEIPT_KEY` | NOT PROVISIONED | Fail-closed; required for promotion |
-| F2 engineering | NOT STARTED | This checkpoint records design only |
+| F2 engineering | PARTIAL — fresh-process execution/import contract implemented 2026-09-29; all other F2-specific engineering NOT STARTED | `docs/EXPERIMENT_J_F2_EXECUTION_CONTRACT_AUTHORIZATION.md` |
 | ACTIVE lesson L | NONE | No lesson exists in Qdrant |
 | N=2 authorization | NOT AUTHORIZED | No document authorizes N=2 |
