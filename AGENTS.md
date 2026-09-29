@@ -100,6 +100,30 @@ Governance/Security → Hostile Audit → Observability fixes → Evaluation/Lea
 - Large audit documents carry no trust beyond individually-checked findings.
 - Asymmetric failure awareness: name the worse failure direction, say "I don't know" rather than guess.
 
+### UNTRACKED IMPLEMENTATION / PROVENANCE RULE (global)
+The repository's tracked state is the durable, reproducible project state. Files that exist only in the working tree are machine-local evidence and must not automatically be treated as authorized implementation.
+
+When an untracked file appears to be required by tracked code, tests, runtime behavior, or an active architecture:
+
+1. **STOP before committing it.**
+2. Establish the file's provenance: exact path and purpose; which tracked files reference or depend on it; which tests reference it; which authority documents reference or require it; when/how it appeared in Git history or the working tree; whether it is an intended implementation, generated artifact, experiment artifact, temporary investigation file, or accidental residue.
+3. Determine whether its inclusion is authorized by the applicable authority hierarchy.
+4. Determine whether committing it restores the reproducible repository state or introduces new behavior.
+5. Inspect the exact proposed staged diff.
+6. Stage **only** the explicitly authorized files.
+7. Verify that no authority documents, tests, configuration, unrelated changes, or investigation artifacts are accidentally included.
+8. Commit only after provenance and scope are established.
+9. Re-run the relevant tests from the resulting repository state.
+10. Record the provenance decision and evidence in the durable engineering record.
+
+**Burden of proof:** the presence of a file on disk is not evidence that it belongs in the repository. The default classification is **NOT PROVEN** until repository evidence, authority evidence, or explicit authorization establishes otherwise.
+
+**Clean-checkout principle:** if tracked code depends on an untracked implementation file, a clean checkout of the current commit must be tested conceptually and, where practical, empirically. A locally working tree is not sufficient evidence of repository completeness.
+
+**No silent promotion:** never automatically `git add -A`, `git add .`, broadly stage untracked files, or commit untracked implementation merely because doing so makes tests pass.
+
+**Classification requirement:** every provenance investigation must conclude with PROVEN / PARTIALLY PROVEN / NOT PROVEN / BLOCKED, and must separately state whether the file is authorized for repository inclusion; whether repository reproducibility is restored; what machine-local evidence remains; and what contradictions or gaps remain. Applies globally, not only to Experiment J.
+
 ---
 
 ## Module Map (Current)
