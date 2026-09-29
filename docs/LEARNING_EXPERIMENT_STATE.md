@@ -946,3 +946,103 @@ Post-F1 Governance Baseline (2026-09-27):
 - 183 pending mutations preserved but not applied (genetic mutation disabled)
 - F1 scientific protocol unchanged; only operational runtime parameters modified
 ```
+
+---
+
+## 10. F2 Engineering Checkpoint (2026-09-28)
+
+**Status:** DOCUMENTATION CHECKPOINT ONLY — no implementation performed.
+
+**Purpose:** Record F2 engineering design decisions, implementation status, and implementation order before code changes begin. This section is an engineering checkpoint, not experimental results.
+
+**Scientific status preserved:** F0 is frozen. F1 is closed. No legitimate ACTIVE lesson L exists. N=2 is not authorized. SWARM_RECEIPT_KEY must not be provisioned. No manual ACTIVE lesson may be created.
+
+### 10.1 Engineering Status (from source audit)
+
+**IMPLEMENTED (F1 machinery, reused for F2):**
+- `PromptRepairer.process_failure()` — candidate creation from failures
+- `PromptRepairer.evaluate_candidate()` — evaluation gate with HMAC receipt
+- `PromptRepairer.promote()` — promotion with receipt verification, fail-closed without `SWARM_RECEIPT_KEY`
+- `LessonManager.store()` — Qdrant ActiveLessons persistence
+- `LessonManager.render_active_lessons()` — governed seam for lesson delivery
+- `run_repair_task.py` — F1 single-observation harness (fresh process, workspace isolation, `SWARM_F1_NO_WEB_TOOLS=1`)
+- `f1_infra.py` — evidence manifests, health gate, classification
+- `evaluation_bridge.py` — harness→PromptRepairer adapter
+- `_strip_web_tools_for_local_analysis()` — web-tool stripping
+
+**NOT IMPLEMENTED (F2-specific):**
+- F2 freeze schema / deterministic artifact capture
+- `exclude_ids` parameter in `render_active_lessons()`
+- Frozen artifact replay (contextvar bypass + cross-process transport)
+- Delivery instrumentation (`lesson_block_hash`, `final_prompt_hash`, `delivery_timestamp`, `treatment_set_hash`)
+- Rediscovery rule classification from trajectory timestamps
+- Fresh-process T/X/C0 arm orchestrator
+- Adversarial/corruption/mutation tests
+- Governed promotion fixture for genuine ACTIVE lesson
+- F2 certification gate
+- One authoritative delivery abstraction
+
+### 10.2 F2 Design Invariants
+
+These are engineering design decisions, not experimental results.
+
+**A. Freeze T first.**
+The treatment artifact T must first be generated using the normal governed retrieval/render path (`render_active_lessons()`). The exact resulting artifact is then frozen. F2 X must be derived deterministically from that frozen T artifact. Do NOT implement X by rerunning live retrieval with `exclude_ids` if doing so could alter ranking, budget selection, retrieval, reranking, refill, backfill, or substitution. `exclude_ids` may be implemented as a general backward-compatible rendering capability but must NOT silently change F2 T/X selection semantics.
+
+**B. Cross-process replay.**
+A Python `ContextVar` does NOT cross process boundaries. The parent F2 harness must pass a serialized/content-addressed freeze manifest or artifact reference to the child process. The child process must load and verify the artifact/manifest itself. Only inside the child process should the replay provider/context state be installed. The ContextVar is an in-process replay mechanism, not the cross-process transport mechanism.
+
+**C. One authoritative delivery abstraction.**
+Avoid creating two independent replay mechanisms. Prefer one authoritative delivery abstraction/provider that can select live lesson delivery or verified frozen-artifact delivery. The model/tool execution path consumes that authoritative delivery result. Do not create separate independent guards that can disagree about what was delivered.
+
+**D. Separate hashes.**
+The F2 provenance model must distinguish: (1) `artifact_hash` — hash of the exact bytes/text delivered; (2) `treatment_set_hash` — hash representing the logical treatment identity/set; (3) `manifest_hash` — hash of the canonical provenance manifest. The manifest must be deterministic/canonical and must not include its own hash when computing `manifest_hash`.
+
+**E. Freeze provenance.**
+The freeze manifest must have enough provenance to independently establish what was frozen. Design toward fields covering: `schema_version`, experiment identifier, F2 arm/protocol version, Git SHA, model identity, task identity, lesson L identity/hash when applicable, ordered lesson IDs/hashes, frozen artifact, artifact hash, treatment-set hash, freeze timestamp, promotion/provenance reference where applicable, manifest hash. Do not invent values for fields not yet known.
+
+**F. Fail closed.**
+Replay must reject corrupted or mismatched artifacts/manifests. A mismatch must not silently fall back to live retrieval. Engineering validation must test mutation of artifact contents, artifact hash, lesson identity/hash, Git SHA, model identity, arm/protocol identity, and manifest integrity.
+
+**G. Retrieval mutation isolation.**
+F2 replay validation must include an adversarial test: freeze T; mutate the live retrieval state; replay the frozen artifact; verify replay output is unchanged. This demonstrates replay is actually isolated from live retrieval.
+
+**H. Rediscovery classification.**
+Rediscovery is classified from recorded timestamps/trace evidence. The rule is derived from F0 §6 and documented as a classification rule, not presented as proof of causality. Record enough evidence to determine whether the relevant filesystem action occurred before or after lesson delivery.
+
+### 10.3 Implementation Order
+
+1. F2 freeze schema / deterministic artifact / hash primitives
+2. Verified replay isolation (in-process + cross-process)
+3. Exact T → deterministic X derivation
+4. Delivery instrumentation
+5. Rediscovery analysis
+6. Fresh-process T/X/C0 harness
+7. Adversarial/corruption/mutation tests
+8. Governed promotion fixture
+9. Only after engineering validation, provision real signing authority
+10. Create a legitimate ACTIVE lesson through the governed path
+11. Freeze F2 treatment/control artifacts
+12. F2 certification
+13. Authorization review
+14. Only then N=2
+
+### 10.4 Governance Rule
+
+> `SWARM_RECEIPT_KEY` is a governance capability, not merely a configuration value.
+
+It must not be provisioned simply to make tests pass. The engineering machinery must first be implemented and tested without granting real signing authority. Only when the governed promotion fixture is ready should real signing authority be introduced.
+
+### 10.5 Current Prerequisites
+
+| Prerequisite | Status | Source |
+|---|---|---|
+| F0 frozen | COMPLETE | `docs/EXPERIMENT_J.md` commit `20a1989b` |
+| F1 closed (20/20) | COMPLETE | `docs/EXPERIMENT_J_F1_AUTHORIZATION.md` |
+| Backend healthy | COMPLETE | Live verification 2026-09-28 |
+| Qdrant healthy / C0 verified | COMPLETE | `ActiveLessons` absent (404) |
+| Post-F1 governance baseline | COMPLETE | Verified 2026-09-27 |
+| `SWARM_RECEIPT_KEY` | NOT PROVISIONED | Fail-closed; required for promotion |
+| F2 engineering | NOT STARTED | This checkpoint records design only |
+| ACTIVE lesson L | NONE | No lesson exists in Qdrant |
+| N=2 authorization | NOT AUTHORIZED | No document authorizes N=2 |
