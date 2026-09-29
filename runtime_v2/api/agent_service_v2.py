@@ -27,6 +27,8 @@ log = logging.getLogger(__name__)
 # in THIS module (immediately below) — tests patch them by this path, and moving
 # a mutable that a consumer reads elsewhere silently no-ops the patch.
 # ---------------------------------------------------------------------------
+from runtime_v2.services.f2_replay import get_delivery_artifact, is_replay_active
+
 from runtime_v2.api._agent_helpers import (  # noqa: F401
     _INTERNET_GOAL_RE as _INTERNET_GOAL_RE,
     _FIX_INTENT_RE as _FIX_INTENT_RE,
@@ -2662,12 +2664,15 @@ class AgentServiceV2:
                 # GOVERNED SEAM: only the curated active lesson set may enter the
                 # agent's system prompt as behavioural guidance. Raw episodic
                 # memory stays on the evidence/diagnosis side.
-                from swarm_os.services.lesson_manager import get_lesson_manager
+                if is_replay_active():
+                    injected_memories = get_delivery_artifact()
+                else:
+                    from swarm_os.services.lesson_manager import get_lesson_manager
 
-                injected_memories = await get_lesson_manager().render_active_lessons(
-                    f"agent:{agent_id} {prompt[:200]}",
-                    max_chars=700,
-                )
+                    injected_memories = await get_lesson_manager().render_active_lessons(
+                        f"agent:{agent_id} {prompt[:200]}",
+                        max_chars=700,
+                    )
             except Exception as exc:
                 log.warning("Failed to render active lessons: %s", exc)
 

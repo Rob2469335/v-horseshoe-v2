@@ -3,7 +3,7 @@
 Covers every verification target from the task specification:
 A  Determinism
 B  Artifact mutation
-C  Treatment identity
+C  Treatment identity (F0-conformant: treatment_set_hash = SHA256(rendered_artifact))
 D  Manifest determinism
 E  Self-hash exclusion
 F  Round-trip
@@ -13,10 +13,13 @@ I  Provenance mismatch
 J  Unsupported schema
 K  No fallback
 L  Atomic persistence
+M  Hash contract (F0 conformance)
+N  T/X hash distinction
 """
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -67,15 +70,15 @@ def _make_frozen(lessons: tuple[LessonEntry, ...] | None = None, rendered_artifa
 # ---------------------------------------------------------------------------
 
 class TestDeterminism:
-    def test_same_inputs_same_artifact_hash(self):
-        a = _make_frozen()
-        b = _make_frozen()
-        assert a.artifact_hash == b.artifact_hash
-
     def test_same_inputs_same_treatment_set_hash(self):
         a = _make_frozen()
         b = _make_frozen()
         assert a.treatment_set_hash == b.treatment_set_hash
+
+    def test_same_inputs_same_lesson_set_hash(self):
+        a = _make_frozen()
+        b = _make_frozen()
+        assert a.lesson_set_hash == b.lesson_set_hash
 
     def test_same_inputs_same_manifest_hash(self):
         a = _make_frozen()
@@ -93,50 +96,50 @@ class TestDeterminism:
 # ---------------------------------------------------------------------------
 
 class TestArtifactMutation:
-    def test_one_byte_change_alters_artifact_hash(self):
+    def test_one_byte_change_alters_treatment_set_hash(self):
         original = _make_frozen()
         mutated = _make_frozen(rendered_artifact="1. Always use pathlib\n2. Verify before patching\n3. Run tests after EDITS")
-        assert original.artifact_hash != mutated.artifact_hash
+        assert original.treatment_set_hash != mutated.treatment_set_hash
 
     def test_one_byte_change_alters_manifest_hash(self):
         original = _make_frozen()
         mutated = _make_frozen(rendered_artifact="X")
         assert original.manifest_hash != mutated.manifest_hash
 
-    def test_one_byte_change_preserves_treatment_set_hash(self):
+    def test_one_byte_change_preserves_lesson_set_hash(self):
         original = _make_frozen()
         mutated = _make_frozen(rendered_artifact="completely different text")
-        assert original.treatment_set_hash == mutated.treatment_set_hash
+        assert original.lesson_set_hash == mutated.lesson_set_hash
 
 
 # ---------------------------------------------------------------------------
-# C. Treatment identity
+# C. Treatment identity (F0-conformant)
 # ---------------------------------------------------------------------------
 
 class TestTreatmentIdentity:
-    def test_same_lessons_same_treatment_hash(self):
+    def test_same_lessons_same_lesson_set_hash(self):
         lessons = _make_lessons()
         a = _make_frozen(lessons=lessons)
         b = _make_frozen(lessons=lessons)
-        assert a.treatment_set_hash == b.treatment_set_hash
+        assert a.lesson_set_hash == b.lesson_set_hash
 
-    def test_different_lessons_different_treatment_hash(self):
+    def test_different_lessons_different_lesson_set_hash(self):
         a = _make_frozen(lessons=_make_lessons())
         other = (LessonEntry(lesson_id="xxx", lesson_hash="h_xxx", position=1),)
         b = _make_frozen(lessons=other)
-        assert a.treatment_set_hash != b.treatment_set_hash
+        assert a.lesson_set_hash != b.lesson_set_hash
 
-    def test_different_arm_different_treatment_hash(self):
+    def test_different_arm_different_lesson_set_hash(self):
         a = _make_frozen(arm="T")
         b = _make_frozen(arm="X")
-        assert a.treatment_set_hash != b.treatment_set_hash
+        assert a.lesson_set_hash != b.lesson_set_hash
 
-    def test_different_protocol_different_treatment_hash(self):
+    def test_different_protocol_different_lesson_set_hash(self):
         a = _make_frozen(protocol_version="f2_v1")
         b = _make_frozen(protocol_version="f2_v2")
-        assert a.treatment_set_hash != b.treatment_set_hash
+        assert a.lesson_set_hash != b.lesson_set_hash
 
-    def test_lesson_order_invariant_for_treatment_hash(self):
+    def test_lesson_order_invariant_for_lesson_set_hash(self):
         lessons_a = (
             LessonEntry(lesson_id="aaa", lesson_hash="h1", position=1),
             LessonEntry(lesson_id="bbb", lesson_hash="h2", position=2),
@@ -147,7 +150,7 @@ class TestTreatmentIdentity:
         )
         a = _make_frozen(lessons=lessons_a)
         b = _make_frozen(lessons=lessons_b)
-        assert a.treatment_set_hash == b.treatment_set_hash
+        assert a.lesson_set_hash == b.lesson_set_hash
 
 
 # ---------------------------------------------------------------------------
@@ -240,7 +243,7 @@ class TestRoundTrip:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
         assert data["manifest_hash"] == m.manifest_hash
-        assert data["artifact_hash"] == m.artifact_hash
+        assert data["treatment_set_hash"] == m.treatment_set_hash
 
 
 # ---------------------------------------------------------------------------
@@ -253,15 +256,15 @@ class TestCorruption:
         d = manifest_to_dict(m)
         d["rendered_artifact"] = "corrupted"
         corrupted = dict_to_manifest(d)
-        with pytest.raises(FreezeVerificationError, match="Artifact hash mismatch"):
+        with pytest.raises(FreezeVerificationError, match="Treatment set hash mismatch"):
             verify_manifest(corrupted)
 
-    def test_artifact_hash_mismatch_fails_verify(self):
+    def test_treatment_set_hash_mismatch_fails_verify(self):
         m = _make_frozen()
         d = manifest_to_dict(m)
-        d["artifact_hash"] = "0" * 64
+        d["treatment_set_hash"] = "0" * 64
         corrupted = dict_to_manifest(d)
-        with pytest.raises(FreezeVerificationError, match="Artifact hash mismatch"):
+        with pytest.raises(FreezeVerificationError, match="Treatment set hash mismatch"):
             verify_manifest(corrupted)
 
 
@@ -278,12 +281,12 @@ class TestManifestCorruption:
         with pytest.raises(FreezeVerificationError, match="Manifest hash mismatch"):
             verify_manifest(corrupted)
 
-    def test_treatment_set_hash_mismatch_fails_verify(self):
+    def test_lesson_set_hash_mismatch_fails_verify(self):
         m = _make_frozen()
         d = manifest_to_dict(m)
-        d["treatment_set_hash"] = "0" * 64
+        d["lesson_set_hash"] = "0" * 64
         corrupted = dict_to_manifest(d)
-        with pytest.raises(FreezeVerificationError, match="Treatment set hash mismatch"):
+        with pytest.raises(FreezeVerificationError, match="Lesson set hash mismatch"):
             verify_manifest(corrupted)
 
 
@@ -363,7 +366,7 @@ class TestNoFallback:
     def test_verification_failure_raises_explicit_error(self):
         m = _make_frozen()
         d = manifest_to_dict(m)
-        d["artifact_hash"] = "bad"
+        d["treatment_set_hash"] = "bad"
         corrupted = dict_to_manifest(d)
         try:
             verify_manifest(corrupted)
@@ -457,3 +460,105 @@ class TestAtomicPersistence:
         path = persist_manifest(m, target)
         assert path.exists()
         assert target.is_dir()
+
+
+# ---------------------------------------------------------------------------
+# M. Hash contract — F0 conformance
+# ---------------------------------------------------------------------------
+
+class TestHashContractF0:
+    def test_treatment_set_hash_is_sha256_of_rendered_artifact(self):
+        """F0 §4: treatment_set_hash = SHA256(active_block)."""
+        m = _make_frozen()
+        expected = hashlib.sha256(m.rendered_artifact.encode("utf-8")).hexdigest()
+        assert m.treatment_set_hash == expected
+
+    def test_changing_rendered_artifact_changes_treatment_set_hash(self):
+        a = _make_frozen()
+        b = _make_frozen(rendered_artifact="different text")
+        assert a.treatment_set_hash != b.treatment_set_hash
+
+    def test_changing_rendered_artifact_preserves_lesson_set_hash(self):
+        a = _make_frozen()
+        b = _make_frozen(rendered_artifact="different text")
+        assert a.lesson_set_hash == b.lesson_set_hash
+
+    def test_changing_lesson_membership_changes_lesson_set_hash(self):
+        lessons_a = (LessonEntry(lesson_id="aaa", lesson_hash="h1", position=1),)
+        lessons_b = (LessonEntry(lesson_id="bbb", lesson_hash="h2", position=1),)
+        a = _make_frozen(lessons=lessons_a)
+        b = _make_frozen(lessons=lessons_b)
+        assert a.lesson_set_hash != b.lesson_set_hash
+
+    def test_changing_arm_changes_lesson_set_hash(self):
+        a = _make_frozen(arm="T")
+        b = _make_frozen(arm="X")
+        assert a.lesson_set_hash != b.lesson_set_hash
+
+    def test_treatment_set_hash_differs_from_lesson_set_hash(self):
+        """The two hashes must be distinct — different input, different purpose."""
+        m = _make_frozen()
+        assert m.treatment_set_hash != m.lesson_set_hash
+
+    def test_lesson_set_hash_includes_arm(self):
+        a = _make_frozen(arm="T")
+        b = _make_frozen(arm="X")
+        assert a.lesson_set_hash != b.lesson_set_hash
+
+    def test_lesson_set_hash_includes_protocol(self):
+        a = _make_frozen(protocol_version="f2_v1")
+        b = _make_frozen(protocol_version="f2_v2")
+        assert a.lesson_set_hash != b.lesson_set_hash
+
+
+# ---------------------------------------------------------------------------
+# N. T/X hash distinction
+# ---------------------------------------------------------------------------
+
+class TestTXHashDistinction:
+    def test_treatment_hash_changes_with_l_removal(self):
+        """Removing L changes the rendered artifact, hence the treatment hash."""
+        lessons = (
+            LessonEntry(lesson_id="aaa", lesson_hash="h1", position=1, rule_text="Rule A"),
+            LessonEntry(lesson_id="bbb", lesson_hash="h2", position=2, rule_text="Rule L"),
+            LessonEntry(lesson_id="ccc", lesson_hash="h3", position=3, rule_text="Rule B"),
+        )
+        t_text = "1. Rule A\n2. Rule L\n3. Rule B"
+        x_text = "1. Rule A\n3. Rule B"
+        t = _make_frozen(lessons=lessons, rendered_artifact=t_text, arm="T")
+        x = _make_frozen(lessons=(lessons[0], lessons[2]), rendered_artifact=x_text, arm="X")
+
+        # treatment_set_hash (F0: SHA256 of rendered text) must differ
+        assert t.treatment_set_hash != x.treatment_set_hash
+        assert t.treatment_set_hash == hashlib.sha256(t_text.encode("utf-8")).hexdigest()
+        assert x.treatment_set_hash == hashlib.sha256(x_text.encode("utf-8")).hexdigest()
+
+    def test_lesson_set_hash_changes_with_l_removal_and_arm(self):
+        """Removing L and changing arm both change the lesson-set hash."""
+        lessons_t = (
+            LessonEntry(lesson_id="aaa", lesson_hash="h1", position=1),
+            LessonEntry(lesson_id="bbb", lesson_hash="h2", position=2),
+            LessonEntry(lesson_id="ccc", lesson_hash="h3", position=3),
+        )
+        lessons_x = (lessons_t[0], lessons_t[2])
+        t = _make_frozen(lessons=lessons_t, arm="T")
+        x = _make_frozen(lessons=lessons_x, arm="X")
+        assert t.lesson_set_hash != x.lesson_set_hash
+
+    def test_t_and_x_manifest_hashes_differ(self):
+        """Different rendered text + different lesson set → different manifest."""
+        t = _make_frozen(rendered_artifact="1. A\n2. L\n3. B", arm="T")
+        x = _make_frozen(rendered_artifact="1. A\n3. B", arm="X")
+        assert t.manifest_hash != x.manifest_hash
+
+    def test_c0_lesson_set_hash_differs_from_t(self):
+        """C0 has different arm and empty lesson set."""
+        t = _make_frozen(arm="T")
+        c0 = _make_frozen(arm="C0", rendered_artifact="")
+        assert t.lesson_set_hash != c0.lesson_set_hash
+
+    def test_c0_treatment_hash_is_sha256_of_empty(self):
+        """C0 rendered artifact is empty; treatment hash is SHA256 of empty string."""
+        c0 = _make_frozen(arm="C0", rendered_artifact="")
+        expected = hashlib.sha256(b"").hexdigest()
+        assert c0.treatment_set_hash == expected

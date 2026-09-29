@@ -47,6 +47,8 @@ import litellm
 litellm.telemetry = False
 litellm.suppress_debug_info = True
 
+from swarm_os.services.f2_replay import get_delivery_artifact, is_replay_active
+
 log = logging.getLogger(__name__)
 
 # ADAPTIVE ROUTING (arXiv:2608.13568 "Does a Language Server Save Tokens for
@@ -652,15 +654,19 @@ async def get_tool_decision(
                 #    available to the diagnosis/evidence side only.
                 injected_chars = 0
                 try:
-                    from swarm_os.services.lesson_manager import (
-                        get_lesson_manager,
-                    )
+                    # F2 replay: check if frozen artifact should be delivered instead
+                    if is_replay_active():
+                        active_block = get_delivery_artifact()
+                    else:
+                        from swarm_os.services.lesson_manager import (
+                            get_lesson_manager,
+                        )
 
-                    active_block = await get_lesson_manager().render_active_lessons(
-                        memory_query,
-                        max_chars=min(700, _headroom * 2),
-                        eval_id=eval_id,
-                    )
+                        active_block = await get_lesson_manager().render_active_lessons(
+                            memory_query,
+                            max_chars=min(700, _headroom * 2),
+                            eval_id=eval_id,
+                        )
                     if active_block:
                         system_prompt = system_prompt + active_block
                         injected_chars += len(active_block)
@@ -761,14 +767,17 @@ async def get_tool_decision(
                         # Governed seam ONLY — never raw ephemeral memory in the
                         # recovery directive. The active lesson set is already a
                         # validated behavioral policy; historical memory is not.
-                        from swarm_os.services.lesson_manager import (
-                            get_lesson_manager,
-                        )
+                        if is_replay_active():
+                            past_lessons = get_delivery_artifact()
+                        else:
+                            from swarm_os.services.lesson_manager import (
+                                get_lesson_manager,
+                            )
 
-                        past_lessons = await get_lesson_manager().render_active_lessons(
-                            f"agent:{agent_id} empty response failure fix",
-                            max_chars=400,
-                        )
+                            past_lessons = await get_lesson_manager().render_active_lessons(
+                                f"agent:{agent_id} empty response failure fix",
+                                max_chars=400,
+                            )
                     except Exception as e:
                         log.debug("Failed to render active lessons: %s", e)
 

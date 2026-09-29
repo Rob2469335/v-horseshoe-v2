@@ -102,7 +102,7 @@ result = {
     "is_replay_active": state.mode == ReplayMode.FROZEN_REPLAY,
     "manifest_path": state.manifest_path,
     "arm": state.artifact.arm,
-    "artifact_hash": state.artifact.artifact_hash,
+    "treatment_set_hash": state.artifact.treatment_set_hash,
 }
 print(json.dumps(result))
 '''
@@ -142,7 +142,7 @@ class TestFreshProcessReplay:
         assert data["is_replay_active"] is True
         assert data["manifest_path"] == str(manifest_path)
         assert data["arm"] == "T"
-        assert data["artifact_hash"] == artifact.artifact_hash
+        assert data["treatment_set_hash"] == artifact.treatment_set_hash
 
 
 # ---------------------------------------------------------------------------
@@ -234,7 +234,7 @@ class TestCorruptedArtifact:
         with open(manifest_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
 
-        with pytest.raises(FreezeVerificationError, match="Artifact hash mismatch"):
+        with pytest.raises(FreezeVerificationError, match="Treatment set hash mismatch"):
             install_verified_replay(manifest_path)
 
         # Must not have installed any replay state
@@ -354,7 +354,7 @@ class TestNoLiveFallback:
         # Corrupt
         with open(manifest_path, encoding="utf-8") as f:
             data = json.load(f)
-        data["artifact_hash"] = "bad"
+        data["treatment_set_hash"] = "bad"
         with open(manifest_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
 
@@ -511,7 +511,7 @@ class TestExplicitReplayRequest:
         os.environ["SWARM_F2_REPLAY"] = "1"
         os.environ["SWARM_F2_MANIFEST_PATH"] = str(manifest_path)
         try:
-            with pytest.raises(FreezeVerificationError, match="Artifact hash mismatch"):
+            with pytest.raises(FreezeVerificationError, match="Treatment set hash mismatch"):
                 install_verified_replay_from_env()
         finally:
             os.environ.pop("SWARM_F2_REPLAY", None)
@@ -532,7 +532,7 @@ class TestExplicitReplayRequest:
         # Corrupt the manifest
         with open(manifest_path, encoding="utf-8") as f:
             data = json.load(f)
-        data["artifact_hash"] = "bad"
+        data["treatment_set_hash"] = "bad"
         with open(manifest_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
 

@@ -21,6 +21,8 @@ load_dotenv(override=True)
 
 import os
 
+from runtime_v2.services.f2_freeze import FreezeVerificationError
+
 # Set default HTTP timeout in environment if not already set
 # read=None is critical for SSE streaming — LLM responses can take 30-120s
 os.environ.setdefault("HTTPX_DEFAULT_TIMEOUT", "300.0")
@@ -515,6 +517,30 @@ async def lifespan(app: FastAPI):
         log.info("Started system-probe warmup")
     except Exception as exc:
         log.warning(f"Probe warmup unavailable: {exc}")
+
+# ---------------------------------------------------------------------------
+    # F2 Replay Initialization (Experiment J Phase 3)
+    # ---------------------------------------------------------------------------
+    try:
+        from swarm_os.services.f2_replay import install_verified_replay_from_env
+        from swarm_os.services.f2_freeze import FreezeVerificationError
+
+        replay_state = install_verified_replay_from_env()
+        if replay_state is not None:
+            log.info(
+                "F2 replay active: manifest=%s arm=%s lessons=%d",
+                replay_state.manifest_path,
+                replay_state.artifact.arm,
+                len(replay_state.artifact.ordered_lessons),
+            )
+        else:
+            log.info("F2 replay not requested (SWARM_F2_REPLAY not set) — LIVE mode")
+    except FreezeVerificationError as exc:
+        log.error("F2 replay verification failed: %s", exc)
+        raise  # Fail closed — never fall back to LIVE
+    except Exception as exc:
+        log.error("F2 replay initialization failed: %s", exc)
+        raise  # Fail closed
 
     log.info("RuntimeGraph mounted on app.state — all routes live")
     yield
