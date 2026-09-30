@@ -238,6 +238,11 @@ $backendEnv = @{
     SWARM_SEMANTIC_CACHE = $env:SWARM_SEMANTIC_CACHE
 }
 
+# Pass F1 web-tool gate only if operator explicitly set it in calling session
+if ($env:SWARM_F1_NO_WEB_TOOLS) {
+    $backendEnv["SWARM_F1_NO_WEB_TOOLS"] = $env:SWARM_F1_NO_WEB_TOOLS
+}
+
 $backendJob = Start-Job -ScriptBlock {
     param($r, $vars)
     Set-Location $r

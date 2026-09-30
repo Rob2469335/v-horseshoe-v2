@@ -1,0 +1,1 @@
+"provides_extra": ["dev", "test"] as the attribute name is 'provides_extra' (singular)

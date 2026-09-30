@@ -302,6 +302,108 @@ Per `docs/EXPERIMENT_J_F1_AUTHORIZATION.md` and `docs/LEARNING_EXPERIMENT_STATE.
 
 ---
 
+## F2 Replay Boundary Engineering — Implementation + Forensic Audit (2026-09-29)
+
+Authoritative context: `docs/EXPERIMENT_J.md` (frozen F0), `docs/EXPERIMENT_J_F1_AUTHORIZATION.md`,
+`docs/LEARNING_EXPERIMENT_STATE.md` §10 (F2 engineering checkpoint). Do not modify those three docs.
+
+### 1. What exists on disk (reconciled from working tree, not from conversation memory)
+
+| Item | Status | Evidence |
+|------|--------|----------|
+| Freeze primitives | On disk | `runtime_v2/services/f2_freeze.py` — **UNTRACKED in git** |
+| Replay isolation | On disk | `runtime_v2/services/f2_replay.py` — **UNTRACKED in git** |
+| Back-compat wrappers | Tracked + modified | `swarm_os/services/f2_freeze.py`, `swarm_os/services/f2_replay.py` (re-export runtime_v2) |
+| FastAPI integration | Tracked | `swarm_os/app/main.py` lifespan calls `install_verified_replay_from_env()` (~line 522-541), fail-closed on error |
+| Delivery gate sites | Tracked (in HEAD commit 9576f8a7) | `runtime_v2/api/agent_service_v2.py:2667-2668`, `runtime_v2/services/stream_runner.py:658-669,770-780` |
+| F2 tests | Tracked | `tests/test_f2_freeze.py` (58), `tests/test_f2_replay.py` (25) |
+| Promotion fixture / exclude_ids / X-derivation / fresh-process harness / delivery instrumentation | **NOT IMPLEMENTED** | No production/harness caller of `freeze_artifact()`/`persist_manifest()` exists; no `exclude_ids` anywhere |
+
+**Git-state defect (confirmed):** `runtime_v2/services/f2_freeze.py` and `runtime_v2/services/f2_replay.py`
+have never been tracked (not in any commit). Tracked code depends on them:
+`swarm_os/app/main.py@HEAD` does `from runtime_v2.services.f2_freeze import FreezeVerificationError` at module top,
+and the tracked wrappers re-export from `runtime_v2.services.f2_*`. A **clean checkout of HEAD cannot import
+the backend or collect the F2 tests** (`ModuleNotFoundError: No module named 'runtime_v2'`).
+
+### 2. Exact test baseline (run 2026-09-29)
+
+```
+python -m pytest tests/test_f2_freeze.py tests/test_f2_replay.py -v
+```
+Collected: 83 · Passed: 80 · Failed: 3 (deterministic, every run) · Errors: 0 · Skipped: 0
+
+Failing tests:
+1. `TestFreshProcessReplay::test_child_process_replays_frozen_artifact`
+2. `TestParentChildDistinction::test_parent_contextvar_not_inherited_by_child`
+3. `TestParentChildDistinction::test_verified_replay_via_env`
+
+All three fail identically inside the child subprocess:
+`ModuleNotFoundError: No module named 'runtime_v2'` at the wrapper's `from runtime_v2.services.f2_freeze import ...`.
+
+**Root cause (proven):** `tests/test_f2_replay.py::_run_child()` spawns
+`sys.executable -u <temp_dir>/_child_script.py` with `cwd=repo_root` but NO `PYTHONPATH`.
+For a script executed from a temp dir, `sys.path[0]` is the script dir, not `cwd`. The editable install
+(`pip install -e .`) exposes top-level `organism_console` and `swarm_os` only — `runtime_v2` is absent from
+every editable finder MAPPING. So the child can import tracked `swarm_os.services.f2_freeze` but its re-export
+target `runtime_v2.services.f2_freeze` cannot resolve.
+
+**PYTHONPATH experiment (proven):** setting `PYTHONPATH=<repo_root>` for those same 3 tests → **3 passed**.
+The failures are test-harness environment, but this is NOT a production-cannot-fail claim:
+the future F2 fresh-process harness (unimplemented) would face the identical import requirement unless it sets
+`PYTHONPATH`/`--app-dir`. Production `start-dev.ps1` sets `PYTHONPATH=$root` + `-m uvicorn --app-dir`, so the
+current backend startup path is safe; a future child-process harness is unproven.
+
+### 3. Forensic audit classification (independent, 2026-09-29)
+
+**Classification: PARTIALLY VERIFIED.**
+
+Confirmed (code + passing tests): manifest self-hash exclusion; manifest provenance fields;
+atomic persistence (temp+`os.replace`+fsync); no LIVE fallback on verification failure;
+frozen-data mutation isolation; explicit LIVE-vs-FROZEN env signaling; fresh-child does not inherit
+parent ContextVar (logic correct; execution blocked only by import path).
+
+NOT PROVEN / gaps:
+- **T → X ordering:** no production pipeline. `render_active_lessons()` → freeze → persist → derive X is not
+  implemented; X exists only as literal strings in `TestTXHashDistinction`.
+- **Sole delivery authority:** `get_delivery_artifact()` is gated at 3 sites, but `swarm_os/brain.py:270,280`
+  and `organism_console/core/repair_engine.py:656` call `render_active_lessons()` directly (bypass replay gate).
+- **Multi-task isolation:** no concurrency test exists; `_f2_state` is process-global by construction.
+- **Verifier identity check:** accepts a self-consistent manifest whose git_sha/task/arm differ from any
+  authorized canonical identity (verifies internal integrity, not binding to an external identity).
+- **Startup fail-closed end-to-end:** `lifespan` raises on corrupt manifest (main.py:536-541), but no test
+  runs the lifespan with a corrupt manifest.
+
+### 4. Contradictions surfaced (not resolved)
+
+1. `docs/LEARNING_EXPERIMENT_STATE.md` §10 header says "DOCUMENTATION CHECKPOINT ONLY — no implementation
+   performed", yet the F2 freeze/replay implementation, tests, and integration exist in the working tree and in
+   commits `c8e7c20e`, `e27d65b`, `9576f8a7`. Authority doc is stale relative to the working tree. Higher
+   authority = the repo implementation + tests for *what exists*; the doc remains authoritative for
+   *what is not authorized yet* (promotion fixture, exclude_ids, harness, N=2).
+2. `AGENTS.md` §43 "Experiment J F2 — PENDING" remains true for the scientific step (no ACTIVE lesson L) but
+   does not record the on-disk replay-boundary engineering state above.
+3. Report claim "62 freeze + 21 replay tests" vs actual **58 + 25** (recorded in §2).
+
+### 5. Untracked probe files created during this session's investigation
+
+`test_child.py`, `test_import.py`, `test_import2.py` (repo root, untracked, scratch). They call
+`freeze_artifact`/`persist_manifest` and must NOT be counted as production callers. Recommend deletion or
+exclusion before any commit.
+
+### 6. Status (machine-readable)
+
+| Item | Status | Evidence |
+|------|--------|----------|
+| F2 freeze/replay primitives | IMPLEMENTED (untracked on disk) | `runtime_v2/services/f2_freeze.py`, `f2_replay.py` |
+| F2 tests | 80/83 pass; 3 env-blocked (PYTHONPATH) | §2 above |
+| T → X pipeline | NOT IMPLEMENTED | no production caller / no exclude_ids |
+| Delivery authority | PARTIAL (2 bypass sites) | brain.py, repair_engine.py |
+| Multi-task isolation | NOT EMPIRICALLY TESTED | §3 |
+| Phase 3 | NOT AUTHORIZED | prerequisites unmet: `SWARM_RECEIPT_KEY` missing, no ACTIVE lesson L |
+| N=2 | MUST REMAIN STOPPED | no authorizing document |
+
+---
+
 ## Frozen N1 Artifacts (Do Not Modify)
 
 - `qwen_train/run_twine_eval.py` — Frozen evaluator (SHA-256: `C8388FF9C317944AA53C163C5149455B177F95F59A75DE7C1E13AD88AD041AC2`)
