@@ -24,7 +24,7 @@ This is the frozen F0 research question from `docs/EXPERIMENT_J.md` §1. The lea
 | **Post-F1 Governance Baseline** | **ESTABLISHED 2026-09-27** | `SWARM_AUTONOMY=0`, `SWARM_GENETIC_MUTATION=0`, `SWARM_EVAL_TICK=0`, `SWARM_EXPERIMENT_J_ARM=0`, `SWARM_F1_NO_WEB_TOOLS=0`, `SWARM_EVOLUTION=0`; verified in backend PID 20332 |
 | **Experiment J F2 (genuine learning event)** | **PENDING** | No verified ACTIVE lesson L exists. Prerequisites: `SWARM_RECEIPT_KEY` provisioned (missing, fail-closed), backend/Qdrant healthy, `ActiveLessons` empty (C0). See `docs/EXPERIMENT_J.md` §17, §18. |
 | **F1 Harness Machinery** | **IMPLEMENTED** | Evaluator separation, pre-flight checks, behavioral prompt, fresh-clone gate, `SWARM_F1_NO_WEB_TOOLS=1` |
-| **F2 Engineering Work** | **NOT IMPLEMENTED** | Promotion fixture, `exclude_ids` in `render_active_lessons()`, delivery instrumentation, fresh-process harness, replay code. See `docs/EXPERIMENT_J.md` §18. |
+| **F2 Engineering Work** | **PARTIAL** | Promotion fixture, delivery instrumentation, fresh-process harness, replay code: IMPLEMENTED (2026-09-29 baseline `7165cb20`). `exclude_ids`, certification gate: NOT IMPLEMENTED. See `docs/EXPERIMENT_J.md` §18. |
 
 **F1 Protocol Observations: 20/20 COMPLETED** (reconciled 2026-09-26 from `qwen_train/results/f1_obs*.jsonl`):
 - 10 valid observations (all reaching qualifying first-edit endpoint @ ATIF Step 4)
@@ -970,16 +970,22 @@ Post-F1 Governance Baseline (2026-09-27):
 - `evaluation_bridge.py` — harness→PromptRepairer adapter
 - `_strip_web_tools_for_local_analysis()` — web-tool stripping
 
-**NOT IMPLEMENTED (F2-specific):**
+**NOT IMPLEMENTED (remaining F2-specific):**
 - F2 freeze schema / deterministic artifact capture (primitives exist in `runtime_v2/services/f2_freeze.py`; governed production freeze pipeline not implemented)
 - `exclude_ids` parameter in `render_active_lessons()`
-- Delivery instrumentation (`lesson_block_hash`, `final_prompt_hash`, `delivery_timestamp`, `treatment_set_hash`)
 - Rediscovery rule classification from trajectory timestamps
-- Fresh-process T/X/C0 arm orchestrator
 - Adversarial/corruption/mutation tests
-- Governed promotion fixture for genuine ACTIVE lesson
 - F2 certification gate
-- One authoritative delivery abstraction (see invariant C below)
+
+**IMPLEMENTED as of 2026-09-29 F2 baseline (`7165cb20`):**
+- Delivery instrumentation (9-field P2 delivery evidence in trajectory JSONL)
+- Fresh-process T/X/C0 arm orchestrator (adapter + orchestrator + real-P2 tests)
+- Governed promotion fixture (`tests/test_learner_artifact_derivation.py`, 39 tests; uses test-only signing; no real ACTIVE lesson created)
+- One authoritative delivery abstraction (invariant C in §10.2)
+
+**NOT YET TRIGGERED:**
+- Genuine governed learning event (requires Qdrant healthy + production `SWARM_RECEIPT_KEY` provisioned)
+- ACTIVE lesson L: NONE — does not exist; no legitimate ACTIVE lesson has been created
 
 **IMPLEMENTED under dated authorization (2026-09-29):**
 - F2 fresh-process execution/import contract — every F2 fresh Python child
