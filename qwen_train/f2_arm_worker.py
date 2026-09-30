@@ -60,6 +60,82 @@ def _compute_final_prompt_hash(system_prompt: str, delivered: str) -> str:
     return hashlib.sha256((system_prompt + delivered).encode("utf-8")).hexdigest()
 
 
+def _read_p2_delivery_evidence(
+    workspace_root: Path, rollout_id: str | None = None
+) -> dict[str, Any] | None:
+    """Read P2's authoritative delivery-evidence record for THIS rollout.
+
+    Transport decision (authorized per F2 worker-exec §10 L280): the narrowest
+    existing mechanism is trajectory readback — P2 writes delivery_evidence to
+    data/trajectories/{run_id}.jsonl at the model-facing delivery seam
+    (runtime_v2/api/agent_service_v2.py). This function reads that record and
+    returns it.
+
+    Identity binding: selection is on the record's ``rollout_id`` field, which P2
+    reads from the ``SWARM_F2_ROLLOUT_ID`` environment value P1 set on the P2
+    process. The record's ``run_id`` is P2's own per-invocation uuid4 and names
+    the trajectory FILE; it is never a join key for P1, and the file name is not
+    used to select evidence.
+
+    Fail-closed. Returns None — never a partially-trusted record — when:
+      * no rollout identity was supplied, so nothing can be selected safely;
+      * no delivery_evidence record carries this rollout's identity (missing
+        evidence, or another rollout's / stale evidence);
+      * several records match this rollout AND disagree on any authoritative
+        field, because which one P2 actually delivered is then unknown.
+    Byte-identical duplicate records are an idempotent re-write, not a
+    conflict, and collapse to one.
+    """
+    expected = (rollout_id or "").strip()
+    if not expected:
+        return None
+
+    traj_dir = workspace_root / "data" / "trajectories"
+    if not traj_dir.is_dir():
+        return None
+    traj_files = sorted(
+        traj_dir.glob("*.jsonl"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    matches: list[dict[str, Any]] = []
+    for traj_file in traj_files:
+        try:
+            with open(traj_file, "r", encoding="utf-8") as fh:
+                for raw in fh:
+                    raw = raw.strip()
+                    if not raw:
+                        continue
+                    try:
+                        rec = json.loads(raw)
+                    except json.JSONDecodeError:
+                        continue
+                    if rec.get("record_type") != "delivery_evidence":
+                        continue
+                    # Identity-less evidence is never selectable: an F2 arm must
+                    # be bound to a rollout it can name.
+                    if not str(rec.get("rollout_id") or "").strip():
+                        continue
+                    if str(rec.get("rollout_id")).strip() != expected:
+                        continue
+                    matches.append(rec)
+        except OSError:
+            continue
+
+    if not matches:
+        return None
+
+    first = matches[0]
+    for other in matches[1:]:
+        if json.dumps(other, sort_keys=True, default=str) != json.dumps(
+            first, sort_keys=True, default=str
+        ):
+            # Conflicting evidence for one rollout: refuse to guess which
+            # delivery is authoritative.
+            return None
+    return first
+
+
 def _arm_report(state: dict[str, Any]) -> str:
     return json.dumps(state, sort_keys=True, separators=(",", ":"))
 
@@ -125,6 +201,45 @@ def run_worker(argv: list[str] | None = None) -> int:
 
         exec_end = time.time()
 
+        # -- P2 delivery-evidence transport (authorized per F2 worker-exec §10) --
+        # P2 is the authoritative producer of delivery evidence at the
+        # model-facing delivery seam.  We read P2's trajectory record here.
+        # P1's own computation (above) is kept only as a verification baseline.
+        # Transport decision: trajectory readback — the narrowest existing
+        # mechanism (no new IPC).  P2 writes delivery_evidence into
+        # data/trajectories/{run_id}.jsonl during execution; this worker reads
+        # it back and uses P2's values in the receipt.
+        workspace_root = Path(os.environ.get("SWARM_WORKSPACE_ROOT", str(_HERE.parent)))
+        p2_evidence: dict[str, Any] | None = None
+        if exec_cmd:
+            p2_evidence = _read_p2_delivery_evidence(workspace_root, rollout_id)
+            if p2_evidence is None:
+                raise RuntimeError(
+                    "F2 fail-closed: no unambiguous P2 delivery evidence bound to "
+                    f"rollout_id={rollout_id!r} in the trajectory store. An F2 arm "
+                    "with real execution MUST receive P2-produced delivery evidence "
+                    "for its own rollout; missing evidence, another rollout's "
+                    "evidence, or conflicting duplicates are not a valid receipt."
+                )
+            if p2_evidence.get("arm") not in (None, artifact.arm):
+                raise RuntimeError(
+                    f"F2 fail-closed: P2 evidence arm={p2_evidence.get('arm')!r} "
+                    f"does not match manifest arm={artifact.arm!r}"
+                )
+
+        # Use P2-produced values as authoritative; keep P1 baseline for comparison
+        if p2_evidence:
+            lesson_block_hash = p2_evidence.get("lesson_block_hash", lesson_block_hash)
+            final_prompt_hash = p2_evidence.get("final_prompt_hash", final_prompt_hash)
+            delivery_timestamp = p2_evidence.get("delivery_timestamp", delivery_timestamp)
+            p2_serving_pid = p2_evidence.get("serving_pid", "")
+            p2_serving_start_time = p2_evidence.get("serving_start_time", "")
+            evidence_source = "p2_trajectory"
+        else:
+            p2_serving_pid = ""
+            p2_serving_start_time = ""
+            evidence_source = "p1_computed_delegated"
+
         receipt: dict[str, Any] = {
             "experiment_id": artifact.experiment_id,
             "protocol_version": artifact.protocol_version,
@@ -154,10 +269,18 @@ def run_worker(argv: list[str] | None = None) -> int:
                 "lesson_block_hash": lesson_block_hash,
                 "final_prompt_hash": final_prompt_hash,
                 "delivery_timestamp": delivery_timestamp,
+                "evidence_source": evidence_source,
             },
             "lesson_block_hash": lesson_block_hash,
             "final_prompt_hash": final_prompt_hash,
             "delivery_timestamp": delivery_timestamp,
+            "p2_delivery_evidence": {
+                "source": evidence_source,
+                "serving_pid": p2_serving_pid,
+                "serving_start_time": p2_serving_start_time,
+                "manifest_treatment_set_hash": p2_evidence.get("manifest_treatment_set_hash", "") if p2_evidence else "",
+                "manifest_content_address": p2_evidence.get("manifest_content_address", "") if p2_evidence else "",
+            },
             "execution_timestamps": {"started": exec_start, "completed": exec_end},
             "verification_result": "verified",
             "failure_reason": None,

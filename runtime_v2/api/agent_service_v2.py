@@ -177,6 +177,50 @@ def _current_rollout_id() -> str:
         return ""
 
 
+def _current_f2_rollout_id() -> str:
+    """F2 arm rollout identity propagated into this serving process (or '').
+
+    F2 arms do not travel over the credential-gated HTTP header path that
+    populates ROLLOUT_ID_CTX: the P1 orchestrator writes SWARM_F2_ROLLOUT_ID
+    into the environment of the fresh P2 process itself
+    (qwen_train/f2_execution_adapter.py). Reading that variable here is the
+    identity value P1 actually established for this process, so the delivery
+    evidence P2 writes carries the arm identity its reader looks up.
+
+    Distinct from _current_rollout_id(), which is the per-request header identity.
+    """
+    try:
+        return os.environ.get("SWARM_F2_ROLLOUT_ID", "").strip()
+    except Exception:  # noqa: BLE001 - never let identity lookup kill the stream
+        return ""
+
+
+def _f2_delivery_evidence_chunk(
+    run_id: str, delivered_block: str, sys_prompt: str, agent_id: str
+) -> dict[str, Any]:
+    """Build the F2 delivery-evidence chunk at the model-facing delivery seam.
+
+    Identity binding (P1↔P2): ``run_id`` is this invocation's own backend id (a
+    fresh uuid4, unknown to P1) and names the trajectory FILE; it is not a join
+    key P1 can hold. ``rollout_id`` is the F2 arm identity P1 propagated into
+    this process, read back from the environment value P1 set, and is the field
+    P1's reader selects on. Both are recorded so the evidence is bound to the
+    rollout that actually produced it.
+
+    The 9 authoritative delivery fields come from
+    ``record_f2_delivery_evidence()`` (P2 is authoritative for them); this
+    function only adds identity.
+    """
+    from runtime_v2.services.f2_replay import record_f2_delivery_evidence
+
+    return {
+        "type": "f2_delivery_evidence",
+        "run_id": run_id,
+        "rollout_id": _current_f2_rollout_id(),
+        **record_f2_delivery_evidence(delivered_block, sys_prompt, agent_id),
+    }
+
+
 class AgentServiceV2:
     def __init__(
         self,
@@ -2747,15 +2791,12 @@ class AgentServiceV2:
 
         # F2 delivery evidence: 9-field record at the actual delivery seam.
         # Yielded as a special chunk intercepted by the outer step_agent_stream;
-        # never forwarded to the client. run_id included for trajectory binding.
+        # never forwarded to the client. Built by _f2_delivery_evidence_chunk,
+        # which binds the record to the rollout P1 propagated into this process.
         if is_replay_active():
-            from runtime_v2.services.f2_replay import record_f2_delivery_evidence
-
-            yield {
-                "type": "f2_delivery_evidence",
-                "run_id": run_id,
-                **record_f2_delivery_evidence(injected_memories, sys_prompt, agent_id),
-            }
+            yield _f2_delivery_evidence_chunk(
+                run_id, injected_memories, sys_prompt, agent_id
+            )
 
         messages = [{"role": "system", "content": sys_prompt}] + history
         if prompt:
