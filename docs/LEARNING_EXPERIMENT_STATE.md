@@ -1055,3 +1055,23 @@ It must not be provisioned simply to make tests pass. The engineering machinery 
 | F2 engineering | PARTIAL — fresh-process execution/import contract implemented 2026-09-29; all other F2-specific engineering NOT STARTED | `docs/EXPERIMENT_J_F2_EXECUTION_CONTRACT_AUTHORIZATION.md` |
 | ACTIVE lesson L | NONE | No lesson exists in Qdrant |
 | N=2 authorization | NOT AUTHORIZED | No document authorizes N=2 |
+
+---
+
+## F2 Authority Amendment Pointer (2026-09-29)
+
+The F2 authority documents were amended on 2026-09-29 (see
+`docs/EXPERIMENT_J_F2_ORCHESTRATOR_DESIGN.md` and
+`docs/EXPERIMENT_J_F2_WORKER_EXECUTION_AUTHORIZATION.md`, as amended). The F2
+HTTP execution graph is exactly `P0 → P1 → P2`: P1 and P2 are separate fresh
+processes per arm; P1 drives P2 directly over `127.0.0.1` HTTP/SSE; P3 is not
+required; P1/P2 fusion is not authorized; P2 owns authoritative replay state and
+delivery. Backend identity is the serving process (socket/listener owner):
+`p2_serving_pid` + `p2_serving_start_time`, with launcher and evidence-writer
+identities recorded separately; expected-PID equality is not a requirement.
+Committed F0 delivery-identity recording (`lesson_block_hash`,
+`final_prompt_hash`, `delivery_timestamp`, backend PID/start time) remains
+authoritative; a delivery-time hash-mismatch ABORT is not currently authorized.
+
+This is a dated pointer record only. No experiment-state conclusion is changed by
+this entry.

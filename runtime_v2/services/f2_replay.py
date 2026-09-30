@@ -86,10 +86,40 @@ class ReplayState:
 # This is the authoritative source for production delivery, not the ContextVar.
 _f2_state: ReplayState | None = None
 
+# Process-local "F2 replay required" flag. Distinct from replay-ACTIVE:
+# an execution can be F2-required even while replay state is not yet (or no
+# longer) installed. This survives the clearing of SWARM_F2_REPLAY by
+# install_verified_replay_from_env(), so a lost replay before delivery still
+# ABORTS rather than silently becoming LIVE.
+_f2_required: bool = False
+
 # ContextVar retained ONLY for test isolation (tests run in same process).
 _REPLAY_STATE: ContextVar[ReplayState | None] = ContextVar(
     "f2_replay_state", default=None
 )
+_REQUIRED_CTX: ContextVar[bool] = ContextVar("f2_replay_required", default=False)
+
+
+def mark_replay_required() -> None:
+    """Record that the current process is an F2 replay-required execution.
+
+    Process-local and immutable for the arm lifetime. Survives the clearing of
+    SWARM_F2_REPLAY after a successful install, so the delivery seams can still
+    distinguish F2_REQUIRED from ordinary non-F2 LIVE execution.
+    """
+    global _f2_required
+    _f2_required = True
+    _REQUIRED_CTX.set(True)
+    _log.info("F2 replay REQUIRED — process-local flag set (survives env clear)")
+
+
+def is_replay_required() -> bool:
+    """True iff the current process is an F2 replay-required execution.
+
+    Uses the process-level flag (authoritative for production delivery),
+    independent of whether verified replay is currently ACTIVE.
+    """
+    return _f2_required
 
 
 def install_replay_state(artifact: FrozenArtifact, manifest_path: str) -> ReplayState:
@@ -122,10 +152,14 @@ def clear_replay_state() -> None:
     """Remove replay state, reverting to LIVE mode.
 
     Used after an F2 arm completes to restore normal behavior.
+    Also clears the process-local F2-required flag so a completed arm cannot
+    silently re-enter LIVE while still marked F2-required.
     """
-    global _f2_state
+    global _f2_state, _f2_required
     _f2_state = None
+    _f2_required = False
     _REPLAY_STATE.set(None)
+    _REQUIRED_CTX.set(False)
     _log.info("F2 replay cleared — reverting to LIVE mode")
 
 
@@ -250,6 +284,11 @@ def install_verified_replay_from_env() -> ReplayState | None:
     if not replay_requested:
         return None  # Explicitly LIVE mode — no replay requested
 
+    # Record F2-required BEFORE install: the env var is cleared on success, but
+    # the process-local required flag must survive so a lost replay before
+    # delivery still ABORTS rather than silently becoming LIVE.
+    mark_replay_required()
+
     manifest_path = decode_manifest_reference()
     if manifest_path is None:
         raise FreezeVerificationError(
@@ -262,3 +301,48 @@ def install_verified_replay_from_env() -> ReplayState | None:
     _clear_replay_env()
 
     return state
+
+
+def record_f2_delivery_evidence(
+    delivered_block: str,
+    sys_prompt: str,
+    agent_id: str,
+) -> dict:
+    """Produce the F0 delivery-identity evidence at the P2 delivery seam.
+
+    Called once per delivery inside the serving P2 process, after the final
+    ``sys_prompt`` has been constructed and before messages/model invocation.
+    Returns a dict with exactly 9 authoritative fields (F0 §4/§7/§9).
+
+    Side-effect free with respect to the delivered prompt: the block and prompt
+    are read-only inputs; the dict is returned to the caller for association
+    with the trajectory record.
+    """
+    import hashlib
+    import os
+    import time
+
+    delivered_sha = hashlib.sha256(delivered_block.encode("utf-8")).hexdigest()
+    prompt_sha = hashlib.sha256(sys_prompt.encode("utf-8")).hexdigest()
+    serving_pid = os.getpid()
+
+    try:
+        import psutil
+
+        serving_start_time = psutil.Process(serving_pid).create_time()
+    except Exception:  # noqa: BLE001
+        serving_start_time = 0.0
+
+    artifact = _f2_state.artifact if _f2_state else None
+
+    return {
+        "delivered_block": delivered_block,
+        "lesson_block_hash": delivered_sha,
+        "final_prompt_hash": prompt_sha,
+        "delivery_timestamp": time.time(),
+        "serving_pid": serving_pid,
+        "serving_start_time": serving_start_time,
+        "arm": agent_id,
+        "manifest_treatment_set_hash": artifact.treatment_set_hash if artifact else "",
+        "manifest_content_address": artifact.content_address if artifact else "",
+    }

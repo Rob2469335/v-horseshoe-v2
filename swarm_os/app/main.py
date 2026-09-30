@@ -21,8 +21,6 @@ load_dotenv(override=True)
 
 import os
 
-from runtime_v2.services.f2_freeze import FreezeVerificationError
-
 # Set default HTTP timeout in environment if not already set
 # read=None is critical for SSE streaming — LLM responses can take 30-120s
 os.environ.setdefault("HTTPX_DEFAULT_TIMEOUT", "300.0")

@@ -27,7 +27,34 @@ log = logging.getLogger(__name__)
 # in THIS module (immediately below) — tests patch them by this path, and moving
 # a mutable that a consumer reads elsewhere silently no-ops the patch.
 # ---------------------------------------------------------------------------
-from runtime_v2.services.f2_replay import get_delivery_artifact, is_replay_active
+from runtime_v2.services.f2_replay import (
+    get_delivery_artifact,
+    is_replay_active,
+    is_replay_required,
+)
+from runtime_v2.services.f2_freeze import FreezeVerificationError
+
+
+def _f2_replay_required() -> bool:
+    """True iff this process is an F2 replay-required execution.
+
+    Reads the process-local required flag (f2_replay.is_replay_required), which
+    SURVIVES the clearing of SWARM_F2_REPLAY after a successful install — so
+    "requirement held but replay later lost" is still an ABORT (hardening
+    correction; authorization §7.2).
+    """
+    return is_replay_required()
+
+
+def _f2_abort_if_required_but_inactive() -> None:
+    """Fail closed: F2 replay REQUIRED but inactive => ABORT before model
+    delivery. Raises FreezeVerificationError (propagates through _call_llm's
+    re-raise) so no model request, no LIVE rendering, no delivery evidence."""
+    if _f2_replay_required() and not is_replay_active():
+        raise FreezeVerificationError(
+            "F2 replay REQUIRED but replay is inactive in the delivery process; "
+            "ABORT before model execution (no LIVE fallback)."
+        )
 
 from runtime_v2.api._agent_helpers import (  # noqa: F401
     _INTERNET_GOAL_RE as _INTERNET_GOAL_RE,
@@ -2531,6 +2558,7 @@ class AgentServiceV2:
             parent_id = ""  # top-level normalized
 
         _last_chunk = {}
+        delivery_evidence: dict = {}
         try:
             async for chunk in self._step_agent_stream_inner(
                 agent_id,
@@ -2546,6 +2574,9 @@ class AgentServiceV2:
                 parent_id=parent_id,
                 delegated_by=delegated_by or "",
             ):
+                if chunk.get("type") == "f2_delivery_evidence":
+                    delivery_evidence = chunk
+                    continue  # captured; not forwarded to client
                 _last_chunk = chunk
                 yield chunk
         except GeneratorExit:
@@ -2583,6 +2614,25 @@ class AgentServiceV2:
                 log.debug(
                     "trajectory write failed (best-effort, stream continues): %s", _e
                 )  # trajectory write is best-effort; never kill the stream
+
+            # F2 delivery evidence: append a separate JSONL record to the
+            # trajectory file. Concurrency-safe: delivery_evidence is a local
+            # variable per request (set by the intercepted chunk, not shared).
+            if delivery_evidence:
+                try:
+                    import json as _json_mod
+
+                    traj_path = self._TRAJ_DIR / f"{run_id}.jsonl"
+                    with open(traj_path, "a", encoding="utf-8") as _f:
+                        _f.write(
+                            _json_mod.dumps(
+                                {"record_type": "delivery_evidence",
+ **delivery_evidence}
+                            )
+                            + "\n"
+                        )
+                except Exception:  # noqa: BLE001
+                    pass  # best-effort; evidence write must never kill the stream
 
     def _feed_aborted_outcome(
         self, agent_id: str, prompt: str, genome_id: str = ""
@@ -2664,6 +2714,8 @@ class AgentServiceV2:
                 # GOVERNED SEAM: only the curated active lesson set may enter the
                 # agent's system prompt as behavioural guidance. Raw episodic
                 # memory stays on the evidence/diagnosis side.
+                # F2 replay REQUIRED but inactive => ABORT (fail closed).
+                _f2_abort_if_required_but_inactive()
                 if is_replay_active():
                     injected_memories = get_delivery_artifact()
                 else:
@@ -2673,6 +2725,8 @@ class AgentServiceV2:
                         f"agent:{agent_id} {prompt[:200]}",
                         max_chars=700,
                     )
+            except FreezeVerificationError:
+                raise  # F2 replay-required abort MUST propagate
             except Exception as exc:
                 log.warning("Failed to render active lessons: %s", exc)
 
@@ -2690,6 +2744,18 @@ class AgentServiceV2:
         sys_prompt = build(agent_id) + injected_memories
         if len(chain) > 1:
             sys_prompt += f"\n\nAlready visited: {' -> '.join(chain)}. Do NOT re-delegate to these agents."
+
+        # F2 delivery evidence: 9-field record at the actual delivery seam.
+        # Yielded as a special chunk intercepted by the outer step_agent_stream;
+        # never forwarded to the client. run_id included for trajectory binding.
+        if is_replay_active():
+            from runtime_v2.services.f2_replay import record_f2_delivery_evidence
+
+            yield {
+                "type": "f2_delivery_evidence",
+                "run_id": run_id,
+                **record_f2_delivery_evidence(injected_memories, sys_prompt, agent_id),
+            }
 
         messages = [{"role": "system", "content": sys_prompt}] + history
         if prompt:

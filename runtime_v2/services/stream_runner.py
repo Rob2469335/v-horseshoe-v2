@@ -47,9 +47,39 @@ import litellm
 litellm.telemetry = False
 litellm.suppress_debug_info = True
 
-from swarm_os.services.f2_replay import get_delivery_artifact, is_replay_active
+from swarm_os.services.f2_replay import (
+    get_delivery_artifact,
+    is_replay_active,
+    is_replay_required,
+)
+from runtime_v2.services.f2_freeze import FreezeVerificationError
 
 log = logging.getLogger(__name__)
+
+
+def _f2_replay_required() -> bool:
+    """True iff this process was launched as an F2 replay-required execution.
+
+    Reads the process-local required flag (f2_replay.is_replay_required), which
+    SURVIVES the clearing of SWARM_F2_REPLAY after a successful install — so
+    "requirement held but replay later lost" is still distinguishable from
+    ordinary non-F2 LIVE execution (authorization §7.2, hardening correction).
+    """
+    return is_replay_required()
+
+
+def _f2_abort_if_required_but_inactive() -> None:
+    """Fail closed: F2 replay REQUIRED but inactive => ABORT before model delivery.
+
+    Raises FreezeVerificationError (propagates past _call_llm's re-raise) so no
+    model request, no LIVE lesson rendering, and no successful delivery evidence
+    are produced. LIVE render is never an acceptable F2 fallback.
+    """
+    if _f2_replay_required() and not is_replay_active():
+        raise FreezeVerificationError(
+            "F2 replay REQUIRED but replay is inactive in the delivery process; "
+            "ABORT before model execution (no LIVE fallback)."
+        )
 
 # ADAPTIVE ROUTING (arXiv:2608.13568 "Does a Language Server Save Tokens for
 # Coding Agents?"): the agent's tool choice is task-shaped. On LOCALIZATION
@@ -654,7 +684,9 @@ async def get_tool_decision(
                 #    available to the diagnosis/evidence side only.
                 injected_chars = 0
                 try:
-                    # F2 replay: check if frozen artifact should be delivered instead
+                    # F2 replay: ABORT if replay REQUIRED but inactive; otherwise
+                    # check if frozen artifact should be delivered instead.
+                    _f2_abort_if_required_but_inactive()
                     if is_replay_active():
                         active_block = get_delivery_artifact()
                     else:
@@ -675,6 +707,8 @@ async def get_tool_decision(
                             agent_id,
                             len(active_block),
                         )
+                except FreezeVerificationError:
+                    raise  # F2 replay-required abort MUST propagate (no fallback)
                 except Exception as refl_err:
                     log.debug(
                         "Governed lesson render skipped: %s", refl_err
@@ -767,6 +801,8 @@ async def get_tool_decision(
                         # Governed seam ONLY — never raw ephemeral memory in the
                         # recovery directive. The active lesson set is already a
                         # validated behavioral policy; historical memory is not.
+                        # F2 replay REQUIRED but inactive => ABORT (fail closed).
+                        _f2_abort_if_required_but_inactive()
                         if is_replay_active():
                             past_lessons = get_delivery_artifact()
                         else:
@@ -778,6 +814,8 @@ async def get_tool_decision(
                                 f"agent:{agent_id} empty response failure fix",
                                 max_chars=400,
                             )
+                    except FreezeVerificationError:
+                        raise  # F2 replay-required abort MUST propagate
                     except Exception as e:
                         log.debug("Failed to render active lessons: %s", e)
 
