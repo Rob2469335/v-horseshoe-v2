@@ -1,32 +1,86 @@
-# Horseshoe Swarm v2
+# ZENITH Swarm OS (v-horseshoe-v2)
 
-Horseshoe Swarm v2 is a modular swarm orchestration platform for local AI workflows, routing, planning, execution, and simulation.
+A modular swarm orchestration platform for local AI agent workflows — planning, routing, execution, self-healing, and controlled experimentation.
 
-## Overview
+## What it is
 
-The orchestrator coordinates planning, routing, critique, trace collection, model selection, and task execution over a LiteLLM-backed model inventory (OpenRouter, Groq, and local llama.cpp endpoints).
+ZENITH Swarm OS is a Python 3.14+ system that orchestrates AI agents over local model infrastructure (llama.cpp, LiteLLM, Qdrant). The repository contains:
+
+- **swarm_os/** — core orchestration, API, brain, memory, healing, and control plane
+- **runtime_v2/** — async agent runtime with LLM client, tool execution, and F2 replay delivery
+- **organism_console/** — CLI interactive shell
+- **start-console/** — web/SSR console experiment
+- **qwen_train/** — experiment harness, evaluation scripts, and training pipeline tools
+- **tests/** — automated test suite (pytest)
+
+The project is not a production service. It is an experimental research platform with automated tests and controlled infrastructure.
+
+## The research question
+
+The primary research question (Experiment J, frozen as F0) is:
+
+> Does delivery and utilization of a genuine, lawfully promoted lesson L change a fresh worker's observable first-relevant-edit behavior compared to the exact same frozen treatment artifact with L removed?
+
+See `docs/EXPERIMENT_J.md` for the full scientific design.
+
+## Repository layout
+
+| Directory | Purpose |
+|---|---|
+| `swarm_os/` | Core platform: orchestrator, API routes, brain, memory, healing, control plane |
+| `runtime_v2/` | Agent runtime: LLM client, tool execution, stream runner, F2 replay delivery |
+| `organism_console/` | CLI shell frontend |
+| `start-console/` | Web/SSR console experiment |
+| `qwen_train/` | Experiment harness, evaluation scripts, F2 adapter and worker |
+| `tests/` | Automated tests (pytest) |
+| `docs/` | Experiment J authority documents, F2 design and authorization |
 
 ## Quick start
 
-1. Make sure your local llama.cpp / LiteLLM server is running.
-2. Confirm your environment API keys (`OPENROUTER_API_KEY`, `GROQ_API_KEY`) or local models are configured in `litellm-config.yaml`.
-3. Run your orchestrator smoke checks.
+Requires Python >= 3.14 and a local model server (llama.cpp on port 8080).
 
-## Smoke tests
+```bash
+# Install in development mode
+pip install -e .
 
-```powershell
-python -c "from swarm_os.services.orchestrator import Orchestrator; o=Orchestrator(); print({'vision': o.build_route(prompt='read this screenshot', requested_model=None, phenotype={}), 'coding': o.build_route(prompt='fix this python exception', requested_model=None, phenotype={}), 'general': o.build_route(prompt='hello', requested_model=None, phenotype={}), 'embedding': o.build_route(prompt='build embedding vector', requested_model=None, phenotype={}), 'reranker': o.build_route(prompt='rerank these search hits', requested_model=None, phenotype={})})"
+# Run the test suite
+pytest
+
+# Run with linting
+ruff check . --select E9,F
+pytest
 ```
 
-## Current routing inventory
+The development stack (llama.cpp, Qdrant, Qwen embed/rerank/vision) can be started with `start-dev.ps1`, but this requires pre-configured model weights and `.env` credentials.
 
-- `qwen3-vl:8b`
-- `qwen3-embedding:8b`
-- `qwen3:14b`
-- `qwen2.5:14b-instruct-32k`
-- `qwen2.5-coder:14b-32k`
-- `moondream:latest`
-- `mistral-nemo:12b`
-- `qwen2.5:3b-instruct`
-- `nomic-embed-text:latest`
-- `qllama/bge-reranker-v2-m3:latest`
+## Status
+
+| Item | Status |
+|---|---|
+| Core platform (Phases 1–6) | Implemented and verified |
+| Experiment J F0 (scientific design) | Frozen |
+| Experiment J F1 (pilot, 20 observations) | Closed — baseline established |
+| Experiment J F2 (governed learning event) | Pending — infrastructure implemented |
+| F2 delivery evidence | Implemented (9-field trajectory record) |
+| Scientific learning result | **Not yet produced** |
+
+**What exists:** The runtime, tests, delivery-seam enforcement, F2 replay infrastructure, and the governed-learning pathway code (prompt repairer, lesson manager, promotion with HMAC receipts). Historical F1 observations and engineering evidence are preserved.
+
+**What does not yet exist:** A genuine ACTIVE lesson L, a completed governed learning event, or a scientific result from Experiment J F2.
+
+## Current status (detailed)
+
+- Experiment J F1 is **closed**: 20 protocol observations completed (10 valid, 10 infrastructure-invalid); the no-lesson baseline (`k`, `n`, practical-effect criterion) is frozen.
+- Experiment J F2 prerequisites are partially satisfied: delivery-seam enforcement, replay propagation, fresh-process harness, and delivery-identity evidence are implemented. The governed promotion machinery is tested (39 tests in `tests/test_learner_artifact_derivation.py`). A genuine ACTIVE lesson L has **not yet been created**; this requires provisioning `SWARM_RECEIPT_KEY` and a healthy Qdrant instance through the real governed learning pathway.
+- The F2 authority specifies an execution graph of `P0 → P1 → P2` (separate fresh processes per arm, direct HTTP/SSE delivery, no P3 required for the HTTP path).
+- See `docs/LEARNING_EXPERIMENT_STATE.md` for the current engineering and prerequisites state.
+
+## Security
+
+- `.env` files containing API keys and credentials **must not be committed** (enforced by `.gitignore`).
+- `SWARM_RECEIPT_KEY` is not provisioned in the repository and must be provided externally for F2 execution.
+- No production signing authority is embedded in the codebase.
+
+## License
+
+Internal research project. Not a published package.
