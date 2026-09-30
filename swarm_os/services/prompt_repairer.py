@@ -1353,6 +1353,21 @@ class PromptRepairer:
             cand["active_lesson_id"] = lid
             cand["snapshot_id"] = snapshot_id
 
+            # Deterministic supersession: retire lessons this one replaces, so
+            # a stale instruction cannot keep reaching the prompt. Cosine
+            # similarity cannot separate a contradiction from a duplicate
+            # (AUROC 0.59, arXiv:2606.26511) and outdated instruction causes
+            # CONFIDENT errors rather than abstention (HoH, ACL 2025), so the
+            # verdict must come from a pure function of the lesson text.
+            # Never destructive — lessons are marked superseded_by, not deleted.
+            _retired = await self._retire_superseded(
+                rule_text, candidate_id=cand["id"]
+            )
+            self._audit(
+                "SUPERSEDED",
+                {"candidate_id": cand["id"], "retired": list(_retired)},
+            )
+
             # Attack 13/14 Fix: If this step fails, Qdrant is already modified. We MUST catch it.
             self._change_state(cand, CandidateState.ACTIVE, "atomic promotion successful")
             self._journal_append("committed", candidate_id, lid or "")
@@ -1374,6 +1389,62 @@ class PromptRepairer:
             except Exception:
                 pass
             return f"rejected: promotion_failed ({e})"
+
+    async def _retire_superseded(
+        self, new_rule: str, *, candidate_id: str
+    ) -> list[str]:
+        """Mark lessons that ``new_rule`` deterministically supersedes.
+
+        Non-destructive: sets ``superseded_by`` and persists, never deletes, so
+        the full history stays auditable. Fail-safe: a lesson that cannot be
+        parsed is left untouched, and any store error is logged and swallowed so
+        a supersession problem can never fail an otherwise-valid promotion.
+
+        The new lesson is strictly newer than everything already ACTIVE, so it
+        is the ``candidate_newer`` side of every verdict; age only decides
+        replacements within one polarity.
+        """
+        from swarm_os.services.lesson_supersession import supersedes
+
+        retired: list[str] = []
+        try:
+            existing = await self.lesson_manager.get_all()
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("supersession: could not read active lessons: %s", exc)
+            return retired
+
+        for lesson in existing:
+            if lesson.superseded_by:
+                continue  # already retired
+            try:
+                if not supersedes(
+                    new_rule, lesson.rule, candidate_newer=True
+                ):
+                    continue
+            except Exception as exc:  # noqa: BLE001 - never block a promotion
+                _log.warning(
+                    "supersession: verdict failed for %s: %s", lesson.id, exc
+                )
+                continue
+            try:
+                # Point at the CANDIDATE that replaced it, matching the field's documented
+                # meaning (an id of the superseding lesson).
+                lesson.superseded_by = candidate_id
+                lesson.last_verified_at = time.strftime(
+                    "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+                )
+                await self.lesson_manager.store(lesson)
+                retired.append(lesson.id)
+                _log.info(
+                    "supersession: retired %s (superseded by candidate %s)",
+                    lesson.id,
+                    candidate_id,
+                )
+            except Exception as exc:  # noqa: BLE001
+                _log.warning(
+                    "supersession: could not retire %s: %s", lesson.id, exc
+                )
+        return retired
 
     async def rollback(self, snapshot_id: str) -> bool:
         """Restore the exact previous prompt state using a snapshot."""
