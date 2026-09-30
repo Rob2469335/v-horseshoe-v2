@@ -207,6 +207,27 @@ def _jaccard_tokens(a: str, b: str) -> float:
     return len(sa & sb) / len(sa | sb)
 
 
+def _lessons_fully_within(
+    block: str, lessons: list[ActiveLesson]
+) -> list[ActiveLesson]:
+    """Return the lessons whose rendered line survives INTACT in ``block``.
+
+    ``block`` may have been truncated at ``max_chars``, cutting a rule
+    mid-sentence.  A rule that only partially reached the model was not
+    fully delivered, so its lesson must not be attested as delivered.
+    Numbered lines are ``"N. rule"``; a lesson counts only if its own line is
+    present whole.
+    """
+    out: list[ActiveLesson] = []
+    for lesson in lessons:
+        rule = (lesson.rule or "").strip()
+        if not rule:
+            continue
+        if any(line.endswith(rule) for line in block.splitlines()):
+            out.append(lesson)
+    return out
+
+
 def _is_contradiction(a: str, b: str) -> bool:
     """Detect obvious negation patterns between two rules."""
     negations = {"never", "do not", "don't", "no ", "not "}
@@ -355,33 +376,28 @@ class LessonManager:
 
         return selected
 
-    async def render_active_lessons(
-        self,
-        task_context: str = "",
-        max_chars: int = 700,
-        eval_id: str | None = None,
-    ) -> str:
-        """THE governed seam — render the deterministic [BEHAVIORAL LESSONS]
-        block for a Robs worker prompt.
+    async def _select_for_render(
+        self, eval_id: str | None = None
+    ) -> list[tuple[ActiveLesson | None, str]]:
+        """Select the ordered (lesson, rule) pairs that will actually render.
 
-        This is the ONLY production path by which behavioral instruction may
-        enter the worker's system prompt. It reads the active lesson set
-        (versioned, deduped, budgeted, contradiction-checked by the Promotion
-        Gate) and renders the *rule text only* — never raw Qdrant history,
-        never the source trajectory, never confidence/evidence prose.
+        THE single source of truth for governed lesson selection. ``render_active_
+        lessons()`` renders exactly these pairs, and any consumer that needs the
+        *identity* of what was delivered (e.g. the F2 arm manifest) must derive
+        it from here — never from an independent second selection.
 
-        Fail-closed: any retrieval/embedding error returns "" (no behavioral
-        injection at all), and the rendered block is hard-bounded by both
-        MAX_ACTIVE_TOKENS and ``max_chars`` even on partial retrieval.
+        Returns pairs of (ActiveLesson | None, rule_text). ``None`` marks the
+        per-request evaluation snapshot, which is request-scoped and has no
+        ACTIVE-collection identity.
         """
         try:
             lessons = await self.get_all()
         except Exception as exc:  # noqa: BLE001
             _log.warning("render_active_lessons: retrieval failed: %s", exc)
-            return ""
+            return []
         active = [l for l in lessons if not l.superseded_by]
         active.sort(key=lambda l: (max(0.0, l.effectiveness), l.version), reverse=True)
-        lines: list[str] = []
+        selected: list[tuple[ActiveLesson | None, str]] = []
         budget_tokens = MAX_ACTIVE_TOKENS
         # Per-request evaluation snapshot: delivered ONLY to the request that
         # carries the evaluation_id. The candidate is NEVER written to the
@@ -397,7 +413,7 @@ class LessonManager:
             except Exception:  # noqa: BLE001
                 ev_safe = False
             if ev_safe and ev_tokens <= budget_tokens:
-                lines.append(ev_lesson)
+                selected.append((None, ev_lesson))
                 budget_tokens -= ev_tokens
                 _log.info(
                     "render_active_lessons: INCLUDED eval snapshot %s (candidate %s)",
@@ -427,17 +443,78 @@ class LessonManager:
                 continue  # cannot fit → next (already sorted by value)
             if rule_tokens > MAX_RULE_TOKENS:
                 continue  # governance violation — never render an over-budget rule
-            lines.append(rule)
+            selected.append((lesson, rule))
             budget_tokens -= rule_tokens
-        if not lines:
-            return ""
+        return selected
+
+    async def render_active_lessons(
+        self,
+        task_context: str = "",
+        max_chars: int = 700,
+        eval_id: str | None = None,
+    ) -> str:
+        """THE governed seam — render the deterministic [BEHAVIORAL LESSONS]
+        block for a Robs worker prompt.
+
+        This is the ONLY production path by which behavioral instruction may
+        enter the worker's system prompt. It reads the active lesson set
+        (versioned, deduped, budgeted, contradiction-checked by the Promotion
+        Gate) and renders the *rule text only* — never raw Qdrant history,
+        never the source trajectory, never confidence/evidence prose.
+
+        Selection lives in ``_select_for_render`` — the single source of truth
+        shared with any consumer that must attest to *which* lessons were
+        delivered (see ``render_active_lessons_with_records``).  Do not
+        re-implement selection here or elsewhere.
+
+        Fail-closed: any retrieval/embedding error returns "" (no behavioral
+        injection at all), and the rendered block is hard-bounded by both
+        MAX_ACTIVE_TOKENS and ``max_chars`` even on partial retrieval.
+        """
+        block, _ = await self.render_active_lessons_with_records(
+            task_context, max_chars=max_chars, eval_id=eval_id
+        )
+        return block
+
+    async def render_active_lessons_with_records(
+        self,
+        task_context: str = "",
+        max_chars: int = 700,
+        eval_id: str | None = None,
+    ) -> tuple[str, list[ActiveLesson]]:
+        """Render the governed block AND return the ACTIVE lessons actually
+        delivered, in render order.
+
+        The returned lessons are precisely those whose rule text appears in the
+        returned block.  A consumer that records "these lessons were delivered"
+        MUST use this list rather than an independent selection, otherwise the
+        recorded set can diverge from what was actually rendered (the F2 arm
+        manifest hazard).  The request-scoped eval snapshot has no ACTIVE
+        identity and is therefore excluded from the record list.
+        """
+        selected = await self._select_for_render(eval_id=eval_id)
+        if not selected:
+            return "", []
+        lines = [rule for _, rule in selected]
+        delivered = [lesson for lesson, _ in selected if lesson is not None]
         block = "\n".join(f"{i}. {r}" for i, r in enumerate(lines, 1))
-        if len(block) > max_chars:
+        truncated = len(block) > max_chars
+        if truncated:
             block = block[: max_chars]
-        return f"\n\n[BEHAVIORAL LESSONS]\n{block}"
+            # A truncated block may cut a rule mid-sentence. Any lesson whose
+            # rendered line does not appear COMPLETELY in the delivered block
+            # was not fully delivered, so it is not a delivered record.
+            delivered = _lessons_fully_within(block, delivered)
+        return f"\n\n[BEHAVIORAL LESSONS]\n{block}", delivered
 
     async def get_all(self) -> list[ActiveLesson]:
-        """Return all active lessons (for pruning/conflict checks)."""
+        """Return all active lessons (for pruning/conflict checks).
+
+        NOTE: this is a raw store read (dummy-vector dump).  It is the correct
+        choice for governance passes that must consider the WHOLE set, and the
+        wrong choice for anything that must agree with what the governed seam
+        delivered — use ``_select_for_render`` for that.
+        """
         client = await self._get_client()
         results = await client.query_points(
             collection_name=ACTIVE_COLLECTION,

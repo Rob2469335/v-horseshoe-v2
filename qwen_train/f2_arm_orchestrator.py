@@ -90,24 +90,24 @@ async def _default_render_governed_t(
 ) -> tuple[str, tuple[LessonEntry, ...]]:
     """Render T through the governed active-lesson path and build frozen records.
 
-    Calls ``LessonManager.render_active_lessons`` (the ONLY governed seam) and
-    reconstructs ordered lesson records (position, id, hash, rule text) from the
-    active lessons that were rendered.  Because ``render_active_lessons`` returns
-    a flat block, the records are rebuilt from the same ACTIVE set that the
-    governed seam selected, in render order.
+    Calls ``LessonManager.render_active_lessons_with_records`` (the ONLY governed
+    seam) and builds frozen records (position, id, hash, rule text) from the
+    lessons that seam reports as actually delivered.
+
+    The record set MUST come from the seam rather than a second independent
+    selection.  A duplicate ``get_all()`` + sort here is only equivalent to the
+    rendered block while both execute the same path; the moment selection
+    changes (relevance ranking, admission, exclusion) the manifest would attest
+    to lessons that were never delivered — silently corrupting F2 provenance.
     """
     from swarm_os.services.lesson_manager import get_lesson_manager
 
     manager = get_lesson_manager()
-    active_block = await manager.render_active_lessons(
+    active_block, delivered = await manager.render_active_lessons_with_records(
         task_context, max_chars=max_chars
     )
-    lessons = await manager.get_all()
-    active = [l for l in lessons if not l.superseded_by]
-    # mirror render order: effectiveness desc, then version desc
-    active.sort(key=lambda l: (max(0.0, l.effectiveness), l.version), reverse=True)
     records: list[LessonEntry] = []
-    for pos, lesson in enumerate(active, start=1):
+    for pos, lesson in enumerate(delivered, start=1):
         rule = (lesson.rule or "").strip()
         if not rule:
             continue
