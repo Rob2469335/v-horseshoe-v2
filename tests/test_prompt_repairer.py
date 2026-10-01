@@ -400,7 +400,28 @@ async def test_candidate_quarantine_during_evaluation(temp_dir, mock_diagnostici
 from swarm_os.services.prompt_repairer import GOVERNANCE_VERSION
 
 @pytest.fixture
-def repairer_fixture():
+def isolated_data_dir(temp_dir):
+    """Redirect every PromptRepairer persistent store into the test temp dir.
+
+    `_journal_file()` derives its path from `_DATA_DIR` at call time, so
+    patching `_DATA_DIR` isolates the transaction journal as well as the
+    candidate, snapshot and audit stores. Without this, a test that calls
+    `_journal_file()` appends to production `data/prompt_repairer_journal.jsonl`,
+    which is consumed by `recover_interrupted_promotions()` on every backend
+    startup -- so a test row becomes input to governed recovery, not inert
+    output. See docs/EXPERIMENT_J_F2_TEST_ISOLATION_AUDIT.md.
+
+    The journal itself is NOT mocked: appends and reads stay real, so recovery
+    semantics are still exercised.
+    """
+    with patch("swarm_os.services.prompt_repairer._DATA_DIR", temp_dir):
+        with patch("swarm_os.services.prompt_repairer._CANDIDATES_FILE", temp_dir / "candidates.json"):
+            with patch("swarm_os.services.prompt_repairer._SNAPSHOTS_FILE", temp_dir / "snapshots.json"):
+                with patch("swarm_os.services.prompt_repairer._AUDIT_LOG_FILE", temp_dir / "audit.jsonl"):
+                    yield temp_dir
+
+@pytest.fixture
+def repairer_fixture(isolated_data_dir):
     diag = MagicMock()
     lm = MagicMock()
     lm.get_all = AsyncMock(return_value=[])
