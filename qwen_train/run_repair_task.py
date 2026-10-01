@@ -511,13 +511,30 @@ def main() -> int:
     try:
         import importlib
         f1i = importlib.import_module("f1_infra")
-        # Check if there's already a backend on port 8000 and warn
-        existing_pid = f1i._check_port_listening(8000)
-        if existing_pid:
-            print(f"  WARNING: Existing backend on port 8000 (PID={existing_pid})")
-            print(f"  Starting fresh F1-owned backend for this observation...")
-        else:
-            print("  No existing backend on port 8000, starting fresh...")
+        # FAIL CLOSED on a stale port occupant. A pre-existing backend owns a
+        # different SWARM_WORKSPACE_ROOT, so the observation would run against
+        # a tree it is not attributed to. F1 does not terminate it: that process
+        # is not F1-owned, and killing an operator's dev backend is a
+        # destructive action this harness has no authority to take.
+        stale_pid = f1i._check_port_listening(8000)
+        if stale_pid:
+            print(f"  ABORT: port 8000 already occupied by PID {stale_pid} (not F1-owned)")
+            print("  Stop the pre-existing backend (e.g. start-dev.ps1) and re-run.")
+            _classification = f1i.classify_observation(f1i.RawObservation(
+                infra_invalid_reason="process_identity_unknown",
+            ))
+            _obs_result = {
+                "ts": f1i._now_iso(),
+                "id": instance_id,
+                "verdict": False,
+                "verify_reason": "stale_backend_not_owned",
+                "interpretation": _classification.to_dict(),
+            }
+            Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+            with open(out_path, "a", encoding="utf-8") as _f:
+                _f.write(json.dumps(_obs_result) + "\n")
+            print(json.dumps(_obs_result, indent=2))
+            return 2
 
         # Start fresh F1-owned backend with the observation's workspace root
         _backend_record, _evidence_dir = f1i.start_backend_fresh(
@@ -526,32 +543,43 @@ def main() -> int:
             port=8000,
             timeout=60,
         )
+        _launched_pid = _backend_record.expected_pid
+        print(f"  Started F1-owned backend PID={_launched_pid}")
         _backend_pid = _backend_record.pid
-        print(f"  Started backend PID={_backend_pid}")
 
-        # Workaround: the backend process may fork; find the actual PID listening on the port
-        print("  Resolving actual listening PID...")
+        # Resolve the actual listener ONLY if it is F1's own process tree.
+        # A foreign PID is never substituted into F1 state.
+        print("  Resolving listening PID (owned processes only)...")
         import time
         for _ in range(30):  # up to 30s
             time.sleep(1)
             actual_pid = f1i._check_port_listening(8000)
-            if actual_pid and actual_pid != _backend_record.pid:
-                print(f"  PID mismatch detected: started {_backend_record.pid}, listening {actual_pid}")
-                _backend_record.pid = actual_pid
-                _backend_pid = actual_pid
-                print(f"  Updated record PID to {actual_pid}")
+            if actual_pid and f1i._pid_is_owned_child(actual_pid, _launched_pid):
+                if actual_pid != _backend_record.pid:
+                    print(f"  Adopted owned descendant PID={actual_pid}")
+                    _backend_record.pid = actual_pid
+                    _backend_pid = actual_pid
                 break
+            elif actual_pid:
+                print(f"  ABORT: port 8000 served by unowned PID {actual_pid}")
+                return 2
             elif actual_pid == _backend_record.pid:
                 break
 
         # Wait for backend to become healthy (includes workspace_match check)
         print("  Waiting for backend health gate...")
-        _gate = f1i.wait_for_backend(_backend_record, port=8000, timeout=120)
+        _gate = f1i.wait_for_backend(
+            _backend_record, port=8000, timeout=120,
+            expected_workspace_root=str(repo),
+        )
         if not _gate.passed:
             print(f"  HEALTH GATE FAILED — ABORTING OBSERVATION")
             print(f"  Errors: {_gate.errors}")
             _classification = f1i.classify_observation(f1i.RawObservation(
-                infra_invalid_reason="health_gate_failure",
+                infra_invalid_reason="workspace_mismatch"
+                if _gate.errors and any(
+                    "workspace_mismatch" in e for e in _gate.errors)
+                else "health_gate_failure",
             ))
             _obs_result = {
                 "ts": f1i._now_iso(),
@@ -564,20 +592,31 @@ def main() -> int:
             with open(out_path, "a", encoding="utf-8") as _f:
                 _f.write(json.dumps(_obs_result) + "\n")
             print(json.dumps(_obs_result, indent=2))
-            # Clean up the backend we started
+            # Clean up ONLY the process tree F1 launched.
             try:
                 import psutil
-                if _backend_record.pid:
+                if _backend_record.pid and f1i._pid_is_owned_child(
+                    _backend_record.pid, _launched_pid
+                ):
                     p = psutil.Process(_backend_record.pid)
                     if p.is_running():
                         p.terminate()
                         p.wait(timeout=5)
+                        print(f"  [BACKEND] Terminated F1-owned PID={_backend_record.pid}")
+                elif _backend_record.pid:
+                    print(f"  [BACKEND] SKIP termination: PID {_backend_record.pid} "
+                          f"is not owned by F1 launch {_launched_pid}")
             except Exception:
                 pass
             return 2
         print("  HEALTH GATE PASSED")
-        print(f"  workspace_match: {_gate.workspace_identity == str(repo)}")
+        print(f"  workspace_match: {_gate.workspace_match}")
         print(f"  workspace_root: {_gate.workspace_identity}")
+        # Defence in depth: the gate already refuses a mismatch, so reaching
+        # here with workspace_match False means the gate was bypassed.
+        if not _gate.workspace_match:
+            print("  ABORT: workspace identity mismatch after gate pass")
+            return 2
 
     except Exception as _gate_exc:
         print(f"  Health gate import/probe failed: {_gate_exc}")
@@ -731,14 +770,23 @@ def main() -> int:
 
     try:
         if "_backend_record" in locals() and _backend_record and _backend_record.pid:
-            import psutil
-            p = psutil.Process(_backend_record.pid)
-            if p.is_running():
-                p.terminate()
-                p.wait(timeout=5)
-                print(f"  [BACKEND] Terminated PID={_backend_record.pid}")
+            # Ownership check: never terminate a PID that F1 did not launch.
+            # R1 EJ-R1-001 killed a pre-existing dev backend here purely
+            # because its PID had been substituted into F1 state.
+            if "_launched_pid" in locals() and not f1i._pid_is_owned_child(
+                _backend_record.pid, _launched_pid
+            ):
+                print(f"  [BACKEND] SKIP termination: PID {_backend_record.pid} "
+                      f"is not F1-owned (launched {_launched_pid})")
             else:
-                print(f"  [BACKEND] PID={_backend_record.pid} already stopped")
+                import psutil
+                p = psutil.Process(_backend_record.pid)
+                if p.is_running():
+                    p.terminate()
+                    p.wait(timeout=5)
+                    print(f"  [BACKEND] Terminated F1-owned PID={p.pid}")
+                else:
+                    print(f"  [BACKEND] PID={p.pid} already stopped")
     except Exception as e:
         print(f"  [BACKEND] Cleanup error: {e}")
 

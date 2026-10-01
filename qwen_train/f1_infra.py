@@ -351,6 +351,8 @@ class HealthGateResult:
     health_http_200: bool = False
     status_ready: bool = False
     workspace_identity: str = ""
+    workspace_match: bool = False
+    expected_workspace_root: str = ""
     router_reachability: bool = False
     no_web_tools_flag: bool = False
     expected_pid_identity: bool = False
@@ -513,6 +515,43 @@ def _probe_endpoint(url: str, timeout: float = 5.0) -> bool:
         return False
 
 
+def _norm(p: str) -> str:
+    """Canonical form for comparing two workspace paths.
+
+    Separator- and case-insensitive, so a backend reporting the same directory
+    in a different spelling still matches. Deliberately NOT the
+    ``tool_executor._norm`` root-relative form: the health gate compares two
+    ABSOLUTE roots, so stripping a root would erase the very difference it
+    must detect.
+    """
+    return str(p or "").replace("\\", "/").rstrip("/").lower()
+
+
+def _pid_is_owned_child(candidate: Optional[int], owner: Optional[int]) -> bool:
+    """True when ``candidate`` is ``owner`` or a descendant of ``owner``.
+
+    Ownership is required before F1 may record, monitor, or terminate a PID.
+    A port occupant that is merely a different live process is NOT owned.
+    """
+    if not candidate or not owner:
+        return False
+    if candidate == owner:
+        return True
+    try:
+        import psutil
+        p = psutil.Process(candidate)
+        for _ in range(8):
+            parent = p.parent()
+            if parent is None:
+                return False
+            if parent.pid == owner:
+                return True
+            p = parent
+    except Exception:
+        return False
+    return False
+
+
 def _check_port_listening(port: int) -> Optional[int]:
     """Return the PID listening on port, or None."""
     try:
@@ -613,8 +652,15 @@ def wait_for_backend(
     port: int = 8000,
     timeout: int = 60,
     pid_check_interval: float = 2.0,
+    expected_workspace_root: str = "",
 ) -> HealthGateResult:
-    """Wait for the backend to become healthy, with PID identity verification."""
+    """Wait for the backend to become healthy, with PID identity verification.
+
+    ``expected_workspace_root`` is optional for backward compatibility. When
+    supplied, the backend's reported sandbox root MUST match it or the gate
+    fails: liveness alone cannot prove the observation ran against the arm
+    workspace it will be attributed to.
+    """
     gate = HealthGateResult(timestamp=_now_iso())
     deadline = time.monotonic() + timeout
 
@@ -642,6 +688,20 @@ def wait_for_backend(
             continue
 
         gate.process_alive = True
+        if actual_pid and not _pid_is_owned_child(actual_pid, record.expected_pid):
+            # Ownership gate: a port occupant F1 did not launch is never adopted
+            # as F1-owned, even when it is healthy. R1 EJ-R1-001 adopted a
+            # pre-existing dev backend this way, recorded its PID as F1's own,
+            # attributed the observation to the wrong workspace, and then
+            # terminated that foreign process during cleanup.
+            record.state = ProcessState.UNKNOWN
+            gate.errors.append(
+                f"stale_backend_not_owned: port {port} served by pid {actual_pid}, "
+                f"which is not the launched pid {record.expected_pid} nor its "
+                f"descendant"
+            )
+            return gate
+
         if record.pid and actual_pid and actual_pid != record.pid:
             record.state = ProcessState.UNKNOWN
             gate.errors.append(
@@ -650,7 +710,7 @@ def wait_for_backend(
             )
             return gate
 
-        gate.expected_pid_identity = actual_pid == record.pid if record.pid else False
+        gate.expected_pid_identity = _pid_is_owned_child(actual_pid, record.expected_pid)
 
         gate.health_http_200 = _probe_endpoint(
             f"http://127.0.0.1:{port}/health", timeout=5.0
@@ -670,6 +730,24 @@ def wait_for_backend(
 
         gate.no_web_tools_flag = os.environ.get("SWARM_F1_NO_WEB_TOOLS") == "1"
 
+        # Workspace identity is a REQUIRED precondition, not an advisory field.
+        # A backend whose sandbox root is anything other than this observation's
+        # isolated arm clone is serving the agent a different tree than the one
+        # the manifest and lesson evidence will be attributed to. R1 EJ-R1-001
+        # reached this exact state (project-root workspace, zero tool calls,
+        # 1200s timeout) and the liveness-only gate passed it.
+        if expected_workspace_root:
+            gate.expected_workspace_root = expected_workspace_root
+            gate.workspace_match = _norm(gate.workspace_identity) == _norm(
+                expected_workspace_root
+            )
+            if not gate.workspace_match:
+                gate.errors.append(
+                    f"workspace_mismatch: backend reports "
+                    f"{gate.workspace_identity!r}, expected "
+                    f"{expected_workspace_root!r}"
+                )
+
         if (
             gate.process_alive
             and gate.port_listening
@@ -677,6 +755,7 @@ def wait_for_backend(
             and gate.status_ready
             and gate.expected_pid_identity
             and gate.router_reachability
+            and (not expected_workspace_root or gate.workspace_match)
         ):
             gate.passed = True
             record.state = ProcessState.HEALTHY

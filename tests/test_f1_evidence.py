@@ -353,6 +353,133 @@ class TestRuntimeMonitor:
 # 6. Health Gate
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# 6b. Backend ownership + workspace isolation (R1 EJ-R1-001 regression)
+# ---------------------------------------------------------------------------
+
+class TestBackendOwnershipIsolation:
+    """A pre-existing backend must never be adopted as F1-owned.
+
+    R1 EJ-R1-001 launched backend 19684 with the arm workspace, but port 8000
+    was already served by a pre-existing dev backend (27180) whose
+    SWARM_WORKSPACE_ROOT was the project root. F1 adopted that PID, the
+    liveness-only health gate passed, the agent executed zero tools and
+    timed out at 1200s, and cleanup then killed the foreign process.
+    """
+
+    def test_pid_ownership_accepts_self(self):
+        assert f1i._pid_is_owned_child(os.getpid(), os.getpid()) is True
+
+    def test_pid_ownership_rejects_foreign_process(self):
+        # A live but unrelated process (this one) is not owned by another PID.
+        assert f1i._pid_is_owned_child(os.getpid(), 999999) is False
+
+    def test_pid_ownership_rejects_missing_pids(self):
+        assert f1i._pid_is_owned_child(None, os.getpid()) is False
+        assert f1i._pid_is_owned_child(os.getpid(), None) is False
+        assert f1i._pid_is_owned_child(None, None) is False
+
+    def test_stale_port_occupant_cannot_pass_health_gate(self, monkeypatch):
+        """A foreign listener on the port fails the gate, healthy or not."""
+        backend = f1i.ProcessRecord(
+            role="backend", pid=os.getpid(), expected_pid=999999,
+            state=f1i.ProcessState.STARTING,
+        )
+        monkeypatch.setattr(f1i, "_check_port_listening", lambda port: os.getpid())
+
+        def _alive(pid):
+            class _P:
+                @staticmethod
+                def is_running():
+                    return True
+
+                @staticmethod
+                def status():
+                    return "running"
+            return _P()
+
+        monkeypatch.setattr(f1i, "_probe_endpoint", lambda url, timeout=5.0: True)
+        monkeypatch.setattr(
+            "psutil.Process", lambda pid=None: _alive(pid), raising=False
+        )
+        gate = f1i.wait_for_backend(backend, port=8000, timeout=1, pid_check_interval=0.1)
+
+        assert gate.passed is False
+        assert any("stale_backend_not_owned" in e for e in gate.errors)
+
+    def test_workspace_mismatch_blocks_observation(self, monkeypatch):
+        """workspace_match False blocks the gate even when all liveness is True."""
+        backend = f1i.ProcessRecord(
+            role="backend", pid=os.getpid(), expected_pid=os.getpid(),
+            state=f1i.ProcessState.STARTING,
+        )
+        monkeypatch.setattr(f1i, "_check_port_listening", lambda port: os.getpid())
+
+        class _P:
+            @staticmethod
+            def is_running():
+                return True
+
+            @staticmethod
+            def status():
+                return "running"
+
+        monkeypatch.setattr(f1i, "_probe_endpoint", lambda url, timeout=5.0: True)
+        monkeypatch.setattr(
+            "psutil.Process", lambda pid=None: _P(), raising=False
+        )
+
+        class _Resp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return json.dumps({
+                    "ready": True,
+                    "llamacpp_reachable": True,
+                    "sandbox": {"workspace_root": r"C:\some\project\root"},
+                }).encode()
+
+        monkeypatch.setattr(
+            f1i.urllib.request, "urlopen", lambda *a, **k: _Resp(), raising=False
+        )
+        gate = f1i.wait_for_backend(
+            backend, port=8000, timeout=1, pid_check_interval=0.1,
+            expected_workspace_root=r"C:\arms\pypa__twine-1066\repo",
+        )
+
+        assert gate.workspace_match is False
+        assert gate.passed is False
+        assert any("workspace_mismatch" in e for e in gate.errors)
+
+    def test_workspace_match_blocks_health_gate_and_gates_cleanup(self):
+        """workspace_mismatch is already a valid infra-invalid reason."""
+        assert "workspace_mismatch" in f1i.INFRA_INVALID_REASONS
+
+    def test_norm_makes_workspace_comparison_separator_and_case_insensitive(self):
+        assert f1i._norm(r"C:\Arms\Repo") == f1i._norm("c:/arms/repo/")
+        assert f1i._norm(r"C:\Arms\Repo") != f1i._norm(r"C:\other\repo")
+        # Two different roots must NOT compare equal (root-relative _norm would
+        # wrongly strip both to "").
+        assert f1i._norm(r"C:\arms\repo") != f1i._norm(r"C:\arms\repo\sub")
+
+    def test_cleanup_never_kills_unowned_pid(self):
+        """The ownership predicate is what cleanup gates on."""
+        unowned = 999999
+        assert f1i._pid_is_owned_child(unowned, os.getpid()) is False
+
+    def test_owned_launched_pid_still_passes_ownership(self):
+        """Normal F1-owned startup keeps working: launched pid is owned."""
+        backend = f1i.ProcessRecord(
+            role="backend", pid=os.getpid(), expected_pid=os.getpid(),
+            state=f1i.ProcessState.STARTING,
+        )
+        assert f1i._pid_is_owned_child(backend.pid, backend.expected_pid) is True
+
+
 class TestHealthGate:
     def test_gate_detects_dead_pid(self):
         backend = f1i.ProcessRecord(role="backend", pid=999999, state=f1i.ProcessState.STARTING)
