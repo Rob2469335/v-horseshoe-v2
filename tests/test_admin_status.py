@@ -43,39 +43,42 @@ def test_status_primary_vision_model_real_vision_model(monkeypatch, client):
     assert r.json()["primary_vision_model"] == "moondream-latest"
 
 
-def test_timeline_reads_bounded_events(monkeypatch, client):
+def test_timeline_reads_bounded_events(monkeypatch, client, tmp_path):
     """STA-2: /timeline must call EventLogRepository.read_events with a hard
-    max (500) so a huge events.jsonl is never materialized on every poll."""
+    max (500) so a huge events.jsonl is never materialized on every poll.
+
+    `routes.py:654` resolves its events path as a CWD-relative
+    `Path("data/events/events.jsonl")`, so redirecting the working directory is
+    what isolates BOTH the route and this fixture. Writing to the real
+    `data/events/` tree was previously a production-state mutation: on a machine
+    where that file is absent or empty the test created it and then DELETED it
+    in `finally`. See docs/TEST_PERSISTENT_STORE_ISOLATION_AUDIT.md (YELLOW-2).
+    """
     import json
     from pathlib import Path
     from swarm_os.repositories.event_log_repo import EventLogRepository
 
+    monkeypatch.chdir(tmp_path)
+
     events_path = Path("data/events/events.jsonl")
     events_path.parent.mkdir(parents=True, exist_ok=True)
-    wrote = False
-    if not events_path.exists() or events_path.stat().st_size == 0:
-        with events_path.open("w", encoding="utf-8") as f:
-            f.write(
-                json.dumps({"occurred_at": "2026-08-10T00:00:00+00:00", "status": "ok"})
-                + "\n"
-            )
-        wrote = True
-    try:
-        captured = {}
+    events_path.write_text(
+        json.dumps({"occurred_at": "2026-08-10T00:00:00+00:00", "status": "ok"}) + "\n",
+        encoding="utf-8",
+    )
 
-        def _fake_read_events(self, current_offset, max_events=0):
-            captured["args"] = (current_offset, max_events)
-            return [], 0
+    captured = {}
 
-        monkeypatch.setattr(EventLogRepository, "read_events", _fake_read_events)
-        r = client.get("/timeline")
-        assert r.status_code == 200
-        assert captured["args"] == (0, 500), (
-            f"read_events must be called with a bounded max, got {captured['args']}"
-        )
-    finally:
-        if wrote:
-            events_path.unlink(missing_ok=True)
+    def _fake_read_events(self, current_offset, max_events=0):
+        captured["args"] = (current_offset, max_events)
+        return [], 0
+
+    monkeypatch.setattr(EventLogRepository, "read_events", _fake_read_events)
+    r = client.get("/timeline")
+    assert r.status_code == 200
+    assert captured["args"] == (0, 500), (
+        f"read_events must be called with a bounded max, got {captured['args']}"
+    )
 
 
 def test_safe_ollama_models_reuses_pooled_probe_client(monkeypatch):

@@ -321,17 +321,34 @@ destination:
 
 | Test | Destination | Class |
 |---|---|---|
-| `tests/test_admin_status.py:53-62` | **`data/events/events.jsonl`** (production) via `Path("data/events/events.jsonl")` + `.mkdir()` + `.open("w")` | **YELLOW** |
+| `tests/test_admin_status.py:46-62` | **`data/events/events.jsonl`** (production) via `Path("data/events/events.jsonl")` + `.mkdir()` + `.open("w")`, then `unlink()` in `finally` | **was YELLOW → REMEDIATED** (see below) |
 | `tests/test_sandbox_bounds.py:46` | sets `SWARM_WRITE_ROOT=data/curriculum_fix` (production-relative) | **YELLOW** — requires tracing the sandbox writer to prove containment |
 | `tests/test_admin_resume_latest.py:9` | `Path("swarm_os/data/snapshots/snapshot_0001.json")` | GRAY — read-only reference, write not established |
 | `tests/test_arm_workspace.py`, `test_autonomy_e2e.py`, `test_autonomous_loop_bugs.py`, `test_agents_md_atomic.py`, `test_approval_gate.py` | temp/git-repo fixtures created inside the test | GREEN |
 
 **PROVEN probe 2:** `pytest tests/test_admin_status.py` → 7 passed;
 `data/events/events.jsonl` unchanged (576,234 bytes, `15A3D9B010D7E46C`). The
-write at `:57` is guarded by `if not events_path.exists() or size == 0`, which is
-currently false. **YELLOW** rather than GREEN because the guard is *state-
-dependent*: on a clean checkout where the file is absent, the test **would
-create a production event log entry**.
+write at `:57` is guarded by `if not exists or size == 0`, which is
+currently false — so the defect was **state-dependent and inert on this machine**.
+
+**PROVEN — why it was still a real defect.** `routes.py:654` also resolves its
+events path as CWD-relative `Path("data/events/events.jsonl")`, and `:665` gates
+the branch on `events_path.exists()`. The test's file-creation was therefore
+*load-bearing*: it was the only way to force the route down the code path the
+test asserts. Because pytest runs with CWD == repo root, that "temporary" setup
+targeted production, and the `finally: unlink()` would have **deleted a
+production file** had production `events.jsonl` ever been empty.
+
+**REMEDIATION APPLIED.** The test now calls `monkeypatch.chdir(tmp_path)`, which
+redirects the route's CWD-relative path and the test's own fixture together.
+The write is unconditional inside `tmp_path`, and the destructive `unlink()`
+`finally` block is gone (`tmp_path` cleans itself).
+
+**PROVEN — revert-then-pass.** Running the *old* body verbatim with CWD pointed
+at a scratch directory created `data/events/events.jsonl` **there**, confirming the
+old code was CWD-bound rather than isolated. With the fix in place and CWD left at
+the repo root, `data/events/events.jsonl` is byte-identical after the test.
+
 
 ## 11. Empirical probes and exact evidence
 
@@ -442,8 +459,8 @@ behavior. No untracked file was added, deleted, modified, or staged.
 
 | Class | Original | Current | Items (current) |
 |---|---|---|---|
-| **GREEN** | 3 | 5 | PromptRepairer unit fixtures; PromptRepairer lifespan isolation (remediated `417d013c`); Qdrant `lesson_manager` (corrected — see §7.3); fitness store for `tests/`; `.env`-independent env fixtures |
-| **YELLOW** | 3 | 2 | `test_admin_status.py` conditional event-log write; `SWARM_WRITE_ROOT` in `test_sandbox_bounds.py` |
+| **GREEN** | 3 | 7 | PromptRepairer unit fixtures; PromptRepairer lifespan isolation (remediated `417d013c`); test_admin_status event-log isolation (remediated, §10); Qdrant `lesson_manager` (corrected — see §7.3); fitness store for `tests/`; `.env`-independent env fixtures |
+| **YELLOW** | 3 | 1 | `SWARM_WRITE_ROOT` in `test_sandbox_bounds.py` |
 | **RED** | 2 | 1 | **Qdrant general-constructor bypass** — ordinary pytest reached a real `AsyncQdrantClient` and could issue a real `upsert('decision_cache')` (§7.2). **Remediated** by the two-layer package+per-module patch (§7.4) |
 | **GRAY** | 6 | 6 | `swarm_os/tests/` fitness; memory/diary Qdrant path; trajectories; checkpoints; run_snapshots; receipt-key file reachability |
 
@@ -453,7 +470,7 @@ see `docs/PROMPTREPAIRER_LIFESPAN_ISOLATION_REMEDIATION.md`. The
 `candidates.json`-contamination claim that accompanied it was **rejected** and is
 recorded as such; it was never real.
 
-**Still open:** YELLOW ×2 and GRAY ×6 above, plus the `:8081`
+**Still open:** YELLOW ×1 (`SWARM_WRITE_ROOT`) and GRAY ×6 above, plus the `:8081`
 `EmbeddingService.embed` retry cost noted in §7.4.
 
 **Final verdict on broad pytest:** **STILL NOT SAFE.** Qdrant is now contained, but
@@ -500,9 +517,11 @@ reference it. Any full-suite run executes the lifespan repeatedly.
 7. **Scope note:** `ActiveLessons` and every Experiment J store are untouched by
    this path; the reachable collection is `decision_cache` only.
 
-### YELLOW-2 — conditional production event-log write
-`tests/test_admin_status.py:53-62`. Remediation: monkeypatch the events path to
-`tmp_path`. **Authorization required: YES** (test modification).
+### YELLOW-2 — conditional production event-log write — **REMEDIATED**
+`tests/test_admin_status.py:46-62`. **Remediation applied:** `monkeypatch.chdir(tmp_path)`
+isolates both the test fixture and `routes.py:654`'s CWD-relative path; the
+destructive `finally: unlink()` is removed. Verified byte-identical production
+`data/events/events.jsonl` with CWD left at the repo root.
 
 ### YELLOW-3 — `SWARM_WRITE_ROOT` points into production
 `tests/test_sandbox_bounds.py:46` sets `SWARM_WRITE_ROOT=data/curriculum_fix`,
@@ -562,7 +581,7 @@ fitness tests, and `swarm_os/tests` genetics.
 | Qdrant mock coverage | `tests/conftest.py:67-92`; `swarm_os/tests/conftest.py:16-35` |
 | Fitness gate + path | `swarm_os/services/outcome_fitness.py:30,159-160,296-297` |
 | Fitness guard | `tests/conftest.py:169-181` |
-| Conditional event write | `tests/test_admin_status.py:53-62` |
+| Conditional event write | `tests/test_admin_status.py` — REMEDIATED via `monkeypatch.chdir` |
 | `SWARM_WRITE_ROOT` | `tests/test_sandbox_bounds.py:46` |
 | Test-only receipt key | `tests/conftest.py:11-15` |
 | dotenv override | `swarm_os/app/main.py:20` |
