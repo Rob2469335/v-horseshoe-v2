@@ -16,6 +16,7 @@ import logging
 import threading
 import time
 import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 from qdrant_client import AsyncQdrantClient
@@ -376,8 +377,85 @@ class LessonManager:
 
         return selected
 
+    async def _rank_active(
+        self, task_context: str
+    ) -> list[tuple[float, ActiveLesson]]:
+        """Rank the non-superseded active set for this task.
+
+        Ordering is by ``relevance x effectiveness``, then by the governed
+        ``(effectiveness, version)`` key as a deterministic tie-break so two
+        lessons with equal score always render in the same order.
+
+        Two properties are deliberate and load-bearing:
+
+        * **Relevance is advisory, not a filter.** A lesson with no similarity
+          signal still participates. Retrieval decides ORDER among lessons that
+          fit the budget, never which lessons are eligible. Eligibility is a
+          governance question (supersession, safety, budget) and a relevance
+          threshold would make it a retrieval question — a threshold on a store
+          that contains contradicted lessons cannot separate stale from current
+          (AUROC 0.59, arXiv:2606.26511).
+        * **Relevance is optional.** If the query cannot be embedded, ranking
+          degrades to the governed order instead of failing closed, because a
+          transient embedder outage must not silently withdraw every lesson
+          from the prompt.
+
+        Returns ``(score, lesson)`` with score in ``[0, 1]``; ``0.0`` when
+        relevance is unavailable.
+        """
+        try:
+            lessons = await self.get_all()
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("lesson ranking: retrieval failed: %s", exc)
+            return []
+
+        active = [l for l in lessons if not l.superseded_by]
+        scores: dict[str, float] = {}
+        query = (task_context or "").strip()
+        if query and active:
+            try:
+                vector = await self._embed(query)
+                results = await self._client_query_active(vector)
+                for hit in results:
+                    lid = hit.id if isinstance(hit.id, str) else str(hit.id)
+                    scores[lid] = float(hit.score or 0.0)
+            except Exception as exc:  # noqa: BLE001 - degrade, never withdraw
+                _log.warning(
+                    "lesson ranking: relevance unavailable, using governed order: %s",
+                    exc,
+                )
+
+        ranked: list[tuple[float, ActiveLesson]] = []
+        for lesson in active:
+            rel = scores.get(lesson.id, 0.0)
+            combined = rel * max(0.0, float(lesson.effectiveness or 0.0))
+            ranked.append((combined, lesson))
+        ranked.sort(
+            key=lambda item: (
+                item[0],
+                max(0.0, float(item[1].effectiveness or 0.0)),
+                item[1].version,
+                item[1].id,
+            ),
+            reverse=True,
+        )
+        return ranked
+
+    async def _client_query_active(self, vector: list[float]):
+        """Dense query against the ACTIVE collection. Isolated for testability."""
+        client = await self._get_client()
+        return await client.query_points(
+            collection_name=ACTIVE_COLLECTION,
+            query=vector,
+            limit=MAX_RULES * 2,
+            score_threshold=MIN_CONFIDENCE,
+        )
+
     async def _select_for_render(
-        self, eval_id: str | None = None
+        self,
+        task_context: str = "",
+        eval_id: str | None = None,
+        exclude_ids: Iterable[str] | None = None,
     ) -> list[tuple[ActiveLesson | None, str]]:
         """Select the ordered (lesson, rule) pairs that will actually render.
 
@@ -386,17 +464,25 @@ class LessonManager:
         *identity* of what was delivered (e.g. the F2 arm manifest) must derive
         it from here — never from an independent second selection.
 
+        ``exclude_ids`` removes specific lessons from ELIGIBILITY. It exists so a
+        caller can withhold a named lesson without reranking what remains —
+        withholding must not promote a lesson that would otherwise have been
+        budget-excluded, or the delivered set would shift for a reason unrelated
+        to the exclusion. Excluded ids are therefore filtered BEFORE packing,
+        and never re-added afterwards.
+
         Returns pairs of (ActiveLesson | None, rule_text). ``None`` marks the
         per-request evaluation snapshot, which is request-scoped and has no
         ACTIVE-collection identity.
         """
-        try:
-            lessons = await self.get_all()
-        except Exception as exc:  # noqa: BLE001
-            _log.warning("render_active_lessons: retrieval failed: %s", exc)
-            return []
-        active = [l for l in lessons if not l.superseded_by]
-        active.sort(key=lambda l: (max(0.0, l.effectiveness), l.version), reverse=True)
+        excluded = {str(x).strip() for x in (exclude_ids or ()) if str(x).strip()}
+
+        ranked = await self._rank_active(task_context)
+        active = [
+            lesson
+            for _, lesson in ranked
+            if not excluded or lesson.id not in excluded
+        ]
         selected: list[tuple[ActiveLesson | None, str]] = []
         budget_tokens = MAX_ACTIVE_TOKENS
         # Per-request evaluation snapshot: delivered ONLY to the request that
@@ -405,6 +491,15 @@ class LessonManager:
         ctx = get_eval_context(eval_id)
         if ctx:
             ev_lesson = (ctx.lesson or "").strip()
+            # An explicit exclusion must also withhold the request-scoped
+            # snapshot when it names this candidate. The snapshot has no ACTIVE
+            # id of its own, so it is matched on the candidate it came from.
+            if ctx.candidate_id and ctx.candidate_id in excluded:
+                _log.info(
+                    "render_active_lessons: EXCLUDED eval snapshot %s by id",
+                    ctx.evaluation_id,
+                )
+                ev_lesson = ""
             ev_tokens = estimate_tokens(ev_lesson)
             try:
                 from swarm_os.services.prompt_repairer import is_safe_lesson
@@ -452,6 +547,7 @@ class LessonManager:
         task_context: str = "",
         max_chars: int = 700,
         eval_id: str | None = None,
+        exclude_ids: Iterable[str] | None = None,
     ) -> str:
         """THE governed seam — render the deterministic [BEHAVIORAL LESSONS]
         block for a Robs worker prompt.
@@ -467,12 +563,24 @@ class LessonManager:
         delivered (see ``render_active_lessons_with_records``).  Do not
         re-implement selection here or elsewhere.
 
-        Fail-closed: any retrieval/embedding error returns "" (no behavioral
-        injection at all), and the rendered block is hard-bounded by both
-        MAX_ACTIVE_TOKENS and ``max_chars`` even on partial retrieval.
+        ``task_context`` now participates: lessons are ordered by
+        ``relevance x effectiveness`` for this request instead of by a static
+        effectiveness value written once at promotion.  Relevance decides ORDER
+        among lessons that already fit the budget; it never decides eligibility.
+        Ranking degrades to governed order if the query cannot be embedded.
+
+        ``exclude_ids`` withholds named lessons from eligibility without
+        reranking the rest.
+
+        Fail-closed: any retrieval error returns "" (no behavioral injection at
+        all), and the rendered block is hard-bounded by both MAX_ACTIVE_TOKENS
+        and ``max_chars`` even on partial retrieval.
         """
         block, _ = await self.render_active_lessons_with_records(
-            task_context, max_chars=max_chars, eval_id=eval_id
+            task_context,
+            max_chars=max_chars,
+            eval_id=eval_id,
+            exclude_ids=exclude_ids,
         )
         return block
 
@@ -481,6 +589,7 @@ class LessonManager:
         task_context: str = "",
         max_chars: int = 700,
         eval_id: str | None = None,
+        exclude_ids: Iterable[str] | None = None,
     ) -> tuple[str, list[ActiveLesson]]:
         """Render the governed block AND return the ACTIVE lessons actually
         delivered, in render order.
@@ -492,7 +601,9 @@ class LessonManager:
         manifest hazard).  The request-scoped eval snapshot has no ACTIVE
         identity and is therefore excluded from the record list.
         """
-        selected = await self._select_for_render(eval_id=eval_id)
+        selected = await self._select_for_render(
+            task_context, eval_id=eval_id, exclude_ids=exclude_ids
+        )
         if not selected:
             return "", []
         lines = [rule for _, rule in selected]
