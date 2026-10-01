@@ -12,6 +12,50 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 
 @pytest.fixture(autouse=True)
+def isolate_prompt_repairer_store(tmp_path):
+    """Never let a test mutate PromptRepairer's PRODUCTION persistent state.
+
+    RED-1/RED-2 from `docs/TEST_PERSISTENT_STORE_ISOLATION_AUDIT.md`:
+    `swarm_os/app/main.py:126-129` runs `recover_interrupted_promotions()` in the
+    application lifespan, so ANY `TestClient(app)` construction replays the real
+    production journal and then calls `_save_candidates()`. With pending journal
+    rows present that appended ~142 `RECOVERED_INTERRUPTED_PROMOTION` records to
+    the production audit log and rewrote the production candidate store — with no
+    test involved at all.
+
+    Every PromptRepairer write resolves its destination from the module globals
+    `_DATA_DIR` / `_CANDIDATES_FILE` / `_SNAPSHOTS_FILE` / `_AUDIT_LOG_FILE` at
+    CALL time (e.g. `prompt_repairer.py:1022`, `:1087`, and `_journal_file()` at
+    `:66-69` which derives from `_DATA_DIR`), so redirecting those globals is
+    sufficient even for the cached `get_prompt_repairer()` singleton.
+
+    This ISOLATES rather than disables: the real recovery logic, real JSON/JSONL
+    I/O, real `_save_candidates()` and real `_audit()` all still execute — against
+    per-test temporary state. Nothing is mocked away.
+
+    Lives at the repository root so it covers BOTH `tests/` and `swarm_os/tests/`;
+    `tests/conftest.py` is scoped to `tests/` only. Mirrors the existing
+    `isolate_outcome_fitness` pattern in `tests/conftest.py`.
+    """
+    store = tmp_path / "prompt_repairer_store"
+    store.mkdir(parents=True, exist_ok=True)
+    with patch("swarm_os.services.prompt_repairer._DATA_DIR", store):
+        with patch(
+            "swarm_os.services.prompt_repairer._CANDIDATES_FILE",
+            store / "candidates.json",
+        ):
+            with patch(
+                "swarm_os.services.prompt_repairer._SNAPSHOTS_FILE",
+                store / "snapshots.json",
+            ):
+                with patch(
+                    "swarm_os.services.prompt_repairer._AUDIT_LOG_FILE",
+                    store / "audit.jsonl",
+                ):
+                    yield store
+
+
+@pytest.fixture(autouse=True)
 def global_reflexion_service_mock():
     """Make the reflexion-memory check inside the swarm brain hermetic and fast.
 
