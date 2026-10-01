@@ -1083,3 +1083,33 @@ authoritative; a delivery-time hash-mismatch ABORT is not currently authorized.
 
 This is a dated pointer record only. No experiment-state conclusion is changed by
 this entry.
+
+---
+
+## Test-Isolation Audit Pointer (2026-10-01)
+
+An audit of whether the tracked test suite writes Experiment J production learning
+state under `data/` is recorded in
+`docs/EXPERIMENT_J_F2_TEST_ISOLATION_AUDIT.md`.
+
+Summary of what that audit establishes:
+
+- **PROVEN:** `tests/test_prompt_repairer.py::test_forged_journal_cannot_delete_unowned_lesson`
+  (`:553`) writes the **production** transaction journal at `:568`, because its
+  `repairer_fixture` (`:402-413`) patches no module-level path.
+- **PROVEN:** the journal is consumed by `PromptRepairer.recover_interrupted_promotions()`
+  (`:908`), invoked unconditionally at backend startup (`swarm_os/app/main.py:129`),
+  so a test-appended row becomes input to governed recovery.
+- **CORRECTED:** candidate-store contamination is **not** reproducible from the
+  tracked suite. `test_crash_between_persistence_phases` (`:334`) runs inside the
+  `repairer` fixture's `_DATA_DIR` patch (`:39`), and `_journal_file()` derives from
+  `_DATA_DIR` at call time (`:66-69`). Likewise the `:326` journal write is isolated.
+- **GOVERNANCE GAP:** no Experiment J authority document defines a test-isolation
+  rule. `tests/conftest.py:169-181` establishes the *practice* for a different store
+  (`data/evolution/fitness.jsonl`); no equivalent guard exists for the
+  PromptRepairer journal or candidate store.
+- **REQUIRES AUTHORIZATION:** no remediation is authorized. See
+  `docs/EXPERIMENT_J_F2_EXECUTION_CONTRACT_AUTHORIZATION.md:67`.
+
+This pointer changes no experiment-state conclusion, no scientific parameter, and
+no authorization.

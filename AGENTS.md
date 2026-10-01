@@ -220,6 +220,7 @@ Create a subsystem AGENTS.md only when genuine subsystem-specific standing rules
 | `docs/EXPERIMENT_J.md` | Frozen F0 scientific design |
 | `docs/EXPERIMENT_J_F1_AUTHORIZATION.md` | F1 operational authorization |
 | `docs/LEARNING_EXPERIMENT_STATE.md` | Current learning experiment state |
+| `docs/EXPERIMENT_J_F2_TEST_ISOLATION_AUDIT.md` | Test-isolation audit: production journal write in `tests/test_prompt_repairer.py`; corrected candidate-store claim; no remediation authorized |
 | `WORK_LOG.md` | Human-readable historical project memory |
 | `AGENTS_LEGACY.md` | Immutable migration artifact (SHA-256: `F0DDF84CC876EDD8574AB63568F92045F2798F2AA3F40FF306939E42A1E1731E`) — for recovery only, not routine agent context |
 
@@ -229,7 +230,12 @@ Create a subsystem AGENTS.md only when genuine subsystem-specific standing rules
 
 **Experiment J F1 — CLOSED** (20/20 observations completed, governance baseline established 2026-09-27).
 
-**Next scientific step: Experiment J F2.** Produce a genuine ACTIVE lesson L through the real governed learning pathway (failure → PromptRepairer → evidence → HMAC receipt → promote → ACTIVE), then freeze F2 (capture exact `render_active_lessons()` treatment artifact). Prerequisites: `SWARM_RECEIPT_KEY` provisioned (currently missing, fail-closed), backend healthy, Qdrant healthy, `ActiveLessons` empty (C0 verified). Engineering work required: promotion fixture / lawful lesson generation, `exclude_ids` in `render_active_lessons()`, delivery instrumentation, fresh-process harness (see `docs/EXPERIMENT_J.md` §18, §17). This documentation update does NOT authorize an evaluation.
+**Next scientific step: Experiment J F2 §10.3 item 10** (`docs/LEARNING_EXPERIMENT_STATE.md:1041`): produce a genuine ACTIVE lesson L through the real governed learning pathway (failure → PromptRepairer → evidence → HMAC receipt → promote → ACTIVE), then freeze F2. Prerequisite: `SWARM_RECEIPT_KEY` is PROVISIONED (§10.3 item 9, operator 2026-09-30); promotion remains fail-closed without it. C0 verified (`ActiveLessons` absent). N=2 is NOT AUTHORIZED (`:1065`).
+
+Two **procedural** preconditions for a rollout, neither requiring a code change:
+port 8000 must be clear so the F1-owned backend owns it (fail-closed per `76b96dae`), and no test suite may run inside the evidence window — `tests/test_prompt_repairer.py` writes the production journal (see `docs/EXPERIMENT_J_F2_TEST_ISOLATION_AUDIT.md`).
+
+**Test-isolation rule (REQUIRES AUTHORIZATION before any change):** tests MUST NOT write `data/` production learning state. Established practice exists for a different store (`tests/conftest.py:169-181`, `isolate_outcome_fitness`); no Experiment J authority document defines a general rule, and no remediation is authorized. Distinguish: temporary/mocked stores in fixtures; tests that intentionally exercise persistence/recovery (which must still use temporary stores); production runtime state; Experiment J evidence/state; generated runtime data.
 
 ---
 
