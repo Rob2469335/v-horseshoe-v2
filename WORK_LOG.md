@@ -432,6 +432,23 @@ exclusion before any commit.
 | Source code changed | NO |
 | Subsystem AGENTS.md created | NO (none needed — no subsystem-specific rules found) |
 
+## Machine Specs (verified 2026-08-30)
+
+Moved here from  + "AGENTS.md" + @ during the 2026-10-01 instruction-architecture
+remediation. This is a point-in-time hardware record, not a standing rule. The one
+standing trap it corrects is retained in  + "AGENTS.md" + @ (Protected Paths section):
+**this host has no discrete GPU**.
+
+- **CPU**: Intel Core Ultra 5 135U (Meteor Lake) — 2 P-cores + 8 E-cores + 2 LP E-cores,
+  12 cores / 14 threads, 1.60 GHz base / 4.4 GHz turbo
+- **iGPU**: Intel Arc integrated (4 Xe-cores / 64 EU), shared system RAM (UMA)
+- **NPU**: Intel AI Boost (OpenVINO rejected for Qwen3.5)
+- **RAM**: 32 GB DDR5-5600
+- **Driver**: 32.0.101.8991, Vulkan 1.4.356, D3D12, SM 6.7
+
+**Correction (supersedes an earlier claim):** there is **NO Arc A770** on this
+machine. The training GPU is the Meteor Lake integrated Arc iGPU using shared DDR5.
+
 ---
 
 *End of WORK_LOG.md — This file contains the historical project memory migrated from the original AGENTS.md. For current standing rules and architecture, see AGENTS.md. For Experiment J scientific truth, see the three authoritative documents in docs/.*
