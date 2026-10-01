@@ -329,6 +329,17 @@ class BenchmarkEvaluator:
 
         out = Path(tempfile.mkdtemp()) / "arm.jsonl"
         py = _REPO_ROOT / ".venv" / "Scripts" / "python.exe"
+        # Authoritative external test patch: a SIBLING of repo/ under
+        # WORK/<instance_id>/, written by swe_rebench_probe.fetch_instance and
+        # build_swe_pool. It is deliberately OUTSIDE the agent workspace, so the
+        # fresh-arm `git clean -fdx` cannot remove it. There is exactly one
+        # patch-application mechanism (the harness child); this call site only
+        # passes the path.
+        test_patch_path = swe.get("test_patch_path") or (
+            Path(os.environ.get("SWE_PROBE_WORK",
+                                str(_REPO_ROOT.parent / "swe_probe_work")))
+            / instance_id / "test_patch.diff"
+        )
         cmd = [
             str(py),
             str(_REPO_ROOT / "qwen_train" / "run_repair_task.py"),
@@ -337,6 +348,12 @@ class BenchmarkEvaluator:
             "--problem-statement", problem_statement,
             "--test-cmd", str(swe.get("test_cmd", "")),
             "--out", str(out),
+            # Every arm starts from base_commit + exactly the authorized patch,
+            # so consecutive arms can re-establish that state after the previous
+            # arm dirtied the tree. Without this the cleanliness pre-flight
+            # rejects a workspace that legitimately carries its patch.
+            "--fresh-arm-workspace",
+            "--test-patch", str(test_patch_path),
         ]
         for f2p in (swe.get("fail_to_pass", []) or []):
             cmd += ["--f2p", str(f2p)]

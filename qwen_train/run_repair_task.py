@@ -263,6 +263,12 @@ def main() -> int:
                     help="Run pre-flight checks and evaluator sanity without invoking the model")
     ap.add_argument("--behavioral-prompt", action="store_true",
                     help="Use behavioral prompt (no exact fix disclosure)")
+    ap.add_argument("--fresh-arm-workspace", action="store_true",
+                    help="Establish HEAD==base_commit plus exactly the authorized "
+                         "--test-patch BEFORE the cleanliness pre-flight runs, so an "
+                         "arm can start from a known state and re-establish it after a "
+                         "previous arm dirtied the tree. Default OFF: flag-off "
+                         "behavior is unchanged.")
     args = ap.parse_args()
 
     instance_id = args.instance_id
@@ -284,9 +290,54 @@ def main() -> int:
     print("F1 HARNESS PRE-FLIGHT CHECKS")
     print("=" * 70)
 
+    # --- Fresh-arm workspace preparation (opt-in; runs BEFORE pre-flight) ---
+    # The cleanliness pre-flight below rejects ANY dirty tree, but a SWE
+    # workspace is SUPPOSED to be dirty: it carries its authorized test patch.
+    # Because pre-flight runs before _reset_instance, such a workspace can never
+    # reach the reset that would establish the state. When explicitly enabled,
+    # establish the authorized state first (HEAD == base_commit, tree == base +
+    # exactly the authorized patch), fail-closed, so the pre-flight below
+    # verifies it instead of merely rejecting it.
+    if args.fresh_arm_workspace:
+        print("\n[0/6] Preparing fresh arm workspace...")
+        if not args.test_patch:
+            print("  FAIL: --fresh-arm-workspace requires --test-patch")
+            print("\nABORT: fresh-arm workspace preparation failed.")
+            return 2
+        patch_path = Path(args.test_patch)
+        try:
+            from qwen_train.arm_workspace import (
+                FreshArmWorkspaceError,
+                prepare_fresh_arm_workspace,
+            )
+
+            expected_paths = prepare_fresh_arm_workspace(
+                repo, args.base_commit, patch_path
+            )
+        except Exception as exc:  # noqa: BLE001 - fail closed, never continue
+            print(f"  FAIL: {exc}")
+            print("\nABORT: fresh-arm workspace preparation failed.")
+            return 2
+        print(f"  PASS: HEAD == {args.base_commit}")
+        print(f"  PASS: authorized patch paths: {sorted(expected_paths)}")
+        print(f"  PASS: external patch preserved at {patch_path}")
+
     # --- Pre-flight: Target workspace ---
     print("\n[1/6] Checking target workspace...")
-    target_errors = _preflight_target_state(repo, args.base_commit)
+    if args.fresh_arm_workspace:
+        from qwen_train.arm_workspace import (
+            FreshArmWorkspaceError,
+            preflight_target_state_with_patch,
+        )
+
+        try:
+            target_errors = preflight_target_state_with_patch(
+                repo, args.base_commit, Path(args.test_patch)
+            )
+        except FreshArmWorkspaceError as exc:
+            target_errors = [f"Target pre-flight failed: {exc}"]
+    else:
+        target_errors = _preflight_target_state(repo, args.base_commit)
     if target_errors:
         for err in target_errors:
             print(f"  FAIL: {err}")
@@ -294,7 +345,10 @@ def main() -> int:
         return 2
     print(f"  PASS: Target at {repo}")
     print(f"  PASS: HEAD = {args.base_commit}")
-    print(f"  PASS: Working tree clean")
+    if args.fresh_arm_workspace:
+        print(f"  PASS: Working tree == base + authorized test patch")
+    else:
+        print(f"  PASS: Working tree clean")
 
     # --- Pre-flight: Evaluator separation ---
     print("\n[2/6] Checking evaluator separation...")
