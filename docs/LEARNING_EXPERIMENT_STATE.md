@@ -24,7 +24,7 @@ This is the frozen F0 research question from `docs/EXPERIMENT_J.md` §1. The lea
 | **Post-F1 Governance Baseline** | **ESTABLISHED 2026-09-27** | `SWARM_AUTONOMY=0`, `SWARM_GENETIC_MUTATION=0`, `SWARM_EVAL_TICK=0`, `SWARM_EXPERIMENT_J_ARM=0`, `SWARM_F1_NO_WEB_TOOLS=0`, `SWARM_EVOLUTION=0`; verified in backend PID 20332 |
 | **Experiment J F2 (genuine learning event)** | **PENDING** | No verified ACTIVE lesson L exists. Prerequisites: `SWARM_RECEIPT_KEY` provisioned (missing, fail-closed), backend/Qdrant healthy, `ActiveLessons` empty (C0). See `docs/EXPERIMENT_J.md` §17, §18. |
 | **F1 Harness Machinery** | **IMPLEMENTED** | Evaluator separation, pre-flight checks, behavioral prompt, fresh-clone gate, `SWARM_F1_NO_WEB_TOOLS=1` |
-| **F2 Engineering Work** | **PARTIAL** | Promotion fixture, delivery instrumentation, fresh-process harness, replay code: IMPLEMENTED (2026-09-29 baseline `7165cb20`). `exclude_ids`, certification gate: NOT IMPLEMENTED. See `docs/EXPERIMENT_J.md` §18. |
+| **F2 Engineering Work** | **PARTIAL** | Promotion fixture, delivery instrumentation, fresh-process harness, replay code: IMPLEMENTED (2026-09-29 baseline `7165cb20`). `exclude_ids`: IMPLEMENTED (2026-09-30, relevance-ordered governed seam). Rediscovery classification and invariant-F mutation coverage: IMPLEMENTED. Certification gate: NOT IMPLEMENTED. See `docs/EXPERIMENT_J.md` §18. |
 
 **F1 Protocol Observations: 20/20 COMPLETED** (reconciled 2026-09-26 from `qwen_train/results/f1_obs*.jsonl`):
 - 10 valid observations (all reaching qualifying first-edit endpoint @ ATIF Step 4)
@@ -52,7 +52,7 @@ This is the frozen F0 research question from `docs/EXPERIMENT_J.md` §1. The lea
 **Prerequisites (from `docs/EXPERIMENT_J.md` §17, §18 and `docs/LEARNING_EXPERIMENT_STATE.md` §1):**
 | Prerequisite | Status | Notes |
 |---|---|---|
-| `SWARM_RECEIPT_KEY` provisioned in `.env` | ❌ MISSING | Fail-closed; required for HMAC receipt signing |
+| `SWARM_RECEIPT_KEY` provisioned in `.env` | ✅ PROVISIONED | Operator-provisioned 2026-09-30 per §10.3 item 9. Required for HMAC receipt signing; promotion remains fail-closed without it |
 | Backend healthy (`/readyz`=ready, `/health`=ok) | ✅ Verified | Backend PID 20332, Qdrant healthy |
 | Qdrant `ActiveLessons` empty (C0) | ✅ Verified | Post-F1 baseline confirmed |
 | `SWARM_HARNESS_KEY=dev` in `.env` | ✅ Set | For rollout provenance |
@@ -972,15 +972,17 @@ Post-F1 Governance Baseline (2026-09-27):
 
 **NOT IMPLEMENTED (remaining F2-specific):**
 - F2 freeze schema / deterministic artifact capture (primitives exist in `runtime_v2/services/f2_freeze.py`; governed production freeze pipeline not implemented)
-- `exclude_ids` parameter in `render_active_lessons()`
-- Rediscovery rule classification from trajectory timestamps
-- Adversarial/corruption/mutation tests
 - F2 certification gate
+
+**IMPLETED since the 2026-09-29 baseline (removing items from the list above):**
+- `exclude_ids` parameter in `render_active_lessons()` (2026-09-30)
+- Rediscovery rule classification from trajectory timestamps — `qwen_train/f2_rediscovery.py` (F0 §6 predicate; not yet wired into a real F2 arm)
+- Adversarial/corruption/mutation tests — `tests/test_f2_invariant_f_mutation.py` plus invariant G in `tests/test_f2_replay.py`
 
 **IMPLEMENTED as of 2026-09-29 F2 baseline (`7165cb20`):**
 - Delivery instrumentation (9-field P2 delivery evidence in trajectory JSONL)
 - Fresh-process T/X/C0 arm orchestrator (adapter + orchestrator + real-P2 tests)
-- Governed promotion fixture (`tests/test_learner_artifact_derivation.py`, 39 tests; uses test-only signing; no real ACTIVE lesson created)
+- Governed promotion fixture (`tests/test_learner_artifact_derivation.py`, 21 tests; uses test-only signing; no real ACTIVE lesson created). Verified ready 2026-09-30: the fixture drives failure → PromptRepairer → evidence → HMAC receipt → promotion → store, reaching `"promoted"` under a test-only receipt key with tmp storage and a mocked lesson manager. Receipt fail-closed paths without signing authority are covered in `tests/test_prompt_repairer.py` (no_signing_authority, wrong-key).
 - One authoritative delivery abstraction (invariant C in §10.2)
 
 **NOT YET TRIGGERED:**
@@ -1057,7 +1059,7 @@ It must not be provisioned simply to make tests pass. The engineering machinery 
 | Backend healthy | COMPLETE | Live verification 2026-09-28 |
 | Qdrant healthy / C0 verified | COMPLETE | `ActiveLessons` absent (404) |
 | Post-F1 governance baseline | COMPLETE | Verified 2026-09-27 |
-| `SWARM_RECEIPT_KEY` | NOT PROVISIONED | Fail-closed; required for promotion |
+| `SWARM_RECEIPT_KEY` | PROVISIONED (operator, §10.3 item 9) | Fail-closed without it; required for promotion |
 | F2 engineering | PARTIAL — fresh-process execution/import contract implemented 2026-09-29; all other F2-specific engineering NOT STARTED | `docs/EXPERIMENT_J_F2_EXECUTION_CONTRACT_AUTHORIZATION.md` |
 | ACTIVE lesson L | NONE | No lesson exists in Qdrant |
 | N=2 authorization | NOT AUTHORIZED | No document authorizes N=2 |

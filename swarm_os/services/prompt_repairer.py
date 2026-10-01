@@ -39,6 +39,10 @@ from swarm_os.services.lesson_manager import (
     register_eval_context,
 )
 from swarm_os.lib.atomic_io import atomic_write_text
+# Inference topologies (LOCAL = local llama.exe on :8079; RUNPOD = SSH tunnel
+# when the router is pinned). Defined in experiment_model_identity so the
+# preregistered identity and the topology vocabulary live together.
+from swarm_os.services.experiment_model_identity import LOCAL, RUNPOD
 
 GOVERNANCE_VERSION = 2
 # Default evidence governance: at least 3 INDEPENDENT trajectories (unique run
@@ -420,6 +424,11 @@ class BenchmarkEvaluator:
                 "failure_category": "postcheck_failed" if not pc_ok else (None if rec.get("verdict") else "task_failure"),
                 "inference_endpoint": preflight.get("inference_endpoint"),
                 "router_boot_id": preflight.get("boot_id"),
+                # F0 :144/:145 REQUIRED RECORD -- the verified model identity
+                # must survive into the rollout evidence, not only into the
+                # preflight dict. Merged from the preflight provenance so the
+                # record keeps its existing shape plus the identity fields.
+                **(preflight.get("model_identity") or {}),
                 "timeout_count": pc.get("timeout_count", 0),
                 "timestamp": time.time(),
             })
@@ -471,35 +480,48 @@ class BenchmarkEvaluator:
         import httpx as _httpx
 
         pin_path = self._pin_config_path()
-        if not pin_path.exists():
-            return {"ok": False,
-                    "failure_category": "endpoint_preflight_failed",
-                    "verify_reason": f"pin config not found: {pin_path}"}
-        try:
-            pin = json.loads(pin_path.read_text(encoding="utf-8"))
-        except Exception as exc:
-            return {"ok": False,
-                    "failure_category": "endpoint_preflight_failed",
-                    "verify_reason": f"pin config unreadable: {exc}"}
+        # --- Topology resolution (authoritative discriminator) -----------------
+        # model_router.py:90-98 defines two legitimate topologies: a LOCAL
+        # llama.exe owning :8079 (SWARM_ROUTER_PINNED unset/0) and a RUNPOD SSH
+        # tunnel owning :8079 (pinned). The router's OWN status endpoint is the
+        # authority for which one is live -- never an env var read here, which
+        # could disagree with the process actually serving traffic.
+        #
+        # An operator pin config may override ports and supply the RunPod
+        # expected fingerprint. It is OPTIONAL here: local mode must not need
+        # it, and whether it is REQUIRED is decided by the router's OWN status
+        # endpoint below (the authoritative topology signal), never by an env
+        # var that could disagree with the process serving traffic.
+        pin_path = self._pin_config_path()
+        pin = {}
+        pin_present = pin_path.exists()
+        if pin_present:
+            try:
+                pin = json.loads(pin_path.read_text(encoding="utf-8"))
+            except Exception as exc:
+                return {"ok": False,
+                        "failure_category": "endpoint_preflight_failed",
+                        "verify_reason": f"pin config unreadable: {exc}"}
 
         tunnel_port = pin.get("tunnel_port", 8079)
         status_port = pin.get("status_port", 8095)
 
-        # 1. :8079 listener owner must be ssh.exe
+        # 1. :8079 must be listening. Owner differs per topology and is
+        # recorded as provenance; only RunPod REQUIRES ssh.exe.
         try:
             import psutil
-            ssh_found = False
+
+            owner = ""
+            listening = False
             for conn in psutil.net_connections(kind="inet"):
                 if conn.laddr.port == tunnel_port and conn.status == "LISTEN":
-                    proc = psutil.Process(conn.pid)
-                    if proc.name().lower() == "ssh.exe":
-                        ssh_found = True
-                    else:
-                        return {"ok": False,
-                                "failure_category": "endpoint_preflight_failed",
-                                "verify_reason": f":{tunnel_port} owned by {proc.name()}, not ssh.exe"}
+                    listening = True
+                    try:
+                        owner = psutil.Process(conn.pid).name()
+                    except Exception:  # noqa: BLE001
+                        owner = f"pid:{conn.pid}"
                     break
-            if not ssh_found:
+            if not listening:
                 return {"ok": False,
                         "failure_category": "endpoint_preflight_failed",
                         "verify_reason": f":{tunnel_port} not listening"}
@@ -526,10 +548,57 @@ class BenchmarkEvaluator:
                     "failure_category": "endpoint_preflight_failed",
                     "verify_reason": f"status endpoint unreachable: {exc}"}
 
-        if not status.get("pinned"):
+        # --- Topology selection: strict bool + agreement with the env signal --
+        # Truthiness is NOT acceptable here. `pinned` decides whether the pin
+        # requirement and the ssh.exe ownership requirement apply, so a missing,
+        # null, numeric or string value must fail closed rather than coercing to
+        # LOCAL (the less restrictive contract).
+        pinned = status.get("pinned", None)
+        if not isinstance(pinned, bool):
             return {"ok": False,
                     "failure_category": "endpoint_preflight_failed",
-                    "verify_reason": "router not pinned (SWARM_ROUTER_PINNED=1 not set)"}
+                    "verify_reason": f"status endpoint returned no usable "
+                                     f"'pinned' boolean: {pinned!r}"}
+
+        # The router reports its own env var; the configured signal must AGREE.
+        # Disagreement means we cannot say which topology is actually serving, so
+        # fail closed instead of silently choosing the less restrictive one.
+        env_raw = os.environ.get("SWARM_ROUTER_PINNED", "").strip()
+        if env_raw == "":
+            env_pinned = False  # documented local default (model_router.py:98)
+        elif env_raw in ("0", "1"):
+            env_pinned = env_raw == "1"
+        else:
+            return {"ok": False,
+                    "failure_category": "endpoint_preflight_failed",
+                    "verify_reason": f"malformed SWARM_ROUTER_PINNED={env_raw!r}; "
+                                     f"expected '0' or '1'"}
+        if env_pinned != pinned:
+            return {"ok": False,
+                    "failure_category": "endpoint_preflight_failed",
+                    "verify_reason": f"topology signals disagree: "
+                                     f"SWARM_ROUTER_PINNED={env_raw!r} but router "
+                                     f"reports pinned={pinned}"}
+
+        topology = RUNPOD if pinned else LOCAL
+        if topology == RUNPOD and not pin_present:
+            return {"ok": False,
+                    "failure_category": "endpoint_preflight_failed",
+                    "verify_reason": f"pinned topology requires a pin config: {pin_path}"}
+        if topology == RUNPOD and owner.lower() != "ssh.exe":
+            return {"ok": False,
+                    "failure_category": "endpoint_preflight_failed",
+                    "verify_reason": f"pinned topology requires ssh.exe on "
+                                     f":{tunnel_port}, found {owner}"}
+        # LOCAL requires the actual local llama serving process. A merely
+        # non-empty owner is not enough: any process squatting :8079 while the
+        # router is unpinned must not be accepted.
+        if topology == LOCAL and "llama" not in owner.lower():
+            return {"ok": False,
+                    "failure_category": "endpoint_preflight_failed",
+                    "verify_reason": f"local topology requires the local llama "
+                                     f"server on :{tunnel_port}, found "
+                                     f"{owner or 'no owner'!r}"}
 
         boot_id = status.get("boot_id", "")
         pre_counters = {
@@ -538,7 +607,7 @@ class BenchmarkEvaluator:
             "pairless": status.get("pairless", 0),
         }
 
-        # 3. /props hash via the tunnel (not the router)
+        # 3. /props via the inference endpoint (not the router)
         try:
             async with _httpx.AsyncClient(timeout=10.0) as client:
                 props = (await client.get(
@@ -548,25 +617,66 @@ class BenchmarkEvaluator:
                     "failure_category": "endpoint_preflight_failed",
                     "verify_reason": f"/props unreachable: {exc}"}
 
-        actual = self._props_hash(props)
-        expected = self._props_hash(pin)
-        if actual != expected:
+        # 3a. MODEL IDENTITY (F0 REQUIRED RECORD, :125/:144/:145). Checked
+        # against the PREREGISTERED GGUF SHA-256 before any fingerprint test,
+        # so a matching configuration fingerprint can never stand in for it.
+        from swarm_os.services.experiment_model_identity import (
+            EXPECTED_LOCAL_PROPS_FINGERPRINT,
+            ModelIdentityError,
+            verify_model_identity,
+        )
+
+        try:
+            identity = verify_model_identity(
+                props,
+                topology=topology,
+                endpoint_owner=owner,
+                boot_id=boot_id,
+                expected_fingerprint=(
+                    EXPECTED_LOCAL_PROPS_FINGERPRINT if topology == LOCAL else None
+                ),
+                repo_root=_REPO_ROOT,
+            )
+        except ModelIdentityError as exc:
             return {"ok": False,
                     "failure_category": "endpoint_preflight_failed",
-                    "verify_reason": f"fingerprint mismatch "
-                                     f"(expected={expected}, actual={actual}), "
-                                     f"re-pin if intended"}
+                    "verify_reason": f"model identity: {exc}"}
+
+        # 4. Configuration fingerprint. RunPod compares against its operator
+        # pin snapshot (unchanged behaviour); local compares against the
+        # authorized local fingerprint. Secondary to the identity check above.
+        actual = identity.props_fingerprint
+        if topology == RUNPOD:
+            expected = self._props_hash(pin)
+            if actual != expected:
+                return {"ok": False,
+                        "failure_category": "endpoint_preflight_failed",
+                        "verify_reason": f"fingerprint mismatch "
+                                         f"(expected={expected}, actual={actual}), "
+                                         f"re-pin if intended"}
 
         return {"ok": True, "boot_id": boot_id,
-                "inference_endpoint": actual, "pre_counters": pre_counters}
+                "inference_endpoint": actual, "pre_counters": pre_counters,
+                "inference_topology": topology,
+                "model_identity": identity.as_provenance()}
 
     async def _run_postcheck(self, preflight: dict) -> dict:
         """Post-arm endpoint validation.  Returns ``{"ok": True}`` or
         ``{"ok": False, "verify_reason": …}``."""
         import httpx as _httpx
 
+        # Pin-file reading is topology-CONDITIONAL only: RunPod keeps its
+        # operator pin (ports + expected fingerprint); local uses defaults.
+        # boot_id, counter and /props stability checks below are unchanged.
+        topology = preflight.get("inference_topology", RUNPOD)
         pin_path = self._pin_config_path()
-        pin = json.loads(pin_path.read_text(encoding="utf-8"))
+        pin = {}
+        if topology == RUNPOD:
+            if not pin_path.exists():
+                return {"ok": False,
+                        "failure_category": "endpoint_postcheck_failed",
+                        "verify_reason": f"pinned topology requires a pin config: {pin_path}"}
+            pin = json.loads(pin_path.read_text(encoding="utf-8"))
         tunnel_port = pin.get("tunnel_port", 8079)
         status_port = pin.get("status_port", 8095)
 
