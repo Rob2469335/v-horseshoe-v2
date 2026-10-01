@@ -322,7 +322,7 @@ destination:
 | Test | Destination | Class |
 |---|---|---|
 | `tests/test_admin_status.py:46-62` | **`data/events/events.jsonl`** (production) via `Path("data/events/events.jsonl")` + `.mkdir()` + `.open("w")`, then `unlink()` in `finally` | **was YELLOW → REMEDIATED** (see below) |
-| `tests/test_sandbox_bounds.py:46` | sets `SWARM_WRITE_ROOT=data/curriculum_fix` (production-relative) | **YELLOW** — requires tracing the sandbox writer to prove containment |
+| `tests/test_sandbox_bounds.py:46` | sets `SWARM_WRITE_ROOT=data/curriculum_fix` (production-relative) | **was YELLOW → GREEN by verification** — containment traced and proved below; regression test added |
 | `tests/test_admin_resume_latest.py:9` | `Path("swarm_os/data/snapshots/snapshot_0001.json")` | GRAY — read-only reference, write not established |
 | `tests/test_arm_workspace.py`, `test_autonomy_e2e.py`, `test_autonomous_loop_bugs.py`, `test_agents_md_atomic.py`, `test_approval_gate.py` | temp/git-repo fixtures created inside the test | GREEN |
 
@@ -459,8 +459,8 @@ behavior. No untracked file was added, deleted, modified, or staged.
 
 | Class | Original | Current | Items (current) |
 |---|---|---|---|
-| **GREEN** | 3 | 7 | PromptRepairer unit fixtures; PromptRepairer lifespan isolation (remediated `417d013c`); test_admin_status event-log isolation (remediated, §10); Qdrant `lesson_manager` (corrected — see §7.3); fitness store for `tests/`; `.env`-independent env fixtures |
-| **YELLOW** | 3 | 1 | `SWARM_WRITE_ROOT` in `test_sandbox_bounds.py` |
+| **GREEN** | 3 | 8 | PromptRepairer unit fixtures; PromptRepairer lifespan isolation (remediated `417d013c`); test_admin_status event-log isolation (remediated, §10); `SWARM_WRITE_ROOT` relative-root containment (GREEN by verification, §19 YELLOW-3); Qdrant `lesson_manager` (corrected — see §7.3); fitness store for `tests/`; `.env`-independent env fixtures |
+| **YELLOW** | 3 | **0** | none — both YELLOW items are now GREEN (one remediated, one proven contained) |
 | **RED** | 2 | 1 | **Qdrant general-constructor bypass** — ordinary pytest reached a real `AsyncQdrantClient` and could issue a real `upsert('decision_cache')` (§7.2). **Remediated** by the two-layer package+per-module patch (§7.4) |
 | **GRAY** | 6 | 6 | `swarm_os/tests/` fitness; memory/diary Qdrant path; trajectories; checkpoints; run_snapshots; receipt-key file reachability |
 
@@ -470,7 +470,7 @@ see `docs/PROMPTREPAIRER_LIFESPAN_ISOLATION_REMEDIATION.md`. The
 `candidates.json`-contamination claim that accompanied it was **rejected** and is
 recorded as such; it was never real.
 
-**Still open:** YELLOW ×1 (`SWARM_WRITE_ROOT`) and GRAY ×6 above, plus the `:8081`
+**Still open:** YELLOW x0 and GRAY x6 above, plus the `:8081`
 `EmbeddingService.embed` retry cost noted in §7.4.
 
 **Final verdict on broad pytest:** **STILL NOT SAFE.** Qdrant is now contained, but
@@ -523,10 +523,59 @@ isolates both the test fixture and `routes.py:654`'s CWD-relative path; the
 destructive `finally: unlink()` is removed. Verified byte-identical production
 `data/events/events.jsonl` with CWD left at the repo root.
 
-### YELLOW-3 — `SWARM_WRITE_ROOT` points into production
-`tests/test_sandbox_bounds.py:46` sets `SWARM_WRITE_ROOT=data/curriculum_fix`,
-resolved relative to CWD. Writer containment was not traced. **GRAY-leaning
-YELLOW.** Remediation: point at `tmp_path`. **Authorization required: YES.**
+### YELLOW-3 — `SWARM_WRITE_ROOT` relative write root — **GREEN by verification**
+
+Originally flagged because the writer was never traced. It has now been traced.
+
+**PROVEN — resolution rule** (`swarm_os/lib/paths.py:106-109`):
+
+```python
+base = Path(wr)
+if not base.is_absolute():
+    base = root / base          # root = agent_workspace_root()
+base = base.resolve()
+```
+
+A relative `SWARM_WRITE_ROOT` resolves under the **workspace root**, never the
+process CWD.
+
+**PROVEN — every relative-write-root test supplies a tmp workspace:**
+
+| Test | Workspace source |
+|---|---|
+| `test_sandbox_bounds.py:41-49` | `monkeypatch.setenv("SWARM_WORKSPACE_ROOT", str(ws))` with `ws = tmp_path / "ws"` |
+| `test_write_root.py:16,38` | `filesystem_handler(..., tmp_path)` — tmp passed as the workspace argument |
+| `test_workspace_routing_f1_op_infra_002.py:432-456` | `root=ws` with `ws = tmp_path / "ws"` |
+
+No tracked test combines a relative write root with a production workspace root.
+
+**PROVEN — `sandbox_bounds()` is a pure query.** `paths.py` contains **0** `mkdir`,
+`.open(`, `write_text`, `write_bytes` or `touch` calls. `Path.resolve()` with the
+default `strict=False` does not create anything.
+
+**PROVEN — empirical, against the real production directory.** `data/curriculum_fix`
+is not hypothetical: **352 real files**. Running all five write-root/workspace test
+files (`test_sandbox_bounds`, `test_write_root`, `test_workspace_routing_f1_op_infra_002`,
+`test_workspace_root`, `test_filesystem_patch_alias`) gave 50 passed / 2 skipped, with
+a per-file SHA-256 snapshot before and after:
+
+```
+files before/after : 352 / 352
+ADDED   : 0
+REMOVED : 0
+CHANGED : 0
+```
+
+**PROVEN — the risk is real, the containment is what prevents it.** With the same env
+but `SWARM_WORKSPACE_ROOT` pointed at the repo instead of tmp, the write root resolves
+to the production path and **175 real entries** are inside it. Containment depends
+entirely on the workspace root being a tmp dir.
+
+**Regression test added:** `test_relative_write_root_never_escapes_the_workspace`
+asserts the resolution stays under `tmp_path`, is not under `Path.cwd()`, and that
+nothing was created. Mutation-checked: it fails if the workspace root is the repo.
+
+**Verdict: GREEN.** No production code change was needed or made.
 
 ## 20. Remediation plan, ordered by risk
 
@@ -535,7 +584,7 @@ YELLOW.** Remediation: point at `tmp_path`. **Authorization required: YES.**
 2. ~~**RED-3 / YELLOW-1**~~ — **DONE** (this task): package-level + per-module
    Qdrant patch in both conftests.
 3. **YELLOW-2** — redirect `test_admin_status.py`'s events path to `tmp_path`.
-4. **YELLOW-3** — redirect `test_sandbox_bounds.py`'s `SWARM_WRITE_ROOT`.
+4. ~~**YELLOW-3**~~ - **CLOSED as GREEN**: containment traced and proved (`paths.py:106-109`); regression test added; no code change needed.
 5. **GRAY closure** — trace trajectory / checkpoint / run-snapshot path
    resolution under test, then classify.
 6. **Embedding retry cost** (`:8081`, §7.4) — separate defect, not yet scheduled.

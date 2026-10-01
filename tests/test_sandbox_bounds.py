@@ -15,6 +15,8 @@ runs, and ``write_covers_workspace=False`` is the abort condition.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from swarm_os.lib.paths import sandbox_bounds
 
 
@@ -74,6 +76,33 @@ def test_invalid_workspace_root_fails_closed_never_raises(monkeypatch):
     b = sandbox_bounds()
     assert b["write_covers_workspace"] is False
     assert b["error"]
+
+
+def test_relative_write_root_never_escapes_the_workspace(monkeypatch, tmp_path):
+    """Containment lock for the YELLOW-1 finding in
+    docs/TEST_PERSISTENT_STORE_ISOLATION_AUDIT.md.
+
+    A RELATIVE ``SWARM_WRITE_ROOT`` resolves UNDER the workspace root
+    (``paths.py:106-109``). ``data/curriculum_fix`` is a real production
+    directory with 352 files, so a test that set the workspace root to the repo
+    instead of a tmp dir would point its write root straight at it. This asserts
+    the resolution stays inside ``tmp_path``, and that querying ``sandbox_bounds``
+    creates nothing on disk.
+    """
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    monkeypatch.setenv("SWARM_WORKSPACE_ROOT", str(ws))
+    monkeypatch.setenv("SWARM_WRITE_ROOT", "data/curriculum_fix")
+
+    b = sandbox_bounds()
+
+    write_root = Path(b["write_root"])
+    assert write_root == (ws / "data" / "curriculum_fix").resolve()
+    assert not write_root.is_relative_to(Path.cwd().resolve())
+    assert write_root.is_relative_to(ws.resolve())
+    # resolve() must not have created it -- this is a pure query.
+    assert not write_root.exists()
+    assert not (ws / "data").exists()
 
 
 def test_status_schema_carries_sandbox() -> None:
