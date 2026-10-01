@@ -56,6 +56,44 @@ def isolate_prompt_repairer_store(tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def isolate_runtime_data_dirs(tmp_path, monkeypatch):
+    """Never let a test append to the runtime stores under `data/`.
+
+    PROVEN leak (docs/TEST_PERSISTENT_STORE_ISOLATION_AUDIT.md, GRAY closure):
+    ordinary pytest created 4 files per run in production `data/` --
+    3 x `data/trajectories/<run_id>.jsonl` and 1 x
+    `data/run_snapshots/<snapshot_id>.json` -- reproduced over two consecutive
+    runs, from 10 test files that never patch these constants.
+
+    The cause is the same shape as the Qdrant finding: these are CWD-relative
+    constants, so under pytest (CWD == repo root) they point at production.
+    `AgentServiceV2._TRAJ_DIR` is a CLASS attribute read only through `self.`,
+    the other two are module globals; string targets patch each correctly.
+
+    `data/checkpoints` is redirected too even though all five tests that touch it
+    already patch it -- it is the same class of constant and should not depend on
+    every future test remembering.
+    """
+    root = tmp_path / "runtime_data"
+    monkeypatch.setattr(
+        "runtime_v2.api.agent_service_v2.AgentServiceV2._TRAJ_DIR",
+        root / "trajectories",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "runtime_v2.services.checkpointing._CHECKPOINT_DIR",
+        root / "checkpoints",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "runtime_v2.services.run_snapshot._SNAPSHOT_DIR",
+        root / "run_snapshots",
+        raising=False,
+    )
+    return root
+
+
+@pytest.fixture(autouse=True)
 def global_reflexion_service_mock():
     """Make the reflexion-memory check inside the swarm brain hermetic and fast.
 

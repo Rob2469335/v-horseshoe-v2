@@ -383,9 +383,12 @@ because absence of a file store is not proof of isolation for the Qdrant path.
 
 **PROVEN:** `data/f1_evidence/` (28 files) holds F1 runtime evidence. No test
 imports `qwen_train/run_repair_task.py` (verified: 0 tracked references).
-**GRAY:** `data/trajectories/`, `data/checkpoints/`, `data/run_snapshots/` writers
-were not exhaustively traced; `test_agent_trajectory.py` and 10 other trajectory-
-referencing tests exist, and the trajectory path resolution was not established.
+**PROVEN (later traced — see §13.1):** `data/trajectories/`,
+`data/checkpoints/` and `data/run_snapshots/` were **not** safe. They were
+CWD-relative constants, and ordinary pytest was writing into production:
+**4 files per run** (3 × `data/trajectories/<run_id>.jsonl`, 1 ×
+`data/run_snapshots/<snapshot_id>.json`), reproduced across two consecutive runs
+and now remediated.
 
 **PROVEN:** no test creates an ACTIVE lesson or reaches `promote()` against the
 production store — `promote` requires `SWARM_RECEIPT_KEY`, and
@@ -394,6 +397,71 @@ production store — `promote` requires `SWARM_RECEIPT_KEY`, and
 
 **PROVEN:** no Experiment J authority document, threshold, `k`, `N`, treatment, or
 promotion rule was modified by this audit.
+
+### 13.1 GRAY closure — runtime `data/` stores were **RED**, now remediated
+
+The three filesystem GRAY items were traced and the classification was wrong.
+They were not "unproven"; they were **proven unsafe**.
+
+**Root cause — same shape as the Qdrant finding.** CWD-relative constants:
+
+| Constant | Line | Kind |
+|---|---|---|
+| `AgentServiceV2._TRAJ_DIR = Path("data/trajectories")` | `agent_service_v2.py:295` | class attribute, read via `self.` |
+| `checkpointing._CHECKPOINT_DIR = Path("data/checkpoints")` | `checkpointing.py:41` | module global |
+| `run_snapshot._SNAPSHOT_DIR = Path("data/run_snapshots")` | `run_snapshot.py:36` | module global |
+
+Under pytest the process CWD is the repository root, so these resolve to
+production.
+
+**PROVEN — measured, not inferred.** A per-file snapshot (path, size, mtime) of
+**15 `data/` subtrees totalling 1,609 files** plus 8 top-level store files was
+taken before and after running the 10 test files that reference these modules
+without patching the constants:
+
+```
+before/after : 1609 / 1613
+ADDED   : 4
+REMOVED : 0
+CHANGED : 0
+   + data/trajectories/data/trajectories/0a59ffc2-....jsonl
+   + data/trajectories/data/trajectories/b379acef-....jsonl
+   + data/trajectories/data/trajectories/ee170b6c-....jsonl
+   + data/run_snapshots/data/run_snapshots/35c6b4ef7ee0.json
+```
+
+Reproduced identically on two consecutive runs. Nothing else in `data/` was
+touched — `events`, `evolution`, `checkpoints`, `usage`, `trust_grants.json`,
+`curriculum_fix` (352 files) and the other 8 stores were all unchanged.
+
+**Evidence preserved, not cleaned.** `data/trajectories/` now holds 563 files
+(557 original + 6 written by the two leak-detection runs). Per instruction, no
+contaminated artifact was deleted.
+
+**Remediation.** Root-`conftest.py::isolate_runtime_data_dirs` (autouse) redirects
+all three constants to a per-test `tmp_path` directory, using string targets so
+the class attribute and the module globals are each patched at the right scope.
+
+**PROVEN — result.** Same 10 test files, same snapshot method:
+
+```
+ADDED=0 REMOVED=0 CHANGED=0     (was 4 added per run)
+```
+
+Test results were unchanged: 193 passed / 3 failed both before and after, so the
+fixture introduced no regression. The 3 failures are **pre-existing** and
+unrelated — verified by running the same files with the fixture stashed and
+unstashed (identical `2 failed, 3 passed`), and their cause is
+`AttributeError: 'NoneType' object has no attribute 'get'` in the agent stream
+path, not storage.
+
+**Regression coverage:** `tests/test_runtime_data_isolation.py` (5 tests) pins
+that each constant is outside `data/`, and that a real trajectory write lands in
+the temporary directory and never in production.
+
+`data/checkpoints` was redirected too even though all five tests that touch it
+already patched it — it is the same class of constant and should not depend on
+every future test remembering.
 
 ## 14. TestClient / application-startup assessment — see §8.2 (RED-1)
 
@@ -459,10 +527,10 @@ behavior. No untracked file was added, deleted, modified, or staged.
 
 | Class | Original | Current | Items (current) |
 |---|---|---|---|
-| **GREEN** | 3 | 8 | PromptRepairer unit fixtures; PromptRepairer lifespan isolation (remediated `417d013c`); test_admin_status event-log isolation (remediated, §10); `SWARM_WRITE_ROOT` relative-root containment (GREEN by verification, §19 YELLOW-3); Qdrant `lesson_manager` (corrected — see §7.3); fitness store for `tests/`; `.env`-independent env fixtures |
+| **GREEN** | 3 | 9 | PromptRepairer unit fixtures; PromptRepairer lifespan isolation (remediated `417d013c`); test_admin_status event-log isolation (remediated, §10); `SWARM_WRITE_ROOT` relative-root containment (GREEN by verification, §19 YELLOW-3); Qdrant `lesson_manager` (corrected — see §7.3); fitness store for `tests/`; `.env`-independent env fixtures |
 | **YELLOW** | 3 | **0** | none — both YELLOW items are now GREEN (one remediated, one proven contained) |
 | **RED** | 2 | 1 | **Qdrant general-constructor bypass** — ordinary pytest reached a real `AsyncQdrantClient` and could issue a real `upsert('decision_cache')` (§7.2). **Remediated** by the two-layer package+per-module patch (§7.4) |
-| **GRAY** | 6 | 6 | `swarm_os/tests/` fitness; memory/diary Qdrant path; trajectories; checkpoints; run_snapshots; receipt-key file reachability |
+| **GRAY** | 6 | 3 | `swarm_os/tests/` fitness scope; memory/diary Qdrant path; receipt-key file reachability. (The other three — trajectories, checkpoints, run_snapshots — were proven **RED** and remediated; see §13.1.) |
 
 **REMEDIATED, no longer counted:** RED-1/RED-2 (`TestClient(app)` lifespan writing
 production `candidates.json` + appending to `audit.jsonl`) — fixed in `417d013c`,
@@ -470,7 +538,7 @@ see `docs/PROMPTREPAIRER_LIFESPAN_ISOLATION_REMEDIATION.md`. The
 `candidates.json`-contamination claim that accompanied it was **rejected** and is
 recorded as such; it was never real.
 
-**Still open:** YELLOW x0 and GRAY x6 above, plus the `:8081`
+**Still open:** YELLOW x0 and GRAY x3 above, plus the `:8081`
 `EmbeddingService.embed` retry cost noted in §7.4.
 
 **Final verdict on broad pytest:** **STILL NOT SAFE.** Qdrant is now contained, but
