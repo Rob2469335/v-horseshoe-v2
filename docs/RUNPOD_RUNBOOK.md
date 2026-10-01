@@ -4,6 +4,14 @@ This runbook covers the operational procedures for deploying, verifying, and
 auditing the swarm on a RunPod GPU pod. It complements `AGENTS.md` by
 focusing on **operational execution** rather than architecture.
 
+> **Scope: RunPod only.** Experiment J supports **two** inference topologies —
+> this RunPod/pinned one, and a LOCAL topology (local `llama.exe` on `:8079`)
+> that needs no SSH tunnel and no pin file. The dual-topology contract, the
+> fail-closed rules, and the model-identity/provenance requirements are
+> documented in **`docs/INFERENCE_TOPOLOGY.md`**. Read that document before
+> assuming `SWARM_ROUTER_PINNED=1` is universally required; it is required for
+> the RunPod arms described here, not for local arms.
+
 ---
 
 ## Prerequisites & Environment
@@ -18,6 +26,9 @@ focusing on **operational execution** rather than architecture.
   - `HF_TOKEN` (for private model upload)
   - `SWARM_API_TOKEN` (optional, protects local API)
 * **Local model**: `qwen_train/robs4b_q4km.gguf` (SHA256 `65202F372110DDE854B40CE15DCD1B6AB56A1FE9EA542B84B6A9CC745B242D41`, 2.71 GB).
+  This remains the originally recorded preregistered identity for Experiment J;
+  `docs/INFERENCE_TOPOLOGY.md` §2 is the canonical statement of it and covers
+  both topologies.
 
 ---
 
@@ -104,9 +115,15 @@ or `insufficient_evidence` at promotion time.
 
 ## Governance / Security Checks
 
-* **Router pin**: `SWARM_ROUTER_PINNED=1` must be set before any arm. Verified
-  via `/status` endpoint (`pinned: true`) and `model_router.py` logic.
-  If unpinned, router can spawn local `llama.exe` → wrong model.
+* **Router pin**: `SWARM_ROUTER_PINNED=1` must be set before any **RunPod** arm.
+  Verified via the authenticated `/inference/status` endpoint (`pinned: true`,
+  a strict boolean) **and** agreement with the environment value; a local
+  `llama.exe` squatting on `:8079` is the wrong model. If unpinned, the router
+  spawns a local `llama.exe`. Topology disagreement, or a junk
+  `SWARM_ROUTER_PINNED` value, **fails closed** rather than falling back to
+  local — see `docs/INFERENCE_TOPOLOGY.md`.
+  * The `SWARM_ROUTER_PINNED=1` line recorded below was originally written as
+    "before any arm"; it applies to the RunPod arms this runbook covers.
 * **Sandbox**: `SWARM_WRITE_ROOT` is the configured write boundary for
   filesystem operations that pass through the sandbox/security layer.
 * **Autonomy ceiling**: `autonomy_policy.json` (v2) at repo root is the
