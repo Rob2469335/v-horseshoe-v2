@@ -10,30 +10,54 @@ isolation guarantees so the combined run is deterministic.
 
 import pytest
 from unittest.mock import patch, AsyncMock, MagicMock
-from qdrant_client import AsyncQdrantClient
+from qdrant_client import AsyncQdrantClient, QdrantClient
+
+# Captured before any patch is active -- see tests/conftest.py for the full
+# rationale. `_qdrant_in_memory` must build the real in-memory client from this
+# reference rather than the (soon-patched) module attribute.
+_REAL_ASYNC_QDRANT = AsyncQdrantClient
+_REAL_SYNC_QDRANT = QdrantClient
+
+
+def _qdrant_in_memory(*args, **kwargs):
+    return _REAL_ASYNC_QDRANT(":memory:")
+
+
+def _qdrant_in_memory_sync(*args, **kwargs):
+    return _REAL_SYNC_QDRANT(":memory:")
 
 
 @pytest.fixture(autouse=True)
 def swarmos_qdrant_mock():
-    """Force in-memory AsyncQdrantClient so no swarm_os test needs live Qdrant."""
+    """Force in-memory Qdrant so no swarm_os test needs a live server.
 
-    def mock_init(*args, **kwargs):
-        return AsyncQdrantClient(":memory:")
-
-    with patch(
-        "swarm_os.services.vector_store.AsyncQdrantClient", side_effect=mock_init
-    ):
-        with patch(
-            "swarm_os.services.reflection_loop.AsyncQdrantClient",
-            side_effect=mock_init,
-            create=True,
-        ):
+    Package-level patch covers function-local `from qdrant_client import ...`
+    sites; per-module patches cover module globals bound at import time. This
+    tree previously had neither the package patch nor the `lesson_manager`
+    module patch. See tests/conftest.py::global_qdrant_mock.
+    """
+    with patch("qdrant_client.AsyncQdrantClient", side_effect=_qdrant_in_memory):
+        with patch("qdrant_client.QdrantClient", side_effect=_qdrant_in_memory_sync):
             with patch(
-                "swarm_os.services.tool_registry.AsyncQdrantClient",
-                side_effect=mock_init,
-                create=True,
+                "swarm_os.services.vector_store.AsyncQdrantClient",
+                side_effect=_qdrant_in_memory,
             ):
-                yield
+                with patch(
+                    "swarm_os.services.reflection_loop.AsyncQdrantClient",
+                    side_effect=_qdrant_in_memory,
+                    create=True,
+                ):
+                    with patch(
+                        "swarm_os.services.tool_registry.AsyncQdrantClient",
+                        side_effect=_qdrant_in_memory,
+                        create=True,
+                    ):
+                        with patch(
+                            "swarm_os.services.lesson_manager.AsyncQdrantClient",
+                            side_effect=_qdrant_in_memory,
+                            create=True,
+                        ):
+                            yield
 
 
 @pytest.fixture(autouse=True)

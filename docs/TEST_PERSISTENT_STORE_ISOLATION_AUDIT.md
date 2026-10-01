@@ -5,9 +5,12 @@ authority document was modified. The only repository change is this report.
 
 - **Commit audited:** `32ed3d5a3126389013a01174a2fa1d06ac2501ce`
   (`FIX: isolate PromptRepairer persistent paths`)
-- **Date:** 2026-10-01
-- **Verdict:** **broad pytest is NOT currently safe.** Two RED findings, both
-  proven by empirical probes that mutated production-like state during this audit.
+- **Date:** 2026-10-01 (updated same day by the Qdrant remediation task)
+- **Verdict:** **broad pytest is NOT currently safe.** Both RED findings that were
+  open when this audit was written have since been **remediated** (PromptRepairer
+  lifespan at `417d013c`; Qdrant constructor bypass in the commit that carries
+  this revision). YELLOW ×2 and GRAY ×6 remain open, and the full suite has not
+  been run to confirm the rest of the posture. See §18.
 
 Evidence labels used throughout: **PROVEN** (source/output), **OBSERVED**,
 **INFERRED**, **UNKNOWN**.
@@ -83,13 +86,13 @@ local-Qdrant bypasses are presently inert. See §7 for the structural exposure.
 | `swarm_os/tests/**` | fitness | **no fitness guard in scope** | **GRAY** (no `_feed_outcome` reference found; probe clean) |
 | `tests/test_admin_status.py:46-62` | `data/events/events.jsonl` | conditional `if not exists or size == 0` | **YELLOW** (§10) |
 | any test requesting `client` (30 functions) | **candidates + audit** | `TestClient(app)` lifespan → `recover_interrupted_promotions()` | **RED** (§8) |
-| `runtime_v2/services/_semantic_decision_cache.py` and 5 other modules | Qdrant | function-local `from qdrant_client import` bypasses `global_qdrant_mock` | **YELLOW** (§7) |
+| `runtime_v2/services/_semantic_decision_cache.py` and 5 other modules | Qdrant | function-local `from qdrant_client import` bypassed `global_qdrant_mock` | **was YELLOW → proven RED (§7.2) → REMEDIATED (§7.4)** |
 
 ## 6. Fixture / isolation matrix
 
 | Fixture | Scope | Protects | Hides / gap |
 |---|---|---|---|
-| `global_qdrant_mock` (`tests/conftest.py:67`) | `tests/` autouse | 4 module-level client bindings | 6+ function-local import sites unbound; `swarm_os/tests/conftest.py:16` patches only 3 (omits `lesson_manager`) |
+| `global_qdrant_mock` (`tests/conftest.py:68`) | `tests/` autouse | **package-level** `qdrant_client.AsyncQdrantClient`/`QdrantClient` **plus** 4 module-level bindings | both import styles now covered (remediated, §7.4); `swarmos_qdrant_mock` in `swarm_os/tests/` gained the same |
 | `global_mcp_manager_mock` (`:95`) | `tests/` autouse | real npx MCP subprocesses | hides real MCP lifecycle |
 | `global_system_probe_mock` (`:127`) | `tests/` autouse | psutil probes | hides real probe results |
 | `global_chess_engine_mock` (`:138`) | `tests/` autouse | real Stockfish spawn | documents a real full-suite hang (anyio#1014) it also masks |
@@ -98,7 +101,15 @@ local-Qdrant bypasses are presently inert. See §7 for the structural exposure.
 | `harden_testclient_shutdown` (`:34`) | session autouse | TestClient teardown hang | bounds teardown at 20s; can abandon shutdown mid-lifespan |
 | `client` (`:28`) | on-request | — | **triggers the RED path in §8** |
 
-## 7. Qdrant isolation assessment — **YELLOW**
+## 7. Qdrant isolation assessment — **RED** (upgraded from YELLOW; see §7.1)
+
+> **Status note (2026-10-01, remediation task).** This section was originally
+> written as **YELLOW** because no live Qdrant endpoint existed to prove mutation.
+> Subsequent runtime evidence re-derived the bypass and **upgraded it to RED**;
+> `lesson_manager` was simultaneously **corrected to GREEN**. The original
+> reasoning is preserved in §7.1 as audit history rather than deleted.
+
+### 7.1 Original assessment (superseded — retained as history)
 
 **PROVEN:** `global_qdrant_mock` (`tests/conftest.py:67-92`) patches exactly four
 module-level bindings: `vector_store`, `reflection_loop`, `tool_registry`,
@@ -124,11 +135,99 @@ which patching a module attribute cannot intercept:
 **PROVEN:** `swarm_os/tests/conftest.py:16-35` patches **3** sites and omits
 `lesson_manager`.
 
-**PROVEN:** Qdrant is not currently listening, so the bypass cannot mutate a live
-store right now. **INFERRED:** on a machine with Qdrant running (the documented
-dev setup starts it on :6333), these paths would open real clients and could
-create/upsert/delete real collections. Classified **YELLOW**, not RED, because no
-live endpoint existed to prove mutation.
+**ORIGINAL CONCLUSION (superseded):** Qdrant was not listening, so the bypass could
+not mutate a live store; classified **YELLOW** because no live endpoint existed to
+prove mutation. **This was the correct conclusion given the evidence then
+available, and it was wrong.** Reasoning from "no server is running" is not a
+containment argument — the documented dev stack (`start-dev.ps1`) runs Qdrant on
+:6333.
+
+### 7.2 Runtime evidence that makes this RED
+
+**PROVEN** (socket spy on the real collected test, no Qdrant started):
+
+```
+tests/test_semantic_cache_smoke.py  ->  1 TCP connect attempt to 127.0.0.1:6333, 38.5s
+```
+
+That test sets `SWARM_SEMANTIC_CACHE=1` (`:8`) and calls `cache_tool_decision` /
+`get_semantic_cached_decision` with **no client stub**, so
+`_ensure_components()` → `_make_qdrant_client()` builds the real class and dials
+the endpoint.
+
+**PROVEN** — the write path is reachable. With a correct float vector,
+`cache_tool_decision` issues `upsert(collection_name='decision_cache', points=1)`
+(`_semantic_decision_cache.py:347`).
+
+**PROVEN — scope of impact, stated precisely so severity is not inflated:**
+
+- The reachable collection is **`decision_cache`** (`:32`), **not** `ActiveLessons`.
+  `_semantic_decision_cache.py` never references `ActiveLessons`.
+- No Experiment J governance store or file is reachable this way.
+- On the documented dev stack the write would land in a real `decision_cache`
+  collection.
+
+**RED** — the criterion is that ordinary pytest can reach a real instance and
+mutate a real collection. That is proven. Inertness came only from Qdrant being
+down.
+
+### 7.3 `lesson_manager` — **GREEN** (corrected)
+
+The earlier implication that `LessonManager` was itself a live-Qdrant risk was
+**overstated**. Verified:
+
+- `LessonManager.__init__` accepts `client=None` (`lesson_manager.py:261`).
+- `_get_client()` constructs a real client **only** when `self._client is None`
+  (`:265-270`).
+- Every tracked test passes an explicit client
+  (`test_prompt_repairer.py:605,638,802,895,916` → `AsyncMock()` / `store`), so
+  `_client` is never `None`.
+- The bare `LessonManager()` route (`:774`) is reached only via
+  `get_lesson_manager()`, which root `conftest.py::global_lesson_manager_mock`
+  patches autouse for **both** test trees.
+
+`lesson_manager` is **GREEN**. It is additionally now covered by an explicit
+per-module patch (see §7.4), which was added for completeness, not because it was
+ever proven unsafe.
+
+### 7.4 Remediation (2026-10-01)
+
+**PROVEN — a package-level patch alone is insufficient.** Patching
+`qdrant_client.AsyncQdrantClient` intercepts function-local imports but leaves
+module globals bound at *import* time pointing at the real class:
+
+```
+under a package-only patch:
+   lesson_manager.AsyncQdrantClient is the real class = True
+   vector_store.AsyncQdrantClient   is the real class = True
+   reflection_loop.AsyncQdrantClient is the real class = True
+   tool_registry.AsyncQdrantClient  is the real class = True
+   function-local import            -> intercepted
+```
+
+Therefore the fix is **two layers**, applied in `tests/conftest.py` and
+`swarm_os/tests/conftest.py`:
+
+1. Package-level `qdrant_client.AsyncQdrantClient` / `QdrantClient` — covers the
+   13 function-local import sites.
+2. The four per-module bindings — covers module globals bound at import time.
+   `swarm_os/tests/conftest.py` additionally gained the `lesson_manager` patch it
+   previously omitted.
+
+Both factories capture the **real** constructors at conftest-import time
+(`_REAL_ASYNC_QDRANT`) before any patch is active, so the in-memory client is
+built from a genuine reference rather than the soon-patched module attribute.
+
+**PROVEN — result.** `tests/test_semantic_cache_smoke.py` connect attempts to
+:6333 went **1 → 0** after the fix. Regression coverage:
+`tests/test_qdrant_isolation.py` (7 tests) and
+`swarm_os/tests/unit/test_qdrant_isolation_tree.py` (3 tests) — 10 passed in 0.35s.
+
+**Not remediated by this change:** the residual ~38s runtime of
+`test_semantic_cache_smoke.py` is a **separate defect** — `EmbeddingService.embed`
+retry logic against `:8081`, invisible to a `socket.connect` spy and unrelated to
+Qdrant. Out of scope; recorded as OPEN below.
+
 
 ## 8. PromptRepairer assessment — one GREEN family, one **RED**
 
@@ -318,7 +417,9 @@ symbolically rather than spawning — consistent with this risk.
 **PROVEN:** `global_qdrant_mock` is broad but its gaps are structural, not
 philosophical (§7).
 
-No fixture was modified or refactored by this audit.
+No fixture was modified or refactored **by the original audit**. Subsequent
+remediation tasks did modify them: `isolate_prompt_repairer_store`
+(`417d013c`, §8.2) and the two-layer Qdrant patch (§7.4).
 
 ## 17. Clean-checkout / untracked-file assessment
 
@@ -333,15 +434,32 @@ behavior. No untracked file was added, deleted, modified, or staged.
 
 ## 18. Classification summary
 
-| Class | Count | Items |
-|---|---|---|
-| **GREEN** | 3 | PromptRepairer unit fixtures; fitness store for `tests/`; `.env`-independent env fixtures |
-| **YELLOW** | 3 | `TestClient(app)` audit append (RED-1 companion, content-idempotent); Qdrant local-import bypass; `test_admin_status.py` conditional event-log write; `SWARM_WRITE_ROOT` in `test_sandbox_bounds.py` |
-| **RED** | 2 | **RED-1** `TestClient(app)` lifespan → production `candidates.json` rewrite + `audit.jsonl` growth (proven, no test needed); **RED-2** 90 test files / 30 functions can trigger RED-1 |
-| **GRAY** | 6 | `swarm_os/tests/` fitness; memory/diary Qdrant path; trajectories; checkpoints; run_snapshots; receipt-key file reachability |
+> **Updated 2026-10-01 (remediation task).** RED-1/RED-2 (PromptRepairer lifespan)
+> were remediated at commit `417d013c`; Qdrant YELLOW-1 was upgraded to **RED** on
+> runtime evidence and remediated in the same task that added this note; Qdrant
+> `lesson_manager` was corrected to **GREEN**. The "original" column below is the
+> state as this audit was first written, so the audit trail stays intact.
 
-YELLOW and RED rows total 5 distinct items; RED-1 and RED-2 are the same mechanism
-at different blast radii, counted separately as specified.
+| Class | Original | Current | Items (current) |
+|---|---|---|---|
+| **GREEN** | 3 | 5 | PromptRepairer unit fixtures; PromptRepairer lifespan isolation (remediated `417d013c`); Qdrant `lesson_manager` (corrected — see §7.3); fitness store for `tests/`; `.env`-independent env fixtures |
+| **YELLOW** | 3 | 2 | `test_admin_status.py` conditional event-log write; `SWARM_WRITE_ROOT` in `test_sandbox_bounds.py` |
+| **RED** | 2 | 1 | **Qdrant general-constructor bypass** — ordinary pytest reached a real `AsyncQdrantClient` and could issue a real `upsert('decision_cache')` (§7.2). **Remediated** by the two-layer package+per-module patch (§7.4) |
+| **GRAY** | 6 | 6 | `swarm_os/tests/` fitness; memory/diary Qdrant path; trajectories; checkpoints; run_snapshots; receipt-key file reachability |
+
+**REMEDIATED, no longer counted:** RED-1/RED-2 (`TestClient(app)` lifespan writing
+production `candidates.json` + appending to `audit.jsonl`) — fixed in `417d013c`,
+see `docs/PROMPTREPAIRER_LIFESPAN_ISOLATION_REMEDIATION.md`. The
+`candidates.json`-contamination claim that accompanied it was **rejected** and is
+recorded as such; it was never real.
+
+**Still open:** YELLOW ×2 and GRAY ×6 above, plus the `:8081`
+`EmbeddingService.embed` retry cost noted in §7.4.
+
+**Final verdict on broad pytest:** **STILL NOT SAFE.** Qdrant is now contained, but
+YELLOW and GRAY items remain open and the full suite has not been run to confirm
+the rest of the posture.
+
 
 ## 19. RED / YELLOW detail
 
@@ -366,10 +484,21 @@ at different blast radii, counted separately as specified.
 Same mechanism. 30 test functions across 8 files request `client`; 90 files
 reference it. Any full-suite run executes the lifespan repeatedly.
 
-### YELLOW-1 — Qdrant local-import bypass
-Files in §7 table. Remediation: extend `global_qdrant_mock` to cover the six
-local-import modules, or route all clients through one factory. **Authorization
-required: YES** (fixture refactor).
+### RED-3 — Qdrant general-constructor bypass (was YELLOW-1)
+1. **Files:** `tests/conftest.py`, `swarm_os/tests/conftest.py` (fixtures) and
+   13 function-local import sites listed in §7.1
+2. **Trigger:** any test that reaches a function-local
+   `from qdrant_client import AsyncQdrantClient` — proven with
+   `tests/test_semantic_cache_smoke.py`
+3. **Write path:** `upsert(collection_name='decision_cache')`
+   (`_semantic_decision_cache.py:347`); read path `:216`; delete/scroll `:279,306`
+4. **Why isolation failed:** per-module attribute patches cannot intercept a
+   call-time import, which resolves against `sys.modules['qdrant_client']`
+5. **Evidence:** socket spy — 1 TCP connect to `127.0.0.1:6333`, 38.5s (§7.2)
+6. **Remediation applied:** two-layer package + per-module patch, both conftests
+   (§7.4). **Authorization: granted.** Result: attempts 1 → 0.
+7. **Scope note:** `ActiveLessons` and every Experiment J store are untouched by
+   this path; the reachable collection is `decision_cache` only.
 
 ### YELLOW-2 — conditional production event-log write
 `tests/test_admin_status.py:53-62`. Remediation: monkeypatch the events path to
@@ -382,19 +511,19 @@ YELLOW.** Remediation: point at `tmp_path`. **Authorization required: YES.**
 
 ## 20. Remediation plan, ordered by risk
 
-1. **RED-1/RED-2** — add a root-`conftest.py` autouse fixture redirecting
-   `prompt_repairer._DATA_DIR` / `_CANDIDATES_FILE` / `_SNAPSHOTS_FILE` /
-   `_AUDIT_LOG_FILE` to a temp dir. Highest value: stops the audit log growing
-   ~21 KB per startup and stops any production candidates rewrite.
-2. **YELLOW-2** — redirect `test_admin_status.py`'s events path to `tmp_path`.
-3. **YELLOW-3** — redirect `test_sandbox_bounds.py`'s `SWARM_WRITE_ROOT`.
-4. **YELLOW-1** — extend Qdrant coverage to the six local-import modules, in both
-   conftests, adding `lesson_manager` to `swarm_os/tests/conftest.py`.
+1. ~~**RED-1/RED-2**~~ — **DONE** (`417d013c`): root-`conftest.py` autouse fixture
+   redirecting `prompt_repairer._DATA_DIR` + the three sibling path globals.
+2. ~~**RED-3 / YELLOW-1**~~ — **DONE** (this task): package-level + per-module
+   Qdrant patch in both conftests.
+3. **YELLOW-2** — redirect `test_admin_status.py`'s events path to `tmp_path`.
+4. **YELLOW-3** — redirect `test_sandbox_bounds.py`'s `SWARM_WRITE_ROOT`.
 5. **GRAY closure** — trace trajectory / checkpoint / run-snapshot path
    resolution under test, then classify.
-6. **Pre-existing 142 pending journal rows** — leave in place. They are known
+6. **Embedding retry cost** (`:8081`, §7.4) — separate defect, not yet scheduled.
+7. **Pre-existing 142 pending journal rows** — leave in place. They are known
    fixture evidence; deleting them is a destructive change to a governance input
    and is not authorized.
+
 
 ## 21. Changes NOT authorized by this task (none performed)
 

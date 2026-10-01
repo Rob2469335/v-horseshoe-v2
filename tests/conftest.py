@@ -61,35 +61,70 @@ def harden_testclient_shutdown():
 
 
 from unittest.mock import patch, AsyncMock, MagicMock
-from qdrant_client import AsyncQdrantClient
+from qdrant_client import AsyncQdrantClient, QdrantClient
+
+# Capture the REAL constructors at conftest-import time, BEFORE any patch is
+# active. `_qdrant_in_memory` must build the in-memory client from this reference:
+# if it called the module attribute `AsyncQdrantClient` it would resolve to the
+# patched stub and recurse (or construct a real network client).
+_REAL_ASYNC_QDRANT = AsyncQdrantClient
+_REAL_SYNC_QDRANT = QdrantClient
+
+
+def _qdrant_in_memory(*args, **kwargs):
+    """Return a real in-memory AsyncQdrantClient, discarding any URL argument."""
+    return _REAL_ASYNC_QDRANT(":memory:")
+
+
+def _qdrant_in_memory_sync(*args, **kwargs):
+    """Return a real in-memory (sync) QdrantClient, discarding any URL argument."""
+    return _REAL_SYNC_QDRANT(":memory:")
 
 
 @pytest.fixture(autouse=True)
 def global_qdrant_mock():
-    # Intercept any AsyncQdrantClient instantiation and force it to be an in-memory client.
-    # This prevents the test suite from requiring a live local Qdrant server.
-    def mock_init(*args, **kwargs):
-        return AsyncQdrantClient(":memory:")
+    """Force every Qdrant client to be in-memory for the whole test.
 
-    with patch(
-        "swarm_os.services.vector_store.AsyncQdrantClient", side_effect=mock_init
-    ):
-        with patch(
-            "swarm_os.services.reflection_loop.AsyncQdrantClient",
-            side_effect=mock_init,
-            create=True,
-        ):
+    Two layers are required, and the reason matters if you edit this:
+
+    1. Package-level (`qdrant_client.AsyncQdrantClient`). `from qdrant_client
+       import AsyncQdrantClient` resolves against `sys.modules['qdrant_client']`,
+       so patching the package attribute intercepts imports performed at CALL
+       time. 13 production sites use a function-local import and were previously
+       untouchable here: `tests/test_semantic_cache_smoke.py` opened a real TCP
+       connection to 127.0.0.1:6333 and took 42s retrying a dead endpoint.
+
+    2. Per-module bindings. A module that did `from qdrant_client import
+       AsyncQdrantClient` at IMPORT time holds its own reference that a package
+       patch cannot retroactively change. Patching only the package therefore
+       leaves those globals pointing at the real network client -- verified.
+
+    Layer 1 alone is insufficient; layer 2 alone (the previous state) misses the
+    function-local sites. Both are needed to satisfy the invariant that no test
+    can obtain a real Qdrant client by either import style.
+    """
+    with patch("qdrant_client.AsyncQdrantClient", side_effect=_qdrant_in_memory):
+        with patch("qdrant_client.QdrantClient", side_effect=_qdrant_in_memory_sync):
             with patch(
-                "swarm_os.services.tool_registry.AsyncQdrantClient",
-                side_effect=mock_init,
-                create=True,
+                "swarm_os.services.vector_store.AsyncQdrantClient",
+                side_effect=_qdrant_in_memory,
             ):
                 with patch(
-                    "swarm_os.services.lesson_manager.AsyncQdrantClient",
-                    side_effect=mock_init,
+                    "swarm_os.services.reflection_loop.AsyncQdrantClient",
+                    side_effect=_qdrant_in_memory,
                     create=True,
                 ):
-                    yield
+                    with patch(
+                        "swarm_os.services.tool_registry.AsyncQdrantClient",
+                        side_effect=_qdrant_in_memory,
+                        create=True,
+                    ):
+                        with patch(
+                            "swarm_os.services.lesson_manager.AsyncQdrantClient",
+                            side_effect=_qdrant_in_memory,
+                            create=True,
+                        ):
+                            yield
 
 
 @pytest.fixture(autouse=True)
