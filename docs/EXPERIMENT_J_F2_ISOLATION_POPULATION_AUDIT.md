@@ -21,6 +21,12 @@ raised by `docs/EXPERIMENT_J_F2_STEP5_AUDIT.md` (`2bd90b5c`).
 | **REPORTED** | Stated by an authoritative document; not re-verified. |
 | **UNKNOWN** | Not established here. Requires a decision or new evidence. |
 
+> **PART II CONTAINS CORRECTIONS TO PART I.** A re-verification pass (2026-09-30)
+> falsified the "3 of 14 SWE repositories" claim inherited from `2bd90b5c`, and
+> qualified two further statements. **Read §11 before relying on Part I.**
+> Corrections C1, C6, C7 are material. Sections C3, C4, C5, C8 are confirmed
+> unchanged.
+
 ---
 
 ## 1. Executive Finding
@@ -396,4 +402,182 @@ work.
 
 ---
 
-**END OF AUDIT RECORD**
+---
+
+# PART II — CORRECTIONS
+
+**Added:** 2026-09-30, re-verification pass.
+**Scope of this part:** correct claims in Parts I–X that re-verification proved
+wrong. Sections not listed here stand unchanged.
+
+Every correction below was produced by re-running the original probe. Where a
+prior claim rested on a wrong path or a wrong probe root, that is stated
+explicitly rather than silently replaced.
+
+## 11. Correction Table
+
+| # | Existing claim | Evidence | Correct statement | Status |
+|---|---|---|---|---|
+| C1 | `2bd90b5c` §2.3/§2.4: *"only 3 of 14 pool repos are checked out"*; *"those 3 are dirty at their base commits"* | `Get-ChildItem C:\Users\rober\Projects\swe_probe_work -Directory` → 34 dirs incl. **all 14** pool `instance_id`s. Probe at `<id>/repo`: **14/14 are Git checkouts with `HEAD == base_commit`.** | **All 14 pool repositories exist as Git checkouts at their declared base commits.** The "3 of 14" figure came from probing the wrong directory level (`<id>` instead of `<id>/repo`, which is what `prompt_repairer.py:313-314` uses) and from enumerating only the repos I had personally observed. **FALSIFIED.** | **CORRECTED** |
+| C2 | §6.1: *"F2 never references `swe_probe_work`"* — correct — but the surrounding framing implied F1 repos were an F2 obstacle | Same probe | **Unchanged and now better supported:** all 14 exist and are at base commit, so F1 availability is not the constraint. The F2 conclusion (no task workspace at all) is unaffected. | **STANDS** |
+| C3 | §2.3 correction of `2bd90b5c`'s call graph | `Select-String` on `f2_arm_worker.py` for `F2ExecutionAdapter\|f2_execution_adapter\|run_curriculum\|cli_runner\|adapter` → **zero matches**. `F2ExecutionAdapter(` constructed only in `tests/` (16 sites). | **CONFIRMED CORRECT.** Production path ends at `f2_arm_worker.main()`. | **STANDS** |
+| C4 | §5.3: `swe_pool.jsonl` "currently disconnected from F2" | Zero F2-module references; zero doc designation; no task-input contract | **CONFIRMED CORRECT.** Disconnection is *contract-level*, not *disk-level*. | **STANDS** |
+| C5 | §4: isolation ownership = parent orchestrator (Option A) | Design §10 row 0, §13.5:679, §739 rejecting adapter ownership | **CONFIRMED CORRECT.** | **STANDS** |
+| C6 | §4.3/§4.3 cross-ref: *"The F1 `_eval_swe` defect … remains real but separate — it is not on the F2 path"* | `evaluate_and_promote_eligible` `prompt_repairer.py:860-869` → `evaluate_candidate` `:679` → `_eval_swe` `:616`; `promote` reached from production `_commands_ai.py:677` | **PARTIALLY CORRECT — see §12.** Not on the **F2** path (C3 holds), but **it IS on the governed learning path** that must produce ACTIVE lesson L. The earlier audits dismissed it as "separate"; that framing was incomplete. | **CORRECTED** |
+| C7 | §9.G / `2bd90b5c` §2.6: "`n` asserted frozen but is not" | `EXPERIMENT_J.md:201-202` — δ and test both "pre-registered at F1". `EXPERIMENT_J_F1_AUTHORIZATION.md:42` — "20 independent no-lesson pilot runs"; `:107` — "20 independent observations". `LEARNING_EXPERIMENT_STATE.md:38-46` lists only pilot parameters. | **CONFIRMED CORRECT, and no contradiction found in `LEARNING_EXPERIMENT_STATE.md`.** Re-read at lines 36–46: the state document lists **pilot** parameters only and never claims a confirmatory `n`/δ/test. The earlier "asserts frozen" characterisation was **too strong**. | **CORRECTED** |
+| C8 | §7 invariant 4: *"No reset exists"* for F2 | Same as C3 | **STANDS.** F2 has no reset. The `git clean -fd` finding belongs to F1's `_reset_instance` (`cli_baseline_swe.py:242-244`), not to F2. | **STANDS** |
+
+## 12. `4c6a05b3` — Treatment-Artifact Impact
+
+`4c6a05b3` added `_rank_active()`, `exclude_ids`, and `_client_query_active()`
+to `swarm_os/services/lesson_manager.py`.
+
+### 12.1 What changed — PROVEN
+
+| | Before `4c6a05b3` | After |
+|---|---|---|
+| Selection | `get_all()` → filter `superseded_by` → sort `(effectiveness, version)` | `_rank_active(task_context)`: same filter, then score `relevance × effectiveness`, sort `(score, effectiveness, version, id)` |
+| Relevance | **none** — `task_context` declared but unread | `_embed(task_context)` → `_client_query_active()`; score per hit; **failure degrades to governed order** |
+| `exclude_ids` | absent | applied **before** packing |
+
+### 12.2 Answers, from code
+
+1. **Before** — static order by `(effectiveness, version)`; `task_context` unused.
+2. **After** — relevance-weighted order with deterministic tie-break.
+3. **Relevance** — `_client_query_active(vector)` dense score against the `ActiveLessons` collection, `limit=MAX_RULES*2`, `score_threshold=MIN_CONFIDENCE` (`_client_query_active`). Absent query or any exception → all scores `0.0`.
+4. **`exclude_ids` removes** — named lessons from **eligibility**, filtered before packing; also withholds the request-scoped eval snapshot when `ctx.candidate_id` matches.
+5. **Who supplies it** — **nobody.** `exclude_ids` defaults to `None` at every F2 call site; no caller passes it. Grep for `exclude_ids` finds the parameter and the F2 freeze docstrings that name it as a known gap (`f2_freeze.py:5`, `f2_arm_primitives.py:117`).
+6. **Can it alter the treatment artifact?** **YES — via relevance, not `exclude_ids`.**
+7. **Can it alter T?** **YES.** `run_f2_arm` → `render_t()` → `render_active_lessons_with_records(task_context, …)` (`f2_arm_orchestrator.py:106-108`). Ordering feeds `LessonEntry.position`, so relevance changes T's frozen order.
+8. **Can it alter X?** **YES, transitively.** `derive_x_from_frozen` removes L from T and preserves remaining positions — so T's ordering determines X's.
+9. **Can it alter C0?** **NO.** C0 is built by `build_c0_artifact` with no retrieval.
+10. **On a production F2 path?** **YES, for T and X.**
+
+### 12.3 Consequence — NOT ESTABLISHED
+
+`EXPERIMENT_J.md:9` freezes T as *"the exact `active_block` string produced by `LessonManager.render_active_lessons()` **at F2**"* — so T is defined by live retrieval **at freeze time**, not pinned independently of it.
+
+`4c6a05b3` therefore changed the function that *defines* T, one commit before
+the F2 isolation audit, without a scientific-review record naming it.
+`EXPERIMENT_J.md:16` lists "Change-Control Rule" protected elements — research
+question, contrast, T/X definitions, treatment-artifact identity, endpoint,
+rediscovery, fresh-worker, contamination, exclusion rules. **The *mechanism*
+that computes T is not enumerated**, so `4c6a05b3` is arguably not a §16
+violation — but that is my reading, not an established fact, and it is a
+scientific question for the operator.
+
+Two further points, both **NOT ESTABLISHED**:
+
+- **Reproducibility.** T's ordering now depends on embedding output at freeze
+  time. The manifest records the resulting `position`/`content_address`, so a
+  frozen artifact is self-describing — but *re-deriving* T later requires the
+  same embedder state. Frozen **replay** is unaffected (`f2_replay` installs
+  the stored artifact).
+- **`exclude_ids` is inert but load-bearing.** No caller supplies it, so today
+  it changes nothing; it exists because the F2 freeze docs name it as required.
+  Its semantics (withhold *before* pack, so withholding cannot promote a
+  budget-excluded lesson) were designed for exactly the X-arm derivation F2
+  needs.
+
+## 13. `BenchmarkEvaluator` — Is It On The ACTIVE-Lesson Path?
+
+**Yes. PROVEN.**
+
+```
+evaluate_and_promote_eligible()      prompt_repairer.py:834   (autonomous tick)
+  └─ res = await self.evaluate_candidate(cid)                  :860
+       └─ if self._is_swe_task(task_id): return await self._eval_swe(...)   :679
+            └─ baseline → candidate, same repo dir            :633-634
+                 └─ run_repair_task.py preflight (:289) aborts on dirty tree
+                      └─ _run_swe_harness returns None → _eval_swe RAISES :636
+  └─ if res == "evaluation_passed": await self.promote(cid)    :867-869
+```
+
+`promote()` is also reachable from production CLI `_commands_ai.py:677`.
+
+### 13.1 Causal trace — every step classified
+
+| # | Question | Answer | Class |
+|---|---|---|---|
+| 1 | Does baseline modify the workspace? | **Yes.** The agent edits via the `filesystem` tool; `git` is read-only (`tool_executor.py:1312` allows only `status/log/diff/diff-stat/show/branch`). | **PROVEN** |
+| 2 | Does candidate use the same workspace? | **Yes.** `_run_swe_harness:313-314` computes the same `repo = work / instance_id / "repo"` for both arms; env is not mutated between calls. | **PROVEN** |
+| 3 | When does preflight run? | `_preflight_target_state` at `run_repair_task.py:289`, **before** the reset at `:414`. | **PROVEN** |
+| 4 | When does reset run? | `cls._reset_instance(inst, hf_inst)` at `:414` (and `:359` for the sanity check). | **PROVEN** |
+| 5 | Does reset apply a test patch? | **Only if `test_patch` is non-empty** (`cli_baseline_swe.py:245-252`). `_run_swe_harness:332-342` does **not** pass `--test-patch`, so `test_patch=""` and **no patch is applied**. | **PROVEN** |
+| 6 | Does reset leave the tree dirty? | `git reset --hard base` + `git clean -fd` (`cli_baseline_swe.py:241,244`). With no patch applied, the **tracked** tree returns to base; **ignored** residue (`.pytest_cache/`, `__pycache__/`, `*.egg-info/`) survives, since `-fdx` is deliberately avoided. | **PROVEN** |
+| 7 | Can the pair complete? | **Only when the baseline arm leaves a clean tracked tree.** All 14 repos are currently dirty (`M tests/test_package.py` etc.) — so **every** `_eval_swe` invocation aborts at preflight `[1/6]` today. | **PROVEN** (observed state) |
+| 8 | Under what exact conditions does it abort? | `_preflight_target_state` returns errors when `HEAD != base_commit` **or** `git status --porcelain` is non-empty (`run_repair_task.py:98-117`) → `return 2` → `_run_swe_harness` `None` → `_eval_swe` raises `"missing SWE harness result"`. | **PROVEN** |
+| 9 | Does this affect the governed learning path? | **Yes.** `evaluate_candidate` is the sole evaluator for SWE tasks; a raise means no `evaluation_passed`, so `promote()` is never reached and **no ACTIVE lesson L can be produced**. | **PROVEN** |
+
+### 13.2 Precise characterization
+
+**This is NOT an F2 problem.** C3 stands: F2 does not import `_eval_swe`.
+It is a **learning-path** blocker: F2 requires a genuine ACTIVE lesson L
+(`EXPERIMENT_J.md:14`, `:186`), and L requires promotion, and promotion for a
+SWE task requires `_eval_swe` to return.
+
+**The blocking condition is environmental, not a logic defect.** The abort path
+is correct fail-closed behaviour given a dirty tree. The defect is that no
+component resets the tree *before* preflight runs — the reset at `:414` is
+downstream of the check at `:289`.
+
+**Scope note.** The observed dirt is exactly the evaluator test files
+(`tests/test_package.py`, `tests/test_commands.py`,
+`pyfakefs/tests/fake_pathlib_test.py`) — consistent with residue from an
+earlier `--test-patch` invocation, **not** with agent edits. That distinction is
+**INFERRED** from file selection; no residue provenance is recorded.
+
+**Not investigated here:** whether the dirty state is *why* no promotion has
+ever succeeded, or whether preflight ordering has always been this way.
+`git log` on `run_repair_task.py` shows `6e024a00` (2026-09-19) *"remove
+duplicate git reset from run_repair_task in favor of `_reset_instance`"* —
+**INFERRED, not established**, that this is where preflight/reset ordering was
+established.
+
+## 14. SWE Repository Facts — Reproducible
+
+Command:
+```powershell
+Get-ChildItem C:\Users\rober\Projects\swe_probe_work -Directory | Select-Object -ExpandProperty Name
+(Get-Content qwen_train\curriculum\swe_pool.jsonl).Count
+```
+Result: **34 directories**, pool = **14 rows**. All 14 pool `instance_id`s are
+present. Per-repo probe at `<id>/repo`:
+
+| Fact | Count |
+|---|---|
+| Pool rows | 14 |
+| Directory `<id>` exists | **14 / 14** |
+| Git checkout (`.git` present at `<id>/repo`) | **14 / 14** |
+| `HEAD == base_commit` | **14 / 14** |
+| Clean (`git status --porcelain` empty) | **0 / 14** — all DIRTY |
+| `usable: true` in pool | 14 / 14 |
+| Usable by the harness **as-is** | **0 / 14** — all abort at preflight |
+
+**These are five distinct facts.** Existence, being a Git checkout, being at the
+declared commit, being clean, and being usable by the harness are separate, and
+only the last fails.
+
+---
+
+## 15. Statistical-Design State — Re-verified
+
+| Element | Class | Evidence |
+|---|---|---|
+| Evaluation population | **NOT PROVEN** | No task-input contract; `swe_pool` disconnected (C4) |
+| Paired unit | **REPORTED** | `EXPERIMENT_J.md:198`, `:203` |
+| Confirmatory `n` | **NOT PROVEN** | `EXPERIMENT_J_F1_AUTHORIZATION.md:42`, `:107` — 20 is the **pilot** count. No confirmatory `n` exists. |
+| δ / practical effect | **NOT PROVEN** | `EXPERIMENT_J.md:201` — *"Risk difference ≥ δ (pre-registered at F1, e.g., δ = 0.15)"*. Placeholder survives. |
+| Statistical test | **NOT PROVEN** | `EXPERIMENT_J.md:202` — *"Pre-registered at F1 (e.g., Fisher's exact…)"*. Placeholder survives. |
+
+**Correction to `2bd90b5c` §2.6 / C7:** that audit claimed
+`LEARNING_EXPERIMENT_STATE.md:23` "asserts frozen." Re-reading lines 36–46, the
+state document lists **pilot** parameters (F1-OP-001 … F1-OP-004b) and does
+**not** claim a confirmatory `n`, δ, or test. The audit's characterisation was
+**too strong**. The underlying gap is unchanged: F0 assigned these to F1; F1 did
+not record them; they remain unfrozen. **No contradiction between documents was
+found** — there is a *silent gap* in F0/F1, not a conflicting claim.
+
+---
+
+**END OF PART II — CORRECTIONS**
