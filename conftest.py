@@ -102,6 +102,13 @@ def global_reflexion_service_mock():
     stalling evolutionary-kernel tests. Tests that exercise the REAL service
     create it directly (or patch this function locally), so this fake is only a
     default fallback and never runs real network I/O.
+
+    `check_model_reliability` is patched for the same reason and is the SAME
+    bypass class as the Qdrant finding: `swarm_os/brain.py:247` imports it
+    INSIDE the function, so patching `get_reflection_service` did not cover it.
+    The real probe then hit the model endpoint (:8080) and retried, hanging
+    `swarm_os/tests/integration/test_cycle.py` indefinitely with every thread
+    pool worker blocked on `_run_isolated(...).result()`.
     """
     service = AsyncMock()
     service.check_for_past_mistakes = AsyncMock(return_value="")
@@ -111,7 +118,12 @@ def global_reflexion_service_mock():
     with patch(
         "swarm_os.services.reflection_loop.get_reflection_service", return_value=service
     ):
-        yield service
+        with patch(
+            "swarm_os.services.reflection_loop.check_model_reliability",
+            return_value="",
+            create=True,
+        ):
+            yield service
 
 
 @pytest.fixture(autouse=True)
