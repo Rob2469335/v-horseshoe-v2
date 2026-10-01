@@ -1,3 +1,12 @@
+collect_ignore = [
+    # 1-line truncated fragment of twine's tests/test_package.py, committed in
+    # f8f40ecd. It is not a runnable test; its only line is a dict fragment that
+    # raises SyntaxError at import, which aborts collection for the ENTIRE suite.
+    # Listed here rather than in the root conftest because collect_ignore
+    # resolves basenames relative to the conftest's own directory.
+    "test_package.py",
+]
+
 import ssl
 
 try:
