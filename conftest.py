@@ -59,37 +59,83 @@ def isolate_prompt_repairer_store(tmp_path):
 def isolate_runtime_data_dirs(tmp_path, monkeypatch):
     """Never let a test append to the runtime stores under `data/`.
 
-    PROVEN leak (docs/TEST_PERSISTENT_STORE_ISOLATION_AUDIT.md, GRAY closure):
-    ordinary pytest created 4 files per run in production `data/` --
-    3 x `data/trajectories/<run_id>.jsonl` and 1 x
-    `data/run_snapshots/<snapshot_id>.json` -- reproduced over two consecutive
-    runs, from 10 test files that never patch these constants.
+    PROVEN leaks (docs/TEST_PERSISTENT_STORE_ISOLATION_AUDIT.md §13.1 and the
+    broad-run follow-up): ordinary pytest wrote into production across at least
+    four store families -- `data/trajectories/`, `data/run_snapshots/`,
+    `data/evolution/staged/`, `data/repair_states/`, `data/snapshots/`,
+    `data/chess/`, `data/intel/`, `data/search_quota.json` and
+    `data/events/events.jsonl`.
 
-    The cause is the same shape as the Qdrant finding: these are CWD-relative
-    constants, so under pytest (CWD == repo root) they point at production.
-    `AgentServiceV2._TRAJ_DIR` is a CLASS attribute read only through `self.`,
-    the other two are module globals; string targets patch each correctly.
+    Cause is always the same shape as the Qdrant finding: a CWD-relative
+    `Path("data/...")` resolved at import time, so under pytest (CWD == repo root)
+    it points at production.
 
-    `data/checkpoints` is redirected too even though all five tests that touch it
-    already patch it -- it is the same class of constant and should not depend on
-    every future test remembering.
+    Two mechanical constraints shaped this table:
+
+    * Attributes are patched, not environment variables. Several of these paths
+      are `Path(os.getenv("X", "data/..."))`, but that default is resolved at
+      MODULE IMPORT -- before any fixture runs -- so setting the env var in a
+      fixture is too late. The attribute has to be patched.
+    * Patching is string-targeted so no module is imported at conftest load.
+
+    When a new `data/` writer is added, add one line to `DATA_PATH_ATTRS`.
+    That is the whole maintenance contract.
     """
     root = tmp_path / "runtime_data"
-    monkeypatch.setattr(
-        "runtime_v2.api.agent_service_v2.AgentServiceV2._TRAJ_DIR",
-        root / "trajectories",
-        raising=False,
-    )
-    monkeypatch.setattr(
-        "runtime_v2.services.checkpointing._CHECKPOINT_DIR",
-        root / "checkpoints",
-        raising=False,
-    )
-    monkeypatch.setattr(
-        "runtime_v2.services.run_snapshot._SNAPSHOT_DIR",
-        root / "run_snapshots",
-        raising=False,
-    )
+
+    # (fully-qualified dotted path INCLUDING the attribute, relative subpath)
+    data_path_attrs = [
+        # trajectories / checkpoints / run snapshots
+        ("runtime_v2.api.agent_service_v2.AgentServiceV2._TRAJ_DIR", "trajectories"),
+        ("runtime_v2.services.checkpointing._CHECKPOINT_DIR", "checkpoints"),
+        ("runtime_v2.services.run_snapshot._SNAPSHOT_DIR", "run_snapshots"),
+        # evolution
+        ("swarm_os.services.evolution_daemon.STAGED_DIR", "evolution/staged"),
+        ("swarm_os.services.evolution_daemon.GENOMES_PATH", "evolution/genomes.jsonl"),
+        ("runtime_v2.services.subagent_evolution.STAGED_DIR", "evolution/subagent_staged"),
+        ("runtime_v2.services.tool_policy.OBSERVATIONS", "evolution/tool_observations.jsonl"),
+        # repairs / snapshots
+        ("organism_console.core.repair_state._REPAIR_STATE_DIR", "repair_states"),
+        ("swarm_os.kernel.snapshot_index.SNAPSHOT_DIR", "snapshots"),
+        # chess
+        ("swarm_os.services.chess_games._DATA_DIR", "chess"),
+        ("swarm_os.services.chess_mistakes._DATA_DIR", "chess"),
+        ("swarm_os.services.chess_training._DATA_DIR", "chess"),
+        ("swarm_os.services.chess_import._PROFILE_DIR", "chess"),
+        ("swarm_os.services.chess_analysis_job._JOBS_DIR", "chess/analysis_jobs"),
+        ("swarm_os.services.gm_games._DATA_DIR", "chess/gm"),
+        # intel / usage
+        ("swarm_os.services.competitive_intel._DATA_DIR", "intel"),
+        ("runtime_v2.services.usage_log._USAGE_PATH", "usage/usage.jsonl"),
+        ("runtime_v2.services.otel_telemetry._telemetry_path", "usage/otel_genai.jsonl"),
+        # grants / tasks
+        ("swarm_os.services.permission_tiers.GRANTS_FILE", "permission_grants.json"),
+        ("swarm_os.services.trust_ledger._GRANTS_PATH", "trust_grants.json"),
+        ("swarm_os.services.task_scheduler._TASKS_FILE", "tasks.json"),
+        # events
+        ("runtime_v2.services.canary_registry._REGISTRY_FILE", "events/canary_pending.json"),
+        ("swarm_os.services.watch_loop._EVENTS_FILE", "events/events.jsonl"),
+        ("swarm_os.services.watch_loop._HEARTBEAT_FILE", "events/watchman_heartbeat.json"),
+        ("swarm_os.services.watch_loop._AUDIT_FILE", "events/auto_repairs.jsonl"),
+        ("swarm_os.services.watch_loop._CANARY_HUMAN_REVIEW_FILE", "events/human_review.jsonl"),
+        # legal
+        ("swarm_os.services.legal.case_corpus.STATE_FILE", "legal/cases_ingest.json"),
+        ("swarm_os.services.legal.case_tracker._CASES_DIR", "cases"),
+        ("swarm_os.services.legal.citator.STATE_FILE", "legal/citator_state.json"),
+        ("swarm_os.services.legal.trial_advisor.TRANSCRIPTS_DIR", "legal/transcripts"),
+    ]
+
+    for dotted, rel in data_path_attrs:
+        monkeypatch.setattr(dotted, root / rel, raising=False)
+
+    # `settings.snapshot_dir` is deliberately NOT patched: it lives on a frozen
+    # dataclass, so neither production code nor a test can mutate it at runtime.
+    # The writable snapshot paths are `snapshot_index.SNAPSHOT_DIR` (patched
+    # above) and the repository classes that take a root argument.
+
+    # These are resolved per call via os.getenv, so env vars do work here.
+    monkeypatch.setenv("SWARM_SEARCH_QUOTA_FILE", str(root / "search_quota.json"))
+
     return root
 
 
