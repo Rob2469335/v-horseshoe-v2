@@ -185,6 +185,26 @@ authorized** while unresolved findings stand there. Consult those documents befo
 running suites against production-like state, and do not treat prior audit status as
 current — verify.
 
+**Governed recovery — three standing rules.**
+
+1. **No non-production writer.** A test, child process, or ad-hoc script MUST NOT write
+   production PromptRepairer state (`candidates`, `snapshots`, `audit`, `journal`,
+   `rollouts`). Redirect the root: `SWARM_PROMPT_REPAIRER_DATA_DIR` for real child
+   processes; the autouse `isolate_prompt_repairer_store` fixture in-process.
+2. **Startup recovery mutates learning state only through the governed path.**
+   `swarm_os/app/main.py` lifespan calls `recover_interrupted_promotions()` on every
+   boot. That is authorized; bypassing it with direct store writes is not.
+3. **No success claim without a verified state transition.** Recovery MUST NOT emit
+   `RECOVERED_INTERRUPTED_PROMOTION` merely because a journal row exists. It requires a
+   verified outcome, or an explicitly truthful failure/unverified record. If a
+   dependency needed for verification is unreachable, fail closed: assert no success,
+   change no state, and leave the transaction retryable. Journal rows must also carry a
+   terminal phase once resolved, so replaying recovery is a no-op rather than an
+   unbounded re-audit.
+
+Record: `docs/PROMPTREPAIRER_STARTUP_RECOVERY_REMEDIATION.md`.
+
+
 ---
 
 ## 4. Environment, Tooling, and Protected Paths

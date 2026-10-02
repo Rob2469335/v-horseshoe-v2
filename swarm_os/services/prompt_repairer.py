@@ -79,6 +79,22 @@ def _journal_file() -> Path:
     return _DATA_DIR / "prompt_repairer_journal.jsonl"
 
 
+# Journal phases that TERMINATE a promotion transaction.
+#
+# `committed` is written when a promotion succeeds; `rolled_back` when a
+# promotion is undone after a partial failure. Both mean "this candidate_id is
+# finished" — so a `qdrant_applied` row for it is never interrupted work.
+#
+# Startup recovery previously cancelled pending work on `committed` ONLY. That
+# left two permanent sources of unbounded replay: a transaction that had been
+# rolled back, and a transaction recovery had itself already resolved. Both
+# stayed pending forever and were re-processed — and re-audited — on every
+# single backend start. Treating both phases as terminal is what makes recovery
+# replay-safe: a transaction that reaches a terminal phase can never become
+# pending again, so re-running recovery over it is a no-op.
+_TERMINAL_JOURNAL_PHASES = frozenset({"committed", "rolled_back"})
+
+
 def _rollout_log_file() -> Path:
     """Append-only per-rollout log (OUTSIDE the governed path).
 
@@ -916,6 +932,21 @@ class PromptRepairer:
             f.write(json.dumps(row) + "\n")
 
     async def recover_interrupted_promotions(self):
+        """Resolve promotion transactions interrupted by a crash.
+
+        Replay-safe: a transaction that reaches a verified terminal state is
+        marked ``rolled_back`` in the journal, and a terminal phase permanently
+        cancels its ``qdrant_applied`` row. Re-running recovery over the same
+        journal is therefore a no-op, so the application lifespan can call this
+        on every boot without re-emitting a recovery record each time.
+
+        Truthful: ``RECOVERED_INTERRUPTED_PROMOTION`` is emitted only for an
+        outcome that was actually verified. When the lesson store cannot be
+        reached, provenance is unverifiable — so nothing is deleted, no candidate
+        state is touched, no terminal row is written, and the attempt is recorded
+        as ``RECOVERY_UNVERIFIED`` instead. That transaction stays pending and is
+        retried on a later startup, which preserves crash recovery.
+        """
         journal = _journal_file()
         if not journal.exists():
             return
@@ -932,41 +963,89 @@ class PromptRepairer:
                     continue
                 phase = row.get("phase")
                 if phase == "qdrant_applied":
-                    # Did 'committed' follow this candidate later? If so the
-                    # promotion completed — leave the lesson alone.
+                    # Did a terminal phase follow this candidate later? If so the
+                    # promotion finished — leave the lesson alone.
                     pending.append((row.get("candidate_id"), row.get("lesson_id", "")))
-                elif phase == "committed":
+                elif phase in _TERMINAL_JOURNAL_PHASES:
                     pending = [
                         p for p in pending if p[0] != row.get("candidate_id")
                     ]
+            resolved = 0
             for candidate_id, lesson_id in pending:
-                if lesson_id:
-                    try:
-                        # Step 6 fix: Verify provenance before deletion
-                        lessons = await self.lesson_manager.get_all()
-                        for lesson in lessons:
-                            if lesson.id == lesson_id:
-                                if candidate_id in lesson.source_candidates:
-                                    await self.lesson_manager.remove(lesson_id)
-                                else:
-                                    self._audit("ROLLBACK_PROVENANCE_MISMATCH", {"lesson_id": lesson_id, "candidate_id": candidate_id})
-                    except Exception:
-                        pass
-                cand = self._candidates.get(candidate_id)
-                if cand:
-                    # Roll the candidate back to PROMOTABLE so a future
-                    # promotion attempt re-runs cleanly. NEVER auto-activate.
-                    if cand.get("status") == CandidateState.ACTIVE.value:
-                        cand["status"] = CandidateState.PROMOTABLE.value
-                        cand.pop("active_lesson_id", None)
-                self._audit(
-                    "RECOVERED_INTERRUPTED_PROMOTION",
-                    {"candidate_id": candidate_id, "lesson_id": lesson_id},
-                )
-            if pending:
+                if await self._recover_pending_promotion(candidate_id, lesson_id):
+                    resolved += 1
+            if resolved:
                 self._save_candidates()
         except Exception as exc:
             self._audit("JOURNAL_RECOVERY_FAILED", {"error": str(exc)})
+
+    async def _recover_pending_promotion(self, candidate_id: str, lesson_id: str) -> bool:
+        """Resolve ONE interrupted promotion transaction.
+
+        Returns True once the transaction has reached a verified terminal state
+        and been marked ``rolled_back`` in the journal. Returns False when the
+        outcome could not be verified, deliberately leaving the transaction
+        pending so a later startup retries it.
+
+        Provenance is verified BEFORE any mutation, so a lesson this candidate is
+        not provably the owner of is never deleted, and a candidate's
+        ``active_lesson_id`` is never dropped on an unverified guess.
+        """
+        if not lesson_id:
+            # Nothing was ever applied, so there is no provenance to check.
+            outcome = "absent"
+        else:
+            try:
+                lessons = await self.lesson_manager.get_all()
+            except Exception as exc:
+                # Fail closed. An unreachable lesson store proves nothing, so it
+                # must never be read as "there is nothing to remove".
+                self._audit("RECOVERY_UNVERIFIED", {
+                    "candidate_id": candidate_id,
+                    "lesson_id": lesson_id,
+                    "reason": "lesson_store_unavailable",
+                    "error": str(exc)[:200],
+                })
+                return False
+            match = next((lesson for lesson in lessons if lesson.id == lesson_id), None)
+            if match is None:
+                # Verified absent: the store answered and the dangling lesson is
+                # not in it, so there is genuinely nothing to undo.
+                outcome = "absent"
+            elif candidate_id in match.source_candidates:
+                await self.lesson_manager.remove(lesson_id)
+                outcome = "removed"
+            else:
+                # Verified that this candidate did NOT create the lesson. Leave
+                # both the lesson and the candidate alone: nothing here proves the
+                # promotion was incomplete. The decision is final, so the
+                # transaction is marked terminal rather than re-decided forever.
+                self._journal_append("rolled_back", candidate_id, lesson_id)
+                self._audit("ROLLBACK_PROVENANCE_MISMATCH", {
+                    "lesson_id": lesson_id,
+                    "candidate_id": candidate_id,
+                })
+                return True
+
+        cand = self._candidates.get(candidate_id)
+        if cand:
+            # Roll the candidate back to PROMOTABLE so a future promotion attempt
+            # re-runs cleanly. NEVER auto-activate.
+            if cand.get("status") == CandidateState.ACTIVE.value:
+                cand["status"] = CandidateState.PROMOTABLE.value
+                cand.pop("active_lesson_id", None)
+        # Terminal row BEFORE the audit record: a crash in between then leaves the
+        # transaction correctly resolved, rather than re-audited on every boot.
+        self._journal_append("rolled_back", candidate_id, lesson_id)
+        self._audit(
+            "RECOVERED_INTERRUPTED_PROMOTION",
+            {
+                "candidate_id": candidate_id,
+                "lesson_id": lesson_id,
+                "verified": outcome,
+            },
+        )
+        return True
 
     async def evaluate_and_promote_eligible(self) -> dict:
         """Bounded orchestration seam (the missing 'learning tick').

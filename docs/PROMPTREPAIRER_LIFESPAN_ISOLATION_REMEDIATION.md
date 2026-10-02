@@ -202,9 +202,13 @@ This remediation covers RED-1 and RED-2 only. Still open from
 - **GRAY** — `swarm_os/tests/` outcome-fitness scope; memory/reflection/diary
   Qdrant path; trajectory, checkpoint and run-snapshot path resolution;
   `data/prompt_repairer_receipt.key` reachability.
-- **Unattributed audit-log growth** described in §9.
 
-Each requires separate authorization. None was touched.
+The **Unattributed audit-log growth** described in §9 was **since attributed and
+repaired** under separate authorization: it was the application lifespan replaying a
+test-polluted journal through non-idempotent, non-verifying startup recovery. See
+`docs/PROMPTREPAIRER_STARTUP_RECOVERY_REMEDIATION.md`.
+
+Each remaining item requires separate authorization. None was touched by that repair.
 
 ## 13. Broad pytest status
 
