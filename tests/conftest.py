@@ -27,6 +27,12 @@ import pytest
 
 from swarm_os.app.main import app
 import os
+import subprocess
+
+# The genuine Popen class, captured before any fixture can mock it. Used by
+# `global_subprocess_mock` to guarantee a leaked mock is never restored as the
+# new baseline for later patches (see that fixture's teardown).
+_REAL_POPEN = subprocess.Popen
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -205,9 +211,27 @@ def global_subprocess_mock():
     # which leads to PytestUnhandledThreadExceptionWarning and zombie processes.
     with patch("subprocess.Popen") as mock_popen:
         mock_popen.return_value.communicate.return_value = (b"", b"")
+        # `subprocess.run` enters Popen as a context manager
+        # (`with Popen(...) as process`), so `process` is
+        # `mock_popen.return_value.__enter__.return_value` - a DIFFERENT object from
+        # `mock_popen.return_value`. Without configuring that child,
+        # `stdout, stderr = process.communicate(...)` unpacks a bare MagicMock and
+        # raises `ValueError: not enough values to unpack (expected 2, got 0)`.
+        mock_popen.return_value.__enter__.return_value.communicate.return_value = (
+            b"",
+            b"",
+        )
         mock_popen.return_value.returncode = 0
         mock_popen.return_value.pid = 99999
         yield mock_popen
+
+    # `patch()` restores whatever it captured on entry. If an earlier test left a
+    # mock installed as subprocess.Popen, that mock becomes the "original" for
+    # every later patch, so the leak is immortalised across the whole session and
+    # survives into modules that never opted into mocking. Always re-assert the
+    # genuine class so a leaked mock can never become the new baseline.
+    if subprocess.Popen is not _REAL_POPEN:
+        subprocess.Popen = _REAL_POPEN
 
 
 @pytest.fixture(autouse=True)

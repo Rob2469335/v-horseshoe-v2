@@ -7,6 +7,8 @@ switching, prompt badge) is exercised with the real registry + a stub context.
 """
 
 import subprocess
+
+_REAL_POPEN = subprocess.Popen
 from pathlib import Path
 
 import pytest
@@ -19,19 +21,27 @@ from organism_console._commands_opencode import (
 )
 
 
-@pytest.fixture(autouse=True)
-def global_subprocess_mock():
-    """Override tests/conftest.py's autouse subprocess.Popen mock.
+@pytest.fixture()
+def real_subprocess():
+    """Give these tests the genuine `subprocess.Popen`.
 
-    These tests build a throwaway git repo and exercise snapshot/restore against
-    real `git` invocations, so subprocess must NOT be mocked here. Module-scope
-    fixtures take precedence over the conftest autouse one.
+    A same-named `global_subprocess_mock` here does NOT disable the autouse
+    conftest mock: pytest resolves same-name fixtures last-wins, so the conftest
+    registration was replaced by this module's fixture while the mock from an
+    earlier module could still be installed. This fixture uses a distinct name,
+    so the conftest mock is set up first and this one runs after it, guaranteeing
+    real `git` for the undo/restore tests. Restoration is explicit rather than
+    relying on captured state.
     """
-    yield
+    subprocess.Popen = _REAL_POPEN
+    try:
+        yield
+    finally:
+        subprocess.Popen = _REAL_POPEN
 
 
 @pytest.fixture()
-def repo(tmp_path: Path):
+def repo(tmp_path: Path, real_subprocess):
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, capture_output=True)
     subprocess.run(
         ["git", "config", "user.email", "t@t"],
