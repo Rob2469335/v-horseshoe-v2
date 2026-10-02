@@ -449,7 +449,7 @@ def _run_evaluator_sanity_check(
     # Resolve the task interpreter through the curriculum row's
     # `base_image_name`. Fails closed rather than using the project `.venv`.
     launcher = resolve_task_python(inst or {})
-    task_py = launcher[0] if len(launcher) == 1 else launcher[-1]
+    task_py = _task_python_path(launcher)
 
     # `test_cmd` from the curriculum begins with a bare `pytest`; `_test_cmd`
     # rewrites it to `<task python> -m pytest ...` so the task environment's

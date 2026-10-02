@@ -301,3 +301,60 @@ def test_install_failure_information_is_preserved():
     """An install step is argv-only; failure text must reach the caller."""
     plan = rrt.task_exec_plan(_pool_row("qiskit__qiskit-ibm-runtime-367"), "TASKPY")
     assert plan["install_argv"][0] == ["TASKPY", "-m", "pip", "install", "-e", ".[test,common]", "--quiet"]
+
+
+# --- evaluator-sanity path must resolve the launcher, not slice it ---
+
+
+def test_evaluator_sanity_does_not_slice_launcher():
+    """Source guard: the bad `launcher[-1]` resolution must not come back.
+
+    For a Windows launcher `["py", "-3.10"]` that expression yields the string
+    `"-3.10"`, which is not an executable, so the evaluator sanity run would
+    silently fall back to ambient resolution.
+    """
+    import inspect
+
+    src = inspect.getsource(rrt._run_evaluator_sanity_check)
+    assert "launcher[-1]" not in src, "evaluator sanity must not slice the launcher"
+    assert "_task_python_path(launcher)" in src, (
+        "evaluator sanity must resolve the launcher via the shared helper"
+    )
+
+
+def test_task_python_path_never_returns_a_bare_version_flag():
+    for launcher in (["py", "-3.10"], ["python", "-3.9"], ["py"]):
+        resolved = rrt._task_python_path(launcher)
+        assert not str(resolved).startswith("-"), (
+            f"{launcher} must not resolve to a bare version flag, got {resolved!r}"
+        )
+
+
+def test_evaluator_sanity_invokes_task_interpreter(monkeypatch, tmp_path):
+    """Exercise the real function: capture the argv it actually executes."""
+    seen = {}
+
+    class _Proc:
+        returncode = 1
+        stdout = "FAILED tests/x.py::test_a - AssertionError\n"
+        stderr = ""
+
+    def fake_run(cmd, **kw):
+        seen["cmd"] = cmd
+        seen["kwargs"] = kw
+        return _Proc()
+
+    monkeypatch.setattr(rrt, "resolve_task_python", lambda inst: ["py", "-3.10"])
+    monkeypatch.setattr(rrt, "task_test_argv", lambda py, tc: [str(py), "-m", "pytest"])
+    monkeypatch.setattr(rrt.subprocess, "run", fake_run)
+
+    ok, _out = rrt._run_evaluator_sanity_check(
+        tmp_path, tmp_path, Path("IGNORED"), "pytest -q tests/x.py", {"base_image_name": "python_base_310"}
+    )
+
+    argv = seen["cmd"]
+    assert argv[0] not in ("-3.10", "-3.9"), (
+        f"launcher was sliced to {argv[0]!r} instead of a resolved interpreter"
+    )
+    assert "shell" not in seen["kwargs"], "task-test execution must not use shell=True"
+    assert ok is False, "failure output on buggy code must report not-all-passed"
