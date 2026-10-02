@@ -45,8 +45,25 @@ _REAL_POPEN = subprocess.Popen
 
 
 @pytest.fixture(autouse=True)
-def _real_subprocess(monkeypatch):
-    monkeypatch.setattr(subprocess, "Popen", _REAL_POPEN)
+def _real_subprocess():
+    """Install the genuine Popen for this module, and put it back on teardown.
+
+    `monkeypatch.setattr` is not sufficient here: it records whatever
+    `subprocess.Popen` currently is (the conftest MagicMock) and restores that
+    on teardown, which leaks a mocked Popen into every module collected after
+    this one. `tests/test_cli_sota.py` and `tests/test_cli_opencode.py` shadow
+    the conftest mock with a no-op fixture so they can shell out to real `git`,
+    and they broke with `ValueError: not enough values to unpack` from
+    `subprocess.py` when this module ran first.
+
+    Restoring the genuine class unconditionally keeps the module-scoped
+    override from outliving the module that needed it.
+    """
+    subprocess.Popen = _REAL_POPEN
+    try:
+        yield
+    finally:
+        subprocess.Popen = _REAL_POPEN
 
 # A real `git diff` MODIFYING one tracked test file and ADDING one new test
 # file. Hunk headers are byte-accurate so `git apply` accepts it unmodified.
