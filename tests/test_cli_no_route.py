@@ -28,7 +28,7 @@ def _drive(monkeypatch, argv):
         calls["handle_line"] = line
         return "ROUTED"
 
-    def fake_run(c, prompt, json_flag=False):
+    def fake_run(c, prompt, json_flag=False, allow_resume=False):
         calls["run_agentic"] = prompt
         return {"content": "x", "files_changed": []}
 
