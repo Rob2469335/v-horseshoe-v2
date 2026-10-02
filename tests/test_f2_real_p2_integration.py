@@ -73,6 +73,34 @@ def global_subprocess_mock():
 
 
 @pytest.fixture(autouse=True)
+def _isolate_child_prompt_repairer_store(tmp_path):
+    """Keep the REAL child backend's prompt-repairer state out of production `data/`.
+
+    These tests spawn a genuine uvicorn P2 in a separate process. That child has
+    no pytest fixtures, so `isolate_prompt_repairer_store` cannot protect the
+    production persistent files for it - P2 was appending ~21 KB per test to the
+    real `data/prompt_repairer_audit.jsonl`.
+
+    `F2ExecutionAdapter` builds the child env with `os.environ.copy()`, so
+    pointing `SWARM_PROMPT_REPAIRER_DATA_DIR` at a per-test temp directory
+    redirects EVERY prompt-repairer persistent file the child touches
+    (candidates, snapshots, audit log, journal). Production behaviour is
+    unchanged when the variable is unset.
+    """
+    store = tmp_path / "child_prompt_repairer_store"
+    store.mkdir(parents=True, exist_ok=True)
+    previous = os.environ.get("SWARM_PROMPT_REPAIRER_DATA_DIR")
+    os.environ["SWARM_PROMPT_REPAIRER_DATA_DIR"] = str(store)
+    try:
+        yield store
+    finally:
+        if previous is None:
+            os.environ.pop("SWARM_PROMPT_REPAIRER_DATA_DIR", None)
+        else:
+            os.environ["SWARM_PROMPT_REPAIRER_DATA_DIR"] = previous
+
+
+@pytest.fixture(autouse=True)
 def _clear_f2_env():
     saved = {k: os.environ.pop(k, None) for k in _F2_ENV_VARS}
     yield

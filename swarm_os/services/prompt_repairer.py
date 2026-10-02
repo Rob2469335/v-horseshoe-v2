@@ -57,7 +57,17 @@ MIN_EVIDENCE_TASKS = 2
 EVAL_ATTEMPT_COOLDOWN_S = 3600
 
 _REPO_ROOT = Path(__file__).parent.parent.parent
-_DATA_DIR = _REPO_ROOT / "data"
+# Persistent-state root. Defaults to <repo>/data in production. It is
+# env-overridable so a CHILD PROCESS can be isolated: the F2 real-backend
+# integration tests spawn a genuine uvicorn P2 that has no pytest fixtures, so
+# `isolate_prompt_repairer_store` cannot protect the production files for it.
+# Because the child inherits os.environ, pointing this at a temp directory
+# isolates EVERY prompt-repairer persistent file (candidates, snapshots, audit
+# log, journal) rather than only the audit log. Unset in production, so
+# behaviour is byte-for-byte unchanged.
+_DATA_DIR = Path(
+    os.environ.get("SWARM_PROMPT_REPAIRER_DATA_DIR") or (_REPO_ROOT / "data")
+)
 _CANDIDATES_FILE = _DATA_DIR / "prompt_repairer_candidates.json"
 _SNAPSHOTS_FILE = _DATA_DIR / "prompt_repairer_snapshots.json"
 _AUDIT_LOG_FILE = _DATA_DIR / "prompt_repairer_audit.jsonl"
