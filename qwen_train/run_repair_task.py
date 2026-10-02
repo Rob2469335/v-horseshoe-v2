@@ -45,7 +45,228 @@ if str(_HERE) not in sys.path:
 
 import run_curriculum as rc  # noqa: E402
 import cli_baseline_swe as cls  # noqa: E402
-from swe_rebench_probe import WORK  # noqa: E402
+from swe_rebench_probe import (  # noqa: E402
+    WORK,
+    _ensure_interpreter,
+    _interpreter_for,
+    _pip_cmd,
+    _test_cmd,
+)
+
+
+class TaskEnvironmentError(RuntimeError):
+    """Raised when a task's declared test environment cannot be established.
+
+    Fails closed on purpose: silently substituting the project interpreter
+    (Python 3.14) for a task that declared `python_base_310` produces
+    environment failures that masquerade as benchmark behaviour failures. That
+    is the documented incident in `swe_rebench_probe._interpreter_for`.
+    """
+
+
+_POOL_ENV_CACHE: dict[str, dict] = {}
+
+
+def _pool_env_meta(instance_id: str) -> dict:
+    """Read task-environment metadata (`base_image_name`, `install`) from the pool.
+
+    The runner previously synthesised its `inst` dict from CLI arguments only, so
+    it never saw the curriculum's declared environment. This reads the authoritative
+    row from `qwen_train/curriculum/swe_pool.jsonl`. Fails closed by returning an
+    empty dict when the row is absent, which makes `resolve_task_python` raise.
+    """
+    if instance_id in _POOL_ENV_CACHE:
+        return _POOL_ENV_CACHE[instance_id]
+    meta: dict = {}
+    pool = _HERE / "curriculum" / "swe_pool.jsonl"
+    try:
+        for line in pool.read_text("utf-8").splitlines():
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            if row.get("instance_id") == instance_id:
+                meta = {
+                    "base_image_name": row.get("base_image_name") or "",
+                    "install": row.get("install") or "",
+                    "image_name": row.get("image_name") or "",
+                }
+                break
+    except (OSError, ValueError):
+        meta = {}
+    _POOL_ENV_CACHE[instance_id] = meta
+    return meta
+
+
+def resolve_task_python(inst: dict) -> list[str]:
+    """Return the interpreter launcher for a curriculum row's `base_image_name`.
+
+    Reuses `swe_rebench_probe._interpreter_for` / `_ensure_interpreter` so there is
+    exactly one source of truth for the Python-version mapping and the
+    fail-closed behaviour. Raises `TaskEnvironmentError` rather than falling back
+    to `sys.executable`.
+    """
+    base_image = str(inst.get("base_image_name") or "")
+    launcher = _interpreter_for(base_image)
+    if not launcher:
+        raise TaskEnvironmentError(
+            f"base_image_name={base_image!r} is not mappable to a local interpreter; "
+            "refusing to fall back to the project interpreter"
+        )
+    version = _ensure_interpreter(launcher, base_image)
+    if not version:
+        raise TaskEnvironmentError(
+            f"base_image_name={base_image!r} -> {' '.join(launcher)} is not available; "
+            "install that interpreter or skip this instance"
+        )
+    return launcher
+
+
+def task_test_argv(task_py: Path | str, test_cmd: str) -> list[str]:
+    """Build the task-test argv for a curriculum row's `test_cmd`.
+
+    Delegates to `swe_rebench_probe._test_cmd`, which rewrites a bare
+    `pytest ...` into `<task python> -m pytest ...`. The previous inline
+    `test_cmd.replace("python -m pytest", ...)` in this module was inert because
+    every pool command begins with bare `pytest`, so the executable resolved
+    through ambient PATH instead of the task environment.
+
+    `_test_cmd` drops trailing arguments for the `python -m pytest ...` spelling
+    (it only splits the bare `pytest` form), so that form is normalised here
+    before delegating. `swe_rebench_probe._test_cmd` itself is left untouched so
+    the pool builder keeps its existing behaviour.
+    """
+    raw = test_cmd.strip()
+    if raw.startswith("python -m pytest"):
+        return _test_cmd(Path(task_py), "pytest" + raw[len("python -m pytest"):])
+    head = raw.split()[0] if raw.split() else ""
+    if head in ("pytest", "py.test", "-m"):
+        return _test_cmd(Path(task_py), raw)
+    # A non-pytest task command is preserved verbatim as argv. It is NOT run
+    # through the project interpreter and NOT executed with shell=True; the task
+    # environment is still selected by running it under the task venv's python
+    # when the command is a script, otherwise it is returned unchanged so the
+    # caller's own execution policy applies.
+    import shlex
+
+    return shlex.split(raw)
+
+
+def _task_python_path(launcher: list[str]) -> Path:
+    """Resolve an interpreter launcher to a concrete executable path.
+
+    `_interpreter_for` returns a launcher such as ``["py", "-3.10"]``. For argv
+    construction we need the interpreter that launcher resolves to, so the minor
+    version is queried once and its real executable path returned.
+    """
+    if len(launcher) == 1:
+        return Path(launcher[0])
+    # Ask the launcher which interpreter it actually resolves to. Returning the
+    # launcher name alone would silently fall back to the default interpreter
+    # (Python 3.14 on this host), which is exactly the defect being fixed.
+    probe = subprocess.run(
+        [*launcher, "-c", "import sys;print(sys.executable)"],
+        capture_output=True, text=True, timeout=120,
+    )
+    resolved = (probe.stdout or "").strip().splitlines()
+    if probe.returncode == 0 and resolved and Path(resolved[-1]).exists():
+        return Path(resolved[-1])
+    spec = launcher[1] if launcher[0].lower() in ("py", "python") else launcher[0]
+    major, _, minor = spec.lstrip("-").partition(".")
+    root = Path(sys.executable).parent
+    for cand in (root / f"python{major}.{minor}.exe", root / f"python{major}{minor}.exe"):
+        if cand.exists():
+            return cand
+    return Path(launcher[0])
+
+
+def task_install_argv(task_py: Path | str, step: str) -> list[str] | None:
+    """Build the argv for one curriculum `install` step against the task venv.
+
+    Returns None for a non-pip step; the caller shells those. Delegates to
+    `swe_rebench_probe._pip_cmd` so pip can never target the project `.venv`.
+    """
+    return _pip_cmd(Path(task_py), step)
+
+
+# Execution prerequisite owned by the HARNESS, not by curriculum truth.
+#
+# Most curriculum rows supply a test runner through their own `install` field
+# (Werkzeug via requirements/tests.txt, dbt via dbt-tests-adapter, pandas-ai by
+# naming pytest explicitly). `qiskit__qiskit-ibm-runtime-367` declares only
+# `pip install -e .[test,common] --quiet`, which does not install pytest, yet its
+# `test_cmd` begins with `pytest`. Rather than silently editing curriculum truth,
+# the harness bootstraps the runner it needs and records that it did so.
+#
+# Provenance matters for Experiment J: a package the harness supplied must not
+# be attributed to the curriculum row.
+HARNESS_EXECUTION_PREREQS = ("pytest",)
+
+CURRICULUM = "curriculum"
+HARNESS = "harness"
+
+
+def task_pytest_available(task_py: Path | str) -> bool:
+    """True when the task venv can already import the declared test runner."""
+    import importlib.util
+
+    for mod in HARNESS_EXECUTION_PREREQS:
+        probe = subprocess.run(
+            [str(task_py), "-c",
+             f"import importlib.util as u;print('Y' if u.find_spec('{mod}') else 'N')"],
+            capture_output=True, text=True, timeout=120,
+        )
+        if probe.returncode != 0 or "Y" not in (probe.stdout or ""):
+            return False
+    return True
+
+
+def ensure_task_pytest(task_py: Path | str) -> list[dict]:
+    """Bootstrap the test runner into the task venv if curriculum did not supply it.
+
+    Returns provenance records: one entry per package, stating whether it came
+    from the curriculum row or from this harness bootstrap. Raises
+    `TaskEnvironmentError` on install failure rather than falling back to the
+    project `.venv`, where the runner may be absent or the wrong version.
+    """
+    records: list[dict] = []
+    if task_pytest_available(task_py):
+        return [{"package": m, "source": CURRICULUM} for m in HARNESS_EXECUTION_PREREQS]
+    for mod in HARNESS_EXECUTION_PREREQS:
+        proc = subprocess.run(
+            [str(task_py), "-m", "pip", "install", mod],
+            capture_output=True, text=True, timeout=900,
+        )
+        if proc.returncode != 0:
+            raise TaskEnvironmentError(
+                f"harness could not install required test runner {mod!r} into the "
+                f"task venv ({task_py}): exit={proc.returncode}\n"
+                f"{(proc.stderr or proc.stdout or '')[-800:]}"
+            )
+        records.append({"package": mod, "source": HARNESS})
+    return records
+
+
+def task_exec_plan(
+    inst: dict,
+    task_py: Path | str,
+) -> dict:
+    """Resolve the full, provenance-visible execution plan for one curriculum row.
+
+    Returns interpreter launcher, install steps, execution-prerequisite provenance,
+    and the test argv. Nothing here mutates curriculum truth and nothing falls back
+    to the project interpreter.
+    """
+    launcher = resolve_task_python(inst or {})
+    install_steps = [s.strip() for s in (inst or {}).get("install") or [] if s.strip()]
+    return {
+        "instance_id": (inst or {}).get("instance_id", ""),
+        "base_image_name": (inst or {}).get("base_image_name", ""),
+        "interpreter": launcher,
+        "task_py": str(task_py),
+        "install_steps": install_steps,
+        "install_argv": [task_install_argv(task_py, s) for s in install_steps],
+        "execution_prereqs": list(HARNESS_EXECUTION_PREREQS),
+    }
 
 # F1 authorized base commit (from docs/EXPERIMENT_J_F1_AUTHORIZATION.md)
 F1_AUTHORIZED_BASE_COMMIT = "45d9f6192dd7b1c81c63f46d277798f19adb97ec"
@@ -215,6 +436,7 @@ def _run_evaluator_sanity_check(
     repo: Path,
     py: Path,
     test_cmd: str,
+    inst: dict | None = None,
 ) -> tuple[bool, str]:
     """Run evaluator against buggy code to verify it detects the bug.
 
@@ -224,10 +446,17 @@ def _run_evaluator_sanity_check(
     test_env = {k: v for k, v in os.environ.items()
                 if k not in ("PYTHONPATH", "PYTHONHOME")}
 
-    # Run the evaluator
-    cmd = test_cmd.replace("python -m pytest", f'"{py}" -m pytest')
+    # Resolve the task interpreter through the curriculum row's
+    # `base_image_name`. Fails closed rather than using the project `.venv`.
+    launcher = resolve_task_python(inst or {})
+    task_py = launcher[0] if len(launcher) == 1 else launcher[-1]
+
+    # `test_cmd` from the curriculum begins with a bare `pytest`; `_test_cmd`
+    # rewrites it to `<task python> -m pytest ...` so the task environment's
+    # pytest is used instead of whatever is on ambient PATH.
+    argv = task_test_argv(task_py, test_cmd)
     p = subprocess.run(
-        cmd, shell=True,
+        argv,
         cwd=str(repo), capture_output=True, text=True, timeout=120,
         env=test_env,
     )
@@ -383,6 +612,8 @@ def main() -> int:
         "fail_to_pass": args.f2p or [],
         "pass_to_pass": [],
         "split": "repair",
+        "base_image_name": _pool_env_meta(instance_id).get("base_image_name", ""),
+        "install": _pool_env_meta(instance_id).get("install", ""),
     }
     test_patch_content = ""
     if args.test_patch and Path(args.test_patch).exists():
@@ -413,7 +644,7 @@ def main() -> int:
         cls._reset_instance(inst, hf_inst)
 
         all_pass, eval_output = _run_evaluator_sanity_check(
-            evaluator_dir, repo, py, args.test_cmd
+            evaluator_dir, repo, py, args.test_cmd, inst
         )
         if all_pass:
             print("  FAIL: All evaluator tests passed (expected some failures on buggy code)")
@@ -476,9 +707,16 @@ def main() -> int:
                 if k not in ("PYTHONPATH", "PYTHONHOME")}
 
     def _test_once() -> str:
-        cmd = args.test_cmd.replace("python -m pytest", f'"{py}" -m pytest')
+        # Resolve the task interpreter from the curriculum row's
+        # `base_image_name` and build argv explicitly. The previous
+        # `args.test_cmd.replace("python -m pytest", ...)` + `shell=True` was
+        # inert for every curriculum command (they begin with bare `pytest`), so
+        # the runner silently used the project interpreter and ambient PATH.
+        launcher = resolve_task_python(inst)
+        task_py = _task_python_path(launcher)
+        argv = task_test_argv(task_py, args.test_cmd)
         p = subprocess.run(
-            cmd, shell=True,
+            argv,
             cwd=str(repo), capture_output=True, text=True, timeout=600,
             env=test_env,
         )
