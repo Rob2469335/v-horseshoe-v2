@@ -257,7 +257,14 @@ $backendJob = Start-Job -ScriptBlock {
 Write-Host "DEBUG pwd=$(Get-Location)"
 Write-Host "DEBUG PYTHONPATH=$env:PYTHONPATH"
     $pythonPath = if (Test-Path "$r\.venv\Scripts\python.exe") { "$r\.venv\Scripts\python.exe" } else { "python" }
-    & $pythonPath -m uvicorn --app-dir $r swarm_os.app.main:app --host 127.0.0.1 --port 8000 2>&1
+    $logDir = Join-Path $r "logs"
+    if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
+    $logFile = Join-Path $logDir "backend.log"
+    if (Test-Path $logFile) {
+      $logBytes = (Get-Item $logFile).Length
+      if ($logBytes -gt 10MB) { Move-Item -Path $logFile -Destination "$logFile.old" -Force }
+    }
+    & $pythonPath -m uvicorn --app-dir $r swarm_os.app.main:app --host 127.0.0.1 --port 8000 2>&1 | Tee-Object -FilePath $logFile -Append
 } -ArgumentList $root, $backendEnv
 
 for ($i = 0; $i -lt 20; $i++) {
