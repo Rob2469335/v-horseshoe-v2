@@ -94,9 +94,16 @@ tool_executor, checkpointing) · `organism_console/` (cli, api_client, permissio
 4. Make the minimal edit.
 5. Re-run relevant tests. **Classify failures:** your change = stop;
    pre-existing = report, not your regression.
-6. Show `git diff` before approval.
-7. No silent scope expansion — report follow-ups separately.
-8. Commit only after acceptance.
+6. **Complete the authorized work.** Once authorized to execute a change,
+   carry it through end-to-end within its defined scope and authority
+   boundaries: implement, validate, diagnose failures, fix in-scope failures,
+   and retest until the acceptance criteria are met. Stop only at a genuine
+   authority/scope boundary or an unresolved blocker - never stop at the first
+   failure, and never treat this as permission to widen scope (rules 8 and 9
+   below, and §3.3's evidence discipline, still govern).
+7. Show `git diff` before approval.
+8. No silent scope expansion — report follow-ups separately.
+9. Commit only after acceptance.
 
 ### 3.3 EVIDENCE-FIRST ENGINEERING
 
