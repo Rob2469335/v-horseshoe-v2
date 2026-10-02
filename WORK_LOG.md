@@ -404,6 +404,40 @@ exclusion before any commit.
 
 ---
 
+## AGENTS.md Runtime Writer Architecture Audit (2026-10-02)
+
+**Trigger:** Source inspection of `swarm_os/lib/agents_md.py`, `swarm_os/services/watch_loop.py`, `swarm_os/services/reflection_loop.py`, `swarm_os/healing/recovery_engine.py`, `runtime_v2/services/tool_executor.py`, `swarm_os/services/telegram_center.py`, `runtime_v2/services/project_map.py`, `runtime_v2/prompts/system_prompts.py`.
+
+**What was discovered:**
+
+1. **Five runtime writers target AGENTS.md**, not four as previously assumed:
+   - `watch_loop._audit_write` → `update_agents_md` (locked + atomic)
+   - `reflection_loop._record_rule_to_agents_md` → `update_agents_md` (locked + atomic)
+   - `recovery_engine._record_to_agents_md` → `update_agents_md` (locked + atomic)
+   - `tool_executor.skill_manage` → `update_agents_md` (locked + atomic)
+   - `telegram_center._handle_learn_cmd` → **bare `Path.write_text` — no lock, no atomic staging**
+
+2. **Historical 0-byte truncation incident:** AGENTS.md was found truncated to 0 bytes mid-session after `telegram_center._handle_learn_cmd` clobbered it (recovered from git; documented in `swarm_os/lib/agents_md.py` docstring).
+
+3. **Telegram → AGENTS.md → project_map → system_prompt chain established:**
+   - `telegram_center._handle_learn_cmd` appends verbatim user input from `/learn` command to AGENTS.md
+   - `project_map.build_project_map()` reads AGENTS.md and extracts Architecture Overview + Module Map sections
+   - `system_prompts._project_map_context()` injects the project map into agent system prompts for code_analyzer, researcher, coder, debugger, reviewer
+   - Chain capability is `PROVEN IN CURRENT REVISION`; actual exercise in this deployment is `NOT ESTABLISHED`.
+
+4. **`reflection_loop` marker:** Inserts under `## Self-Healing & Self-Learning Fixes` marker, which is currently absent in AGENTS.md (a first write would create it).
+
+**Why it mattered:** The non-atomic writer in `telegram_center.py` created a data-corruption hazard. The chain means untrusted Telegram input can reach agent system prompts via AGENTS.md.
+
+**Authoritative evidence locations:**
+- Implementation: `swarm_os/lib/agents_md.py` (docstring + `update_agents_md`), `swarm_os/services/telegram_center.py` (`_handle_learn_cmd`), `runtime_v2/services/project_map.py`, `runtime_v2/prompts/system_prompts.py`
+- Audit: This entry; `docs/TEST_PERSISTENT_STORE_ISOLATION_AUDIT.md` §6 (Qdrant isolation remediation notes)
+- Remediation status: `REQUIRES AUTHORIZATION` per AGENTS.md §6.11 — making `_handle_learn_cmd` atomic, sanitising its input, or splitting AGENTS.md is not a cleanup and not an agent decision.
+
+**Agent guidance preserved in AGENTS.md:** The four "Consequences for you" bullets remain in AGENTS.md §6 (maintenance section) as standing safety rules.
+
+---
+
 ## Frozen N1 Artifacts (Do Not Modify)
 
 - `qwen_train/run_twine_eval.py` — Frozen evaluator (SHA-256: `C8388FF9C317944AA53C163C5149455B177F95F59A75DE7C1E13AD88AD041AC2`)
