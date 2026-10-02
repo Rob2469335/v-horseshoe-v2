@@ -29,8 +29,12 @@ from __future__ import annotations
 import hashlib
 import json
 import sys
+import tempfile
 import time
 from pathlib import Path
+
+import pytest
+
 
 # Bootstrap repo root (matches worker's pattern).
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -40,7 +44,9 @@ if str(_REPO_ROOT) not in sys.path:
 from qwen_train.f2_arm_worker import (  # noqa: E402
     _compute_final_prompt_hash,
     _read_p2_delivery_evidence,
+    _verify_p2_evidence_binding,
 )
+from runtime_v2.services.f2_freeze import persist_manifest  # noqa: E402
 
 # Distinct identity spaces, as in real execution. P1 never knows the run_id.
 P1_ROLLOUT_ID = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"  # P1-minted, uuid4().hex
@@ -292,3 +298,85 @@ class TestEvidenceFieldIntegrity:
         result = _read_p2_delivery_evidence(tmp_path, rollout_id=P1_ROLLOUT_ID)
         block = result["delivered_block"]
         assert result["lesson_block_hash"] == hashlib.sha256(block.encode("utf-8")).hexdigest()
+
+
+class TestArmVersusAgentIdentity:
+    """D1: P2 evidence ``arm`` is AGENT identity, never the F2 arm.
+
+    The evidence record produced by
+    ``runtime_v2.services.f2_replay.record_f2_delivery_evidence`` stores the
+    model/agent identity (e.g. ``"coder"``) in a field named ``arm``. The F2 arm
+    (``T``/``X``/``C0``) is a MANIFEST field. Binding is therefore verified via
+    the manifest content address the evidence was produced under.
+    """
+
+    @staticmethod
+    def _artifact(arm: str = "C0"):
+        class _A:
+            def __init__(self, a):
+                self.arm = a
+                self.content_address = "cafef00dcafe0001"
+        return _A(arm)
+
+    def test_agent_id_coder_accepted_for_c0_manifest(self):
+        """agent_id="coder" must NOT be rejected merely because arm != "coder"."""
+        ev = _make_delivery_evidence(arm="coder")
+        ev["manifest_content_address"] = "cafef00dcafe0001"
+        assert _verify_p2_evidence_binding(ev, self._artifact("C0")) == "coder"
+
+    def test_agent_id_coder_accepted_for_t_manifest(self):
+        ev = _make_delivery_evidence(arm="coder")
+        ev["manifest_content_address"] = "cafef00dcafe0001"
+        assert _verify_p2_evidence_binding(ev, self._artifact("T")) == "coder"
+
+    def test_mismatched_manifest_content_address_fails_closed(self):
+        """Evidence produced under a DIFFERENT manifest is rejected."""
+        ev = _make_delivery_evidence(arm="coder")
+        ev["manifest_content_address"] = "deadbeefcafe0001"
+        with pytest.raises(RuntimeError, match="bound to a different F2 manifest"):
+            _verify_p2_evidence_binding(ev, self._artifact("C0"))
+
+    def test_missing_manifest_binding_fails_closed(self):
+        """No manifest binding -> unbound -> fail closed, never accepted."""
+        ev = _make_delivery_evidence(arm="coder")
+        ev.pop("manifest_content_address")
+        with pytest.raises(RuntimeError, match="no manifest_content_address"):
+            _verify_p2_evidence_binding(ev, self._artifact("C0"))
+
+    def test_empty_manifest_binding_fails_closed(self):
+        ev = _make_delivery_evidence(arm="coder")
+        ev["manifest_content_address"] = ""
+        with pytest.raises(RuntimeError, match="no manifest_content_address"):
+            _verify_p2_evidence_binding(ev, self._artifact("C0"))
+
+    def test_agent_identity_preserved_independently(self):
+        """Agent identity survives and is returned; it is not read as the arm."""
+        ev = _make_delivery_evidence(arm="f2probe")
+        ev["manifest_content_address"] = "cafef00dcafe0001"
+        assert _verify_p2_evidence_binding(ev, self._artifact("X")) == "f2probe"
+
+    def test_non_string_agent_identity_does_not_crash(self):
+        ev = _make_delivery_evidence(arm=None)
+        ev["manifest_content_address"] = "cafef00dcafe0001"
+        assert _verify_p2_evidence_binding(ev, self._artifact("C0")) == ""
+
+    def test_real_p2_evidence_shape_is_accepted(self):
+        """The REAL producer output (agent_id -> 'arm') binds successfully."""
+        from runtime_v2.services.f2_freeze import load_manifest
+        from runtime_v2.services.f2_replay import (
+            install_replay_state,
+            record_f2_delivery_evidence,
+        )
+        from qwen_train.f2_arm_primitives import build_c0_artifact
+
+        art = build_c0_artifact(
+            task_id="T-D1", git_sha="a" * 40, model_name="none",
+            experiment_id="d1", protocol_version="v1",
+        )
+        tmpdir = Path(tempfile.mkdtemp(prefix="d1_"))
+        mpath = persist_manifest(art, tmpdir)
+        install_replay_state(art, str(mpath))
+        ev = record_f2_delivery_evidence(delivered_block="", sys_prompt="p", agent_id="coder")
+        assert ev["arm"] == "coder"           # producer overloads the key
+        assert _verify_p2_evidence_binding(ev, art) == "coder"  # binding still verifies
+        assert load_manifest(mpath).content_address == art.content_address

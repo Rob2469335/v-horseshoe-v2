@@ -1113,3 +1113,79 @@ Summary of what that audit establishes:
 
 This pointer changes no experiment-state conclusion, no scientific parameter, and
 no authorization.
+
+---
+
+## F2 Authority Amendment Pointer (2026-10-02)
+
+`docs/EXPERIMENT_J_F2_OP_INFRA_004_AUTHORIZATION.md` authorizes completion and
+validation of the F2 ENGINEERING execution path: explicit absolute P2
+delivery-evidence transport (`SWARM_F2_TRAJ_DIR`), explicit evidence-write
+outcome, connection to the EXISTING production model-facing seam, task/workspace
+binding to existing F1 machinery, production adapter wiring, and in-scope
+integration repair. It changes no F2 scientific definition, arm, endpoint,
+population, or statistical criterion.
+
+This is a dated pointer record only. No experiment-state conclusion is changed by
+this entry.
+
+---
+
+## F2-OP-INFRA-004 Implementation Status (2026-10-02)
+
+The engineering execution path authorized by
+`docs/EXPERIMENT_J_F2_OP_INFRA_004_AUTHORIZATION.md` is **implemented and published**
+under that authorization. This entry records engineering status only.
+
+**Implemented (authorized scope only):**
+
+- **D2** — `SWARM_F2_TRAJ_DIR` gives P2's evidence writer and the F2 worker's reader
+  one explicit ABSOLUTE directory; the worker consults exactly one directory and
+  fails closed on a relative path. The non-F2 default remains byte-identical to the
+  historical relative `data/trajectories`.
+- **D3** — the bare `except Exception: pass` around the delivery-evidence write is
+  replaced by an explicit outcome (exception type and message preserved) emitted on
+  P2's stdout; the worker distinguishes `EVIDENCE_WRITE_FAILED` from
+  `EVIDENCE_NOT_FOUND`. The stream is still never killed by an evidence-write failure.
+- **W2** — `start_real_p2_production_model` / `execute_arm_real` resolve the model
+  through the EXISTING production seam (`get_litellm_model`) with no
+  `complete_for_tool_decision` monkeypatch. The fake-model entry point is retained.
+- **W4** — `bind_task_environment` reuses the EXISTING F1 task machinery
+  (`_pool_env_meta`, `resolve_task_python`, `_task_python_path`, `task_exec_plan`,
+  `task_test_argv`, `_preflight_evaluator_separation`, `F1_AUTHORIZED_BASE_COMMIT`)
+  and fails closed rather than degrading. Task identity comes from the declared
+  curriculum pool (14 rows in `qwen_train/curriculum/swe_pool.jsonl`), never
+  synthesized. The main repository can never become the task workspace.
+- **Wiring** — a structured `--execute` seam replaces `F2_ARM_EXEC_CMD`, which no
+  tracked production caller ever set.
+
+**Testing Requirements status:**
+
+| Req | Status |
+|---|---|
+| 1 — new D2/D3/W2/W4/wiring regression tests pass | **MET** (84 in the three F2-OP-INFRA-004 suites) |
+| 2 — existing focused F2 tests pass | **MET** (301 passed, 1 skipped) |
+| 3 — engineering rehearsal: zero candidate/lesson/promotion/ACTIVE mutation, zero observation | **NOT MET — OUTSTANDING** |
+| 4 — `docs/EXPERIMENT_J.md` SHA-256 unchanged | **MET** (`4EAFD2FA…`) |
+| 5 — `ruff check . --select E9,F` on changed files | **MET** |
+| 6 — non-F2 default trajectory path byte-identical | **MET** |
+| 7 — no test writes production learning state | **MET** (all five stores byte-identical) |
+
+**OUTSTANDING:** Requirement 3. No end-to-end engineering rehearsal has been run, so
+the assembled path is **not yet proven to traverse the real architecture in one
+execution**. Component-level evidence is strong (301 focused tests, including 4 that
+spawn a genuine uvicorn P2); the missing evidence is the single end-to-end traversal
+through the production model seam. That requires a controlled stack start (Qdrant,
+local model ports, backend) and is authorized for engineering validation only.
+
+**NOT ESTABLISHED:** whether the production model seam completes a real arm on this
+host. No F2 scientific execution has occurred and none is authorized.
+
+**Pre-existing, unrelated:** `tests/test_f2_freeze.py::TestAtomicPersistence::test_no_partial_files_remain`
+fails on `origin/master` because the root `conftest.py` autouse
+`isolate_prompt_repairer_store` fixture creates `prompt_repairer_store/` inside
+`tmp_path`. Neither that test nor `conftest.py` is modified by F2-OP-INFRA-004.
+
+This entry changes no experiment-state conclusion, no scientific parameter, and no
+authorization. F0 remains frozen, F1 remains closed, no ACTIVE lesson exists, N=2 is
+not authorized, and no candidate, lesson, promotion, or F2 observation was created.

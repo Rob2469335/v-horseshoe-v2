@@ -34,6 +34,12 @@ from runtime_v2.services.f2_replay import (
 )
 from runtime_v2.services.f2_freeze import FreezeVerificationError
 
+# F2-OP-INFRA-004 §2 (D3): explicit, observable delivery-evidence write outcomes.
+# Emitted on P2's stdout as {"type": "f2_evidence_write_outcome", ...} so P1 can
+# distinguish a write that failed from evidence that never existed.
+_F2_EVIDENCE_WRITE_OK = "written"
+_F2_EVIDENCE_WRITE_FAILED = "write_failed"
+
 
 def _f2_replay_required() -> bool:
     """True iff this process is an F2 replay-required execution.
@@ -292,7 +298,16 @@ class AgentServiceV2:
             except Exception as e:
                 log.warning("Failed to record event to EventStore: %s", e)
 
-    _TRAJ_DIR = _Path("data/trajectories")
+    # F2-OP-INFRA-004 §1 (D2): an F2 arm supplies an explicit ABSOLUTE evidence
+    # directory via SWARM_F2_TRAJ_DIR so the P2 writer and the F2 worker reader
+    # resolve to exactly the same directory. The previous value was relative and
+    # therefore resolved against the serving process cwd, which is the repository
+    # root — while the worker read from SWARM_WORKSPACE_ROOT, so the two paths
+    # never met for an isolated workspace.
+    #
+    # When the variable is unset — i.e. every non-F2 execution — this remains
+    # EXACTLY the historical relative default, byte for byte.
+    _TRAJ_DIR = _Path(os.environ.get("SWARM_F2_TRAJ_DIR") or "data/trajectories")
     # Agent Trajectory Interchange Format (Harbor RFC 0001). We emit the
     # v1.4-core *tool-step subset* (StepObject + ToolCallSchema +
     # ObservationSchema) — no images/audio/subagent-embedding — so this is a
@@ -2662,21 +2677,56 @@ class AgentServiceV2:
             # F2 delivery evidence: append a separate JSONL record to the
             # trajectory file. Concurrency-safe: delivery_evidence is a local
             # variable per request (set by the intercepted chunk, not shared).
+            #
+            # F2-OP-INFRA-004 §2 (D3): the outcome is EXPLICIT. Previously a
+            # failure was swallowed by `except Exception: pass`, making a failed
+            # write indistinguishable downstream from evidence that never
+            # existed. On failure we now (a) preserve the exception type and
+            # message, (b) emit a machine-readable outcome line on P2's stdout,
+            # which P1 already captures, so the failure is still observable when
+            # the trajectory write itself is what failed. The stream is never
+            # killed by an evidence-write failure (preserved intent).
             if delivery_evidence:
+                _outcome = _F2_EVIDENCE_WRITE_OK
+                _err_type = ""
+                _err_msg = ""
                 try:
-                    import json as _json_mod
-
                     traj_path = self._TRAJ_DIR / f"{run_id}.jsonl"
                     with open(traj_path, "a", encoding="utf-8") as _f:
                         _f.write(
-                            _json_mod.dumps(
+                            json.dumps(
                                 {"record_type": "delivery_evidence",
  **delivery_evidence}
                             )
                             + "\n"
                         )
-                except Exception:  # noqa: BLE001
-                    pass  # best-effort; evidence write must never kill the stream
+                except Exception as _e:  # noqa: BLE001
+                    _outcome = _F2_EVIDENCE_WRITE_FAILED
+                    _err_type = type(_e).__name__
+                    _err_msg = str(_e)[:500]
+                    log.warning(
+                        "F2 delivery-evidence write failed (outcome=%s, %s: %s); "
+                        "stream continues, but P1 must treat evidence as "
+                        "EVIDENCE_WRITE_FAILED, not EVIDENCE_NOT_FOUND",
+                        _outcome, _err_type, _err_msg,
+                    )
+                finally:
+                    # Always emit the outcome so P1 can classify the write even
+                    # when the trajectory file itself was unwritable.
+                    try:
+                        print(
+                            json.dumps({
+                                "type": "f2_evidence_write_outcome",
+                                "run_id": run_id,
+                                "rollout_id": _current_f2_rollout_id(),
+                                "outcome": _outcome,
+                                "error_type": _err_type,
+                                "error": _err_msg,
+                            }),
+                            flush=True,
+                        )
+                    except Exception:  # noqa: BLE001 - diagnostics only
+                        pass
 
     def _feed_aborted_outcome(
         self, agent_id: str, prompt: str, genome_id: str = ""

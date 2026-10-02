@@ -74,10 +74,172 @@ F2_ENV_VARS = (
     "SWARM_F2_REPO_ROOT",
     "SWARM_F2_ROLLOUT_ID",
     "SWARM_F2_TRAJECTORY_RUN_ID",
+    "SWARM_F2_TRAJ_DIR",         # F2-OP-INFRA-004 §1 (D2): explicit absolute
+                                # delivery-evidence dir; writer and reader must
+                                # resolve to the same directory.
 )
 
 # File the fake-model evidence recorder inside P2 writes to (infra test only).
 FAKE_MODEL_EVIDENCE_FILE = "f2_fake_model_evidence.json"
+
+# F2-OP-INFRA-004 §1 (D2).
+F2_TRAJ_DIR_ENV = "SWARM_F2_TRAJ_DIR"
+
+
+def read_evidence_write_outcomes(stdout_path: str | Path | None) -> list[dict[str, Any]]:
+    """Collect P2's explicit delivery-evidence write outcomes (F2-OP-INFRA-004 §2 / D3).
+
+    ``AgentServiceV2`` emits one ``{"type": "f2_evidence_write_outcome", ...}`` JSON
+    line per delivery on P2's stdout, precisely so the outcome survives even when
+    the trajectory write itself is what failed. P1 already captures that stdout, so
+    no new IPC is introduced. Returns an empty list when the file is unavailable.
+    """
+    if not stdout_path:
+        return []
+    try:
+        raw = Path(stdout_path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    out: list[dict[str, Any]] = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line or "f2_evidence_write_outcome" not in line:
+            continue
+        try:
+            rec = json.loads(line)
+        except (ValueError, TypeError):
+            continue
+        if isinstance(rec, dict) and rec.get("type") == "f2_evidence_write_outcome":
+            out.append(rec)
+    return out
+
+
+def resolve_f2_traj_dir(workspace_root: Path | str) -> Path:
+    """Absolute, deterministic delivery-evidence directory for one execution.
+
+    F2-OP-INFRA-004 §1 (D2). This is ONE directory per execution (each execution
+    owns its workspace), not a per-rollout redesign — per-rollout evidence files
+    remain explicitly out of scope as W6.
+
+    It lives INSIDE the isolated workspace so evidence never lands in the main
+    repository, and it is absolute so it does not depend on P2's cwd.
+    """
+    return Path(workspace_root).resolve() / "data" / "trajectories"
+
+
+
+def load_pool_row(instance_id: str) -> dict[str, Any]:
+    """Read the authoritative curriculum row for ``instance_id`` (read-only).
+
+    F2-OP-INFRA-004 §4 (W4). The curriculum pool is the single source of task
+    truth; nothing here synthesizes or mutates it. Raises when the row is absent
+    so a task can never be executed without declared identity.
+    """
+    pool = Path(__file__).resolve().parent / "curriculum" / "swe_pool.jsonl"
+    for line in pool.read_text("utf-8").splitlines():
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        if row.get("instance_id") == instance_id:
+            return row
+    raise FreezeVerificationError(
+        f"F2 fail-closed: no curriculum pool row for instance_id={instance_id!r}. "
+        "Task identity must come from the declared pool, never be synthesized."
+    )
+
+
+def bind_task_environment(
+    *,
+    instance_id: str,
+    task_id: str,
+    workspace_root: str | Path,
+    repo_root: str | Path,
+    evaluator_dir: str | Path | None = None,
+) -> dict[str, Any]:
+    """Bind one F2 arm execution to the EXISTING task-environment machinery.
+
+    F2-OP-INFRA-004 §4 (W4). This REUSES, and does not reinvent, the F1 task
+    contract from ``qwen_train/run_repair_task.py``:
+
+      * ``_pool_env_meta``            — declared environment (base_image/install)
+      * ``resolve_task_python``        — declared interpreter (fail-closed; never
+                                         falls back to the project interpreter)
+      * ``task_exec_plan``             — install steps + execution prerequisites
+      * ``task_test_argv``             — test command argv
+      * ``_preflight_evaluator_separation`` — evaluator outside the workspace
+      * ``F1_AUTHORIZED_BASE_COMMIT``  — the F1-authorized harness base commit
+
+    Establishes and returns: task_id, instance_id, repo, base_commit,
+    base_image_name, isolated workspace, interpreter, install requirements, test
+    command, and evaluator separation. Fails closed rather than degrading.
+
+    The main repository can never become the task workspace.
+    """
+    from qwen_train import run_repair_task as _rrt
+
+    row = load_pool_row(instance_id)
+    env_meta = _rrt._pool_env_meta(instance_id)
+
+    inst = dict(row)
+    inst.setdefault("install", env_meta.get("install", ""))
+    inst.setdefault("base_image_name", env_meta.get("base_image_name", ""))
+
+    # Declared interpreter — raises rather than falling back to the project one.
+    # ``resolve_task_python`` yields a launcher (e.g. ["py","-3.10"]); argv
+    # construction needs the concrete executable, which is exactly what the
+    # already-established ``_task_python_path`` bridge provides.
+    launcher = _rrt.resolve_task_python(inst)
+    task_py = _rrt._task_python_path(launcher)
+    plan = _rrt.task_exec_plan(inst, task_py)
+
+    workspace = Path(workspace_root).resolve()
+    repo = Path(repo_root).resolve()
+
+    # The main repository must NEVER be the mutable task workspace.
+    if workspace == repo or repo in workspace.parents:
+        raise FreezeVerificationError(
+            f"F2 fail-closed: task workspace {workspace} is inside the main "
+            f"repository {repo}. The main repository must never be the task workspace."
+        )
+
+    test_cmd = str(row.get("test_cmd") or "")
+    if not test_cmd.strip():
+        raise FreezeVerificationError(
+            f"F2 fail-closed: curriculum row {instance_id!r} declares no test_cmd; "
+            "an F2 execution must carry a declared verification command."
+        )
+    test_argv = _rrt.task_test_argv(task_py, test_cmd)
+
+    evaluator_errors: list[str] = []
+    if evaluator_dir is not None:
+        evaluator_errors = _rrt._preflight_evaluator_separation(workspace, Path(evaluator_dir))
+        if evaluator_errors:
+            raise FreezeVerificationError(
+                "F2 fail-closed: evaluator separation violated: "
+                + "; ".join(evaluator_errors)
+            )
+
+    return {
+        "task_id": task_id,
+        "instance_id": instance_id,
+        "repo": str(row.get("repo") or ""),
+        "base_commit": str(row.get("base_commit") or ""),
+        "base_image_name": str(inst.get("base_image_name") or ""),
+        "image_name": str(row.get("image_name") or ""),
+        "harness_base_commit": _rrt.F1_AUTHORIZED_BASE_COMMIT,
+        "workspace_root": str(workspace),
+        "interpreter": list(launcher),
+        "interpreter_str": " ".join(str(p) for p in launcher),
+        "task_python": str(task_py),
+        "install_steps": plan.get("install_steps", []),
+        "install_argv": plan.get("install_argv", []),
+        "execution_prereqs": plan.get("execution_prereqs", []),
+        "test_cmd": test_cmd,
+        "test_argv": list(test_argv),
+        "evaluator_dir": str(Path(evaluator_dir).resolve()) if evaluator_dir else "",
+        "evaluator_separation_ok": not evaluator_errors,
+        "pool_row_found": True,
+    }
 
 
 def build_real_p2_launcher(
@@ -86,25 +248,46 @@ def build_real_p2_launcher(
     workspace_root: str | Path,
     port: int,
     evidence_path: str | Path,
+    fake_model: bool = True,
 ) -> str:
     """Body for a REAL fresh uvicorn backend (`python -c` launcher).
 
     The child process (P2) is the genuine backend: ``swarm_os.app.main`` app is
     imported and served by uvicorn, so ``main.py`` lifespan calls
     ``install_verified_replay_from_env()`` inside P2 and P2's ``_f2_state``
-    becomes authoritative. The ONLY instrumentation is at the model boundary
-    (and a spy on the LIVE renderer); the F2 delivery seam and replay guard that
-    run are the REAL production ones.
+    becomes authoritative. The F2 delivery seam and replay guard that run are the
+    REAL production ones in both modes.
 
-    The fake ``complete_for_tool_decision`` returns a deterministic synthetic
-    tool-decision and records evidence to ``evidence_path``:
-      - PID / process identity in P2
-      - F2_REQUIRED / REPLAY_ACTIVE / delivery artifact inside P2
-      - rollout / trajectory identity
-      - whether the LIVE ``render_active_lessons()`` was (incorrectly) requested
+    ``fake_model=True``  — test mode: replaces ``complete_for_tool_decision`` with
+      a deterministic synthetic response so the seam is provable without a model.
+    ``fake_model=False`` — F2-OP-INFRA-004 §3 (W2) PRODUCTION mode: the model call
+      is NOT replaced. P2 resolves and calls the EXISTING production model path
+      (``stream_runner._call_llm`` → ``get_litellm_model``). No monkeypatch, no new
+      model subsystem, no MCP-manager override.
 
-    NO real model/provider is ever contacted.
+    Both modes keep the LIVE-render spy, because proving the LIVE lesson renderer
+    was never reached is a required fail-closed property, not a test convenience.
     """
+
+    # F2-OP-INFRA-004 §3 (W2): in production mode NOTHING about the model call is
+    # replaced — P2 uses the existing stream_runner._call_llm -> get_litellm_model
+    # path and the real MCP manager. Substituted values are inserted verbatim by
+    # the f-string below, so braces here need no escaping.
+    if fake_model:
+        _fake_patch = (
+            "import runtime_v2.services.tool_executor as _te\n"
+            "_te.get_mcp_manager = _no_mcp_manager\n"
+            "import swarm_os.app.main as _main\n"
+            "_main.get_mcp_manager = _no_mcp_manager\n"
+            "...\n"
+            "_sr.complete_for_tool_decision = _fake_complete\n"
+            "_lc.complete_for_tool_decision = _fake_complete\n"
+        )
+    else:
+        _fake_patch = (
+            "# W2 PRODUCTION: real model call, real MCP manager — nothing patched.\n"
+            "MODE = 'production_model'\n"
+        )
 
     code = f"""
 import os, sys, json, types
@@ -137,12 +320,6 @@ class _NoMcpManager:
 
 async def _no_mcp_manager():
     return _NoMcpManager()
-
-
-import runtime_v2.services.tool_executor as _te
-_te.get_mcp_manager = _no_mcp_manager
-import swarm_os.app.main as _main
-_main.get_mcp_manager = _no_mcp_manager
 
 
 def _write_evidence(**extra):
@@ -191,14 +368,56 @@ try:
 except Exception:
     pass
 
-_sr.complete_for_tool_decision = _fake_complete
-_lc.complete_for_tool_decision = _fake_complete
-
+{_fake_patch}
 from swarm_os.app.main import app
 import uvicorn
 uvicorn.run(app, host="127.0.0.1", port={port}, log_level="info")
 """
     return code
+
+
+def start_real_p2_production_model(
+    *,
+    attempt_id: str,
+    repo_root: str | Path,
+    workspace_root: str | Path,
+    port: int,
+    work_dir: str | Path,
+    manifest_path: str | Path,
+    rollout_id: str,
+    trajectory_run_id: str,
+    evidence_path: str | Path | None = None,
+    startup_timeout: int = 60,
+) -> dict[str, Any]:
+    """F2-OP-INFRA-004 §3 (W2): the PRODUCTION model-facing P2.
+
+    Identical to :func:`start_real_p2_with_fake_model` in every respect that the
+    F2 contract governs — fresh process, F2 replay environment propagated, P2's
+    ``main.py`` lifespan independently installing verified replay, the real
+    delivery seam, the real replay guard, and the LIVE-render spy — with exactly
+    one difference:
+
+        ``complete_for_tool_decision`` is NOT replaced.
+
+    P2 therefore resolves and calls the EXISTING production model path
+    (``stream_runner._call_llm`` → ``get_litellm_model``). No new model subsystem,
+    no model architecture/weight/config change, no MCP-manager override.
+
+    The fake-model entry point is retained unchanged for the existing tests.
+    """
+    return _start_real_p2(
+        attempt_id=attempt_id,
+        repo_root=repo_root,
+        workspace_root=workspace_root,
+        port=port,
+        evidence_path=evidence_path,
+        work_dir=work_dir,
+        manifest_path=manifest_path,
+        rollout_id=rollout_id,
+        trajectory_run_id=trajectory_run_id,
+        startup_timeout=startup_timeout,
+        fake_model=False,
+    )
 
 
 def start_real_p2_with_fake_model(
@@ -213,6 +432,7 @@ def start_real_p2_with_fake_model(
     rollout_id: str,
     trajectory_run_id: str,
     startup_timeout: int = 60,
+    fake_model: bool = True,
 ) -> dict[str, Any]:
     """Start a REAL fresh uvicorn backend (P2) with the F2 replay environment and
     a fake/instrumented model boundary (see ``build_real_p2_launcher``).
@@ -225,6 +445,36 @@ def start_real_p2_with_fake_model(
     Returns a process-identity record (pid, expected_pid, parent_pid,
     command_identity, stdout/stderr paths, and the live Popen for cleanup).
     """
+    return _start_real_p2(
+        attempt_id=attempt_id,
+        repo_root=repo_root,
+        workspace_root=workspace_root,
+        port=port,
+        evidence_path=evidence_path,
+        work_dir=work_dir,
+        manifest_path=manifest_path,
+        rollout_id=rollout_id,
+        trajectory_run_id=trajectory_run_id,
+        startup_timeout=startup_timeout,
+        fake_model=fake_model,
+    )
+
+
+def _start_real_p2(
+    *,
+    attempt_id: str,
+    repo_root: str | Path,
+    workspace_root: str | Path,
+    port: int,
+    evidence_path: str | Path,
+    work_dir: str | Path,
+    manifest_path: str | Path,
+    rollout_id: str,
+    trajectory_run_id: str,
+    startup_timeout: int = 60,
+    fake_model: bool = True,
+) -> dict[str, Any]:
+    """Shared P2 launcher. ``fake_model`` selects the model boundary only."""
     env = os.environ.copy()
     env["SWARM_WORKSPACE_ROOT"] = str(workspace_root)
     env["SWARM_MEMORY_INJECT"] = "0"
@@ -239,6 +489,9 @@ def start_real_p2_with_fake_model(
     env["SWARM_F2_REPO_ROOT"] = str(repo_root)
     env["SWARM_F2_ROLLOUT_ID"] = rollout_id
     env["SWARM_F2_TRAJECTORY_RUN_ID"] = trajectory_run_id
+    # F2-OP-INFRA-004 §1 (D2): publish the explicit absolute evidence directory so
+    # the P2 writer and the F2 worker reader resolve to the SAME directory.
+    env[F2_TRAJ_DIR_ENV] = str(resolve_f2_traj_dir(workspace_root))
 
     work_dir = Path(work_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -250,6 +503,7 @@ def start_real_p2_with_fake_model(
         workspace_root=workspace_root,
         port=port,
         evidence_path=evidence_path,
+        fake_model=fake_model,
     )
 
     stdout_f = open(stdout_path, "w", encoding="utf-8", errors="replace")
@@ -322,6 +576,9 @@ def resolve_serving_pid(port: int) -> int | None:
     machine, the listener may differ from the initially-spawned PID; the
     listener is the process that actually installs replay and reaches the
     delivery seam.
+
+    Returns ``None`` when the owner cannot be determined. ``None`` means
+    UNKNOWN — it never means "the launcher" (see ``_resolve_serving_identity``).
     """
     try:
         import psutil
@@ -332,6 +589,29 @@ def resolve_serving_pid(port: int) -> int | None:
     except Exception:  # noqa: BLE001
         pass
     return None
+
+
+def _resolve_serving_identity(port: int, launcher_pid: Any) -> tuple[int, str]:
+    """Establish the serving-process identity, or fail closed.
+
+    Returns ``(serving_pid, source)``. Raises ``FreezeVerificationError`` when
+    the LISTEN socket owner cannot be resolved.
+
+    The launcher PID is NEVER substituted for the serving PID. This launcher may
+    re-execute itself once on this machine, so relabelling it as the serving
+    process would assert an identity that was never established — F2
+    worker-execution authorization §10 item 5 requires the socket owner, and the
+    §13 fail-closed matrix requires ABORT when execution process identity is
+    unestablished. The launcher identity is recorded separately by the caller.
+    """
+    serving_pid = resolve_serving_pid(port)
+    if serving_pid is None:
+        raise FreezeVerificationError(
+            "F2 fail-closed: could not establish the P2 serving-process identity for "
+            f"port {port} (no LISTEN owner resolved). Launcher pid {launcher_pid!r} is "
+            "recorded separately and is NOT substituted for the serving process."
+        )
+    return serving_pid, "socket_listener"
 
 
 def wait_for_backend_health(port: int, timeout: int = 60) -> bool:
@@ -503,6 +783,12 @@ class F2ExecutionAdapter:
         SWARM_F2_REPO_ROOT, SWARM_F2_ROLLOUT_ID, SWARM_F2_TRAJECTORY_RUN_ID),
         they propagate into P2's environment automatically. P2's ``main.py``
         then calls ``install_verified_replay_from_env()`` and owns ``_f2_state``.
+
+        F2-OP-INFRA-004 §1 (D2): the explicit evidence directory is published on
+        the CHILD environment by ``_start_real_p2`` (``env[F2_TRAJ_DIR_ENV]``).
+        It is deliberately NOT written into this process's ``os.environ`` here:
+        mutating the parent environment would leak across unrelated callers and
+        tests, and the backend inherits env from the caller's copy.
         """
         record, evidence_dir = self.backend_starter(
             attempt_id=f"f2arm_{self.arm}",
@@ -809,7 +1095,10 @@ class F2ExecutionAdapter:
             # seam). On this machine the launcher re-executes itself once, so the
             # listener may be the launcher's child — resolve it from the OS.
             launcher_pid = record.get("pid")
-            serving_pid = resolve_serving_pid(port) or launcher_pid
+            # Process identity is NEVER guessed: unresolved stays unresolved and
+            # fails closed. The launcher may re-exec itself once on this machine,
+            # so it must not be relabelled as the serving process.
+            serving_pid, serving_pid_source = _resolve_serving_identity(port, launcher_pid)
 
             return {
                 "p1_pid": os.getpid(),
@@ -818,6 +1107,7 @@ class F2ExecutionAdapter:
                 "p2_expected_pid": record.get("expected_pid"),
                 "p2_launcher_parent_pid": record.get("parent_pid"),
                 "p2_is_launcher": serving_pid == launcher_pid,
+                "serving_pid_source": serving_pid_source,
                 "process_identity": {
                     k: record[k]
                     for k in (
@@ -844,7 +1134,115 @@ class F2ExecutionAdapter:
                 "work_dir": str(work_dir),
             }
         finally:
+                terminate_backend(record)
+
+    def execute_arm_real(
+        self,
+        *,
+        task_prompt: str,
+        task_id: str,
+        rollout_id: str,
+        trajectory_run_id: str,
+        agent_id: str = "coder",
+        port: int = 8211,
+        work_dir: str | Path | None = None,
+        startup_timeout: int = 60,
+        http_timeout: int = 120,
+    ) -> dict[str, Any]:
+        """F2-OP-INFRA-004 §3 (W2): run one arm through the PRODUCTION model seam.
+
+        This is the authorized production path. Unlike
+        ``prove_real_p2_delivery`` it does NOT replace
+        ``complete_for_tool_decision``: P2 runs the real
+        ``stream_runner._call_llm`` → ``get_litellm_model`` path and the real MCP
+        manager. Everything the F2 contract governs is identical to the
+        proven test path:
+
+        1. the frozen manifest is loaded and independently verified;
+        2. F2 replay must already be required/established, else fail closed;
+        3. a REAL fresh P2 backend is started with the F2 replay environment
+           (including ``SWARM_F2_TRAJ_DIR``);
+        4. backend readiness is gated on ``/health``;
+        5. the task is driven over the EXISTING loopback HTTP/SSE surface
+           ``POST /agents/{agent_id}/step/stream``;
+        6. the serving-process identity is resolved from the LISTEN socket owner
+           and fails closed when it cannot be established;
+        7. P2's explicit evidence-write outcomes are collected;
+        8. the backend is always terminated.
+
+        Returns structured execution evidence for the F2 worker.
+        """
+        import tempfile
+
+        artifact = self._load_verified_manifest()
+        self._require_replay_established(artifact)
+
+        if work_dir is None:
+            work_dir = Path(tempfile.mkdtemp(prefix="f2_real_p2_"))
+        work_dir = Path(work_dir)
+        work_dir.mkdir(parents=True, exist_ok=True)
+
+        record: dict[str, Any] | None = None
+        try:
+            record = start_real_p2_production_model(
+                attempt_id=f"f2arm_{self.arm}_{port}",
+                repo_root=self.repo_root,
+                workspace_root=self.workspace_root,
+                port=port,
+                evidence_path=work_dir / FAKE_MODEL_EVIDENCE_FILE,
+                work_dir=work_dir,
+                manifest_path=self.manifest_path,
+                rollout_id=rollout_id,
+                trajectory_run_id=trajectory_run_id,
+                startup_timeout=startup_timeout,
+            )
+
+            healthy = wait_for_backend_health(port, startup_timeout)
+            http: dict[str, Any] = {}
+            if healthy:
+                http = post_task_stream(port, agent_id, task_prompt, http_timeout)
+
+            launcher_pid = record.get("pid")
+            # D4: never substitute the launcher for an unresolved serving PID.
+            serving_pid, serving_pid_source = _resolve_serving_identity(port, launcher_pid)
+
+            write_outcomes = read_evidence_write_outcomes(record.get("stdout_path"))
+            evidence_failures = [
+                o for o in write_outcomes if o.get("outcome") == "write_failed"
+            ]
+
+            return {
+                "mode": "production_model",
+                "model_monkeypatched": False,
+                "p1_pid": os.getpid(),
+                "p2_pid": serving_pid,
+                "p2_launcher_pid": launcher_pid,
+                "serving_pid_source": serving_pid_source,
+                "p2_is_launcher": serving_pid == launcher_pid,
+                "backend_healthy": healthy,
+                "http": http,
+                "arm": self.arm,
+                "task_id": task_id,
+                "manifest_path": str(self.manifest_path),
+                "manifest_content_address": artifact.content_address,
+                "manifest_verified": True,
+                "replay_required_env": self.replay_required(),
+                "rollout_id": rollout_id,
+                "trajectory_run_id": trajectory_run_id,
+                "traj_dir": os.environ.get(F2_TRAJ_DIR_ENV, ""),
+                "evidence_write_outcomes": write_outcomes,
+                "evidence_write_failures": evidence_failures,
+                "process_identity": {
+                    k: record[k]
+                    for k in ("role", "pid", "expected_pid", "parent_pid",
+                              "command_identity", "stdout_path", "stderr_path")
+                    if k in record
+                },
+                "work_dir": str(work_dir),
+            }
+        finally:
             terminate_backend(record)
+
 
     @staticmethod
     def _backend_dict(backend: Any) -> dict[str, Any]:

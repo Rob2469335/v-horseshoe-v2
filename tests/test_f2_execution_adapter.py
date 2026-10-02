@@ -332,3 +332,69 @@ class TestFreshProcessBoundary:
         payload = build_execution_boundary_payload(boundary)
         assert payload["adapter"]["manifest_content_address"]
         assert payload["backend"]["health_gate_passed"] is True
+
+class TestServingProcessIdentityNeverGuessed:
+    """D4: the launcher PID is never relabelled as the serving PID.
+
+    ``resolve_serving_pid`` returns ``None`` when the LISTEN socket owner cannot
+    be determined. That means UNKNOWN. Substituting the launcher PID would
+    assert an identity that was never established (worker-execution authorization
+    §10 item 5 / §13 fail-closed matrix).
+    """
+
+    def test_successful_resolution_returns_socket_owner(self, monkeypatch):
+        from qwen_train import f2_execution_adapter as mod
+
+        monkeypatch.setattr(mod, "resolve_serving_pid", lambda port: 31337)
+        serving, source = mod._resolve_serving_identity(8211, launcher_pid=4242)
+        assert serving == 31337
+        assert source == "socket_listener"
+
+    def test_resolution_failure_raises_and_never_returns_launcher(self, monkeypatch):
+        from qwen_train import f2_execution_adapter as mod
+
+        monkeypatch.setattr(mod, "resolve_serving_pid", lambda port: None)
+        with pytest.raises(FreezeVerificationError, match="could not establish"):
+            mod._resolve_serving_identity(8211, launcher_pid=4242)
+
+    def test_launcher_pid_never_becomes_serving_pid(self, monkeypatch):
+        """The exact old defect: ``resolve(...) or launcher_pid``."""
+        from qwen_train import f2_execution_adapter as mod
+
+        monkeypatch.setattr(mod, "resolve_serving_pid", lambda port: None)
+        raised = False
+        try:
+            serving, _src = mod._resolve_serving_identity(8211, launcher_pid=4242)
+        except FreezeVerificationError:
+            raised = True
+            serving = None
+        assert raised is True
+        assert serving != 4242
+
+    def test_real_resolver_returns_none_for_closed_port(self):
+        """No listener -> None (unknown), not a guess."""
+        from qwen_train.f2_execution_adapter import resolve_serving_pid
+
+        assert resolve_serving_pid(65533) is None
+
+    def test_old_fallback_pattern_absent_from_source(self):
+        """Static guard: the dangerous expression must not reappear."""
+        src = HELPER.read_text(encoding="utf-8")
+        assert "resolve_serving_pid(port) or launcher_pid" not in src
+        assert "or launcher_pid" not in src
+
+    def test_launcher_identity_recorded_separately(self, monkeypatch):
+        """launcher_pid stays in its own field; serving_pid is independent."""
+        from qwen_train import f2_execution_adapter as mod
+
+        monkeypatch.setattr(mod, "resolve_serving_pid", lambda port: 31337)
+        serving, _src = mod._resolve_serving_identity(8211, launcher_pid=4242)
+        payload = {
+            "p2_pid": serving,
+            "p2_launcher_pid": 4242,
+            "serving_pid_source": _src,
+        }
+        assert payload["p2_pid"] == 31337
+        assert payload["p2_launcher_pid"] == 4242
+        assert payload["p2_pid"] != payload["p2_launcher_pid"]
+        assert payload["serving_pid_source"] == "socket_listener"

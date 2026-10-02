@@ -150,6 +150,11 @@ def run_f2_arm(
     trajectory_run_id: str | None = None,
     system_prompt: str = "",
     timeout_s: int = 60,
+    execute: bool = False,
+    task_prompt: str = "",
+    instance_id: str = "",
+    agent_id: str = "coder",
+    port: int = 8211,
 ) -> ArmResult:
     """Run a single F2 arm in a fresh child process.
 
@@ -212,6 +217,20 @@ def run_f2_arm(
     cmd = [sys.executable, "-u", str(worker_script), "--manifest", str(manifest_path), "--arm", arm]
     if system_prompt:
         cmd += ["--system-prompt", system_prompt]
+    # F2-OP-INFRA-004 §5 (production wiring): the orchestrator is the tracked
+    # production caller, so it now carries the STRUCTURED execution seam. Before
+    # this, the worker only executed when F2_ARM_EXEC_CMD was set, and nothing in
+    # the repository ever set it, so every production arm stopped at "delegated".
+    if execute:
+        cmd += [
+            "--execute",
+            "--task-id", task_id or instance_id or "engineering-rehearsal",
+            "--instance-id", instance_id,
+            "--agent-id", agent_id,
+            "--port", str(port),
+        ]
+        if task_prompt:
+            cmd += ["--task-prompt", task_prompt]
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,

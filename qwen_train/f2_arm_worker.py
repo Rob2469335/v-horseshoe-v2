@@ -34,6 +34,7 @@ import json
 import os
 import sys
 import time
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
@@ -55,9 +56,63 @@ from runtime_v2.services.f2_replay import (  # noqa: E402
     install_replay_state,
 )
 
+# F2-OP-INFRA-004 §1 (D2): the explicit absolute directory an F2 arm uses for
+# delivery-evidence transport. Must match the name the adapter propagates and
+# that ``AgentServiceV2._TRAJ_DIR`` reads.
+F2_TRAJ_DIR_ENV = "SWARM_F2_TRAJ_DIR"
+
+# F2-OP-INFRA-004 §2 (D3): the delivery-evidence write outcomes the adapter
+# collected from P2 for THIS execution. Set by the adapter wiring before
+# verification; consumed only to classify a missing-evidence failure correctly.
+_ADAPTER_WRITE_OUTCOMES: ContextVar[list[dict[str, Any]]] = ContextVar(
+    "f2_adapter_write_outcomes", default=[]
+)
+
 
 def _compute_final_prompt_hash(system_prompt: str, delivered: str) -> str:
     return hashlib.sha256((system_prompt + delivered).encode("utf-8")).hexdigest()
+
+
+def _read_evidence_write_outcome(
+    write_outcomes: list[dict[str, Any]] | None,
+) -> dict[str, Any] | None:
+    """Return the first FAILED evidence-write outcome for this execution, else None.
+
+    F2-OP-INFRA-004 §2 (D3). The adapter collects P2's explicit
+    ``f2_evidence_write_outcome`` lines; a ``write_failed`` outcome means the
+    evidence was ATTEMPTED and could not be persisted, which is categorically
+    different from evidence that never existed.
+    """
+    for rec in write_outcomes or []:
+        if isinstance(rec, dict) and rec.get("outcome") == "write_failed":
+            return rec
+    return None
+
+
+def _resolve_traj_dir(workspace_root: Path) -> Path:
+    """Resolve the ONE directory P2 writes delivery evidence to.
+
+    F2-OP-INFRA-004 §1 (D2). For an F2 arm the adapter supplies an explicit
+    absolute directory (``SWARM_F2_TRAJ_DIR``) and BOTH the P2 writer
+    (``AgentServiceV2._TRAJ_DIR``) and this reader resolve to it. Exactly one
+    directory is ever consulted — this deliberately does NOT search candidates,
+    because selecting among several directories would reintroduce the ambiguity
+    that made the join unprovable.
+
+    When the variable is unset the historical ``<workspace_root>/data/trajectories``
+    derivation is preserved (used by non-F2 paths and unit tests).
+    """
+    override = os.environ.get(F2_TRAJ_DIR_ENV, "").strip()
+    if override:
+        resolved = Path(override)
+        if not resolved.is_absolute():
+            raise FreezeVerificationError(
+                f"F2 fail-closed: {F2_TRAJ_DIR_ENV} must be an absolute path, got "
+                f"{override!r}. The P2 evidence writer and the F2 worker reader must "
+                "resolve to exactly one deterministic directory."
+            )
+        return resolved
+    return Path(workspace_root) / "data" / "trajectories"
 
 
 def _read_p2_delivery_evidence(
@@ -90,7 +145,7 @@ def _read_p2_delivery_evidence(
     if not expected:
         return None
 
-    traj_dir = workspace_root / "data" / "trajectories"
+    traj_dir = _resolve_traj_dir(workspace_root)
     if not traj_dir.is_dir():
         return None
     traj_files = sorted(
@@ -140,17 +195,66 @@ def _arm_report(state: dict[str, Any]) -> str:
     return json.dumps(state, sort_keys=True, separators=(",", ":"))
 
 
+def _verify_p2_evidence_binding(p2_evidence: dict[str, Any], artifact: Any) -> str:
+    """Prove P2's evidence was produced under THIS F2 manifest/arm.
+
+    Returns the model/agent identity P2 reported (e.g. ``"coder"``).
+
+    Why the manifest and not the ``arm`` string: P2's evidence record carries the
+    MODEL/AGENT identity in a field named ``arm`` — see
+    ``runtime_v2/services/f2_replay.record_f2_delivery_evidence`` — which is NOT
+    the Experiment-J F2 arm (``T``/``X``/``C0``). Comparing those two strings
+    rejected every real execution. The authoritative F2 arm binding is the frozen
+    manifest the evidence was produced under (the arm is a manifest field), so the
+    content address is verified instead. This is strictly stronger than the
+    previous equality check: it also rejects evidence produced under any other
+    manifest, and it never treats agent identity as arm identity.
+
+    Fail-closed: missing or mismatched manifest binding raises.
+    """
+    p2_agent_id = p2_evidence.get("arm")
+    p2_manifest_content_address = p2_evidence.get("manifest_content_address")
+    if not p2_manifest_content_address:
+        raise RuntimeError(
+            "F2 fail-closed: P2 delivery evidence carries no manifest_content_address "
+            "and therefore cannot be bound to an F2 arm. Requested "
+            f"content_address={artifact.content_address!r} (arm={artifact.arm!r})."
+        )
+    if p2_manifest_content_address != artifact.content_address:
+        raise RuntimeError(
+            "F2 fail-closed: P2 delivery evidence is bound to a different F2 "
+            "manifest/arm: evidence manifest_content_address="
+            f"{p2_manifest_content_address!r} != requested "
+            f"{artifact.content_address!r} (requested arm={artifact.arm!r})."
+        )
+    return p2_agent_id if isinstance(p2_agent_id, str) else ""
+
+
 def run_worker(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="F2 fresh arm worker")
     parser.add_argument("--manifest", required=True, help="Path to the frozen F2 manifest")
     parser.add_argument("--arm", required=True, choices=("T", "X", "C0"), help="Requested arm")
     parser.add_argument("--system-prompt", default="", help="System prompt prefix for final_prompt_hash")
+    # F2-OP-INFRA-004 §5 (production wiring): the STRUCTURED execution seam.
+    # This replaces the F2_ARM_EXEC_CMD environment variable, which no tracked
+    # production caller ever set, so the production path always terminated at
+    # "delegated". Execution is now an explicit argument carried by the caller.
+    parser.add_argument(
+        "--execute", action="store_true",
+        help="Execute this arm through the F2 execution adapter (production model seam)",
+    )
+    parser.add_argument("--task-prompt", default="", help="Task prompt driven over loopback HTTP/SSE")
+    parser.add_argument("--task-id", default="", help="Task identity for this execution")
+    parser.add_argument("--instance-id", default="", help="Curriculum instance_id (task provenance)")
+    parser.add_argument("--agent-id", default="coder", help="Agent identity (NOT the F2 arm)")
+    parser.add_argument("--port", type=int, default=8211, help="Loopback port for fresh P2")
     args = parser.parse_args(argv)
 
     manifest_path = Path(args.manifest)
     rollout_id = os.environ.get("SWARM_F2_ROLLOUT_ID", "unknown-rollout")
     trajectory_run_id = os.environ.get("SWARM_F2_TRAJECTORY_RUN_ID", "")
     exec_cmd = os.environ.get("F2_ARM_EXEC_CMD", "")
+    structured_execute = bool(args.execute)
 
     exec_start = time.time()
     process_identity = {
@@ -179,9 +283,57 @@ def run_worker(argv: list[str] | None = None) -> int:
         final_prompt_hash = _compute_final_prompt_hash(args.system_prompt, delivered_actual)
         delivery_timestamp = time.time()
 
-        # -- execution seam (bounded; see module docstring) --
+        # -- execution seam (F2-OP-INFRA-004 §5) --
         execution_result: dict[str, Any]
-        if exec_cmd:
+        adapter_evidence: dict[str, Any] | None = None
+        if structured_execute:
+            # Production path: invoke the F2 execution adapter directly and take
+            # its structured evidence. No shell string, no unset env var.
+            from qwen_train.f2_execution_adapter import (  # noqa: PLC0415
+                F2ExecutionAdapter,
+                bind_task_environment,
+                resolve_f2_traj_dir,
+            )
+
+            workspace_root = Path(
+                os.environ.get("SWARM_WORKSPACE_ROOT", str(_HERE.parent))
+            ).resolve()
+            os.environ[F2_TRAJ_DIR_ENV] = str(resolve_f2_traj_dir(workspace_root))
+
+            task_binding: dict[str, Any] = {}
+            if args.instance_id:
+                task_binding = bind_task_environment(
+                    instance_id=args.instance_id,
+                    task_id=args.task_id or args.instance_id,
+                    workspace_root=workspace_root,
+                    repo_root=os.environ.get("SWARM_F2_REPO_ROOT", str(_HERE.parent)),
+                )
+
+            adapter = F2ExecutionAdapter(
+                arm=artifact.arm,
+                manifest_path=manifest_path,
+                repo_root=os.environ.get("SWARM_F2_REPO_ROOT", str(_HERE.parent)),
+                workspace_root=workspace_root,
+                port=args.port,
+            )
+            adapter_evidence = adapter.execute_arm_real(
+                task_prompt=args.task_prompt,
+                task_id=args.task_id or (task_binding.get("instance_id") or ""),
+                rollout_id=rollout_id,
+                trajectory_run_id=trajectory_run_id,
+                agent_id=args.agent_id,
+                port=args.port,
+            )
+            execution_result = {
+                "delegated": False,
+                "mode": adapter_evidence.get("mode"),
+                "p2_pid": adapter_evidence.get("p2_pid"),
+                "p2_launcher_pid": adapter_evidence.get("p2_launcher_pid"),
+                "serving_pid_source": adapter_evidence.get("serving_pid_source"),
+                "backend_healthy": adapter_evidence.get("backend_healthy"),
+                "task_binding": task_binding,
+            }
+        elif exec_cmd:
             import subprocess
 
             proc = subprocess.run(exec_cmd, shell=True, capture_output=True, text=True, timeout=30)
@@ -211,21 +363,37 @@ def run_worker(argv: list[str] | None = None) -> int:
         # it back and uses P2's values in the receipt.
         workspace_root = Path(os.environ.get("SWARM_WORKSPACE_ROOT", str(_HERE.parent)))
         p2_evidence: dict[str, Any] | None = None
-        if exec_cmd:
+        p2_agent_id: str = ""
+        if adapter_evidence is not None:
+            # Make P2's explicit write outcomes available for failure
+            # classification (D3) before any evidence lookup.
+            _ADAPTER_WRITE_OUTCOMES.set(list(adapter_evidence.get("evidence_write_outcomes") or []))
+        if structured_execute or exec_cmd:
             p2_evidence = _read_p2_delivery_evidence(workspace_root, rollout_id)
             if p2_evidence is None:
+                # F2-OP-INFRA-004 §2 (D3): a FAILED write is not the same as
+                # evidence that never existed. P2 emits an explicit
+                # f2_evidence_write_outcome line on its stdout (captured by the
+                # adapter); if one of those reports a failure for THIS rollout we
+                # must say so rather than claiming the evidence was absent.
+                wf = _read_evidence_write_outcome(_ADAPTER_WRITE_OUTCOMES.get())
+                if wf is not None:
+                    raise RuntimeError(
+                        "F2 fail-closed: EVIDENCE_WRITE_FAILED — P2 reported that "
+                        f"persisting delivery evidence failed for rollout_id="
+                        f"{rollout_id!r} ({wf.get('error_type')}: "
+                        f"{wf.get('error')}). This is NOT missing evidence and must "
+                        "not be reported as EVIDENCE_NOT_FOUND."
+                    )
                 raise RuntimeError(
-                    "F2 fail-closed: no unambiguous P2 delivery evidence bound to "
-                    f"rollout_id={rollout_id!r} in the trajectory store. An F2 arm "
-                    "with real execution MUST receive P2-produced delivery evidence "
-                    "for its own rollout; missing evidence, another rollout's "
-                    "evidence, or conflicting duplicates are not a valid receipt."
+                    "F2 fail-closed: EVIDENCE_NOT_FOUND — no unambiguous P2 delivery "
+                    f"evidence bound to rollout_id={rollout_id!r} in the trajectory "
+                    "store, and P2 reported no write failure. An F2 arm with real "
+                    "execution MUST receive P2-produced delivery evidence for its own "
+                    "rollout; missing evidence, another rollout's evidence, or "
+                    "conflicting duplicates are not a valid receipt."
                 )
-            if p2_evidence.get("arm") not in (None, artifact.arm):
-                raise RuntimeError(
-                    f"F2 fail-closed: P2 evidence arm={p2_evidence.get('arm')!r} "
-                    f"does not match manifest arm={artifact.arm!r}"
-                )
+            p2_agent_id = _verify_p2_evidence_binding(p2_evidence, artifact)
 
         # Use P2-produced values as authoritative; keep P1 baseline for comparison
         if p2_evidence:
@@ -278,6 +446,9 @@ def run_worker(argv: list[str] | None = None) -> int:
                 "source": evidence_source,
                 "serving_pid": p2_serving_pid,
                 "serving_start_time": p2_serving_start_time,
+                # Model/agent identity reported by P2 (e.g. "coder"). Distinct
+                # from the F2 arm, which is the manifest field verified above.
+                "agent_identity": p2_agent_id,
                 "manifest_treatment_set_hash": p2_evidence.get("manifest_treatment_set_hash", "") if p2_evidence else "",
                 "manifest_content_address": p2_evidence.get("manifest_content_address", "") if p2_evidence else "",
             },
