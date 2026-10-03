@@ -1315,7 +1315,22 @@ authorization. The learning event itself remains NOT executed and NOT authorized
 | NOT READY tasks are skipped, not repaired | **Decision.** A task whose FAIL_TO_PASS does not fail with an assertion error is not run. One task's failure never blocks another task's classification. | `PROVEN IN CURRENT REVISION` |
 | `xknx__xknx-470` is a fallback **only** when fewer than 2 tasks are READY | **Decision, and it fired.** READY_COUNT was 1, so `xknx__xknx-470` was provisioned and probed as the authorized fallback. | `PROVEN IN CURRENT REVISION` |
 
-### D-10. Readiness result — this is a blocking precondition
+### D-10. Readiness result — **SUPERSEDED 2026-10-03, THIS ENTRY IS NOT AUTHORITY**
+
+> **RETRACTED.** The `AssertionError → READY` rule recorded below had no
+> authoritative origin: it appears in no frozen or operational document, no
+> evaluator code path, and `git log --all -S 'AssertionError' -- docs/` returns
+> only commit `1be4e955` (this session). It contradicted the repository's own
+> `docs/F1_TASK_ENVIRONMENT_INVENTORY.md:35` (a `werkzeug.exceptions` failure was
+> already judged a valid, unsolved task), the repository's evaluator, and the
+> SWE-bench grader. It is withdrawn, not refined.
+>
+> **Adopted definition and designated population:**
+> `docs/EXPERIMENT_J_TASK_READINESS_CONTRACT.md` (readiness R1–R8; five
+> designated tasks; assertion-error rule retracted). That contract governs.
+>
+> The table below is retained only as a record of what was measured. Its verdicts
+> are **historical and superseded**. All five tasks satisfy the adopted R1–R4.
 
 Classification rule applied: **READY** only when the FAIL_TO_PASS tests fail with
 **assertion errors**. Measured on a scratch COPY of each task repo outside this
