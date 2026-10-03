@@ -39,6 +39,7 @@ from swarm_os.services.lesson_manager import (
     register_eval_context,
 )
 from swarm_os.lib.atomic_io import atomic_write_text
+from swarm_os.services.lesson_synthesis import SynthesisAttestation
 # Inference topologies (LOCAL = local llama.exe on :8079; RUNPOD = SSH tunnel
 # when the router is pinned). Defined in experiment_model_identity so the
 # preregistered identity and the topology vocabulary live together.
@@ -280,6 +281,18 @@ _CONDITION_KEYWORDS = (
 def _derive_learner_artifact(cand: dict) -> str:
     """Deterministically derive the learner-facing artifact from candidate state.
 
+    **Validated-synthesis precedence (2026-10-03).** When a candidate carries an
+    independently validated synthesis attestation, its principle IS the artifact.
+    This is a pure function of candidate state, so the text delivered during
+    ``evaluate_candidate`` and the text persisted by ``promote`` are byte
+    identical -- otherwise the evaluator would judge one string while a different
+    one became ACTIVE.
+
+    The ``"<condition>: <action>"`` labelled form below is retained for
+    candidates with no attestation. Those candidates cannot reach PROMOTABLE (the
+    synthesis prerequisite in ``promote`` rejects them), so the fallback is
+    reachable only for non-promoted candidates and for direct unit tests.
+
     Governance v2 representation boundary: ``trigger`` remains the full
     diagnostic/provenance and ``action`` remains the behavioral hypothesis —
     both stay in canonical state untouched. The artifact delivered at the
@@ -292,6 +305,14 @@ def _derive_learner_artifact(cand: dict) -> str:
     artifact is returned unchanged so promotion rejects it as ``token_limit``.
     Fail-safe: any unexpected error returns the action.
     """
+    # Precedence 1: an independently validated principle.
+    try:
+        att = SynthesisAttestation.from_dict((cand or {}).get("synthesis"))
+        if att is not None and att.validator_passed and att.principle_text.strip():
+            return att.principle_text
+    except Exception:  # noqa: BLE001 - never let provenance handling break delivery
+        pass
+
     try:
         trigger = str(cand["trigger"])
         action = str(cand["action"])
@@ -1047,6 +1068,45 @@ class PromptRepairer:
         )
         return True
 
+    def attach_synthesis(self, candidate_id: str, attestation: SynthesisAttestation) -> str:
+        """Attach an independently validated synthesis to a candidate.
+
+        Called by the learning pipeline once Stages A-D have run. Fails closed:
+        only a structurally valid attestation whose independent validator passed
+        is stored. The attestation becomes part of canonical candidate state, so
+        ``_hash_candidate`` binds it and any later mutation invalidates the
+        evaluation receipt.
+        """
+        if candidate_id not in self._candidates:
+            return "not_found"
+        if attestation is None or not isinstance(attestation, SynthesisAttestation):
+            return "rejected: invalid_attestation"
+        if not attestation.validator_passed:
+            return "rejected: validator_did_not_pass"
+        if not attestation.principle_text.strip():
+            return "rejected: empty_principle"
+        # Budget and safety are enforced here as well, so a hand-built
+        # attestation cannot introduce an over-budget or unsafe rule. Stage B
+        # already applies both, and `promote`'s token/safety gates remain as
+        # defense in depth; this closes the attach path.
+        if estimate_tokens(attestation.principle_text) > MAX_RULE_TOKENS:
+            return "rejected: principle_exceeds_token_ceiling"
+        if not is_safe_lesson(attestation.principle_text):
+            return "rejected: principle_failed_safety_membrane"
+        cand = self._candidates[candidate_id]
+        if cand.get("status") in (CandidateState.ACTIVE.value, CandidateState.PROMOTABLE.value):
+            # Re-attesting after evaluation would decouple the evaluated text
+            # from the promoted text.
+            return "rejected: already_evaluated"
+        cand["synthesis"] = attestation.to_dict()
+        self._audit("SYNTHESIS_ATTACHED", {
+            "candidate_id": candidate_id,
+            "validator_id": attestation.validator_id,
+            "feature_codes": list(attestation.feature_codes),
+        })
+        self._save_candidates()
+        return "synthesis_attached"
+
     async def evaluate_and_promote_eligible(self) -> dict:
         """Bounded orchestration seam (the missing 'learning tick').
 
@@ -1138,9 +1198,15 @@ class PromptRepairer:
             "action": str(cand.get("action", "")),
             "evidence_runs": norm,
             "evidence_tasks": [str(t) for t in cand.get("evidence_tasks", [])],
-            "activation_scope": str(cand.get("activation_scope", cand.get("component", ""))),
-            "governance_version": int(cand.get("governance_version", GOVERNANCE_VERSION)),
-        }
+"activation_scope": str(cand.get("activation_scope", cand.get("component", ""))),
+               "governance_version": int(cand.get("governance_version", GOVERNANCE_VERSION)),
+               # Bind the lesson-synthesis attestation (2026-10-03). Without this
+               # the delivered rule is NOT covered by the evaluation receipt:
+               # synthesis could be attached or swapped after evaluation and the
+               # text that became ACTIVE would differ from the text the evaluator
+               # judged, with the receipt still verifying.
+               "synthesis": cand.get("synthesis"),
+           }
         return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
     def _hash_candidate(self, cand: dict) -> str:
@@ -1441,6 +1507,40 @@ class PromptRepairer:
         if not eval_res.get("pass"):
             self._change_state(cand, CandidateState.REJECTED, "missing explicit pass in eval_result")
             return "rejected: missing_evaluation"
+
+        # --- Lesson-synthesis prerequisite (additional gate, 2026-10-03) -------
+        # ADDED, not substituted: every gate below and above this point is
+        # unchanged, and the receipt/HMAC authority remains strictly downstream.
+        #
+        # Rationale: the worker-facing rule is `_derive_learner_artifact(cand)`,
+        # which for the evaluation-bridge path could only ever be one of two
+        # canned strings. Such a rule passes every existing gate (safe, within
+        # budget, non-contradictory) while carrying no transferable knowledge, so
+        # without this prerequisite the pipeline can lawfully promote a
+        # tautology. Requiring an independently validated synthesis makes that
+        # outcome unrepresentable.
+        #
+        # Fail closed: a candidate with no attestation, a malformed attestation,
+        # a failed validator verdict, or an empty principle is rejected here.
+        attestation = SynthesisAttestation.from_dict(cand.get("synthesis"))
+        if attestation is None:
+            self._change_state(
+                cand, CandidateState.REJECTED, "missing or invalid lesson synthesis attestation"
+            )
+            return "rejected: no_validated_synthesis"
+        if not attestation.validator_passed:
+            self._change_state(
+                cand, CandidateState.REJECTED,
+                f"lesson synthesis failed independent validation: {attestation.rationale}",
+            )
+            return "rejected: synthesis_quality_failed"
+        # The delivered rule must BE the validated principle. Without this a
+        # candidate could carry a valid attestation while `action` — which is
+        # what `_derive_learner_artifact` actually delivers — says something
+        # else entirely.
+        if not attestation.principle_text.strip():
+            self._change_state(cand, CandidateState.REJECTED, "empty validated principle")
+            return "rejected: empty_principle"
 
         # Verify the TRUSTED receipt: signature + evaluator identity + binding
         # to the CURRENT complete candidate state. A forged/missing/unsigned

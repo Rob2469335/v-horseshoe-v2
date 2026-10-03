@@ -10,6 +10,7 @@ governance invariant are unchanged.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -20,10 +21,37 @@ from swarm_os.services.prompt_repairer import (
     _derive_learner_artifact,
     CandidateState,
     PromptRepairer,
+    EVALUATOR_ID,
+    EVALUATOR_VERSION,
+    GOVERNANCE_VERSION,
 )
 from swarm_os.services.lesson_manager import ActiveLesson, estimate_tokens
+from swarm_os.services.lesson_synthesis import SynthesisAttestation
 
 REPO = Path(__file__).resolve().parents[1]
+
+# A worker-facing principle that is evidence-grounded, transferable and free of
+# source-task identity. Used wherever a test needs a candidate that satisfies the
+# lesson-synthesis prerequisite added to `promote()` on 2026-10-03. Tests that use
+# it still assert exactly what they asserted before; they simply now also supply
+# the validated synthesis the strengthened contract requires.
+VALID_PRINCIPLE = (
+    "Before modifying a dependency-facing call, verify the currently supported "
+    "argument contract and update every caller to match the observed behaviour."
+)
+
+
+def valid_synthesis(text: str = VALID_PRINCIPLE) -> dict:
+    """A minimal independently validated synthesis attestation."""
+    return SynthesisAttestation(
+        synthesis_version="ej-lesson-synthesis/1",
+        principle_text=text,
+        feature_codes=("edit_without_effect",),
+        mechanism="test-seeded mechanism",
+        evidence_ref="rollout:test;task:test",
+        validator_id="ej-independent-lesson-validator/1",
+        validator_passed=True,
+    ).to_dict()
 
 # Real static/bridge trigger shapes (copied from the call sites).
 TRIG_FORCED_SYNTH = "agent repeated an exploration cycle; forced to synthesize."
@@ -81,13 +109,38 @@ def repairer(tmp_path, monkeypatch):
     return repairer
 
 
-def _seed_candidate(r: PromptRepairer, trigger: str, action: str) -> str:
-    """3 independent evidence runs across 2 tasks -> CANDIDATE state."""
+def _negate(rule: str) -> str:
+    """The same rule with its leading directive inverted."""
+    return re.sub(r"^Before\b", "Never", rule, count=1)
+
+
+def _seed_oversized_attestation(text: str) -> SynthesisAttestation:
+    """An attestation whose principle is over the per-rule token ceiling."""
+    return SynthesisAttestation.from_dict(valid_synthesis(text))
+
+
+def _seed_candidate(
+    r: PromptRepairer, trigger: str, action: str, *, synthesis: bool = True
+) -> str:
+    """3 independent evidence runs across 2 tasks -> CANDIDATE state.
+
+    ``synthesis=False`` seeds a candidate WITHOUT a validated synthesis, which is
+    how the legacy ``trigger``/``action`` derivation path is exercised. Such a
+    candidate cannot reach promotion (the synthesis prerequisite is fail-closed),
+    so it is only used by tests of the fallback path itself.
+    """
     r.process_failure("run1", "coder", trigger, action, task_id="task_twine", rollout_id="roll_1")
     r.process_failure("run2", "coder", trigger, action, task_id="task_twine", rollout_id="roll_2")
     r.process_failure("run3", "coder", trigger, action, task_id="task_click", rollout_id="roll_3")
     cands = [c for c in r._candidates.values() if c["trigger"] == trigger]
     assert len(cands) == 1
+    # The lesson-synthesis prerequisite in `promote()` is fail-closed, so a
+    # candidate that is meant to reach promotion must carry a validated
+    # attestation. Attaching it here keeps every downstream test asserting the
+    # behaviour it was written for (receipts, rollback, contradiction, token
+    # gates) rather than the new prerequisite.
+    if synthesis:
+        r.attach_synthesis(cands[0]["id"], SynthesisAttestation.from_dict(valid_synthesis()))
     return cands[0]["id"]
 
 
@@ -192,7 +245,12 @@ class TestThreeSiteIdentity:
         cid = _seed_candidate(r, TRIG_NO_EDIT, ACT_NO_EDIT)
         cand = r._candidates[cid]
         expected = _derive_learner_artifact(cand)
-        assert expected.startswith("no-edit: ")
+        # Since 2026-10-03 the delivered artifact is the independently validated
+        # principle when one is attached, so it is the principle rather than a
+        # "no-edit: " label. This test's subject is IDENTITY across the three
+        # construction sites, which is what must hold for the evaluator and the
+        # promoted lesson to be the same rule.
+        assert expected == VALID_PRINCIPLE
 
         # --- Site 2: register_eval_context inside evaluate_candidate ---
         import swarm_os.services.prompt_repairer as pr_mod
@@ -238,6 +296,12 @@ class TestThreeSiteIdentity:
             "trigger": cand["trigger"],
             "action": cand["action"],
             "task_id": "task_twine",
+            # Mirror production: `evaluate_candidate` passes the FULL candidate
+            # to the evaluator, so the synthesis attestation is present there.
+            # Omitting it here would make the evaluator derive a different
+            # artifact from the one promotion derives, which is precisely the
+            # divergence this test exists to prevent.
+            "synthesis": cand.get("synthesis"),
         }
         result = await evaluator(fresh)
         assert result["pass"] is True
@@ -282,6 +346,19 @@ class TestOverflowFallback:
 class TestActionOverflowGate:
     @pytest.mark.asyncio
     async def test_oversized_action_returned_unchanged_and_gate_rejects(self, repairer):
+        """The token budget is enforced at attach AND still guards promotion.
+
+        Two properties, both preserved:
+
+        1. The FALLBACK derivation path never truncates: an oversized ``action``
+           comes back unchanged. Seeded with ``synthesis=False`` because an
+           attached synthesis takes derivation precedence.
+        2. An OVERSIZED validated principle is refused at attach time, and if one
+           is forced onto a candidate by bypassing ``attach_synthesis`` (a
+           hand-edited candidates.json), ``promote``'s token gate still rejects
+           it. The budget protection is therefore defence in depth, not merely
+           relocated.
+        """
         action = "review the failure and change the approach " * 8
         assert estimate_tokens(action) == 57  # exceeds the 50-token ceiling
         art = _derive_learner_artifact({"trigger": TRIG_TURN_BUDGET, "action": action})
@@ -289,14 +366,27 @@ class TestActionOverflowGate:
         assert estimate_tokens(art) == 57
 
         r = repairer
-        cid = _seed_candidate(r, TRIG_TURN_BUDGET, action)
+        cid = _seed_candidate(r, TRIG_TURN_BUDGET, action, synthesis=False)
 
-        async def mock_eval(c):
-            return {"pass": True, "effectiveness": 0.9}
+        # (a) attach refuses an over-budget principle
+        oversized = _seed_oversized_attestation(action)
+        assert r.attach_synthesis(cid, oversized) == "rejected: principle_exceeds_token_ceiling"
 
-        r.evaluator = mock_eval
-        res = await r.evaluate_candidate(cid)
-        assert res == "evaluation_passed"
+        # (b) bypassing attach, promote's own token gate must still fire
+        r._candidates[cid]["synthesis"] = oversized.to_dict()
+        cand = r._candidates[cid]
+        cand["status"] = CandidateState.PROMOTABLE.value
+        cand["evidence_tasks"] = ["task_twine", "task_click"]
+        cand["eval_result"] = {
+            "pass": True,
+            "governance_version": GOVERNANCE_VERSION,
+            "receipt": {"eval_id": "e", "candidate_id": cid, "hypothesis_id": cid,
+                        "state_hash": r._hash_candidate(cand),
+                        "governance_version": GOVERNANCE_VERSION,
+                        "evaluator_id": EVALUATOR_ID,
+                        "evaluator_version": EVALUATOR_VERSION, "pass": True},
+        }
+        cand["eval_result"]["receipt_sig"] = r._sign_receipt(cand["eval_result"]["receipt"])
         res = await r.promote(cid)
         assert res == "rejected: token_limit"
         assert r._candidates[cid]["status"] == CandidateState.REJECTED.value
@@ -359,10 +449,12 @@ class TestContradictionPreservation:
         r = repairer
         trigger = TRIG_NO_EDIT
         cid = _seed_candidate(r, trigger, "never apply with filesystem write after research.")
-        counter = _derive_learner_artifact({
-            "trigger": trigger,
-            "action": "apply with filesystem write after research.",
-        })
+        # The contradiction gate operates on the DELIVERED artifact. Since
+        # 2026-10-03 that is the validated principle, not `action`, so the
+        # counter-rule must negate the principle. Constructing it from `action`
+        # would no longer be a contradiction of anything the worker receives.
+        counter = _derive_learner_artifact(r._candidates[cid])
+        counter = _negate(counter)
         r.lesson_manager.get_all = AsyncMock(return_value=[
             ActiveLesson(rule=counter, confidence=1.0, effectiveness=1.0),
         ])
@@ -511,6 +603,12 @@ class TestProductionPathChain:
         cand = next(iter(repairer._candidates.values()))
         assert cand["status"] == CandidateState.CANDIDATE.value
         assert set(cand["evidence_tasks"]) == {"pypa__twine-1066", "pallets__click-2380"}
+        # The bridge alone only produces the candidate + evidence. The validated
+        # synthesis is attached by the learning pipeline (Stages A-D) before
+        # evaluation; `promote` refuses any candidate without one.
+        repairer.attach_synthesis(
+            cand["id"], SynthesisAttestation.from_dict(valid_synthesis())
+        )
 
         # Diagnostic preserved full-fidelity in candidate state. Since 2026-10-03
         # the trigger is prefixed with the authoritative evaluator verdict so the
@@ -523,7 +621,9 @@ class TestProductionPathChain:
         assert "f2p=0/3" in cand["trigger"]
 
         expected = _derive_learner_artifact(cand)
-        assert expected.startswith("no-edit: ")
+        # With a validated synthesis attached the delivered artifact IS the
+        # principle, so the labelled fallback form is not what a worker receives.
+        assert expected == VALID_PRINCIPLE
         assert estimate_tokens(expected) <= 50
 
         # Evaluation context receives the derived artifact.
@@ -584,9 +684,13 @@ class TestReceiptIntegrity:
         assert set(canon.keys()) == {
             "candidate_id", "hypothesis_id", "trigger", "action",
             "evidence_runs", "evidence_tasks", "activation_scope",
-            "governance_version",
+            "governance_version", "synthesis",
         }
         assert canon["governance_version"] == 2
+        # The synthesis attestation is BOUND, not decorative: it determines the
+        # delivered rule, so mutating it after evaluation must invalidate the
+        # receipt exactly as mutating `trigger` does.
+        assert canon["synthesis"] is not None
 
     @pytest.mark.asyncio
     async def test_post_eval_trigger_mutation_still_rejected(self, repairer):

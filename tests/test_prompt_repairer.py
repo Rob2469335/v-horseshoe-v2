@@ -5,8 +5,67 @@ import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, patch, MagicMock
 
-from swarm_os.services.prompt_repairer import PromptRepairer, CandidateState
+from swarm_os.services.prompt_repairer import (
+    PromptRepairer,
+    CandidateState,
+    _derive_learner_artifact,
+)
 from swarm_os.services.lesson_manager import ActiveLesson
+from swarm_os.services.lesson_synthesis import SynthesisAttestation
+
+# --- Lesson-synthesis prerequisite (added 2026-10-03) ------------------------
+# `promote()` now refuses any candidate lacking an independently validated
+# synthesis. Tests that exercise the legitimate promotion path supply one via
+# `attach_valid_synthesis`; they still assert exactly what they asserted before
+# (receipt forgery, rollback, contradiction, token budgets, governance version),
+# they simply also satisfy the strengthened contract.
+VALID_PRINCIPLE = (
+    "Before modifying a dependency-facing call, verify the currently supported "
+    "argument contract and update every caller to match the observed behaviour."
+)
+
+
+def valid_synthesis(text: str = VALID_PRINCIPLE) -> dict:
+    return SynthesisAttestation(
+        synthesis_version="ej-lesson-synthesis/1",
+        principle_text=text,
+        feature_codes=("edit_without_effect",),
+        mechanism="test-seeded mechanism",
+        evidence_ref="rollout:test;task:test",
+        validator_id="ej-independent-lesson-validator/1",
+        validator_passed=True,
+    ).to_dict()
+
+
+def attach_valid_synthesis(repairer, cid: str | None = None) -> str:
+    if cid is None:
+        cands = list(repairer._candidates.values())
+        assert cands, "no candidate to attach synthesis to"
+        cid = cands[0]["id"]
+    out = repairer.attach_synthesis(
+        cid, SynthesisAttestation.from_dict(valid_synthesis())
+    )
+    assert out == "synthesis_attached", out
+    return cid
+
+
+def _negate_rule(rule: str) -> str:
+    """The same rule with its leading directive inverted."""
+    import re as _re
+    return _re.sub(r"^Before\b", "Never", rule, count=1)
+
+
+def set_synthesis_direct(repairer, cid: str, text: str = VALID_PRINCIPLE) -> None:
+    """Write the attestation onto a candidate dict, bypassing `attach_synthesis`.
+
+    Tests that construct a candidate already in PROMOTABLE state are simulating a
+    hand-edited candidates.json. `attach_synthesis` correctly refuses that
+    ("already_evaluated"), because re-attesting after evaluation would decouple
+    the evaluated text from the promoted text -- so these tests set the field
+    directly, which is exactly what an attacker or a stale file would contain.
+    The promotion gates must still reject them on their own merits.
+    """
+    repairer._candidates[cid]["synthesis"] = valid_synthesis(text)
 
 @pytest.fixture(autouse=True)
 def _trusted_receipt_key(monkeypatch):
@@ -152,9 +211,15 @@ async def test_contradiction_blocking(repairer):
     async def mock_eval(c): return {"pass": True, "effectiveness": 0.8}
     repairer.evaluator = mock_eval
     
+    attach_valid_synthesis(repairer, cid)
     await repairer.evaluate_candidate(cid)
-    
-    al = ActiveLesson(rule="t: use XML", confidence=1.0, effectiveness=1.0)
+
+    # The contradiction gate operates on the DELIVERED artifact. Since
+    # 2026-10-03 that is the validated principle, so the counter-rule must negate
+    # the principle; a counter-rule built from `action` would not contradict
+    # anything the worker actually receives.
+    delivered = _derive_learner_artifact(repairer._candidates[cid])
+    al = ActiveLesson(rule=_negate_rule(delivered), confidence=1.0, effectiveness=1.0)
     repairer.lesson_manager.get_all.return_value = [al]
     
     res = await repairer.promote(cid)
@@ -182,6 +247,7 @@ async def test_rollback_restores_previous_version(repairer):
     al1 = ActiveLesson(id="id1", rule="rule1", confidence=0.8, effectiveness=0.8, version=2)
     repairer.lesson_manager.get_all.return_value = [al1]
     
+    attach_valid_synthesis(repairer, cid)
     await repairer.evaluate_candidate(cid)
     res = await repairer.promote(cid)
     assert res == "promoted"
@@ -206,13 +272,21 @@ def test_qdrant_instruction_injection(repairer):
 # 16. Single lesson 300 token limit enforcement
 @pytest.mark.asyncio
 async def test_300_token_limit_enforcement(repairer):
-    # Create an action that is > 300 tokens. (e.g. 1000 words)
+    """An OVERSIZED delivered rule is rejected by the token gate.
+
+    The budget is enforced at attach time as well, so the gate is proven as
+    defence in depth: the oversized principle is forced onto the candidate here,
+    bypassing `attach_synthesis`, and `promote` must still reject it. See
+    `test_attach_synthesis.py::test_oversized_principle_refused_at_attach` for the
+    attach-side bound.
+    """
     long_action = "word " * 1000
     cid = _setup_candidate(repairer, "t", long_action)
-    
+
     async def mock_eval(c): return {"pass": True}
     repairer.evaluator = mock_eval
-    
+
+    repairer._candidates[cid]["synthesis"] = valid_synthesis(long_action)
     await repairer.evaluate_candidate(cid)
     res = await repairer.promote(cid)
     assert res == "rejected: token_limit"
@@ -246,6 +320,7 @@ async def test_eval_success_allows_promotion(repairer):
     async def mock_eval(c): return {"pass": True}
     repairer.evaluator = mock_eval
     
+    attach_valid_synthesis(repairer, cid)
     await repairer.evaluate_candidate(cid)
     res = await repairer.promote(cid)
     assert res == "promoted"
@@ -261,6 +336,7 @@ async def test_global_300_token_limit(repairer):
     cid = _setup_candidate(repairer, "t", "a " * 20)
     async def mock_eval(c): return {"pass": True}
     repairer.evaluator = mock_eval
+    attach_valid_synthesis(repairer, cid)
     await repairer.evaluate_candidate(cid)
 
     # Existing active lessons consume ~250 tokens (over the global 300 cap)
@@ -302,6 +378,7 @@ async def test_stale_evaluation(repairer):
     repairer._candidates[cid]["governance_version"] = 9999
     async def mock_eval(c): return {"pass": True}
     repairer.evaluator = mock_eval
+    attach_valid_synthesis(repairer, cid)
     await repairer.evaluate_candidate(cid)
     res = await repairer.promote(cid)
     assert res == "rejected: governance_version"
@@ -311,6 +388,7 @@ async def test_double_promotion(repairer):
     cid = _setup_candidate(repairer)
     async def mock_eval(c): return {"pass": True}
     repairer.evaluator = mock_eval
+    attach_valid_synthesis(repairer, cid)
     await repairer.evaluate_candidate(cid)
     res1 = await repairer.promote(cid)
     assert res1 == "promoted"
@@ -448,6 +526,7 @@ async def test_mutation_after_evaluation(repairer_fixture):
     
     async def mock_eval(c): return {"pass": True}
     r.evaluator = mock_eval
+    set_synthesis_direct(r, "cand_2")
     await r.evaluate_candidate("cand_2")
             
     assert r._candidates["cand_2"]["status"] == CandidateState.PROMOTABLE.value
@@ -479,6 +558,7 @@ async def test_forged_evaluation_receipt_rejected(repairer_fixture):
         "governance_version": GOVERNANCE_VERSION,
         "eval_result": {"pass": True},
     }
+    set_synthesis_direct(r, "cand_3")
     res = await r.promote("cand_3")
     assert "forged_or_mutated_evaluation" in res
     assert r._candidates["cand_3"]["status"] == CandidateState.REJECTED.value
@@ -495,6 +575,11 @@ async def test_forged_evaluation_receipt_rejected(repairer_fixture):
         "governance_version": GOVERNANCE_VERSION,
     }
     r._candidates["cand_3b"] = forged
+    # A hand-forged candidate would carry whatever synthesis field the attacker
+    # chose; give it a VALID one so this test isolates the receipt gate rather
+    # than stopping at the synthesis prerequisite.
+    set_synthesis_direct(r, "cand_3b")
+    forged["synthesis"] = r._candidates["cand_3b"]["synthesis"]
     forged_receipt = {
         "eval_id": "forged",
         "candidate_id": "cand_3b",
@@ -531,6 +616,7 @@ async def test_stale_evaluation_receipt_rejected(repairer_fixture):
     }
     async def mock_eval(c): return {"pass": True}
     r.evaluator = mock_eval
+    set_synthesis_direct(r, "cand_4")
     await r.evaluate_candidate("cand_4")
     assert r._candidates["cand_4"]["status"] == CandidateState.PROMOTABLE.value
 
@@ -665,6 +751,7 @@ async def test_end_to_end_governance_chain():
     assert cand["status"] == CandidateState.CANDIDATE.value
     
     # 2. Evaluate candidate
+    attach_valid_synthesis(r, cand["id"])
     with patch("swarm_os.services.prompt_repairer.get_lesson_manager", return_value=lm):
         await r.evaluate_candidate(cand["id"])
         
@@ -712,6 +799,7 @@ async def test_key_changed_after_evaluation_rejects(repairer, monkeypatch):
     cid = _setup_candidate(r)
     async def mock_eval(c): return {"pass": True}
     r.evaluator = mock_eval
+    attach_valid_synthesis(r, cid)
     await r.evaluate_candidate(cid)
     assert r._candidates[cid]["status"] == CandidateState.PROMOTABLE.value
     monkeypatch.setenv("SWARM_RECEIPT_KEY", "a-different-key")
@@ -812,6 +900,7 @@ async def test_real_rollback_removes_active_lesson_from_store(temp_dir):
                     for i, task in [(1, "taskA"), (2, "taskA"), (3, "taskB")]:
                         r.process_failure(f"run{i}", "coder", "wrong tool", "use filesystem", task_id=task)
                     cid = list(r._candidates.keys())[0]
+                    attach_valid_synthesis(r, cid)
                     await r.evaluate_candidate(cid)
                     res = await r.promote(cid)
                     assert res == "promoted"
@@ -857,6 +946,7 @@ async def test_bounded_driver_evaluates_and_promotes_eligible(repairer):
     assert repairer._candidates[cid]["status"] == CandidateState.CANDIDATE.value
     async def pass_eval(c): return {"pass": True}
     repairer.evaluator = pass_eval
+    attach_valid_synthesis(repairer, cid)
     summary = await repairer.evaluate_and_promote_eligible()
     assert summary["promoted"] == 1
     assert repairer._candidates[cid]["status"] == CandidateState.ACTIVE.value
