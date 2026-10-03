@@ -19,11 +19,33 @@ They pin:
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "start-dev.ps1"
+
+# Every native launcher that can start Qdrant. `start-dev.ps1` is the launcher
+# Experiment J uses (docs/F1_L1_RUNTIME_TOPOLOGY.md); `start-dev-fixed.ps1` is a
+# tracked second copy of the same startup sequence and must not drift from it.
+QDRANT_LAUNCHERS = ("start-dev.ps1", "start-dev-fixed.ps1")
+
+# The canonical production Qdrant storage root, operator-authorized 2026-10-03.
+# Recorded in AGENTS.md section 4. A relative value, or any other directory, is
+# the defect this contract exists to prevent.
+CANONICAL_STORAGE_DIR = "storage"
+
+# Qdrant's own default is `./storage`, resolved against the CHILD's working
+# directory, and `Start-Process` without -WorkingDirectory inherits the caller's
+# CWD. The launchers never change their own CWD (their Set-Location calls live
+# inside Start-Job blocks), so the env pin below is the ONLY thing making the
+# attached store deterministic.
+ABSOLUTE_STORAGE_PIN = re.compile(
+    r"\$env:QDRANT__STORAGE__STORAGE_PATH\s*=\s*Join-Path\s+\$root\s+\"storage\""
+)
+LOCALHOST_PIN = re.compile(r"\$env:QDRANT__SERVICE__HOST\s*=\s*\"127\.0\.0\.1\"")
+QDRANT_LAUNCH = re.compile(r"Start-Process\s+\$qdrantPath")
 
 
 def _src() -> str:
@@ -206,3 +228,156 @@ def test_no_broad_process_name_killing_in_startup_script():
             assert line.lstrip().startswith("#"), (
                 f"uncommented Stop-Process found: {line!r}"
             )
+
+
+# ---------------------------------------------------------------------------
+# Qdrant storage-root determinism (operator-authorized 2026-10-03)
+#
+# Proven defect: the launchers started qdrant.exe with no -WorkingDirectory, no
+# --config-path and no storage path, so Qdrant's `./storage` default resolved
+# against the CALLER's working directory. A rehearsal on 2026-10-03 00:45:23
+# therefore attached to an empty `qdrant_local\` instead of the production
+# store. These are static contract tests: they read the script text and never
+# start Qdrant, matching the established approach in this module.
+# ---------------------------------------------------------------------------
+
+
+def _launcher_src(name: str) -> str:
+    return (ROOT / name).read_text(encoding="utf-8")
+
+
+def test_every_qdrant_launcher_pins_the_absolute_canonical_storage_root():
+    """Both launchers must set QDRANT__STORAGE__STORAGE_PATH from $root."""
+    for name in QDRANT_LAUNCHERS:
+        src = _launcher_src(name)
+        assert ABSOLUTE_STORAGE_PIN.search(src), (
+            f"{name} must set an ABSOLUTE Qdrant storage path derived from "
+            f'$root, i.e. $env:QDRANT__STORAGE__STORAGE_PATH = Join-Path $root "storage"'
+        )
+
+
+def test_storage_path_pin_precedes_the_qdrant_launch():
+    """The pin must be set before qdrant.exe starts, or it has no effect."""
+    for name in QDRANT_LAUNCHERS:
+        src = _launcher_src(name)
+        pin = ABSOLUTE_STORAGE_PIN.search(src)
+        launch = QDRANT_LAUNCH.search(src)
+        assert pin and launch, f"{name}: missing storage pin or Qdrant launch"
+        assert pin.start() < launch.start(), (
+            f"{name}: QDRANT__STORAGE__STORAGE_PATH is assigned AFTER the Qdrant "
+            "Start-Process, so the child would not inherit it"
+        )
+
+
+def test_no_launcher_uses_a_relative_or_alternate_qdrant_storage_path():
+    """Relative values stay CWD-relative; `qdrant_local` is the proven failure."""
+    for name in QDRANT_LAUNCHERS:
+        src = _launcher_src(name)
+        for m in re.finditer(
+            r"\$env:QDRANT__STORAGE__STORAGE_PATH\s*=\s*(.+)$", src, re.MULTILINE
+        ):
+            value = m.group(1).strip()
+            assert not value.startswith('"./') and not value.startswith("'./"), (
+                f"{name}: Qdrant storage path must be absolute, got {value!r}"
+            )
+            assert not value.startswith('".\\') and not value.startswith("'.\\"), (
+                f"{name}: Qdrant storage path must be absolute, got {value!r}"
+            )
+        assert "qdrant_local" not in "\n".join(
+            line for line in src.splitlines() if not line.lstrip().startswith("#")
+        ), (
+            f"{name}: must not point Qdrant at qdrant_local — that path is retained "
+            "only as provenance evidence of the CWD defect"
+        )
+
+
+def test_localhost_only_qdrant_binding_preserved_in_every_launcher():
+    """The 882646a security fix must survive alongside the storage pin."""
+    for name in QDRANT_LAUNCHERS:
+        src = _launcher_src(name)
+        pin = LOCALHOST_PIN.search(src)
+        launch = QDRANT_LAUNCH.search(src)
+        assert pin, (
+            f"{name}: QDRANT__SERVICE__HOST=127.0.0.1 is required — commit "
+            "882646a fixed LAN exposure of the unauthenticated store"
+        )
+        assert launch and pin.start() < launch.start(), (
+            f"{name}: QDRANT__SERVICE__HOST must be set before the Qdrant launch"
+        )
+
+
+def test_every_launcher_mechanism_resolves_to_the_same_root():
+    """The two launchers must not drift into different stores."""
+    values = set()
+    for name in QDRANT_LAUNCHERS:
+        m = ABSOLUTE_STORAGE_PIN.search(_launcher_src(name))
+        assert m, f"{name}: storage pin missing"
+        values.add(m.group(0))
+    assert len(values) == 1, (
+        f"launchers disagree on the Qdrant storage root: {sorted(values)}"
+    )
+
+
+def test_tracked_qdrant_config_agrees_with_the_canonical_root():
+    """No contradictory, inactive storage-root declaration may survive."""
+    cfg = (ROOT / ".qdrant" / "config" / "qdrant.yaml").read_text(encoding="utf-8")
+    paths = re.findall(r"storage_path:\s*['\"]?([^'\"\n]+)", cfg)
+    assert paths, "storage_path missing from .qdrant/config/qdrant.yaml"
+    # Compare the RESOLVED path, not its last segment: `.qdrant/storage` also
+    # ends with `/storage`, so a suffix check would pass on the very value this
+    # contract exists to reject.
+    expected = os.path.normcase(os.path.normpath(str(ROOT / CANONICAL_STORAGE_DIR)))
+    for raw in paths:
+        got = os.path.normcase(os.path.normpath(raw.strip().strip("'\"")))
+        assert got == expected, (
+            f"tracked Qdrant config contradicts the canonical root: {raw!r} "
+            f"(must be {expected}; see AGENTS.md section 4)"
+        )
+    # A 0.0.0.0 bind would re-expose the unauthenticated store to the LAN.
+    hosts = re.findall(r"host:\s*([0-9.]+)", cfg)
+    assert "0.0.0.0" not in hosts, (
+        "tracked Qdrant config binds 0.0.0.0; commit 882646a established that "
+        "this exposed the whole store to the LAN with no auth"
+    )
+    assert "127.0.0.1" in hosts, "tracked Qdrant config must document the loopback bind"
+
+
+def test_docker_compose_agrees_with_the_canonical_root_and_is_marked_non_production():
+    compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    volumes = re.findall(r"-\s*(\S+):/qdrant/storage", compose)
+    assert volumes, "docker-compose.yml no longer maps a Qdrant storage volume"
+    for v in volumes:
+        assert v.endswith("/" + CANONICAL_STORAGE_DIR) or v == CANONICAL_STORAGE_DIR, (
+            f"docker-compose Qdrant volume {v!r} contradicts the canonical root "
+            f"(expected ./{CANONICAL_STORAGE_DIR}); see AGENTS.md section 4"
+        )
+    # The boundary must be explicit, not implicit: Compose is not the
+    # Experiment J launcher.
+    assert "NOT the production" in compose, (
+        "docker-compose.yml must state that Compose is not the production or "
+        "Experiment J Qdrant launcher"
+    )
+
+
+def test_ci_qdrant_is_ephemeral_and_never_mounts_the_production_store():
+    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    service = ci[ci.index("qdrant:") :]
+    assert not re.search(r":/qdrant/storage", service), (
+        "CI Qdrant must stay ephemeral; it must not mount a storage volume"
+    )
+    assert "EPHEMERAL" in service, (
+        "CI Qdrant must be explicitly marked ephemeral so it is not confused "
+        "with the canonical production store"
+    )
+
+
+def test_existing_qdrant_test_isolation_invariant_is_still_declared():
+    """Guard requirement 9.7: ordinary tests must stay barred from real Qdrant."""
+    iso = (ROOT / "tests" / "test_qdrant_isolation.py").read_text(encoding="utf-8")
+    assert "NO ordinary pytest test may obtain a real Qdrant client" in iso, (
+        "tests/test_qdrant_isolation.py lost its 'no real Qdrant client' invariant"
+    )
+    conftest = (ROOT / "tests" / "conftest.py").read_text(encoding="utf-8")
+    assert ":memory:" in conftest, (
+        "tests/conftest.py must keep forcing :memory: Qdrant clients"
+    )

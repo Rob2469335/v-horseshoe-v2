@@ -194,9 +194,20 @@ if (-not (Test-Path $qdrantPath)) {
 # SECURITY (2026-08-17 audit): Qdrant's default `service.host` is 0.0.0.0 — it
 # listens on every interface with NO auth, exposing the whole memory/chess/legal
 # store to the LAN (verified reachable from 10.2.0.2). The env var is the
-# documented override (highest priority, cannot move the ./storage data path).
+# documented override (highest config priority).
 # Bind loopback only: local services reach it at 127.0.0.1; nothing off-box can.
 $env:QDRANT__SERVICE__HOST = "127.0.0.1"
+# STORAGE ROOT (operator-authorized 2026-10-03): Qdrant's built-in default
+# `storage_path` is `./storage`, resolved against the CHILD's working directory.
+# `Start-Process` without -WorkingDirectory inherits the caller's CWD, and this
+# script never changes its own CWD (every Set-Location here is inside a
+# Start-Job block), so the store silently followed whoever invoked the script.
+# Proven consequence: a rehearsal on 2026-10-03 00:45:23 attached to an empty
+# `qdrant_local\` instead of the production store. Pin the ABSOLUTE canonical
+# root; QDRANT__* env outranks defaults AND any config file, so this line is
+# authoritative over `.qdrant\config\qdrant.yaml` and over docker-compose.
+# Canonical root: <repo>\storage — see AGENTS.md §4.
+$env:QDRANT__STORAGE__STORAGE_PATH = Join-Path $root "storage"
 Start-Process $qdrantPath -WindowStyle Hidden
 for ($i = 0; $i -lt 30; $i++) {
     try { Invoke-RestMethod "http://127.0.0.1:6333" | Out-Null; Write-Host "Qdrant ✔" -ForegroundColor Green; break }

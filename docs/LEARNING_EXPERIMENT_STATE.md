@@ -54,7 +54,7 @@ This is the frozen F0 research question from `docs/EXPERIMENT_J.md` §1. The lea
 |---|---|---|
 | `SWARM_RECEIPT_KEY` provisioned in `.env` | ❌ **NOT PROVISIONED** | **Corrected 2026-10-02.** This row previously read "✅ PROVISIONED (operator, 2026-09-30 per §10.3 item 9)". That claim is **HISTORICALLY CLAIMED and is contradicted by verified current state**: the key name is absent from `.env`, and absent from Process/User/Machine environment scopes (`PROVEN IN CURRENT REVISION`). Required for HMAC receipt signing; **promotion is and remains fail-closed without it.** See §10.4 — this is a governance capability, not a configuration value, and is operator-provisioned. |
 | Backend healthy (`/readyz`=ready, `/health`=ok) | ✅ Verified | Backend PID 20332, Qdrant healthy |
-| Qdrant `ActiveLessons` empty (C0) | ✅ Verified | Post-F1 baseline confirmed |
+| Qdrant `ActiveLessons` empty (C0) | ✅ Verified | Post-F1 baseline confirmed. C0 is evaluated **against the canonical store** `C:\Users\rober\Projects\v-horseshoe-v2\storage\` (operator-authorized 2026-10-03, see `docs/F1_L1_RUNTIME_TOPOLOGY.md`). `ActiveLessons` being *absent* is also true of an empty or wrong root, so a 6333 health check plus absence does **not** establish store identity — a pre-run check must confirm the attached root. |
 | `SWARM_HARNESS_KEY=dev` in `.env` | ✅ Set | For rollout provenance |
 | `SWARM_AUTONOMY=0`, `SWARM_GENETIC_MUTATION=0`, `SWARM_EVAL_TICK=0`, `SWARM_EXPERIMENT_J_ARM=0`, `SWARM_F1_NO_WEB_TOOLS=0`, `SWARM_EVOLUTION=0` | ✅ Verified | Post-F1 governance baseline |
 

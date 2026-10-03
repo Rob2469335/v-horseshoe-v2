@@ -422,6 +422,17 @@ exists locally, and never claim GitHub reflects local state without verifying it
   **Lint** `ruff check . --select E9,F` (CI gates E9/F only) · **Format** `ruff format .`
 - **Backend:** `start-dev.ps1` — llama.cpp :8080, embed :8081, rerank :8082,
   vision :8083, Qdrant :6333.
+- **Qdrant storage root (canonical, operator-authorized 2026-10-03):**
+  `C:\Users\rober\Projects\v-horseshoe-v2\storage\`. This is now authoritative by
+  explicit operator decision, **not** by prior authority. Chosen on current
+  effective production use, its 15 collections, exact collection-name
+  correspondence with `snapshots\`, and launcher history (the 2026-06-07 →
+  2026-06-20 regression that removed the explicit path). Both launchers pin it
+  **absolutely** via `QDRANT__STORAGE__STORAGE_PATH`; caller CWD must never
+  select the store, and a relative value (`./storage`, `qdrant_local`) is a
+  defect. `.qdrant\config\qdrant.yaml` and `docker-compose.yml` agree with this
+  root; CI Qdrant is deliberately ephemeral. Owner detail and evidence:
+  `docs/F1_L1_RUNTIME_TOPOLOGY.md`.
 - **CLI:** `python -m organism_console.cli` (or `rob`).
 - **CI:** `pytest tests/ -q`, `ruff check --select E9,F swarm_os runtime_v2 organism_console`,
   `pip check`, `pip-audit -r requirements.txt`.
