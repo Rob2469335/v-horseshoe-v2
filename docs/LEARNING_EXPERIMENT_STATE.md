@@ -1296,5 +1296,135 @@ runtime component and not attributed to the operator. Its content is preserved a
 committed history and is not rewritten. Recorded here so the gap is visible rather
 than inferred away.
 
+---
+
+## Learning-Event Execution Decisions (2026-10-03, preparation session)
+
+This entry records the operating decisions and the verified preparation state for
+the upcoming learning event. It records **no** scientific result and grants **no**
+authorization. The learning event itself remains NOT executed and NOT authorized.
+
+### D-9. Task sourcing and the readiness gate
+
+| Item | Recorded state | Evidence class |
+|---|---|---|
+| Learning tasks come from the dataset **train** split | **Decision.** `swe_rebench_probe.py:65` hardcodes `split=train` in the datasets-server query; no other split is reachable through the provisioning path. | `PROVEN IN CURRENT REVISION` (source read) |
+| The dataset **eval** split is excluded | **Decision.** Because the only query URL pins `split=train`, no eval-split instance can be fetched by this path. | `PROVEN IN CURRENT REVISION` (source read) |
+| Task identity is never synthesized | **Decision.** Identity comes from the declared curriculum pool (`qwen_train/curriculum/swe_pool.jsonl`, 14 rows); `run_repair_task.py` fails closed rather than degrading. | `HISTORICALLY CLAIMED` (re-verified in the state table above, not re-read this session) |
+| **F2 tasks disjoint from these learning tasks** | **NOT PROVEN — recorded as an open gap, not as a decision.** `docs/EXPERIMENT_J_F2_ISOLATION_POPULATION_AUDIT.md:39` states the F2 task population is `NOT PROVEN` and that "F2 has no task-input contract at all: `run_f2_arm()` accepts a `task_id: str` and a `render_t` callable, and nothing else." No disjointness property can be asserted while F2 has no task-input contract. | `NOT PROVEN` |
+| NOT READY tasks are skipped, not repaired | **Decision.** A task whose FAIL_TO_PASS does not fail with an assertion error is not run. One task's failure never blocks another task's classification. | `PROVEN IN CURRENT REVISION` |
+| `xknx__xknx-470` is a fallback **only** when fewer than 2 tasks are READY | **Decision, and it fired.** READY_COUNT was 1, so `xknx__xknx-470` was provisioned and probed as the authorized fallback. | `PROVEN IN CURRENT REVISION` |
+
+### D-10. Readiness result — this is a blocking precondition
+
+Classification rule applied: **READY** only when the FAIL_TO_PASS tests fail with
+**assertion errors**. Measured on a scratch COPY of each task repo outside this
+repository, reset to `base_commit` with `test_patch` re-applied, using each task's
+**own** Python 3.10 interpreter and the instance's declared `test_cmd`, run once,
+capped at 300 s.
+
+| Task | Python | FAIL_TO_PASS error at base | Verdict |
+|---|---|---|---|
+| `databricks__dbt-databricks-935` | 3.10.11 | `AssertionError: assert ... == ...` | **READY** |
+| `sinaptik-ai__pandas-ai-1099` | 3.10.11 | `KeyError: 'columns'` | NOT READY |
+| `qiskit__qiskit-ibm-runtime-367` | 3.10.11 | `TypeError: ... unexpected keyword argument 'created_before'` (plus 13 integration setup ERRORs from absent credentials) | NOT READY |
+| `pallets__werkzeug-2583` | 3.10.11 | `werkzeug.exceptions.*` raised by routing code | NOT READY |
+| `xknx__xknx-470` (fallback) | 3.10.11 | `TypeError: Sensor.__init__() got an unexpected keyword argument 'always_callback'` | NOT READY |
+
+**READY_COUNT = 1.** A minimum of 2 READY tasks was required, so the task
+availability precondition **FAILS** and the preparation is **NO-GO** on this ground
+alone. See "Smallest next action" below.
+
+**`SUPPORTED` counter-evidence, recorded rather than acted on.** The four NOT READY
+tasks fail for a reason that is *not* an environment fault: each reproduces a
+fail-then-pass cycle under the gold patch, which is the semantic
+`qwen_train/swe_rebench_probe.py::probe()` itself uses (`failed > 0 and passed == 0`
+at base, then all pass at gold). Under SWE-bench fail-to-pass semantics all **5**
+tasks qualify. The distinction is decisive and is an operator decision, not an agent
+decision: it is recorded in
+`C:\Users\rober\Projects\_archive\f1_readiness_2026-10-02\task_envs\readiness.json`
+and has **not** been used to reclassify anything here.
+
+### D-11. Clean-room and evidence handling
+
+| Item | Recorded state | Evidence class |
+|---|---|---|
+| The first genuine ACTIVE lesson must be **clean-room** | **Decision.** No lesson text, hypothesis, or candidate may be copied, seeded, or derived from F1 history or from operator knowledge of the gold patches. | `PROVEN IN CURRENT REVISION` (decision recorded) |
+| Prior candidate state is archived | **Decision.** Archived copies live in `data/_quarantine/` (`prompt_repairer_journal.original.20261002T225914Z.bak`, `pending_transactions_quarantine.20261002T225914Z.jsonl`). | `SUPPORTED` (files exist; not independently re-verified as a complete archive) |
+| The live candidate store **began empty** | **Decision, and verified.** `data/prompt_repairer_candidates.json` parses as `{}` — no top-level keys, zero candidates. | `PROVEN IN CURRENT REVISION` |
+| `--fresh-arm-workspace` is required per run | **Decision.** It establishes `HEAD == base_commit` plus exactly the authorized `--test-patch` **before** the cleanliness pre-flight, so an arm starts from a known state. | `PROVEN IN CURRENT REVISION` (CLI and `arm_workspace.py`) |
+| Only **BEHAVIORAL** runs count as learning evidence | **Decision.** An engineering rehearsal is never a learning observation; an infrastructure failure is never a learning observation. | `PROVEN IN CURRENT REVISION` (D-1) |
+| **INFRASTRUCTURE** / **UNKNOWN** classifications are **not re-run** to obtain a BEHAVIORAL result | **Decision.** Re-running until a favorable classification appears would convert an infrastructure failure into fabricated evidence. | `PROVEN IN CURRENT REVISION` (decision recorded) |
+| Minimum **3 BEHAVIORAL runs across at least 2 tasks** | **Recorded as an unmet precondition.** With READY_COUNT = 1 this cannot currently be satisfied. | `NOT ESTABLISHED` |
+| Reflection-daemon `OBSERVED_FAILURE` noise is **not** evidence | **Decision.** The daemon is gated on `SWARM_AUTONOMY` and does not start under the governance baseline; its records are unattributed. | `PROVEN IN CURRENT REVISION` (D-2) |
+| Evidence IDs must match the run ledger | **Decision.** Every evidence record must correspond to a ledger row (`run_id`, `task_id`, `invocation_id`); any extra evidence run ID fails the post-run audit. | `PROVEN IN CURRENT REVISION` (decision recorded) |
+| The **operator** controls all services | **Decision.** No agent starts or stops Qdrant, the model, the proxy, or the learning stack. The preparation session started no process. | `PROVEN IN CURRENT REVISION` |
+
+### D-12. Network containment, and its one verified hole
+
+Non-Serena MCP tools are **DENY** under `SWARM_F1_NO_WEB_TOOLS=1`, extended from the
+existing `SWARM_F1_OFFLINE_MCP=1` gate recorded in D-3.
+`MCPSHA = F6D69FAAD0A6BA58A6F291F5D1DB3DCC98E4F2AACADB1CAB5987BAEA8F1A2F5F`
+(`swarm_os/services/approval_registry.py` `26DF5857…`,
+`tests/test_f1_mcp_denylist.py` `00BECDD2…`).
+
+**Shell network egress remains an explicit, unclosed limitation.** `PROVEN IN
+CURRENT REVISION` by direct probe of `clean_sandbox_env`
+(`swarm_os/services/security_gate.py:488`): variable names containing `TOKEN`,
+`SECRET`, `PASSWORD` or `PASSWD` **are** stripped, but names containing a bare
+`KEY` are **not**. A synthetic environment probe confirmed `MY_KEY`, `SIGNING_KEY`
+and `SSH_KEY` pass through to the launched shell, while `PRIVATE_KEY`,
+`*_API_KEY` and `AWS_ACCESS_KEY_ID` are stripped. In addition every `SWARM_*`
+variable is stripped wholesale, which covers `SWARM_HARNESS_KEY` and
+`SWARM_RECEIPT_KEY`.
+
+This is recorded as a **`GOVERNANCE GAP`** in the denylist, not as a closed
+boundary. It was **not** changed: remediation of the shell-security denylist is
+outside this entry's authority. Because a learning run can execute shell commands,
+MCP denial alone does **not** establish that a learning event was network-free.
+
+### D-13. Receipt key — verified state, and the required pause
+
+| Item | Recorded state | Evidence class |
+|---|---|---|
+| `SWARM_RECEIPT_KEY` is **provisioned** | **NOT PROVEN — the key is absent.** The name does not occur in `.env` (79 lines, 0 matches) and is absent from the Process, User and Machine environment scopes. `prompt_repairer.py:188` proves the only provisioning path is `os.environ["SWARM_RECEIPT_KEY"]`. | `PROVEN IN CURRENT REVISION` |
+| `SWARM_RECEIPT_KEY` must remain **paused** | **Decision, and currently satisfied by absence.** No learning run may load the key. Promotion therefore remains fail-closed. | `PROVEN IN CURRENT REVISION` |
+| `.env` must not be modified | Honoured. The file was read for the key **name** only; its SHA-256 was recorded before and after and is unchanged. No value was ever printed. | `PROVEN IN CURRENT REVISION` |
+
+The state-table row above (`SWARM_RECEIPT_KEY` provisioned in `.env`) was **not**
+changed to read `PROVISIONED`. Doing so would contradict verified machine state and
+overturn the deliberate correction made by commit `dcdf75a2`, and
+`docs/LEARNING_EXPERIMENT_STATE.md:958` states the key "must not be provisioned".
+A promotion-capable learning event is therefore **REQUIRES AUTHORIZATION** and an
+operator provisioning step.
+
+### D-14. What this entry does not decide
+
+- The F2 **task population** and its statistics — `NOT PROVEN`
+  (`EXPERIMENT_J_F2_ISOLATION_POPULATION_AUDIT.md:39`).
+- **N = 2** — not authorized.
+- Whether the production model seam completes a real arm on this host — `NOT
+  ESTABLISHED`.
+- Whether Qdrant attaches to the canonical store at run time — `NOT ESTABLISHED`;
+  Qdrant was not started.
+- Any F0, F1 or F2 conclusion, threshold, or historical observation.
+
+### D-15. Two preparation discrepancies found and NOT worked around
+
+| Discrepancy | Verified state | Evidence class |
+|---|---|---|
+| An expected backup at `C:\Users\rober\Projects\_archive\f1_readiness_2026-10-02\` with SHA-256 `FE12427ACA6AEC06B183D81AE1818BAF9FE698245C0186C1B0D83E7A70FC2DC1` | **No file under that directory has that SHA-256.** Every file present was hashed and none matches. A file cannot be authored to a predetermined digest, so this was **not** faked. | `NOT ESTABLISHED` |
+| Freeze digests must match a run ledger's `freeze_sha` field | Authoritative on-disk digests are recorded in `task_envs/FREEZE_SHA256.txt` (index SHA-256 `589CC0884B47025741812900AC5F03BD8C93B0B727FA331BB8E1443F1A50340B`). Each freeze embeds its own `created_utc`, so **regenerating** a freeze changes its digest; a ledger value is therefore verifiable against the freeze **as it existed at run time**, and the index must be updated if a freeze is ever regenerated. | `PROVEN IN CURRENT REVISION` |
+
+Neither discrepancy was repaired by improvising a substitute. Both are reported for
+the operator.
+
+### D-16. Smallest next action for the blocking precondition
+
+Provision `SWARM_RECEIPT_KEY` in `.env` **or** explicitly authorize its absence for
+this event; and decide the readiness rule — accept SWE-bench fail-to-pass semantics
+(all 5 tasks) or require assertion-error failures (1 task). Both are operator
+decisions. No agent action can clear either.
+
 This entry changes no experiment-state conclusion and no scientific parameter. It
-records decisions and pendings; it grants no authorization.
+records decisions, verified state, and gaps; it grants no authorization.
