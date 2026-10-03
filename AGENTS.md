@@ -356,9 +356,28 @@ report. Do not silently continue indefinitely, and do not blindly retry a failed
 external operation.
 
 **Make progress observable.** If a step produces no artifact and no process, you
-cannot distinguish work from a hang — so each stage must emit at least one. For
+cannot distinguish work from a hang - so each stage must emit at least one. For
 sub-process work, preserve stdout/stderr to a file and record child PIDs, so the
 process can be inspected after the fact. Never leave an agent silently waiting.
+
+**A turn must not end with agent-started services still running.** An agent turn
+can end at any point - the operator may stop it, a deadline may arrive, or the
+session may simply go idle - and anything still listening then leaks with nothing
+left to shut it down. Record every PID at launch, and **either stop the services
+in the same turn or do not start them**; if a turn may end while services are up,
+that is a `STALLED` condition to report, not a state to leave behind. Before
+declaring any turn complete, verify each recorded PID is gone and each target port
+is free. Use a scoped, PID-recorded shutdown - never a host-wide process-name
+kill, which can terminate the operator's own processes.
+
+**Turn-boundary idle is not a stall.** A session that finishes a turn and waits for
+the operator is idle, not hung: the process stays alive and may keep consuming CPU
+while no work is pending, and no permission is outstanding. Do not "recover" from
+that by restarting work. Distinguish it from a real stall by checking the session's
+last recorded action (a completed tool call or final message means the turn ended
+normally) and whether any tool call is still unresolved. A genuine stall is an
+unfinished tool call, a pending permission, or a command with no termination
+condition - all three are things this agent can prevent.
 
 ### 3.10 COMPLETION AND SELF-CHECK
 

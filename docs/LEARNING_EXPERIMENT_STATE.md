@@ -52,7 +52,7 @@ This is the frozen F0 research question from `docs/EXPERIMENT_J.md` §1. The lea
 **Prerequisites (from `docs/EXPERIMENT_J.md` §17, §18 and `docs/LEARNING_EXPERIMENT_STATE.md` §1):**
 | Prerequisite | Status | Notes |
 |---|---|---|
-| `SWARM_RECEIPT_KEY` provisioned in `.env` | ✅ PROVISIONED | Operator-provisioned 2026-09-30 per §10.3 item 9. Required for HMAC receipt signing; promotion remains fail-closed without it |
+| `SWARM_RECEIPT_KEY` provisioned in `.env` | ❌ **NOT PROVISIONED** | **Corrected 2026-10-02.** This row previously read "✅ PROVISIONED (operator, 2026-09-30 per §10.3 item 9)". That claim is **HISTORICALLY CLAIMED and is contradicted by verified current state**: the key name is absent from `.env`, and absent from Process/User/Machine environment scopes (`PROVEN IN CURRENT REVISION`). Required for HMAC receipt signing; **promotion is and remains fail-closed without it.** See §10.4 — this is a governance capability, not a configuration value, and is operator-provisioned. |
 | Backend healthy (`/readyz`=ready, `/health`=ok) | ✅ Verified | Backend PID 20332, Qdrant healthy |
 | Qdrant `ActiveLessons` empty (C0) | ✅ Verified | Post-F1 baseline confirmed |
 | `SWARM_HARNESS_KEY=dev` in `.env` | ✅ Set | For rollout provenance |
@@ -1059,7 +1059,7 @@ It must not be provisioned simply to make tests pass. The engineering machinery 
 | Backend healthy | COMPLETE | Live verification 2026-09-28 |
 | Qdrant healthy / C0 verified | COMPLETE | `ActiveLessons` absent (404) |
 | Post-F1 governance baseline | COMPLETE | Verified 2026-09-27 |
-| `SWARM_RECEIPT_KEY` | PROVISIONED (operator, §10.3 item 9) | Fail-closed without it; required for promotion |
+| `SWARM_RECEIPT_KEY` | **NOT PROVISIONED** (operator, §10.3 item 9) — corrected 2026-10-02; the earlier "PROVISIONED" cell was `HISTORICALLY CLAIMED` and is contradicted by verified machine state | Fail-closed without it; required for promotion. Governance capability per §10.4 — operator-provisioned, never agent-generated |
 | F2 engineering | PARTIAL — fresh-process execution/import contract implemented 2026-09-29; all other F2-specific engineering NOT STARTED | `docs/EXPERIMENT_J_F2_EXECUTION_CONTRACT_AUTHORIZATION.md` |
 | ACTIVE lesson L | NONE | No lesson exists in Qdrant |
 | N=2 authorization | NOT AUTHORIZED | No document authorizes N=2 |
