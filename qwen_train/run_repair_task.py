@@ -89,6 +89,11 @@ def _pool_env_meta(instance_id: str) -> dict:
                     "base_image_name": row.get("base_image_name") or "",
                     "install": row.get("install") or "",
                     "image_name": row.get("image_name") or "",
+                    # D1 FIX (2026-10-03): the declared PASS_TO_PASS set is part of
+                    # task-environment metadata. Without it here the regression
+                    # check cannot be evaluated at all.
+                    "fail_to_pass": row.get("fail_to_pass") or "",
+                    "pass_to_pass": row.get("pass_to_pass") or "",
                 }
                 break
     except (OSError, ValueError):
@@ -610,7 +615,10 @@ def main() -> int:
         "base_commit": args.base_commit,
         "test_cmd": args.test_cmd,
         "fail_to_pass": args.f2p or [],
-        "pass_to_pass": [],
+        # D1 FIX (2026-10-03): was hardcoded `[]`, which silently disabled the
+        # PASS_TO_PASS regression check for every learning-event run. Take the
+        # declared set from the curriculum row.
+        "pass_to_pass": _pool_env_meta(instance_id).get("pass_to_pass") or [],
         "split": "repair",
         "base_image_name": _pool_env_meta(instance_id).get("base_image_name", ""),
         "install": _pool_env_meta(instance_id).get("install", ""),
@@ -723,8 +731,33 @@ def main() -> int:
         return (p.stdout or "") + (p.stderr or "")
 
     base_failing = cls._failing_ids(_test_once())
-    base_p2p_fail = set()
-    print(f"base: {len([t for t in f2p if t in base_failing])}/{len(f2p)} f2p failing")
+    # D2 FIX (2026-10-03): the declared PASS_TO_PASS set was previously dropped on
+    # the floor (`pass_to_pass: []`, `base_p2p_fail = set()`), which made the
+    # regression branch of `_test_result` unreachable dead code -- a run could
+    # break unrelated tests and still be judged a success. Carry the real set and
+    # the pre-existing base failures.
+    p2p = cls.probe._parse_list_field(
+        inst.get("pass_to_pass") or inst.get("PASS_TO_PASS") or []
+    )
+    base_p2p_fail = {t for t in p2p if t in base_failing}
+    print(
+        f"base: {len([t for t in f2p if t in base_failing])}/{len(f2p)} f2p failing, "
+        f"{len(base_p2p_fail)}/{len(p2p)} pre-existing p2p failure(s)"
+    )
+
+    # D2 FIX (2026-10-03): FAIL CLOSED when the declared FAIL_TO_PASS tests do not
+    # actually fail at base. Previously this was printed and then ignored, so a
+    # task whose F2P already passed scored `ok=True` with no agent work at all --
+    # a fabricated success, and one that would then have been read as a genuine
+    # learning signal. Task validity is a precondition, not a diagnostic.
+    f2p_failing_at_base = [t for t in f2p if t in base_failing]
+    if f2p and not f2p_failing_at_base:
+        raise SystemExit(
+            "ABORT: declared FAIL_TO_PASS tests all PASS at base_commit for "
+            f"{instance_id!r}. The task is already solved, so no failure signal "
+            "exists and any verdict would be meaningless. Verify base_commit, "
+            "test_patch application and the declared test_cmd."
+        )
 
     item = {"id": instance_id, "prompt": prompt, "split": "repair"}
     os.environ["SWARM_WORKSPACE_ROOT"] = str(repo)
@@ -948,7 +981,7 @@ def main() -> int:
 
     out = _test_once()
     after_failing = cls._failing_ids(out)
-    ok, reason = cls._test_result(out, f2p, [], base_p2p_fail)
+    ok, reason = cls._test_result(out, f2p, p2p, base_p2p_fail)
     res["verdict"] = ok
     res["verify_reason"] = reason
     res["elapsed_s"] = round(float(res.get("elapsed_s", 0)), 1)
@@ -989,6 +1022,7 @@ def main() -> int:
                 f2p_f2=len(f2p_set & after_failing),
                 diff_stat=diff,
                 ok=ok,
+                evaluator_reason=reason,
                 timeout_seconds=args.timeout,
                 agent_model="robs4b",
                 routing_mode=os.environ.get("SWARM_ROUTING_MODE", "unknown"),

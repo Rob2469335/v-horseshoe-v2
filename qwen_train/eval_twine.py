@@ -181,6 +181,7 @@ def main() -> int:
             f2p_f2=f2p_f2,
             diff_stat=diff_stat,
             ok=ok,
+            evaluator_reason=reason,
             timeout_seconds=args.timeout,
             agent_model="robs4b",
             routing_mode=os.environ.get("SWARM_ROUTING_MODE", "unknown"),

@@ -19,6 +19,14 @@ _log = logging.getLogger(__name__)
 
 _TERMINAL = frozenset({"harness_timeout", "agent_completed", "max_turns", "process_crash"})
 
+# Verdict reasons produced by `cli_baseline_swe._test_result` that mean the run
+# did NOT yield a usable capability measurement. Substring-matched (lowercased)
+# against the verdict reason so the check survives future reason wording.
+#   "env_error"  -> collection crash / no summary line and no test ids
+#   "regression" -> a PASS_TO_PASS test newly broke, i.e. the environment itself
+#                   is now untrustworthy as a measurement surface
+_NON_CAPABILITY_REASONS = ("env_error", "regression")
+
 
 def classify_evaluation_failure(ef: EvaluationFailure) -> str:
     """Deterministic first-stage classifier: BEHAVIORAL, INFRASTRUCTURE, or UNKNOWN.
@@ -26,7 +34,37 @@ def classify_evaluation_failure(ef: EvaluationFailure) -> str:
     Rules are ordered to prefer INFRASTRUCTURE/UNKNOWN when ambiguous.
     A deliberate harness timeout with a healthy backend and meaningful
     trajectory is BEHAVIORAL — not infrastructure.
+
+    VERDICT GATES (rule 0, added 2026-10-03). These run BEFORE every behavioural
+    rule and are the reason this function may no longer read a successful run as
+    a learning failure:
+
+    0a. ``evaluator_passed is True`` -> ``SOLVED``. The authoritative evaluator
+        says every FAIL_TO_PASS test passed. There is no failure to learn from.
+        Without this gate a fully successful run classified BEHAVIORAL, because
+        the behavioural rules key only on liveness (termination_reason, step
+        count, successful tool calls) and never on the task outcome.
+    0b. ``evaluator_passed is None`` -> ``UNKNOWN``. An absent verdict cannot
+        confirm a failure. Fail closed.
+    0c. ``evaluator_reason`` names a non-capability outcome -> ``INFRASTRUCTURE``.
+        A verdict of "env_error" or a new-regression reason means the run did not
+        yield a usable capability measurement.
+
+    A "SOLVED" verdict is a *terminal, expected* outcome, not an anomaly: it must
+    be excluded from the learning-failure channel entirely so that solving a task
+    can never accumulate promotion evidence.
     """
+    # 0. AUTHORITATIVE EVALUATOR VERDICT (fail closed)
+    if ef.evaluator_passed is True:
+        return "SOLVED"
+    if ef.evaluator_passed is None:
+        return "UNKNOWN"
+    if _NON_CAPABILITY_REASONS and any(
+        marker in (ef.evaluator_reason or "").lower()
+        for marker in _NON_CAPABILITY_REASONS
+    ):
+        return "INFRASTRUCTURE"
+
     # 1. Backend unreachable -> INFRASTRUCTURE
     if not ef.backend_reachable:
         return "INFRASTRUCTURE"
@@ -64,10 +102,24 @@ def classify_evaluation_failure(ef: EvaluationFailure) -> str:
 
 
 def _build_failure_reason(ef: EvaluationFailure) -> str:
-    """Construct failure_reason from trajectory facts. Never includes gold patch."""
+    """Construct failure_reason from trajectory facts. Never includes gold patch.
+
+    The verdict token is placed FIRST so it survives `process_failure`'s audit
+    truncation (`failure_reason[:100]`, prompt_repairer.py:1204). Without that,
+    the only record of whether the run actually failed was truncated away, which
+    is why the historical audit log could not answer whether a solved run had
+    been admitted.
+    """
     tools = ", ".join(ef.ordered_tool_actions[:20])
     mod = "no" if not ef.source_modification_attempted else "attempted"
+    verdict = {
+        True: "SOLVED",
+        False: "UNRESOLVED",
+        None: "UNKNOWN",
+    }[ef.evaluator_passed]
     return (
+        f"verdict={verdict} f2p={ef.post_f2p_passed}/"
+        f"{ef.post_f2p_passed + ef.post_f2p_failed} | "
         f"Evaluation task {ef.task_id}: agent executed {ef.step_count} steps "
         f"({tools}) with {ef.successful_tool_calls}/{ef.step_count} successful "
         f"tool calls, {mod} source modification before {ef.termination_reason}. "
@@ -142,7 +194,8 @@ async def build_and_submit_evaluation_failure(
     f2p_p2: int,
     f2p_f2: int,
     diff_stat: str,
-    ok: bool,
+    ok: bool | None = None,
+    evaluator_reason: str = "",
     timeout_seconds: int,
     agent_model: str,
     routing_mode: str,
@@ -205,6 +258,11 @@ async def build_and_submit_evaluation_failure(
         source_changed=source_changed,
         backend_reachable=res.get("backend_reachable_at_timeout", True),
         model_endpoint_reachable=res.get("model_reachable_at_timeout", True),
+        # The authoritative task-outcome verdict, threaded end-to-end. Before
+        # this, `ok` was accepted and discarded, so a run the evaluator judged
+        # SUCCESSFUL was indistinguishable from a genuine failure here.
+        evaluator_passed=ok,
+        evaluator_reason=str(evaluator_reason or ""),
         timestamp=res.get("ts", ""),
         agent_model=agent_model,
         routing_mode=routing_mode,

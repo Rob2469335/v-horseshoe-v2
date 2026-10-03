@@ -512,9 +512,15 @@ class TestProductionPathChain:
         assert cand["status"] == CandidateState.CANDIDATE.value
         assert set(cand["evidence_tasks"]) == {"pypa__twine-1066", "pallets__click-2380"}
 
-        # Diagnostic preserved full-fidelity in candidate state.
-        assert cand["trigger"].startswith("Evaluation task pypa__twine-1066")
+        # Diagnostic preserved full-fidelity in candidate state. Since 2026-10-03
+        # the trigger is prefixed with the authoritative evaluator verdict so the
+        # verdict survives `process_failure`'s `failure_reason[:100]` audit
+        # truncation -- without it the store could not answer whether a solved
+        # run had ever been admitted. The diagnostic itself is unchanged.
+        assert "Evaluation task pypa__twine-1066" in cand["trigger"]
         assert "no source modification" in cand["trigger"]
+        assert cand["trigger"].startswith("verdict=")
+        assert "f2p=0/3" in cand["trigger"]
 
         expected = _derive_learner_artifact(cand)
         assert expected.startswith("no-edit: ")

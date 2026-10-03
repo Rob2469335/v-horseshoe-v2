@@ -45,6 +45,20 @@ class EvaluationFailure:
     post_f2p_failed: int = 0
     source_changed: bool = False              # git diff shows modifications?
 
+    # --- Authoritative evaluator verdict ---
+    # ``evaluator_passed`` is the harness evaluator's task-outcome verdict
+    # (``cli_baseline_swe._test_result``: all FAIL_TO_PASS pass after the run).
+    # ``None`` means the verdict was not supplied, which is NOT the same as
+    # False: an absent verdict cannot confirm a failure, so the learning bridge
+    # must fail closed rather than assume one.
+    #
+    # ``evaluator_reason`` carries the verdict's own explanation (e.g.
+    # "env_error", "regression: N new p2p failure(s)", "f2p: 0/1 passed"). A
+    # non-capability reason means the run did not produce a usable measurement
+    # and must not be treated as a behavioural learning signal.
+    evaluator_passed: bool | None = None
+    evaluator_reason: str = ""
+
     # --- Infrastructure (post-run) ---
     backend_reachable: bool = True            # /readyz after run completed
     model_endpoint_reachable: bool = True     # robs4b health after run completed

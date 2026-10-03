@@ -46,8 +46,14 @@ def _n1_failure(**overrides) -> EvaluationFailure:
         post_f2p_passed=0,
         post_f2p_failed=3,
         source_changed=False,
-        backend_reachable=True,
+backend_reachable=True,
         model_endpoint_reachable=True,
+        # An N1-shaped observation is, by construction, a run that did NOT fix the
+        # task. State that verdict explicitly. Before 2026-10-03 the classifier
+        # inferred failure from liveness alone; it now requires the authoritative
+        # verdict, and an absent verdict is `None` -> UNKNOWN (fail closed).
+        evaluator_passed=False,
+        evaluator_reason="f2p: 0/3 passed",
         timestamp="2026-09-22T22:05:00",
         agent_model="robs4b",
         routing_mode="local_only",
@@ -518,3 +524,256 @@ class TestFutureEvaluator:
         assert "SWARM_ROLLOUT_ID" in content
         assert "SWARM_TASK_ID" in content
         assert "SWARM_HARNESS_KEY" in content
+
+
+# ---------------------------------------------------------------------------
+# 8. Authoritative-verdict gates (2026-10-03)
+#
+# Defect class "D3": `build_and_submit_evaluation_failure()` accepted the
+# evaluator's task-outcome verdict as `ok: bool` and never referenced it. The
+# classifier keyed only on liveness (termination_reason, step_count,
+# successful_tool_calls), so a run the evaluator judged SUCCESSFUL classified
+# BEHAVIORAL and was submitted to PromptRepairer as a learning failure.
+#
+# These tests pin the corrected contract:
+#   ok=True            -> SOLVED        (terminal; never a learning failure)
+#   ok=False + usable  -> BEHAVIORAL    (unchanged intended path)
+#   ok=None            -> UNKNOWN       (absent verdict cannot confirm failure)
+#   reason=env_error / regression -> INFRASTRUCTURE (no usable measurement)
+#   verdict token is inside the first 100 chars, so the audit record keeps it
+#   despite process_failure's `failure_reason[:100]` truncation.
+# ---------------------------------------------------------------------------
+
+
+def _solved_run(**overrides) -> EvaluationFailure:
+    """A run the evaluator judged a SUCCESS: every FAIL_TO_PASS now passes."""
+    base = dict(
+        termination_reason="agent_completed",
+        step_count=7,
+        successful_tool_calls=7,
+        source_modification_attempted=True,
+        source_modification_succeeded=True,
+        source_changed=True,
+        post_f2p_passed=1,
+        post_f2p_failed=0,
+        evaluator_passed=True,
+        evaluator_reason="passed",
+    )
+    base.update(overrides)
+    return _n1_failure(**base)
+
+
+class TestVerdictGates:
+    @pytest.fixture()
+    def isolated_repairer(self, tmp_path, monkeypatch):
+        """Isolated PromptRepairer — never writes production stores."""
+        from swarm_os.services.prompt_repairer import PromptRepairer
+        from swarm_os.healing.diagnostician import Diagnostician
+
+        monkeypatch.setattr("swarm_os.services.prompt_repairer._DATA_DIR", tmp_path)
+        monkeypatch.setattr("swarm_os.services.prompt_repairer._CANDIDATES_FILE",
+                            tmp_path / "candidates.json")
+        monkeypatch.setattr("swarm_os.services.prompt_repairer._SNAPSHOTS_FILE",
+                            tmp_path / "snapshots.json")
+        monkeypatch.setattr("swarm_os.services.prompt_repairer._AUDIT_LOG_FILE",
+                            tmp_path / "audit.jsonl")
+        repairer = PromptRepairer.__new__(PromptRepairer)
+        repairer.diagnostician = Diagnostician()
+        repairer._candidates = {}
+        repairer._snapshots = {}
+        repairer.evaluator = None
+        repairer.lesson_manager = AsyncMock()
+        return repairer
+
+    def test_solved_run_is_not_behavioural(self):
+        """D3 core: a SUCCESSFUL evaluator verdict must never be BEHAVIORAL."""
+        assert classify_evaluation_failure(_solved_run()) == "SOLVED"
+
+    def test_solved_run_not_behavioural_for_every_termination(self):
+        """The gate is evaluated before the behavioural rules, so it wins for
+        every termination reason -- including the timeout-with-progress shape
+        that previously classified BEHAVIORAL."""
+        for term in ("agent_completed", "max_turns", "harness_timeout"):
+            ef = _solved_run(termination_reason=term)
+            assert classify_evaluation_failure(ef) == "SOLVED", term
+
+    def test_solved_run_not_behavioural_even_with_healthy_infra(self):
+        """Adding the strongest possible BEHAVIORAL signals must not rescue it."""
+        ef = _solved_run(
+            backend_reachable=True,
+            model_endpoint_reachable=True,
+            successful_tool_calls=99,
+        )
+        assert classify_evaluation_failure(ef) == "SOLVED"
+
+    def test_absent_verdict_fails_closed(self):
+        """`None` means 'not supplied', not 'failed'. Fail closed."""
+        ef = _n1_failure(evaluator_passed=None, evaluator_reason="")
+        assert classify_evaluation_failure(ef) == "UNKNOWN"
+
+    def test_explicit_failure_with_usable_reason_still_behavioural(self):
+        """The intended learning path must be preserved, not over-blocked."""
+        ef = _n1_failure(
+            termination_reason="agent_completed",
+            evaluator_passed=False,
+            evaluator_reason="f2p: 0/3 passed",
+        )
+        assert classify_evaluation_failure(ef) == "BEHAVIORAL"
+
+    @pytest.mark.parametrize(
+        "reason",
+        ["env_error", "regression: 2 new p2p failure(s)"],
+    )
+    def test_non_capability_verdict_reason_is_infrastructure(self, reason):
+        """A verdict that is False for a NON-capability reason must not be
+        learned from: the run produced no usable measurement."""
+        ef = _n1_failure(evaluator_passed=False, evaluator_reason=reason)
+        assert classify_evaluation_failure(ef) == "INFRASTRUCTURE"
+
+    def test_verdict_token_survives_audit_truncation(self):
+        """`process_failure` audits `failure_reason[:100]`. The verdict must be
+        inside that window or the store cannot answer whether a solved run was
+        ever admitted."""
+        reason = _build_failure_reason(_solved_run())
+        assert reason.startswith("verdict=SOLVED")
+        assert "SOLVED" in reason[:100]
+
+    def test_failure_reason_records_verdict_and_f2p(self):
+        reason = _build_failure_reason(
+            _n1_failure(evaluator_passed=False, evaluator_reason="f2p: 0/3 passed")
+        )
+        assert reason.startswith("verdict=UNRESOLVED")
+        assert "f2p=0/3" in reason[:100]
+
+    @pytest.mark.asyncio
+    async def test_build_and_submit_skips_a_solved_run(self, isolated_repairer):
+        """End-to-end: a successful evaluator verdict creates NO candidate."""
+        res = {
+            "timed_out": False,
+            "cli_ok": True,
+            "tool_order": ["filesystem:read", "filesystem:patch"],
+            "tools_succeeded": ["filesystem:read", "filesystem:patch"],
+            "ts": "2026-10-03T00:00:00Z",
+            "backend_reachable_at_timeout": True,
+            "model_reachable_at_timeout": True,
+        }
+        with patch("swarm_os.services.prompt_repairer.get_prompt_repairer",
+return_value=isolated_repairer):
+            result = await build_and_submit_evaluation_failure(
+                task_id="pypa__twine-1066",
+                rollout_id="solved-rollout",
+                res=res,
+                f2p_p=0, f2p_f=3,
+                f2p_p2=3, f2p_f2=0,
+                diff_stat=" src/twine/__init__.py | 2 +-",
+                ok=True,
+                evaluator_reason="passed",
+                timeout_seconds=1200,
+                agent_model="robs4b",
+                routing_mode="local_only",
+            )
+        assert result == "skipped:SOLVED"
+        assert isolated_repairer._candidates == {}
+
+    @pytest.mark.asyncio
+    async def test_build_and_submit_still_learns_from_a_real_failure(self, isolated_repairer):
+        """The control: the intended path is intact after the fix."""
+        res = {
+            "timed_out": False,
+            "cli_ok": True,
+            "tool_order": ["filesystem:read", "filesystem:patch"],
+            "tools_succeeded": ["filesystem:read", "filesystem:patch"],
+            "ts": "2026-10-03T00:00:00Z",
+            "backend_reachable_at_timeout": True,
+            "model_reachable_at_timeout": True,
+        }
+        with patch("swarm_os.services.prompt_repairer.get_prompt_repairer",
+return_value=isolated_repairer):
+            result = await build_and_submit_evaluation_failure(
+                task_id="pypa__twine-1066",
+                rollout_id="failed-rollout",
+                res=res,
+                f2p_p=0, f2p_f=3,
+                f2p_p2=0, f2p_f2=3,
+                diff_stat=" src/twine/__init__.py | 2 +-",
+                ok=False,
+                evaluator_reason="f2p: 0/3 passed",
+                timeout_seconds=1200,
+                agent_model="robs4b",
+                routing_mode="local_only",
+            )
+        assert result.startswith("BEHAVIORAL:")
+        assert len(isolated_repairer._candidates) == 1
+
+    def test_hypothesized_action_is_not_fabricated_for_solved_runs(self):
+        """A solved run must not be described as an unresolved failure."""
+        reason = _build_failure_reason(_solved_run())
+        assert "did not resolve" not in reason
+
+
+# ---------------------------------------------------------------------------
+# 9. D1/D2 evaluator-verdict-quality gates (2026-10-03)
+#
+# D1: `run_repair_task.py` hardcoded `pass_to_pass: []` and passed `[]` into
+#      `_test_result`, making the regression branch unreachable dead code.
+# D2: the base FAIL_TO_PASS measurement was printed but never enforced, so a
+#      task whose F2P already passed scored ok=True with no agent work.
+#
+# Exercising these needs a real provisioned task, which is out of scope here, so
+# these pin the wiring at source level. The behavioural contracts themselves are
+# covered by `tests/test_cli_baseline_swe.py`.
+# ---------------------------------------------------------------------------
+
+
+class TestEvaluatorVerdictQualityWiring:
+    @staticmethod
+    def _src() -> str:
+        from pathlib import Path
+        p = Path(__file__).resolve().parent.parent / "qwen_train" / "run_repair_task.py"
+        return p.read_text(encoding="utf-8")
+
+    def test_pass_to_pass_is_no_longer_hardcoded_empty(self):
+        """D1: the declared P2P set must reach the task metadata."""
+        src = self._src()
+        assert '"pass_to_pass": [],' not in src, (
+            "pass_to_pass must not be hardcoded empty -- that disables the "
+            "PASS_TO_PASS regression check entirely"
+        )
+
+    def test_pool_meta_exposes_pass_to_pass(self):
+        """D1: the curriculum row's declared P2P set must be readable."""
+        src = self._src()
+        assert '"pass_to_pass": row.get("pass_to_pass") or ""' in src
+
+    def test_verdict_call_receives_the_real_p2p_set(self):
+        """D1: `_test_result` must receive p2p, not an empty list."""
+        src = self._src()
+        assert "cls._test_result(out, f2p, [], base_p2p_fail)" not in src, (
+            "_test_result must receive the declared p2p set"
+        )
+        assert "cls._test_result(out, f2p, p2p, base_p2p_fail)" in src
+
+    def test_base_p2p_failures_are_computed_from_the_base_run(self):
+        """D1: pre-existing P2P failures must be measured, not assumed empty."""
+        src = self._src()
+        assert "base_p2p_fail = {t for t in p2p if t in base_failing}" in src
+
+    def test_base_f2p_failure_is_enforced_not_merely_printed(self):
+        """D2: task validity is a precondition and must abort the run."""
+        src = self._src()
+        assert "f2p_failing_at_base" in src, (
+            "the base FAIL_TO_PASS measurement must be captured for gating"
+        )
+        assert "ABORT: declared FAIL_TO_PASS tests all PASS at base_commit" in src, (
+            "a task whose FAIL_TO_PASS already passes must abort the run"
+        )
+
+    def test_both_callers_forward_the_verdict_reason(self):
+        """The verdict's reason must reach the bridge from both harnesses."""
+        from pathlib import Path
+        root = Path(__file__).resolve().parent.parent / "qwen_train"
+        for name in ("run_repair_task.py", "eval_twine.py"):
+            content = (root / name).read_text(encoding="utf-8")
+            assert "evaluator_reason=reason" in content, (
+                f"{name} must forward the evaluator verdict reason"
+            )
