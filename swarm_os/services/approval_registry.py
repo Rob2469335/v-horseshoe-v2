@@ -100,6 +100,31 @@ OFFLINE_MCP_ENV = "SWARM_F1_OFFLINE_MCP"
 def _offline_mcp_enforced() -> bool:
     """True iff this process is an authorized offline Experiment-J learning run."""
     return os.environ.get(OFFLINE_MCP_ENV, "").strip() == "1"
+
+
+# The documented Experiment-J F1 web-tool control (F1-OP-INFRA-001). It is set by
+# the learning harness (`run_repair_task.py`) and is consumed by
+# `runtime_v2/api/_agent_helpers.py` to strip `web_search`/`web_fetch` from the
+# coder's tool surface.
+#
+# It is read HERE as well, because stripping two web tools is not sufficient:
+# every configured non-Serena MCP server reaches the network by a different
+# route, and `mcp_register` can attach a NEW network server mid-run. Gating the
+# MCP denylist only on SWARM_F1_OFFLINE_MCP meant the documented web-tool
+# control, on its own, did not fail closed on MCP capability.
+#
+# Deliberately a SEPARATE predicate from `_offline_mcp_enforced()`: broadening
+# that one would change SWARM_F1_OFFLINE_MCP's documented semantics (which
+# keeps server-lifecycle actions CONFIRM-gated). Absent/0 here leaves every
+# pre-existing classification untouched.
+NO_WEB_TOOLS_ENV = "SWARM_F1_NO_WEB_TOOLS"
+
+
+def _no_web_tools_enforced() -> bool:
+    """True iff the Experiment-J F1 web-tool control is active (F1-OP-INFRA-001)."""
+    return os.environ.get(NO_WEB_TOOLS_ENV, "").strip() == "1"
+
+
 DENY = "DENY"  # fail-closed: unknown / unclassified -> deny
 
 
@@ -343,6 +368,26 @@ def _base_agent_tool_policy(tool: str, action: str | None = None) -> str:
             server = a.split(":", 1)[0].strip() if a else ""
             if server not in _OFFLINE_MCP_SERVERS:
                 return DENY
+        # F1 web-tool control (F1-OP-INFRA-001) must ALSO fail closed on MCP.
+        # Three capabilities it closes, none of which the learning run uses:
+        #   * every non-Serena MCP server (network reachable by another route);
+        #   * `mcp_register`, which spawns a persistent server subprocess and so
+        #     could attach a network server mid-run — it was CONFIRM, and CONFIRM
+        #     is relaxed by ANY scoped trust grant;
+        #   * `mcp` server-lifecycle configure actions, previously ALWAYS_CONFIRM
+        #     and therefore grant-relaxable via _OFFLINE_GRANTABLE.
+        # `mcp_batch` is denied whole: it dispatches an arbitrary server/tool
+        # list, and the server is not expressible in the (tool, action) pair this
+        # function receives, so per-server filtering is not reachable here.
+        if _no_web_tools_enforced():
+            if t in ("mcp_register", "mcp_batch"):
+                return DENY
+            if t == "mcp":
+                server = a.split(":", 1)[0].strip() if a else ""
+                if server not in _OFFLINE_MCP_SERVERS:
+                    return DENY
+                if a and a.strip().lower() in ("register", "configure"):
+                    return DENY
         # Serena read-only symbol lookups are classified ALWAYS_CONFIRM *per
         # tool* so a broad `mcp` CONFIRM grant cannot open them; they relax only
         # via the exact scoped offline grant (see _OFFLINE_GRANTABLE). Other mcp
