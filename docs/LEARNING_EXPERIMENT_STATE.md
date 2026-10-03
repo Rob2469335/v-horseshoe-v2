@@ -1189,3 +1189,112 @@ fails on `origin/master` because the root `conftest.py` autouse
 This entry changes no experiment-state conclusion, no scientific parameter, and no
 authorization. F0 remains frozen, F1 remains closed, no ACTIVE lesson exists, N=2 is
 not authorized, and no candidate, lesson, promotion, or F2 observation was created.
+
+---
+
+## Operator Decisions: Genuine Learning Event (2026-10-02)
+
+This record states ONLY what the current authority and history actually establish.
+It does not grant authorization, and it does not convert any pending item into an
+allowed one. Where a decision has not been made, that is written down as pending
+rather than inferred.
+
+### D-1. Engineering rehearsal and a learning event are different things
+
+An **engineering rehearsal** exercises the execution path and produces NO scientific
+artifact: no candidate, no lesson, no promotion, no F2 observation. It is authorized
+for validation only.
+
+A **learning-event execution** is a governed scientific run that may accumulate
+promotion evidence and may therefore create a candidate.
+
+**Decision:** engineering rehearsals must never be counted as learning evidence, and
+an infrastructure failure is never a learning observation. This is the standing rule
+the code already enforces - `PromptRepairer.process_failure` rejects untagged events
+with `"ignored: untagged_event"` (`prompt_repairer.py:1230-1231`), so a background
+loop cannot accumulate evidence. `PROVEN IN CURRENT REVISION` by
+`tests/test_f1_reflection_boundary.py::test_reflection_cannot_create_learning_state`.
+
+### D-2. The reflection daemon is not part of any authorized execution path
+
+The ASPO reflection daemon ran unconditionally (first delay 120 s, interval 600 s)
+even under the post-F1 governance baseline `SWARM_AUTONOMY=0`, issuing its own LLM
+call against the same local model endpoint a governed observation measures and
+injecting unattributed `OBSERVED_FAILURE` records into the audit log.
+
+**Decision:** the daemon is gated on `SWARM_AUTONOMY`, exactly as the watch-loop
+already is (`main.py:388`), so both F1 harnesses - which export `SWARM_AUTONOMY=0` -
+no longer start it. Default is unchanged when the variable is unset. This is
+non-interference, not a scientific change: these events were untagged and discarded
+either way.
+
+### D-3. A learning run must not silently hold network or repository-mutating MCP
+
+`qwen_train/run_repair_task.py` issued `grant("mcp", 8 * 3600)`. Because
+`agent_tool_policy` relaxes a CONFIRM classification for ANY active scoped grant,
+that single line auto-approved every CONFIRM-gated MCP action for eight hours -
+including the GitHub MCP server's mutation tools, which `swarm_config.json` launches
+as `github-mcp-server.exe stdio` with NO `--read-only`/`--tools` restriction and a PAT
+credential. `run_curriculum._GRANTABLE` already documents the opposite intent
+("never blanket auto-approve").
+
+**Decision:** under `SWARM_F1_OFFLINE_MCP=1` - exported by the learning harness -
+every `mcp` action whose server is not the local, read-only `serena` is **DENY**. DENY
+is never relaxed by a trust grant and is short-circuited in the tool executor BEFORE
+any approval prompt, so neither a blanket grant nor the harness's
+`allow_approval=True` can reopen it. The blanket grant was removed rather than
+flagged. Pinned by `tests/test_f1_offline_mcp_policy.py`.
+
+### D-4. What remains frozen
+
+- **F0 scientific design** - `docs/EXPERIMENT_J.md`, SHA-256
+  `4EAFD2FAF2BA79078F8C1CAD7415DC1CEB2D24E753122A06FC2FA6AF76908337`. Unchanged.
+- **F1 authority** - `docs/EXPERIMENT_J_F1_AUTHORIZATION.md`, SHA-256
+  `FF4A6722F424AE84EFC7EBB191119C57B46E0E0D11590D1AD980D65B04038304`. Unchanged.
+- **F1 historical evidence** - the 20/20 protocol observations (10 valid, 10
+  infrastructure-invalid) and their reconciliation. Historical claims are preserved
+  AS HISTORICAL and were not re-verified for this entry.
+
+### D-5. What is allowed right now
+
+Engineering and infrastructure work only: implementation, focused tests, task
+environment provisioning, governance documentation, and an engineering rehearsal of
+the F2 path. Committed engineering work may be pushed.
+
+### D-6. What is NOT allowed right now
+
+- **The learning event itself.** No verified ACTIVE lesson L exists.
+- **N = 2** - not authorized.
+- **N1 / F1 candidate evidence reuse** as a new learning event - prohibited; reusing
+  prior evidence would fabricate provenance.
+- Creating a candidate, lesson, promotion, or ACTIVE-lesson mutation for any reason
+  other than a genuinely governed learning run.
+- Any change to F0/F1 thresholds, the receipt/HMAC path, evaluator separation, or
+  clean-room requirements.
+
+### D-7. What is pending
+
+| Item | Status | Evidence class |
+|---|---|---|
+| `SWARM_RECEIPT_KEY` provisioned | **PENDING** - fail-closed prerequisite, missing | `PROVEN IN CURRENT REVISION` (recorded at the state table above) |
+| F2 engineering rehearsal (Requirement 3) | **PENDING** - never run | `PROVEN IN CURRENT REVISION` |
+| Production model seam completes a real arm on this host | **NOT ESTABLISHED** | no F2 execution has occurred |
+| ActiveLessons empty (C0 condition) | **NOT ESTABLISHED** for a live run | Qdrant not currently running |
+| N = 2 | **NOT AUTHORIZED** | `docs/EXPERIMENT_J_N2_READINESS_AUDIT.md` |
+
+### D-8. Provenance of the unattended commit `12b0a177`
+
+`12b0a177` ("clean up AGENTS.md ownership", 2026-10-02 19:49:32) was authored with the
+operator's git identity and pushed to `origin/master` outside any agent session in
+this thread. No automatic or background Git commit path has been established in the
+tracked source; the only `git commit` invocation found is the interactive console
+`/commit` command (`organism_console/_commands_dev.py:201`), and `git push` appears
+only inside a denylist (`swarm_os/capabilities/sandbox_repl.py:150`).
+
+**Decision:** treat the author as **NOT ESTABLISHED**. It is not attributed to a
+runtime component and not attributed to the operator. Its content is preserved as
+committed history and is not rewritten. Recorded here so the gap is visible rather
+than inferred away.
+
+This entry changes no experiment-state conclusion and no scientific parameter. It
+records decisions and pendings; it grants no authorization.

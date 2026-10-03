@@ -236,25 +236,44 @@ async def lifespan(app: FastAPI):
         log.info("Started MemoryBridge daemons (watch_loop and start_manager_daemon)")
 
     try:
-        from swarm_os.services.reflection_loop import run_reflection
+        import os as _os_reflect
 
-        async def _reflection_daemon(
-            interval_seconds: float = 600.0, first_delay: float = 120.0
-        ):
-            # Defer the first distillation (an LLM call) out of the startup
-            # window so the backend serves immediately.
-            if first_delay > 0:
-                await asyncio.sleep(first_delay)
-            while True:
-                try:
-                    await run_reflection()
-                except Exception as exc:
-                    log.warning(f"Reflection daemon iteration failed: {exc}")
-                await asyncio.sleep(interval_seconds)
+        # Gated by SWARM_AUTONOMY=1 (default on when unset) - set to 0 to keep
+        # repairs manual-only, exactly as the watch-loop above. The reflection
+        # daemon is NOT part of any authorized Experiment J execution path: it
+        # distills on a 10-min cadence and issues its own LLM call, which would
+        # contend with a governed F1/F2 observation for the shared local model
+        # endpoint and inject unattributed OBSERVED_FAILURE records into the
+        # PromptRepairer audit log. The F1/L1 harnesses already export
+        # SWARM_AUTONOMY=0 (run_repair_task.py, f1_infra.py), so they no longer
+        # start it. Scientific semantics are unchanged: these events are untagged
+        # and PromptRepairer rejects them as "ignored: untagged_event", so they
+        # never became learning evidence either way.
+        if _os_reflect.environ.get("SWARM_AUTONOMY", "1").strip() == "1":
+            from swarm_os.services.reflection_loop import run_reflection
 
-        t3 = asyncio.create_task(_reflection_daemon())
-        bg_tasks.add(t3)
-        log.info("Started Reflection daemon (ASPO rule distillation, 10-min interval)")
+            async def _reflection_daemon(
+                interval_seconds: float = 600.0, first_delay: float = 120.0
+            ):
+                # Defer the first distillation (an LLM call) out of the startup
+                # window so the backend serves immediately.
+                if first_delay > 0:
+                    await asyncio.sleep(first_delay)
+                while True:
+                    try:
+                        await run_reflection()
+                    except Exception as exc:
+                        log.warning(f"Reflection daemon iteration failed: {exc}")
+                    await asyncio.sleep(interval_seconds)
+
+            t3 = asyncio.create_task(_reflection_daemon())
+            bg_tasks.add(t3)
+            log.info("Started Reflection daemon (ASPO rule distillation, 10-min interval)")
+        else:
+            log.info(
+                "Reflection daemon suppressed (SWARM_AUTONOMY=0): no background "
+                "distillation / LLM call during a governed run"
+            )
     except Exception as exc:
         log.warning(f"Reflection daemon unavailable: {exc}")
 

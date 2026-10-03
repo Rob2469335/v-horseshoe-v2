@@ -731,18 +731,30 @@ def main() -> int:
     # Experiment J F1: strip web_search/web_fetch from the coder's tool surface
     # to prevent drift into web research on this local repair task.
     os.environ["SWARM_F1_NO_WEB_TOOLS"] = "1"
+    # Experiment J: make every non-local MCP action DENY for this learning run.
+    # DENY is never relaxed by a trust grant and is short-circuited in the tool
+    # executor BEFORE any approval prompt, so neither a broad `mcp` grant nor
+    # this harness's `allow_approval=True` can obtain a network-capable or
+    # repository-mutating MCP tool.
+    os.environ["SWARM_F1_OFFLINE_MCP"] = "1"
 
-    # Grant task-scoped offline tool access
+    # Grant task-scoped offline tool access. `_grant_offline()` grants exactly
+    # `run_curriculum._GRANTABLE` -- sandbox_repl, lsp, git, and the two scoped
+    # Serena symbol lookups -- which is the documented least-privilege set (see
+    # the comment on `_GRANTABLE`: "never blanket auto-approve").
+    #
+    # A broad `grant("mcp", 8 * 3600)` (plus `web_fetch` and `filesystem`) used to
+    # be added here. It relaxed EVERY CONFIRM-gated MCP action for 8 hours,
+    # including GitHub write/mutation tools (push_files, create_pull_request,
+    # create_or_update_file, create_issue, create_branch) and every
+    # network-backed MCP server (firecrawl, playwright, arxiv, s2, context7,
+    # huggingface). It is REMOVED rather than flagged: the DENY policy above is
+    # the fail-closed control, and a blanket grant contradicts `_GRANTABLE`.
+    # `filesystem` is deliberately not granted: per `_OFFLINE_GRANTABLE` it may
+    # only be relaxed when the handler's SWARM_WRITE_ROOT confinement is set, and
+    # this harness does not set it.
     grant_msg = rc._grant_offline()
     print(f"offline grants: {grant_msg}")
-    try:
-        from swarm_os.services.trust_ledger import grant
-        grant("mcp", 8 * 3600)
-        grant("web_fetch", 8 * 3600)
-        grant("filesystem", 8 * 3600)
-        print("offline grants: mcp, web_fetch, filesystem (8h)")
-    except Exception as exc:
-        print(f"grant failed: {exc}")
 
     # --- Start F1-owned backend with correct workspace root (replaces health gate) ---
     print("\n[STARTING F1 BACKEND]")

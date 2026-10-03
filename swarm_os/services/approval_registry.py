@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import secrets
 import threading
 import time
@@ -73,6 +74,32 @@ _OFFLINE_GRANTABLE = {
 _SERENA_SYMBOL_OPS = frozenset(
     {"serena:find_symbol", "serena:find_referencing_symbols"}
 )
+# Experiment J learning runs must never silently obtain network-capable or
+# repository-mutating MCP capability. When SWARM_F1_OFFLINE_MCP=1, EVERY `mcp`
+# action whose server is not on this local, read-only allowlist is DENY.
+#
+# DENY is the narrowest safe classification and it is structurally final:
+#   * `agent_tool_policy` never relaxes DENY (see its docstring);
+#   * `tool_executor` short-circuits DENY BEFORE raising any approval prompt,
+#     so neither a broad `grant("mcp", ...)` nor a harness that auto-answers
+#     approvals (`run_curriculum._attempt_once(allow_approval=True)`) can reopen
+#     it.
+#
+# Only `serena` is allowed: it is launched locally
+# (`serena start-mcp-server --project <repo>`) and the only operations reachable
+# through it are read-only symbol lookups. Every other configured server
+# (github, firecrawl, playwright_mcp, arxiv, s2_scholar, context7, huggingface,
+# seq_thinking, code_review, sqlite, memory, google_calendar) reaches the network.
+_OFFLINE_MCP_SERVERS = frozenset({"serena"})
+
+# Opt-in switch. Default absent/0 keeps the pre-existing behaviour so nothing
+# outside an authorized learning run changes. The learning harness sets it to "1".
+OFFLINE_MCP_ENV = "SWARM_F1_OFFLINE_MCP"
+
+
+def _offline_mcp_enforced() -> bool:
+    """True iff this process is an authorized offline Experiment-J learning run."""
+    return os.environ.get(OFFLINE_MCP_ENV, "").strip() == "1"
 DENY = "DENY"  # fail-closed: unknown / unclassified -> deny
 
 
@@ -309,6 +336,13 @@ def _base_agent_tool_policy(tool: str, action: str | None = None) -> str:
     if t == "lsp":
         return CONFIRM
     if t in ("mcp", "mcp_register", "mcp_batch"):
+        # Experiment J offline learning run: fail closed on every non-local MCP
+        # server BEFORE any classification below, so neither a trust grant nor an
+        # auto-answering approval harness can reach a network or mutating tool.
+        if _offline_mcp_enforced() and t == "mcp":
+            server = a.split(":", 1)[0].strip() if a else ""
+            if server not in _OFFLINE_MCP_SERVERS:
+                return DENY
         # Serena read-only symbol lookups are classified ALWAYS_CONFIRM *per
         # tool* so a broad `mcp` CONFIRM grant cannot open them; they relax only
         # via the exact scoped offline grant (see _OFFLINE_GRANTABLE). Other mcp
