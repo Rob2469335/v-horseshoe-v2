@@ -623,6 +623,142 @@ protocol, provisioning the trusted store, and generating any real evidence.
 
 ---
 
+## 4e. Authorized F2 evaluation protocol — `f2_experiment_j_v1`
+
+**Module:** `qwen_train/f2_protocol.py` · **Tests:** `tests/test_f2_protocol.py` (42)
+**Frozen inputs unchanged:** F0 (`4EAFD2FA…`), S8 (`F095D051…`), the Q8 endpoint
+detector (`7BDCCFC8…`), and the governance layer (`2717d8de`).
+
+F2 is a provenance-first, **independently regraded**, paired T/X protocol. The
+worker/producer is **not** authoritative for the scientific result.
+
+```
+CONTROLLED EXECUTION -> IMMUTABLE EVIDENCE BUNDLE -> TRUSTED ARTIFACT STORE
+  -> INDEPENDENT REGRADER -> FROZEN F2 ENDPOINT -> PAIRED T/X STATISTICS
+```
+
+### Scientific endpoint (F0, unchanged)
+
+First qualifying filesystem edit within **k = 12**, **strictly after** lesson
+delivery, path in the task's frozen `relevant_file_set`, operation in
+`{write, patch, edit, create}`; no qualifying edit by step 12 ⇒ **censored at
+12**. Task success is **secondary** and is never synonymous with the endpoint.
+The endpoint is computed by the frozen detector
+`f2_endpoint.qualifying_first_edit`; this protocol does not reimplement it, and
+delivery ordering is enforced by filtering step records to those strictly after
+the verified delivery timestamp.
+
+### Protocol identifier
+
+`f2_experiment_j_v1` — the single authorized F2 result protocol.
+`json_test_report_v1` remains the generic reference deriver and is **not** the
+scientific F2 protocol.
+
+### Result schema (`F2Result`, machine-readable)
+
+`protocol_id · instance_id · arm · execution_identity · delivery_evidence_identity ·
+relevant_file_set_hash · horizon_k · qualifying_operations · first_edit_step ·
+first_edit_path · first_edit_operation · delivery_timestamp · endpoint · censored ·
+task_success · behavioral_artifact_digest · task_outcome_artifact_digest ·
+treatment_artifact_digest` (+ `result_digest`). PRIMARY (`first_edit_step` /
+`endpoint`) and SECONDARY (`task_success`) are structurally distinct fields.
+
+### Evidence inputs
+
+Raw ordered behavioral step records
+`{step_id, timestamp, function_name, operation, path}`; the task-outcome report
+`{fail_to_pass: {node: passed|failed|error|skipped}}`; the rendered treatment
+artifact; the lesson block artifact (arm T); the evaluator implementation
+artifact. The `relevant_file_set` is supplied **curator-side** from the frozen Q8
+manifest and must hash to the bundle's declared `relevant_file_set_hash`.
+
+### Verifier procedure
+
+schema/gold-boundary → protocol → evaluator authorization → evaluator
+**implementation bytes (required for F2)** → artifact integrity (containment,
+role, digest, size) → delivery ordering → **endpoint reconstruction from raw
+behavioral evidence** → **independent task-outcome derivation** → declaration
+comparison (any disagreement rejected) → frozen S8 proof.
+
+### Evaluator provenance rule
+
+F2 **requires** `evaluator_id`, `evaluator_version`,
+`evaluator_implementation_digest`, the **evaluator implementation artifact**,
+`procedure_id`, `protocol_version`, and that the authorization's
+`protocol_version` equals `f2_experiment_j_v1`. The retained implementation bytes
+must hash to the authorized digest. **A SHA-256-shaped string alone is not
+evaluator-byte provenance.** If the bytes are absent, F2 evidence is **not
+admissible**.
+
+### Clean-room rule
+
+X must be a pure deterministic derivation of T with only L removed: same
+instance/repository/base commit/`relevant_file_set_hash`/`horizon_k`/protocol/
+evaluator; arm T carries `lesson_block_hash` and a lesson block artifact that
+hashes to it; arm X carries none; and
+`T_treatment_text.replace(lesson_block_text, "", 1) == X_treatment_text`.
+Any unauthorized difference fails closed.
+
+### Delivery provenance
+
+The primary endpoint must be strictly after the verified delivery event.
+`lesson_block_hash · final_prompt_hash · delivery_timestamp · arm ·
+treatment_artifact_hash` are bound. Delivery cannot be inferred from the
+existence of an upstream lesson.
+
+### Gold boundary
+
+No gold patch, diff, hunk, source, reference/fixing commit, oracle or hidden
+evaluator internals may appear anywhere in an F2 bundle; a recursive scan rejects
+such a bundle with `MALFORMED`. The worker receives only the minimum
+cryptographic/admission facts.
+
+### Fail-closed conditions
+
+Wrong protocol (`UNKNOWN_SCHEMA`); wrong/unauthorized evaluator or wrong
+implementation bytes (`UNAUTHORIZED_PROCEDURE`); missing evaluator implementation
+artifact (`PROVENANCE_NOT_ESTABLISHED`); artifact escape/missing/digest/size
+(`ARTIFACT_*`); arm or identity mismatch (`IDENTITY_MISMATCH`); no post-delivery
+event stream, changed `relevant_file_set` digest, or any declaration disagreement
+(`SCIENTIFICALLY_INSUFFICIENT`); gold material (`MALFORMED`). **A missing event
+stream is never inferred as a censored run.**
+
+### Operational immutability
+
+The trusted artifact root is defined explicitly (`TrustedArtifactStore` +
+`RetentionPolicy`), but **application code does not prove OS/filesystem
+immutability**. That is an operator/OS requirement, recorded below, not a code
+guarantee.
+
+### Classification
+
+**PROVEN:** evaluator authorization and byte provenance (when supplied);
+execution identity; artifact containment/integrity/role; delivery ordering;
+endpoint reconstruction from raw evidence; independent task-outcome derivation;
+declaration rejection; T/X clean room; gold boundary; deterministic,
+side-effect-free verification; fail-closed taxonomy.
+
+**SUPPORTED:** the pipeline's sufficiency once a real executor emits conforming
+bundles into an immutable store.
+
+**INFERRED:** paired T/X statistics consume the derived `F2Result` without
+further trust assumptions.
+
+**NOT ESTABLISHED:** that any real F2 execution has occurred; OS-level
+immutability of the store.
+
+**GOVERNANCE GAP:** the authorized evaluator identity + implementation digest +
+procedure; the trusted store location, retention duration and deletion
+detection; curator and independent-verifier authority.
+
+**REQUIRES AUTHORIZATION:** naming the authorized evaluator/procedure, the
+population/`n`/`δ`/α decisions, provisioning the receipt key, and running F2.
+
+> Contamination is **not** claimed solved: training contamination of gold patches
+> remains a disclosed limitation.
+
+---
+
 ## 5. Clean room (R4) — what is now proven, and what is not
 
 **Closed and proven.** The untrusted-subprocess environment builder previously
