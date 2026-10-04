@@ -236,6 +236,221 @@ step.
 
 ---
 
+## 13. F2 Change-Control and Clarification Mechanism
+
+This document may carry **dated F2 clarification entries**. This mechanism is part
+of the F2 authorization and is recorded here so that an implementation ambiguity
+left by a higher-authority document can be resolved without editing that document.
+
+1. **Dated clarification entries are permitted.** An entry is appended to §14 with
+   a date and a reference id `F2-CLARIFICATION-<n>`.
+2. **Clarifications resolve ambiguity in the existing authorized contract.** They
+   record how an already-authorized contract is to be interpreted where the
+   higher-authority document is silent. They add no new science.
+3. **They MUST NOT silently modify frozen F0** (`docs/EXPERIMENT_J.md`) or F1
+   authority. A clarification that would change a frozen element is not a
+   clarification and is out of scope.
+4. **They MUST NOT expand implementation scope** beyond §10 unless a separate,
+   explicit authorization is granted and recorded.
+5. **Each entry records:** date; issue; authoritative decision; rationale;
+   affected contract; and whether implementation authorization is changed.
+6. **This mechanism is itself part of the F2 authorization.** It is subordinate to
+   F0 and to the authority documents named in §1, and may not be used to
+   circumvent them.
+7. **This log may also carry dated implementation-authorization entries.** Where a
+   clarification defers implementation to a later step (§13(4)), the required
+   separate authorization is recorded here with a reference id
+   `F2-IMPL-AUTH-<n>` and status `AUTHORIZED`. Only the repository operator may
+   record a clarification or an implementation-authorization entry, and each such
+   entry records its author and its date. An implementation-authorization entry MAY
+   expand the §10 file boundary, but only by naming the additional files
+   explicitly. It remains subordinate to F0 and to the authority documents named in
+   §1, and it adds no new science.
+
+## 14. F2 Clarification Log
+
+| Ref | Item | Status | Date | Notes |
+|-----|------|--------|------|-------|
+| F2-CLARIFICATION-001 | F2 delivery-timestamp interpretation (Option A) | CLARIFICATION | 2026-10-04 | Dated F2 authorial interpretation per §13; does not modify F0 |
+| F2-IMPL-AUTH-001 | Step 2b — canonical delivery-timestamp verification (implements `F2-CLARIFICATION-001` Option A) | AUTHORIZED | 2026-10-04 | Separate implementation authorization per §13(4) and §13(7); expands the §10 file boundary by naming exactly two files; does not modify F0 |
+| F2-CLARIFICATION-002 | Same-second steps are AMBIGUOUS and excluded from the endpoint window | CLARIFICATION | 2026-10-04 | Dated F2 authorial interpretation per 13; does not modify F0; adopts the conservative reading, stated in the entry |
+| F2-IMPL-AUTH-002 | Step 2c - delivery-timestamp hardening (implements F2-CLARIFICATION-001/002 and a plausibility floor) | AUTHORIZED | 2026-10-04 | Separate implementation authorization per 13(4) and 13(7); names no files beyond the two already named in F2-IMPL-AUTH-001; does not modify F0 |
+
+### F2-CLARIFICATION-001 - F2 delivery-timestamp interpretation (Option A)
+
+**Author:** Rob (human operator)
+
+**Date:** 2026-10-04
+
+**Issue.** F0 (`docs/EXPERIMENT_J.md:172`) fixes `delivery_timestamp = time.time()`
+(Unix epoch seconds, with a fractional component), while trajectory step
+timestamps are canonical whole-second ISO-8601 UTC strings
+(`runtime_v2/api/agent_service_v2.py:510`). F0 (`:103`, `:109`) requires strict
+behavioural ordering `step.timestamp < delivery_timestamp`, but does not specify
+how the two timestamp domains are compared. Comparing a string to a float is
+type-incoherent, so the rule is not directly implementable as literally written.
+
+**Authoritative decision (Option A).** For F2 ordering, the Unix-epoch
+`delivery_timestamp` is converted to UTC and **floored/truncated to the whole Unix
+second** before comparison with the whole-second trajectory timestamp. The
+comparison remains **strict**: `step_timestamp < delivery_timestamp_second`.
+
+Consequences:
+
+- a step in an earlier UTC second is BEFORE delivery;
+- a step in the **same** UTC second is **NOT BEFORE** delivery;
+- a step in a later UTC second is NOT BEFORE delivery.
+
+Flooring/truncation is explicit: fractional delivery precision is deliberately
+NOT used to claim ordering precision the trajectory does not contain. Rounding to
+nearest second is NOT used; ceiling is NOT used.
+
+**Rationale.** The trajectory records whole seconds. Flooring keeps the strict
+rule conservative and deterministic, and avoids inventing sub-second ordering that
+the retained evidence cannot support.
+
+**Affected contract.** F2 delivery-identity ordering only (`delivery_timestamp`
+vs the trajectory `step.timestamp`). F0 is unchanged, and this clarification does
+NOT claim that F0 originally specified this behaviour; it is an F2 interpretation
+filling an ambiguity F0 leaves open.
+
+**Implementation authorization.** This clarification authorizes the
+**verifier-side timestamp interpretation only**. It does NOT authorize unrelated
+runtime changes, worker changes, prompt-hash changes, `f2_arm_worker.py` changes,
+or F0 edits. The timestamp conversion itself is implemented in a later,
+separately-authorized step.
+
+### F2-IMPL-AUTH-001 - Step 2b: canonical delivery-timestamp verification
+
+**Author:** Rob (human operator) — the repository operator named in the
+authorization footer of this document.
+
+**Date:** 2026-10-04
+
+**Authority.** Recorded under §13(4) and §13(7) as the separate, explicit
+authorization that `F2-CLARIFICATION-001` deferred to ("implemented in a later,
+separately-authorized step"). This entry grants implementation authority only. It
+records no new science and modifies no frozen element.
+
+**Issue.** The F0 timestamp domains are type/precision-incoherent for direct
+comparison. F0 (`docs/EXPERIMENT_J.md:172`) fixes
+`delivery_timestamp = time.time()` (Unix epoch seconds, with a fractional
+component), while trajectory step timestamps are canonical whole-second ISO-8601 UTC
+strings (`runtime_v2/api/agent_service_v2.py:510`), and F0 (`:103`, `:109`) requires
+strict ordering `step.timestamp < delivery_timestamp`. Comparing a canonical string
+to a float is not type-coherent, so the rule is not directly implementable as
+literally written.
+
+**Decision.** `F2-CLARIFICATION-001` Option A is the authoritative implementation
+interpretation. The verifier converts the Unix-epoch `delivery_timestamp` to UTC and
+**floors/truncates it to the whole Unix second**, then compares at whole UTC-second
+resolution. Ordering remains strict:
+
+`step_timestamp < delivery_timestamp_second`
+
+- a step in an earlier UTC second is BEFORE delivery;
+- a step in the **same** UTC second is **NOT BEFORE** delivery;
+- a step in a later UTC second is NOT BEFORE delivery.
+
+Flooring is explicit: fractional delivery precision is NOT used to claim ordering
+precision the trajectory does not contain. Rounding to nearest second is NOT used;
+ceiling is NOT used. Trajectory timestamps remain canonical ISO-8601 UTC timestamps.
+
+**Rationale.** Trajectory timestamps have whole-second precision, while delivery
+timestamps originate from fractional Unix epoch seconds. Flooring the delivery
+timestamp avoids manufacturing sub-second ordering precision and makes same-second
+observations conservatively NOT-BEFORE.
+
+**Scope.** Verifier-side conversion only. The conversion MUST live in a **separate
+delivery-timestamp parsing/conversion path**. The generic canonical trajectory
+timestamp parser MUST remain strict. Trajectory timestamps are NOT reformatted,
+re-serialized, or re-interpreted.
+
+**File boundary.** This entry expands the §10 bounded file list by naming the
+following two additional files, and by no others:
+
+- `qwen_train/f2_protocol.py` — ONLY the verifier-side delivery-timestamp
+  parsing/conversion and ordering logic necessary to implement
+  `F2-CLARIFICATION-001`.
+- `tests/test_f2_protocol.py` — ONLY tests necessary to establish the authorized
+  timestamp contract and preserve existing F2 protocol behavior.
+
+No other production or test file is authorized by this entry.
+
+**Tests.** The implementation MUST include focused regression tests covering:
+
+- valid delivery timestamps;
+- malformed / non-finite delivery timestamp values;
+- flooring rather than rounding;
+- same-second rejection;
+- earlier-second acceptance;
+- later-second rejection;
+- preservation of strict canonical trajectory timestamp parsing.
+
+**Explicit non-authorization.** This entry does NOT authorize:
+
+- `docs/EXPERIMENT_J.md` (frozen F0);
+- `runtime_v2/api/agent_service_v2.py`;
+- `runtime_v2/services/f2_replay.py`;
+- `qwen_train/f2_arm_worker.py`;
+- `qwen_train/f2_governance.py`;
+- `qwen_train/f2_evidence.py`;
+- `qwen_train/f2_endpoint.py`;
+- prompt-hash redesign;
+- worker fallback changes;
+- runtime timestamp precision changes;
+- F2 experiment execution;
+- real F2 evidence generation;
+- service startup/restart;
+- unrelated cleanup or refactoring.
+
+**Implementation status.** This entry **authorizes future implementation; it does not
+itself implement anything.** Step 2b is NOT implemented by this entry. No production
+code, no test code, and no runtime timestamp production is changed by recording this
+authorization. Implementation remains a separate, subsequent step.
+
+### F2-CLARIFICATION-002 - Same-second steps are AMBIGUOUS and excluded from the endpoint window
+
+**Author:** Rob (human operator)
+
+**Date:** 2026-10-04
+
+**Issue.** F2-CLARIFICATION-001 defines only the BEFORE test (step_timestamp < floored delivery second) and states that a step in the same UTC second is NOT BEFORE delivery. It does not say whether such a step belongs to the endpoint window. The verifier (`qwen_train/f2_protocol.py`, comparison `step_dt > delivery_dt`) excludes it from the window. F0 (`docs/EXPERIMENT_J.md:103`, `:109`) defines only the strictly-earlier (rediscovery) rule and defines no strictly-after rule; the strictly-after window was previously asserted only by the subordinate `docs/EXPERIMENT_J_F2_READINESS_AND_STATISTICAL_PLAN.md`.
+
+**Authoritative decision.** For F2 endpoint reconstruction a step is inside the endpoint window only if its UTC second is strictly later than the floored delivery second. A step in the SAME UTC second as the floored delivery second is AMBIGUOUS: it is not BEFORE delivery (it is not treated as rediscovery) and it is NOT in the endpoint window. It is excluded from endpoint reconstruction. If no step remains in the window the run is SCIENTIFICALLY_INSUFFICIENT, not censored.
+
+**Rationale.** Step timestamps have whole-second precision and delivery is fractional, so the order of a same-second step relative to delivery cannot be established from retained evidence. Counting it could attribute pre-delivery behaviour to the lesson. Excluding it is the conservative choice for the primary causal claim. F0's literal wording could be read to count such a step; this entry does not claim otherwise and records a deliberate conservative interpretation.
+
+**Affected contract.** F2 endpoint window only. F0 is unchanged.
+
+**Deferred.** Recording ambiguous or rediscovery steps (the F0 rediscovery flag and contamination diagnostics, `docs/EXPERIMENT_J.md:104`, `:107`) is NOT implemented and is NOT authorized by this entry. It requires a separate authorization.
+
+**Implementation authorization.** None beyond F2-IMPL-AUTH-002. The current verifier behaviour already matches this decision.
+
+### F2-IMPL-AUTH-002 - Step 2c: delivery-timestamp hardening
+
+**Author:** Rob (human operator)
+
+**Date:** 2026-10-04
+
+**Authority.** Recorded under 13(4) and 13(7). Implements F2-CLARIFICATION-001 and F2-CLARIFICATION-002 and the plausibility floor below. Records no new science and modifies no frozen element.
+
+**Issue.** An evidence run on 2026-10-04 showed that `parse_delivery_timestamp` (a) raises OverflowError for an integer too large for float instead of rejecting it; (b) accepts 0 and negative values, so a mistaken value can silently place delivery before every step; and (c) the existing test `test_float_seam_timestamp_is_rejected_by_regrade` passes for an unrelated reason and its comment is now false.
+
+**Decision.**
+1. Guard numeric conversion in `parse_delivery_timestamp` so that no input can raise; every failure returns (None, reason).
+2. Reject any delivery instant earlier than 2025-01-01T00:00:00Z (Unix 1735689600), for both epoch and ISO inputs. No upper bound is added.
+3. In the tests, revise exactly one existing test and its comment: rename `test_float_seam_timestamp_is_rejected_by_regrade` so the name states what it asserts, use a fixture whose delivery second lies between the fixture's step timestamps, and assert VERIFIED. Add focused tests for the guard and the floor.
+4. Ratify the documentation edits already made in `_reconstruct_endpoint` (the docstring paragraph and the comment above the `step_dt > delivery_dt` comparison) as documentation of F2-CLARIFICATION-001/002.
+
+**File boundary.** Only the two files named in F2-IMPL-AUTH-001, and only: `qwen_train/f2_protocol.py` - `parse_delivery_timestamp`, its constants, and the documentation edits in item 4; `tests/test_f2_protocol.py` - new tests and the single revision in item 3.
+
+**Explicit non-authorization.** Everything listed as not authorized in F2-IMPL-AUTH-001, plus: any rediscovery flag or ambiguity recording, `organism_console/*`, and `.github/*`.
+
+**Implementation status.** This entry authorizes future implementation; it does not itself implement anything.
+
+---
+
 *Authorized: 2026-09-29*
 *Operator: Rob (human operator)*
 *Scope: F2 orchestrator implementation — bounded file set (§10), scientific design unchanged (§3-§9)*
