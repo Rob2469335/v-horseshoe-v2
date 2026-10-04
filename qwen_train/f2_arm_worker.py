@@ -257,6 +257,8 @@ def run_worker(argv: list[str] | None = None) -> int:
     structured_execute = bool(args.execute)
 
     exec_start = time.time()
+    # The validated task-workspace identity for an EXECUTING arm (None otherwise).
+    exec_workspace_root: Path | None = None
     process_identity = {
         "role": "f2_arm_worker",
         "pid": os.getpid(),
@@ -305,9 +307,19 @@ def run_worker(argv: list[str] | None = None) -> int:
                 resolve_f2_traj_dir,
             )
 
-            workspace_root = Path(
-                os.environ.get("SWARM_WORKSPACE_ROOT", str(_HERE.parent))
-            ).resolve()
+            # F2 fail-closed workspace identity. An executing arm MUST declare
+            # its isolated task workspace explicitly. There is NO fallback to
+            # the code root: the code root is itself a git repository and so
+            # satisfies resolve_task_repo(), which would silently turn arm
+            # preparation into a reset of the main repository. Resolved BEFORE
+            # any workspace preparation, adapter construction, model spawn or
+            # task execution.
+            from qwen_train.arm_workspace import resolve_required_workspace_root
+
+            workspace_root = resolve_required_workspace_root(
+                code_root=_HERE.parent,
+            )
+            exec_workspace_root = workspace_root
             os.environ[F2_TRAJ_DIR_ENV] = str(resolve_f2_traj_dir(workspace_root))
 
             task_binding: dict[str, Any] = {}
@@ -381,7 +393,17 @@ def run_worker(argv: list[str] | None = None) -> int:
         # mechanism (no new IPC).  P2 writes delivery_evidence into
         # data/trajectories/{run_id}.jsonl during execution; this worker reads
         # it back and uses P2's values in the receipt.
-        workspace_root = Path(os.environ.get("SWARM_WORKSPACE_ROOT", str(_HERE.parent)))
+        # Reuse the workspace identity resolved (and validated) on the execution
+        # path above. Do NOT re-derive it here from a code-root default: an
+        # executing arm has no fallback to the main repository, and this read
+        # must not reintroduce one. Outside --execute there is no resolved
+        # workspace, so the documented code-root derivation is preserved for the
+        # delegated path.
+        workspace_root = (
+            exec_workspace_root
+            if exec_workspace_root is not None
+            else Path(os.environ.get("SWARM_WORKSPACE_ROOT", str(_HERE.parent)))
+        )
         p2_evidence: dict[str, Any] | None = None
         p2_agent_id: str = ""
         if adapter_evidence is not None:

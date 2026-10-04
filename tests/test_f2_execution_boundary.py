@@ -281,7 +281,9 @@ class TestWorkerRoute:
             manifest = _frozen(tmp_path, with_readiness=True)
             monkeypatch.setenv("SWARM_F2_REPO_ROOT", str(REPO_ROOT))
             monkeypatch.setenv("SWARM_F2_TRAJECTORY_RUN_ID", "tr")
-            monkeypatch.setenv("SWARM_WORKSPACE_ROOT", str(tmp_path / "ws"))
+            ws = tmp_path / "ws"
+            ws.mkdir(exist_ok=True)  # an EXECUTING arm requires an existing workspace
+            monkeypatch.setenv("SWARM_WORKSPACE_ROOT", str(ws))
             run_worker(argv=[
                 "--manifest", str(manifest), "--arm", "T", "--execute",
                 "--instance-id", "pypa__twine-1066", "--task-id", "TASK-1",

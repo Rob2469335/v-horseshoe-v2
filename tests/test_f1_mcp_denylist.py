@@ -286,3 +286,85 @@ def test_learning_run_needs_neither_denied_tool():
     assert "mcp" not in rc._GRANTABLE
     assert "mcp_register" not in rc._GRANTABLE
     assert "mcp_batch" not in rc._GRANTABLE
+
+
+# ---------------------------------------------------------------------------
+# D1: the two NATIVE web tools are structurally DENY under the same flag.
+#
+# Previously the flag removed web_search/web_fetch only from the agent's tool
+# SURFACE, via `_strip_web_tools_for_local_analysis`, which deliberately skips
+# stripping when the goal matches `_INTERNET_GOAL_RE` ("latest", "how to",
+# "best practices", "current state of", ...). web_search classified ALLOW and
+# web_fetch CONFIRM, so on an "internet-flavoured" task prompt under
+# SWARM_F1_NO_WEB_TOOLS=1 the surface kept them and the policy permitted them.
+# The denial is now at the policy layer and takes no prompt input at all.
+# ---------------------------------------------------------------------------
+
+
+class TestNativeWebToolsDeniedUnderNoWebPolicy:
+    def test_web_search_is_deny_under_flag(self, monkeypatch):
+        monkeypatch.setenv(ar.NO_WEB_TOOLS_ENV, "1")
+        assert ar.agent_tool_policy("web_search") == ar.DENY
+
+    def test_web_fetch_is_deny_under_flag(self, monkeypatch):
+        monkeypatch.setenv(ar.NO_WEB_TOOLS_ENV, "1")
+        assert ar.agent_tool_policy("web_fetch") == ar.DENY
+
+    @pytest.mark.parametrize(
+        "goal",
+        [
+            "fix the latest twine release bug",
+            "how to fix MockResponse.ok",
+            "apply best practices to this module",
+            "current state of the upstream repository",
+            "search the internet for the answer",
+        ],
+    )
+    def test_denial_is_independent_of_task_prompt(self, monkeypatch, goal):
+        """No prompt wording can re-open web_search while the flag is armed."""
+        monkeypatch.setenv(ar.NO_WEB_TOOLS_ENV, "1")
+        assert ar.agent_tool_policy("web_search") == ar.DENY
+        assert ar.agent_tool_policy("web_fetch") == ar.DENY
+        # Even when the surface filter declines to strip them, the policy denies.
+        from runtime_v2.api._agent_helpers import _strip_web_tools_for_local_analysis
+
+        kept = _strip_web_tools_for_local_analysis(
+            "coder", ["web_search", "web_fetch", "read"], goal
+        )
+        if "web_search" in kept:
+            assert ar.agent_tool_policy("web_search") == ar.DENY
+
+    def test_deny_survives_a_scoped_trust_grant(self, monkeypatch):
+        """DENY is structurally final: no grant can relax it."""
+        monkeypatch.setenv(ar.NO_WEB_TOOLS_ENV, "1")
+        tl.grant("web_search", 600)
+        tl.grant("web_fetch", 600)
+        assert ar.agent_tool_policy("web_search") == ar.DENY
+        assert ar.agent_tool_policy("web_fetch") == ar.DENY
+
+    def test_mcp_network_capable_tools_remain_deny(self, monkeypatch):
+        """The pre-existing MCP denial must not regress."""
+        monkeypatch.setenv(ar.NO_WEB_TOOLS_ENV, "1")
+        assert ar.agent_tool_policy("mcp", "github:list_issues") == ar.DENY
+        assert ar.agent_tool_policy("mcp", "firecrawl:scrape") == ar.DENY
+        assert ar.agent_tool_policy("mcp_register") == ar.DENY
+        assert ar.agent_tool_policy("mcp_batch") == ar.DENY
+
+    def test_local_readonly_tools_still_allowed_under_flag(self, monkeypatch):
+        """The denial must not disturb the offline least-privilege surface."""
+        monkeypatch.setenv(ar.NO_WEB_TOOLS_ENV, "1")
+        assert ar.agent_tool_policy("filesystem", "read") == ar.ALLOW
+        assert ar.agent_tool_policy("git", "diff") == ar.ALLOW
+        assert ar.agent_tool_policy("semantic_search") == ar.ALLOW
+
+    def test_default_behaviour_outside_the_governed_run_is_unchanged(self, monkeypatch):
+        """With the flag absent, web tools keep their pre-existing policy."""
+        monkeypatch.delenv(ar.NO_WEB_TOOLS_ENV, raising=False)
+        assert ar.agent_tool_policy("web_search") == ar.ALLOW
+        assert ar.agent_tool_policy("web_fetch") == ar.CONFIRM
+
+    def test_f2_p2_arms_the_flag(self):
+        """The F2 production spawn must arm the policy for its P2 child."""
+        src = (REPO / "qwen_train" / "f2_execution_adapter.py").read_text(encoding="utf-8")
+        code = "\n".join(ln for ln in src.splitlines() if not ln.strip().startswith("#"))
+        assert f'env["{ar.NO_WEB_TOOLS_ENV}"] = "1"' in code

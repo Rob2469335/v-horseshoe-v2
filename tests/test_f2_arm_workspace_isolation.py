@@ -199,33 +199,38 @@ class TestResolveLayout:
         assert resolve_task_test_patch(repo) == inst / "test_patch.diff"
 
 
+def _frozen_manifest(tmp_path: Path, *, with_readiness: bool) -> Path:
+    """Freeze + persist a real F2 manifest carrying (or omitting) readiness."""
+    from dataclasses import replace
+
+    from runtime_v2.services.f2_freeze import freeze_artifact, persist_manifest, verify_manifest
+    from runtime_v2.services.task_readiness import (
+        READINESS_CONDITIONS,
+        ReadinessEvidence,
+        TaskReadiness,
+        endpoint_measurable,
+        evaluate_readiness,
+        manifest_readiness_payload,
+    )
+
+    payload = None
+    if with_readiness:
+        tr = TaskReadiness(task_id="TASK-1", base_commit="deadbeef",
+                           relevant_file_set=("src/module.py",))
+        ev = ReadinessEvidence(**{c: True for c in READINESS_CONDITIONS})
+        v = evaluate_readiness(replace(ev, R8_endpoint_measurable=endpoint_measurable(tr)))
+        payload = manifest_readiness_payload(tr, ev, v)
+    art = freeze_artifact(rendered_artifact="active block", arm="T",
+                          task_id="TASK-1", task_readiness=payload)
+    verify_manifest(art)
+    return persist_manifest(art, tmp_path)
+
+
 class TestWorkerPlumbing:
     """The real F2 worker isolates the workspace BEFORE the gated adapter runs."""
 
     def _manifest(self, tmp_path: Path, *, with_readiness: bool) -> Path:
-        from dataclasses import replace
-
-        from runtime_v2.services.f2_freeze import freeze_artifact, persist_manifest, verify_manifest
-        from runtime_v2.services.task_readiness import (
-            READINESS_CONDITIONS,
-            ReadinessEvidence,
-            TaskReadiness,
-            endpoint_measurable,
-            evaluate_readiness,
-            manifest_readiness_payload,
-        )
-
-        payload = None
-        if with_readiness:
-            tr = TaskReadiness(task_id="TASK-1", base_commit="deadbeef",
-                               relevant_file_set=("src/module.py",))
-            ev = ReadinessEvidence(**{c: True for c in READINESS_CONDITIONS})
-            v = evaluate_readiness(replace(ev, R8_endpoint_measurable=endpoint_measurable(tr)))
-            payload = manifest_readiness_payload(tr, ev, v)
-        art = freeze_artifact(rendered_artifact="active block", arm="T",
-                              task_id="TASK-1", task_readiness=payload)
-        verify_manifest(art)
-        return persist_manifest(art, tmp_path)
+        return _frozen_manifest(tmp_path, with_readiness=with_readiness)
 
     @pytest.fixture(autouse=True)
     def _cleanup(self, monkeypatch):
@@ -259,7 +264,9 @@ class TestWorkerPlumbing:
 
         monkeypatch.setattr(ADAPTER, "F2ExecutionAdapter", _FakeAdapter)
         monkeypatch.setenv("SWARM_F2_REPO_ROOT", str(tmp_path))
-        monkeypatch.setenv("SWARM_WORKSPACE_ROOT", str(tmp_path / "ws"))
+        ws = tmp_path / "ws"
+        ws.mkdir(exist_ok=True)  # an EXECUTING arm requires an existing workspace
+        monkeypatch.setenv("SWARM_WORKSPACE_ROOT", str(ws))
         manifest = self._manifest(tmp_path, with_readiness=True)
         WORKER.run_worker(argv=[
             "--manifest", str(manifest), "--arm", "T", "--execute",
@@ -287,7 +294,9 @@ class TestWorkerPlumbing:
 
         monkeypatch.setattr(ADAPTER, "F2ExecutionAdapter", _FakeAdapter)
         monkeypatch.setenv("SWARM_F2_REPO_ROOT", str(tmp_path))
-        monkeypatch.setenv("SWARM_WORKSPACE_ROOT", str(tmp_path / "ws"))
+        ws = tmp_path / "ws"
+        ws.mkdir(exist_ok=True)  # an EXECUTING arm requires an existing workspace
+        monkeypatch.setenv("SWARM_WORKSPACE_ROOT", str(ws))
         manifest = self._manifest(tmp_path, with_readiness=True)
         rc = WORKER.run_worker(argv=["--manifest", str(manifest), "--arm", "T", "--execute"])
         assert rc != 0
@@ -303,10 +312,187 @@ class TestWorkerPlumbing:
         import qwen_train.arm_workspace as AW
         monkeypatch.setattr(AW, "prepare_arm_workspace", lambda ws, bc: None)
         monkeypatch.setenv("SWARM_F2_REPO_ROOT", str(tmp_path))
-        monkeypatch.setenv("SWARM_WORKSPACE_ROOT", str(tmp_path / "ws"))
+        ws = tmp_path / "ws"
+        ws.mkdir(exist_ok=True)  # an EXECUTING arm requires an existing workspace
+        monkeypatch.setenv("SWARM_WORKSPACE_ROOT", str(ws))
         manifest = self._manifest(tmp_path, with_readiness=False)  # NO readiness
         rc = WORKER.run_worker(argv=[
             "--manifest", str(manifest), "--arm", "T", "--execute",
             "--instance-id", "pypa__twine-1066", "--task-id", "pypa__twine-1066",
         ])
         assert rc != 0  # the readiness gate still refuses
+
+
+class TestExecuteRequiresDeclaredWorkspace:
+    """D2: an EXECUTING arm must be told explicitly which filesystem is the
+    evaluated task workspace. There is no fallback to the code root.
+
+    The code root is itself a git repository, so a defaulting caller would hand
+    the MAIN REPOSITORY to ``prepare_fresh_arm_workspace`` -- whose third step is
+    ``git reset --hard <base_commit>`` + ``git clean -fdx``. The invariant is
+    enforced here, not left to incidental later failures.
+    """
+
+    def test_missing_env_fails_closed(self, tmp_path, monkeypatch):
+        from qwen_train.arm_workspace import (
+            FreshArmWorkspaceError,
+            resolve_required_workspace_root,
+        )
+
+        monkeypatch.delenv("SWARM_WORKSPACE_ROOT", raising=False)
+        with pytest.raises(FreshArmWorkspaceError, match="SWARM_WORKSPACE_ROOT"):
+            resolve_required_workspace_root(code_root=tmp_path)
+
+    def test_blank_env_fails_closed(self, tmp_path, monkeypatch):
+        from qwen_train.arm_workspace import (
+            FreshArmWorkspaceError,
+            resolve_required_workspace_root,
+        )
+
+        monkeypatch.setenv("SWARM_WORKSPACE_ROOT", "   ")
+        with pytest.raises(FreshArmWorkspaceError):
+            resolve_required_workspace_root(code_root=tmp_path)
+
+    def test_relative_env_fails_closed(self, tmp_path, monkeypatch):
+        from qwen_train.arm_workspace import (
+            FreshArmWorkspaceError,
+            resolve_required_workspace_root,
+        )
+
+        monkeypatch.setenv("SWARM_WORKSPACE_ROOT", "relative/ws")
+        with pytest.raises(FreshArmWorkspaceError, match="absolute"):
+            resolve_required_workspace_root(code_root=tmp_path)
+
+    def test_nonexistent_env_fails_closed(self, tmp_path, monkeypatch):
+        from qwen_train.arm_workspace import (
+            FreshArmWorkspaceError,
+            resolve_required_workspace_root,
+        )
+
+        monkeypatch.setenv("SWARM_WORKSPACE_ROOT", str(tmp_path / "nope"))
+        with pytest.raises(FreshArmWorkspaceError, match="not an existing directory"):
+            resolve_required_workspace_root(code_root=tmp_path)
+
+    def test_code_root_cannot_be_the_task_workspace(self, tmp_path, monkeypatch):
+        """The main repository is rejected even when explicitly declared."""
+        from qwen_train.arm_workspace import (
+            FreshArmWorkspaceError,
+            resolve_required_workspace_root,
+        )
+
+        code = tmp_path / "code_root"
+        code.mkdir()
+        monkeypatch.setenv("SWARM_WORKSPACE_ROOT", str(code))
+        with pytest.raises(FreshArmWorkspaceError, match="code root"):
+            resolve_required_workspace_root(code_root=code)
+
+    def test_valid_isolated_workspace_resolves(self, tmp_path, monkeypatch):
+        from qwen_train.arm_workspace import resolve_required_workspace_root
+
+        ws = tmp_path / "instance"
+        ws.mkdir()
+        monkeypatch.setenv("SWARM_WORKSPACE_ROOT", str(ws))
+        assert resolve_required_workspace_root(code_root=tmp_path) == ws.resolve()
+
+
+class TestWorkerRejectsUndeclaredWorkspace:
+    """D2 at the real execution boundary: the worker refuses BEFORE any
+    workspace preparation, adapter construction, or model spawn."""
+
+    @pytest.fixture(autouse=True)
+    def _cleanup(self, monkeypatch):
+        from runtime_v2.services.f2_replay import clear_replay_state
+
+        monkeypatch.setenv("SWARM_F2_REPLAY", "1")
+        yield
+        clear_replay_state()
+        import os
+
+        os.environ.pop("SWARM_F2_TRAJ_DIR", None)
+
+    def _assert_refused_before_execution(self, tmp_path, monkeypatch, manifest):
+        from qwen_train import f2_arm_worker as WORKER
+        from qwen_train import f2_execution_adapter as ADAPTER
+        import qwen_train.arm_workspace as AW
+
+        touched: list[str] = []
+        monkeypatch.setattr(AW, "prepare_arm_workspace",
+                            lambda *a, **k: touched.append("prepare"))
+        monkeypatch.setattr(AW, "resolve_required_workspace_root",
+                            _real_resolver_or_raise(touched))
+
+        class _FakeAdapter:
+            def __init__(self, *a, **k):
+                touched.append("adapter_constructed")
+
+            def execute_arm_real(self, **k):
+                touched.append("execute_arm_real")
+                return {}
+
+        monkeypatch.setattr(ADAPTER, "F2ExecutionAdapter", _FakeAdapter)
+        monkeypatch.setattr(ADAPTER, "bind_task_environment",
+                            lambda **k: touched.append("bind") or {"base_commit": "deadbeef"})
+        monkeypatch.setenv("SWARM_F2_REPO_ROOT", str(tmp_path))
+
+        rc = WORKER.run_worker(argv=[
+            "--manifest", str(manifest), "--arm", "T", "--execute",
+            "--instance-id", "pypa__twine-1066", "--task-id", "pypa__twine-1066",
+        ])
+        assert rc != 0
+        # Nothing destructive and no spawn may be reached.
+        assert "prepare" not in touched
+        assert "adapter_constructed" not in touched
+        assert "execute_arm_real" not in touched
+
+    def test_execute_without_workspace_env_fails_closed(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("SWARM_WORKSPACE_ROOT", raising=False)
+        manifest = _frozen_manifest(tmp_path, with_readiness=True)
+        self._assert_refused_before_execution(tmp_path, monkeypatch, manifest)
+
+    def test_execute_with_relative_workspace_fails_closed(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("SWARM_WORKSPACE_ROOT", "relative/ws")
+        manifest = _frozen_manifest(tmp_path, with_readiness=True)
+        self._assert_refused_before_execution(tmp_path, monkeypatch, manifest)
+
+    def test_execute_with_missing_workspace_dir_fails_closed(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("SWARM_WORKSPACE_ROOT", str(tmp_path / "absent"))
+        manifest = _frozen_manifest(tmp_path, with_readiness=True)
+        self._assert_refused_before_execution(tmp_path, monkeypatch, manifest)
+
+    def test_execute_pointing_at_main_repo_fails_closed(self, tmp_path, monkeypatch):
+        """Declaring the MAIN repository as the workspace is refused."""
+        code_root = Path(__file__).resolve().parent.parent
+        monkeypatch.setenv("SWARM_WORKSPACE_ROOT", str(code_root))
+        manifest = _frozen_manifest(tmp_path, with_readiness=True)
+        from qwen_train import f2_arm_worker as WORKER
+        from qwen_train import f2_execution_adapter as ADAPTER
+        import qwen_train.arm_workspace as AW
+
+        touched: list[str] = []
+        monkeypatch.setattr(AW, "prepare_arm_workspace",
+                            lambda *a, **k: touched.append("prepare"))
+
+        class _FakeAdapter:
+            def __init__(self, *a, **k):
+                touched.append("adapter_constructed")
+
+        monkeypatch.setattr(ADAPTER, "F2ExecutionAdapter", _FakeAdapter)
+        monkeypatch.setenv("SWARM_F2_REPO_ROOT", str(tmp_path))
+        rc = WORKER.run_worker(argv=[
+            "--manifest", str(manifest), "--arm", "T", "--execute",
+            "--instance-id", "pypa__twine-1066", "--task-id", "pypa__twine-1066",
+        ])
+        assert rc != 0
+        assert "prepare" not in touched
+        assert "adapter_constructed" not in touched
+
+
+def _real_resolver_or_raise(touched: list[str]):
+    """Wrap the real resolver so a test can see whether it was reached."""
+    from qwen_train.arm_workspace import resolve_required_workspace_root
+
+    def _wrapped(*a, **k):
+        touched.append("resolve")
+        return resolve_required_workspace_root(*a, **k)
+
+    return _wrapped

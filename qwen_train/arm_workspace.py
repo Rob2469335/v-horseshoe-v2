@@ -41,9 +41,13 @@ Design notes
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from pathlib import Path
+
+# The env var an executing F2 arm uses to declare its evaluated task filesystem.
+WORKSPACE_ROOT_ENV = "SWARM_WORKSPACE_ROOT"
 
 # `git apply` failure => the patch cannot establish the authorized state.
 class FreshArmWorkspaceError(RuntimeError):
@@ -255,6 +259,58 @@ def prepare_fresh_arm_workspace(
         f"external test patch vanished during preparation: {test_patch_file}",
     )
     return expected
+
+
+def resolve_required_workspace_root(
+    env_var: str = WORKSPACE_ROOT_ENV,
+    *,
+    code_root: Path | str | None = None,
+) -> Path:
+    """Resolve the ISOLATED task workspace root for an EXECUTING F2 arm.
+
+    An arm that will execute must be told, explicitly, which filesystem is the
+    evaluated task workspace. There is deliberately NO fallback here: this
+    function never substitutes the code root, the current working directory, or
+    any other default.
+
+    Why a fallback would be unsafe (not merely untidy): the code root is itself a
+    git repository, so it satisfies :func:`resolve_task_repo`. A defaulting
+    caller would therefore hand the MAIN REPOSITORY to
+    :func:`prepare_fresh_arm_workspace`, whose third step is
+    ``git reset --hard <base_commit>`` followed by ``git clean -fdx``. The only
+    things currently standing between that and a destroyed main checkout are
+    incidental (a sibling ``test_patch.diff`` that does not exist, and a
+    ``base_commit`` that will not resolve there) -- neither is an invariant.
+
+    Fails closed when the variable is unset, blank, relative, not an existing
+    directory, or resolves to the code root.
+    """
+    raw = os.environ.get(env_var, "").strip()
+    _require(
+        bool(raw),
+        f"F2 fail-closed: {env_var} is required for an executing F2 arm. An "
+        "undeclared task workspace cannot be isolated, and no default is "
+        "substituted because the code root is a git repository and would be "
+        "reset as if it were the task workspace. Refusing to execute.",
+    )
+    ws = Path(raw)
+    _require(
+        ws.is_absolute(),
+        f"F2 fail-closed: {env_var} must be an absolute path, got {raw!r}.",
+    )
+    _require(
+        ws.is_dir(),
+        f"F2 fail-closed: {env_var} is not an existing directory: {raw!r}.",
+    )
+    resolved = ws.resolve()
+    if code_root is not None:
+        code = Path(code_root).resolve()
+        _require(
+            resolved != code,
+            f"F2 fail-closed: {env_var} resolved to the code root {str(code)!r}. "
+            "The main repository must never be the evaluated task workspace.",
+        )
+    return resolved
 
 
 def resolve_task_repo(workspace_root: Path | str) -> Path:

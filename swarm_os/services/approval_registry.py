@@ -281,8 +281,20 @@ def _base_agent_tool_policy(tool: str, action: str | None = None) -> str:
         return DENY if a else CONFIRM  # unknown fs op -> deny
 
     if t == "web_search":
+        # Experiment J governed no-web run (SWARM_F1_NO_WEB_TOOLS=1, set for F1
+        # and for F2's P2): fail closed HERE rather than relying on the
+        # prompt-dependent `_strip_web_tools_for_local_analysis` surface filter.
+        # That filter skips stripping when the goal matches an "internet" wording
+        # ("latest", "how to", "best practices", ...), which would leave an
+        # ALLOW-classified web_search reachable on a purely local repair task.
+        # The denial is prompt-independent and structural: `agent_tool_policy`
+        # never relaxes DENY, so no scoped trust grant can reopen it.
+        if _no_web_tools_enforced():
+            return DENY
         return ALLOW
     if t == "web_fetch":
+        if _no_web_tools_enforced():
+            return DENY
         return CONFIRM
     if t == "semantic_search":
         return ALLOW
