@@ -20,6 +20,24 @@ from swarm_os.services.lesson_distiller import (
     make_local_distiller,
 )
 
+#: A declared weights digest for fixtures that exercise TRANSPORT behaviour.
+#: Since the R5 reproducibility pass, ``make_local_distiller`` refuses an identity
+#: that cannot reproduce its own transformation, so any fixture building a valid
+#: LOCAL identity must declare one. These tests are about transport containment,
+#: not provenance, so a fixed placeholder digest is supplied to satisfy the
+#: stricter construction contract without altering what they assert.
+_TEST_WEIGHTS_DIGEST = "0" * 64
+
+
+def _local_identity(base_url: str, model_id: str = "m") -> DistillerIdentity:
+    """A valid, reproducible local identity for transport-level fixtures."""
+    return DistillerIdentity(
+        provider="local",
+        model_id=model_id,
+        base_url=base_url,
+        weights_digest=_TEST_WEIGHTS_DIGEST,
+    )
+
 
 class _RecordingHandler(http.server.BaseHTTPRequestHandler):
     """A tiny loopback endpoint that records requests and can redirect."""
@@ -76,7 +94,7 @@ def _hostile_proxy_env(monkeypatch, proxy_url):
 class TestLocalOnlyBoundary:
     def test_accepts_loopback_local_identity(self):
         d = make_local_distiller(
-            DistillerIdentity("local", "qwen3.5-4b", "http://127.0.0.1:8080"),
+            _local_identity("http://127.0.0.1:8080", "qwen3.5-4b"),
             complete=lambda _p: "rule",
         )
         assert d.identity.qualified_id == "local:qwen3.5-4b"
@@ -133,6 +151,8 @@ class TestLocalOnlyBoundary:
 
     def test_default_identity_is_local_loopback_when_set(self, monkeypatch):
         monkeypatch.setenv("SWARM_DISTILLER_MODEL", "robs4b")
+        monkeypatch.setenv("SWARM_DISTILLER_WEIGHTS_DIGEST", _TEST_WEIGHTS_DIGEST)
+        monkeypatch.delenv("SWARM_DISTILLER_WEIGHTS_DIGEST_UNAVAILABLE", raising=False)
         ident = default_local_identity()
         assert ident.provider == "local"
         assert ident.model_id == "robs4b"
@@ -141,7 +161,7 @@ class TestLocalOnlyBoundary:
     def test_http_failure_fails_closed_not_network_fallback(self):
         """A local call failure raises LocalOnlyError; it never falls back."""
         # Point the built-in completion at a dead local port.
-        d = make_local_distiller(DistillerIdentity("local", "m", "http://127.0.0.1:59999"))
+        d = make_local_distiller(_local_identity("http://127.0.0.1:59999"))
         with pytest.raises(LocalOnlyError):
             d("prompt")
 
@@ -171,7 +191,7 @@ class TestTransportContainment:
 
     @staticmethod
     def _distiller(base_url):
-        return make_local_distiller(DistillerIdentity("local", "m", base_url))
+        return make_local_distiller(_local_identity(base_url))
 
     def test_http_proxy_cannot_escape(self, monkeypatch):
         with _server() as (target, target_url), _server() as (proxy, proxy_url):
@@ -225,7 +245,7 @@ class TestTransportContainment:
 
     def test_no_fallback_on_transport_failure(self):
         # A dead local port must raise; there is no alternate URL or provider.
-        d = make_local_distiller(DistillerIdentity("local", "m", "http://127.0.0.1:59999"))
+        d = make_local_distiller(_local_identity("http://127.0.0.1:59999"))
         with pytest.raises(LocalOnlyError):
             d("prompt")
 
