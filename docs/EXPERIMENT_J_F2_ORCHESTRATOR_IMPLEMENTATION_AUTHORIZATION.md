@@ -276,6 +276,8 @@ left by a higher-authority document can be resolved without editing that documen
 | F2-CLARIFICATION-002 | Same-second steps are AMBIGUOUS and excluded from the endpoint window | CLARIFICATION | 2026-10-04 | Dated F2 authorial interpretation per 13; does not modify F0; adopts the conservative reading, stated in the entry |
 | F2-IMPL-AUTH-002 | Step 2c - delivery-timestamp hardening (implements F2-CLARIFICATION-001/002 and a plausibility floor) | AUTHORIZED | 2026-10-04 | Separate implementation authorization per 13(4) and 13(7); names no files beyond the two already named in F2-IMPL-AUTH-001; does not modify F0 |
 | F2-IMPL-AUTH-003 | Ratification (retroactive) of Step 1 and Step 1c assembler binding, commits bee672dc and 68208c4f | AUTHORIZED (RETROACTIVE) | 2026-10-04 | Separate implementation authorization per 13(4) and 13(7); names no files beyond the two already named in F2-IMPL-AUTH-001; records that no authorization existed when the commits were made; does not modify F0 |
+| F2-CLARIFICATION-003 | Rediscovery reads the UN-FLOORED delivery instant; the endpoint window keeps the floored second | CLARIFICATION | 2026-10-04 | Dated F2 authorial interpretation per 13; resolves which delivery reading F0 6 uses; does not modify F0 |
+| F2-IMPL-AUTH-004 | Step 3 - F0 6 rediscovery integration, test-isolation fix and op_infra_004 workspace fixture | AUTHORIZED | 2026-10-04 | Separate implementation authorization per 13(4) and 13(7); names four files explicitly; does not modify F0 |
 
 ### F2-CLARIFICATION-001 - F2 delivery-timestamp interpretation (Option A)
 
@@ -467,6 +469,53 @@ authorization. Implementation remains a separate, subsequent step.
 **Explicit non-authorization.** This entry does not ratify, authorize or review any other commit, including earlier F2 protocol, admission-gate or bundle-assembly commits. It does not authorize wiring `f2_arm_worker.py`, any runtime change, or any F2 execution.
 
 **Implementation status.** This entry records authorization for work already committed; it implements nothing.
+
+### F2-CLARIFICATION-003 - Rediscovery reads the UN-FLOORED delivery instant; the endpoint window keeps the floored second
+
+**Author:** Rob (human operator)
+
+**Date:** 2026-10-04
+
+**Authority.** Recorded under 13(4) and 13(7) on the operator's explicit instruction of 2026-10-04, entered by the release agent. Subordinate to F0 and to the authority documents named in 1. Adds no new science and modifies no frozen element.
+
+**Issue.** F2-CLARIFICATION-001 floors the delivery instant to the whole UTC second, but that ruling was stated for ORDERING: the endpoint window. F0 6 (docs/EXPERIMENT_J.md:103, :109) is a DIFFERENT comparison: `step.timestamp < delivery_timestamp`, in which `delivery_timestamp` is the fractional `time.time()` value fixed at docs/EXPERIMENT_J.md:172 and the step timestamp has whole-second resolution. Flooring the delivery instant makes a step recorded in the delivery second compare as NOT strictly earlier, which hides a possible pre-delivery edit. Applying one reading to both rules therefore either weakens the endpoint window or weakens the contamination diagnostic. The two rules need different inputs, and the ambiguity was left open.
+
+**Authoritative decision.**
+1. The endpoint window CONTINUES to use the floored whole-second delivery instant exactly as decided by F2-CLARIFICATION-001 and F2-CLARIFICATION-002. That ruling is unchanged.
+2. The F0 6 rediscovery classification uses the UN-FLOORED delivery instant recovered from the retained delivery evidence.
+3. Where the earliest qualifying edit and the delivery lie within one recorded step period (1 second), the verdict records `boundary_ambiguous` as true, because the retained evidence cannot order them.
+4. A run whose earliest qualifying edit is strictly earlier than the un-floored delivery is classified pre-delivery rediscovery. Per F0 6 it is recorded with the classification and its evidence, is excluded from the primary T/X causal analysis, and is handled as missing data for that arm's primary endpoint.
+
+**Rationale.** Flooring exists so that the whole-second trajectory and the delivery instant share one comparable domain; that need applies to the window test, not to a contamination test whose whole purpose is to detect edits that precede delivery. Using the un-floored instant for rediscovery biases toward classifying a run as contaminated, which excludes it from the causal analysis - the conservative direction for a primary claim. Ambiguity is recorded rather than resolved by assumption.
+
+**Affected contract.** F2 rediscovery classification and endpoint admissibility only. F0 6 is unchanged and was not modified. The `F2Result` schema fixed by the readiness plan is unchanged: no field is added, removed or renamed. `_reconstruct_endpoint` is unchanged.
+
+**Implementation authorization.** F2-IMPL-AUTH-004.
+
+### F2-IMPL-AUTH-004 - Step 3: F0 6 rediscovery integration, test-isolation fix and op_infra_004 workspace fixture
+
+**Author:** Rob (human operator)
+
+**Date:** 2026-10-04
+
+**Authority.** Recorded under 13(4) and 13(7) on the operator's explicit instruction of 2026-10-04, entered by the release agent. Implements F2-CLARIFICATION-003. Records no new science and modifies no frozen element.
+
+**Issue.** Three defects were verified by direct inspection on 2026-10-04.
+
+1. `qwen_train/f2_rediscovery.py` implements F0 6 and is covered by `tests/test_f2_rediscovery.py`, but it is imported by NOTHING in production. `classify_rediscovery` is referenced only by its own test. F0 6 requires the rediscovery flag, the pre-delivery classification, exclusion from the primary causal analysis, and missing-data handling; none of the four is emitted by the F2 verification path. A contaminated run and a run with an empty event stream are currently indistinguishable: both yield the single reason that no step occurs strictly after delivery.
+2. `conftest.py` declares two autouse fixtures, `isolate_prompt_repairer_store` and `isolate_runtime_data_dirs`, and both request the per-test `tmp_path`. Each then creates a directory inside it. Any test that also requests `tmp_path` and asserts on that directory's contents observes the fixtures' directories, so `tests/test_f2_freeze.py::TestAtomicPersistence::test_no_partial_files_remain` fails with two entries instead of one. The production writer is correct; the isolation fixtures contaminate the assertion surface. This also keeps the broad-pytest prohibition in `AGENTS.md` section 3.6 in force.
+3. `tests/test_f2_op_infra_004.py::TestProductionWiring` calls the orchestrator with `execute=True` but declares no workspace. `qwen_train/arm_workspace.py:288-295` correctly fails closed because `SWARM_WORKSPACE_ROOT` is unset, so the two argv assertions never reach the stubbed `Popen`. The guard is correct and must not be weakened; the test must supply the declaration the guard demands. The orchestrator writes that variable into `os.environ` at :202, so the test must also restore it.
+
+**Decision.**
+1. `qwen_train/f2_protocol.py`: add a public `classify_run_rediscovery(bundle, *, store)` that classifies one arm against F0 6 from retained bytes and returns the verdict dictionary, by adapting the flat behavioral records to the ATIF tool-call shape the existing classifier expects. The un-floored delivery instant is recovered from the retained delivery evidence per F2-CLARIFICATION-003. In `derive_f2_result`, a run classified as pre-delivery rediscovery yields no primary result, and the returned reason records the verdict and its evidence. The `F2Result` schema is NOT changed. `_reconstruct_endpoint` is NOT changed.
+2. `conftest.py`: both autouse isolation fixtures derive their root from `tmp_path_factory` instead of the test's `tmp_path`, so they can never place state inside a test's own temporary directory. The values they return are unchanged in meaning, so every test that consumes a fixture return value keeps working. Isolation is not weakened: the same module globals are patched, to a private per-test directory.
+3. `tests/test_f2_op_infra_004.py`: supply an explicit throwaway absolute workspace directory to the orchestrator so the existing fail-closed guard passes on its own terms, and restore `SWARM_WORKSPACE_ROOT` afterwards so the declaration does not leak between tests. No assertion is weakened, skipped or removed, and the guard is not relaxed.
+
+**File boundary.** Exactly four files, named here and by no others: `qwen_train/f2_protocol.py` (items 1 and, only as the new function's documentation, nothing else); `tests/test_f2_protocol.py` (new tests for item 1); `conftest.py` (item 2); `tests/test_f2_op_infra_004.py` (item 3).
+
+**Explicit non-authorization.** Everything listed as not authorized in F2-IMPL-AUTH-001 and F2-IMPL-AUTH-002, plus: `qwen_train/f2_rediscovery.py` and `tests/test_f2_rediscovery.py` (consumed, never modified); any change to the `F2Result` schema; any change to `_reconstruct_endpoint`; any change to `qwen_train/arm_workspace.py` or `qwen_train/f2_arm_orchestrator.py`; ambiguity recording as a persisted artifact; frozen F0 and F1 artifacts; `organism_console/*`; `.github/*`; F2 experiment execution; real F2 evidence generation; service startup; provisioning `SWARM_RECEIPT_KEY`, which is operator-only.
+
+**Implementation status.** This entry authorizes future implementation; it does not itself implement anything.
 
 ---
 
