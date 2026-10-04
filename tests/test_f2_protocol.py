@@ -16,6 +16,7 @@ import os
 import shutil
 import tempfile
 from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -932,6 +933,273 @@ class TestTimestampDomain:
 
 
 # --------------------------------------------------------------------------
+# F2-CLARIFICATION-001 (Option A) - delivery-timestamp domain + floor semantics
+# --------------------------------------------------------------------------
+
+#: 2026-10-04T00:00:00Z expressed as Unix epoch seconds.
+_EPOCH_2026_10_04 = int(datetime(2026, 10, 4, tzinfo=timezone.utc).timestamp())
+
+
+class TestDeliveryTimestampDomain:
+    """Delivery is Unix epoch seconds; the trajectory is canonical ISO-8601 UTC.
+
+    Per F2-CLARIFICATION-001 (Option A) the delivery timestamp is converted to UTC
+    and FLOORED to the whole Unix second -- never rounded to nearest, never
+    ceiled -- so no sub-second ordering precision is claimed that the retained
+    trajectory does not contain. The generic canonical parser is NOT broadened.
+    """
+
+    def _derive(self, steps, delivery_ts):
+        b = _bundle(F2_TREATMENT_ARM, behavior=_steps(*steps), delivery_ts=delivery_ts)
+        return derive_f2_result(b, store=_store(), relevant_file_set=RFS)
+
+    # -- delivery parsing -------------------------------------------------
+    def test_valid_fractional_unix_timestamp(self):
+        from qwen_train.f2_protocol import parse_delivery_timestamp
+
+        dt, why = parse_delivery_timestamp("1791072005.8")
+        assert why == ""
+        assert dt == datetime(2026, 10, 4, 0, 0, 5, tzinfo=timezone.utc)
+        assert dt.tzinfo is not None
+
+    def test_valid_integral_unix_timestamp(self):
+        from qwen_train.f2_protocol import parse_delivery_timestamp
+
+        dt, why = parse_delivery_timestamp("1791072005")
+        assert why == ""
+        assert dt == datetime(2026, 10, 4, 0, 0, 5, tzinfo=timezone.utc)
+
+    def test_production_serialised_representation(self):
+        # Exactly what the seam emits: time.time() -> str() -> str(float).
+        from qwen_train.f2_protocol import parse_delivery_timestamp
+
+        raw = str(float(_EPOCH_2026_10_04 + 5) + 0.8)
+        assert raw == "1791072005.8"
+        dt, why = parse_delivery_timestamp(raw)
+        assert why == ""
+        assert dt == datetime(2026, 10, 4, 0, 0, 5, tzinfo=timezone.utc)
+
+    def test_malformed_value_is_rejected(self):
+        from qwen_train.f2_protocol import parse_delivery_timestamp
+
+        for bad in ("not-a-timestamp", "2026-10-04T00:00:05", "12:00:05", "1_000"):
+            dt, why = parse_delivery_timestamp(bad)
+            assert dt is None and why, bad
+
+    def test_empty_value_is_rejected(self):
+        from qwen_train.f2_protocol import parse_delivery_timestamp
+
+        for bad in ("", "   "):
+            dt, why = parse_delivery_timestamp(bad)
+            assert dt is None and why
+
+    def test_non_finite_values_are_rejected(self):
+        from qwen_train.f2_protocol import parse_delivery_timestamp
+
+        for bad in (float("nan"), float("inf"), float("-inf")):
+            dt, why = parse_delivery_timestamp(bad)
+            assert dt is None and why
+        for bad in ("nan", "inf", "-inf", "NaN", "Infinity"):
+            dt, why = parse_delivery_timestamp(bad)
+            assert dt is None and why
+
+    def test_non_convertible_types_are_rejected(self):
+        from qwen_train.f2_protocol import parse_delivery_timestamp
+
+        for bad in (None, True, [], {}, ()):
+            dt, why = parse_delivery_timestamp(bad)
+            assert dt is None and why
+
+    # -- floor semantics --------------------------------------------------
+    def test_floors_rather_than_rounds(self):
+        # .8 > .5, so rounding-to-nearest would give 00:00:06; floor gives 00:00:05.
+        from qwen_train.f2_protocol import parse_delivery_timestamp
+
+        dt, why = parse_delivery_timestamp("1791072005.8")
+        assert why == ""
+        assert dt.second == 5
+        assert dt != datetime(2026, 10, 4, 0, 0, 6, tzinfo=timezone.utc)
+
+    def test_small_fraction_does_not_drop_the_second(self):
+        from qwen_train.f2_protocol import parse_delivery_timestamp
+
+        dt, _ = parse_delivery_timestamp("1791072005.2")
+        assert dt == datetime(2026, 10, 4, 0, 0, 5, tzinfo=timezone.utc)
+
+    def test_delivery_is_utc_aware_and_offset_normalised(self):
+        from qwen_train.f2_protocol import parse_delivery_timestamp
+
+        a, _ = parse_delivery_timestamp("1791072005.8")
+        b, _ = parse_delivery_timestamp("2026-10-04T01:00:05+01:00")
+        assert a == b
+        assert a.tzinfo is not None
+        assert b.utcoffset().total_seconds() == 0
+
+    # -- ordering ---------------------------------------------------------
+    def test_one_second_before_delivery_is_excluded(self):
+        r, _ = self._derive(
+            [_step(4, "2026-10-04T00:00:04Z", "twine/package.py")], "1791072005.8"
+        )
+        assert r is None
+
+    def test_same_second_is_not_before_delivery(self):
+        # Delivery 00:00:05.800 floors to 00:00:05, so a 00:00:05 step is NOT
+        # before delivery. It is not strictly after it either, so it falls
+        # outside the endpoint window (readiness plan: "strictly after").
+        r, _ = self._derive(
+            [_step(4, "2026-10-04T00:00:05Z", "twine/package.py")], "1791072005.8"
+        )
+        assert r is None
+
+    def test_one_second_after_delivery_is_included(self):
+        r, _ = self._derive(
+            [_step(4, "2026-10-04T00:00:06Z", "twine/package.py")], "1791072005.8"
+        )
+        assert r is not None and r.endpoint is True and r.first_edit_step == 4
+
+    def test_fractional_delivery_is_floored_not_rounded(self):
+        # Rounding .8 up to 00:00:06 would wrongly admit the 00:00:05 step.
+        r, _ = self._derive(
+            [_step(4, "2026-10-04T00:00:05Z", "twine/package.py")], "1791072005.8"
+        )
+        assert r is None
+        r2, _ = self._derive(
+            [_step(4, "2026-10-04T00:00:06Z", "twine/package.py")], "1791072005.8"
+        )
+        assert r2 is not None and r2.endpoint is True
+
+    def test_strict_equality_is_neither_before_nor_after(self):
+        from qwen_train.f2_protocol import (
+            parse_canonical_timestamp,
+            parse_delivery_timestamp,
+        )
+
+        delivery, _ = parse_delivery_timestamp("1791072005.8")
+        step, _ = parse_canonical_timestamp("2026-10-04T00:00:05Z")
+        assert step == delivery  # the same whole-second instant
+        assert not step < delivery  # NOT before delivery
+        assert not step > delivery  # NOT strictly after -> excluded
+
+    def test_utc_aware_comparison_across_offsets(self):
+        r, _ = self._derive(
+            [_step(4, "2026-10-03T19:00:06-05:00", "twine/package.py")], "1791072005.8"
+        )
+        assert r is not None and r.endpoint is True
+
+    def test_unix_delivery_interoperates_with_iso_trajectory(self):
+        raw = str(_EPOCH_2026_10_04 + 5.8)
+        r, _ = self._derive(
+            [_step(4, "2026-10-04T00:00:06Z", "twine/package.py")], raw
+        )
+        assert r is not None and r.endpoint is True
+        assert r.delivery_timestamp == raw
+
+    # -- generic parser preservation --------------------------------------
+    def test_canonical_trajectory_timestamps_still_parse(self):
+        from qwen_train.f2_protocol import parse_canonical_timestamp
+
+        dt, why = parse_canonical_timestamp("2026-10-04T00:00:05Z")
+        assert why == ""
+        assert dt == datetime(2026, 10, 4, 0, 0, 5, tzinfo=timezone.utc)
+
+    def test_malformed_canonical_timestamps_still_fail(self):
+        from qwen_train.f2_protocol import parse_canonical_timestamp
+
+        for bad in ("not-a-timestamp", "2026-10-04T00:00:05", ""):
+            dt, why = parse_canonical_timestamp(bad)
+            assert dt is None and why, bad
+
+    def test_generic_parser_does_not_accept_unix_seconds(self):
+        # The generic trajectory parser must NOT be loosened for delivery values.
+        from qwen_train.f2_protocol import parse_canonical_timestamp
+
+        for bad in ("1791072005.8", "1791072005"):
+            dt, why = parse_canonical_timestamp(bad)
+            assert dt is None and why, bad
+
+
+# --------------------------------------------------------------------------
+# F2-IMPL-AUTH-002 - delivery-timestamp hardening: overflow guard + floor
+# --------------------------------------------------------------------------
+
+#: 2025-01-01T00:00:00Z as Unix epoch seconds: the plausibility floor.
+_FLOOR_2025_01_01 = 1735689600
+
+
+class TestDeliveryTimestampHardening:
+    """No input may raise, and no delivery instant may precede the floor.
+
+    Per F2-IMPL-AUTH-002: numeric conversion is guarded so every failure
+    returns ``(None, reason)``, and any delivery instant earlier than
+    2025-01-01T00:00:00Z is rejected on both the epoch and the ISO path.
+    """
+
+    # -- overflow guard: must return, never raise --------------------------
+    def test_huge_int_returns_none_and_does_not_raise(self):
+        from qwen_train.f2_protocol import parse_delivery_timestamp
+
+        for bad in (10 ** 400, -(10 ** 400)):
+            dt, why = parse_delivery_timestamp(bad)
+            assert dt is None, bad
+            assert why, bad
+
+    # -- plausibility floor, epoch path -----------------------------------
+    def test_below_floor_epoch_values_are_rejected(self):
+        from qwen_train.f2_protocol import parse_delivery_timestamp
+
+        for bad in (0, -1, "0", "-1", 1735689599, "1735689599.9"):
+            dt, why = parse_delivery_timestamp(bad)
+            assert dt is None, bad
+            assert why, bad
+
+    def test_at_and_above_floor_epoch_values_are_accepted(self):
+        from qwen_train.f2_protocol import parse_delivery_timestamp
+
+        dt, why = parse_delivery_timestamp(1735689600)
+        assert why == ""
+        assert dt is not None and dt.timestamp() == 1735689600
+        dt2, why2 = parse_delivery_timestamp("1735689600.9")
+        assert why2 == ""
+        # the .9 is floored, so the effective second is the floor itself
+        assert dt2 is not None and dt2.timestamp() == 1735689600
+
+    # -- plausibility floor, ISO path -------------------------------------
+    def test_iso_below_floor_is_rejected(self):
+        from qwen_train.f2_protocol import parse_delivery_timestamp
+
+        dt, why = parse_delivery_timestamp("2024-12-31T23:59:59Z")
+        assert dt is None
+        assert why
+
+    def test_iso_at_floor_is_accepted(self):
+        from qwen_train.f2_protocol import parse_delivery_timestamp
+
+        dt, why = parse_delivery_timestamp("2025-01-01T00:00:00Z")
+        assert why == ""
+        assert dt is not None and dt.timestamp() == 1735689600
+
+    # -- pre-existing rejections must survive the hardening ----------------
+    def test_bool_is_still_rejected(self):
+        from qwen_train.f2_protocol import parse_delivery_timestamp
+
+        dt, why = parse_delivery_timestamp(True)
+        assert dt is None and why
+
+    def test_naive_iso_is_still_rejected(self):
+        from qwen_train.f2_protocol import parse_delivery_timestamp
+
+        dt, why = parse_delivery_timestamp("2026-10-04T12:00:00")
+        assert dt is None and why
+
+    def test_realistic_production_timestamp_is_accepted(self):
+        from qwen_train.f2_protocol import parse_delivery_timestamp
+
+        dt, why = parse_delivery_timestamp("1791072005.8")
+        assert why == ""
+        assert dt is not None and dt.second == 5
+
+
+# --------------------------------------------------------------------------
 # BLOCKER B/C - production -> governed bundle assembly, delivered-byte binding
 # --------------------------------------------------------------------------
 class TestBundleAssembly:
@@ -1198,12 +1466,17 @@ class TestSeamTightening:
         b = self._assemble(seam_delivery=seam)
         assert b.delivery.delivery_timestamp == "1759536000.123"
 
-    def test_float_seam_timestamp_is_rejected_by_regrade(self):
-        # Documents CURRENT behaviour: the F2 verifier requires RFC 3339, so a
-        # Unix float (what the P2 seam actually emits) cannot be regraded.
-        seam = self._seam(f"x\n{LESSON}", ts=1759536000.123)
+    def test_float_seam_timestamp_regrades_verified_when_ordering_holds(self):
+        # Documents CURRENT behaviour: the verifier accepts the P2 seam's Unix
+        # float delivery timestamp, floors it to the whole second, and regrades
+        # VERIFIED when the fixture steps straddle that delivery second.
+        # 1791072000 == 2026-10-04T00:00:00Z, so _PRE (23:59:59Z) is BEFORE
+        # delivery and _POST (00:00:05Z) is AFTER it, making step 4 the endpoint.
+        seam = self._seam(f"x\n{LESSON}", ts=1791072000.123)
         b = self._assemble(seam_delivery=seam)
-        assert _regrade(b).state == STATE_SCIENTIFICALLY_INSUFFICIENT
+        assert b.delivery.delivery_timestamp == "1791072000.123"
+        v = _regrade(b)
+        assert v.state == STATE_VERIFIED, v.detail
 
 
 # --------------------------------------------------------------------------

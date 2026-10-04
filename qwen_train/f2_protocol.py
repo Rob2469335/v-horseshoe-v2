@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
@@ -84,6 +85,7 @@ __all__ = [
     "ROLE_DELIVERY_EVIDENCE",
     "EXECUTION_STATE_BY_ARM",
     "parse_canonical_timestamp",
+    "parse_delivery_timestamp",
     "canonical_text_bytes",
     "assemble_f2_bundle",
 ]
@@ -162,6 +164,111 @@ def parse_canonical_timestamp(value: Any) -> tuple[Any, str]:
             f"timestamp is timezone-naive and cannot be ordered unambiguously: {s!r}"
         )
     return dt.astimezone(timezone.utc), ""
+
+
+_DELIVERY_EPOCH_TEXT = re.compile(r"\A[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)\Z")
+
+#: Earliest plausible F2 delivery instant: 2025-01-01T00:00:00Z. Per
+#: F2-IMPL-AUTH-002 any earlier instant is rejected (plausibility floor).
+#: No upper bound is imposed.
+_DELIVERY_EPOCH_FLOOR = 1735689600
+
+
+def parse_delivery_timestamp(value: Any) -> tuple[Any, str]:
+    """Parse the F2 DELIVERY timestamp into a floored, timezone-aware UTC instant.
+
+    Deliberately SEPARATE from :func:`parse_canonical_timestamp`. The delivery
+    instant and the trajectory step timestamps live in different type domains: F0
+    (``docs/EXPERIMENT_J.md:172``) fixes delivery as ``time.time()`` -- fractional
+    Unix epoch seconds -- while step timestamps are canonical whole-second ISO-8601
+    UTC strings (``runtime_v2/api/agent_service_v2.py:510``). Comparing those two
+    domains directly is type-incoherent, so the generic canonical parser is NOT
+    loosened to accept Unix seconds: it keeps parsing trajectory timestamps only,
+    and stays strict.
+
+    Per ``F2-CLARIFICATION-001`` (Option A) the delivery instant is FLOORED to the
+    whole Unix second -- never rounded to nearest, never ceiled -- before any
+    comparison, so no sub-second ordering precision is claimed that the retained
+    trajectory does not contain. Flooring is mathematical ``floor`` (downward), NOT
+    integer truncation toward zero. The result is timezone-aware UTC, making it
+    directly comparable with a canonical step timestamp in one shared domain.
+
+    Per ``F2-IMPL-AUTH-002`` this parser is additionally HARDENED: every numeric
+    conversion is guarded so that NO input can raise (a value too large for a
+    float is rejected, never propagated), and any delivery instant earlier than
+    2025-01-01T00:00:00Z (Unix 1735689600) is rejected as implausible on both the
+    epoch and the ISO path. No upper bound is imposed.
+
+    Accepted representations (both occur in F2 delivery evidence):
+
+    * decimal Unix epoch seconds, fractional or integral -- what production emits
+      (``time.time()`` serialised by ``str()``, e.g. ``"1759536005.8"``);
+    * canonical ISO-8601 / RFC 3339 WITH an explicit timezone designator -- read
+      through the strict generic parser, then floored into the same whole-second
+      domain so both representations normalise identically.
+
+    Returns ``(datetime_utc|None, reason)``. FAIL CLOSED: a missing, empty,
+    malformed, timezone-naive, non-finite or unsupported value is rejected rather
+    than guessed, and no fallback value (current time, zero, the epoch, or another
+    timestamp) is ever substituted.
+    """
+    from datetime import datetime, timezone
+    from math import floor, isfinite
+
+    if value is None or isinstance(value, bool):
+        return None, (
+            f"delivery timestamp is missing or has unsupported type "
+            f"{type(value).__name__!r}"
+        )
+
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None, "delivery timestamp is empty"
+        if _DELIVERY_EPOCH_TEXT.match(text) is None:
+            # Not decimal epoch seconds: it must be a canonical date-time, and it
+            # is NEVER reinterpreted as Unix seconds if the strict parse fails.
+            dt, why = parse_canonical_timestamp(text)
+            if dt is None:
+                return None, why
+            dt = dt.replace(microsecond=0).astimezone(timezone.utc)
+            if dt.timestamp() < _DELIVERY_EPOCH_FLOOR:
+                return None, (
+                    f"delivery timestamp {dt.isoformat()} precedes the earliest "
+                    f"plausible delivery instant (2025-01-01T00:00:00Z): {text!r}"
+                )
+            return dt, ""
+        try:
+            seconds = float(text)
+        except (OverflowError, ValueError) as exc:
+            return None, (
+                f"delivery timestamp is not a representable number: {text!r} ({exc})"
+            )
+    elif isinstance(value, (int, float)):
+        try:
+            seconds = float(value)
+        except (OverflowError, ValueError) as exc:
+            return None, (
+                f"delivery timestamp is not a representable number: {value!r} ({exc})"
+            )
+    else:
+        return None, f"delivery timestamp has unsupported type {type(value).__name__!r}"
+
+    if not isfinite(seconds):
+        return None, f"delivery timestamp is not a finite number: {value!r}"
+
+    whole = floor(seconds)
+    if whole < _DELIVERY_EPOCH_FLOOR:
+        return None, (
+            f"delivery timestamp {value!r} is before the earliest plausible "
+            "delivery instant (2025-01-01T00:00:00Z)"
+        )
+    try:
+        return datetime.fromtimestamp(whole, tz=timezone.utc), ""
+    except (OverflowError, OSError, ValueError) as exc:
+        return None, (
+            f"delivery timestamp is out of range for a UTC instant: {value!r} ({exc})"
+        )
 
 
 def _canonical_bytes(payload: Mapping[str, Any]) -> bytes:
@@ -525,7 +632,11 @@ def _reconstruct_endpoint(
       event stream must never be inferred as a censored run.
 
     Delivery ordering is enforced here: only steps STRICTLY after the verified
-    delivery timestamp are considered.
+    delivery timestamp are considered. The delivery instant is parsed by
+    :func:`parse_delivery_timestamp`, which floors it to the whole UTC second per
+    ``F2-CLARIFICATION-001`` so it is type-coherent with the canonical step
+    timestamps; a step in the SAME second as delivery is therefore NOT before
+    delivery yet also NOT strictly after it, and falls outside the endpoint window.
     """
     payload, why = _read_json(store, bundle.behavioral_artifact, "behavioral artifact")
     if payload is None:
@@ -541,7 +652,7 @@ def _reconstruct_endpoint(
                 return None, "insufficient", f"behavioral record {i} is missing {name!r}"
         records.append(r)
 
-    delivery_dt, why = parse_canonical_timestamp(delivery_timestamp)
+    delivery_dt, why = parse_delivery_timestamp(delivery_timestamp)
     if delivery_dt is None:
         return None, "insufficient", f"delivery event: {why}"
 
@@ -553,7 +664,14 @@ def _reconstruct_endpoint(
                 f"behavioral record step {r['step_id']}: {why}; event ordering "
                 "cannot be established unambiguously"
             )
-        if step_dt > delivery_dt:  # F0 strict-after, in the canonical UTC domain
+        if step_dt > delivery_dt:
+            # Strictly AFTER the verified delivery event. The endpoint window is
+            # defined that way by EXPERIMENT_J_F2_READINESS_AND_STATISTICAL_PLAN.md
+            # ("delivery ordering is enforced by filtering step records to those
+            # strictly after the verified delivery timestamp"). F0's own strict rule
+            # (EXPERIMENT_J.md:109) is the complementary rediscovery test, strictly
+            # EARLIER than delivery. ``delivery_dt`` is whole-second UTC per
+            # F2-CLARIFICATION-001, so both sides share one comparable UTC domain.
             post.append(r)
     if not post:
         return None, "insufficient", (
