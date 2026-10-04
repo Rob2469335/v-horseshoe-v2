@@ -496,3 +496,151 @@ class TestDeterminism:
     def test_verification_is_repeatable(self):
         b = _bundle(F2_TREATMENT_ARM)
         assert _regrade(b).state == _regrade(b).state == STATE_VERIFIED
+
+# --------------------------------------------------------------------------
+# Remaining adversarial cases
+# --------------------------------------------------------------------------
+class TestEndpointBoundaries:
+    def _derive(self, steps):
+        res, _ = derive_f2_result(
+            _bundle(F2_TREATMENT_ARM, behavior=_steps(_PRE, *steps)),
+            store=_store(),
+            relevant_file_set=RFS,
+        )
+        return res
+
+    def test_step_1_is_an_endpoint(self):
+        r = self._derive([_step(1, "2026-10-04T00:00:01Z", "twine/package.py")])
+        assert r.endpoint is True and r.first_edit_step == 1
+
+    def test_step_12_is_an_endpoint(self):
+        r = self._derive([_step(12, "2026-10-04T00:00:12Z", "twine/package.py")])
+        assert r.endpoint is True and r.first_edit_step == 12
+
+    def test_step_13_is_censored(self):
+        r = self._derive([_step(13, "2026-10-04T00:00:13Z", "twine/package.py")])
+        assert r.endpoint is False and r.censored is True
+
+    def test_no_qualifying_event_is_censored(self):
+        r = self._derive([_step(5, "2026-10-04T00:00:05Z", "src/other.py")])
+        assert r.endpoint is False and r.censored is True
+
+    def test_duplicate_events_yield_the_first_step(self):
+        dup = _step(4, "2026-10-04T00:00:05Z", "twine/package.py")
+        r = self._derive([dup, dict(dup), _step(6, "2026-10-04T00:00:06Z", "twine/package.py")])
+        assert r.first_edit_step == 4
+
+
+class TestMoreArtifactAdversarial:
+    def test_unc_path_rejected(self):
+        b = _bundle(F2_TREATMENT_ARM)
+        bad = ArtifactRef(r"\\server\share\f.json", "a" * 64, 1, ROLE_TEST_OUTPUT)
+        assert _regrade(replace(b, behavioral_artifact=bad)).state == STATE_ARTIFACT_ESCAPES_ROOT
+
+    def test_task_outcome_evidence_mutation_rejected(self):
+        b = _bundle(F2_TREATMENT_ARM)
+        (_ROOT / b.task_outcome_artifact.name).write_bytes(b'{"fail_to_pass":{"t::a":"failed"}}')
+        assert _regrade(b).state == STATE_ARTIFACT_DIGEST_MISMATCH
+
+    def test_treatment_artifact_mutation_rejected(self):
+        b = _bundle(F2_TREATMENT_ARM)
+        (_ROOT / b.treatment_artifact.name).write_bytes(b"# tampered\n")
+        assert _regrade(b).state == STATE_ARTIFACT_DIGEST_MISMATCH
+
+    def test_implementation_role_mutation_rejected(self):
+        b = _bundle(F2_TREATMENT_ARM)
+        bad_impl = ArtifactRef(
+            b.implementation_artifact.name, b.implementation_artifact.digest,
+            b.implementation_artifact.size_bytes, ROLE_TEST_OUTPUT,
+        )
+        assert _regrade(replace(b, implementation_artifact=bad_impl)).state == STATE_MALFORMED
+
+    def test_treatment_missing_lesson_block_fails_clean_room(self):
+        t = _bundle(F2_TREATMENT_ARM)
+        # T treatment text without the lesson block -> removal cannot match X.
+        plain = _write("plain.txt", b"# treatment artifact\ntail\n", ROLE_TEST_OUTPUT)
+        t = replace(t, treatment_artifact=plain)
+        ok, why = verify_f2_clean_room(t, _bundle(F2_CONTROL_ARM), store=_store())
+        assert not ok
+
+    def test_behavioral_record_missing_field_fails_closed(self):
+        bad = _write("bfield.json", json.dumps([{"step_id": 4}]).encode(), ROLE_TEST_OUTPUT)
+        v = _regrade(_bundle(F2_TREATMENT_ARM, behavior=bad))
+        assert v.state == STATE_SCIENTIFICALLY_INSUFFICIENT
+
+
+# --------------------------------------------------------------------------
+# Admission (readiness + protocol + clean room)
+# --------------------------------------------------------------------------
+class TestAdmission:
+    def _ready(self, **over):
+        from runtime_v2.services.task_readiness import READINESS_CONDITIONS, ReadinessEvidence
+
+        d = {c: True for c in READINESS_CONDITIONS}
+        d.update(over)
+        return ReadinessEvidence(**d)
+
+    def _task(self, **over):
+        from runtime_v2.services.task_readiness import TaskReadiness
+
+        kw = dict(task_id=TASK, base_commit=BASE, relevant_file_set=tuple(RFS))
+        kw.update(over)
+        return TaskReadiness(**kw)
+
+    def _admit(self, **over):
+        from qwen_train.f2_admission import admit_f2_task
+
+        kw = dict(
+            readiness=self._task(),
+            readiness_evidence=self._ready(),
+            store=_store(),
+            registry=_registry(),
+            relevant_file_set=RFS,
+            t_bundle=_bundle(F2_TREATMENT_ARM),
+            x_bundle=_bundle(F2_CONTROL_ARM),
+        )
+        kw.update(over)
+        return admit_f2_task(**kw)
+
+    def test_ready_and_valid_pair_is_admissible(self):
+        a = self._admit()
+        assert a.admissible is True, a.detail
+        assert set(a.results) == {F2_TREATMENT_ARM, F2_CONTROL_ARM}
+
+    def test_missing_readiness_is_not_admissible(self):
+        assert self._admit(readiness=None).admissible is False
+
+    def test_missing_readiness_evidence_is_not_admissible(self):
+        assert self._admit(readiness_evidence=None).admissible is False
+
+    def test_unmet_readiness_condition_blocks_admission(self):
+        a = self._admit(readiness_evidence=self._ready(R5_evidence_provenance=None))
+        assert a.admissible is False and "R1-R8" in a.detail
+
+    def test_readiness_task_id_mismatch_blocks_admission(self):
+        a = self._admit(readiness=self._task(task_id="other__task-1"))
+        assert a.admissible is False and "task_id" in a.detail
+
+    def test_readiness_base_commit_mismatch_blocks_admission(self):
+        a = self._admit(readiness=self._task(base_commit="f" * 40))
+        assert a.admissible is False and "base_commit" in a.detail
+
+    def test_readiness_relevant_file_set_mismatch_blocks_admission(self):
+        a = self._admit(readiness=self._task(relevant_file_set=("other/file.py",)))
+        assert a.admissible is False and "relevant_file_set" in a.detail
+
+    def test_protocol_failure_blocks_admission(self):
+        lying = _bundle(F2_TREATMENT_ARM, declared_step=3)
+        a = self._admit(t_bundle=lying)
+        assert a.admissible is False and a.protocol_state == STATE_SCIENTIFICALLY_INSUFFICIENT
+
+    def test_tx_task_mismatch_blocks_admission(self):
+        x = replace(_bundle(F2_CONTROL_ARM), instance_id="other__task-1")
+        a = self._admit(x_bundle=x)
+        assert a.admissible is False
+
+    def test_gold_leak_blocks_admission(self):
+        d = _bundle(F2_TREATMENT_ARM).to_dict()
+        d["gold_diff"] = "diff --git a/x b/x"
+        a = self._admit(t_bundle=d)
+        assert a.admissible is False

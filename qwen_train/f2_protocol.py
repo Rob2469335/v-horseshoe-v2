@@ -75,6 +75,7 @@ __all__ = [
     "regrade_f2",
     "verify_f2_clean_room",
     "regrade_f2_pair",
+    "find_forbidden_gold",
     "FORBIDDEN_GOLD_KEYS",
 ]
 
@@ -149,6 +150,15 @@ def _find_forbidden(obj: Any, path: str = "") -> str:
             if found:
                 return found
     return ""
+
+
+def find_forbidden_gold(obj: Any) -> str:
+    """Public wrapper: locate any forbidden gold key in a raw bundle mapping.
+
+    Admission receives raw mappings and must reject gold material BEFORE it is
+    parsed into an :class:`F2Bundle`, so this is exposed rather than private.
+    """
+    return _find_forbidden(obj)
 
 
 # ===========================================================================
@@ -751,6 +761,16 @@ def regrade_f2_pair(
     results: dict[str, F2Result] = {}
     if t_bundle is None or x_bundle is None:
         return _fail(STATE_PROVENANCE_NOT_ESTABLISHED, "both T and X bundles are required"), results
+    # Gold boundary BEFORE parsing: a raw mapping must never smuggle gold material
+    # past the scan by being converted to a bundle first.
+    for label, b in (("T", t_bundle), ("X", x_bundle)):
+        if isinstance(b, Mapping):
+            leaked = _find_forbidden(b)
+            if leaked:
+                return _fail(
+                    STATE_MALFORMED,
+                    f"{label} bundle carries forbidden gold material at {leaked!r}",
+                ), results
     if isinstance(t_bundle, Mapping):
         t_bundle = F2Bundle.from_dict(t_bundle)
     if isinstance(x_bundle, Mapping):

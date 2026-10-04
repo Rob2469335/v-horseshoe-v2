@@ -759,6 +759,34 @@ population/`n`/`δ`/α decisions, provisioning the receipt key, and running F2.
 
 ---
 
+## 4f. F2 admission gate
+
+**Module:** `qwen_train/f2_admission.py` · **Tests:** `tests/test_f2_protocol.py::TestAdmission` (10)
+
+`admit_f2_task(...)` is the single gate that decides whether a task's paired T/X
+evidence may enter the F2 confirmatory analysis. It composes the frozen layers and
+introduces no new scientific semantics. It fails closed at the first unmet layer:
+
+1. **R1-R8 readiness** (`runtime_v2.services.task_readiness.evaluate_readiness`) —
+   authoritative and enforced first. A missing declaration/evidence is
+   `NOT ESTABLISHED`, never a pass.
+2. **Readiness/evidence agreement** — the declaration must match the T and X
+   bundles on `instance_id`, `base_commit`, and its own `relevant_file_set` must
+   hash to the frozen task set used for regrading.
+3. **Paired regrade** under `f2_experiment_j_v1` — evaluator authorization,
+   evaluator-byte provenance, artifact integrity, delivery provenance, endpoint
+   reconstruction, task-outcome derivation, declaration rejection, and the T/X
+   clean room.
+4. **Gold boundary before parsing** — a raw bundle mapping is scanned for gold
+   keys *before* it is parsed, so gold material cannot slip past the scan by being
+   converted to a bundle first.
+
+`F2Admission` reports `admissible`, the readiness verdict, the protocol state, the
+clean-room result, and both derived `F2Result`s. Admission is therefore real: it
+cannot be reached from declarations alone.
+
+---
+
 ## 5. Clean room (R4) — what is now proven, and what is not
 
 **Closed and proven.** The untrusted-subprocess environment builder previously
