@@ -859,3 +859,73 @@ class TestArtifactRoles:
         from qwen_train.f2_governance import ROLE_EVALUATOR_IMPLEMENTATION
 
         assert ROLE_LESSON_BLOCK != ROLE_EVALUATOR_IMPLEMENTATION
+
+
+# --------------------------------------------------------------------------
+# BLOCKER A - one canonical timestamp domain for scientific event ordering
+# --------------------------------------------------------------------------
+class TestTimestampDomain:
+    def _derive(self, steps, delivery_ts=DELIVERY_TS):
+        b = _bundle(F2_TREATMENT_ARM, behavior=_steps(*steps), delivery_ts=delivery_ts)
+        return derive_f2_result(b, store=_store(), relevant_file_set=RFS)
+
+    def test_immediately_before_delivery_is_excluded(self):
+        r, _ = self._derive([_step(4, "2026-10-03T23:59:59Z", "twine/package.py")])
+        assert r is None  # no post-delivery event stream -> insufficient
+
+    def test_exactly_at_delivery_is_not_after(self):
+        r, _ = self._derive([_step(4, DELIVERY_TS, "twine/package.py")])
+        assert r is None  # strict-after excludes equality -> insufficient
+
+    def test_immediately_after_delivery_is_included(self):
+        r, _ = self._derive([_step(4, "2026-10-04T00:00:01Z", "twine/package.py")])
+        assert r is not None and r.endpoint is True and r.first_edit_step == 4
+
+    def test_timezone_equivalent_timestamps_compare_correctly(self):
+        # 01:00+01:00 == 00:00Z, so it is NOT after -> insufficient.
+        r, _ = self._derive([_step(4, "2026-10-04T01:00:00+01:00", "twine/package.py")])
+        assert r is None
+        # 01:00:01+01:00 == 00:00:01Z, so it IS after -> endpoint.
+        r2, _ = self._derive([_step(4, "2026-10-04T01:00:01+01:00", "twine/package.py")])
+        assert r2 is not None and r2.endpoint is True
+
+    def test_timezone_aware_ordering_across_offsets(self):
+        # A step stated in a far-west offset is still strictly after delivery.
+        r, _ = self._derive([_step(4, "2026-10-03T20:00:01-05:00", "twine/package.py")])
+        assert r is not None and r.endpoint is True
+
+    def test_malformed_timestamp_fails_closed(self):
+        r, why = self._derive([_step(4, "not-a-timestamp", "twine/package.py")])
+        assert r is None and "ISO-8601" in why
+
+    def test_timezone_naive_timestamp_fails_closed(self):
+        r, why = self._derive([_step(4, "2026-10-04T00:00:01", "twine/package.py")])
+        assert r is None and "naive" in why
+
+    def test_missing_timestamp_fails_closed(self):
+        bad = _write("bfield_ts.json", json.dumps([{"step_id": 4}]).encode(), ROLE_TEST_OUTPUT)
+        v = _regrade(_bundle(F2_TREATMENT_ARM, behavior=bad))
+        assert v.state == STATE_SCIENTIFICALLY_INSUFFICIENT
+
+    def test_precision_difference_does_not_reorder(self):
+        # 00:00:01.000000 vs 00:00:01Z are the same instant -> after delivery.
+        r, _ = self._derive([_step(4, "2026-10-04T00:00:01.000000Z", "twine/package.py")])
+        assert r is not None and r.endpoint is True
+        # A sub-second step before delivery stays excluded.
+        r2, _ = self._derive([_step(4, "2026-10-03T23:59:59.999999Z", "twine/package.py")])
+        assert r2 is None
+
+    def test_canonicalization_is_deterministic(self):
+        from qwen_train.f2_protocol import parse_canonical_timestamp
+
+        a, _ = parse_canonical_timestamp("2026-10-04T01:00:00+01:00")
+        b, _ = parse_canonical_timestamp("2026-10-04T00:00:00Z")
+        assert a == b
+        assert parse_canonical_timestamp("2026-10-04T00:00:00Z")[0] == a
+
+    def test_parse_rejects_non_string(self):
+        from qwen_train.f2_protocol import parse_canonical_timestamp
+
+        for bad in (None, 1234, "", "   "):
+            dt, why = parse_canonical_timestamp(bad)
+            assert dt is None and why

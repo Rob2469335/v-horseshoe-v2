@@ -736,6 +736,63 @@ Two kinds of time are distinguished:
 The earlier blanket statement that "timestamps never affect scientific identity"
 is **superseded** by this distinction.
 
+**One canonical timestamp domain.** Event ordering does NOT use lexical string
+comparison. `parse_canonical_timestamp` requires RFC 3339 / ISO-8601 **with an
+explicit timezone designator** and normalises to UTC; a missing, non-string,
+malformed, or timezone-**naive** value fails closed (`SCIENTIFICALLY_INSUFFICIENT`
+— the ordering cannot be established unambiguously). Offsets compare correctly
+(`01:00+01:00 == 00:00Z`), sub-second precision does not reorder events, and the
+F0 strict-after rule is preserved exactly (an event at the delivery instant is
+**not** after it).
+
+### SOTA alignment (2026)
+
+Principles **adopted** from current SWE-bench-family practice:
+* the agent's internal gate is never the verdict — grading comes from an
+  independent grader over the *retained* artifact (`swebench-verified`,
+  `swebench-pro` METHODOLOGY);
+* the grader is run **unmodified** and pinned; verdicts must not come from a local
+  reimplementation (same source);
+* **raw trajectories are retained** so a third party can verify protocol
+  compliance (SWE-bench-Live evaluation protocol);
+* re-runs are permitted only for external/infra faults, never to re-roll a
+  reasoning loss; every run is retained, wins and losses;
+* preregistration/procedure outranks prose; the denominator is honest.
+
+Principles **rejected** as unnecessary or conflicting with F0: container-based
+grading and patch-capture (J's endpoint is behavioural, not patch-based);
+leaderboard/resolve-rate framing (J's primary endpoint is the first qualifying
+edit, with task success secondary); model-agnosticism-by-grep as a substitute for
+a frozen distiller identity (J freezes the distiller separately).
+
+**Experiment-J-specific** (not borrowable from any benchmark): the causal T/X
+contrast with surgical lesson removal, the delivery seam and its ordering rule,
+the behavioural endpoint, and the paired within-task design.
+
+### Open engineering blockers (this pass)
+
+* **BLOCKER A — timestamp domain: FIXED.** `_reconstruct_endpoint` compared
+  timestamps lexically (`str(r["timestamp"]) > ts`). It now parses both sides with
+  `parse_canonical_timestamp` into timezone-aware UTC and compares datetimes,
+  failing closed on malformed/naive values. 11 adversarial tests.
+* **BLOCKER B — delivered-byte binding: `NOT ESTABLISHED`.** The verifier checks
+  `sha256(retained treatment bytes) == delivery.treatment_artifact_hash`, which is
+  metadata consistency. It does **not** yet prove that the bytes at the live P2
+  model-facing seam equal the frozen treatment artifact. Closing this requires
+  binding the actual delivery-seam payload to the retained artifact.
+* **BLOCKER C — production bundle assembly: `NOT ESTABLISHED`.** The live worker
+  (`f2_arm_worker.py`) emits a rich *receipt* (`delivery_identity`,
+  `manifest_identity`, `tx_identity`, `p2_delivery_evidence`, `delivered_artifact`)
+  but does **not** assemble the governed `F2Bundle` (`behavioral_artifact`,
+  `task_outcome_artifact`, `treatment_artifact`, `delivery_artifact`,
+  `implementation_artifact`) that `regrade_f2_pair` consumes. The production path
+  therefore terminates at a receipt, not at independently regradable evidence.
+  These are engineering gaps, not authorization gaps.
+
+> **No property above is upgraded to PROVEN merely because a test exists.** BLOCKER
+> B and C remain `NOT ESTABLISHED` until the live seam produces the governed
+> evidence bundle.
+
 ### Artifact roles
 
 `ROLE_TEST_OUTPUT` / `ROLE_RUN_LOG` (behavioral and task-outcome evidence, and the

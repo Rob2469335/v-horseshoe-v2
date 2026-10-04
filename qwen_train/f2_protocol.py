@@ -80,6 +80,7 @@ __all__ = [
     "ROLE_LESSON_BLOCK",
     "ROLE_DELIVERY_EVIDENCE",
     "EXECUTION_STATE_BY_ARM",
+    "parse_canonical_timestamp",
 ]
 
 #: The single authorized F2 result protocol. Do NOT reuse the generic
@@ -129,6 +130,33 @@ _TASK_OUTCOME_STATUSES = ("passed", "failed", "error", "skipped")
 
 def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def parse_canonical_timestamp(value: Any) -> tuple[Any, str]:
+    """Parse a timestamp into a canonical, timezone-aware UTC datetime.
+
+    F2 event ordering MUST NOT use ad-hoc lexical string comparison: mixed
+    formats, offsets, precisions or naive values could silently reorder events.
+    The canonical scientific domain is RFC 3339 / ISO-8601 WITH an explicit
+    timezone designator, normalised to UTC.
+
+    Returns ``(datetime_utc|None, reason)``. Fail closed: a missing, non-string,
+    malformed, or timezone-NAIVE value is rejected rather than guessed.
+    """
+    from datetime import datetime, timezone
+
+    if not isinstance(value, str) or not value.strip():
+        return None, "timestamp is missing or not a string"
+    s = value.strip()
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        return None, f"timestamp is not ISO-8601/RFC 3339: {s!r}"
+    if dt.tzinfo is None:
+        return None, (
+            f"timestamp is timezone-naive and cannot be ordered unambiguously: {s!r}"
+        )
+    return dt.astimezone(timezone.utc), ""
 
 
 def _canonical_bytes(payload: Mapping[str, Any]) -> bytes:
@@ -489,8 +517,20 @@ def _reconstruct_endpoint(
                 return None, "insufficient", f"behavioral record {i} is missing {name!r}"
         records.append(r)
 
-    ts = delivery_timestamp
-    post = [r for r in records if str(r["timestamp"]) > ts]
+    delivery_dt, why = parse_canonical_timestamp(delivery_timestamp)
+    if delivery_dt is None:
+        return None, "insufficient", f"delivery event: {why}"
+
+    post = []
+    for r in records:
+        step_dt, why = parse_canonical_timestamp(r["timestamp"])
+        if step_dt is None:
+            return None, "insufficient", (
+                f"behavioral record step {r['step_id']}: {why}; event ordering "
+                "cannot be established unambiguously"
+            )
+        if step_dt > delivery_dt:  # F0 strict-after, in the canonical UTC domain
+            post.append(r)
     if not post:
         return None, "insufficient", (
             "no behavioral step occurs strictly after the delivery timestamp; the "
