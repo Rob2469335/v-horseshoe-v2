@@ -38,6 +38,15 @@ class TaskReadinessError(ValueError):
     """A task-readiness declaration is absent, malformed, or inconsistent."""
 
 
+class ReadinessGateError(TaskReadinessError):
+    """The readiness gate refused to let an experiment arm proceed.
+
+    Raised by the F2 orchestrator pre-flight when readiness is absent, malformed,
+    identity-mismatched, or not fully met. Fail-closed: no arm may execute after
+    this is raised.
+    """
+
+
 def _normalize_path(p: object) -> str:
     if not isinstance(p, str):
         raise TaskReadinessError(f"relevant_file_set entry is not a string: {p!r}")
@@ -172,6 +181,21 @@ class ReadinessEvidence:
     R6_learning_signal_sufficient: bool | None = None
     R7_promotion_reachable: bool | None = None
     R8_endpoint_measurable: bool | None = None
+
+    @classmethod
+    def from_dict(cls, d: Mapping[str, Any] | None) -> "ReadinessEvidence":
+        """Build from a mapping. Any non-boolean / absent condition stays ``None``
+        (NOT ESTABLISHED) — it is never coerced to a pass."""
+        if d is None:
+            return cls()
+        if not isinstance(d, Mapping):
+            raise TaskReadinessError("readiness evidence must be a mapping")
+        return cls(
+            **{
+                name: (d.get(name) if d.get(name) in (True, False) else None)
+                for name in READINESS_CONDITIONS
+            }
+        )
 
 
 @dataclass(frozen=True)

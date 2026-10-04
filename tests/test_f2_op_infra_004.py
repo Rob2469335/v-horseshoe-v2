@@ -375,6 +375,27 @@ class TestProductionWiring:
 
         real = subprocess.Popen
         ORCH.subprocess.Popen = _Popen
+        # The F2 pre-flight readiness gate requires a declaration + evidence;
+        # supply TEST values (not operator F2 values) so the arm reaches Popen.
+        from runtime_v2.services.task_readiness import (
+            READINESS_CONDITIONS,
+            ReadinessEvidence,
+            TaskReadiness,
+        )
+
+        task_id = kw.pop("task_id", "ENGINEERING-REHEARSAL")
+        kw.setdefault(
+            "readiness",
+            TaskReadiness(
+                task_id=task_id,
+                base_commit="engineering-rehearsal",
+                relevant_file_set=("src/engineering_rehearsal.py",),
+            ),
+        )
+        kw.setdefault(
+            "readiness_evidence",
+            ReadinessEvidence(**{c: True for c in READINESS_CONDITIONS}),
+        )
         try:
             ORCH.run_f2_arm(
                 arm="C0",
@@ -383,7 +404,7 @@ class TestProductionWiring:
                 repo_root=Path("."),
                 render_t=lambda: (_ for _ in ()).throw(AssertionError("unused")),
                 lesson_l_id="", lesson_l_hash="",
-                task_id=kw.pop("task_id", "ENGINEERING-REHEARSAL"),
+                task_id=task_id,
                 **kw,
             )
         except SystemExit:

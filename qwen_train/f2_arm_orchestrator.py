@@ -34,9 +34,18 @@ import os
 import subprocess
 import sys
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
+
+from runtime_v2.services.task_readiness import (
+    ReadinessEvidence,
+    ReadinessGateError,
+    ReadinessVerdict,
+    TaskReadiness,
+    endpoint_measurable,
+    evaluate_readiness,
+)
 
 from runtime_v2.services.f2_freeze import (
     FrozenArtifact,
@@ -78,6 +87,8 @@ class ArmResult:
     child_stdout: str
     child_stderr: str
     manifest_path: Path
+    readiness: dict[str, Any] | None = None
+    readiness_path: Path | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -155,14 +166,28 @@ def run_f2_arm(
     instance_id: str = "",
     agent_id: str = "coder",
     port: int = 8211,
+    readiness: TaskReadiness | Mapping[str, Any] | None = None,
+    readiness_evidence: ReadinessEvidence | Mapping[str, Any] | None = None,
+    base_commit: str = "",
 ) -> ArmResult:
     """Run a single F2 arm in a fresh child process.
 
     One arm per process (F0 §7; design §9).  Returns an ArmResult containing the
     validated receipt or raises on any fail-closed condition.
+
+    A READINESS GATE runs first (R1-R8). F2 cannot render, freeze, or spawn an
+    arm unless the task is mechanically READY; see ``_enforce_readiness``.
     """
     if arm not in ("T", "X", "C0"):
         raise ValueError(f"invalid arm: {arm!r}")
+
+    # -- 0. READINESS GATE (fail closed) -----------------------------------
+    readiness_decl, readiness_verdict = _enforce_readiness(
+        readiness=readiness,
+        evidence=readiness_evidence,
+        task_id=task_id,
+        base_commit=base_commit,
+    )
 
     manifest_dir = Path(manifest_dir)
     worker_script = Path(worker_script)
@@ -207,6 +232,23 @@ def run_f2_arm(
     # -- 3. environment + spawn fresh child --------------------------------
     ro = rollout_id or uuid.uuid4().hex
     traj = trajectory_run_id or uuid.uuid4().hex
+
+    # -- 2b. persist the readiness verdict alongside the arm manifest -------
+    # Co-located provenance: the canonical TaskReadiness declaration + the
+    # canonical ReadinessVerdict, bound to this arm + rollout. This is not a
+    # competing representation; it records the existing gate's output so the
+    # run can be audited against the task it claims.
+    readiness_record = {
+        **readiness_decl.to_dict(),
+        "arm": arm,
+        "rollout_id": ro,
+        "readiness": readiness_verdict.to_dict(),
+    }
+    readiness_path = manifest_path.with_name(manifest_path.stem + "_readiness.json")
+    readiness_path.write_text(
+        json.dumps(readiness_record, indent=2, sort_keys=True), encoding="utf-8"
+    )
+
     env = dict(os.environ)
     env["SWARM_F2_REPLAY"] = "1"
     env["SWARM_F2_MANIFEST_PATH"] = str(manifest_path)
@@ -268,7 +310,58 @@ def run_f2_arm(
         child_stdout=out_text,
         child_stderr=err_text,
         manifest_path=manifest_path,
+        readiness=readiness_record,
+        readiness_path=readiness_path,
     )
+
+
+def _enforce_readiness(
+    *,
+    readiness: TaskReadiness | Mapping[str, Any] | None,
+    evidence: ReadinessEvidence | Mapping[str, Any] | None,
+    task_id: str,
+    base_commit: str,
+) -> tuple[TaskReadiness, ReadinessVerdict]:
+    """F2 pre-flight readiness gate. Fail closed on any unmet condition.
+
+    * no declaration / wrong type -> ``ReadinessGateError``
+    * malformed declaration / relevant_file_set hash mismatch -> raises
+      (``TaskReadiness.from_dict``)
+    * task_id mismatch -> ``ReadinessGateError``
+    * base_commit mismatch (when supplied) -> ``ReadinessGateError``
+    * R8 is DERIVED from the declaration; a caller cannot assert it
+    * any R1-R8 not explicitly ``True`` -> ``ReadinessGateError``
+    """
+    if readiness is None:
+        raise ReadinessGateError("no task-readiness declaration: F2 cannot proceed")
+    if isinstance(readiness, Mapping):
+        readiness = TaskReadiness.from_dict(readiness)
+    if not isinstance(readiness, TaskReadiness):
+        raise ReadinessGateError(
+            f"invalid readiness declaration type: {type(readiness).__name__}"
+        )
+    if task_id and readiness.task_id != task_id:
+        raise ReadinessGateError(
+            f"readiness task_id {readiness.task_id!r} != arm task_id {task_id!r}"
+        )
+    if base_commit and readiness.base_commit != base_commit:
+        raise ReadinessGateError(
+            f"readiness base_commit {readiness.base_commit!r} != arm base_commit {base_commit!r}"
+        )
+    ev = (
+        evidence
+        if isinstance(evidence, ReadinessEvidence)
+        else ReadinessEvidence.from_dict(evidence)
+    )
+    # R8 (endpoint measurability) is a property of the declaration, not of the
+    # caller's evidence: derive it so it cannot be claimed without a valid set.
+    ev = replace(ev, R8_endpoint_measurable=endpoint_measurable(readiness))
+    verdict = evaluate_readiness(ev)
+    if not verdict.ready:
+        raise ReadinessGateError(
+            "task not READY (unmet: " + ", ".join(verdict.unmet) + ")"
+        )
+    return readiness, verdict
 
 
 def _freeze_t(
